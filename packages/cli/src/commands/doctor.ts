@@ -16,16 +16,17 @@ import { checkConnectedProviders } from './doctor-connected-providers';
 import { checkWorkspaceWritable, checkBundledDefaults, checkTelemetry } from './doctor-install';
 import { checkArchonSkill } from './doctor-skill';
 import { checkGitHubApp, checkSlack, checkTelegram } from './doctor-platforms';
-import { checkWorkflowProviderSelection } from './doctor-workflow-providers';
+import { checkWorkflows } from './doctor-workflow-providers';
 
 type CheckOutcome = Promise<CheckResult | CheckResult[]>;
 
 async function runDefaultChecks(env: NodeJS.ProcessEnv): Promise<CheckOutcome[]> {
-  const selection = await checkWorkflowProviderSelection();
+  const workflows = await checkWorkflows();
   return [
     checkConfigFiles(),
-    Promise.resolve(selection.check),
-    checkInstalledProviders(undefined, undefined, selection.allowEmptyProviderInventory),
+    Promise.resolve(workflows.files),
+    Promise.resolve(workflows.providers),
+    checkInstalledProviders(undefined, undefined, workflows.allowEmptyProviderInventory),
     ...providerRegistry.list().map(provider => checkProviderDiagnostics(provider.id)),
     checkGitHubApp(env),
     checkAssistantLogin(env),
