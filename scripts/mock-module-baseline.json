@@ -384,7 +384,6 @@
       "@archon/isolation",
       "@archon/paths",
       "@archon/providers",
-      "@archon/workflows/router",
       "@archon/workflows/run-source",
       "@archon/workflows/utils/tool-formatter",
       "@archon/workflows/workflow-discovery",
@@ -2339,11 +2338,8 @@
       "deactivateSession",
       "deleteOldSessions",
       "getActiveSession",
-      "getSessionChain",
-      "getSessionHistory",
       "transitionSession",
-      "updateSession",
-      "updateSessionMetadata"
+      "updateSession"
     ],
     "packages/core/src/db/user-ai-prefs-store.ts": [
       "clearUserAiPrefs",
@@ -2417,7 +2413,6 @@
       "findAdoptingRuns",
       "findChildRuns",
       "findOpenWorkRuns",
-      "findResumableRun",
       "findResumableRunByParentConversation",
       "findWorkflowRunsByIdPrefix",
       "getActiveWorkflowRun",
@@ -3022,7 +3017,6 @@
       "logWorkflowEvent",
       "logWorktreeSetup"
     ],
-    "packages/workflows/src/router.ts": ["resolveWorkflowName"],
     "packages/workflows/src/run-paths.ts": [
       "isFolderCodebase",
       "prepareRunPaths",

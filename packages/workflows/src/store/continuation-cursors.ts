@@ -8,6 +8,7 @@ import {
   type SourceRelease,
   type WorkflowRun,
 } from '../schemas/workflow-run';
+import { executionClaim } from './run-writes';
 
 /** Exact persisted cursor expected by an automatic continuation claim. */
 export type WorkflowResumeCursor =
@@ -17,6 +18,20 @@ export type WorkflowResumeCursor =
   | { kind: 'answered'; nodeId: string; pauseId: string }
   /** A run released after a host-local source read failure (`readSourceRelease`). */
   | ({ kind: 'source' } & Omit<SourceRelease, 'path'>);
+
+/**
+ * A `running` run whose caller found that no owner answers for it, pinned to the
+ * execution claim the caller read (`ownerlessResumeCursor`). Resume mints a new claim, so
+ * of two resumers that read the same run, only the first matches. It is not a
+ * continuation: nothing defers or schedules it.
+ */
+export interface OwnerlessResumeCursor {
+  kind: 'ownerless';
+  executionClaim: string | null;
+}
+
+/** Every cursor `IWorkflowStore.resumeWorkflowRun` accepts. */
+export type ResumeClaimCursor = WorkflowResumeCursor | OwnerlessResumeCursor;
 
 /** How long an unaccepted continuation, or a run released for unreadable source, waits before the next claim. */
 export const CONTINUATION_RETRY_MS = 60_000;
@@ -28,7 +43,7 @@ export const CONTINUATION_RETRY_MS = 60_000;
  */
 export function resumeCursorMatches(
   run: Pick<WorkflowRun, 'status' | 'metadata'>,
-  cursor: WorkflowResumeCursor
+  cursor: ResumeClaimCursor
 ): boolean {
   switch (cursor.kind) {
     case 'wait': {
@@ -62,7 +77,26 @@ export function resumeCursorMatches(
         release.releaseId === cursor.releaseId
       );
     }
+    case 'ownerless':
+      return run.status === 'running' && executionClaim(run.metadata) === cursor.executionClaim;
   }
+}
+
+/** The cursor that resumes `run` while it is still `running` under the claim read here. */
+export function ownerlessResumeCursor(run: Pick<WorkflowRun, 'metadata'>): OwnerlessResumeCursor {
+  return { kind: 'ownerless', executionClaim: executionClaim(run.metadata) };
+}
+
+/**
+ * The cursor an operator's resume carries for a run `resumeWorkflow` just returned. A
+ * `running` run passed that check only because no owner answered, so its resume is pinned
+ * to the claim that was checked; any other run needs none. Never derive it from a run that
+ * did not pass that check: the store would then resume a run whose owner may be alive.
+ */
+export function checkedResumeCursor(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>
+): OwnerlessResumeCursor | undefined {
+  return run.status === 'running' ? ownerlessResumeCursor(run) : undefined;
 }
 
 export function deadlineWaitCursor(

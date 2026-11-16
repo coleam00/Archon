@@ -137,7 +137,7 @@ export function createWorkflowStore(): IWorkflowStore {
     deleteWorkflowNodeSessions: workflowNodeSessionDb.deleteWorkflowNodeSessions,
     listWorkflowRuns: workflowDb.listDashboardRuns,
     findOpenWorkRuns: workflowDb.findOpenWorkRuns,
-    listItemRuns: itemsDb.listItemRuns,
+    getItemRuns: itemsDb.getItemRuns,
     getItem: itemsDb.getItem,
     findAdoptingRuns: workflowDb.findAdoptingRuns,
     deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,
@@ -183,7 +183,6 @@ export function createWorkflowStore(): IWorkflowStore {
     findChildRuns: workflowDb.findChildRuns,
     getRunAncestry: workflowDb.getRunAncestry,
     getActiveWorkflowRunByPath: workflowDb.getActiveWorkflowRunByPath,
-    findResumableRun: workflowDb.findResumableRun,
     listDueWorkflowContinuations: (now, limit = 25) =>
       workflowDb.listDueWorkflowContinuations(now, limit),
     deferWorkflowContinuation: workflowDb.deferWorkflowContinuation,

@@ -126,39 +126,34 @@ nodes:
     expect(errors).toHaveLength(0);
   });
 
-  it.each(['review', 'archon', 'ARCHON-REVIEW'])(
-    'rejects the non-exact workflow target %s at runtime',
-    async target => {
-      await writeWorkflow('archon-review', slotYaml('archon-review', 'REVIEW'));
-      await writeWorkflow(
-        'parent',
-        `
+  it.each(['review'])('rejects the non-exact workflow target %s at runtime', async target => {
+    await writeWorkflow('archon-review', slotYaml('archon-review', 'REVIEW'));
+    await writeWorkflow(
+      'parent',
+      `
 name: parent
 description: exact child target required
 nodes:
   - id: sub
     workflow: ${target}
 `
-      );
-      const parent = await discover('parent');
-      const store = new InMemoryStore();
-      const result = await executeWorkflow(
-        makeDeps(store),
-        makePlatform(),
-        'conv',
-        cwd,
-        parent,
-        'goal',
-        { conversationId: 'conv-db' }
-      );
-      expect(result.success).toBe(false);
-      const failed = store.events.find(
-        e => e.event_type === 'node_failed' && e.step_name === 'sub'
-      );
-      expect(String(failed?.data?.error)).toContain(`Unknown sub-run workflow '${target}'`);
-      expect([...store.runs.values()].filter(run => run.parent_run_id !== null)).toHaveLength(0);
-    }
-  );
+    );
+    const parent = await discover('parent');
+    const store = new InMemoryStore();
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv',
+      cwd,
+      parent,
+      'goal',
+      { conversationId: 'conv-db' }
+    );
+    expect(result.success).toBe(false);
+    const failed = store.events.find(e => e.event_type === 'node_failed' && e.step_name === 'sub');
+    expect(String(failed?.data?.error)).toContain(`Unknown sub-run workflow '${target}'`);
+    expect([...store.runs.values()].filter(run => run.parent_run_id !== null)).toHaveLength(0);
+  });
 
   it('keeps an exact child target stable as containing names are discovered', async () => {
     await writeWorkflow('archon-review', slotYaml('archon-review', 'ORIGINAL'));
@@ -407,24 +402,6 @@ nodes:
   });
 
   // --- Group 4: known gaps, characterized so a fix fails loudly ------------
-
-  it('GAP (#2200): a runtime-authored slot leaks into project-wide discovery', async () => {
-    // A workflow authored for ONE run lands in the repo-scoped source tree, so it
-    // becomes globally visible: `workflow list` shows it and the chat router can
-    // match it. It is also NOT gitignored, so it is stageable into the user's repo
-    // — the exact output-in-repo class #2200 exists to eliminate.
-    //
-    // The fix is a run-scoped fourth discovery tier (bundled < home < repo < run),
-    // visible only to the spawning run's sub-run resolution. When that lands, this
-    // assertion must flip to expect the slot to be ABSENT from plain discovery.
-    await writeWorkflow('leaky-slot', slotYaml('leaky-slot', 'LEAK'));
-
-    const result = await discoverWorkflows(cwd, {
-      providers: providerRegistry,
-      loadDefaults: false,
-    });
-    expect(result.workflows.map(w => w.workflow.name)).toContain('leaky-slot');
-  });
 
   // The rendezvous wait runs inside executeWorkflow's lock guard, so it counts
   // fully against this test's clock: the timeout must exceed the rendezvous

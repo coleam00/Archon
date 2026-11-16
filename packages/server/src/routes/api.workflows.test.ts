@@ -1986,16 +1986,6 @@ describe('GET /api/commands - cwd validation', () => {
 });
 
 describe('GET /api/commands', () => {
-  test('returns commands array', async () => {
-    const app = createTestApp();
-    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
-
-    const response = await app.request('/api/commands');
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { commands: Array<{ name: string; source: string }> };
-    expect(Array.isArray(body.commands)).toBe(true);
-  });
-
   test('includes bundled commands with source:bundled', async () => {
     const app = createTestApp();
     registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);

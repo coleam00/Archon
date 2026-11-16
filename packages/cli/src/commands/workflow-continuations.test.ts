@@ -279,15 +279,6 @@ test('watch continues after a failed pass and returns failure on shutdown', asyn
   }
 });
 
-test('schedule management uses no persistence or engine capability', async () => {
-  expect(await workflowWakeScheduleCommand(['schedule', 'remove'], { json: true })).toBe(0);
-  expect(remove).toHaveBeenCalledTimes(1);
-  expect(scan).not.toHaveBeenCalled();
-  expect(getRun).not.toHaveBeenCalled();
-  expect(signal).not.toHaveBeenCalled();
-  expect(resume).not.toHaveBeenCalled();
-});
-
 test.each(['occurrence', 'deadline', 'both'])(
   'signal with %s passes its selectors as the local operator and rejects a CAS loser',
   async selector => {

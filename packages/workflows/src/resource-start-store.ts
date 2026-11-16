@@ -26,7 +26,7 @@ import {
   type WorkflowRunStatus,
 } from './schemas/workflow-run';
 import type { WorkflowResource } from './schemas/resource-name';
-import type { ResumeRefusal, WorkflowResumeCursor } from './store';
+import type { ResumeClaimCursor, ResumeRefusal } from './store';
 
 export function skippedFireNotice(
   receipt: Pick<SourceReceiptInput, 'deliveryId' | 'sourceActor'>,
@@ -432,7 +432,7 @@ export function resourceResumeBlocker(
  */
 export function resumeRefusal(
   run: Pick<WorkflowRun, 'status' | 'metadata'>,
-  cursor: WorkflowResumeCursor | undefined
+  cursor: ResumeClaimCursor | undefined
 ): ResumeRefusal {
   if (run.status !== 'paused') return 'failed';
   const wait = pendingWorkflowWaitDeadline(run);

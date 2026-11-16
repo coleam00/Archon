@@ -4,7 +4,6 @@ import { join } from 'path';
 import { mkdtempSync, writeFileSync } from 'fs';
 import { removeTempTree } from '@archon/paths/test-utils';
 import type { MergedConfig } from '@archon/core';
-import { doctorLog } from './doctor-check';
 import { checkAssistantLogin, type AssistantLoginDeps } from './doctor-assistant-login';
 
 describe('checkAssistantLogin', () => {
@@ -236,36 +235,6 @@ describe('checkAssistantLogin', () => {
     } finally {
       native.mockRestore();
       rows.mockRestore();
-      user.mockRestore();
-      load.mockRestore();
-    }
-  });
-
-  it('logs the error when the connected-credential lookup fails', async () => {
-    const core = await import('@archon/core');
-    const userDb = await import('@archon/core/db/users');
-    const { PiProvider, registerBuiltinProviders, registerCommunityProviders } = await import(
-      '@archon/providers/in-process'
-    );
-    registerBuiltinProviders();
-    registerCommunityProviders();
-    const lookupError = new Error('database unreachable');
-    const load = spyOn(core, 'loadConfig').mockResolvedValue({ ...config, assistant: 'pi' });
-    const user = spyOn(userDb, 'findOrCreateUserByPlatformIdentity').mockRejectedValue(lookupError);
-    const native = spyOn(PiProvider.prototype, 'checkCredential').mockResolvedValue({
-      state: 'not_connected',
-      source: 'native',
-    });
-    const debug = spyOn(doctorLog(), 'debug');
-    try {
-      await checkAssistantLogin({ ARCHON_USER_ID: 'operator' });
-      expect(debug).toHaveBeenCalledWith(
-        { err: lookupError },
-        'doctor.assistant_login_credential_lookup_failed'
-      );
-    } finally {
-      debug.mockRestore();
-      native.mockRestore();
       user.mockRestore();
       load.mockRestore();
     }

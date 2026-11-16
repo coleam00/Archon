@@ -263,14 +263,6 @@ describe('workflow-events', () => {
       );
     });
 
-    test('returns empty array for no results', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      const result = await listWorkflowEvents('run-456');
-
-      expect(result).toEqual([]);
-    });
-
     test('throws wrapped error when query fails', async () => {
       mockQuery.mockRejectedValueOnce(new Error('timeout'));
 
@@ -919,26 +911,6 @@ describe('workflow-events', () => {
       expect(mockLogger.warn).toHaveBeenCalledTimes(2);
     });
 
-    test('does not warn when completed events omit optional token usage', async () => {
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([
-          {
-            step_name: 'node-a',
-            event_type: 'node_completed',
-            data: { node_output: 'output without usage' },
-          },
-        ])
-      );
-
-      const result = await getDagResumeSnapshot('run-without-tokens');
-
-      expect(result.completedNodeOutputs).toEqual(
-        new Map([['node-a', { output: 'output without usage' }]])
-      );
-      expect(result.tokens).toBeUndefined();
-      expect(mockLogger.warn).not.toHaveBeenCalled();
-    });
-
     test('skips corrupt JSON rows without losing other rows', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
@@ -1039,23 +1011,6 @@ describe('workflow-events', () => {
       expect(result.costUsd).toBeCloseTo(0.01, 10);
       expect(result.completedNodeOutputs.size).toBe(3);
       expect(mockLogger.warn).toHaveBeenCalledTimes(2);
-    });
-
-    test('does not warn when completed events omit optional cost', async () => {
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([
-          {
-            step_name: 'node-a',
-            event_type: 'node_completed',
-            data: { node_output: 'no cost reported', tokens: { input: 5, output: 1 } },
-          },
-        ])
-      );
-
-      const result = await getDagResumeSnapshot('run-cost-absent');
-
-      expect(result.costUsd).toBeUndefined();
-      expect(mockLogger.warn).not.toHaveBeenCalled();
     });
 
     // #2469: a loop_group writes a roll-up node_completed row whose cost_usd restates

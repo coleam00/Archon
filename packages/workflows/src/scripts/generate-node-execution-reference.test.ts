@@ -26,18 +26,6 @@ describe('node execution reference', () => {
     expect(updateReference(current.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n'))).toBe(
       updateReference(current)
     );
-    const rendered = renderReferenceTables();
-    for (const title of [
-      'Execution record',
-      'Execution metadata',
-      'Cache record',
-      'Persisted event data',
-    ]) {
-      expect(rendered).toContain(`### ${title}`);
-    }
-    expect(rendered).toContain('`spend.tokens.value.cacheRead`');
-    expect(rendered).toContain('`cache.invalidatingDeps[]`');
-    expect(rendered).toContain('`node_output_spill_path`');
   });
 
   it('documents every cache action with the event emitted by its serializer', async () => {

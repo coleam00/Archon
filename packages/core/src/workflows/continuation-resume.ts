@@ -18,7 +18,7 @@ import type {
   WorkflowResumeInput,
 } from '@archon/workflows/engine-port';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
-import type { WorkflowResumeCursor } from '@archon/workflows/store';
+import type { ResumeClaimCursor, WorkflowResumeCursor } from '@archon/workflows/store';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   answeredPauseContinuation,
@@ -80,7 +80,7 @@ export async function resumeRunContinuation(
   host: { deps: WorkflowDeps; engine: IWorkflowEngine },
   runId: string,
   resolveContext: (run: WorkflowRun) => Promise<ContinuationContext>,
-  cursor?: WorkflowResumeCursor,
+  cursor?: ResumeClaimCursor,
   options: { actorUserId?: string; resolveProject?: ResolveProject } & Pick<
     WorkflowResumeOptions,
     'deferScratchCleanup'
@@ -88,7 +88,7 @@ export async function resumeRunContinuation(
 ): Promise<ContinuationAdmission> {
   const run = await host.deps.store.getWorkflowRun(runId);
   if (!run) return { kind: 'unavailable', reason: 'run no longer exists' };
-  if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) return { kind: 'not-accepted' };
+  if (!continuable(run, cursor)) return { kind: 'not-accepted' };
   try {
     await runSource.resolveRunSourceCapture(run.metadata);
   } catch (error) {
@@ -130,6 +130,16 @@ export async function resumeRunContinuation(
     cursor,
     options: { ...project.options, ...executionOptions },
   });
+}
+
+/**
+ * A failed or paused run continues. A `running` run continues only under the `ownerless`
+ * cursor of an operator's resume, which `resumeWorkflow` checked; the store refuses it if
+ * its claim moved since.
+ */
+function continuable(run: WorkflowRun, cursor: ResumeClaimCursor | undefined): boolean {
+  if (run.status === 'running') return cursor?.kind === 'ownerless';
+  return RESUMABLE_WORKFLOW_STATUSES.includes(run.status);
 }
 
 async function resumeWithLiveOwner(

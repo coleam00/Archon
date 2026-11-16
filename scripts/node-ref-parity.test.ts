@@ -4,9 +4,8 @@
  * identical to the engine's originals.
  *
  * `@archon/web` must never import `@archon/workflows` (a server package), and
- * `api.generated.d.ts` is type-only so it cannot carry a runtime value — the
- * same constraint AGENTS.md records for `TRIGGER_RULES`. The web package
- * therefore keeps deliberate copies of both grammars, and these checks are what
+ * `api.generated.d.ts` is type-only so it cannot carry a runtime value. The web
+ * package therefore keeps deliberate copies of both grammars, and these checks are what
  * keep those copies honest.
  *
  * They live in `scripts/` rather than beside the web modules because this is a

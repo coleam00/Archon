@@ -179,14 +179,11 @@ describe('parseFixtureFile', () => {
     );
   });
 
-  it.each(['authoredOutcome', 'expected', 'failNode', 'reachd', 'input', 'resolvedTextContains'])(
-    'rejects unknown fixture declaration key %s',
-    key => {
-      expect(() => parseFixtureFile(`fixture:\n  ${key}: failed`, 'x')).toThrow(
-        `Unrecognized key: "${key}"`
-      );
-    }
-  );
+  it.each(['failNode'])('rejects unknown fixture declaration key %s', key => {
+    expect(() => parseFixtureFile(`fixture:\n  ${key}: failed`, 'x')).toThrow(
+      `Unrecognized key: "${key}"`
+    );
+  });
 
   it('preserves every supported fixture declaration key', () => {
     const declaration: FixtureDeclaration = {

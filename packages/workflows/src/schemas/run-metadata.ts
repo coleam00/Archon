@@ -222,13 +222,14 @@ export function readContinuationMode(
 }
 
 /**
- * The host, process and user that last took over executing this run, stamped by the
- * executor each time it starts or resumes execution. The live-owner endpoint is
- * local to one host and one user, so when no owner answers, this record is what
- * `abandon` shows the operator, including whether the owner ran on another host or
- * as another user. It is a report, never a liveness signal: nothing decides a run is
- * dead from it. `workflow wait` reads its host and uid only to refuse reporting owner
- * loss when this host and user could not reach that owner's endpoint.
+ * The host, process and user that last took over executing this run. The store writes it
+ * in the same update that makes the run `running` for that process (a pending claim or a
+ * resume, `currentExecutionOwner`), so no reader sees a new claim beside the previous
+ * owner. The live-owner endpoint is local to one host and one user, so when no owner
+ * answers, this record is what `abandon` shows the operator, including whether the owner
+ * ran on another host or as another user. It is a report, never a liveness signal:
+ * nothing decides a run is dead from it. `workflow wait` and resume read its host and uid
+ * only to refuse when this host and user could not reach that owner's endpoint.
  */
 export const EXECUTION_OWNER_METADATA_KEY = 'execution_owner';
 

@@ -33,7 +33,6 @@ type TransactionReads = Pick<
   | 'findChildRuns'
   | 'getRunAncestry'
   | 'getActiveWorkflowRunByPath'
-  | 'findResumableRun'
   | 'findWorkflowRunsByIdPrefix'
   | 'findAdoptingRuns'
   | 'listAttentionQueueRows'
@@ -50,11 +49,9 @@ export const listRunEvents = (events: WorkflowEventRow[], id: string): WorkflowE
 export const newestFirst = (rows: WorkflowRun[]): WorkflowRun[] =>
   rows.sort((a, b) => b.started_at.getTime() - a.started_at.getTime());
 
+/** Resumable without a cursor; a `running` run needs a matching `ownerless` cursor too. */
 export const isResumable = (run: WorkflowRun): boolean =>
-  run.status === 'paused' ||
-  run.status === 'failed' ||
-  (run.status === 'running' &&
-    (run.last_activity_at === null || run.last_activity_at.getTime() < Date.now() - 86_400_000));
+  run.status === 'paused' || run.status === 'failed';
 
 /** A run `cancelResumableRunsForConversation(conversationId)` cancels. */
 export const isConversationResetTarget = (run: WorkflowRun, conversationId: string): boolean =>
@@ -234,14 +231,6 @@ export function createTransactionReads(
               workflowPathPriorityTime(a).getTime() - workflowPathPriorityTime(b).getTime() ||
               (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
           )[0] ?? null
-      ),
-    findResumableRun: async (name, path) =>
-      structuredClone(
-        newestFirst(
-          [...runs.values()].filter(
-            run => run.workflow_name === name && run.working_path === path && isResumable(run)
-          )
-        )[0] ?? null
       ),
     findWorkflowRunsByIdPrefix: async (prefix, codebaseId) =>
       structuredClone(

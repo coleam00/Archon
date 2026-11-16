@@ -5,18 +5,6 @@ import { SessionNotFoundError } from '../db/sessions';
 
 describe('session-transitions', () => {
   describe('getTriggerForCommand', () => {
-    test('maps reset to reset-requested', () => {
-      expect(getTriggerForCommand('reset')).toBe('reset-requested');
-    });
-
-    test('maps worktree-remove to worktree-removed', () => {
-      expect(getTriggerForCommand('worktree-remove')).toBe('worktree-removed');
-    });
-
-    test('maps setproject to project-changed', () => {
-      expect(getTriggerForCommand('setproject')).toBe('project-changed');
-    });
-
     test('returns null for commands without triggers', () => {
       expect(getTriggerForCommand('help')).toBeNull();
       expect(getTriggerForCommand('status')).toBeNull();

@@ -545,18 +545,8 @@ describe('run row stamps', () => {
         expect.objectContaining({ metadata: expect.objectContaining(owner) })
       );
     });
-
-    it.each([
-      ['a row a launcher pre-created', { preCreatedRun: makeRun({ status: 'pending' }) }],
-      ['a resumed run', resumeOf(makeRun())],
-    ])('restamps this process on %s', async (_label, options) => {
-      const store = makeStore({ claimPendingWorkflowRun: mock(async () => makeRun()) });
-      await startWorkflow({ store, options });
-      expect(store.updateWorkflowRun).toHaveBeenCalledWith(
-        'run-123',
-        expect.objectContaining({ metadata: expect.objectContaining(owner) })
-      );
-    });
+    // A pre-created row and a resumed one get their owner from the store, in the update
+    // that claims or resumes them (store conformance: `the claim and every resume record`).
   });
 
   // #2872 — `run --detach` writes the row before it forks, so `Started` names a queryable

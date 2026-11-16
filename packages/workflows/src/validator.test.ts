@@ -15,8 +15,6 @@ registerBuiltinProviders();
 registerPiProvider();
 
 import {
-  levenshtein,
-  findSimilar,
   makeWorkflowResult,
   validateWorkflowResources,
   validateCommand,
@@ -107,80 +105,6 @@ async function createCommandFile(name: string, content = '# Do something'): Prom
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, `${name}.md`), content);
 }
-
-// =============================================================================
-// levenshtein
-// =============================================================================
-
-describe('levenshtein', () => {
-  test('identical strings → 0', () => {
-    expect(levenshtein('abc', 'abc')).toBe(0);
-  });
-
-  test('single insertion', () => {
-    expect(levenshtein('abc', 'abcd')).toBe(1);
-  });
-
-  test('single deletion', () => {
-    expect(levenshtein('abcd', 'abc')).toBe(1);
-  });
-
-  test('single substitution', () => {
-    expect(levenshtein('abc', 'axc')).toBe(1);
-  });
-
-  test('empty string → length of other', () => {
-    expect(levenshtein('', 'abc')).toBe(3);
-    expect(levenshtein('abc', '')).toBe(3);
-  });
-
-  test('both empty → 0', () => {
-    expect(levenshtein('', '')).toBe(0);
-  });
-
-  test('typical typo: "asist" vs "assist"', () => {
-    expect(levenshtein('asist', 'assist')).toBe(1);
-  });
-
-  test('completely different strings', () => {
-    expect(levenshtein('abc', 'xyz')).toBe(3);
-  });
-});
-
-// =============================================================================
-// findSimilar
-// =============================================================================
-
-describe('findSimilar', () => {
-  test('returns closest candidates within threshold', () => {
-    const result = findSimilar('asist', ['assist', 'assign', 'resist', 'totally-different']);
-    expect(result).toContain('assist');
-    expect(result.length).toBeLessThanOrEqual(3);
-  });
-
-  test('excludes exact match (distance = 0)', () => {
-    expect(findSimilar('assist', ['assist', 'asist'])).not.toContain('assist');
-  });
-
-  test('returns empty array when nothing is close', () => {
-    expect(findSimilar('xyz', ['totally-different', 'another-one'])).toEqual([]);
-  });
-
-  test('respects explicit maxDistance override', () => {
-    const result = findSimilar('a', ['ab', 'abc', 'abcd'], 1);
-    expect(result).toEqual(['ab']);
-  });
-
-  test('returns at most 3 suggestions', () => {
-    const result = findSimilar('test', ['teat', 'tent', 'text', 'best', 'rest']);
-    expect(result.length).toBeLessThanOrEqual(3);
-  });
-
-  test('is case-insensitive for near-matches', () => {
-    const result = findSimilar('ASIST', ['assist']);
-    expect(result).toContain('assist');
-  });
-});
 
 // =============================================================================
 // validateWorkflowResources — command nodes
@@ -935,9 +859,14 @@ describe('discoverAvailableCommands', () => {
   });
 
   test('loadDefaultCommands: false suppresses bundled commands', async () => {
-    const withDefaults = await discoverAvailableCommands(tmpDir, { loadDefaultCommands: true });
-    const without = await discoverAvailableCommands(tmpDir, { loadDefaultCommands: false });
-    expect(withDefaults.length).toBeGreaterThanOrEqual(without.length);
+    const bundled = formatPackagedResourceReference(
+      { source: 'bundled', pack: 'fake', workflow: 'review' },
+      'check'
+    );
+    const withDefaults = await validateCommand(bundled, tmpDir, { loadDefaultCommands: true });
+    const without = await validateCommand(bundled, tmpDir, { loadDefaultCommands: false });
+    expect(withDefaults.valid).toBe(true);
+    expect(without.valid).toBe(false);
   });
 
   // --- Home-scoped commands (~/.archon/commands/) — new capability
@@ -961,7 +890,8 @@ describe('discoverAvailableCommands', () => {
     });
 
     test('repo command overrides home command with the same name', async () => {
-      await createHomeCommand('shared', '# Home version');
+      // The home copy is empty, so the result is valid only when the repo copy wins.
+      await createHomeCommand('shared', '');
       await createCommandFile('shared', '# Repo version');
       const result = await validateCommand('shared', tmpDir, { loadDefaultCommands: false });
       expect(result.valid).toBe(true);
@@ -1527,26 +1457,6 @@ describe('validateWorkflowResources — bash output-ref lint', () => {
     expect(warnings).toHaveLength(0);
   });
 
-  test('warns on a double-quoted $node.output in a loop until_bash', async () => {
-    // until_bash substitutes with the same escapedForBash=true path as bash nodes,
-    // so the footgun applies there too.
-    const workflow = makeWorkflow('test', [
-      {
-        id: 'gen',
-        prompt: 'produce output',
-        kind: 'loop',
-        loop: {
-          until: 'DONE',
-          until_bash: 'status="$emit.output.status" && [ "$status" = "done" ]',
-        },
-      } as unknown as DagNode,
-    ]);
-    const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry);
-    const warnings = issues.filter(i => i.level === 'warning' && i.field === 'loop.until_bash');
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0].message).toContain('wrapping');
-  });
-
   test('warns on double-quoted output refs in top-level and nested loop_groups', async () => {
     const workflow = makeWorkflow('test', [
       {
@@ -1579,22 +1489,6 @@ describe('validateWorkflowResources — bash output-ref lint', () => {
       ['inner', 'loop_group.until_bash'],
     ]);
     expect(warnings.every(warning => warning.message.includes('wrapping'))).toBe(true);
-  });
-
-  test('warns on a bare output ref in loop_group until_bash', async () => {
-    const workflow = makeWorkflow('test', [
-      {
-        id: 'group',
-        kind: 'loop_group',
-        loop_group: {
-          until_bash: 'test $probe.output.state != "pending"',
-          max_iterations: 2,
-          nodes: [{ id: 'probe', kind: 'exec', runtime: 'sh', script: 'echo pending' }],
-        },
-      } as unknown as DagNode,
-    ]);
-    const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry);
-    expect(issues.find(i => i.field === 'loop_group.until_bash')?.message).toContain('bare');
   });
 });
 

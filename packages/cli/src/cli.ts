@@ -52,7 +52,7 @@ import { installPipeSafeConsole } from './utils/safe-console';
 import { withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
 import { escapeRunJobIfRequested } from './utils/run-job-escape';
-import { rejectConfigOutsideRun, RESUME_RUN_CONFIG_CONFLICT } from './dispatch-guards';
+import { rejectConfigOutsideRun } from './dispatch-guards';
 import { resolveCliExitCode } from './utils/workflow-exit-code';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 installPipeSafeConsole();
@@ -343,14 +343,7 @@ async function decodeDetachedRunConfig({
     const { decodeWorkflowRunConfigHandoff } = await import(
       '@archon/core/config/run-config-handoff'
     );
-    const detachedRunConfig = decodeWorkflowRunConfigHandoff(detachedRunConfigPayload);
-    // Fail-fast for the decode step, not a second copy of the invariant: `workflow-run-admission.ts`
-    // still owns this rejection for every caller. A legitimately spawned detached child
-    // cannot reach it — the parent refuses to seal a config for a continuation before it
-    // forks — so this only fires on a hand-built `--internal-detached-run-config`, and
-    // saves it a database round-trip on the way to the same message.
-    if (values.resume) throw new Error(RESUME_RUN_CONFIG_CONFLICT);
-    return detachedRunConfig;
+    return decodeWorkflowRunConfigHandoff(detachedRunConfigPayload);
   }
   return undefined;
 }

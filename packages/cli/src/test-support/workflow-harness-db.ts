@@ -34,7 +34,7 @@ mock.module('@archon/core/db/isolation-environments', () => ({
   findActiveByWorkflow: mock(() => Promise.resolve(null)),
   create: mock(() => Promise.resolve({ id: 'iso-123' })),
   listActive: mock(() => Promise.resolve([])),
-  // Reached only by the --resume path. mock.module() MERGES over the real
+  // Reached only by the resume path. mock.module() MERGES over the real
   // module, so omitting this would leave the REAL implementation in place and
   // open a live SQLite handle rather than failing loudly (#2240).
   listByCodebase: mock(() => Promise.resolve([])),
@@ -106,7 +106,6 @@ mock.module('@archon/core/db/workflows', () => ({
   cancelWorkflowRun: mockCancelWorkflowRunCommand,
   findChildRuns: mock(() => Promise.resolve([])),
   getRunAncestry: mock(() => Promise.resolve([])),
-  findResumableRun: mock(() => Promise.resolve(null)),
   resumeWorkflowRun: mock(() => Promise.resolve(null)),
   getWorkflowRun: mockLookupWorkflowRun,
   getWorkflowRunForAttention: mockLookupWorkflowRun,

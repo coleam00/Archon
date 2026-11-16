@@ -397,6 +397,14 @@ export async function stopLiveOwner(
   }
 }
 
+/** The top of `runId`'s `parent_run_id` chain; undefined when no ancestor row remains. */
+export async function rootRunIdOf(
+  ctx: OperationContext,
+  runId: string
+): Promise<string | undefined> {
+  return (await ctx.store.getRunAncestry(runId)).at(-1)?.id;
+}
+
 /** Every cancel and abandon here is an operator's request, whichever surface sent it. */
 export function cancelByOperator(
   ctx: OperationContext,

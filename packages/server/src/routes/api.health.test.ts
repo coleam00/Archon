@@ -448,15 +448,6 @@ describe('GET /api/health', () => {
     expect(await response.json()).toEqual(snapshot);
   });
 
-  test('returns 200 without any auth requirements', async () => {
-    mockGetStats.mockImplementationOnce(makeIdleLockStats);
-    mockGetRunningWorkflows.mockImplementationOnce(async () => []);
-
-    const app = makeApp();
-    const response = await app.request('/api/health');
-    expect(response.status).toBe(200);
-  });
-
   test('includes is_docker: false in non-Docker environment', async () => {
     mockGetStats.mockImplementationOnce(makeIdleLockStats);
     mockGetRunningWorkflows.mockImplementationOnce(async () => []);

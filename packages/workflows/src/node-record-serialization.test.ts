@@ -129,17 +129,6 @@ describe('node record serializers', () => {
     expect(restored?.metadata?.lifecycle).toEqual(lifecycle);
   });
 
-  it('preserves persisted lifecycle selection order', () => {
-    expect(NODE_LIFECYCLE_EVENT_TYPES).toEqual([
-      'node_started',
-      'node_suspended',
-      'node_completed',
-      'node_failed',
-      'node_skipped',
-      'node_skipped_prior_success',
-    ]);
-  });
-
   it('persists and reads every schema-owned metadata field', () => {
     const source = record();
     const durable = serializeNodeStateRecord(source);

@@ -1,7 +1,9 @@
+import { hostname } from 'node:os';
 import { serializeNodeStateRecord } from '../node-record-serialization';
 import type { NodeExecutionRecord } from '../schemas/node-execution';
 import { PAUSE_CAUSE_METADATA_KEY, type PauseCause } from '../schemas/pause-cause';
 import type { RunCancelReason } from '../schemas/run-terminal-reason';
+import type { ExecutionOwnerRecord } from '../schemas/run-metadata';
 import {
   SOURCE_RELEASE_METADATA_KEY,
   workflowWaitStepName,
@@ -69,6 +71,18 @@ export const EXECUTION_CLAIM_METADATA_KEY = 'execution_claim';
 export function executionClaim(metadata: Record<string, unknown>): string | null {
   const claim = metadata[EXECUTION_CLAIM_METADATA_KEY];
   return typeof claim === 'string' ? claim : null;
+}
+
+/**
+ * The owner record of the calling process. Every store records it in the same update that
+ * makes a run `running` for that process (a pending claim or a resume), because the process
+ * that claims or resumes a run is the one that executes it. A resumer on another host then
+ * reads the new owner, not the previous one, and refuses instead of starting a second
+ * executor before the new owner stamps the row.
+ */
+export function currentExecutionOwner(): ExecutionOwnerRecord {
+  const uid = process.getuid?.();
+  return { host: hostname(), pid: process.pid, ...(uid === undefined ? {} : { uid }) };
 }
 
 /** What `releaseRunForUnreadableSource` records about the node whose source could not be read. */
