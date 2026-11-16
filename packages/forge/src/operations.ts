@@ -123,6 +123,18 @@ export const commitChecksObservationSchema = checkSetSchema.safeExtend({
   revision: gitObjectIdSchema,
   approvalPending: z.boolean().nullable().optional(),
 });
+/** The `forge check` refusals a plugin can state its own remedy for. */
+const pluginRemedyKinds = ['unsupported_op', 'no_credential'] as const;
+type PluginRemedyKind = (typeof pluginRemedyKinds)[number];
+/**
+ * The `forge check` refusals the operator fixes, each answered with a remedy. A run
+ * refused at start reports these kinds as they are; any other failure is the check's own.
+ */
+export const forgeAccessRefusalKinds = ['no_plugin_for_host', ...pluginRemedyKinds] as const;
+export type ForgeAccessRefusalKind = (typeof forgeAccessRefusalKinds)[number];
+export function isForgeAccessRefusalKind(kind: string): kind is ForgeAccessRefusalKind {
+  return (forgeAccessRefusalKinds as readonly string[]).includes(kind);
+}
 export const pluginIdentitySchema = z.object({
   name: z.string().regex(/^[a-z0-9-]+$/),
   version: z.string().min(1),
@@ -137,7 +149,10 @@ export const pluginMetadataSchema = pluginIdentitySchema.extend({
   // The operator's next step when `forge check` refuses for this plugin; forge supplies
   // generic text for a plugin that states none.
   remedies: z
-    .object({ unsupported_op: z.string().min(1), no_credential: z.string().min(1) })
+    .object({
+      unsupported_op: z.string().min(1),
+      no_credential: z.string().min(1),
+    } satisfies Record<PluginRemedyKind, z.ZodString>)
     .partial()
     .optional(),
 });
@@ -203,11 +218,9 @@ export const temporaryErrorKinds = ['unavailable', 'rate_limited'] as const;
 export const forgeErrorSchema = z.object({
   kind: z.enum([
     ...temporaryErrorKinds,
-    'unsupported_op',
+    ...forgeAccessRefusalKinds,
     'conflict',
     'authorization',
-    'no_plugin_for_host',
-    'no_credential',
     'not_found',
     'forge_error',
     'invalid_request',

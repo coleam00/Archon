@@ -10,6 +10,7 @@ import {
   PR_VIEW_ANY_STATE,
   RESOLVE_SUBJECT,
   temporaryErrorKinds,
+  type ForgeAccessRefusalKind,
   type ForgeError,
   type ForgeMutationRequest,
   type ForgeRequest,
@@ -469,16 +470,13 @@ export async function checkForgeAccess(
 
 /** A refusal the operator fixes, with their next step: the plugin's text, else forge's. */
 function refused(
-  error: ForgeError & { kind: 'no_plugin_for_host' | 'unsupported_op' | 'no_credential' },
+  error: ForgeError & { kind: ForgeAccessRefusalKind },
   metadata?: PluginMetadata
 ): Extract<ForgeAccessCheck, { ok: false }> {
   return { ok: false, error, remedy: remedy(error.kind, metadata) };
 }
 
-function remedy(
-  kind: 'no_plugin_for_host' | 'unsupported_op' | 'no_credential',
-  metadata: PluginMetadata | undefined
-): string {
+function remedy(kind: ForgeAccessRefusalKind, metadata: PluginMetadata | undefined): string {
   if (kind === 'no_plugin_for_host' || metadata === undefined) {
     return "Install a forge plugin that claims this host with `archon plugin add`, or map the host to an installed plugin under `forge.hosts` in Archon's config.";
   }
