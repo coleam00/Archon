@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { RunEndedFacts } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { createRunEndedStarts } from './run-ended';
+import { providerRegistry } from '@archon/providers';
+import { createRunEndedPreflight, createRunEndedStarts } from './run-ended';
 
 const track = trackTempRoots();
 
@@ -138,6 +139,24 @@ describe('run-ended starts', () => {
   ])('%s starts nothing', async (_label, ended) => {
     const starts = await triggersWith({ 'build.json': trigger() });
     expect(await starts(ended)).toEqual([]);
+  });
+
+  test('a run with no item reads no trigger file, so a malformed one cannot fail it', async () => {
+    const directory = track(await mkdtemp(join(tmpdir(), 'archon-run-ended-')));
+    await writeFile(join(directory, 'broken.json'), '{ not json');
+    const dependencies = {
+      triggersDirectory: () => directory,
+      getItem: async () => ITEM,
+      projectKeyOf: async () => ITEM.projectKey,
+    };
+    const noItem = endedRun({ item_id: null });
+    expect(await createRunEndedStarts(dependencies)(facts({ run: noItem }))).toEqual([]);
+    const preflight = createRunEndedPreflight({
+      ...dependencies,
+      providers: providerRegistry,
+      loadConfig: () => Promise.reject(new Error('a run with no item loads no config')),
+    });
+    expect(await preflight(noItem)).toBeUndefined();
   });
 
   test('a binding that launches in another project starts nothing, even with a bad mapping', async () => {

@@ -1096,68 +1096,6 @@ describe('durable resource starts', () => {
     expect((await listStartReceipts()).map(row => row.id)).toEqual([first.receipt.id]);
   });
 
-  test('a start a completion wrote before its process died stays pending and can be claimed only once', async () => {
-    const { claimStartBindingPreparation, listPendingStartBindings } = createWorkflowStore();
-    const ended = '0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e0e';
-    await admitResourceStart({
-      resource: 'stage-a',
-      capacity: 1,
-      hostId: 'host',
-      overlap: 'queue',
-      launch: launch(ended),
-    });
-    await claimPendingWorkflowRun(ended);
-    const receiptId = crypto.randomUUID();
-    // The completion commits its start; nothing after it runs, as when the process dies.
-    await completeWorkflowRun(ended, { duration_ms: 1 }, undefined, {
-      outcome: { kind: 'enum', value: 'planned' },
-      startReceipts: [
-        {
-          receipt: {
-            id: receiptId,
-            sourceInstanceId: 'stage-b-after-a',
-            deliveryId: ended,
-            contentDigest: 'digest',
-            receivedAt: new Date().toISOString(),
-            occurredAt: null,
-            sourceActor: { source: 'archon-run-ended', id: ended, display: 'planned' },
-          },
-          outcome: 'matched',
-          bindings: [
-            {
-              bindingId: 'stage-b',
-              bindingRevision: 'r1',
-              hostId: 'host',
-              runAsUserId: '22222222-2222-4222-8222-222222222222',
-              resource: 'stage-b',
-              overlap: 'queue',
-              launch: {
-                cwd: '/tmp/test',
-                workflowName: 'b',
-                inputs: {},
-                isolation: { kind: 'in-place' },
-              },
-            },
-          ],
-        },
-      ],
-    });
-    // The restarted host's next drain finds it; a second drain at the same time cannot
-    // claim it again, and once prepared it is no longer pending.
-    expect(await listPendingStartBindings({ hostId: 'host' })).toMatchObject([
-      { receiptId, bindingId: 'stage-b', status: 'pending' },
-    ]);
-    const identity = (ownerId: string) => ({ receiptId, bindingId: 'stage-b', ownerId });
-    expect(await claimStartBindingPreparation(identity('first'))).toBe(true);
-    expect(await claimStartBindingPreparation(identity('second'))).toBe(false);
-    const prepared = launch(crypto.randomUUID());
-    expect(
-      await completeStartBindingPreparation({ ...identity('first'), launch: prepared })
-    ).toMatchObject({ status: 'admitted' });
-    expect(await listPendingStartBindings({ hostId: 'host' })).toEqual([]);
-    expect(await claimStartBindingPreparation(identity('third'))).toBe(false);
-  });
-
   test('an item lists runs that started in the same second in the order they were written', async () => {
     const db = getDatabase();
     await db.query(

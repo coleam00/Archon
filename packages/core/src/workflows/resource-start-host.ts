@@ -393,20 +393,30 @@ function receiptIdOfLaunch(launch: PreparedWorkflowLaunch | undefined): string |
 }
 
 /**
- * Prepare this host's pending receipt bindings, or only those of `receiptIds`, and hand
- * each one admitted now to the host. Failures are collected, not thrown. The store selects
- * `receiptIds` before its page limit, so a host backlog cannot hide a known receipt.
+ * Prepare a page of this host's pending bindings, or all of `receiptIds` page by page (a
+ * page is read again until it brings nothing untried), and start each one admitted now.
+ * Failures are collected, not thrown; a failed binding is not retried here.
  */
 async function preparePendingBindings(
   host: ResourceStartHost,
   failures: ResourceStartDrainFailure[],
   receiptIds?: readonly string[]
 ): Promise<void> {
-  const pending = await host.deps.store.listPendingStartBindings({
-    hostId: host.hostId,
-    receiptIds,
-  });
-  for (const binding of pending) await preparePendingBinding(host, failures, binding);
+  const PAGE = 100;
+  const tried = new Set<string>();
+  const key = (binding: PendingStartBindingInspection) =>
+    'document' in binding ? binding.document : `${binding.receiptId}\n${binding.bindingId}`;
+  for (let offset = 0; offset < (receiptIds?.length ?? 1); ) {
+    const page = receiptIds?.slice(offset, offset + PAGE);
+    const query = { hostId: host.hostId, receiptIds: page, limit: PAGE };
+    const listed = await host.deps.store.listPendingStartBindings(query);
+    const fresh = listed.filter(binding => !tried.has(key(binding)));
+    for (const binding of fresh) {
+      tried.add(key(binding));
+      await preparePendingBinding(host, failures, binding);
+    }
+    if (!page || listed.length < PAGE || fresh.length === 0) offset += PAGE;
+  }
 }
 
 async function preparePendingBinding(
@@ -414,26 +424,19 @@ async function preparePendingBinding(
   failures: ResourceStartDrainFailure[],
   binding: PendingStartBindingInspection
 ): Promise<void> {
-  if ('document' in binding) {
-    failures.push({ error: binding.error });
-    return;
-  }
+  if ('document' in binding) return void failures.push({ error: binding.error });
   if (!binding.intent) return;
-  const identity = {
-    receiptId: binding.receiptId,
-    bindingId: binding.bindingId,
-    ownerId: randomUUID(),
-  };
+  const { receiptId, bindingId } = binding;
+  const identity = { receiptId, bindingId, ownerId: randomUUID() };
   if (!(await host.deps.store.claimStartBindingPreparation(identity))) return;
   let disposition: ResourceStartDisposition;
   try {
     disposition = await prepareClaimedBinding(host, binding.intent, identity);
   } catch (error) {
-    failures.push({ receiptId: binding.receiptId, error });
-    return;
+    return void failures.push({ receiptId, error });
   }
   if (disposition.status === 'admitted')
-    await startAdmittedRequest(host, failures, disposition.requestId, binding.receiptId);
+    await startAdmittedRequest(host, failures, disposition.requestId, receiptId);
 }
 
 async function startAdmittedRequest(
@@ -450,9 +453,8 @@ async function startAdmittedRequest(
 }
 
 /**
- * Prepare only the bindings of `receiptIds` on this host, and start the ones admitted now.
- * The rest of the host's pending and queued work is left for the host's own drain: this
- * is what a process that serves no host does for the starts its own run's end caused.
+ * Prepare every binding of `receiptIds` on this host and start those admitted now, leaving
+ * the host's other work to its own drain: what an ending process does for the starts it caused.
  */
 export async function startReceiptBindings(
   host: ResourceStartHost,
@@ -464,11 +466,10 @@ export async function startReceiptBindings(
 }
 
 /**
- * One host pass: prepare this host's pending receipt bindings, then admit its queued
- * requests while their slots have capacity. Every admitted request is handed to the
- * host. A damaged receipt is reported after the pass instead of stopping it. Safe to run
- * concurrently with other hosts and processes: preparation and admission are claimed
- * atomically by the store.
+ * One host pass: prepare a page of this host's pending receipt bindings, then admit its
+ * queued requests while their slots have capacity, handing each admitted one to the host.
+ * A damaged receipt is reported after the pass. Safe to run concurrently with other hosts
+ * and processes: the store claims preparation and admission atomically.
  */
 export async function drainResourceStartHost(host: ResourceStartHost): Promise<void> {
   const failures: ResourceStartDrainFailure[] = [];
