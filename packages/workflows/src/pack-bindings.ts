@@ -4,8 +4,7 @@
  * Each binding is a timer (`schedule:`), an event (`event:`) or, with neither, a fire-only
  * binding. The checks that span bindings run here, where all are visible: a sibling
  * reference names a declared binding that is written as a file `trigger fire` reads (a
- * timer or fire-only binding), and an event field is read only by an event binding. A
- * timer maps no `item`, since a tick is about no item.
+ * timer or fire-only binding), and an event field is read only by an event binding.
  */
 import type { Fail } from './pack-settings';
 import {
@@ -25,9 +24,6 @@ function parseBinding(id: string, raw: unknown, fail: Fail): PackBinding {
   const event = 'event' in raw;
   if (timer && event) {
     return fail(`binding '${id}' must not set both 'schedule' (a timer) and 'event'`);
-  }
-  if (timer && 'item' in raw) {
-    return fail(`binding '${id}' is a timer and must not map an item: a tick is about no item`);
   }
   // The key's presence picks the schema, so `schedule:` with no value fails as a timer.
   const schema = timer

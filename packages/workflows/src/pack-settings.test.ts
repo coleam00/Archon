@@ -155,7 +155,7 @@ describe('parsePackDeclaration bindings', () => {
       'only an event binding has an event',
     ],
     [timer('    event: { kind: issue.lifecycle }\n'), "must not set both 'schedule'"],
-    [timer('    item: { field: number }\n'), "binding 'sweep' is a timer and must not map an item"],
+    [timer('    item: { field: number }\n'), 'Unrecognized key: "item"'],
     // A schedule key without its expression is a broken timer, never a fire-only binding.
     [
       '  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n    schedule:\n',
