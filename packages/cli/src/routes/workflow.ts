@@ -216,12 +216,36 @@ export async function runWorkflowLogs(route: WorkflowRoute): Promise<number> {
   );
 }
 
+/**
+ * The target of `wait`, `cancel` or `abandon`: one run id, or `--item <key>`. A usage
+ * error is returned as its message.
+ */
+function runOrItemTarget(
+  { positionals, values }: WorkflowRoute,
+  verb: 'wait' | 'cancel' | 'abandon'
+): { runId: string } | { item: string; allRuns: boolean } | { usage: string } {
+  const runId = positionals[2];
+  const item = values.item as string | undefined;
+  const allRuns = values['all-runs'] === true;
+  const usage =
+    verb === 'wait'
+      ? 'Usage: archon workflow wait <run-id> | --item <key> [--json] [--timeout <seconds>]'
+      : `Usage: archon workflow ${verb} <run-id> | --item <key> [--all-runs]`;
+  if (verb === 'wait' && positionals[3] !== undefined) return { usage };
+  if (runId !== undefined && item !== undefined)
+    return { usage: `Error: Pass a run id or --item <key>, not both.\n${usage}` };
+  if (allRuns && verb === 'wait')
+    return { usage: 'Error: --all-runs applies to cancel and abandon.' };
+  if (allRuns && item === undefined)
+    return { usage: `Error: --all-runs applies with --item.\n${usage}` };
+  if (item !== undefined) return { item, allRuns };
+  return runId === undefined ? { usage } : { runId };
+}
+
 export async function runWorkflowWait(route: WorkflowRoute): Promise<number> {
-  const { positionals, values, json, effectiveCwd } = route;
-  const waitRunId = positionals[2];
-  if (!waitRunId || positionals[3] !== undefined) {
-    return await fail(json, 'Usage: archon workflow wait <run-id> [--json] [--timeout <seconds>]');
-  }
+  const { values, json, effectiveCwd } = route;
+  const target = runOrItemTarget(route, 'wait');
+  if ('usage' in target) return await fail(json, target.usage);
   const rawTimeout = values.timeout as string | undefined;
   let timeoutSeconds: number | undefined;
   if (rawTimeout !== undefined) {
@@ -234,9 +258,14 @@ export async function runWorkflowWait(route: WorkflowRoute): Promise<number> {
     }
   }
   // The wait's own exit code (3 for a deadline) has to reach the shell.
+  if ('item' in target)
+    return await route.commands.workflowWaitItemCommand(route.host, target.item, effectiveCwd, {
+      json,
+      timeoutSeconds,
+    });
   return await route.commands.workflowWaitCommand(
     route.host,
-    waitRunId,
+    target.runId,
     json,
     effectiveCwd,
     timeoutSeconds
@@ -281,13 +310,18 @@ export async function runWorkflowResume(route: WorkflowRoute): Promise<number> {
 }
 
 export async function runWorkflowAbandon(route: WorkflowRoute): Promise<number> {
-  const abandonRunId = route.positionals[2];
-  if (!abandonRunId) {
-    return await fail(route.json, 'Usage: archon workflow abandon <run-id>');
-  }
+  const target = runOrItemTarget(route, 'abandon');
+  if ('usage' in target) return await fail(route.json, target.usage);
+  if ('item' in target)
+    return await route.commands.workflowAbandonItemCommand(
+      route.host,
+      target.item,
+      route.effectiveCwd,
+      { json: route.json, allRuns: target.allRuns }
+    );
   return await route.commands.workflowAbandonCommand(
     route.host,
-    abandonRunId,
+    target.runId,
     route.json,
     route.effectiveCwd
   );
@@ -303,13 +337,18 @@ export async function runWorkflowEndTurn(route: WorkflowRoute): Promise<number> 
 }
 
 export async function runWorkflowCancel(route: WorkflowRoute): Promise<number> {
-  const cancelRunId = route.positionals[2];
-  if (!cancelRunId) {
-    return await fail(route.json, 'Usage: archon workflow cancel <run-id>');
-  }
+  const target = runOrItemTarget(route, 'cancel');
+  if ('usage' in target) return await fail(route.json, target.usage);
+  if ('item' in target)
+    return await route.commands.workflowCancelItemCommand(
+      route.host,
+      target.item,
+      route.effectiveCwd,
+      { json: route.json, allRuns: target.allRuns }
+    );
   return await route.commands.workflowCancelCommand(
     route.host,
-    cancelRunId,
+    target.runId,
     route.json,
     route.effectiveCwd
   );

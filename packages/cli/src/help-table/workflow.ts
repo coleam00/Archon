@@ -1,5 +1,10 @@
 import type { HelpGroup } from './types';
 
+const ALL_RUNS_FLAG = {
+  spec: '--all-runs',
+  description: 'With --item: act on every matching run instead of refusing when several match',
+};
+
 export const workflowHelp: HelpGroup = {
   entries: [
     {
@@ -75,8 +80,9 @@ export const workflowHelp: HelpGroup = {
     {
       command: 'workflow',
       subcommand: 'wait',
-      spec: 'workflow wait <run-id>',
-      description: 'Block until the run ends or needs attention',
+      spec: 'workflow wait <run-id> | --item <key>',
+      description:
+        'Block until the run ends or needs attention\nWith --item: until any live run on the item does; names the run',
     },
     {
       command: 'workflow',
@@ -186,14 +192,18 @@ export const workflowHelp: HelpGroup = {
     {
       command: 'workflow',
       subcommand: 'cancel',
-      spec: 'workflow cancel <run-id>',
-      description: 'Stop a running workflow (stops an owning process first)',
+      spec: 'workflow cancel <run-id> | --item <key>',
+      description:
+        "Stop a running workflow (stops an owning process first)\nWith --item: the item's running run; refuses when several are",
+      scopedFlags: [ALL_RUNS_FLAG],
     },
     {
       command: 'workflow',
       subcommand: 'abandon',
-      spec: 'workflow abandon <run-id>',
-      description: 'Mark a run cancelled, stopping a live owner first',
+      spec: 'workflow abandon <run-id> | --item <key>',
+      description:
+        "Mark a run cancelled, stopping a live owner first\nWith --item: the item's pending, running or paused run; refuses when several are",
+      scopedFlags: [ALL_RUNS_FLAG],
     },
     {
       command: 'workflow',

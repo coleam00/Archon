@@ -1052,6 +1052,17 @@ archon workflow wait <run-id> --json --timeout 900
 
 There is no default timeout. Pass `--timeout <seconds>` when the host needs an upper bound.
 
+`archon workflow wait --item <key>` waits on an [item](#items) instead of one run. It
+watches every run on the item that has not ended at call time, plus every run that starts
+on the item while it waits, and returns when the first of them reports something, as
+`workflow wait <run-id>` would for that run. Runs that had already ended are history and
+do not end the wait. Each result names its run: one line per run, or under `--json` one
+`{ "ok": true, "action": "wait", "item", "results": [...] }` document whose `results`
+hold exactly what `workflow wait <run-id> --json` prints for each run. Runs that reported
+together are all listed. An item with no live run is refused rather than waited on
+(`reason: "no_run"`, exit `1`, listing the item's runs). Exit codes are as above: `0` when
+a run reported, `3` when the timeout passed with every watched run still live.
+
 Exit codes describe the command, not the run:
 
 | Exit | Meaning |
@@ -1549,7 +1560,22 @@ who owns the run:
 ```bash
 archon workflow cancel <run-id>
 archon workflow cancel <run-id> --json
+archon workflow cancel --item <key> [--all-runs]
 ```
+
+With `--item <key>`, cancel acts on the [item's](#items) run that is `running`, through
+the same path as `workflow cancel <run-id>`, so a live owner is handled the same way.
+Archon never chooses between runs: when several runs on the item are running, cancel
+refuses and lists them; name one by id, or pass `--all-runs` to cancel each in start
+order. With `--all-runs`, one run's failure does not stop the rest, every run is
+reported, and the command exits `1` if any failed. Cancel also refuses an item with no
+running run, and an item one of whose runs cannot be read, since that run may be the one
+to act on. Under `--json` the command prints one
+`{ "ok", "action": "cancel", "item", "results": [...] }` document whose `results` hold
+exactly what the run-id form prints for each run. A refusal prints
+`{ "ok": false, "action", "item", "reason", "error", "runs"? }`, where `reason` is
+`no_project`, `not_found`, `unreadable`, `no_run` or `several_runs`, and `runs` lists the
+runs to choose from.
 
 When cancel refuses, it exits nonzero. Under `--json` it also prints `{ "ok": false, "error": ... }`.
 `workflow resume` and `workflow abandon` follow the same contract, so a script or bash node can
@@ -1638,7 +1664,12 @@ this host:
 ```bash
 archon workflow abandon <run-id>
 archon workflow abandon <run-id> --json
+archon workflow abandon --item <key> [--all-runs]
 ```
+
+`--item <key>` works as it does for [`workflow cancel`](#workflow-cancel), for the item's
+run that is `pending`, `running` or `paused`. A failed run, or a cancelled run whose
+worktree removal you are retrying, is abandoned by id.
 
 `--json` adds an `owner` object: `{ "outcome": "stopped", "pid": … }`, or
 `{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
@@ -2501,7 +2532,7 @@ A `trigger fire` from inside a run that names no item inherits that run's item, 
 
 A continuation started with `--adopt <run-id>` or `--supersedes <run-id>` and no `--item` belongs to the item of the run it continues, so a fix round or a rerun stays in the item's history. `--item <key>` names another item instead, and a continuation of a run with no item has none. `--supersedes` can name a run of another project by its full id; that run's item cannot be inherited, so the continuation is refused before it starts unless it passes `--item`. The same holds when the continuation has no registered project. A continuation of a run with no item starts in every case.
 
-A run started with no item, and no run to inherit one from, has none. `archon workflow runs --item <key>` reads an item: its runs, open questions, and answers with rulings. Each run carries its `cause`: the run whose end started it, the run and node that fired it, the trigger source that started it, or `null` for a start by hand. `GET /api/items?project=<project>&key=<key>` is the same read over HTTP.
+A run started with no item, and no run to inherit one from, has none. `archon workflow runs --item <key>` reads an item: its runs, open questions, and answers with rulings. Each run carries its `cause`: the run whose end started it, the run and node that fired it, the trigger source that started it, or `null` for a start by hand. `GET /api/items?project=<project>&key=<key>` is the same read over HTTP. `workflow wait`, `cancel` and `abandon` also accept `--item <key>` and never choose between an item's runs: `wait` reports every run that settled, and `cancel` and `abandon` refuse when more than one run applies unless `--all-runs` is passed.
 
 A ruling is a decision recorded on the item without a question having been asked ([`workflow rule`](#workflow-rule)). It is a fact about the item, like an answer, and needs no run: recording one on a key nothing has named writes the item. Withdrawing a ruling keeps the record and marks it withdrawn. A workflow reads its item's answers and rulings through `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to); the engine passes them to no node on its own.
 

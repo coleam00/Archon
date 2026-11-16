@@ -24,6 +24,11 @@ export {
   workflowTestCommand,
   workflowWaitCommand,
 } from './workflow-query';
+export {
+  workflowAbandonItemCommand,
+  workflowCancelItemCommand,
+  workflowWaitItemCommand,
+} from './workflow-item-runs';
 export { workflowAttentionCommand, workflowAttentionLabelCommand } from './workflow-attention';
 export { workflowNoticeCommand, WORKFLOW_NOTICE_USAGE } from './workflow-notice';
 export { workflowRuleCommand, WORKFLOW_RULE_USAGE } from './workflow-rule';
