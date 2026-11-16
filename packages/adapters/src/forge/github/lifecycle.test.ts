@@ -719,6 +719,7 @@ test('reviews paginate submissions and root diff comments, retaining author and 
     submitted_at: '2026-10-06T10:00:00Z',
     created_at: '2026-10-06T10:00:00Z',
   };
+  const comment = { ...item, path: 'a.ts' };
   const calls: string[] = [];
   const response = await handleGithubOperation(
     { operationId: 'reviews', op: 'pr.reviews', ref },
@@ -737,13 +738,13 @@ test('reviews paginate submissions and root diff comments, retaining author and 
                 ]
           );
         return json([
-          { ...item, state: undefined },
-          { ...item, id: 2, in_reply_to_id: 1 },
-          { ...item, id: 3, user: null, commit_id: null, created_at: null },
-          { ...item, id: 4, user: { id: 3, login: 'ci[bot]', type: 'Bot' } },
-          { ...item, id: 5, user: { id: 4, login: 'acme', type: 'Organization' } },
-          { ...item, id: 6, user: { id: 5, login: 'old' } },
-          { ...item, id: 7, user: { id: 6, login: 'ghost', type: 'Mannequin' } },
+          { ...comment, state: undefined },
+          { ...comment, id: 2, in_reply_to_id: 1 },
+          { ...comment, id: 3, user: null, commit_id: null, created_at: null },
+          { ...comment, id: 4, user: { id: 3, login: 'ci[bot]', type: 'Bot' } },
+          { ...comment, id: 5, user: { id: 4, login: 'acme', type: 'Organization' } },
+          { ...comment, id: 6, user: { id: 5, login: 'old' } },
+          { ...comment, id: 7, user: { id: 6, login: 'ghost', type: 'Mannequin' } },
         ]);
       },
     }

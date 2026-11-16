@@ -726,6 +726,7 @@ export class SqliteAdapter implements IDatabase {
         last_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now')),
+        model TEXT,
         PRIMARY KEY (workflow_name, node_id, scope_key, provider)
       );
 

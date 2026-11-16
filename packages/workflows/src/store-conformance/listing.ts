@@ -56,11 +56,13 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
       };
       await store.upsertWorkflowNodeSession({
         ...key,
+        model: 'sonnet',
         provider_session_id: 'first',
         last_run_id: run.id,
       });
       const initial = await store.listWorkflowNodeSessions(key);
       expect(workflowNodeSessionSchema.safeParse(initial[0]).success).toBe(true);
+      expect(initial[0]?.model).toBe('sonnet');
       await store.upsertWorkflowRunNodeSession({
         workflow_run_id: run.id,
         node_id: 'build',
@@ -73,12 +75,14 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
       await Bun.sleep(1100);
       await store.upsertWorkflowNodeSession({
         ...key,
+        model: null,
         provider_session_id: 'second',
         last_run_id: null,
       });
       const changed = await store.listWorkflowNodeSessions(key);
       expect(changed).toHaveLength(1);
       expect(changed[0]).toMatchObject({
+        model: null,
         provider_session_id: 'second',
         last_run_id: null,
         created_at: initial[0]?.created_at,
@@ -86,12 +90,14 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
       await store.upsertWorkflowNodeSession({
         ...key,
         scope_key: 'other',
+        model: null,
         provider_session_id: 'other',
         last_run_id: run.id,
       });
       await store.upsertWorkflowNodeSession({
         ...key,
         node_id: 'other',
+        model: null,
         provider_session_id: 'other',
         last_run_id: run.id,
       });
@@ -303,6 +309,7 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
         ...scope,
         node_id: 'build',
         provider: 'claude',
+        model: null,
         provider_session_id: 'keep',
         last_run_id: failed.id,
       });

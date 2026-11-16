@@ -17,7 +17,7 @@ import {
   mockDispatchBackgroundWorkflow,
   mockExecuteWorkflow,
   mockFailPreparedRun,
-  mockFindResumableRunByParentConversation,
+  mockListResumableRunsByParentConversation,
   mockGetCodebase,
   mockGetCurrentBranchStrict,
   mockGetOrCreateConversation,
@@ -84,14 +84,14 @@ export function setupRoutingTests() {
     mockHandleCommand.mockReturnValueOnce(
       Promise.resolve(makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'raced-run-1',
           working_path: '/repos/test-repo/worktrees/paused',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
     mockHydrateResumableRun.mockReturnValueOnce(
       Promise.reject(refusal ?? new WorkflowNotResumableError('raced-run-1', 'running'))
@@ -625,8 +625,8 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     mockHandleCommand.mockReturnValueOnce(
       Promise.resolve(fixture.makeWorkflowResult({ args: 'test message' }))
     );
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(makeResumableRun({ status: 'paused' }))
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([makeResumableRun({ status: 'paused' })])
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({

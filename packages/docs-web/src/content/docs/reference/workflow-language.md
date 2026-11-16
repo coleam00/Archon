@@ -108,7 +108,7 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 | `depends_on` | string[] | `[]` | Node IDs that must complete before this node runs |
 | `when` | string | unset | Condition expression. Node is skipped if false. See [Condition Syntax](#when-condition-syntax) |
 | `trigger_rule` | string | `all_success` | Join semantics when multiple upstreams exist. Distinct from a fan-out node's [`fan_out.join`](#the-four-fields), which reduces one node's N children and defaults to `all_done` |
-| `context` | `'fresh'` \| `'shared'` \| `{ resume: node-id }` | unset | `fresh` = new session; `shared` = inherit the ambient prior session in a sequential layer; `resume` = fork the exact completed upstream node's session. Parallel layers require named resume or fresh context |
+| `context` | `'fresh'` \| `'shared'` \| `'same'` \| `{ resume: node-id }` | unset | `fresh` = new session; `shared` = inherit the ambient prior session in a sequential layer; `same` = continue the session this node itself last had, in its previous loop round or an earlier run on the same item (see [Continuing a node's own session](#continuing-a-nodes-own-session)); `resume` = fork the exact completed upstream node's session. Parallel layers require named resume, `same`, or fresh context |
 | `idle_timeout` | number | unset | Kill node after this many milliseconds without a provider chunk. Any chunk counts as progress, thinking included. Open tool calls and reported live background work suspend the timer until a result arrives. After a result, silence counts toward this timeout while waiting for turn settlement, even if work remains live; a timeout fails the node as incomplete. A new running wake turn or newly started tool or subtask restores live-work protection until its next result |
 | `retry` | object | unset | Per-node retry configuration. See [Retry Configuration](#retry-configuration) |
 | `mutates_checkout` | boolean | unset | `false` asserts this node leaves the git checkout untouched. The engine compares before/after Git status and content fingerprints of Git-visible dirty and individually listed untracked paths, excluding the run's artifacts, state, and log directories. It fails the node naming changed paths, including edits to already-dirty files and additions inside already-untracked directories. Dirty checkout cost scales with the visible dirty/untracked bytes read. This observation does not prevent writes or detect changes restored before the final snapshot; ignored paths and recursive submodule contents are not fingerprinted. Enforced on `command`, `prompt`, `bash`, and `script` nodes; the check is skipped outside a git repository or when Git or required filesystem reads fail. This includes Git status output exceeding the subprocess buffer limit (1 MiB on stdout or stderr); a large untracked tree can skip the entire assertion, even when those paths would be excluded from fingerprinting. A layer whose parallel nodes all declare it still runs in parallel, and a violation there also names the guarded siblings that ran in the same layer, since the change may not be the failing node's alone. Since one snapshot covers the whole checkout, every guarded node running when the write lands fails, not only the writer. A layer that mixes guarded nodes with any node that isn't checkout-guarded (a node of another kind, or one without `mutates_checkout: false`) runs one node at a time, so a sibling's write is never blamed on a guarded node. Distinct from the workflow-level [`mutates_checkout`](#running-sub-runs-side-by-side), which controls the path lock |
@@ -230,6 +230,47 @@ This is an exact, immutable fork contract:
 - Run resume restores these private handles for completed nodes, so a pause or process restart does not lose declared ancestry. Each node's full session ID is recorded on its node record; transcripts and logs carry at most an eight-character preview.
 
 This is separate from `persist_session`: `{ resume: source }` selects ancestry within one governed run, while `persist_session` continues the same node across separate workflow invocations. If both apply to a consumer, the named source wins for the current invocation and the resulting branch is still saved for its next invocation.
+
+### Continuing a node's own session
+
+`context: same` continues the session the node itself last had, so one node can build in round one and fix what a check returned in round two, or pick up again when a later run on the same item starts its stage again. Fresh stays the default; each node opts in.
+
+```yaml
+nodes:
+  - id: deliver
+    loop_group:
+      max_iterations: 4
+      until_bash: 'checks=$checks.output; [ "$checks" = PASS ]'
+      nodes:
+        - id: build
+          prompt: |
+            Build $ARGUMENTS. The last checks reported:
+            $LOOP_PREV.checks.output
+          context: same
+        - id: checks
+          bash: ./scripts/check.sh
+          depends_on: [build]
+```
+
+The node reads, in order:
+
+1. **Its own earlier round in this loop invocation.** Round two continues round one's session in place: it is the same run and the same node.
+2. **Otherwise, the run's item.** The newest session this workflow and node left on the run's item, in whichever run, is forked. The earlier run's session stays as it was, so two runs never append to one session. The node's path names it (`deliver.build` inside the group above), so a differently named node, or the same name in another workflow, never shares it.
+3. **Otherwise, a fresh session.** This includes a run with no item, and every run on the file store, which has no items. Inside a loop, such a node still continues between rounds.
+
+The session is the node's own:
+
+- It never takes the shared sequential cursor, so it does not continue another node's session.
+- A parallel layer, `fresh_context: true` on the loop, and the start of a composed block do not reset it. Nodes that run side by side each continue their own session.
+- A default-context node after it in a sequential layer still forks its session, as it would any node's. Set that node to `context: fresh` if it should start clean.
+
+Every round writes its session under the item, so a later run, or a [failure resume](/guides/loop-nodes/#resume) that restarts mid-loop, continues the newest round. A pause inside the loop (an attention wait, a durable wait, an approval) keeps the cursor, and the next round continues it.
+
+A recorded session that ran on another provider or model than the node now resolves to is not continued. The node starts fresh, the run records a `node_session_not_continued` event with `reason: provider_changed` or `model_changed` and both pairs, and posts a notice naming them. A provider without `sessionFork` continues between rounds but starts fresh across runs, with `reason: no_fork`. Sessions are kept one per provider, and a store may record their time to the second, so two providers' sessions can tie as the newest; neither is then provably the last, and the node starts fresh with `reason: ambiguous`. A provider without `sessionResume` cannot use `same`: the workflow fails to load when the provider is written in the file, and the node fails when it runs otherwise. A failed lookup runs the node fresh and posts a notice.
+
+`same` is a different thing from `shared` and from `persist_session`. `shared` continues the previous sequential node's session in this run. `persist_session` continues a node across runs launched from one conversation; `same` continues it across runs on one item, which a CLI or trigger run has too. A node cannot declare both.
+
+A node that keeps its session keeps its earlier reasoning too. A reviewer that continues its own session may defend findings it made in an earlier round, where a fresh one would look again. Choose per node.
 
 ### Claude SDK Advanced Options
 
@@ -1003,7 +1044,7 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 **How to resume:**
 
 - **CLI**: `archon workflow resume <run-id>` continues that run: a failed or paused one, or one its killed process left `running`. Find the id with `archon workflow runs`. See the [CLI reference](/reference/cli/#workflow-resume) for what it checks before resuming a `running` run.
-- **Chat**: Approving or rejecting a _paused_ workflow continues it from where it left off (the platform already knows the run id). For a prior **failed** run, `/workflow run <name>` does **not** silently resume: it shows a prompt offering three choices: resume it, abandon it and run fresh, or start fresh anyway. Pass `--force` to skip the prompt: `/workflow run <name> --force <args>` always starts a fresh run.
+- **Chat**: Approving or rejecting a _paused_ workflow continues it from where it left off (the platform already knows the run id). For a prior **failed** run, `/workflow run <name>` does **not** silently resume: it shows a prompt offering three choices: resume it, abandon it and run fresh, or start fresh anyway. Pass `--force` to skip the prompt: `/workflow run <name> --force <args>` always starts a fresh run. Each failed or paused run of that workflow in the conversation is a candidate to continue, except a run waiting for attention or a run with no working path, which never counts. When two or more candidates remain, `/workflow run <name>` continues none of them: it lists them with the `/workflow resume <id>` command for each, and `--force` to start fresh.
 - **Web UI**: Open the failed run in the console and use **Resume** in the run detail action bar.
 
 **What happens on resume:**
@@ -1119,7 +1160,7 @@ To continue a node's conversation outside Archon, read its session id from `arch
 
 ### `context: fresh` overrides
 
-A node with `context: fresh` skips persistence (and in-run threading). The explicit "always fresh" intent wins over `persist_session`.
+A node with `context: fresh` skips persistence (and in-run threading). The explicit "always fresh" intent wins over `persist_session`. A `context: same` node also takes no workflow-level `persist_sessions` default: it carries its own cross-run continuity, scoped to the run's item (see [Continuing a node's own session](#continuing-a-nodes-own-session)).
 
 `context: { resume: source }` also wins over the consumer's saved cross-run session for that invocation. After the exact named fork succeeds, its new branch is saved normally when `persist_session` applies.
 
@@ -2257,9 +2298,10 @@ the workflow's [pack settings](#pack-settings): it overrides the project's value
 run, and is checked against the setting's type.
 
 One consequence worth knowing on **chat, the run route, and the console**: the surfaces that reuse a
-conversation. Invoking a workflow there when a resumable run of it already exists in that
+conversation. Invoking a workflow there when exactly one resumable run of it exists in that
 conversation normally *continues that run* rather than starting a new one, without any resume vocabulary
-(see [DAG Resume on Failure](#dag-resume-on-failure)). New `inputs` values passed on such a call are
+(see [DAG Resume on Failure](#dag-resume-on-failure)). With more than one, it continues none and lists
+them so you can name one by id. New `inputs` values passed on such a call are
 **not applied**: the continued run keeps what it started with, and Archon says so, naming the
 values it ignored. To run fresh with different values, abandon the existing run first
 (`/workflow abandon <id>`) and invoke again. The CLI has no such implicit continuation: a plain

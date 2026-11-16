@@ -119,9 +119,9 @@ export const mockRegisterRepository = mock(
 export const mockGetPausedWorkflowRun = mock<typeof WorkflowDb.getPausedWorkflowRun>(() =>
   Promise.resolve(null)
 );
-export const mockFindResumableRunByParentConversation = mock<
-  typeof WorkflowDb.findResumableRunByParentConversation
->(() => Promise.resolve(null));
+export const mockListResumableRunsByParentConversation = mock<
+  typeof WorkflowDb.listResumableRunsByParentConversation
+>(() => Promise.resolve([]));
 export const mockUpdateWorkflowRun = mock<typeof WorkflowDb.updateWorkflowRun>(() =>
   Promise.resolve()
 );

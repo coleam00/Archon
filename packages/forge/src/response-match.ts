@@ -411,6 +411,16 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
     value.comment.bodyDigest === contentDigest(request.body),
   'pr.thread.resolve': (request, value) =>
     sameTarget(value.target, request.ref) && value.thread === request.thread && value.resolved,
+  'pr.review.submit': (request, value) =>
+    sameTarget(value.target, request.ref) &&
+    sameRef(value.review.ref, request.ref) &&
+    value.review.commit === request.commit &&
+    value.review.key === request.key &&
+    value.comments.length === request.comments.length &&
+    request.comments.every(
+      (comment, index) =>
+        value.comments[index]?.path === comment.path && value.comments[index].line === comment.line
+    ),
   'workitem.edit-body': (request, value) =>
     sameTarget(value.target, request.ref) &&
     sameRef(value.workitem.ref, request.ref) &&

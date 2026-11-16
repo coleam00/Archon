@@ -560,16 +560,16 @@ mock.module('../services/title-generator', () => ({
   generateAndSetTitle: mockGenerateAndSetTitle,
 }));
 
-// Workflow DB mock — dispatchOrchestratorWorkflow now consults findResumableRunByParentConversation
+// Workflow DB mock — dispatchOrchestratorWorkflow now consults listResumableRunsByParentConversation
 // for all platforms (not just web), so this module must be stubbed even when these tests don't
 // exercise the resume path. The default null return keeps execution on the "fresh run" branch.
 mock.module('../db/workflows', () => ({
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   getWorkflowRunForAttention: mock(async () => null),
-  findResumableRunByParentConversation: mock<
-    typeof WorkflowDb.findResumableRunByParentConversation
-  >(() => Promise.resolve(null)),
+  listResumableRunsByParentConversation: mock<
+    typeof WorkflowDb.listResumableRunsByParentConversation
+  >(() => Promise.resolve([])),
   getPausedWorkflowRun: mock<typeof WorkflowDb.getPausedWorkflowRun>(() => Promise.resolve(null)),
   updateWorkflowRun: mock<typeof WorkflowDb.updateWorkflowRun>(() => Promise.resolve()),
 }));

@@ -127,6 +127,9 @@ const workflowWaitNodeOwnerFields = {
 export const sessionCursorSchema = z.object({
   sessionId: z.string().min(1),
   provider: z.string().min(1),
+  // The model the session ran on, when it resolved one. A `context: same` node does not
+  // continue a session from another model. Absent in metadata written by older binaries.
+  model: z.string().min(1).optional(),
 });
 export type SessionCursor = z.infer<typeof sessionCursorSchema>;
 export const bodySessionCursorsSchema = z.record(z.string().min(1), sessionCursorSchema);
