@@ -31,7 +31,11 @@ import { ContinuedItemProjectError, type WorkflowRunOrigin } from './schemas/wor
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { refuseBrokenRunEndedBindings } from './run-ended-refusal';
 import { holdWorkflowResource } from './resource-hold';
-import { resolveResultInputs, unsuppliedResultInputs } from './run-result';
+import {
+  refuseResultInputsWithoutItem,
+  resolveResultInputs,
+  unsuppliedResultInputs,
+} from './run-result';
 import { workflowPathPriorityTime } from './workflow-path-lock';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -89,52 +93,24 @@ export async function admitWorkflowRun(
     workflowRun = created.value;
   }
 
+  // A continuation's row already says everything this process adds: the store's resume
+  // recorded this process as its owner.
   let checkoutBaselineSample: CheckoutSample | undefined;
-  const resultInputs = dispatch.isContinuation
-    ? new Map<string, string>()
-    : unsuppliedResultInputs(workflow, dispatch.startInputs);
   if (!dispatch.isContinuation) {
-    const claimed = await claimPendingRun(
+    const started = await startFreshRun(
       deps,
       platform,
       conversationId,
       cwd,
       workflow,
       workflowRun,
-      resultInputs,
       execContext,
-      opts
-    );
-    if (claimed.stopped) return claimed;
-    checkoutBaselineSample = claimed.value;
-  }
-
-  // A continuation's row already says everything this process adds: the store's resume
-  // recorded this process as its owner. A fresh pre-created row still needs its invocation.
-  if (preCreatedRun && !dispatch.isContinuation) {
-    const stamped = await stampPreCreatedRun(
-      deps,
-      platform,
-      conversationId,
-      cwd,
-      preCreatedRun,
       opts,
       dispatch
     );
-    if (stamped.stopped) return stamped;
-    workflowRun = stamped.value;
+    if (started.stopped) return started;
+    ({ workflowRun, checkoutBaselineSample } = started.value);
   }
-
-  // Read after the resource wait, so the run reads the latest result when it starts work.
-  const resolved = await resolveResultInputs(
-    deps,
-    platform,
-    conversationId,
-    workflowRun,
-    resultInputs
-  );
-  if (resolved.stopped) return resolved;
-  workflowRun = resolved.value;
 
   const blocked = await holdCheckoutPathLock(
     deps,
@@ -146,6 +122,64 @@ export async function admitWorkflowRun(
   );
   if (blocked) return { stopped: true, result: blocked };
   return { stopped: false, value: { workflowRun, checkoutBaselineSample } };
+}
+
+/**
+ * Claim a fresh run and record a pre-created row's invocation, then fill its `result_of`
+ * inputs: read after the resource wait, they are the latest when the run starts work.
+ */
+async function startFreshRun(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  cwd: string,
+  workflow: ResolvedWorkflow,
+  workflowRun: WorkflowRun,
+  execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
+  opts: ExecuteWorkflowOptions,
+  dispatch: RunDispatch
+): Promise<RunPhase<AdmittedRun>> {
+  const resultInputs = unsuppliedResultInputs(workflow, dispatch.startInputs);
+  const itemless = await refuseResultInputsWithoutItem(
+    deps,
+    platform,
+    conversationId,
+    workflow,
+    workflowRun,
+    resultInputs
+  );
+  if (itemless) return { stopped: true, result: itemless };
+  const claimed = await claimPendingRun(
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflow,
+    workflowRun,
+    execContext,
+    opts
+  );
+  if (claimed.stopped) return claimed;
+  let run = workflowRun;
+  if (opts.preCreatedRun) {
+    const stamped = await stampPreCreatedRun(
+      deps,
+      platform,
+      conversationId,
+      cwd,
+      opts.preCreatedRun,
+      opts,
+      dispatch
+    );
+    if (stamped.stopped) return stamped;
+    run = stamped.value;
+  }
+  const resolved = await resolveResultInputs(deps, platform, conversationId, run, resultInputs);
+  if (resolved.stopped) return resolved;
+  return {
+    stopped: false,
+    value: { workflowRun: resolved.value, checkoutBaselineSample: claimed.value },
+  };
 }
 
 async function notifyResumingRun(
@@ -282,35 +316,6 @@ async function refuseAsksWithoutItem(
 }
 
 /**
- * A run whose `result_of` inputs were not supplied reads them from its item, so with no
- * item it is refused before it does any work. A `workflow:` child carries no item, so its
- * parent must pass such an input through `with:`.
- */
-async function refuseResultInputsWithoutItem(
-  deps: WorkflowDeps,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  workflow: ResolvedWorkflow,
-  workflowRun: WorkflowRun,
-  resultInputs: ReadonlyMap<string, string>
-): Promise<WorkflowExecutionResult | undefined> {
-  const [first] = resultInputs;
-  if (first === undefined || workflowRun.item_id !== null) return undefined;
-  const [input, source] = first;
-  const reason = `Workflow '${workflow.name}' reads input '${input}' from result_of '${source}', which resolves from the run's item: start it with --item <key>, or supply '${input}'`;
-  await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${reason}`);
-  await requireTerminalStatusWrite(
-    deps.store.cancelWorkflowRun(
-      workflowRun.id,
-      { cancel_reason: 'precondition_failed' },
-      { pendingOnly: true }
-    ),
-    { workflowRunId: workflowRun.id, site: 'workflow.result_inputs_without_item_refused' }
-  );
-  return { success: false, workflowRunId: workflowRun.id, error: reason };
-}
-
-/**
  * Take the workflow's resource slot, win execution ownership of a pending row, then sample
  * the checkout the run starts from.
  */
@@ -321,7 +326,6 @@ async function claimPendingRun(
   cwd: string,
   workflow: ResolvedWorkflow,
   workflowRun: WorkflowRun,
-  resultInputs: ReadonlyMap<string, string>,
   execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
   { onExecutionClaimed, noWait }: ExecuteWorkflowOptions
 ): Promise<RunPhase<CheckoutSample>> {
@@ -335,15 +339,6 @@ async function claimPendingRun(
     workflowRun
   );
   if (askless) return { stopped: true, result: askless };
-  const itemless = await refuseResultInputsWithoutItem(
-    deps,
-    platform,
-    conversationId,
-    workflow,
-    workflowRun,
-    resultInputs
-  );
-  if (itemless) return { stopped: true, result: itemless };
   const refused = await holdWorkflowResource(
     deps,
     platform,

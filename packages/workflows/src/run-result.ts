@@ -8,7 +8,7 @@ import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { jsonValueSchema, type JsonValue } from './output-ref';
 import { safeSendMessage, sendCriticalMessage } from './platform-messages';
 import type { RunPhase } from './executor-shared';
-import type { ResolvedWorkflow, WorkflowRun } from './schemas';
+import type { ResolvedWorkflow, WorkflowExecutionResult, WorkflowRun } from './schemas';
 import { readSubrunMetadata, runInputsMetadata, SUBRUN_METADATA_KEYS } from './schemas';
 import { splitAttentionRead } from './schemas/attention-degraded';
 import type { IWorkflowStore } from './store';
@@ -110,6 +110,35 @@ export function unsuppliedResultInputs(
         : []
     )
   );
+}
+
+/**
+ * A run whose `result_of` inputs were not supplied reads them from its item, so with no
+ * item it is refused before it does any work. A `workflow:` child carries no item, so its
+ * parent must pass such an input through `with:`.
+ */
+export async function refuseResultInputsWithoutItem(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflow: ResolvedWorkflow,
+  workflowRun: WorkflowRun,
+  resultInputs: ReadonlyMap<string, string>
+): Promise<WorkflowExecutionResult | undefined> {
+  const [first] = resultInputs;
+  if (first === undefined || workflowRun.item_id !== null) return undefined;
+  const [input, source] = first;
+  const reason = `Workflow '${workflow.name}' reads input '${input}' from result_of '${source}', which resolves from the run's item: start it with --item <key>, or supply '${input}'`;
+  await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${reason}`);
+  await requireTerminalStatusWrite(
+    deps.store.cancelWorkflowRun(
+      workflowRun.id,
+      { cancel_reason: 'precondition_failed' },
+      { pendingOnly: true }
+    ),
+    { workflowRunId: workflowRun.id, site: 'workflow.result_inputs_without_item_refused' }
+  );
+  return { success: false, workflowRunId: workflowRun.id, error: reason };
 }
 
 /**
