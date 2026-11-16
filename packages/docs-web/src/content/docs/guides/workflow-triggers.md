@@ -84,7 +84,7 @@ archon trigger whoami
 
 It prints `runAsUserId`, the ID to put in the binding, and `cliIdentity`, the name it resolved from `ARCHON_USER_ID` or `$USER`. It creates the Archon user for that identity when none exists yet. Use the same store for this command and the host that executes the binding: the same `ARCHON_HOME` with `store: files`, or the same `DATABASE_URL` with database storage. User IDs belong to that installation store.
 
-A workflow pack can declare the bindings it recommends. [`archon pack bindings`](/reference/cli/#pack-bindings) writes them as the files described below for one repository, and you register each as this page describes.
+A workflow pack can declare the bindings it recommends. [`archon pack bindings`](/reference/cli/#pack-bindings) writes them as the files described below for one repository, and you register each as this page describes. A pack's run-ended bindings need no registration: the command writes them into the triggers directory, where they are active.
 
 ## Configure a native macOS schedule
 
@@ -250,6 +250,8 @@ Save the file in `ARCHON_HOME/triggers/` (`~/.archon/triggers/` by default), for
   }
 }
 ```
+
+A workflow pack can declare this hand-off as a [`run_ended:` binding](/reference/workflow-language/#pack-bindings); [`archon pack bindings`](/reference/cli/#pack-bindings) writes it into this directory, checked, for one repository.
 
 Every process that completes a run reads each `*.json` file in that directory that has `on`, at each completion, so a new file applies to the next run that ends and removing it turns the binding off. Archon reads these files only from the install's home, never from a repository. Bindings do not belong in workflow YAML. `archon trigger check` lists every run-ended binding that is active and checks it against the workflows of the project it launches in.
 

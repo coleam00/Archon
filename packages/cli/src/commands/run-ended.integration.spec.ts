@@ -321,6 +321,77 @@ describe('a run-ended binding', () => {
     );
   }, 90_000);
 
+  test('a pack declares it and `pack bindings` writes it where the end of a run starts it', async () => {
+    const fixture = await makeFixture('pack');
+    const pack = join(fixture.projectRoot, '.archon', 'workflows', 'chain');
+    for (const [name, body] of [
+      ['chain-plan', STAGE_A.replace('name: stage-a', 'name: chain-plan')],
+      ['chain-build', STAGE_B.replace('name: stage-b', 'name: chain-build')],
+    ] as const) {
+      mkdirSync(join(pack, name), { recursive: true });
+      writeFileSync(join(pack, name, `${name}.yaml`), body);
+    }
+    mkdirSync(join(pack, '.pack'), { recursive: true });
+    writeFileSync(
+      join(pack, '.pack', 'pack.yaml'),
+      `bindings:
+  build:
+    workflow: chain-build
+    resource: build
+    overlap: queue
+    isolation: { kind: in-place }
+    run_ended: { workflow: chain-plan, outcome: planned }
+    inputs:
+      plan: { result: /plan }
+      issue: { input: issue }
+`
+    );
+    const { runAsUserId } = JSON.parse(await fixture.cli(['trigger', 'whoami'])) as {
+      runAsUserId: string;
+    };
+    await fixture.cli([
+      'pack',
+      'bindings',
+      'chain',
+      '--repo',
+      'github.com/acme/widgets',
+      '--host',
+      HOST,
+      '--run-as',
+      runAsUserId,
+      '--json',
+    ]);
+    const listed = JSON.parse(await fixture.cli(['trigger', 'check'])) as {
+      runEnded: { workflowName: string; problems: string[] }[];
+    };
+    expect(listed.runEnded).toMatchObject([{ workflowName: 'chain-build', problems: [] }]);
+
+    await fixture.cli([
+      'workflow',
+      'run',
+      'chain-plan',
+      '--no-worktree',
+      '--item',
+      'issue-1',
+      '--input',
+      'plan=p1',
+      '--input',
+      'issue=i1',
+    ]);
+    const runs = await waitFor(
+      () => completedRuns(fixture, 2),
+      'the plan and the build its end started'
+    );
+    expect(runs.map(run => run.workflow_name)).toEqual(['chain-plan', 'chain-build']);
+    expect(JSON.parse(runs[1]?.metadata ?? '{}')).toMatchObject({
+      inputs: { plan: 'planned: p1', issue: 'i1' },
+    });
+    const read = itemReadSchema.parse(
+      JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json']))
+    );
+    expect(read.runs[1]?.cause).toEqual({ kind: 'run_ended', runId: runs[0]?.id });
+  }, 90_000);
+
   test('a hand run with no trigger host starts the stage its end caused, with no other command', async () => {
     const fixture = await makeFixture('hand');
     fixture.bind('build-after-plan', RUN_ENDED);

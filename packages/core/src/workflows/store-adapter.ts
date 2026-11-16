@@ -36,8 +36,13 @@ import * as envVarDb from '../db/env-vars';
 import { getAgentProvider } from '../services/provider-admission';
 import type { WorktreeOwnershipReaders } from '../services/cleanup/run-worktree';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
-import { createLogger, getArchonHome } from '@archon/paths';
-import { createRunEndedPreflight, createRunEndedStarts, launchProjectKey } from './run-ended';
+import { createLogger } from '@archon/paths';
+import {
+  createRunEndedPreflight,
+  createRunEndedStarts,
+  getTriggersPath,
+  launchProjectKey,
+} from './run-ended';
 import { registeredProjectKeyForPath } from '../services/codebase-checkout-resolver';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
 import { createGitHubAppAuthProvider } from '../github-auth/auth';
@@ -319,7 +324,7 @@ export function createWorkflowDeps(
 } {
   const provider = registeredGitHubAppAuthProvider;
   const runEnded = {
-    triggersDirectory: () => join(getArchonHome(), 'triggers'),
+    triggersDirectory: () => getTriggersPath(),
     getItem: (id: string) => store.getItem(id),
     projectKeyOf: launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb)),
   };

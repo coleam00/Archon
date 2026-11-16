@@ -2509,27 +2509,29 @@ Items need the database store and a registered project. With `store: files`, or 
 
 ### `pack bindings`
 
-Write the [trigger bindings a pack declares](/reference/workflow-language/#pack-bindings) as files for one repository. The command registers and schedules nothing; it prints what registers each file.
+Write the [trigger bindings a pack declares](/reference/workflow-language/#pack-bindings) as files for one repository. A run-ended binding is written to the triggers directory and is active once written. Nothing registers or schedules the other kinds; the command prints what registers each file.
 
 ```bash
 archon pack bindings <pack> \
   --repo <host>/<owner>/<name> \
   --host <host-id> \
   --run-as <user-id> \
-  --out <dir> \
-  [--cwd <checkout>] [--only <id,...>] [--force]
+  [--out <dir>] [--cwd <checkout>] [--config <file>] [--workflow-source <dir>] \
+  [--only <id,...>] [--force]
 ```
 
-- `<pack>` is the pack's folder name (`sdlc`), or `<owner>.<name>` for an installed pack. It is discovered from `--cwd` as a run there would find it, so a project's copy of a pack wins over the bundled one.
+- `<pack>` is the pack's folder name (`sdlc`), or `<owner>.<name>` for an installed pack. It is discovered from `--cwd` as a run there would find it, so a project's copy of a pack wins over the bundled one. With `--workflow-source`, it is discovered from there instead.
 - `--repo` is the repository the bindings act on, such as `github.com/acme/widgets`.
 - `--host` is the execution host the starts are assigned to: the server's `ARCHON_TRIGGER_HOST`, or the host you pass to `trigger drain`.
 - `--run-as` is the Archon user the runs act as; `archon trigger whoami` prints yours. The command does not check that the user exists; `trigger schedule install` and a webhook delivery do.
 - `--cwd` is the checkout the runs launch in (default: the current directory). It is written as an absolute path.
-- `--out` is where the files go. Each is named `<pack>-<owner>-<name>-<binding id>-<digest>.json`, where the digest is of the pack, repository host and path, and binding ID, so two packs or repositories never share a name. That name without `.json` is its binding ID and a timer's `sourceInstanceId`.
+- `--config` is a [run config](#per-run-config-files) file every written binding launches with, written as `launch.configSource`. It is how model aliases reach a start without the pack naming a model. The file is loaded once before anything is written, so a bad path fails here.
+- `--workflow-source` is the directory the pack's workflows are discovered from when the pack does not live in the checkout, written as `launch.discoveryCwd`, as `workflow run --workflow-source` uses it.
+- `--out` is where timer, fire-only and event files go; it is required only when the selection writes one. Each is named `<pack>-<owner>-<name>-<binding id>-<digest>.json`, where the digest is of the pack, repository host and path, and binding ID, so two packs or repositories never share a name. That name without `.json` is its binding ID and its `sourceInstanceId`.
 - `--only` writes the listed bindings. A binding whose input names another binding's file needs that binding listed too, or its file already in `--out`.
 - `--force` replaces existing files. Without it, one existing file refuses the whole set and nothing is written.
 
-A timer binding is written as a complete `trigger fire --config` file. A fire-only binding is the same file without `schedule`; the command lists it under its own heading with the `trigger fire` command that starts it, and `trigger schedule install` refuses it. An event binding is written as one object for the `bindings` array of the GitHub source plugin's `config`, in the file `ARCHON_WEBHOOK_SOURCES` names, because the plugin reads bindings only from there. The plugin accepts `github.com` repositories, so the command refuses to write an event binding for another host. Every file is checked against the schema of the loader that will read it before any is written. `--json` prints `{"pack", "written": [{"id", "kind", "path"}]}`, where `kind` is `timer`, `event` or `fire`.
+A timer binding is written as a complete `trigger fire --config` file. A fire-only binding is the same file without `schedule`; the command lists it under its own heading with the `trigger fire` command that starts it, and `trigger schedule install` refuses it. An event binding is written as one object for the `bindings` array of the GitHub source plugin's `config`, in the file `ARCHON_WEBHOOK_SOURCES` names, because the plugin reads bindings only from there. The plugin accepts `github.com` repositories, so the command refuses to write an event binding for another host. A [run-ended binding](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends) is written to `ARCHON_HOME/triggers/`, one file per outcome it declares, named `<pack>-<owner>-<name>-<binding id>-<outcome>-<digest>.json`. The engine reads that directory at every completion, so the file is active once written; `archon trigger check` lists it and deleting it turns it off. Because one invalid file there fails item runs on the whole install, every run-ended file is checked as `trigger check` checks it (the ended workflow declares the outcome and every input read from it, and the started workflow declares every input mapped to it) before any file is written, and the command refuses run-ended bindings on `store: files`. Every file is checked against the schema of the loader that will read it before any is written. `--json` prints `{"pack", "written": [{"id", "kind", "path"}]}`, where `kind` is `timer`, `event`, `fire` or `run_ended`, and a `run_ended` entry also has its `outcome`.
 
 ```bash
 archon pack bindings sdlc --repo github.com/acme/widgets --host build-host-1 \
