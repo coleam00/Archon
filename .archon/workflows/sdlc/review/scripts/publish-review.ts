@@ -9,10 +9,8 @@
  *
  * A report goes public only about the commit its round fixed at the start
  * (review-round): the checkout must still be at it and the pull request's remote
- * head must be it (../../.shared/review-head.ts). review-round already refused a
- * pull-request URL whose head was another commit; this check is the one that covers
- * every scope, after a review long enough for the head to move. Any mismatch
- * refuses, so a verdict about one commit can never stand as the verdict on another. This node stamps that commit and the certified
+ * head must be it (../../.shared/review-head.ts). Any mismatch refuses, so a verdict
+ * about one commit can never stand as the verdict on another. This node stamps that commit and the certified
  * verdict on the comment itself (../../.shared/review-comment.ts) rather than trusting
  * the report's text to name them; the merge queue's gate reads both. Once published, the
  * report, its `findings.json` and that commit are kept together under `published/`

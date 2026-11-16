@@ -306,7 +306,6 @@ nodes:
           depends_on: [implement, pr, review, simplify, ci, threads]
           trigger_rule: all_done
           with:
-            previous: "$LOOP_PREV.round.output.round"
             prior_report: "$LOOP_PREV.round.output.prior_report"
             previous_pr_url: "$LOOP_PREV.round.output.pr_url"
             previous_contract_left: "$LOOP_PREV.round.output.contract_left"
@@ -331,7 +330,6 @@ nodes:
           output_format:
             type: object
             properties:
-              round: { type: integer }
               done: { type: boolean }
               ready: { type: boolean }
               # Why the round ended: round.ts owns the vocabulary (delivered, review_open, ...).
@@ -342,7 +340,7 @@ nodes:
               # The latest review's `contract_left`; null until a review judged coverage.
               contract_left: { type: [array, 'null'], items: { type: string } }
               summary: { type: string }
-            required: [round, done, ready, reason, pr_url, prior_report, contract_left, summary]
+            required: [done, ready, reason, pr_url, prior_report, contract_left, summary]
 
   # Corrections and the base merge can falsify claims the description made when the
   # draft opened, and an implementer can pass red the description must disclose. One
