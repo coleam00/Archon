@@ -35,8 +35,17 @@ export interface LoopGroupProgress {
   lastStartedIteration: number;
 }
 
+/** The round a failed or interrupted group invocation stopped in, read from its body rows. */
+export interface InterruptedIteration {
+  iteration: number;
+  /** Every body node finished in it, so its body does not run again. */
+  finished: boolean;
+  /** The group failed because it ran out of rounds, so it has none left. */
+  exhausted: boolean;
+}
+
 /**
- * Where a loop group starts. Three resume shapes are recognized:
+ * Where a loop group starts. Four resume shapes are recognized:
  *  - the ORIGINAL interactive_loop gate (group.interactive + gate_message).
  *  - a body terminal gate paused under THIS group, with bodyGateId naming
  *    the leaf gate. `$LOOP_USER_INPUT` does not apply to this shape — the human's
@@ -44,6 +53,12 @@ export interface LoopGroupProgress {
  *    like any other body node's output — so `loopUserInput` stays scoped to the
  *    legacy shape.
  *  - a body terminal wait this group owns.
+ *  - a group that failed or was interrupted outside any pause (`interruptedRound`):
+ *    earlier rounds stay done and the rounds already used count against max_iterations.
+ *    A round whose body did not finish runs again in full, with `$LOOP_PREV` read from
+ *    the round before. A round whose body finished re-runs only its completion check and
+ *    the group goes on to the next round, unless the group is interactive: its gate
+ *    follows that check and was never reached, so the round re-runs in full.
  */
 export interface LoopGroupResume {
   loopGateMeta: ApprovalContext | undefined;
@@ -52,10 +67,12 @@ export interface LoopGroupResume {
   isEscalatedGateResume: boolean;
   isEscalatedWaitResume: boolean;
   isLoopResume: boolean;
+  /** Set only for the failure or kill shape; `done` means the round does not run again. */
+  interruptedRound: (InterruptedIteration & { done: boolean }) | undefined;
   /** Named owner sessions of body nodes that resume a session context; undefined when none do. */
   bodySessionCursors: Map<string, SessionCursor> | undefined;
   bodySessionCursorAncestry: Map<string, Map<string, SessionCursor>>;
-  /** The iteration the run paused in. */
+  /** The iteration the run paused, failed or was interrupted in. */
   resumeIteration: number;
   startIteration: number;
   feedbackGiven: boolean;
