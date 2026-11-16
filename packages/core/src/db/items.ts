@@ -21,10 +21,19 @@ export async function ensureItem(
   codebaseId: string | undefined,
   key: string
 ): Promise<string> {
-  assertItemKey(key);
   const project = await codebaseProjectKey(query, codebaseId);
   if (!project) throw new Error('naming an item needs a registered project');
-  const named = [project, key];
+  return ensureItemInProject(query, project, key);
+}
+
+/** The item `key` names in project `projectKey`, written on first use. */
+export async function ensureItemInProject(
+  query: TransactionQuery,
+  projectKey: string,
+  key: string
+): Promise<string> {
+  assertItemKey(key);
+  const named = [projectKey, key];
   await query(
     'INSERT INTO remote_agent_items (project_key, key) VALUES ($1, $2) ON CONFLICT DO NOTHING',
     named

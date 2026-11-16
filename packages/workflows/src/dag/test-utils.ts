@@ -154,6 +154,13 @@ export function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
   };
 }
 
+/** A store method these tests never reach. */
+function notUsed(): Mock<() => Promise<never>> {
+  return mock(async () => {
+    throw new Error('Not used by this test');
+  });
+}
+
 export function createMockStore(): MockWorkflowStore {
   const createWorkflowEvent = mock<IWorkflowStore['persistWorkflowEvent']>(
     async _data => undefined
@@ -280,21 +287,14 @@ export function createMockStore(): MockWorkflowStore {
     deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() => {
       throw new Error('Unexpected deleteWorkflowNodeSessions');
     }),
-    findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
-    getItemRuns: mock<IWorkflowStore['getItemRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
-    getItem: mock<IWorkflowStore['getItem']>(async () => {
-      throw new Error('Not used by this test');
-    }),
-    findAdoptingRuns: mock<IWorkflowStore['findAdoptingRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
-    deleteOldWorkflowRuns: mock<IWorkflowStore['deleteOldWorkflowRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
+    findOpenWorkRuns: notUsed(),
+    getItemRuns: notUsed(),
+    getItem: notUsed(),
+    listItemRulings: notUsed(),
+    recordItemRuling: notUsed(),
+    withdrawItemRuling: notUsed(),
+    findAdoptingRuns: notUsed(),
+    deleteOldWorkflowRuns: notUsed(),
     listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async runId => runEvents(runId)),
     listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(
       async (ids, types) => new Map(ids.map(id => [id, runEvents(id, types)]))

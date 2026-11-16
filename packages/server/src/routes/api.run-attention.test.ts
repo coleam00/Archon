@@ -8,12 +8,24 @@ import {
   mockGetItemRuns,
   mockListEventsForRuns,
   mockListCodebases,
+  mockListItemRulings,
+  mockRecordItemRuling,
+  mockWithdrawItemRuling,
+  mockGetUserById,
+  makeUser,
+  setSessionUserId,
   MOCK_RUNNING_RUN,
   makeDashboardWorkflowRun,
   makeApp,
 } from '../test/api-workflow-runs-harness';
 import { describe, test, expect } from 'bun:test';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import {
+  ItemRulingNotFoundError,
+  ItemRulingWithdrawnError,
+  itemRulingSchema,
+  type ItemRuling,
+} from '@archon/workflows/schemas/item-ruling';
 import type {
   WorkflowAttentionWaitContext,
   WorkflowRun,
@@ -339,5 +351,111 @@ describe('reading an item over HTTP', () => {
     );
     expect(response.status).toBe(500);
     expect(JSON.stringify(await response.json())).not.toContain('10.0.0.5');
+  });
+});
+
+describe('rulings on an item over HTTP', () => {
+  const project = '_cwd/scratch';
+  const ruling = (fields: Partial<ItemRuling> = {}): ItemRuling => ({
+    kind: 'ruling',
+    id: 'ruling-1',
+    text: 'leave the chat readers for a follow-up',
+    at: '2026-11-15T10:00:00.000Z',
+    via: 'api',
+    by: null,
+    fromRun: null,
+    withdrawn: null,
+    ...fields,
+  });
+  const post = (path: string, body: unknown) =>
+    makeApp().app.request(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  test('the operator records a ruling with no question asked, under the name it declares', async () => {
+    mockRecordItemRuling.mockImplementationOnce(async input =>
+      ruling({ via: input.via, by: input.by })
+    );
+    const response = await post('/api/items/rulings', {
+      project,
+      key: 'issues/7',
+      text: 'leave the chat readers for a follow-up',
+      as: 'triage-agent',
+    });
+    expect(response.status).toBe(201);
+    expect(itemRulingSchema.parse(await response.json())).toMatchObject({
+      via: 'api',
+      by: { declared: 'triage-agent' },
+    });
+    expect(mockRecordItemRuling.mock.calls.at(-1)?.[0]).toMatchObject({
+      projectKey: project,
+      key: 'issues/7',
+      text: 'leave the chat readers for a follow-up',
+    });
+  });
+
+  test('a user who is not an admin is refused; an admin is recorded as the user', async () => {
+    setSessionUserId('member');
+    try {
+      const refused = await post('/api/items/rulings', { project, key: 'issues/7', text: 'no' });
+      expect(refused.status).toBe(403);
+      mockGetUserById.mockImplementationOnce(async id => ({ ...makeUser(id), role: 'admin' }));
+      mockRecordItemRuling.mockImplementationOnce(async input => ruling({ by: input.by }));
+      const recorded = await post('/api/items/rulings', {
+        project,
+        key: 'issues/7',
+        text: 'yes',
+        as: 'ignored',
+      });
+      expect(recorded.status).toBe(201);
+      expect(itemRulingSchema.parse(await recorded.json()).by).toEqual({
+        userId: 'user-from-member',
+      });
+    } finally {
+      setSessionUserId(undefined);
+    }
+  });
+
+  test('blank text is 400, and an unknown project is 400', async () => {
+    expect((await post('/api/items/rulings', { project, key: 'k', text: '  ' })).status).toBe(400);
+    mockListCodebases.mockImplementationOnce(async () => []);
+    expect(
+      (await post('/api/items/rulings', { project: 'no-such', key: 'k', text: 'x' })).status
+    ).toBe(400);
+  });
+
+  test('withdrawing answers the withdrawn ruling, 404 for no such ruling, 409 when already withdrawn', async () => {
+    const withdrawn = ruling({
+      withdrawn: { at: '2026-11-15T11:00:00.000Z', via: 'api', by: null, fromRun: null },
+    });
+    mockWithdrawItemRuling.mockImplementationOnce(async () => withdrawn);
+    const response = await post('/api/items/rulings/ruling-1/withdraw', {});
+    expect(response.status).toBe(200);
+    expect(itemRulingSchema.parse(await response.json())).toEqual(withdrawn);
+    expect(mockWithdrawItemRuling.mock.calls.at(-1)?.[0]).toMatchObject({
+      rulingId: 'ruling-1',
+      via: 'api',
+    });
+    mockWithdrawItemRuling.mockImplementationOnce(async () => {
+      throw new ItemRulingNotFoundError('nope');
+    });
+    expect((await post('/api/items/rulings/nope/withdraw', {})).status).toBe(404);
+    mockWithdrawItemRuling.mockImplementationOnce(async () => {
+      throw new ItemRulingWithdrawnError('ruling-1');
+    });
+    expect((await post('/api/items/rulings/ruling-1/withdraw', {})).status).toBe(409);
+  });
+
+  test('reading the item shows its rulings', async () => {
+    const item = { id: 'item-row', projectKey: project, key: 'issues/8' };
+    mockGetItemRuns.mockImplementationOnce(async () => ({ item, runs: [], descendantIds: [] }));
+    mockListItemRulings.mockImplementationOnce(async () => [ruling()]);
+    mockListAttentionQueueRows.mockImplementationOnce(async () => []);
+    const response = await makeApp().app.request(
+      `/api/items?project=${encodeURIComponent(project)}&key=issues%2F8`
+    );
+    expect(itemReadSchema.parse(await response.json()).answers).toEqual([ruling()]);
   });
 });

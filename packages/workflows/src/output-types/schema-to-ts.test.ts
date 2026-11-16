@@ -36,6 +36,16 @@ describe('convertOutputSchema', () => {
     );
   });
 
+  test('a record whose keys are narrowed by propertyNames is still a record of strings', () => {
+    expect(
+      convertOutputSchema({
+        type: 'object',
+        propertyNames: { type: 'string', pattern: '^[a-z]+$' },
+        additionalProperties: { type: 'string' },
+      }).type
+    ).toBe(convertOutputSchema({ type: 'object', additionalProperties: { type: 'string' } }).type);
+  });
+
   test('a type list is a union, and a nullable object keeps its properties', () => {
     expect(convertOutputSchema({ type: ['string', 'null'] }).type).toBe('string | null');
     expect(

@@ -170,6 +170,9 @@ Commands:
                              Answer a paused attention wait in its declared form
   workflow reset-sessions <workflow-name>
                              Delete persisted sessions for a workflow (omits --scope only with --yes; [--node <id>] [--json])
+  workflow rule --item <key> -- <text>
+                             Record a ruling on an item of this project: a decision made without a question.
+                             Every later read of the item shows it with the answers; prints the ruling's id
   workflow notice <text>     Inside a workflow node: say what the run did, for whoever watches attention
                              with --notices. Never pauses the run and cannot be answered
   workflow event emit        Emit a workflow event into a run
@@ -267,14 +270,14 @@ Options:
   --occurrence <id>          For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still
                              paused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer
                              and attention label)
-  --as <name>                For 'workflow approve/reject/respond/answer': the name the answerer declares for itself,
-                             recorded with an attention wait's answer as a claim (never checked; refused at a gate)
+  --as <name>                For 'workflow approve/reject/respond/answer/rule': the name the answerer declares for itself,
+                             recorded with an attention wait's answer or a ruling as a claim (never checked; refused at a gate)
   --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)
   --no-wait                  For 'workflow run': refuse, naming the resource, instead of waiting when the workflow's
                              resource is full
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
-  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers
+  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on
   --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded
   --limit <n>                For 'workflow runs': max rows (default 20)
   --timeout <seconds>        For 'workflow wait': give up after N seconds (default: wait indefinitely)

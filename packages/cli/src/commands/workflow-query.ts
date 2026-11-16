@@ -11,7 +11,7 @@ import {
   attentionQueueSource,
   projectRefForCodebase,
 } from '@archon/core/operations/attention-queue';
-import { readItem } from '@archon/workflows/item-read';
+import { readItem, readItemOfRun } from '@archon/workflows/item-read';
 import { itemReadLines } from './workflow-item-text';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import { resolveDryRunEnvironment } from './workflow-dry-run';
@@ -520,6 +520,11 @@ export async function workflowRunsCommand(
   }
   const statusFilter = parseRunsStatus(opts.status);
   if (statusFilter instanceof Error) return refuseRuns(opts, statusFilter);
+  if (opts.itemOf !== undefined) {
+    if (opts.item !== undefined)
+      return refuseRuns(opts, new Error('--item and --item-of are mutually exclusive.'));
+    return await readItemOfRunCommand(host, opts.itemOf, opts);
+  }
   const codebase = await findRunsCodebase(host, cwd, opts);
   if (codebase instanceof Error) return refuseRuns(opts, codebase);
   // The open-work inbox contains terminal failed runs with no adopter or successor.
@@ -548,6 +553,8 @@ interface RunsOptions {
   open?: boolean;
   /** Read this item in the project: its runs, open questions and answers. */
   item?: string;
+  /** Read the item this run belongs to, in whichever project it is. */
+  itemOf?: string;
   verbose?: boolean;
 }
 type RunsCodebase = Awaited<ReturnType<typeof findCodebaseForCheckoutPath>> | undefined;
@@ -610,6 +617,35 @@ async function readItemRuns(
       return 1;
     }
     await writeStderr(`No item '${item}' in project ${project.name}.\n`);
+    return 1;
+  }
+  if (opts.json) {
+    await writeJsonLine(read);
+    return 0;
+  }
+  console.log(`\n${itemReadLines(read).join('\n')}\n`);
+  return 0;
+}
+
+/**
+ * Read the item a run belongs to (`readItemOfRun`): the host command behind the
+ * `archon:script` `item()` export. A run with no item is `not_found`, like an unknown run.
+ */
+async function readItemOfRunCommand(
+  host: WorkflowHost,
+  runId: string,
+  opts: RunsOptions
+): Promise<number> {
+  const read = await readItemOfRun(
+    attentionQueueSource(host.deps.store, host.records.isolation),
+    runId
+  );
+  if (read === null) {
+    if (opts.json) {
+      await writeJsonLine({ ok: false, error: 'not_found', run: runId });
+      return 1;
+    }
+    await writeStderr(`Run ${runId} is not on an item, or this store does not know it.\n`);
     return 1;
   }
   if (opts.json) {

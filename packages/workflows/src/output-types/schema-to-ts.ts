@@ -72,6 +72,8 @@ const SHAPELESS_KEYWORDS = new Set([
   'uniqueItems',
   'minProperties',
   'maxProperties',
+  // Narrows an object's keys, which its type already states as strings.
+  'propertyNames',
 ]);
 
 const OBJECT_KEYWORDS = ['properties', 'required', 'additionalProperties'] as const;

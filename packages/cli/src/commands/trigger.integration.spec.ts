@@ -16,6 +16,7 @@ import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { triggerFireConfigSchema } from './trigger';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
 import { standardWebhooksSourceConfigSchema } from '@archon/adapters/sources/standard-webhooks/source-plugin';
 import {
   isTerminalRunStatus,
@@ -410,6 +411,65 @@ describe('trigger CLI durable execution', () => {
       questions: [],
       answers: [],
     });
+
+    // A ruling is recorded with no question asked, here on a key nothing has named yet.
+    const readJson = async (args: string[]) => JSON.parse((await invoke(args)).stdout) as unknown;
+    const ruling = itemRulingSchema.parse(
+      await readJson([
+        'workflow',
+        'rule',
+        '--item',
+        'item-new',
+        '--as',
+        'triage-agent',
+        '--json',
+        '--',
+        'leave the chat readers for a follow-up',
+      ])
+    );
+    expect(ruling).toMatchObject({
+      text: 'leave the chat readers for a follow-up',
+      by: { declared: 'triage-agent' },
+      via: 'cli',
+      withdrawn: null,
+    });
+    const fresh = itemReadSchema.parse(
+      await readJson(['workflow', 'runs', '--item', 'item-new', '--json'])
+    );
+    expect(fresh.runs).toEqual([]);
+    expect(fresh.answers).toEqual([ruling]);
+    // Any run of an item reads the item's rulings by its own id, as `archon:script` item() does.
+    await invoke(['workflow', 'rule', '--item', 'item-1', '--', 'do not accept an empty outcome']);
+    const ofRun = itemReadSchema.parse(
+      await readJson(['workflow', 'runs', '--item-of', started[0]?.id ?? '', '--json'])
+    );
+    expect(ofRun.item.key).toBe('item-1');
+    expect(
+      ofRun.answers.flatMap(answer => (answer.kind === 'ruling' ? [answer.text] : []))
+    ).toEqual(['do not accept an empty outcome']);
+    const noItem = await invoke(
+      ['workflow', 'runs', '--item-of', all.find(run => run.item_key === null)?.id ?? '', '--json'],
+      false
+    );
+    expect(noItem.exitCode).toBe(1);
+    expect(JSON.parse(noItem.stdout)).toMatchObject({ ok: false, error: 'not_found' });
+    // Withdrawn once; the record stays and says so.
+    const withdrawn = itemRulingSchema.parse(
+      await readJson(['workflow', 'rule', '--withdraw', ruling.id, '--json'])
+    );
+    expect(withdrawn.withdrawn).toMatchObject({ via: 'cli', by: null });
+    for (const [id, error] of [
+      [ruling.id, 'already_withdrawn'],
+      ['no-such-ruling', 'not_found'],
+    ] as const) {
+      const refused = await invoke(['workflow', 'rule', '--withdraw', id, '--json'], false);
+      expect(refused.exitCode).toBe(1);
+      expect(JSON.parse(refused.stdout)).toMatchObject({ ok: false, error });
+    }
+    expect(
+      itemReadSchema.parse(await readJson(['workflow', 'runs', '--item', 'item-new', '--json']))
+        .answers
+    ).toEqual([withdrawn]);
 
     // A continuation stays on the item of the run it continues; `--item` still wins, and
     // continuing a run with no item gives none. `--adopt` writes the same

@@ -1630,6 +1630,38 @@ This is an **authoring** concern, not an engine one. Options, in order of prefer
 Put the state write in a `script:` node, not in an AI node's Write tool. A `script:` node is
 a guarantee; a prompt instructing an AI node to append is a convention it may not follow.
 
+## Reading the item a run belongs to
+
+A run on an [item](/reference/cli/#items) can read what is recorded about it: the item's
+runs, the questions open in them, and the answers to them together with the item's
+[rulings](/reference/cli/#workflow-rule), the decisions an operator recorded without a
+question being asked. A ruling given to one run reaches every later run on the item this
+way, whichever workflow it is. The engine adds none of it to a prompt; a workflow that
+wants it reads it in a `script:` node and hands it on like any other output:
+
+```yaml
+nodes:
+  - id: rulings
+    runtime: bun
+    script: |
+      import { emit, item } from 'archon:script';
+      const read = item();
+      emit({
+        rulings: (read?.answers ?? []).flatMap(answer =>
+          answer.kind === 'ruling' && answer.withdrawn === null ? [answer.text] : []
+        ),
+      });
+  - id: review
+    depends_on: [rulings]
+    prompt: |
+      Review the change. These rulings on the item stand: $rulings.output.rulings
+```
+
+`item()` reads the item of the run's top-level run, so a `workflow:` child reads its
+parent's item. It returns `null` for a run on no item. A withdrawn ruling stays in the
+list with `withdrawn` set; what a ruling means is for the reading node to judge. Like
+`state`, it runs on the host: a container-isolated node cannot call it.
+
 ## Durable state documents
 
 Use `archon state` for a standing agent's small JSON ledger, cursor or index when updates

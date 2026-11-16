@@ -6,6 +6,10 @@ import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
+import {
+  ItemRulingNotFoundError,
+  ItemRulingWithdrawnError,
+} from '@archon/workflows/schemas/item-ruling';
 import { dashboardRunsResultSchema } from '@archon/workflows/schemas/workflow-run-listing';
 import { WorkflowStatusReadError } from './workflows';
 import type { IDatabase, SqlDialect, QueryResult } from './adapters/types';
@@ -531,6 +535,84 @@ export function describeSqlStatusReadConformance(
       expect([...(read?.descendantIds ?? [])].sort()).toEqual(
         [child.id, sibling.id, grandchild.id].sort()
       );
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a ruling is recorded on an item with no run, withdrawn once, and kept', async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      const projectKey = projectKeyForCodebase(
+        { name: 'conformance', default_cwd: '/conformance' },
+        ''
+      );
+      const byCli = { via: 'cli', by: { declared: 'triage-agent' }, fromRun: null };
+      // Nothing has named the key: the ruling writes the item, which has no run.
+      const first = await store.recordItemRuling({
+        projectKey,
+        key: 'fresh',
+        text: 'leave the chat readers for a follow-up',
+        ...byCli,
+      });
+      expect(first).toMatchObject({
+        kind: 'ruling',
+        text: 'leave the chat readers for a follow-up',
+        via: 'cli',
+        by: { declared: 'triage-agent' },
+        fromRun: null,
+        withdrawn: null,
+      });
+      const item = await store.getItemRuns(projectKey, 'fresh');
+      expect(item?.runs).toEqual([]);
+      const second = await store.recordItemRuling({
+        projectKey,
+        key: 'fresh',
+        text: 'do not accept an empty outcome',
+        via: 'api',
+        by: { userId: 'user-1' },
+        fromRun: { runId: 'run-1', nodePath: 'review' },
+      });
+
+      const withdrawn = await store.withdrawItemRuling({
+        rulingId: first.id,
+        via: 'api',
+        by: null,
+        fromRun: null,
+      });
+      expect(withdrawn.withdrawn).toMatchObject({ via: 'api', by: null, fromRun: null });
+      await expect(
+        store.withdrawItemRuling({ rulingId: first.id, ...byCli })
+      ).rejects.toBeInstanceOf(ItemRulingWithdrawnError);
+      await expect(
+        store.withdrawItemRuling({ rulingId: 'no-such-ruling', ...byCli })
+      ).rejects.toBeInstanceOf(ItemRulingNotFoundError);
+      // A withdrawal's own row is not a ruling to withdraw.
+      const rows = await db.query<{ id: string }>(
+        'SELECT id FROM remote_agent_item_rulings WHERE withdraws IS NOT NULL'
+      );
+      await expect(
+        store.withdrawItemRuling({ rulingId: rows.rows[0]?.id ?? '', ...byCli })
+      ).rejects.toBeInstanceOf(ItemRulingNotFoundError);
+
+      // Both rulings stay, oldest first, and the first says it was withdrawn.
+      const listed = await store.listItemRulings(item?.item.id ?? '');
+      expect(listed).toEqual([withdrawn, second]);
+      expect(second).toMatchObject({
+        by: { userId: 'user-1' },
+        fromRun: { runId: 'run-1', nodePath: 'review' },
+      });
+
+      // A row that does not read is reported in its place.
+      await db.query('UPDATE remote_agent_item_rulings SET via = $1 WHERE id = $2', [
+        'Not A Surface',
+        second.id,
+      ]);
+      expect(await store.listItemRulings(item?.item.id ?? '')).toEqual([
+        withdrawn,
+        { type: 'degraded', reason: 'ruling_unreadable', rulingId: second.id },
+      ]);
     } finally {
       await harness.close();
     }

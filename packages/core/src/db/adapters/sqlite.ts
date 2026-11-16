@@ -566,6 +566,22 @@ export class SqliteAdapter implements IDatabase {
         UNIQUE(project_key, key)
       );
 
+      -- Rulings on an item, append-only; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_rulings (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        item_id TEXT NOT NULL REFERENCES remote_agent_items(id),
+        withdraws TEXT UNIQUE REFERENCES remote_agent_item_rulings(id),
+        text TEXT,
+        by_declared TEXT,
+        by_user_id TEXT,
+        via TEXT NOT NULL,
+        from_run_id TEXT,
+        from_node_path TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        CHECK ((withdraws IS NULL) = (text IS NOT NULL))
+      );
+      CREATE INDEX IF NOT EXISTS idx_item_rulings_item_id ON remote_agent_item_rulings(item_id);
+
       CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
         project_key TEXT NOT NULL,
         name TEXT NOT NULL,

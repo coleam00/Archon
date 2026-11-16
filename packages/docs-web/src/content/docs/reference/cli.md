@@ -636,7 +636,8 @@ archon workflow runs --throughput      # effective output tok/s by run and model
 archon workflow runs --throughput --json --verbose
 archon workflow runs --all             # list across all projects
 archon workflow runs --open            # failed runs nothing has adopted or superseded
-archon workflow runs --item issue-42   # one item: its runs, open questions and answers
+archon workflow runs --item issue-42   # one item: its runs, open questions, answers and rulings
+archon workflow runs --item-of <run-id> --json  # the item a run belongs to
 ```
 
 `--throughput` adds effective output throughput per listed run and an aggregate grouped
@@ -650,9 +651,11 @@ reads events in batches of up to 20 runs; without the flag, listing costs are un
 Unreadable history or invalid typed execution metadata fails the opted-in request rather
 than returning a partial report.
 
-`--item <key>` reads one [item](#items) in the current project and ignores the other filters. It prints three sections, each oldest first: the item's runs (id, workflow, status, authored outcome, start and end), the questions open in those runs or their sub-runs, and the answers recorded in them (attention answers and gate decisions, with the run, node, time and surface). A sub-run is not listed as a run; its question or answer names its own run id, and `workflow get` on the parent shows it. The read reports recorded facts only; it computes no position for the item. It needs a registered project.
+`--item <key>` reads one [item](#items) in the current project and ignores the other filters. It prints three sections, each oldest first: the item's runs (id, workflow, status, authored outcome, start and end), the questions open in those runs or their sub-runs, and the answers recorded in them (attention answers and gate decisions, with the run, node, time and surface) together with the item's [rulings](#workflow-rule) (text, time, surface, who when they said, and when it was withdrawn). A sub-run is not listed as a run; its question or answer names its own run id, and `workflow get` on the parent shows it. The read reports recorded facts only; it computes no position for the item. It needs a registered project.
 
-`--json` prints `{ item, runs, questions, answers, degraded }`: `item` is `{ id, projectKey, key }`; each run is `{ id, workflow, status, outcome, startedAt, completedAt }`; each question is the attention queue item `workflow attention --json` lists; each answer has `kind` `attention` (with `answer`, `by`, `fromRun`) or `gate` (with `decision`, and `text` for its comment or rejection reason), and `runId`, `node`, `occurrence`, `at`, `via`, null where the row does not record them. `degraded` names each run in the item's tree that could not be read, one of its own runs or a paused child; the rest of the item still reads. An item named with no run yet reads with empty sections; a key no start has named exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "item": "<key>" }`.
+`--json` prints `{ item, runs, questions, answers, degraded }`: `item` is `{ id, projectKey, key }`; each run is `{ id, workflow, status, outcome, startedAt, completedAt }`; each question is the attention queue item `workflow attention --json` lists; each answer has `kind` `attention` (with `answer`, `by`, `fromRun`) or `gate` (with `decision`, and `text` for its comment or rejection reason), and `runId`, `node`, `occurrence`, `at`, `via`, null where the row does not record them; or `kind` `ruling`, with `id`, `text`, `at`, `via`, `by`, `fromRun` and `withdrawn` (null, or `{ at, via, by, fromRun }`), and no run. `degraded` names each part that could not be read: a run in the item's tree, one of its own runs or a paused child (`reason: "run_unreadable"`, `runId`), or a ruling (`reason: "ruling_unreadable"`, `rulingId`); the rest of the item still reads. An item named with no run yet reads with empty sections but for its rulings; a key nothing has named exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "item": "<key>" }`.
+
+`--item-of <run-id>` reads the item a run belongs to, the item of its top-level run when it is a `workflow:` sub-run, in whichever project the run is. It prints the same read as `--item`. A run on no item, or one the store does not know, exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "run": "<run-id>" }`. It is the host command behind the `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to) export.
 
 With the SQL store, the recent-run list rejects the entire result if a returned row or a
 status-count group contains an unsupported persisted status; it never returns a partial
@@ -1280,6 +1283,34 @@ not running (`run_not_running`), and, with no `reason`, when a label is not `key
 it is not called from a workflow node: it reads
 `WORKFLOW_ID` and `ARCHON_NODE_EXECUTION` from the node's environment, and the two must
 name the same run. Put the text after `--` when it may start with a dash.
+
+### `workflow rule`
+
+Record a ruling on an item of the current project: a decision made about the item without
+a question having been asked, such as "leave the chat readers for a follow-up". Every later
+read of the item shows it with the answers, and a run on the item can read it through
+[`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to). The engine
+stores the text and never reads it.
+
+```bash
+archon workflow rule --item issue-42 --as triage-agent -- "Leave the chat readers for a follow-up"
+archon workflow rule --withdraw <ruling-id>
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--item <key>` | The item the ruling is on, in the project the working directory belongs to, as [`runs --item`](#workflow-runs) finds it. A key nothing has named yet is written as a new item, as a start would write it |
+| `--withdraw <ruling-id>` | Withdraw a ruling instead. The ruling stays in the item read with `withdrawn` set; a ruling is withdrawn once |
+| `--as <name>` | The name you declare for yourself, recorded as a claim nothing checks |
+| `--json` | Print the ruling as the item read lists it, or `{ ok: false, error }` |
+
+The text goes after `--`, and must not be blank. Called from inside a workflow node, the
+ruling records the node's run and node as `fromRun`, read from the node's environment. The
+command prints the ruling's id. It exits 1 for blank text, for a directory with no
+registered project, for a ruling id that names no ruling (`error: "not_found"`) and for
+one already withdrawn (`error: "already_withdrawn"`). Rulings need the database store.
+`POST /api/items/rulings` and `POST /api/items/rulings/{rulingId}/withdraw` do the same over
+HTTP; see the [API reference](/reference/api/).
 
 ### `workflow attention label`
 
@@ -2411,7 +2442,9 @@ A `trigger fire` from inside a run that names no item inherits that run's item, 
 
 A continuation started with `--adopt <run-id>` or `--supersedes <run-id>` and no `--item` belongs to the item of the run it continues, so a fix round or a rerun stays in the item's history. `--item <key>` names another item instead, and a continuation of a run with no item has none. `--supersedes` can name a run of another project by its full id; that run's item cannot be inherited, so the continuation is refused before it starts unless it passes `--item`. The same holds when the continuation has no registered project. A continuation of a run with no item starts in every case.
 
-A run started with no item, and no run to inherit one from, has none. `archon workflow runs --item <key>` reads an item: its runs, open questions and answers. `GET /api/items?project=<project>&key=<key>` is the same read over HTTP.
+A run started with no item, and no run to inherit one from, has none. `archon workflow runs --item <key>` reads an item: its runs, open questions, and answers with rulings. `GET /api/items?project=<project>&key=<key>` is the same read over HTTP.
+
+A ruling is a decision recorded on the item without a question having been asked ([`workflow rule`](#workflow-rule)). It is a fact about the item, like an answer, and needs no run: recording one on a key nothing has named writes the item. Withdrawing a ruling keeps the record and marks it withdrawn. A workflow reads its item's answers and rulings through `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to); the engine passes them to no node on its own.
 
 Items need the database store and a registered project. With `store: files`, or in a directory with no project, naming an item fails.
 

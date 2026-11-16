@@ -358,6 +358,15 @@ export async function createFileWorkflowStore(
     getItem: async () => {
       throw new FileStoreUnsupportedError('items');
     },
+    listItemRulings: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    recordItemRuling: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    withdrawItemRuling: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
     listWorkflowRuns: async options => {
       const result = await query('all', view => view.listWorkflowRuns(options));
       result.runs = await Promise.all(

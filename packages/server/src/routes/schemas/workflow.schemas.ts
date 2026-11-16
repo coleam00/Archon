@@ -15,6 +15,7 @@ import { z } from '@hono/zod-openapi';
 import { openAttentionQueueCountsSchema } from '@archon/workflows/attention-counts';
 import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
 import {
   attentionWatchLevelSchema,
   classifiedAttentionStreamLineSchema,
@@ -28,6 +29,7 @@ import {
 import {
   createRunAttentionSchema,
   declaredAnswererNameSchema,
+  itemKeySchema,
   approvalContextSchema,
   expectedApprovalGateSchema,
   workflowRunSchema as engineWorkflowRunSchema,
@@ -437,6 +439,25 @@ export const itemReadQuerySchema = z.object({
 
 /** GET /api/items response: the item, its runs, open questions and answers. */
 export const itemReadResponseSchema = itemReadSchema.meta({ id: 'ItemRead' });
+
+/** POST /api/items/rulings body: the item, by project and key, and the ruling's text. */
+export const recordItemRulingBodySchema = z
+  .object({
+    project: z.string().min(1),
+    key: itemKeySchema,
+    text: z.string().refine(text => text.trim() !== '', 'A ruling needs text'),
+    /** The name the operator declares for itself; ignored for an identified user. */
+    as: declaredAnswererNameSchema.optional(),
+  })
+  .openapi('RecordItemRulingBody');
+
+/** POST /api/items/rulings/{rulingId}/withdraw body. */
+export const withdrawItemRulingBodySchema = z
+  .object({ as: declaredAnswererNameSchema.optional() })
+  .openapi('WithdrawItemRulingBody');
+
+/** A ruling as recorded on its item, withdrawn or not. */
+export const itemRulingResponseSchema = itemRulingSchema.meta({ id: 'ItemRuling' });
 
 /** GET /api/runs/{runId}/attention response: null when the run needs no one now. */
 export const attentionQueueItemResponseSchema = z
