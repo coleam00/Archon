@@ -282,7 +282,7 @@ function declaredInputNames(workflow: Pick<ResolvedWorkflow, 'inputs' | 'pack'>)
  * Every problem with a run-ended binding, read against the workflows of the project it
  * launches in: the ended workflow exists and declares the outcome and every input the
  * binding reads, and the started workflow exists and declares every input it maps. The
- * check a run gets before it starts, and the one `trigger check` prints.
+ * check a run gets before it starts; `runEndedTriggerCheck` reports it with the rest.
  */
 export async function runEndedBindingCheck(
   { binding, runEnded }: RunEndedBinding,
@@ -317,6 +317,56 @@ export async function runEndedBindingCheck(
   for (const name of Object.keys(runEnded.inputs ?? {}))
     if (!declared.includes(name))
       problems.push(`workflow '${target.name}' does not declare input '${name}'`);
+  return problems;
+}
+
+/**
+ * What `trigger check` prints, one problems list per binding in input order: the check a
+ * run gets before it starts, plus what a run is not refused for. A missing `launch.cwd`
+ * (the binding is skipped and never starts), a binding that starts the workflow that
+ * ended it (a loop), and two files that start the same stage for the same end.
+ */
+export async function runEndedTriggerCheck(
+  bindings: readonly RunEndedBinding[],
+  deps: Pick<WorkflowDeps, 'loadConfig' | 'providers'> &
+    Pick<RunEndedStartsDependencies, 'projectKeyOf'>
+): Promise<string[][]> {
+  const problems: string[][] = [];
+  const stages = new Map<string, number[]>();
+  for (const [index, candidate] of bindings.entries()) {
+    const { binding, runEnded } = candidate;
+    if (!existsSync(binding.launch.cwd)) {
+      problems.push([
+        `binding.launch.cwd '${binding.launch.cwd}' does not exist, so this binding never starts; fix the path or remove the file`,
+      ]);
+      continue;
+    }
+    // Starts match an item by project, so two checkouts of one project start the stage
+    // twice; a path not registered yet is a project of its own.
+    const project = (await bindingProjectKey(candidate, deps)) ?? binding.launch.cwd;
+    const stage = JSON.stringify([
+      project,
+      runEnded.workflowName,
+      runEnded.outcome,
+      binding.launch.workflowName,
+    ]);
+    stages.set(stage, [...(stages.get(stage) ?? []), index]);
+    const found = await runEndedBindingCheck(candidate, deps);
+    if (binding.launch.workflowName === runEnded.workflowName)
+      found.push(
+        `binding starts '${runEnded.workflowName}', the workflow whose end fires it: each run that completes with '${runEnded.outcome}' starts another on the same item`
+      );
+    problems.push(found);
+  }
+  for (const group of stages.values()) {
+    if (group.length < 2) continue;
+    for (const index of group) {
+      const others = group.filter(other => other !== index).map(other => bindings[other].file);
+      problems[index].push(
+        `binds the same outcome to the same stage as ${others.join(', ')}: the stage starts once per file on the item`
+      );
+    }
+  }
   return problems;
 }
 

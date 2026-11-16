@@ -983,11 +983,13 @@ describe('executeDagWorkflow -- the outcome is written when the run completes (#
       outcome?: string | false;
       priorCompletedNodes?: Map<string, PersistedNodeOutput>;
       runEndedStarts?: WorkflowDeps['runEndedStarts'];
+      platform?: ReturnType<typeof createMockPlatform>;
     } = {}
   ): Promise<void> => {
     await executeDagWorkflow(
       dagOptions({
         deps: { ...createMockDeps(store), runEndedStarts: options.runEndedStarts },
+        ...(options.platform ? { platform: options.platform } : {}),
         conversationId: 'conv-outcome',
         cwd: testDir,
         workflow: {
@@ -1171,13 +1173,41 @@ describe('executeDagWorkflow -- the outcome is written when the run completes (#
     expect(completedWith(store)).toEqual({ outcome: { kind: 'boolean', value: 'failed' } });
   });
 
+  /** The messages the run sent that say it completed with no outcome. */
+  const noOutcomeMessages = (platform: ReturnType<typeof createMockPlatform>): string[] =>
+    platform.sendMessage.mock.calls
+      .map(call => String(call[1]))
+      .filter(text => text.includes('completed with no outcome'));
+
   it('completes an undeclared workflow with no outcome', async () => {
     mockStructuredResult({ green: true });
     const store = createMockStore();
+    const platform = createMockPlatform();
 
-    await run(store, [resultNode()], { outcome: false });
+    await run(store, [resultNode()], { outcome: false, platform });
 
     expect(completedWith(store)).toBeUndefined();
+    expect(noOutcomeMessages(platform)).toEqual([]);
+  });
+
+  it('says the run completed with no outcome when its returns node was skipped', async () => {
+    mockStructuredResult({ green: true });
+    const store = createMockStore();
+    const platform = createMockPlatform();
+
+    await run(
+      store,
+      [
+        { id: 'gate', kind: 'agent', source: { kind: 'inline', prompt: 'decide' } },
+        { ...resultNode(), depends_on: ['gate'], when: "$gate.output == 'never'" },
+      ],
+      { platform }
+    );
+
+    expect(completedWith(store)).toBeUndefined();
+    expect(noOutcomeMessages(platform)).toEqual([
+      "\u2139\ufe0f Workflow 'completed-outcome' completed with no outcome: its returns node 'result' was skipped, so nothing bound to its outcome starts.",
+    ]);
   });
 });
 

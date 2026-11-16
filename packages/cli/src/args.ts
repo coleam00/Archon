@@ -71,6 +71,7 @@ export const cliArgOptions: CliArgOptions = {
   'conversation-id': { type: 'string' },
   detach: { type: 'boolean' },
   'no-wait': { type: 'boolean' },
+  'no-item': { type: 'boolean' },
   all: { type: 'boolean' },
   status: { type: 'string' },
   limit: { type: 'string' },
