@@ -81,7 +81,7 @@ async function fixture(packIn: 'project' | 'source') {
     triggersDirectory: () => triggers,
     projectKeyOf: async (cwd: string) => (cwd === project ? 'acme/widgets' : 'acme/other'),
   };
-  return { root, project, source, write, deps };
+  return { root, project, source, pack, write, deps };
 }
 
 describe('readPackGraph', () => {
@@ -121,10 +121,55 @@ describe('readPackGraph', () => {
     const graph = await readPackGraph(project, 'chain', deps);
 
     const [arrow] = graph.arrows;
-    expect(arrow?.active && arrow.installed.problems.length).toBeGreaterThan(0);
+    if (!arrow?.active) throw new Error('the installed file is not an active arrow');
+    expect(arrow.installed.problems).not.toEqual([]);
     expect(graph.stages.find(s => s.name === 'chain-a')?.outcome?.values).toContainEqual({
       value: 'ready',
       startsNothing: true,
     });
+  });
+
+  test('a file whose launch checkout is gone never starts, so it shows with that problem', async () => {
+    const { root, project, write, deps } = await fixture('project');
+    await write('stale', trigger('stale', join(root, 'removed-checkout')));
+
+    const graph = await readPackGraph(project, 'chain', deps);
+
+    const [arrow] = graph.arrows;
+    if (!arrow?.active) throw new Error('the installed file is not an active arrow');
+    expect(arrow.installed.problems).toEqual([
+      expect.stringContaining('does not exist, so this binding never starts'),
+    ]);
+    expect(graph.stages.find(s => s.name === 'chain-a')?.outcome?.values).toContainEqual({
+      value: 'ready',
+      startsNothing: true,
+    });
+  });
+
+  test('a declared stage that fails to load leaves the graph, its arrow and the load error', async () => {
+    const { project, pack, deps } = await fixture('project');
+    await writeFile(
+      join(pack, '.pack', 'pack.yaml'),
+      'bindings:\n  next:\n    workflow: chain-b\n    resource: b\n    overlap: queue\n    run_ended: { workflow: chain-a, outcome: ready }\n'
+    );
+    await writeFile(
+      join(pack, 'chain-b', 'chain-b.yaml'),
+      'name: chain-b\ndescription: b\nnodes:\n  - id: w\n    include: missing-block\n'
+    );
+
+    const graph = await readPackGraph(project, 'chain', deps);
+
+    expect(graph.stages.map(s => s.name)).toEqual(['chain-a']);
+    expect(graph.discoveryErrors).toContainEqual(
+      expect.objectContaining({ filename: 'chain-b.yaml', workflowName: 'chain-b' })
+    );
+    expect(graph.arrows).toMatchObject([
+      {
+        from: { stage: 'chain-a', outcome: 'ready' },
+        to: 'chain-b',
+        active: false,
+        declared: { binding: 'next', problems: [expect.stringContaining("'chain-b'")] },
+      },
+    ]);
   });
 });

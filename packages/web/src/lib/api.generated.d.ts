@@ -9536,6 +9536,7 @@ export interface components {
             active: true;
             declared: {
               binding: string;
+              problems: string[];
             } | null;
             installed: {
               file: string;
@@ -9553,6 +9554,7 @@ export interface components {
             active: false;
             declared: {
               binding: string;
+              problems: string[];
             };
             installed: unknown;
           }

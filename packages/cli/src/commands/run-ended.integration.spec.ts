@@ -386,7 +386,7 @@ describe('a run-ended binding', () => {
         from: { stage: 'chain-plan', outcome: 'planned' },
         to: 'chain-build',
         active: false,
-        declared: { binding: 'build' },
+        declared: { binding: 'build', problems: [] },
         installed: null,
       },
     ]);
@@ -401,8 +401,9 @@ describe('a run-ended binding', () => {
     };
     expect(listed.runEnded).toMatchObject([{ workflowName: 'chain-build', problems: [] }]);
     const [arrow] = (await graph()).arrows;
-    expect(arrow).toMatchObject({ active: true, declared: { binding: 'build' } });
-    const arrowId = arrow?.active ? arrow.installed.sourceInstanceId : 'not active';
+    expect(arrow).toMatchObject({ active: true, declared: { binding: 'build', problems: [] } });
+    if (!arrow?.active) throw new Error('the copied file did not activate the arrow');
+    const arrowId = arrow.installed.sourceInstanceId;
 
     await fixture.cli([
       'workflow',

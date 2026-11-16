@@ -101,14 +101,14 @@ describe('a pack graph', () => {
         from: { stage: 'a', outcome: 'ready' },
         to: 'b',
         active: true,
-        declared: { binding: 'b-after-a' },
+        declared: { binding: 'b-after-a', problems: [] },
         installed: { file: '/home/triggers/file-b.json', sourceInstanceId: 'file-b', problems: [] },
       },
       {
         from: { stage: 'b', outcome: 'done' },
         to: 'c',
         active: false,
-        declared: { binding: 'c-after-b' },
+        declared: { binding: 'c-after-b', problems: [] },
         installed: null,
       },
     ]);
@@ -233,6 +233,36 @@ describe('a pack graph', () => {
       { workflow: 'body', nodes: [plain('list'), fanned('more', 'list', 'inner')] },
       { workflow: 'inner', nodes: [plain('leaf')] },
     ]);
+  });
+
+  test('a stage with a boolean outcome ends with succeeded or failed', () => {
+    const check = wf(
+      'check',
+      [
+        {
+          id: 'decide',
+          bash: 'true',
+          output_format: {
+            type: 'object',
+            properties: { green: { type: 'boolean' } },
+            required: ['green'],
+          },
+        },
+      ],
+      { returns: 'decide', result: { outcome: 'green' } }
+    );
+    const graph = graphOf(stages(check, stage('next', ['done'])), {
+      declared: undefined,
+      installed: [installed('check', 'succeeded', 'next', 'on-green')],
+    });
+    expect(graph.stages[0]?.outcome).toEqual({
+      field: 'green',
+      form: 'boolean',
+      values: [
+        { value: 'succeeded', startsNothing: false },
+        { value: 'failed', startsNothing: true },
+      ],
+    });
   });
 
   test('every discovery error is listed, so a missing stage is visible', () => {

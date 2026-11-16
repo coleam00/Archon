@@ -495,6 +495,18 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
 const GRAPH_USAGE =
   'Usage: archon pack graph <pack> [--cwd <checkout>] [--workflow-source <dir>] [--json]';
 
+function arrowText(arrow: PackGraph['arrows'][number]): string {
+  const problems = arrow.active ? arrow.installed.problems : [];
+  const state = !arrow.active
+    ? 'declared, inactive'
+    : problems.length > 0
+      ? `active, refused: ${problems.join('; ')}`
+      : 'active';
+  const declared = arrow.declared?.problems ?? [];
+  const note = declared.length > 0 ? ` (binding ${declared.join('; ')})` : '';
+  return `  ${arrow.from.stage}:${arrow.from.outcome} -> ${arrow.to} [${state}]${note}`;
+}
+
 /** The graph as plain lines; `--json` prints the read itself, which is the contract. */
 function graphText(graph: PackGraph): string {
   const lines = [`Pack '${graph.pack}': ${String(graph.stages.length)} stage(s)`];
@@ -503,15 +515,7 @@ function graphText(graph: PackGraph): string {
     lines.push(`  ${stage.name}${values === undefined ? ' (no outcome)' : `: ${values}`}`);
   }
   lines.push('', `Arrows: ${String(graph.arrows.length)}`);
-  for (const arrow of graph.arrows) {
-    const problems = arrow.active ? arrow.installed.problems : [];
-    const state = !arrow.active
-      ? 'declared, inactive'
-      : problems.length > 0
-        ? `active, refused: ${problems.join('; ')}`
-        : 'active';
-    lines.push(`  ${arrow.from.stage}:${arrow.from.outcome} -> ${arrow.to} [${state}]`);
-  }
+  for (const arrow of graph.arrows) lines.push(arrowText(arrow));
   const nothing = graph.stages.flatMap(stage =>
     (stage.outcome?.values ?? [])
       .filter(v => v.startsNothing)

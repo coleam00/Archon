@@ -9,8 +9,10 @@
 import { loadStoreSelection } from '../config/store-selection';
 import type { WorkflowDeps } from '@archon/workflows/deps';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
+import { existsSync } from 'node:fs';
 import {
   buildPackGraph,
+  declaredRunEndedWorkflows,
   nearestPackBindings,
   packWorkflows,
   type InstalledArrow,
@@ -27,10 +29,15 @@ import {
 type GraphDeps = Pick<WorkflowDeps, 'loadConfig' | 'providers'> &
   Pick<RunEndedStartsDependencies, 'triggersDirectory' | 'projectKeyOf'>;
 
-/** The run-ended files that touch a stage and launch in the project of `cwd`, each checked. */
+/**
+ * The run-ended files that touch the pack and launch in the project of `cwd`, each with
+ * what keeps the engine from starting it. `touches` says whether a workflow name is one of
+ * the pack's: a stage, or a name its declared bindings use, so a file about a stage that
+ * failed to load still shows.
+ */
 async function installedArrows(
   cwd: string,
-  stageNames: ReadonlySet<string>,
+  touches: (workflowName: string) => boolean,
   deps: GraphDeps
 ): Promise<InstalledArrow[]> {
   const files = await readRunEndedBindings(deps.triggersDirectory());
@@ -46,17 +53,29 @@ async function installedArrows(
   const installed: InstalledArrow[] = [];
   for (const file of files) {
     const launchWorkflow = file.binding.launch.workflowName;
-    if (!stageNames.has(file.runEnded.workflowName) && !stageNames.has(launchWorkflow)) continue;
-    const launches = (await bindingProjectKey(file, deps)) ?? file.binding.launch.cwd;
-    if (launches !== project) continue;
-    installed.push({
+    if (!touches(file.runEnded.workflowName) && !touches(launchWorkflow)) continue;
+    const entry = {
       file: file.file,
       sourceInstanceId: file.sourceInstanceId,
       runEnded: file.runEnded,
       launchWorkflow,
-      // The preflight check: a binding it refuses fails every item run of its ended stage.
-      problems: await runEndedBindingCheck(file, deps),
-    });
+    };
+    // A start from a missing checkout is in no project, so the end of a run never starts
+    // it (`launchProjectKey`). Which project it was meant for cannot be known, so a file
+    // about this pack is shown with the problem `trigger check` gives it, not hidden.
+    if (!existsSync(file.binding.launch.cwd)) {
+      installed.push({
+        ...entry,
+        problems: [
+          `binding.launch.cwd '${file.binding.launch.cwd}' does not exist, so this binding never starts; fix the path or remove the file`,
+        ],
+      });
+      continue;
+    }
+    const launches = (await bindingProjectKey(file, deps)) ?? file.binding.launch.cwd;
+    if (launches !== project) continue;
+    // The preflight check: a binding it refuses fails every item run of its ended stage.
+    installed.push({ ...entry, problems: await runEndedBindingCheck(file, deps) });
   }
   return installed;
 }
@@ -71,11 +90,15 @@ export async function readPackGraph(
   const discovered = await discoverWorkflowsWithConfig(source, deps.loadConfig, deps.providers);
   const workflows = packWorkflows(discovered, packKey, source);
   const stages = workflows.map(entry => entry.workflow);
+  const declared = nearestPackBindings(workflows);
+  const names = [...stages.map(stage => stage.name), ...declaredRunEndedWorkflows(declared)];
+  const touches = (name: string): boolean =>
+    names.some(own => name === own || name.endsWith(`:${own}`));
   return buildPackGraph({
     packKey,
     stages,
-    declared: nearestPackBindings(workflows),
-    installed: await installedArrows(cwd, new Set(stages.map(stage => stage.name)), deps),
+    declared,
+    installed: await installedArrows(cwd, touches, deps),
     workflows: [...discovered.workflows, ...(discovered.support ?? [])].map(e => e.workflow),
     discoveryErrors: discovered.errors,
   });

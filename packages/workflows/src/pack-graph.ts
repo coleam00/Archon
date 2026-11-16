@@ -68,7 +68,15 @@ const arrowEndsSchema = {
   /** The workflow the arrow starts; it may be outside the pack. */
   to: z.string(),
 };
-const declaredSourceSchema = z.object({ binding: z.string() });
+const declaredSourceSchema = z.object({
+  binding: z.string(),
+  /**
+   * Why the binding cannot be read against the pack as it loaded: it names a workflow that
+   * is not a stage here. The name is reported as declared; `discoveryErrors` says whether
+   * that stage failed to load.
+   */
+  problems: z.array(z.string()),
+});
 const installedSourceSchema = z.object({
   file: z.string(),
   sourceInstanceId: z.string(),
@@ -160,6 +168,18 @@ export function nearestPackBindings(
     .sort((a, b) => SCOPE_RANK[a.source] - SCOPE_RANK[b.source])[0]?.bindings;
 }
 
+/** The workflow names the pack's run-ended bindings declare, as written. */
+export function declaredRunEndedWorkflows(
+  declared: Readonly<Record<string, PackBinding>> | undefined
+): string[] {
+  return Object.values(declared ?? {}).flatMap(binding => {
+    const kinded = kindedPackBinding(binding);
+    return kinded.kind === 'run_ended'
+      ? [kinded.binding.run_ended.workflow, kinded.binding.workflow]
+      : [];
+  });
+}
+
 /** An installed pack's workflow is named `owner/plugin:<name>`; a binding may name `<name>`. */
 export function packWorkflowName(names: readonly string[], declared: string): string | undefined {
   return names.find(n => n === declared || n.endsWith(`:${declared}`));
@@ -238,26 +258,35 @@ const installedSource = (
 });
 
 /** Each declared run-ended binding as one arrow per outcome it lists, from stage to stage. */
-function declaredArrows(
-  input: GraphInput
-): { binding: string; from: string; outcome: string; to: string }[] {
+/**
+ * Each declared run-ended binding as one arrow per outcome it lists, from stage to stage.
+ * A workflow name that is not a stage is kept as declared, with a problem, so a stage that
+ * failed to load leaves its arrows and the load error in the graph instead of failing it.
+ */
+function declaredArrows(input: GraphInput): {
+  binding: { binding: string; problems: string[] };
+  from: string;
+  outcome: string;
+  to: string;
+}[] {
   const names = input.stages.map(stage => stage.name);
-  const stageName = (id: string, declared: string): string => {
-    const name = packWorkflowName(names, declared);
-    if (name === undefined)
-      throw new Error(
-        `Binding '${id}' names workflow '${declared}', which pack '${input.packKey}' does not provide.`
-      );
-    return name;
-  };
   return Object.entries(input.declared ?? {}).flatMap(([id, binding]) => {
     const kinded = kindedPackBinding(binding);
     if (kinded.kind !== 'run_ended') return [];
-    const from = stageName(id, kinded.binding.run_ended.workflow);
-    const to = stageName(id, kinded.binding.workflow);
+    const problems: string[] = [];
+    const stageName = (declared: string): string => {
+      const name = packWorkflowName(names, declared);
+      if (name !== undefined) return name;
+      problems.push(
+        `names workflow '${declared}', which is not a stage of pack '${input.packKey}' as it loaded; see discoveryErrors`
+      );
+      return declared;
+    };
+    const from = stageName(kinded.binding.run_ended.workflow);
+    const to = stageName(kinded.binding.workflow);
     const { outcome } = kinded.binding.run_ended;
     return (typeof outcome === 'string' ? [outcome] : outcome).map(value => ({
-      binding: id,
+      binding: { binding: id, problems: [...problems] },
       from,
       outcome: value,
       to,
@@ -280,14 +309,14 @@ function graphArrows(input: GraphInput): PackGraphArrow[] {
         arrowKey(from, outcome, to)
     );
     if (files.length === 0)
-      arrows.push({ ...ends, active: false, declared: { binding }, installed: null });
+      arrows.push({ ...ends, active: false, declared: binding, installed: null });
     // Two files for one arrow start the stage twice; each is reported, as `trigger check` does.
     for (const entry of files) {
       matched.add(entry);
       arrows.push({
         ...ends,
         active: true,
-        declared: { binding },
+        declared: binding,
         installed: installedSource(entry),
       });
     }
@@ -330,8 +359,7 @@ function graphStage(stage: Stage, started: ReadonlySet<string>): PackGraph['stag
 
 /**
  * The graph of one pack from its stages (include-expanded), its declared bindings and the
- * install's run-ended files for its project. A declared run-ended binding that names a
- * workflow the pack does not provide throws, as `archon pack bindings` refuses it.
+ * install's run-ended files for its project.
  */
 export function buildPackGraph(input: GraphInput): PackGraph {
   const arrows = graphArrows(input);
