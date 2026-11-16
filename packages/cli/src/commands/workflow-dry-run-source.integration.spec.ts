@@ -1,5 +1,6 @@
 // @archon-test-isolated
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -96,6 +97,46 @@ describe('workflow run --dry-run --workflow-source', () => {
 
     expect(result.trace.find(entry => entry.nodeId === 'hello')?.reason).toBeUndefined();
     expect(result.outcome).toBe('completed');
+  });
+
+  test('runs a source file that replaces a bundled workflow of the same name', async () => {
+    const fx = fixture();
+    write(
+      join(fx.source, '.archon', 'workflows', 'archon-plan.yaml'),
+      'name: archon-plan\ndescription: local\nnodes:\n  - id: local-only\n    bash: echo local\n'
+    );
+
+    const result = await dryRun(fx, 'archon-plan');
+
+    expect(result.trace.map(entry => entry.nodeId)).toEqual(['local-only']);
+    expect(result.outcome).toBe('completed');
+  });
+
+  test('a captured run of that replacement records project as its dispatch source', async () => {
+    const fx = fixture();
+    write(
+      join(fx.source, '.archon', 'workflows', 'archon-plan.yaml'),
+      'name: archon-plan\ndescription: local\nnodes:\n  - id: local-only\n    bash: echo local-5826\n'
+    );
+
+    const result = await captureWorkflowCommand(fx.home, async host => {
+      await workflowRunCommand(host, fx.target, 'archon-plan', '', {
+        discoveryCwd: fx.source,
+        noWorktree: true,
+        folder: true,
+      });
+    });
+
+    expect(result.status, result.output).toBe(0);
+    const db = new Database(join(fx.home, 'archon.db'), { readonly: true });
+    try {
+      const rows = db
+        .query<{ metadata: string }, []>('SELECT metadata FROM remote_agent_workflow_runs')
+        .all();
+      expect(rows.map(row => JSON.parse(row.metadata).dispatch?.source)).toEqual(['project']);
+    } finally {
+      db.close();
+    }
   });
 
   // A same-named global workflow stands in for any other scope the name could resolve from.
