@@ -29,6 +29,7 @@ import {
 import type { CheckoutSharedEventData } from './schemas/workflow-event';
 import { ContinuedItemProjectError, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
+import { refuseBrokenRunEndedBindings } from './run-ended-refusal';
 import { holdWorkflowResource } from './resource-hold';
 import { workflowPathPriorityTime } from './workflow-path-lock';
 
@@ -219,6 +220,22 @@ async function createWorkflowRunRow(
 }
 
 /**
+ * A run whose end would fire a broken run-ended binding is refused before it does any
+ * work, so a binding that names a missing stage is found before the stage feeding it runs.
+ */
+async function refuseRunOnBrokenBindings(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflowRun: WorkflowRun
+): Promise<WorkflowExecutionResult | undefined> {
+  const reason = await refuseBrokenRunEndedBindings(deps, workflowRun);
+  if (reason === undefined) return undefined;
+  await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${reason}`);
+  return { success: false, workflowRunId: workflowRun.id, error: reason };
+}
+
+/**
  * Take the workflow's resource slot, win execution ownership of a pending row, then sample
  * the checkout the run starts from.
  */
@@ -232,6 +249,8 @@ async function claimPendingRun(
   execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
   { onExecutionClaimed, noWait }: ExecuteWorkflowOptions
 ): Promise<RunPhase<CheckoutSample>> {
+  const broken = await refuseRunOnBrokenBindings(deps, platform, conversationId, workflowRun);
+  if (broken) return { stopped: true, result: broken };
   const refused = await holdWorkflowResource(
     deps,
     platform,

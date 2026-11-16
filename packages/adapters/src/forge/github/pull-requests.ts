@@ -5,22 +5,14 @@ import {
   contentDigest,
   forgePrRecordSchema,
   prTimestampsSchema,
-  reviewItemSchema,
   type ForgeMutationRequest,
   type ForgePrRecord,
   type ForgeRequest,
   type ForgeResponse,
 } from '@archon/forge/operations';
 import type { PrRef, RepoRef } from '@archon/forge';
-import {
-  GitHubError,
-  githubPages,
-  githubRequest,
-  location,
-  repositoryPath,
-  type Fetch,
-} from './api';
-import { actor, authorField, userSchema } from './actor';
+import { GitHubError, githubRequest, location, repositoryPath, type Fetch } from './api';
+import { authorField, userSchema } from './actor';
 import { applied, failure, refused, unknown, unverified, type Submit } from './mutation-outcome';
 
 const repoSchema = z.object({ full_name: z.string().min(1) });
@@ -348,58 +340,4 @@ export async function handleGithubPrView(
       : undefined,
     selector.repo
   );
-}
-
-export async function handleGithubPrReviews(
-  request: Extract<ForgeRequest, { op: 'pr.reviews' }>,
-  fetchImpl: Fetch,
-  token: string
-): Promise<ForgeResponse> {
-  const { root, path } = location(request.ref.repo);
-  const fields = reviewItemSchema.shape;
-  const itemSchema = z.object({
-    id: z.union([z.number().int(), fields.id]),
-    html_url: fields.url,
-    body: fields.body.nullable(),
-    user: userSchema,
-    commit_id: fields.commit.optional(),
-    state: fields.state.optional(),
-    submitted_at: fields.createdAt.optional(),
-    created_at: fields.createdAt.optional(),
-    in_reply_to_id: z.number().nullable().optional(),
-  });
-  const base = `${root}/repos/${path}/pulls/${String(request.ref.number)}`;
-  const [reviews, comments] = await Promise.all([
-    githubPages(fetchImpl, token, `${base}/reviews`, value => z.array(itemSchema).parse(value)),
-    githubPages(fetchImpl, token, `${base}/comments`, value => z.array(itemSchema).parse(value)),
-  ]);
-  const project = (
-    item: z.infer<typeof itemSchema>,
-    kind: 'review' | 'review_comment'
-  ): z.infer<typeof reviewItemSchema> => ({
-    kind,
-    id: String(item.id),
-    author: actor(request.ref.repo.host, item.user),
-    commit: item.commit_id ?? null,
-    state: kind === 'review' ? (item.state ?? null) : null,
-    createdAt: (kind === 'review' ? item.submitted_at : item.created_at) ?? null,
-    url: item.html_url,
-    body: item.body ?? '',
-  });
-  return {
-    operationId: request.operationId,
-    ok: true,
-    result: {
-      op: request.op,
-      value: {
-        ref: request.ref,
-        items: [
-          ...reviews.filter(item => item.state !== 'PENDING').map(item => project(item, 'review')),
-          ...comments
-            .filter(item => item.in_reply_to_id == null)
-            .map(item => project(item, 'review_comment')),
-        ],
-      },
-    },
-  };
 }

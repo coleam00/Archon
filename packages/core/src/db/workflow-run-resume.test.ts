@@ -21,7 +21,7 @@ mock.module('./connection', () => ({
 }));
 
 import { currentExecutionOwner, WorkflowNotResumableError } from '@archon/workflows/store';
-import { findResumableRunByParentConversation, resumeWorkflowRun } from './workflow-run-resume';
+import { listResumableRunsByParentConversation, resumeWorkflowRun } from './workflow-run-resume';
 
 describe('workflow run resume', () => {
   beforeEach(() => {
@@ -29,48 +29,28 @@ describe('workflow run resume', () => {
     mockQuery.mockImplementation(() => Promise.resolve(createQueryResult([])));
   });
 
-  describe('findResumableRunByParentConversation', () => {
-    test('scopes by workflow name, parent conversation and codebase', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([mockWorkflowRun]));
+  describe('listResumableRunsByParentConversation', () => {
+    test('lists every failed or paused run of the workflow in the conversation and codebase', async () => {
+      const olderRun = { ...mockWorkflowRun, id: 'older-run' };
+      mockQuery.mockResolvedValueOnce(createQueryResult([mockWorkflowRun, olderRun]));
 
-      const result = await findResumableRunByParentConversation('piv', 'conv-1', 'codebase-789');
+      const result = await listResumableRunsByParentConversation('piv', 'conv-1', 'codebase-789');
 
-      expect(result).toEqual(mockWorkflowRun);
+      expect(result).toEqual([mockWorkflowRun, olderRun]);
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain('workflow_name = $1');
       expect(query).toContain('parent_conversation_id = $2');
       expect(query).toContain('codebase_id = $3');
-      expect(params).toEqual(['piv', 'conv-1', 'codebase-789']);
-    });
-
-    test('prefers a paused run over a newer failed one (paused-first ordering)', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      await findResumableRunByParentConversation('piv', 'conv-1', 'cb');
-
-      const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status IN ('failed', 'paused')");
-      // Status is the primary sort key: an open gate auto-resumes, while a
-      // failed candidate is gated behind an explicit user prompt. Ordering by
-      // started_at alone lets a newer failure shadow an older waiting gate.
-      expect(query).toContain("ORDER BY CASE WHEN status = 'paused' THEN 0 ELSE 1 END");
-      // Recency still breaks ties within a status.
-      expect(query).toContain('started_at DESC');
-    });
-
-    test('returns null when no run matches', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      const result = await findResumableRunByParentConversation('piv', 'conv-1', 'cb');
-
-      expect(result).toBeNull();
+      expect(query).not.toContain('LIMIT');
+      expect(params).toEqual(['piv', 'conv-1', 'codebase-789']);
     });
 
     test('throws on database error', async () => {
       mockQuery.mockRejectedValueOnce(new Error('Connection refused'));
 
-      await expect(findResumableRunByParentConversation('piv', 'conv-1', 'cb')).rejects.toThrow(
-        'Failed to find resumable run by parent conversation: Connection refused'
+      await expect(listResumableRunsByParentConversation('piv', 'conv-1', 'cb')).rejects.toThrow(
+        'Failed to list resumable runs by parent conversation: Connection refused'
       );
     });
   });

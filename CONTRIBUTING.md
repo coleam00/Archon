@@ -8,9 +8,23 @@ Thank you for your interest in contributing to Archon!
 2. Clone your fork
 3. Install dependencies: `bun install`
 4. Copy `.env.example` to `.env` in the Archon checkout and configure it for the source server. This file loads after CWD env stripping, without overriding remaining process values, and before `~/.archon/.env` and `<cwd>/.archon/.env`. See [environment file locations](packages/docs-web/src/content/docs/reference/configuration.md#env-file-locations) for precedence and the distinction from a target repository's `.env`.
-5. Start development: `bun run dev`
+5. Start development: `bun run dev`. It uses `~/.archon` unless `ARCHON_HOME` is set; see [Running a checkout](#running-a-checkout) before you run a branch.
 
 ## Development Workflow
+
+### Running a checkout
+
+Archon applies its schema migrations when it opens a database. Running a checkout's CLI, server or tests against your own `~/.archon` writes that branch's unmerged schema into your live database, and the additive-only rule means it stays there.
+
+Before you run a checkout, give it its own home and remove it afterwards:
+
+```bash
+export ARCHON_HOME="$(mktemp -d)"
+```
+
+If `DATABASE_URL` is set, in your shell or in the checkout's `.env`, unset it or point it at a scratch database you create and drop. A scratch home does not change which database `DATABASE_URL` names. Copy `config.yaml` into the scratch home when the change needs your configuration; do not copy `archon.db` or credentials.
+
+A build running from inside an Archon home's `workspaces/` (a run's worktree or a managed clone) refuses to open any database, SQLite or PostgreSQL, while `ARCHON_HOME` names that home, and prints this instruction. The check reads only the home: once `ARCHON_HOME` is a scratch directory, a `DATABASE_URL` is opened as given, live or not. Set a scratch home rather than routing around the refusal.
 
 ### Code Quality
 

@@ -1,3 +1,4 @@
+import type { IWorkflowStore } from '@archon/workflows/store';
 import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
@@ -75,7 +76,11 @@ const fileUserSchema = userRowSchema.extend({
   platform: identityPlatformSchema,
   platform_user_id: z.string(),
 });
-export async function createFileWorkflowHost(root: string): Promise<WorkflowHost> {
+export async function createFileWorkflowHost(
+  root: string,
+  /** Wraps the store every part of the host shares, before any part captures it. */
+  wrapStore: <S extends IWorkflowStore>(store: S) => Promise<S> = async store => store
+): Promise<WorkflowHost> {
   await assertFileStoreConfiguration();
   async function users(): Promise<z.infer<typeof fileUserSchema>[]> {
     return z.array(fileUserSchema).parse((await readJson(join(root, 'host/users.json'))) ?? []);
@@ -330,30 +335,32 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           .sort((a, b) => b.created_at.getTime() - a.created_at.getTime())[0] ?? null,
     },
   };
-  const store = await createFileWorkflowStore({
-    root,
-    getCodebase: id => records.codebases.getCodebase(id),
-    resourceCapacity: async resource => (await loadResourceCapacities()).get(resource),
-    listReusableCheckouts: async () =>
-      (await environments())
-        .filter(row => row.status === 'active' && row.workflow_type === 'task')
-        .map(row => ({
-          codebaseId: row.codebase_id,
-          branch: row.workflow_id,
-          workingPath: row.working_path,
-        })),
-    isCheckoutReleased: async (run, path) => {
-      const matching = (await environments()).filter(
-        row =>
-          row.provider === 'worktree' &&
-          row.codebase_id === run.codebase_id &&
-          row.working_path === (run.working_path ?? path)
-      );
-      return matching.length > 0 && matching.every(row => row.status !== 'active');
-    },
-    getCodebaseEnvVars: async id =>
-      (await readCodebases()).find(row => row.id === id)?.envVars ?? {},
-  });
+  const store = await wrapStore(
+    await createFileWorkflowStore({
+      root,
+      getCodebase: id => records.codebases.getCodebase(id),
+      resourceCapacity: async resource => (await loadResourceCapacities()).get(resource),
+      listReusableCheckouts: async () =>
+        (await environments())
+          .filter(row => row.status === 'active' && row.workflow_type === 'task')
+          .map(row => ({
+            codebaseId: row.codebase_id,
+            branch: row.workflow_id,
+            workingPath: row.working_path,
+          })),
+      isCheckoutReleased: async (run, path) => {
+        const matching = (await environments()).filter(
+          row =>
+            row.provider === 'worktree' &&
+            row.codebase_id === run.codebase_id &&
+            row.working_path === (run.working_path ?? path)
+        );
+        return matching.length > 0 && matching.every(row => row.status !== 'active');
+      },
+      getCodebaseEnvVars: async id =>
+        (await readCodebases()).find(row => row.id === id)?.envVars ?? {},
+    })
+  );
   const worktreeReaders: WorktreeOwnershipReaders = {
     getCodebase: id => records.codebases.getCodebase(id),
     getLiveRunOwningEnv: async (id, _release, excludeRunId) => {

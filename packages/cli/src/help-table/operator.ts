@@ -107,6 +107,12 @@ export const operatorHelp: HelpGroup = {
     },
     {
       command: 'trigger',
+      subcommand: 'check',
+      spec: 'trigger check',
+      description: 'List the run-ended bindings in ARCHON_HOME/triggers and check them',
+    },
+    {
+      command: 'trigger',
       subcommand: 'inspect',
       spec: 'trigger inspect <receipt-or-request-id>',
       description: 'Show causal receipt, disposition, blockers, and recovery guidance',

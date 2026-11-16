@@ -609,35 +609,49 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
         { id: intents[4].launch.run.id },
       ]);
     });
-    test('admission keeps FIFO across hosts, skips overlap and withdraws queued work', async () => {
+    test('admission keeps FIFO per host, passes over another host, skips overlap and withdraws queued work', async () => {
       const store = harness.store;
       const owner = start(),
         queued = start('queue', 'other'),
         later = start(),
+        last = start(),
         skipped = start('skip');
       await store.admitResourceStart(owner);
       expect(await store.admitResourceStart(queued)).toMatchObject({
         status: 'queued',
         blocker: { kind: 'run', id: owner.launch.run.id },
       });
+      // Another host's queued start does not block this host; the full slot does.
       expect(await store.admitResourceStart(later)).toMatchObject({
         status: 'queued',
-        blocker: { kind: 'request', id: queued.launch.run.id },
+        blocker: { kind: 'run', id: owner.launch.run.id },
       });
+      // This host's own queue does.
       expect(await store.admitResourceStart(skipped)).toMatchObject({
         status: 'skipped',
-        blocker: { kind: 'request', id: queued.launch.run.id },
+        blocker: { kind: 'request', id: later.launch.run.id },
       });
       expect(await store.getWorkflowRun(skipped.launch.run.id)).toBeNull();
       await store.claimPendingWorkflowRun(owner.launch.run.id);
       await store.completeWorkflowRun(owner.launch.run.id, { duration_ms: 1 });
-      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([]);
-      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toEqual(queued.launch);
-      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toBeNull();
+      // The slot is free. The other host's older start waits only for its own drain, so
+      // it blocks neither this host's queue nor its new starts; this host's queue keeps
+      // its own order.
+      expect(await store.admitResourceStart(last)).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'request', id: later.launch.run.id },
+      });
       expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([
         { status: 'admitted', requestId: later.launch.run.id, runId: later.launch.run.id },
       ]);
-      expect(await store.listQueuedResourceStartsForHost('host')).toEqual([]);
+      expect(await store.listQueuedResourceStartsForHost('other')).toMatchObject([
+        { id: queued.launch.run.id },
+      ]);
+      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toEqual(queued.launch);
+      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toBeNull();
+      expect(await store.listQueuedResourceStartsForHost('host')).toMatchObject([
+        { id: last.launch.run.id },
+      ]);
     });
   });
 }

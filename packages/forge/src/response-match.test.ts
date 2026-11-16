@@ -75,3 +75,54 @@ test('a resolved answer to an issue or pull request URL must name its subject', 
   expect(matches(resolved({ kind: 'pr', number: 1 }))).toBe(true);
   expect(matches(resolved())).toBe(false);
 });
+
+test('an applied review answers the request only when it echoes its commit, key and comments in order', () => {
+  const ref = { repo: { host: 'forge.example', path: 'team/repo' }, number: 7 };
+  const request = {
+    operationId: 'review',
+    op: 'pr.review.submit' as const,
+    ref,
+    commit: 'commit-a',
+    key: 'run-1',
+    summary: 'Two findings.',
+    comments: [
+      { path: 'a.ts', line: 3, body: 'one' },
+      { path: 'b.ts', line: 9, body: 'two' },
+    ],
+  };
+  const placed = [
+    { path: 'a.ts', line: 3, placed: 'inline' as const },
+    { path: 'b.ts', line: 9, placed: 'summary' as const },
+  ];
+  const answer = (overrides: { commit?: string; comments?: typeof placed } = {}) =>
+    matchesForgeOperationResponse(
+      request,
+      {
+        operationId: 'review',
+        ok: true,
+        result: {
+          op: 'pr.review.submit',
+          value: {
+            target: ref,
+            outcome: 'applied',
+            changed: true,
+            review: {
+              ref,
+              id: '100',
+              url: 'https://forge.example/team/repo/pull/7#review-100',
+              commit: overrides.commit ?? 'commit-a',
+              key: 'run-1',
+              bodyDigest: 'digest',
+            },
+            comments: overrides.comments ?? placed,
+          },
+        },
+      },
+      metadata,
+      'forge.example'
+    );
+  expect(answer()).toBe(true);
+  expect(answer({ commit: 'commit-b' })).toBe(false);
+  expect(answer({ comments: [...placed].reverse() })).toBe(false);
+  expect(answer({ comments: placed.slice(0, 1) })).toBe(false);
+});

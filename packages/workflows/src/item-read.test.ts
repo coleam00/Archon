@@ -77,7 +77,12 @@ const first = run('first', {
   started_at: new Date('2026-11-01T09:00:00.000Z'),
   completed_at: new Date('2026-11-01T09:30:00.000Z'),
 });
-const second = run('second', { started_at: new Date('2026-11-01T11:00:00.000Z') });
+// The second run was started by the end of the first; its receipt holds that cause.
+const SECOND_RECEIPT = '5a4f7f9e-2b0e-4a4c-9d36-1c1f1f6f3a10';
+const second = run('second', {
+  started_at: new Date('2026-11-01T11:00:00.000Z'),
+  metadata: { resource_start: { receiptId: SECOND_RECEIPT, bindingId: 'review' } },
+});
 const child = asking('child', '2026-11-01T11:10:00.000Z', {
   parent_run_id: 'second',
   item_id: null,
@@ -154,6 +159,23 @@ const source: ItemReadSource = {
     getCodebase: async () => null,
     getItem: async id => (id === item.id ? item : null),
     listItemRulings: async id => (id === item.id ? rulings : []),
+    getResourceStartRequest: async () => null,
+    getStartReceipt: async id =>
+      id === SECOND_RECEIPT
+        ? {
+            id,
+            sourceInstanceId: 'review-after-deliver',
+            deliveryId: 'first',
+            contentDigest: 'digest',
+            receivedAt: '2026-11-01T09:30:00.000Z',
+            occurredAt: null,
+            sourceActor: { source: 'archon-run-ended', id: 'first', display: 'built' },
+            itemKey: item.key,
+            outcome: 'matched',
+            reason: null,
+            bindings: [],
+          }
+        : null,
   },
 };
 
@@ -169,6 +191,8 @@ describe('reading an item', () => {
         outcome: 'built',
         startedAt: '2026-11-01T09:00:00.000Z',
         completedAt: '2026-11-01T09:30:00.000Z',
+        cause: null,
+        awaitingExecution: null,
       },
       {
         id: 'second',
@@ -177,6 +201,8 @@ describe('reading an item', () => {
         outcome: null,
         startedAt: '2026-11-01T11:00:00.000Z',
         completedAt: null,
+        cause: { kind: 'run_ended', runId: 'first' },
+        awaitingExecution: null,
       },
     ]);
     // The children's questions are the item's, under their own run ids, oldest first; the

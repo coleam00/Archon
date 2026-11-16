@@ -486,6 +486,30 @@ test('a plugin without draft conversion refuses without executing the operation'
   });
 });
 
+test('a plugin without review submission refuses it by name without running', async () => {
+  const discovery = await discoverPlugins({
+    config: {
+      plugins: [{ plugin: 'mutator', command: process.execPath, args: [fixture] }],
+      scanPath: false,
+    },
+  });
+  for (const plugin of discovery.byHost.values()) plugin.command = '/missing-operation-executable';
+  const review = {
+    operationId: 'review-1',
+    op: 'pr.review.submit',
+    ref,
+    commit: 'a'.repeat(40),
+    key: 'run-1',
+    summary: 'A summary.',
+    comments: [],
+  } satisfies ForgeRequest;
+  expect((await dispatchForge(review, { discovery })).response).toMatchObject({
+    ok: false,
+    error: { kind: 'unsupported_op' },
+    mutation: { op: 'pr.review.submit', outcome: 'refused' },
+  });
+});
+
 test('draft conversion accepts unchanged evidence and rejects a non-open read-back', async () => {
   expect((await dispatch(draft, 'unchanged')).response).toMatchObject({
     ok: true,

@@ -333,10 +333,10 @@ export function createInMemoryWorkflowStore(
         run => run.id === id,
         view => view.failWorkflowRun(id, error, options)
       ),
-    cancelWorkflowRun: (id, details) =>
+    cancelWorkflowRun: (id, details, options) =>
       terminalWrite(
         run => run.id === id,
-        view => view.cancelWorkflowRun(id, details)
+        view => view.cancelWorkflowRun(id, details, options)
       ),
     cancelFanOutRun: (id, reason) =>
       terminalWrite(

@@ -11,7 +11,7 @@ import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { packCommand, type PackBindingsOptions } from './pack';
-import { triggerFireConfigSchema } from './trigger';
+import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 
 const DECLARATION = `bindings:
   sweep:
@@ -131,7 +131,7 @@ describe('archon pack bindings', () => {
     const sweepFile = await fileFor('sweep');
     const sweepName = sweepFile.replace(/\.json$/, '');
     const sweepPath = join(out, sweepFile);
-    expect(triggerFireConfigSchema.parse(await readJson(sweepFile))).toEqual({
+    expect(triggerConfigSchema.parse(await readJson(sweepFile))).toEqual({
       version: 1,
       sourceInstanceId: sweepName,
       binding: {
@@ -156,7 +156,7 @@ describe('archon pack bindings', () => {
       },
       schedule: { intervalSeconds: 600, runAtLoad: false },
     });
-    const after = triggerFireConfigSchema.parse(await readJson(await fileFor('after')));
+    const after = triggerConfigSchema.parse(await readJson(await fileFor('after')));
     expect(after.binding.resource).toBe('fixture:host-1:after');
     expect(after.binding.launch.inputs).toEqual({ sweep_binding: sweepPath });
     const printed = logSpy.mock.calls.flat().join('\n');
@@ -169,7 +169,7 @@ describe('archon pack bindings', () => {
     await packCommand('bindings', ['fixture'], options({ only: 'follow-up' }));
 
     const file = await fileFor('follow-up');
-    const config = triggerFireConfigSchema.parse(await readJson(file));
+    const config = triggerConfigSchema.parse(await readJson(file));
     expect(config.schedule).toBeUndefined();
     expect(config.binding.resource).toBe('fixture:git.example.com/acme/widgets:follow-up');
     const printed = logSpy.mock.calls.flat().join('\n');
@@ -223,7 +223,7 @@ describe('archon pack bindings', () => {
     }
     const files = await readdir(out);
     for (const file of files) {
-      const config = triggerFireConfigSchema.parse(await readJson(file));
+      const config = triggerConfigSchema.parse(await readJson(file));
       ids.add(config.binding.bindingId).add(config.sourceInstanceId);
     }
     expect(files.length).toBe(3);
@@ -261,7 +261,7 @@ describe('archon pack bindings', () => {
     expect(await readFile(join(out, sweep), 'utf8')).toBe('mine');
 
     await packCommand('bindings', ['fixture'], options({ only: 'sweep,after', force: true }));
-    expect(triggerFireConfigSchema.safeParse(await readJson(sweep)).success).toBe(true);
+    expect(triggerConfigSchema.safeParse(await readJson(sweep)).success).toBe(true);
   });
 
   it.each([

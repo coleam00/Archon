@@ -292,6 +292,12 @@
       "src/commands/trigger.integration.spec.ts"
     ],
     [
+      "src/commands/run-ended.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-detach-refusal.integration.spec.ts"
+    ],
+    [
       "src/commands/workflow-continuations.test.ts"
     ],
     [

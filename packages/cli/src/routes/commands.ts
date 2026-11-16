@@ -181,8 +181,15 @@ export async function runTrigger({
   const { triggerCommand, spawnAdmitted } = await loadRoute(() => import('../commands/trigger'), {
     database: await usesDatabaseStore(),
   });
-  const { createCliWorkflowHost } = await import('../utils/workflow-host');
-  const host = await createCliWorkflowHost(true);
+  const { createCliWorkflowHost, cliOwnTriggerHost } = await import('../utils/workflow-host');
+  // A `trigger execute` process serves the host it runs for, so the run it ends admits
+  // that host's next start.
+  const host = await createCliWorkflowHost(
+    true,
+    cliOwnTriggerHost(
+      subcommand === 'execute' && typeof values.host === 'string' ? values.host : undefined
+    )
+  );
   await triggerCommand(
     host,
     subcommand,

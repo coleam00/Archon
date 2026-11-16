@@ -1,7 +1,7 @@
 // @archon-test-isolated
 /**
  * Resume preparation is a caller-side primitive: callers look up the candidate
- * themselves (by run id, or findResumableRunByParentConversation for chat) and
+ * themselves (by run id, or listResumableRunsByParentConversation for chat) and
  * call hydrateResumableRun to turn it into the form executeWorkflow expects.
  */
 import { describe, expect, it, mock } from 'bun:test';

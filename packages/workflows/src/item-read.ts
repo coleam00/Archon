@@ -29,7 +29,9 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import type { WorkflowEventRow } from './schemas/workflow-event';
+import { readResourceStartReceiptId, startCause, startCauseSchema } from './schemas/resource-start';
 import type { IWorkflowStore } from './store';
+import { awaitingExecution } from './resource-start-store';
 
 export const itemRunSchema = z.object({
   id: z.string(),
@@ -40,6 +42,18 @@ export const itemRunSchema = z.object({
   startedAt: z.string().datetime(),
   /** Null while the run has not ended. */
   completedAt: z.string().datetime().nullable(),
+  /**
+   * What started the run, read from the start receipt its start recorded: a run on this
+   * item that ended, a node that fired it, or another trigger source. Null for a start
+   * by hand, which has no receipt.
+   */
+  cause: startCauseSchema.nullable(),
+  /**
+   * Set while the run's start is admitted but no executor has claimed it. If the process
+   * that admitted it died, it stays set until an operator runs it once:
+   * `archon trigger execute <requestId> --host <hostId>`.
+   */
+  awaitingExecution: z.object({ requestId: z.string(), hostId: z.string() }).nullable(),
 });
 export type ItemRun = z.infer<typeof itemRunSchema>;
 
@@ -101,10 +115,23 @@ export type ItemRead = z.infer<typeof itemReadSchema>;
 
 export interface ItemReadSource extends AttentionQueueSource {
   store: AttentionQueueSource['store'] &
-    Pick<IWorkflowStore, 'getItemRuns' | 'listEventsForRuns' | 'listItemRulings'>;
+    Pick<
+      IWorkflowStore,
+      | 'getItemRuns'
+      | 'listEventsForRuns'
+      | 'listItemRulings'
+      | 'getStartReceipt'
+      | 'getResourceStartRequest'
+    >;
 }
 
-function itemRun(run: WorkflowRun): ItemRun {
+async function itemRun(source: ItemReadSource, run: WorkflowRun): Promise<ItemRun> {
+  // The receipt stays the one owner of why a start happened; this only reads it.
+  const receiptId = readResourceStartReceiptId(run.metadata);
+  const receipt = receiptId ? await source.store.getStartReceipt(receiptId) : null;
+  // Only a start from a receipt is executed by another process; only a pending run waits.
+  const request =
+    receipt && run.status === 'pending' ? await source.store.getResourceStartRequest(run.id) : null;
   return {
     id: run.id,
     workflow: run.workflow_name,
@@ -112,6 +139,8 @@ function itemRun(run: WorkflowRun): ItemRun {
     outcome: displayedRunOutcome(run),
     startedAt: run.started_at.toISOString(),
     completedAt: run.completed_at?.toISOString() ?? null,
+    cause: receipt ? startCause(receipt) : null,
+    awaitingExecution: awaitingExecution(request),
   };
 }
 
@@ -180,7 +209,7 @@ export async function readItem(
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   return {
     item: found.item,
-    runs: own.values.map(itemRun),
+    runs: await Promise.all(own.values.map(run => itemRun(source, run))),
     questions,
     answers,
     // A paused item run the store could not read is in both reports; list it once.
