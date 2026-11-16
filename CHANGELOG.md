@@ -71,6 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `archon workflow run --detach` is refused with the reason (exit 1, `{ "ok": false, "error" }` under `--json`) when the run's child would refuse it before its first node: a registered `--branch` worktree on another branch or without `--from` in its history, or an `--item` run with a broken run-ended binding. It used to acknowledge a started run that the child then refused, with the reason only in the child's log. (#5783)
+- `archon workflow run --detach` of a workflow that declares `returns.asks`, started without `--item`, is refused in the command's result instead of acknowledging a run its child then cancels. (#5844)
 
 ## [0.14.0] - 2026-11-07
 
