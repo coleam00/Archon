@@ -209,7 +209,7 @@ A relative path resolves from the invoking directory before the repository root.
 | Key | Meaning |
 | --- | --- |
 | `fixture.expect` | Simulation outcome: `completed` (the default), `failed`, `paused` or `cancelled` |
-| `fixture.authored` | Optional authored outcome expectation: `succeeded` or `failed`. A mismatch or an undeclared verdict fails the fixture |
+| `fixture.authored` | Optional authored outcome expectation: `succeeded` or `failed` for a boolean outcome, or the value of a named one. A mismatch or an undeclared outcome fails the fixture |
 | `fixture.fail-node` | Required when `expect: failed`. A node id, or a list naming the exact failed set (a loop body failure is the node and its group) |
 | `fixture.reached` | Nodes that must complete or be stubbed |
 | `fixture.inputs` | Values for the workflow's declared inputs |
@@ -775,10 +775,9 @@ These are audit facts. They never name who answered, and nothing routes on them.
   when the record holds no reason text. The full value stays in `terminal_record`.
 
 The axes may disagree without either being rewritten: `completed` with authored outcome `failed`
-means execution finished normally but the workflow judged the work unsuccessful; `failed` or
-`paused` with authored outcome `succeeded` records a successful verdict before execution later
-failed or paused. A null outcome means the workflow did not declare one, the selected node has not
-authored it yet, or the run predates the field. In that case human output keeps its status-only
+means execution finished normally but the workflow judged the work unsuccessful. A null outcome
+means the workflow did not declare one, the run has not completed, or the run predates the field.
+What the `returns:` node said before a later failure or pause stays in its `node_completed` event. In that case human output keeps its status-only
 presentation. Except on an [execution handoff](#workflow-run-name-message), foreground
 `workflow run` uses the same labels when an outcome exists, and its exit code follows execution
 success or failure. A handoff reports only the observed status and has the exit meaning described above.

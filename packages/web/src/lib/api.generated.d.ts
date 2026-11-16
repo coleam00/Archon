@@ -7285,8 +7285,7 @@ export interface components {
         workflow: string;
         /** @enum {string} */
         status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
-        /** @enum {string|null} */
-        outcome: 'succeeded' | 'failed' | null;
+        outcome: string | null;
         /** Format: date-time */
         startedAt: string;
         /** Format: date-time */

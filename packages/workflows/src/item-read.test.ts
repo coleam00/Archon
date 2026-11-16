@@ -15,6 +15,7 @@ function run(id: string, fields: Partial<WorkflowRun> = {}): WorkflowRun {
     codebase_id: null,
     status: 'running',
     outcome: null,
+    completed_outcome: null,
     user_message: '',
     metadata: {},
     active_phase_started_at: null,
@@ -71,7 +72,7 @@ function event(
 // an unrelated run asks one too.
 const first = run('first', {
   status: 'completed',
-  outcome: 'succeeded',
+  completed_outcome: 'built',
   started_at: new Date('2026-11-01T09:00:00.000Z'),
   completed_at: new Date('2026-11-01T09:30:00.000Z'),
 });
@@ -138,7 +139,7 @@ describe('reading an item', () => {
         id: 'first',
         workflow: 'deliver',
         status: 'completed',
-        outcome: 'succeeded',
+        outcome: 'built',
         startedAt: '2026-11-01T09:00:00.000Z',
         completedAt: '2026-11-01T09:30:00.000Z',
       },
