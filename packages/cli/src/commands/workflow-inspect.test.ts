@@ -1278,6 +1278,8 @@ describe('workflowGetCommand', () => {
     await workflowGetCommand(createTestWorkflowHost(), 'run-skip-cause', false, true);
 
     expect(consoleSpy).toHaveBeenCalledWith('    - publish (upstream failed: validate)');
+    // A run with no loop reads as before: no Rounds block.
+    expect(consoleSpy).not.toHaveBeenCalledWith('  Rounds:');
   });
 
   // #3488 acceptance: the stored failure is command-free, so the CLI writes the abandon
