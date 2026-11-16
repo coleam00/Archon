@@ -94,6 +94,16 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     );
     expect(await workflowStartRefusal(start)).toBeUndefined();
 
+    // With several open runs the dispatch lists them, so admission must not refuse first.
+    prepare();
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
+        makeResumableRun({ id: 'open-run-a', status: 'paused' }),
+        makeResumableRun({ id: 'open-run-b', status: 'failed' }),
+      ])
+    );
+    expect(await workflowStartRefusal(start)).toBeUndefined();
+
     prepare();
     expect(await workflowStartRefusal({ ...start, inputs: { diff: 'D1' } })).toBeUndefined();
     // A conversation in a worktree runs the canonical repository's workflow, not this one.

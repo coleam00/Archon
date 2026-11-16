@@ -621,12 +621,10 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
     expect(replies.some(reply => reply.includes('Found a prior'))).toBe(false);
   });
 
-  test('an attention pause does not make a single continuable run ambiguous', async () => {
-    mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
-    mockGetCodebase.mockResolvedValueOnce(makeCodebase());
-    mockHandleCommand.mockResolvedValueOnce(fixture.makeWorkflowResult());
-    mockListResumableRunsByParentConversation.mockResolvedValueOnce([
-      makeResumableRun({
+  test.each([
+    {
+      label: 'an attention pause',
+      excluded: makeResumableRun({
         id: 'attention-run',
         status: 'paused',
         metadata: {
@@ -639,6 +637,17 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
           },
         },
       }),
+    },
+    {
+      label: 'a run with no working path',
+      excluded: makeResumableRun({ id: 'pathless-run', status: 'failed', working_path: null }),
+    },
+  ])('$label does not make a single continuable run ambiguous', async ({ excluded }) => {
+    mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+    mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+    mockHandleCommand.mockResolvedValueOnce(fixture.makeWorkflowResult());
+    mockListResumableRunsByParentConversation.mockResolvedValueOnce([
+      excluded,
       makeResumableRun({ id: 'gate-run', status: 'paused' }),
     ]);
 
