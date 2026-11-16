@@ -144,6 +144,14 @@ export function describeItemLinkConformance(
           [pieceId, whole?.item.id ?? '']
         )
       ).rejects.toThrow();
+      // The renewed link is active, so the database refuses a second active row for it:
+      // the partial unique index, not the store's code, keeps an active link stored once.
+      await expect(
+        db.query(
+          "INSERT INTO remote_agent_item_links (from_item_id, to_item_id, kind, via) VALUES ($1, $2, 'depends_on', 'cli')",
+          [pieceId, whole?.item.id ?? '']
+        )
+      ).rejects.toThrow();
 
       // A row that does not read is reported in its place.
       await db.query('UPDATE remote_agent_item_links SET via = $1 WHERE id = $2', [

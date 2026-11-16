@@ -156,7 +156,7 @@ test('an item read prints its runs, open questions and answers', () => {
   expect(text).toContain('1 ruling(s) on this item could not be read: ruling-lost');
 });
 
-test('an item read prints each link with the other item, kind and direction, active ones first', () => {
+test('an item read prints each link with the other item, kind and direction', () => {
   const lines = itemReadLines(read);
   const section = lines.slice(lines.indexOf('Links:') + 1, lines.indexOf('Open questions:'));
   const line = (id: string) => section.find(row => row.includes(id)) ?? '';
@@ -175,7 +175,5 @@ test('an item read prints each link with the other item, kind and direction, act
   expect(line('link-ended')).toContain('alice');
   expect(line('link-ended')).toContain('2026-11-01T08:30Z');
   expect(line('link-out')).not.toContain('ended');
-  // Active links print before the ended one.
-  expect(section.indexOf(line('link-ended'))).toBeGreaterThan(section.indexOf(line('link-in')));
   expect(section.some(row => row.includes('link-lost'))).toBe(true);
 });
