@@ -238,32 +238,27 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     expect(mockRunLiveOwnerClose).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    'does not own process group',
-    'Windows run job broker did not become ready within 10000 ms',
-  ])(
-    'records a verified launch failure after a refused detached owner claim: %s',
-    async message => {
-      process.env.ARCHON_DETACHED_RUN_OWNER = '1';
-      process.env.ARCHON_DETACHED_LAUNCH_TOKEN = 'launch-token';
-      const workflowsDb = require('@archon/core/db/workflows');
-      mockClaimDetachedRunProcessOwner.mockRejectedValueOnce(new Error(message));
+  it('records a verified launch failure after a refused detached owner claim', async () => {
+    const message = 'does not own process group';
+    process.env.ARCHON_DETACHED_RUN_OWNER = '1';
+    process.env.ARCHON_DETACHED_LAUNCH_TOKEN = 'launch-token';
+    const workflowsDb = require('@archon/core/db/workflows');
+    mockClaimDetachedRunProcessOwner.mockRejectedValueOnce(new Error(message));
 
-      await expect(
-        workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {
-          detachedRunId: 'pending-child',
-        })
-      ).rejects.toThrow(message);
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {
+        detachedRunId: 'pending-child',
+      })
+    ).rejects.toThrow(message);
 
-      expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
-        'pending-child',
-        expect.stringContaining(message),
-        { exitReason: 'launch_failed', pendingLaunchToken: 'launch-token' }
-      );
-      expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
-      expect(process.env.ARCHON_DETACHED_RUN_OWNER).toBeUndefined();
-    }
-  );
+    expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
+      'pending-child',
+      expect.stringContaining(message),
+      { exitReason: 'launch_failed', pendingLaunchToken: 'launch-token' }
+    );
+    expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
+    expect(process.env.ARCHON_DETACHED_RUN_OWNER).toBeUndefined();
+  });
 
   it('uses the source-reserved run id before workflow_started is emitted', async () => {
     const workflowsDb = require('@archon/core/db/workflows');

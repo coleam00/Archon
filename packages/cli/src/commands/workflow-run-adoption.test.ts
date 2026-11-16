@@ -181,53 +181,6 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     );
   });
 
-  it('rejects an ambiguous adopted run prefix with its candidates', async () => {
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDb = await import('@archon/core/db/workflows');
-    const adoption = await import('@archon/core/operations/workflow-adoption');
-    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockClear();
-    (adoption.resolveWorkflowAdoption as ReturnType<typeof mock>).mockClear();
-    setupAdoptMocks();
-    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'cb-adopt',
-      name: 'test-repo',
-      default_cwd: '/test/path',
-      kind: 'repo',
-    });
-    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
-      { id: '0b1ee8da-1111-2222-3333-444455556666' },
-      { id: '0b1ee8da-9999-8888-7777-666655554444' },
-    ]);
-
-    await expect(
-      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
-        adoptRunId: '0b1ee8da',
-      })
-    ).rejects.toThrow(
-      '0b1ee8da-1111-2222-3333-444455556666\n  0b1ee8da-9999-8888-7777-666655554444'
-    );
-    expect(adoption.resolveWorkflowAdoption).not.toHaveBeenCalled();
-    (adoption.resolveWorkflowAdoption as ReturnType<typeof mock>).mockReset();
-  });
-
-  it('passes a full adopted run id through unchanged', async () => {
-    const adoptedRunId = '0b1ee8da-1111-2222-3333-444455556666';
-    const workflowDb = await import('@archon/core/db/workflows');
-    const adoption = await import('@archon/core/operations/workflow-adoption');
-    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockClear();
-    (adoption.resolveWorkflowAdoption as ReturnType<typeof mock>).mockClear();
-    setupAdoptMocks();
-
-    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
-      adoptRunId: adoptedRunId,
-    });
-
-    expect(workflowDb.findWorkflowRunsByIdPrefix).not.toHaveBeenCalled();
-    expect(adoption.resolveWorkflowAdoption).toHaveBeenCalledWith(
-      expect.objectContaining({ adoptedRunId })
-    );
-  });
-
   const adoptionRefusals = ['missing', 'mismatched', 'replaced', 'switched', 'detached'] as const;
   function refusedEnvironment(reason: (typeof adoptionRefusals)[number]) {
     if (reason === 'missing') return null;

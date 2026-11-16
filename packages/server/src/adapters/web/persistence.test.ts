@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, mock, afterEach } from 'bun:test';
+import { describe, test, expect, beforeEach, mock, afterEach, jest } from 'bun:test';
 
 // Mock logger before importing module under test
 mock.module('@archon/paths', () => ({
@@ -147,36 +147,25 @@ describe('MessagePersistence', () => {
     }
   );
 
-  describe('startPeriodicFlush / stopPeriodicFlush', () => {
-    test('startPeriodicFlush is idempotent (double call does not create two timers)', () => {
+  test('periodic flush persists buffered text until stopped, and a second start adds no timer', async () => {
+    jest.useFakeTimers();
+    try {
+      persistence.setConversationDbId('conv-1', 'db-uuid-1');
       persistence.startPeriodicFlush();
-      persistence.startPeriodicFlush(); // second call should be a no-op
-
-      // We can't directly inspect the timer ID, but we can verify stopPeriodicFlush
-      // cleans up without error and subsequent operations still work.
-      persistence.stopPeriodicFlush();
-      persistence.stopPeriodicFlush(); // should not throw
-    });
-
-    test('stopPeriodicFlush is safe to call when no timer is running', () => {
-      // Should not throw
-      persistence.stopPeriodicFlush();
-    });
-
-    test('startPeriodicFlush / stopPeriodicFlush lifecycle', () => {
       persistence.startPeriodicFlush();
-      // Timer is running — no assertion needed beyond no-throw
-      persistence.stopPeriodicFlush();
-      // Timer is cleared — no assertion needed beyond no-throw
-    });
+      persistence.appendText('conv-1', 'first');
+      jest.advanceTimersByTime(30_000);
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(mockAddMessage.mock.calls.map(call => call[2])).toEqual(['first']);
 
-    test('timer can be restarted after stop', () => {
-      persistence.startPeriodicFlush();
       persistence.stopPeriodicFlush();
-      // Starting again should work without errors
-      persistence.startPeriodicFlush();
-      persistence.stopPeriodicFlush();
-    });
+      persistence.appendText('conv-1', 'second');
+      jest.advanceTimersByTime(30_000);
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(mockAddMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   describe('appendText', () => {

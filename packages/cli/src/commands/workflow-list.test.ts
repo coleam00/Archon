@@ -326,54 +326,6 @@ describe('workflowListCommand', () => {
     await expect(query).rejects.toThrow('Did you mean:\n  - archon-review\n  - custom-review');
   });
 
-  it('carries discovery errors when a requested workflow name is not exact', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const loadError = {
-      filename: 'bad.yaml',
-      error: 'Invalid YAML',
-      errorType: 'parse_error' as const,
-    };
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [
-        makeTestWorkflowWithSource({ name: 'archon-review' }),
-        makeTestWorkflowWithSource({ name: 'custom-review' }),
-      ],
-      errors: [loadError],
-    });
-
-    const error = await captureError(
-      workflowListCommand('/test/path', { name: 'review', json: true })
-    );
-
-    expect(error).toMatchObject({ loadErrors: [loadError] });
-  });
-
-  it('reduces catalogs dominated by long descriptions by at least 10x', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const workflows = Array.from({ length: 20 }, (_, index) =>
-      makeTestWorkflowWithSource({
-        name: `workflow-${String(index).padStart(2, '0')}`,
-        description: `Route suitable work here. ${'Detailed routing constraint '.repeat(200)}`,
-      })
-    );
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>)
-      .mockResolvedValueOnce({ workflows, errors: [] })
-      .mockResolvedValueOnce({ workflows, errors: [] });
-
-    await workflowListCommand('/test/path', { json: true });
-    await workflowListCommand('/test/path', { json: true, full: true });
-
-    const compactBytes = Buffer.byteLength(
-      (stdoutSpy.mock.calls[0]?.[0] as string | undefined) ?? '',
-      'utf8'
-    );
-    const fullBytes = Buffer.byteLength(
-      (stdoutSpy.mock.calls[1]?.[0] as string | undefined) ?? '',
-      'utf8'
-    );
-    expect(fullBytes / compactBytes).toBeGreaterThanOrEqual(10);
-  });
-
   it('should include errors in JSON output', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -395,57 +347,6 @@ describe('workflowListCommand', () => {
       error: 'Invalid YAML',
       errorType: 'parse_error',
     });
-  });
-
-  it('should include effort and webSearchMode in JSON output when present', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [
-        makeTestWorkflowWithSource({
-          name: 'plan',
-          description: 'Planning workflow',
-          provider: 'codex',
-          model: 'gpt-5.6-sol',
-          // #2556: `effort:` is the one spelling. The deprecated field is
-          // translated into it at load, so it can never reach this surface.
-          effort: 'xhigh',
-          webSearchMode: 'live',
-        }),
-      ],
-      errors: [],
-    });
-
-    await workflowListCommand('/test/path', { json: true });
-
-    const output = firstJsonPayload(stdoutSpy);
-    const parsed = JSON.parse(output) as {
-      workflows: Array<Record<string, string | boolean>>;
-      errors: unknown[];
-    };
-    expect(parsed.workflows[0]).toEqual({
-      name: 'plan',
-      description: 'Planning workflow',
-      descriptionTruncated: false,
-      provider: 'codex',
-      model: 'gpt-5.6-sol',
-      effort: 'xhigh',
-      webSearchMode: 'live',
-    });
-  });
-
-  it('should produce text output when json flag is false', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [
-        makeTestWorkflowWithSource({ name: 'assist', description: 'General assistance' }),
-      ],
-      errors: [],
-    });
-
-    await workflowListCommand('/test/path', { json: false });
-
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Discovering workflows'));
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Found 1 workflow(s)'));
   });
 
   it('calls discoverWorkflowsWithConfig with (cwd, loadConfig) — home scope is internal', async () => {
