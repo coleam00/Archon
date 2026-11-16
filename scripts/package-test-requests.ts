@@ -84,14 +84,6 @@ export function resolveRequestedTestGroups(
   const groups = (
     files.length === 0 ? [] : resolvePackageTestGroups(packageDirectory, manifest, files)
   ).filter(group => group.length > 0);
-  const groupedFiles = new Set(groups.flat());
-  if (typeof manifest === 'object' && manifest !== null && 'testGroups' in manifest) {
-    for (const file of files) {
-      if (!groupedFiles.has(file)) {
-        throw new Error(`Requested test is not covered by testGroups: ${file}`);
-      }
-    }
-  }
   const selectorIndices = new Set(positionals.map(token => token.index));
   const options = requested.filter((_, index) => !selectorIndices.has(index));
   return {

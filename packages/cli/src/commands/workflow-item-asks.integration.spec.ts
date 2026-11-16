@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Asks a completed run leaves on its item (`returns: { node, asks }`), against a real SQLite
  * store with every command in its own CLI process: the run opens them when it completes, the
