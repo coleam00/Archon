@@ -87,9 +87,9 @@ export const workflowHelp: HelpGroup = {
     {
       command: 'workflow',
       subcommand: 'attention',
-      spec: 'workflow attention [<run-id>]',
+      spec: 'workflow attention [<run-id>|ask:<id>]',
       description:
-        'List, count or stream the attention queue, or read the item one run stands for\n(defaults to the current project)',
+        'List, count or stream the attention queue, or read the item one run or ask stands for\n(defaults to the current project)',
       scopedFlags: [
         { spec: '--project <id|name|key>', description: 'Scope to another project' },
         { spec: '--all', description: 'The whole install' },
@@ -242,6 +242,15 @@ export const workflowHelp: HelpGroup = {
           description: 'In place of --choose: the option the wait recommends',
         },
         { spec: '--text <text>', description: 'Free text recorded with the answer' },
+        {
+          spec: '--ref <ref>',
+          description:
+            "In place of <run-id> --occurrence: the item's ref as workflow attention lists it.\nThe only way to answer an ask a completed run left",
+        },
+        {
+          spec: '--withdraw <ref>',
+          description: 'Withdraw an ask a completed run left; it closes unanswered',
+        },
       ],
     },
     {

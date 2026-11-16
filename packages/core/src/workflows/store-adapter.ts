@@ -20,6 +20,7 @@ import type { MergedConfig } from '../config/config-types';
 import * as itemsDb from '../db/items';
 import * as itemLinksDb from '../db/item-links';
 import * as itemRulingsDb from '../db/item-rulings';
+import * as itemAsksDb from '../db/item-asks';
 import * as workflowDb from '../db/workflows';
 import * as resourceStarts from '../db/resource-starts';
 import { toHydratedTimestamp } from '../db/timestamps';
@@ -149,6 +150,11 @@ export function createWorkflowStore(): IWorkflowStore {
     listItemLinks: itemLinksDb.listItemLinks,
     recordItemLink: itemLinksDb.recordItemLink,
     endItemLink: itemLinksDb.endItemLink,
+    listOpenItemAsks: itemAsksDb.listOpenItemAsks,
+    listItemAsks: itemAsksDb.listItemAsks,
+    getItemAsk: itemAsksDb.getItemAsk,
+    answerItemAsk: itemAsksDb.answerItemAsk,
+    withdrawItemAsk: itemAsksDb.withdrawItemAsk,
     findAdoptingRuns: workflowDb.findAdoptingRuns,
     deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,
     getWorkflowEventHead: async () => sqlCursor(await workflowEventDb.getWorkflowEventHead()),

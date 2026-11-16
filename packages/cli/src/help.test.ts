@@ -155,7 +155,8 @@ Commands:
   workflow wait <run-id> | --item <key>
                              Block until the run ends or needs attention
                              With --item: until any live run on the item does; names the run
-  workflow attention [<run-id>] List, count or stream the attention queue, or read the item one run stands for
+  workflow attention [<run-id>|ask:<id>]
+                             List, count or stream the attention queue, or read the item one run or ask stands for
                              (defaults to the current project)
   workflow attention label <run-id> --occurrence <id>
                              Set or remove labels on the attention wait a run is paused at

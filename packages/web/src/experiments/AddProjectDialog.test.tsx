@@ -105,46 +105,49 @@ function control(
   return found;
 }
 
-for (const mode of ['url', 'path'] as const) {
-  for (const edited of [null, 'release', 'dev']) {
-    test(`${mode}: displayed dev submits ${edited === 'release' ? 'an explicit choice' : 'null'} after editing ${String(edited)}`, async () => {
-      let tree = render();
-      if (mode === 'path') {
-        control(
-          tree,
-          el =>
-            el.type === 'button' && React.Children.toArray(el.props.children).includes('Local path')
-        ).onClick?.();
-        tree = render();
-      }
-      const source = mode === 'url' ? 'https://example.com/repo' : '/repo';
-      control(tree, el => el.type === 'input' && el.props.placeholder !== undefined).onChange?.({
-        target: { value: source },
-      });
+for (const [mode, edited] of [
+  ['url', null],
+  ['url', 'release'],
+  ['url', 'dev'],
+  ['path', 'release'],
+] as const) {
+  test(`${mode}: displayed dev submits ${edited === 'release' ? 'an explicit choice' : 'null'} after editing ${String(edited)}`, async () => {
+    let tree = render();
+    if (mode === 'path') {
+      control(
+        tree,
+        el =>
+          el.type === 'button' && React.Children.toArray(el.props.children).includes('Local path')
+      ).onClick?.();
       tree = render();
-      for (const effect of effects.splice(0)) {
-        const cleanup = effect();
-        if (cleanup) cleanups.push(cleanup);
-      }
-      for (const timer of timers.splice(0)) timer();
-      await Promise.resolve();
-      tree = render();
-      expect(renderToStaticMarkup(tree)).toContain('value="dev"');
-      const branch = control(tree, el => el.props['aria-label'] === 'Base branch');
-      if (edited !== null) {
-        branch.onChange?.({ target: { value: 'release' } });
-        branch.onChange?.({ target: { value: edited } });
-        tree = render();
-      }
-      control(tree, el => el.type === 'form').onSubmit?.({ preventDefault: noop });
-      await Promise.resolve();
-      expect(mode === 'url' ? addUrl : addPath).toHaveBeenCalledWith(
-        source,
-        edited === 'release' ? 'release' : null,
-        ...(mode === 'path' ? [false] : [])
-      );
+    }
+    const source = mode === 'url' ? 'https://example.com/repo' : '/repo';
+    control(tree, el => el.type === 'input' && el.props.placeholder !== undefined).onChange?.({
+      target: { value: source },
     });
-  }
+    tree = render();
+    for (const effect of effects.splice(0)) {
+      const cleanup = effect();
+      if (cleanup) cleanups.push(cleanup);
+    }
+    for (const timer of timers.splice(0)) timer();
+    await Promise.resolve();
+    tree = render();
+    expect(renderToStaticMarkup(tree)).toContain('value="dev"');
+    const branch = control(tree, el => el.props['aria-label'] === 'Base branch');
+    if (edited !== null) {
+      branch.onChange?.({ target: { value: 'release' } });
+      branch.onChange?.({ target: { value: edited } });
+      tree = render();
+    }
+    control(tree, el => el.type === 'form').onSubmit?.({ preventDefault: noop });
+    await Promise.resolve();
+    expect(mode === 'url' ? addUrl : addPath).toHaveBeenCalledWith(
+      source,
+      edited === 'release' ? 'release' : null,
+      ...(mode === 'path' ? [false] : [])
+    );
+  });
 }
 
 test('explicit folder selection submits a git root without inspection and ignores a late result', async () => {

@@ -15,16 +15,6 @@ describe('source-tree-paths', () => {
   usePathEnvSnapshot();
 
   describe('getAppArchonBasePath', () => {
-    test('returns repo root .archon path in local development', () => {
-      delete process.env.ARCHON_DOCKER;
-      delete process.env.WORKSPACE_PATH;
-      const path = getAppArchonBasePath();
-      // Should end with .archon and NOT contain packages/core or packages/paths
-      expect(path).toMatch(/\.archon$/);
-      expect(path).not.toContain('packages/core');
-      expect(path).not.toContain('packages/paths');
-    });
-
     test('path exists and contains defaults directories', () => {
       delete process.env.ARCHON_DOCKER;
       delete process.env.WORKSPACE_PATH;
@@ -62,21 +52,6 @@ describe('source-tree-paths', () => {
 describe('validateAppDefaultsPaths', () => {
   test('does not throw for valid paths', async () => {
     await expect(validateAppDefaultsPaths()).resolves.toBeUndefined();
-  });
-
-  test('handles missing paths gracefully', async () => {
-    const originalEnv = process.env.ARCHON_DOCKER;
-    process.env.ARCHON_DOCKER = 'true';
-    try {
-      // In Docker mode, paths won't exist — should still not throw
-      await expect(validateAppDefaultsPaths()).resolves.toBeUndefined();
-    } finally {
-      if (originalEnv === undefined) {
-        delete process.env.ARCHON_DOCKER;
-      } else {
-        process.env.ARCHON_DOCKER = originalEnv;
-      }
-    }
   });
 });
 

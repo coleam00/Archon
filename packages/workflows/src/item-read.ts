@@ -6,6 +6,7 @@
  */
 import { z } from 'zod';
 import {
+  askItemRef,
   attentionQueueItemSchema,
   compareAge,
   isHeldByRun,
@@ -15,6 +16,7 @@ import {
 import {
   attentionDegradedSchema,
   splitAttentionRead,
+  type AttentionDegraded,
   type IdentifiedAttentionDegraded,
 } from './schemas/attention-degraded';
 import { itemActFields } from './schemas/item-act';
@@ -31,6 +33,7 @@ import {
   type ItemRuling,
 } from './schemas/item-ruling';
 import { recordSurfaceSchema } from './schemas/record-surface';
+import { chosenAskOption, type StoredItemAsk } from './schemas/item-ask';
 import { workflowRunStatusSchema } from './schemas/run-status';
 import {
   attentionAnswererSchema,
@@ -86,7 +89,12 @@ const answerFields = {
  * One recorded answer: `attention` answers a question (`wait_answered`), `gate` resolves an
  * approval gate (`approval_received`), `ruling` is a decision recorded on the item with no
  * question asked (`ItemRuling`), which no run holds. `text` on a gate is its comment, or a
- * rejection's reason. A withdrawn ruling stays, with `withdrawn` set.
+ * rejection's reason. A withdrawn ruling stays, with `withdrawn` set. `ask` answers or
+ * withdraws an ask a completed run left, and `asks_settled` records that the last open ask
+ * of that run's set closed, with how many were answered and withdrawn: `answered: 0` means
+ * nothing was. Both read from the item's ask rows, not from run events, so they stay on the
+ * item after the run that left the asks is deleted; `runId` names that run, `node` and
+ * `occurrence` are null. A set that a newer one replaced before it closed never settles.
  */
 export const itemAnswerSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -104,6 +112,28 @@ export const itemAnswerSchema = z.discriminatedUnion('kind', [
     text: z.string().nullable(),
   }),
   itemRulingSchema,
+  z.object({
+    kind: z.literal('ask'),
+    ...answerFields,
+    /** The ask's ref, as the queue listed it. */
+    ref: z.string(),
+    /** What was asked. */
+    question: z.string(),
+    /** Null for a withdrawal. */
+    answer: attentionAnswerSchema.nullable(),
+    /** The option the answer chose and what it does; null when none is recorded. */
+    chosen: z.object({ id: z.string(), does: z.string() }).nullable(),
+    withdrawn: z.boolean(),
+    by: attentionAnswererSchema.nullable(),
+    /** Reported from the answering run's environment and not verified. */
+    fromRun: attentionAnsweringRunSchema.nullable(),
+  }),
+  z.object({
+    kind: z.literal('asks_settled'),
+    ...answerFields,
+    answered: z.number().int().nonnegative(),
+    withdrawn: z.number().int().nonnegative(),
+  }),
 ]);
 export type ItemAnswer = z.infer<typeof itemAnswerSchema>;
 
@@ -155,6 +185,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'listEventsForRuns'
       | 'listItemRulings'
       | 'listItemLinks'
+      | 'listItemAsks'
       | 'getStartReceipt'
       | 'getResourceStartRequest'
     >;
@@ -238,6 +269,62 @@ export async function readItemRuns(
   return { item: found.item, runs: values, degraded, descendantIds: found.descendantIds };
 }
 
+function distinctByRun(reports: readonly AttentionDegraded[]): AttentionDegraded[] {
+  return reports.filter(
+    (report, index) => reports.findIndex(other => other.runId === report.runId) === index
+  );
+}
+
+/** An answered or withdrawn ask as an entry of the item's answers; null while it is open or once replaced. */
+function askAnswer({ id, runId, ask, closed }: StoredItemAsk): ItemAnswer | null {
+  if (closed === null || closed.as === 'replaced') return null;
+  const answer = closed.as === 'answered' ? closed.answer : null;
+  return {
+    kind: 'ask',
+    runId,
+    node: null,
+    occurrence: null,
+    at: closed.act.at,
+    via: closed.act.via,
+    ref: askItemRef(id),
+    question: ask.question,
+    answer,
+    chosen: answer === null ? null : (chosenAskOption(ask, answer) ?? null),
+    withdrawn: answer === null,
+    by: closed.act.by,
+    fromRun: closed.act.fromRun,
+  };
+}
+
+/**
+ * The answers and settled sets the item's asks hold: one entry per answered or withdrawn
+ * ask, and one `asks_settled` per set whose asks all closed that way, at its last close.
+ */
+function askAnswers(asks: readonly StoredItemAsk[]): ItemAnswer[] {
+  const sets = new Map<string, StoredItemAsk[]>();
+  for (const ask of asks) sets.set(ask.runId, [...(sets.get(ask.runId) ?? []), ask]);
+  return [...sets].flatMap(([runId, set]) => {
+    const closes = set.map(askAnswer).filter(answer => answer?.kind === 'ask');
+    const [first] = closes;
+    if (first === undefined || closes.length < set.length) return closes;
+    const answered = closes.filter(close => !close.withdrawn).length;
+    const settled: ItemAnswer = {
+      kind: 'asks_settled',
+      runId,
+      node: null,
+      occurrence: null,
+      at: closes.reduce(
+        (last, close) => (Date.parse(close.at) > Date.parse(last) ? close.at : last),
+        first.at
+      ),
+      via: null,
+      answered,
+      withdrawn: closes.length - answered,
+    };
+    return [...closes, settled];
+  });
+}
+
 /** Read the item `key` names in project `projectKey`; null when there is no such item. */
 export async function readItem(
   source: ItemReadSource,
@@ -254,8 +341,9 @@ export async function readItem(
   ]);
   // The one queue reader, so a question here reads as `workflow attention` lists it.
   const { values, degraded } = splitAttentionRead(await listAttentionQueue(source));
+  // An ask no run holds belongs to the item it was left on.
   const questions = values
-    .filter(item => isHeldByRun(item) && tree.has(item.run.id))
+    .filter(item => (isHeldByRun(item) ? tree.has(item.run.id) : item.item?.id === found.item.id))
     .sort(compareAge);
   const events =
     tree.size === 0
@@ -271,9 +359,14 @@ export async function readItem(
   for (const read of await source.store.listItemLinks(found.item.id))
     if ('type' in read) unreadableLinks.push(read);
     else links.push(readLink(found.item.id, read));
-  const answers = [...[...events.values()].flat().map(itemAnswer), ...rulings]
+  const asks = splitAttentionRead(await source.store.listItemAsks(found.item.id));
+  const answers = [
+    ...[...events.values()].flat().map(itemAnswer),
+    ...rulings,
+    ...askAnswers(asks.values),
+  ]
     // Stable, so rows that tie on `at` keep their store order: append order within a run,
-    // recording order among rulings.
+    // recording order among rulings, and a set's last answer before its settle.
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   return {
     item: found.item,
@@ -281,12 +374,14 @@ export async function readItem(
     questions,
     answers,
     links,
-    // A paused item run the store could not read is in both reports; list it once.
+    // A paused item run the store could not read is in both reports, and an unreadable
+    // open ask in the queue's and the item's; list each run once.
     degraded: [
-      ...own.degraded,
-      ...degraded.filter(
-        report => tree.has(report.runId) && !own.degraded.some(mine => mine.runId === report.runId)
-      ),
+      ...distinctByRun([
+        ...own.degraded,
+        ...degraded.filter(report => tree.has(report.runId)),
+        ...asks.degraded,
+      ]),
       ...unreadableRulings,
       ...unreadableLinks,
     ],

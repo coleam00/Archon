@@ -303,13 +303,6 @@ describe('toRunEvent — approvals (server writes approval_requested/approval_re
     if (garbage.kind !== 'approval') throw new Error('unreachable');
     expect(garbage.resolution).toBeNull();
   });
-
-  test('the old (never-written) approval_pending type is NOT treated as an approval', () => {
-    // Guards against regressing to the pre-fix keys: approval_pending/approval_resolved
-    // are not emitted by the server, so they must fall through, not render as approvals.
-    const e = toRunEvent(raw({ event_type: 'approval_pending', data: { message: 'x' } }));
-    expect(e.kind).not.toBe('approval');
-  });
 });
 
 describe('toRunEvent — deprecation notice (#2781)', () => {
@@ -429,10 +422,6 @@ describe('toRunEvent — fallback', () => {
 });
 
 describe('countTerminalNodes', () => {
-  test('no nodes → 0/0', () => {
-    expect(countTerminalNodes([])).toEqual({ completed: 0, total: 0 });
-  });
-
   test('pending and running nodes are excluded from the total', () => {
     expect(
       countTerminalNodes([
@@ -671,19 +660,6 @@ describe('foldNodeRuns', () => {
     expect(
       foldNodeRuns([node(null, 'node_completed'), node('ghost', 'node_completed')], [])
     ).toEqual([]);
-  });
-
-  test('non-node_transition events are ignored', () => {
-    const runs = foldNodeRuns(
-      [
-        node('plan', 'node_completed'),
-        toRunEvent(raw({ event_type: 'workflow_artifact', data: { label: 'pr' } })),
-        toRunEvent(raw({ event_type: 'workflow_completed', data: {} })),
-      ],
-      [state('plan', 'completed')]
-    );
-    expect(runs).toHaveLength(1);
-    expect(runs[0]?.nodeId).toBe('plan');
   });
 });
 

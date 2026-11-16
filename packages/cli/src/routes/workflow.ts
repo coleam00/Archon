@@ -451,6 +451,9 @@ export async function runWorkflowRespond(route: WorkflowRoute): Promise<number> 
 
 export async function runWorkflowAnswer(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, effectiveCwd } = route;
+  const ref = values.ref as string | undefined;
+  const withdraw = values.withdraw as string | undefined;
+  if (ref !== undefined || withdraw !== undefined) return await runWorkflowAnswerByRef(route);
   const answerRunId = positionals[2];
   const answerOccurrence = values.occurrence as string | undefined;
   const choose = (values.choose as string[] | undefined) ?? [];
@@ -478,13 +481,35 @@ export async function runWorkflowAnswer(route: WorkflowRoute): Promise<number> {
   );
 }
 
+/** `workflow answer --ref <ref>` or `--withdraw <ref>`: an item named by its queue ref. */
+async function runWorkflowAnswerByRef(route: WorkflowRoute): Promise<number> {
+  const { positionals, values, json, commands } = route;
+  const ref = values.ref as string | undefined;
+  const withdraw = values.withdraw as string | undefined;
+  const choose = (values.choose as string[] | undefined) ?? [];
+  const recommended = values.recommended === true;
+  const text = values.text as string | undefined;
+  const as = values.as as string | undefined;
+  const extra = positionals[2] !== undefined || values.occurrence !== undefined;
+  const request =
+    withdraw !== undefined && ref === undefined && choose.length === 0 && !recommended && !extra
+      ? text === undefined
+        ? { withdraw, as }
+        : undefined
+      : ref !== undefined && withdraw === undefined && !extra && !(recommended && choose.length > 0)
+        ? { ref, selection: recommended ? { recommended: true as const } : { choose }, text, as }
+        : undefined;
+  if (request === undefined) return await fail(json, commands.WORKFLOW_ANSWER_REF_USAGE);
+  return await commands.workflowAnswerRefCommand(route.host, request, json);
+}
+
 export async function runWorkflowAttention(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, effectiveCwd } = route;
   if (positionals[2] === 'label') return await runWorkflowAttentionLabel(route);
   if (positionals[3] !== undefined) {
     return await fail(
       json,
-      'Usage: archon workflow attention [<run-id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key>|answerer [--since <40m|24h|7d|2w|ISO>]] [--notices --since <40m|24h|7d|2w|ISO>] [--watch [--notices | --protocol [--after <cursor>]]] [--json]'
+      'Usage: archon workflow attention [<run-id>|ask:<id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key>|answerer [--since <40m|24h|7d|2w|ISO>]] [--notices --since <40m|24h|7d|2w|ISO>] [--watch [--notices | --protocol [--after <cursor>]]] [--json]'
     );
   }
   return await route.commands.workflowAttentionCommand(route.host, effectiveCwd, positionals[2], {

@@ -197,6 +197,15 @@ function createMockStore(): IWorkflowStore {
     endItemLink: mock<IWorkflowStore['endItemLink']>(async () => {
       throw new Error('Not used by this test');
     }),
+    listOpenItemAsks: mock<IWorkflowStore['listOpenItemAsks']>(async () => []),
+    listItemAsks: mock<IWorkflowStore['listItemAsks']>(async () => []),
+    getItemAsk: mock<IWorkflowStore['getItemAsk']>(async () => null),
+    answerItemAsk: mock<IWorkflowStore['answerItemAsk']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    withdrawItemAsk: mock<IWorkflowStore['withdrawItemAsk']>(async () => {
+      throw new Error('Not used by this test');
+    }),
     findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
       throw new Error('Not used by this test');
     }),

@@ -30,7 +30,9 @@ The queue acts on its own when the case is clear, and asks a maintainer when it 
   delivery handed it off ready, out of draft. CI pending at that head does not hold
   it: the merge queue judges CI before it merges and returns red the change caused.
   When the only thing left is a check no round can run, such as an operator check the
-  review deferred, the queue asks once for it at that head instead.
+  review deferred, the queue asks once for it at that head instead. In a project with
+  no CI (`ci: none`), done also needs the full validation a round ran and recorded as
+  passed at that head; when it is missing, the next round runs it.
 
 ## Unclear: the queue asks
 
