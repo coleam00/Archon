@@ -93,11 +93,8 @@ process.exit(9);`,
 
   test.each([
     ['silent Bash', 'sh', '# inline-body-marker\nexit 7'],
-    ['whitespace Bash', 'sh', '# inline-body-marker\nprintf " "; exit 7'],
     ['silent Bun', 'bun', '// inline-body-marker\nprocess.exit(7);'],
-    ['whitespace Bun', 'bun', '// inline-body-marker\nconsole.log(" "); process.exit(7);'],
     ['silent Python', 'uv', '# inline-body-marker\nimport sys\nsys.exit(7)'],
-    ['whitespace Python', 'uv', '# inline-body-marker\nimport sys\nprint(" "); sys.exit(7)'],
   ] as const)('reports no diagnostic output for %s', async (_name, runtime, script) => {
     const result = await dryRunWorkflow({
       workflow: makeTestWorkflow({

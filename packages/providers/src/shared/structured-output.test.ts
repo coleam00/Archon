@@ -112,10 +112,6 @@ After careful evaluation, here is the JSON:
     });
   });
 
-  test('tier 3 still returns undefined for irreparable non-JSON', () => {
-    expect(tryParseStructuredOutput('this is just prose, not JSON at all')).toBeUndefined();
-  });
-
   test('tier 3 rejects a valid object followed by trailing prose (no bogus array)', () => {
     // jsonrepair would coerce `{...}\nprose` into `[{...}, "prose"]`; the object-only
     // gate rejects that so the result degrades cleanly instead of surfacing an array.
@@ -564,12 +560,6 @@ describe('normalizeJsonSchemaForOpenAiStrict', () => {
   test('leaves non-object schemas untouched', () => {
     const out = normalizeJsonSchemaForOpenAiStrict({ type: 'string' }) as Record<string, unknown>;
     expect(out.additionalProperties).toBeUndefined();
-  });
-
-  test('does not mutate the input object (returns a deep clone)', () => {
-    const input = { type: 'object', properties: { a: { type: 'string' } } };
-    normalizeJsonSchemaForOpenAiStrict(input);
-    expect('additionalProperties' in input).toBe(false);
   });
 
   test('is idempotent — an already-normalized schema is structurally unchanged', () => {

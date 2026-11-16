@@ -5,12 +5,10 @@ import {
   messageRowSchema,
   codebaseRowSchema,
   userRowSchema,
-  userIdentityRowSchema,
   sessionRowSchema,
   SESSION_TRANSITION_REASONS,
   sessionMetadataSchema,
   workflowEventRowSchema,
-  codebaseEnvVarSchema,
   dashboardWorkflowRunSchema,
   listDashboardRunsOptionsSchema,
   dashboardRunsResultSchema,
@@ -156,7 +154,7 @@ describe('core schemas', () => {
   });
 
   // -----------------------------------------------------------------------
-  // userRowSchema + userIdentityRowSchema
+  // userRowSchema + identityPlatformSchema
   // -----------------------------------------------------------------------
   test('userRowSchema accepts a valid row', () => {
     const result = userRowSchema.safeParse({
@@ -182,18 +180,6 @@ describe('core schemas', () => {
     expect(result.success).toBe(false);
   });
 
-  test('userIdentityRowSchema accepts a valid row', () => {
-    const result = userIdentityRowSchema.safeParse({
-      id: 'id-1',
-      user_id: 'user-1',
-      platform: 'web',
-      platform_user_id: 'web-123',
-      platform_display_name: 'Alice',
-      created_at: new Date(),
-    });
-    expect(result.success).toBe(true);
-  });
-
   test('identityPlatformSchema rejects invalid platform', () => {
     const result = identityPlatformSchema.safeParse('invalid_platform');
     expect(result.success).toBe(false);
@@ -202,24 +188,6 @@ describe('core schemas', () => {
   // -----------------------------------------------------------------------
   // sessionRowSchema + sessionMetadataSchema
   // -----------------------------------------------------------------------
-  test('sessionRowSchema accepts a valid row', () => {
-    const result = sessionRowSchema.safeParse({
-      id: 'sess-1',
-      conversation_id: 'conv-1',
-      codebase_id: null,
-      ai_assistant_type: 'claude',
-      assistant_session_id: null,
-      active: true,
-      metadata: { lastCommand: 'plan' },
-      started_at: new Date(),
-      ended_at: null,
-      parent_session_id: null,
-      transition_reason: null,
-      ended_reason: null,
-    });
-    expect(result.success).toBe(true);
-  });
-
   test('session reasons validate supported history and reject unknown values independently', () => {
     const row = {
       id: 'sess-1',
@@ -264,21 +232,6 @@ describe('core schemas', () => {
       step_name: 'plan',
       data: {},
       created_at: '2025-06-01T12:00:00.000Z',
-    });
-    expect(result.success).toBe(true);
-  });
-
-  // -----------------------------------------------------------------------
-  // codebaseEnvVarSchema
-  // -----------------------------------------------------------------------
-  test('codebaseEnvVarSchema accepts a valid row', () => {
-    const result = codebaseEnvVarSchema.safeParse({
-      id: 'env-1',
-      codebase_id: 'cb-1',
-      key: 'API_KEY',
-      value: 'secret',
-      created_at: '2025-06-01T12:00:00.000Z',
-      updated_at: '2025-06-01T12:00:00.000Z',
     });
     expect(result.success).toBe(true);
   });

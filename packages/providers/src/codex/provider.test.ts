@@ -204,36 +204,6 @@ describe('CodexProvider', () => {
     }
   );
 
-  test('post-result diagnostics share a run ID and settle only after shutdown', async () => {
-    const ids: string[] = [];
-    for (let i = 0; i < 2; i++) {
-      mockLogger.debug.mockClear();
-      const { provider } = providerWith();
-      for await (const chunk of provider.sendQuery('private prompt', '/workspace')) {
-        const calls = mockLogger.debug.mock.calls.filter(([fields]) => 'runId' in fields);
-        if (chunk.type === 'result') expect(calls).toEqual([]);
-        if (chunk.type === 'settled') {
-          const runId: unknown = calls[0][0].runId;
-          expect(typeof runId).toBe('string');
-          expect(calls).toEqual([
-            [{ runId }, 'codex.host_tool_calls_finished'],
-            [{ runId }, 'codex.stdin_finished'],
-            [{ runId, code: 0, signal: null }, 'codex.child_exit'],
-            [{ runId }, 'codex.child_close'],
-            [{ runId }, 'codex.settle'],
-          ]);
-          ids.push(String(runId));
-        }
-      }
-    }
-    expect(ids).toHaveLength(2);
-    expect(ids[0]).not.toBe(ids[1]);
-  });
-
-  test('getType returns codex', () => {
-    expect(new CodexProvider().getType()).toBe('codex');
-  });
-
   test('getCapabilities returns the Codex capability set', () => {
     expect(new CodexProvider().getCapabilities()).toEqual({
       backgroundWork: 'reported' as const,
@@ -794,14 +764,6 @@ describe('CodexProvider', () => {
       expect(server.processes[0].signals).toEqual([]);
       expect(mockLogger.error).toHaveBeenCalledWith(
         expect.objectContaining({ lifecycle: 'process_abnormal_exit' }),
-        'codex.app_server_abnormal_exit'
-      );
-    });
-
-    test('a spawn failure is logged without the abnormal-exit lifecycle tag', async () => {
-      await run(providerWith({ spawnError: 'ENOENT' }).provider);
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.not.objectContaining({ lifecycle: expect.anything() }),
         'codex.app_server_abnormal_exit'
       );
     });

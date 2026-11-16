@@ -200,7 +200,7 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     cancelResumableRunsForConversation: mock(unexpected('cancelResumableRunsForConversation')),
     deleteWorkflowNodeSessions: mock(unexpected('deleteWorkflowNodeSessions')),
     findOpenWorkRuns: mock(unexpected('findOpenWorkRuns')),
-    listItemRuns: mock(unexpected('listItemRuns')),
+    getItemRuns: mock(unexpected('getItemRuns')),
     getItem: mock(unexpected('getItem')),
     findAdoptingRuns: mock(unexpected('findAdoptingRuns')),
     deleteOldWorkflowRuns: mock(unexpected('deleteOldWorkflowRuns')),
@@ -229,7 +229,6 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     createWorkflowEvent: mock(async () => undefined),
     persistWorkflowEvent: mock(async () => undefined),
     persistWorkflowEventIfRunning: mock(async () => ({ persisted: true })),
-    findResumableRun: mock(async () => null),
     listProviderEvents: mock(async () => []),
     getDagResumeSnapshot: mock(async () => ({
       completedNodeOutputs: new Map(),

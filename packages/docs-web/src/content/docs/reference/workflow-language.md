@@ -1000,17 +1000,17 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 
 **How to resume:**
 
-- **CLI**: `archon workflow run <name> --resume` selects the newest eligible run by start time for `(workflow_name, cwd)`: a failed or paused run, or a `running` run whose last activity timestamp is missing or more than one day old. With a SQL store, a `running` run is excluded while its resource-start request is `admitted`; see [trigger inspection and recovery](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). See the [CLI reference](/reference/cli/#workflow-resume) for detailed eligibility. Use `archon workflow resume <run-id>` to target a specific failed or paused run; this exact-ID command rejects all `running` runs. Missing or old activity does not prove the owner is gone; verify that before resuming a `running` run.
-- **Chat**: Approving or rejecting a _paused_ workflow continues it from where it left off (the platform already knows the run id). For a prior **failed** (or stale `running`) run, `/workflow run <name>` does **not** silently resume: it shows a prompt offering three choices: resume it, abandon it and run fresh, or start fresh anyway. Pass `--force` to skip the prompt: `/workflow run <name> --force <args>` always starts a fresh run.
+- **CLI**: `archon workflow resume <run-id>` continues that run: a failed or paused one, or one its killed process left `running`. Find the id with `archon workflow runs`. See the [CLI reference](/reference/cli/#workflow-resume) for what it checks before resuming a `running` run.
+- **Chat**: Approving or rejecting a _paused_ workflow continues it from where it left off (the platform already knows the run id). For a prior **failed** run, `/workflow run <name>` does **not** silently resume: it shows a prompt offering three choices: resume it, abandon it and run fresh, or start fresh anyway. Pass `--force` to skip the prompt: `/workflow run <name> --force <args>` always starts a fresh run.
 - **Web UI**: Open the failed run in the console and use **Resume** in the run detail action bar.
 
 **What happens on resume:**
 
-1. The CLI / orchestrator looks up the resumable run, loads its `node_completed` events and private addressable-session handles, then transitions the row back to `running`.
+1. The CLI / orchestrator takes the run it was named, loads its `node_completed` events and private addressable-session handles, then transitions the row back to `running`.
 2. Completed nodes are skipped; only failed and not-yet-run nodes are executed. Failed nodes are retried when the failures are what stopped the run: resuming a **failed** run, or continuing after a provider-limit pause or a released source. A run that paused at a node that waits on purpose (an attention, time or event wait, an approval gate, or a child it is blocked on) instead replays the failures from before that pause when it continues, so a node the run had already moved past does not run again.
 3. You receive a platform message like: `Resuming workflow — skipping 3 already-completed node(s).`
 
-**Crashed servers / orphaned runs**: Archon does **not** auto-fail `running` rows on server startup, because that would kill workflows actively executing in another process (CLI, adapter). If a server crash leaves a row stuck as `running`, it remains visible in the console run list. To continue it, first verify that its owner is gone. When it meets the eligibility rules above, use `archon workflow run <name> --resume` from its recorded working path; this selects the newest eligible run for that name and path. `archon workflow resume <run-id>` rejects all `running` runs, including stale orphans. Do not cancel or abandon it before resuming: both mark it `cancelled`, which cannot be resumed.
+**Crashed servers / orphaned runs**: Archon does **not** auto-fail `running` rows on server startup, because that would kill workflows actively executing in another process (CLI, adapter). If a server crash leaves a row stuck as `running`, it remains visible in the console run list. To continue it, run `archon workflow resume <run-id>`: it resumes the run when no owner answers for it on this host, and refuses, naming the owner, when one does. Do not cancel or abandon it before resuming: both mark it `cancelled`, which cannot be resumed.
 
 To stop or discard a run instead:
 
@@ -2213,7 +2213,7 @@ conversation normally *continues that run* rather than starting a new one, witho
 **not applied**: the continued run keeps what it started with, and Archon says so, naming the
 values it ignored. To run fresh with different values, abandon the existing run first
 (`/workflow abandon <id>`) and invoke again. The CLI has no such implicit continuation: a plain
-`archon workflow run` always starts fresh, and `--input` with `--resume` is rejected outright.
+`archon workflow run` always starts fresh, and `archon workflow resume <run-id>` takes no `--input`.
 
 Adoption and supersede declarations are exceptions: if the dispatch would continue an existing run,
 Archon refuses the declaration before continuation or its fresh fallback. The refusal names the

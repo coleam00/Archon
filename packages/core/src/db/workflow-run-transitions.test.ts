@@ -244,16 +244,6 @@ describe('workflow run transitions', () => {
       );
     });
 
-    test('stores error in metadata', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      mockTerminalSnapshot('failed');
-
-      await failWorkflowRun('workflow-run-123', 'Timeout exceeded');
-
-      const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(params).toContain(JSON.stringify({ error: 'Timeout exceeded' }));
-    });
-
     test('records the stop reason and its signal on the run row', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockTerminalSnapshot('failed');
@@ -389,24 +379,6 @@ describe('workflow run transitions', () => {
       expect(result.metadata).toEqual({});
       const [, params] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(params[4]).toBe('{}');
-    });
-
-    test('serializes github_context metadata successfully under normal conditions', async () => {
-      const runWithContext = {
-        ...mockWorkflowRun,
-        metadata: { github_context: 'Issue #99: Fix bug' },
-      };
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      mockQuery.mockResolvedValueOnce(createQueryResult([runWithContext]));
-
-      const result = await createWorkflowRun({
-        workflow_name: 'test',
-        origin: { conversationId: 'conv' },
-        user_message: 'test',
-        metadata: { github_context: 'Issue #99: Fix bug' },
-      });
-
-      expect(result.metadata).toEqual({ github_context: 'Issue #99: Fix bug' });
     });
   });
 

@@ -450,14 +450,6 @@ describe('workflowStatusCommand', () => {
     expect(printed).not.toContain('/workflow ');
   });
 
-  it('should print message when no active runs', async () => {
-    mockListDashboardRuns.mockResolvedValueOnce(statusRuns([]));
-
-    await workflowStatusCommand(createTestWorkflowHost(), '/test/path', { all: true });
-
-    expect(consoleSpy).toHaveBeenCalledWith('No active workflows.');
-  });
-
   it('prints the complete active run layout with fixed age and active nodes', async () => {
     const now = spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-23T12:00:00Z'));
     try {
@@ -509,17 +501,6 @@ describe('workflowStatusCommand', () => {
 
     expect(consoleSpy).toHaveBeenCalledWith('  Status: paused');
     expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Authored outcome');
-  });
-
-  it('should output JSON when json=true', async () => {
-    mockListDashboardRuns.mockResolvedValueOnce(statusRuns([]));
-
-    await workflowStatusCommand(createTestWorkflowHost(), '/test/path', { json: true, all: true });
-
-    expect(stdoutSpy).toHaveBeenCalledWith(
-      `${JSON.stringify({ runs: [], scopeFallback: false }, null, 2)}\n`,
-      expect.any(Function)
-    );
   });
 
   it('keeps parallel active nodes in non-verbose JSON', async () => {
@@ -1104,13 +1085,6 @@ describe('workflowGetCommand', () => {
     [
       'invalid values',
       { total_cost_usd: '0', total_tokens_in: {}, total_tokens_out: '12' },
-      'unknown',
-      'unknown',
-      'unknown',
-    ],
-    [
-      'nonfinite values',
-      { total_cost_usd: Infinity, total_tokens_in: NaN, total_tokens_out: -Infinity },
       'unknown',
       'unknown',
       'unknown',
@@ -2450,21 +2424,5 @@ describe('fan-out outcome lines', () => {
     expect(
       formatFanOutOutcome(fanOutOutcome([{ index: 0, outcome: 'completed', child_run_id: 'c' }]))
     ).toEqual([]);
-  });
-
-  it('carries the slot record from a fan-out node event into its summary', () => {
-    const outcome = fanOutOutcome([{ index: 0, outcome: 'not_started', error: 'refused' }]);
-    const [summary] = buildNodeSummaries([
-      {
-        id: 'work-failed',
-        workflow_run_id: 'run-fan',
-        event_type: 'node_failed',
-        step_name: 'work',
-        step_index: null,
-        data: { error: 'refused all', fan_out: true, fan_out_outcome: outcome },
-        created_at: '2026-10-22T10:00:00.000Z',
-      },
-    ]);
-    expect(summary?.fanOutOutcome).toEqual(outcome);
   });
 });

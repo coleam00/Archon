@@ -778,7 +778,7 @@ describe('CommandHandler', () => {
             id: 'run-789',
             workflow_name: 'assist',
             conversation_id: 'conv-1',
-            status: 'running' as const,
+            status: 'completed' as const,
             user_message: 'test',
           })
         );
@@ -808,7 +808,7 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Usage: /workflow resume <id>');
-        expect(result.message).toContain('failed or paused workflow');
+        expect(result.message).toContain('failed, paused or killed workflow run');
       });
 
       test('should handle DB error on resume gracefully', async () => {

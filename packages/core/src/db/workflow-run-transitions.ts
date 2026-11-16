@@ -6,6 +6,7 @@
 
 import {
   CANCELLED_REASON_METADATA_KEY,
+  EXECUTION_OWNER_METADATA_KEY,
   initialRunMetadata,
   mutableRunMetadata,
   SUBRUN_METADATA_KEYS,
@@ -16,6 +17,7 @@ import {
   sourceReleaseMetadata,
   DETACHED_LAUNCH_METADATA_KEY,
   EXECUTION_CLAIM_METADATA_KEY,
+  currentExecutionOwner,
   sourceReleasedEvent,
   type FanOutCancelReason,
   type SourceReleaseWrite,
@@ -193,7 +195,8 @@ export async function createWorkflowRun(data: WorkflowRunInsert): Promise<Workfl
  *
  * `workingPath` is stamped by the claim itself on a row created without one
  * (`run --detach`), so the check and the claimant lookup see the checkout the
- * run is about to use. An existing path is never replaced.
+ * run is about to use. An existing path is never replaced. The same update records
+ * this process as the run's execution owner (`currentExecutionOwner`).
  */
 export async function claimPendingWorkflowRun(
   id: string,
@@ -203,7 +206,8 @@ export async function claimPendingWorkflowRun(
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs
           SET status = 'running', last_activity_at = ${getDialect().now()},
-              working_path = COALESCE(working_path, CAST($2 AS TEXT))
+              working_path = COALESCE(working_path, CAST($2 AS TEXT)),
+              metadata = ${getDialect().jsonMerge('metadata', 3)}
         WHERE id = $1 AND status = 'pending'
           AND NOT EXISTS (
             SELECT 1 FROM remote_agent_isolation_environments e
@@ -224,7 +228,11 @@ export async function claimPendingWorkflowRun(
                WHERE q.id = $1 AND q.status = 'admitted'
             )
           )`,
-      [id, workingPath ?? null]
+      [
+        id,
+        workingPath ?? null,
+        JSON.stringify({ [EXECUTION_OWNER_METADATA_KEY]: currentExecutionOwner() }),
+      ]
     );
     if (claimed.rowCount !== 1) return null;
     const selected = await query<WorkflowRunRow>(

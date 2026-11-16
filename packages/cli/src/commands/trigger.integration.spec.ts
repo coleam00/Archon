@@ -15,6 +15,7 @@ import type { JsonValue } from '@archon/workflows/output-ref';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { triggerFireConfigSchema } from './trigger';
+import { itemReadSchema } from '@archon/workflows/item-read';
 import { standardWebhooksSourceConfigSchema } from '@archon/adapters/sources/standard-webhooks/source-plugin';
 import {
   isTerminalRunStatus,
@@ -334,7 +335,7 @@ describe('trigger CLI durable execution', () => {
     expect((await invoke(['workflow', 'get', failed.id])).stdout).toContain(metadata.error);
   }, 30_000);
 
-  test('a start names an item, a start fired from inside that run inherits it, and the item lists its runs', async () => {
+  test('a start names an item, a start fired from inside that run inherits it, and the item reads its runs', async () => {
     const fixture = await heldTriggerRun('item');
     const configPath = join(fixture.projectRoot, '..', 'trigger.json');
     const fired = join(fixture.projectRoot, '..', 'fired');
@@ -342,8 +343,8 @@ describe('trigger CLI durable execution', () => {
     fixture.writeWorkflow(
       `[ -e '${fired}' ] || { touch '${fired}'; '${process.execPath}' '${fixture.cliPath}' trigger fire --config '${configPath}'; }`
     );
-    const invoke = (args: string[]) =>
-      runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, args);
+    const invoke = (args: string[], expectSuccess?: boolean) =>
+      runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, args, expectSuccess);
     const runs = () =>
       readRows<{ id: string; status: string; item_key: string | null }>(
         join(fixture.archonHome, 'archon.db'),
@@ -371,20 +372,44 @@ describe('trigger CLI durable execution', () => {
     const all = await settled(4);
     expect(all.map(run => run.item_key).sort()).toEqual(['item-1', 'item-1', 'item-2', null]);
 
-    const listed = JSON.parse(
-      (await invoke(['workflow', 'runs', '--item', 'item-1', '--json'])).stdout
+    const database = join(fixture.archonHome, 'archon.db');
+    const read = itemReadSchema.parse(
+      JSON.parse((await invoke(['workflow', 'runs', '--item', 'item-1', '--json'])).stdout)
     );
-    expect(listed.total).toBe(2);
-    expect(listed.runs.map((run: { id: string }) => run.id).sort()).toEqual(
-      started.map(run => run.id).sort()
+    expect(read.item.key).toBe('item-1');
+    expect(read.runs.map(run => run.id).sort()).toEqual(started.map(run => run.id).sort());
+    expect(read.runs.every(run => run.status === 'completed')).toBe(true);
+    expect((await invoke(['workflow', 'runs', '--item', 'item-1'])).stdout).toContain(
+      'Item item-1'
     );
     // One row per item; the run with no item added none.
     expect(
-      readRows<{ key: string }>(
-        join(fixture.archonHome, 'archon.db'),
-        'SELECT key FROM remote_agent_items ORDER BY key'
-      )
+      readRows<{ key: string }>(database, 'SELECT key FROM remote_agent_items ORDER BY key')
     ).toEqual([{ key: 'item-1' }, { key: 'item-2' }]);
+    // A key nothing named is refused; an item named with no run yet reads as one.
+    const unknown = await invoke(['workflow', 'runs', '--item', 'item-9', '--json'], false);
+    expect(unknown.exitCode).toBe(1);
+    expect(JSON.parse(unknown.stdout)).toEqual({ ok: false, error: 'not_found', item: 'item-9' });
+    const textUnknown = await invoke(['workflow', 'runs', '--item', 'item-9'], false);
+    expect(textUnknown.exitCode).toBe(1);
+    expect(textUnknown.stderr).toContain("No item 'item-9'");
+    const writable = new Database(database);
+    try {
+      writable.run(
+        "INSERT INTO remote_agent_items (project_key, key) SELECT project_key, 'item-3' FROM remote_agent_items WHERE key = 'item-1'"
+      );
+    } finally {
+      writable.close();
+    }
+    const waiting = itemReadSchema.parse(
+      JSON.parse((await invoke(['workflow', 'runs', '--item', 'item-3', '--json'])).stdout)
+    );
+    expect(waiting).toMatchObject({
+      item: { key: 'item-3' },
+      runs: [],
+      questions: [],
+      answers: [],
+    });
 
     // A continuation stays on the item of the run it continues; `--item` still wins, and
     // continuing a run with no item gives none. `--adopt` writes the same

@@ -73,7 +73,9 @@ describe('expandWorkflowIncludes — returns drives primarySink (#2470)', () => 
     });
   });
 
-  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+  // loader/contracts.test.ts proves each composition keyword's selector rules; one keyword
+  // here proves those rules still run after include rebinding.
+  for (const keyword of ['allOf']) {
     test(`checks composed ${keyword} outcome selectors after include rebinding`, () => {
       for (const [field, required, expected] of [
         ['green', ['green'], null],

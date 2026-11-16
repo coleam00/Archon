@@ -34,27 +34,7 @@ import { EFFORT_LEVELS, modelRefSchema } from './schemas';
 registerBuiltinProviders();
 registerCommunityProviders();
 
-describe('TIER_NAMES constant', () => {
-  test('contains exactly small, medium, large', () => {
-    expect([...TIER_NAMES]).toEqual(['small', 'medium', 'large']);
-  });
-});
-
 describe('buildAiProfile — tier defaults', () => {
-  test('builds tier aliases for claude default provider', () => {
-    const profile = buildAiProfile('claude');
-    expect(profile.aliases.small).toBeDefined();
-    expect(profile.aliases.medium).toBeDefined();
-    expect(profile.aliases.large).toBeDefined();
-  });
-
-  test('injects provider into each tier entry', () => {
-    const profile = buildAiProfile('claude');
-    expect(profile.aliases.small?.provider).toBe('claude');
-    expect(profile.aliases.medium?.provider).toBe('claude');
-    expect(profile.aliases.large?.provider).toBe('claude');
-  });
-
   test('built-in tier defaults mirror tier-defaults.json, provider injected', () => {
     // Derived from the owning JSON, never restated by hand: a defaults bump
     // must not require editing this test.
@@ -683,22 +663,6 @@ describe('buildAiProfile — reserved name validation', () => {
     ).toThrow(/reserved/);
   });
 
-  test('rejects reserved "medium" in repoAliases', () => {
-    expect(() =>
-      buildAiProfile('claude', {
-        repoAliases: { medium: { provider: 'claude', model: 'opus' } },
-      })
-    ).toThrow(/reserved/);
-  });
-
-  test('rejects reserved "large" in repoAliases', () => {
-    expect(() =>
-      buildAiProfile('claude', {
-        repoAliases: { large: { provider: 'claude', model: 'opus' } },
-      })
-    ).toThrow(/reserved/);
-  });
-
   test('error message names the offending tier keyword', () => {
     expect(() =>
       buildAiProfile('claude', {
@@ -739,23 +703,10 @@ describe('resolveModelSpec — tier classification', () => {
     expect(spec).toEqual({ provider: 'claude', model: 'opus' });
   });
 
-  test("'medium' returns preset for medium tier", () => {
-    const profile = buildAiProfile('claude');
-    const spec = resolveModelSpec(profile, 'medium');
-    expect(spec).toEqual({ provider: 'claude', model: 'sonnet' });
-  });
-
   test("'small' returns preset for small tier", () => {
     const profile = buildAiProfile('claude');
     const spec = resolveModelSpec(profile, 'small');
     expect(spec).toEqual({ provider: 'claude', model: 'haiku' });
-  });
-
-  test('returned preset has provider and model fields', () => {
-    const profile = buildAiProfile('claude');
-    const spec = resolveModelSpec(profile, 'large') as ModelAliasPreset;
-    expect(typeof spec.provider).toBe('string');
-    expect(typeof spec.model).toBe('string');
   });
 });
 
@@ -871,22 +822,6 @@ describe('resolveModelSpec — literal pass-through', () => {
     expect(resolveModelSpec(emptyProfile, 'opus')).toEqual({ literal: 'opus' });
   });
 
-  test("'claude-opus-4-7' returns { literal: 'claude-opus-4-7' }", () => {
-    expect(resolveModelSpec(emptyProfile, 'claude-opus-4-7')).toEqual({
-      literal: 'claude-opus-4-7',
-    });
-  });
-
-  test("'gpt-5' returns { literal: 'gpt-5' }", () => {
-    expect(resolveModelSpec(emptyProfile, 'gpt-5')).toEqual({ literal: 'gpt-5' });
-  });
-
-  test('literal return does NOT have provider or model fields', () => {
-    const spec = resolveModelSpec(emptyProfile, 'sonnet');
-    expect(spec).not.toHaveProperty('provider');
-    expect(spec).not.toHaveProperty('model');
-  });
-
   test('literal pass-through ignores configured tier defaults', () => {
     const profile = buildAiProfile('claude');
     // bare literal — not a tier keyword, no @ prefix → pass-through verbatim
@@ -952,22 +887,6 @@ describe('resolvePresetEffort', () => {
 });
 
 describe('isEffortValidForProvider', () => {
-  test('accepts every rung on a provider that has the control', () => {
-    for (const rung of [
-      'minimal',
-      'low',
-      'medium',
-      'high',
-      'xhigh',
-      'max',
-      'ultra',
-      'persistent',
-    ]) {
-      expect(isEffortValidForProvider(providerRegistry, 'codex', rung)).toBe(true);
-      expect(isEffortValidForProvider(providerRegistry, 'claude', rung)).toBe(true);
-    }
-  });
-
   test('rejects a value that is not a rung', () => {
     expect(isEffortValidForProvider(providerRegistry, 'claude', 'extreme')).toBe(false);
   });

@@ -383,19 +383,6 @@ describe('project-paths', () => {
         join('/custom/archon', 'workspaces', '@cwd', `_-${cwdDigest('/')}`)
       );
     });
-
-    test('agrees with the per-kind helpers it replaces', () => {
-      expect(getProjectStoragePaths({ kind: 'repo', owner: 'acme', repo: 'widget' })).toMatchObject(
-        {
-          artifactsRoot: getProjectArtifactsPath('acme', 'widget'),
-          logsDir: getProjectLogsPath('acme', 'widget'),
-        }
-      );
-      expect(getProjectStoragePaths({ kind: 'folder', slug: 'ops' })).toMatchObject({
-        artifactsRoot: getFolderProjectArtifactsPath('ops'),
-        logsDir: getFolderProjectLogsPath('ops'),
-      });
-    });
   });
 
   describe('getProjectRoot', () => {
@@ -405,22 +392,6 @@ describe('project-paths', () => {
       delete process.env.ARCHON_DOCKER;
       const result = getProjectRoot('acme', 'widget');
       expect(result).toBe(join(homedir(), '.archon', 'workspaces', 'acme', 'widget'));
-    });
-
-    test('respects ARCHON_HOME', () => {
-      delete process.env.WORKSPACE_PATH;
-      delete process.env.ARCHON_DOCKER;
-      process.env.ARCHON_HOME = '/custom/archon';
-      expect(getProjectRoot('acme', 'widget')).toBe(
-        join('/custom/archon', 'workspaces', 'acme', 'widget')
-      );
-    });
-
-    test('works in Docker', () => {
-      process.env.ARCHON_DOCKER = 'true';
-      expect(getProjectRoot('acme', 'widget')).toBe(
-        join('/', '.archon', 'workspaces', 'acme', 'widget')
-      );
     });
   });
 
@@ -560,15 +531,6 @@ describe('project-paths', () => {
           'runs',
           'run-123'
         )
-      );
-    });
-
-    test('respects ARCHON_HOME override', () => {
-      delete process.env.WORKSPACE_PATH;
-      delete process.env.ARCHON_DOCKER;
-      process.env.ARCHON_HOME = join('/', 'custom', 'archon');
-      expect(getFolderRunArtifactsPath('ops', 'r1')).toBe(
-        join('/', 'custom', 'archon', 'workspaces', '_folder', 'ops', 'artifacts', 'runs', 'r1')
       );
     });
   });

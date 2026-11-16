@@ -62,21 +62,6 @@ describe('Pi extension process-error broker', () => {
     }
   });
 
-  test('claims a stack-attested extension error without replacing it', () => {
-    openTurn = beginPiExtensionTurn(['/extensions/fake-extension.ts']);
-    let received: Error | undefined;
-    openTurn.onError(error => {
-      received = error;
-    });
-    const error = new Error('timer exploded');
-    error.stack =
-      'Error: timer exploded\n    at callback (/extensions/fake-extension.ts:4:2)\n    at timer (bun:1:1)';
-
-    expect(claimPiExtensionProcessError(error)).toBe(true);
-    expect(received).toBe(error);
-    expect(piExtensionFailureEvidence(error)).toBe(error.stack);
-  });
-
   test('does not decode a literal percent escape in a filesystem path', () => {
     openTurn = beginPiExtensionTurn(['C:\\extensions\\a%20b.ts']);
     const error = new Error('another extension failed');

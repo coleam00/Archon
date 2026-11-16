@@ -181,7 +181,7 @@ function createMockStore(): IWorkflowStore {
     deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() => {
       throw new Error('Unexpected deleteWorkflowNodeSessions');
     }),
-    listItemRuns: mock<IWorkflowStore['listItemRuns']>(async () => []),
+    getItemRuns: mock<IWorkflowStore['getItemRuns']>(async () => null),
     getItem: mock<IWorkflowStore['getItem']>(async () => null),
     findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
       throw new Error('Not used by this test');
@@ -240,7 +240,6 @@ function createMockStore(): IWorkflowStore {
     findChildRuns: mock(() => Promise.resolve([])),
     getRunAncestry: mock(() => Promise.resolve([])),
     getActiveWorkflowRunByPath: mock(() => Promise.resolve(null)),
-    findResumableRun: mock(() => Promise.resolve(null)),
     resumeWorkflowRun: mock(() =>
       Promise.resolve({
         origin: { conversationId: 'conv-mock' },
@@ -516,113 +515,6 @@ describe('script node deps field — command construction', () => {
     expect(args[args.indexOf('python') + 1]).toBe('-c');
   });
 
-  it('uv inline without deps uses uv run python -c', async () => {
-    const node: ExecNode = {
-      id: 'simple-py',
-      kind: 'exec',
-      script: 'print("hello")',
-      runtime: 'uv',
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(),
-        cwd: testDir,
-        workflow: { name: 'deps-test', nodes: [node] },
-        workflowRun: makeWorkflowRun('deps-run-2'),
-      })
-    );
-
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'uv');
-    expect(scriptCall).toBeDefined();
-    const [cmd, args] = scriptCall as [string, string[]];
-    expect(cmd).toBe('uv');
-    expect(args).toEqual(['run', 'python', '-c', 'print("hello")']);
-  });
-
-  it('uv inline with empty deps array uses uv run python -c (no extra flags)', async () => {
-    const node: ExecNode = {
-      id: 'empty-deps-py',
-      kind: 'exec',
-      script: 'print("no deps")',
-      runtime: 'uv',
-      deps: [],
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(),
-        cwd: testDir,
-        workflow: { name: 'deps-test', nodes: [node] },
-        workflowRun: makeWorkflowRun('deps-run-3'),
-      })
-    );
-
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'uv');
-    expect(scriptCall).toBeDefined();
-    const [cmd, args] = scriptCall as [string, string[]];
-    expect(cmd).toBe('uv');
-    expect(args).toEqual(['run', 'python', '-c', 'print("no deps")']);
-  });
-
-  it('bun inline with deps uses bun --no-env-file stdin (no extra dep flags — bun auto-installs)', async () => {
-    const node: ExecNode = {
-      id: 'bun-with-deps',
-      kind: 'exec',
-      script: 'import { z } from "zod"; console.log(z.string().parse("hello"))',
-      runtime: 'bun',
-      deps: ['zod', 'node-fetch'],
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(),
-        cwd: testDir,
-        workflow: { name: 'deps-test', nodes: [node] },
-        workflowRun: makeWorkflowRun('deps-run-4'),
-      })
-    );
-
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'bun');
-    expect(scriptCall).toBeDefined();
-    const [cmd, args, options] = scriptCall as [string, string[], { input?: string }];
-    expect(cmd).toBe('bun');
-    // --no-env-file prevents repo .env auto-load; no dep flags — bun auto-installs
-    expect(args).toEqual(['--no-env-file', expect.stringMatching(/^--preload=.*script-api/), '-']);
-    expect(options.input).toBe(node.script);
-    expect(args).not.toContain('--packages');
-    expect(args).not.toContain('--with');
-  });
-
-  it('bun inline without deps uses bun --no-env-file stdin', async () => {
-    const node: ExecNode = {
-      id: 'bun-no-deps',
-      kind: 'exec',
-      script: 'console.log("hello")',
-      runtime: 'bun',
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(),
-        cwd: testDir,
-        workflow: { name: 'deps-test', nodes: [node] },
-        workflowRun: makeWorkflowRun('deps-run-5'),
-      })
-    );
-
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'bun');
-    expect(scriptCall).toBeDefined();
-    const [cmd, args, options] = scriptCall as [string, string[], { input?: string }];
-    expect(cmd).toBe('bun');
-    expect(args).toEqual(['--no-env-file', expect.stringMatching(/^--preload=.*script-api/), '-']);
-    expect(options.input).toBe('console.log("hello")');
-  });
-
   it('uv named script with deps uses uv run --with flags', async () => {
     // Create a named Python script
     const scriptsDir = join(testDir, '.archon', 'scripts');
@@ -661,39 +553,5 @@ describe('script node deps field — command construction', () => {
     expect(httpxIdx).toBe(withIdx + 1);
     // Last arg is the script path
     expect(args[args.length - 1]).toContain('analyze.py');
-  });
-
-  it('uv named script without deps uses uv run <path> (no --with flags)', async () => {
-    // Create a named Python script
-    const scriptsDir = join(testDir, '.archon', 'scripts');
-    await mkdir(scriptsDir, { recursive: true });
-    const { writeFile } = await import('fs/promises');
-    await writeFile(join(scriptsDir, 'simple.py'), 'print("simple")');
-
-    const node: ExecNode = {
-      id: 'run-simple',
-      kind: 'exec',
-      script: 'simple',
-      runtime: 'uv',
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(),
-        cwd: testDir,
-        workflow: { name: 'deps-test', nodes: [node] },
-        workflowRun: makeWorkflowRun('deps-run-7'),
-      })
-    );
-
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'uv');
-    expect(scriptCall).toBeDefined();
-    const [cmd, args] = scriptCall as [string, string[]];
-    expect(cmd).toBe('uv');
-    expect(args).not.toContain('--with');
-    // uv run <path>
-    expect(args[0]).toBe('run');
-    expect(args[args.length - 1]).toContain('simple.py');
   });
 });

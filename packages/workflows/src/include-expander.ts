@@ -119,8 +119,10 @@ interface NodeListExpansion {
  *
  * `commandContents` maps command NAME → file content, null when no candidate resolves, or a
  * path-bearing error when a higher-precedence scope cannot be inspected or a matched file
- * cannot be read. Discovery pre-resolves every include-target command with
- * execution-equivalent precedence and never falls through after either error. A caller that
+ * cannot be read. Discovery pre-resolves every command of every workflow with
+ * execution-equivalent precedence and never falls through after either error. The
+ * flattened graph check also reads each remaining command node's body from it, so a
+ * reference in a command file is checked like the same text inline. A caller that
  * omits the map may still expand workflows without commands. Included command nodes fail
  * composition; included loop commands fail before a fresh AI turn but remain discoverable
  * so an already-paused loop can resume from its persisted read-once snapshot.
@@ -221,7 +223,10 @@ function expandOne(expansion: IncludeExpansion, name: string, stack: string[]): 
   // hand-written node, cycles introduced by edge rewiring, unknown deps, and the
   // equivalent failures inside every recursively expanded loop_group body.
   const structureError =
-    validateDagStructure(expanded.nodes, { includeAliases: expanded.includeAliases }) ||
+    validateDagStructure(expanded.nodes, {
+      includeAliases: expanded.includeAliases,
+      commandContents: expansion.commandContents,
+    }) ||
     validateLoopGroupProseCompletion(expanded.nodes) ||
     // Only here: a producer inside an included block is invisible before flattening.
     validateTypedOutputOrder(expanded.nodes);

@@ -232,7 +232,6 @@ mock.module('../../utils/workflow-source-root', () => ({
 
 mock.module('../../services/cleanup-service', () => ({
   getWorktreeStatusBreakdown: mock(() => Promise.resolve({ active: 0, stale: 0, merged: 0 })),
-  STALE_THRESHOLD_DAYS: 7,
 }));
 
 // Mock @archon/isolation — shared resolve mock so tests can control return values
@@ -398,7 +397,6 @@ mock.module('@archon/workflows/router', () => ({
   suggestWorkflowNames: mock<typeof import('@archon/workflows/router').suggestWorkflowNames>(
     () => []
   ),
-  findWorkflow: mock(() => undefined),
   // Statically imported by the background dispatch path; a named import must link even
   // when the test never exercises it.
   resolveWorkflowName: mock(() => undefined),

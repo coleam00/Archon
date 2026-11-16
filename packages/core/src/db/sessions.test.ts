@@ -1,8 +1,7 @@
 // @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
-import { ZodError } from 'zod';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
-import { Session, SessionMetadata, sessionMetadataSchema } from '../types';
+import { Session, sessionMetadataSchema } from '../types';
 
 const mockQuery = createMockQuery();
 const mockWithTransaction = mock(
@@ -27,10 +26,7 @@ import {
   createSession,
   updateSession,
   deactivateSession,
-  updateSessionMetadata,
   transitionSession,
-  getSessionHistory,
-  getSessionChain,
   deleteOldSessions,
   SessionNotFoundError,
 } from './sessions';
@@ -73,14 +69,6 @@ describe('sessions', () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
       const result = await getActiveSession('conv-456');
-
-      expect(result).toBeNull();
-    });
-
-    test('returns null for non-existent conversation', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      const result = await getActiveSession('non-existent');
 
       expect(result).toBeNull();
     });
@@ -221,64 +209,7 @@ describe('sessions', () => {
     });
   });
 
-  describe('updateSessionMetadata', () => {
-    test('merges metadata correctly', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-
-      await updateSessionMetadata('session-123', { lastCommand: 'execute', plan: 'Add dark mode' });
-
-      expect(mockQuery).toHaveBeenCalledWith(
-        'UPDATE remote_agent_sessions SET metadata = metadata || $1::jsonb WHERE id = $2',
-        [JSON.stringify({ lastCommand: 'execute', plan: 'Add dark mode' }), 'session-123']
-      );
-    });
-
-    test('handles empty metadata', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-
-      await updateSessionMetadata('session-123', {});
-
-      expect(mockQuery).toHaveBeenCalledWith(
-        'UPDATE remote_agent_sessions SET metadata = metadata || $1::jsonb WHERE id = $2',
-        ['{}', 'session-123']
-      );
-    });
-
-    test('handles nested metadata', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-
-      const nestedMetadata = {
-        lastCommand: 'plan',
-        context: {
-          feature: 'dark mode',
-          priority: 'high',
-        },
-      };
-
-      await updateSessionMetadata('session-123', nestedMetadata);
-
-      expect(mockQuery).toHaveBeenCalledWith(
-        'UPDATE remote_agent_sessions SET metadata = metadata || $1::jsonb WHERE id = $2',
-        [JSON.stringify(nestedMetadata), 'session-123']
-      );
-    });
-
-    test('throws SessionNotFoundError when session does not exist', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 0)); // rowCount = 0
-
-      const error = await updateSessionMetadata('non-existent', { key: 'value' }).catch(e => e);
-      expect(error).toBeInstanceOf(SessionNotFoundError);
-      expect(error.message).toBe('Session not found: non-existent');
-    });
-
-    test('throws ZodError when metadata has invalid types', async () => {
-      const error = await updateSessionMetadata('session-123', {
-        lastCommand: 123,
-      } as unknown as SessionMetadata).catch(e => e);
-      expect(error).toBeInstanceOf(ZodError);
-      expect(mockQuery).not.toHaveBeenCalled(); // validation fires before DB
-    });
-
+  describe('sessionMetadataSchema', () => {
     test('allows and preserves unknown keys via passthrough', () => {
       const result = sessionMetadataSchema.parse({
         lastCommand: 'plan',
@@ -430,171 +361,6 @@ describe('sessions', () => {
     });
   });
 
-  describe('getSessionHistory', () => {
-    test('returns sessions ordered by started_at DESC', async () => {
-      const sessions: Session[] = [
-        {
-          id: 'session-3',
-          conversation_id: 'conv-456',
-          codebase_id: 'codebase-789',
-          ai_assistant_type: 'claude',
-          assistant_session_id: null,
-          active: true,
-          metadata: {},
-          started_at: new Date('2024-01-03'),
-          ended_at: null,
-          parent_session_id: 'session-2',
-          transition_reason: 'plan-to-execute',
-          ended_reason: null,
-        },
-        {
-          id: 'session-2',
-          conversation_id: 'conv-456',
-          codebase_id: 'codebase-789',
-          ai_assistant_type: 'claude',
-          assistant_session_id: null,
-          active: false,
-          metadata: {},
-          started_at: new Date('2024-01-02'),
-          ended_at: new Date('2024-01-03'),
-          parent_session_id: 'session-1',
-          transition_reason: 'isolation-changed',
-          ended_reason: null,
-        },
-        {
-          id: 'session-1',
-          conversation_id: 'conv-456',
-          codebase_id: 'codebase-789',
-          ai_assistant_type: 'claude',
-          assistant_session_id: null,
-          active: false,
-          metadata: {},
-          started_at: new Date('2024-01-01'),
-          ended_at: new Date('2024-01-02'),
-          parent_session_id: null,
-          transition_reason: 'first-message',
-          ended_reason: null,
-        },
-      ];
-
-      mockQuery.mockResolvedValueOnce(createQueryResult(sessions));
-
-      const result = await getSessionHistory('conv-456');
-
-      expect(result).toEqual(sessions);
-      expect(mockQuery).toHaveBeenCalledWith(
-        `SELECT * FROM remote_agent_sessions
-     WHERE conversation_id = $1
-     ORDER BY started_at DESC`,
-        ['conv-456']
-      );
-    });
-
-    test('returns empty array for conversation with no sessions', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      const result = await getSessionHistory('conv-456');
-
-      expect(result).toEqual([]);
-    });
-  });
-
-  describe('getSessionChain', () => {
-    test('returns session chain from current to root (oldest first)', async () => {
-      const sessions: Session[] = [
-        {
-          id: 'session-1',
-          conversation_id: 'conv-456',
-          codebase_id: 'codebase-789',
-          ai_assistant_type: 'claude',
-          assistant_session_id: null,
-          active: false,
-          metadata: {},
-          started_at: new Date('2024-01-01'),
-          ended_at: new Date('2024-01-02'),
-          parent_session_id: null,
-          transition_reason: 'first-message',
-          ended_reason: null,
-        },
-        {
-          id: 'session-2',
-          conversation_id: 'conv-456',
-          codebase_id: 'codebase-789',
-          ai_assistant_type: 'claude',
-          assistant_session_id: null,
-          active: false,
-          metadata: {},
-          started_at: new Date('2024-01-02'),
-          ended_at: new Date('2024-01-03'),
-          parent_session_id: 'session-1',
-          transition_reason: 'isolation-changed',
-          ended_reason: null,
-        },
-        {
-          id: 'session-3',
-          conversation_id: 'conv-456',
-          codebase_id: 'codebase-789',
-          ai_assistant_type: 'claude',
-          assistant_session_id: null,
-          active: true,
-          metadata: {},
-          started_at: new Date('2024-01-03'),
-          ended_at: null,
-          parent_session_id: 'session-2',
-          transition_reason: 'plan-to-execute',
-          ended_reason: null,
-        },
-      ];
-
-      mockQuery.mockResolvedValueOnce(createQueryResult(sessions));
-
-      const result = await getSessionChain('session-3');
-
-      expect(result).toEqual(sessions);
-      expect(mockQuery).toHaveBeenCalledWith(
-        `WITH RECURSIVE chain AS (
-       SELECT * FROM remote_agent_sessions WHERE id = $1
-       UNION ALL
-       SELECT s.* FROM remote_agent_sessions s
-       JOIN chain c ON s.id = c.parent_session_id
-     )
-     SELECT * FROM chain ORDER BY started_at ASC`,
-        ['session-3']
-      );
-    });
-
-    test('returns single session for root session with no parent', async () => {
-      const rootSession: Session = {
-        id: 'session-1',
-        conversation_id: 'conv-456',
-        codebase_id: 'codebase-789',
-        ai_assistant_type: 'claude',
-        assistant_session_id: null,
-        active: true,
-        metadata: {},
-        started_at: new Date('2024-01-01'),
-        ended_at: null,
-        parent_session_id: null,
-        transition_reason: 'first-message',
-        ended_reason: null,
-      };
-
-      mockQuery.mockResolvedValueOnce(createQueryResult([rootSession]));
-
-      const result = await getSessionChain('session-1');
-
-      expect(result).toEqual([rootSession]);
-    });
-
-    test('returns empty array for non-existent session ID', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      const result = await getSessionChain('non-existent-session');
-
-      expect(result).toEqual([]);
-    });
-  });
-
   describe('deleteOldSessions', () => {
     test('deletes inactive sessions older than retention period', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 5));
@@ -609,14 +375,6 @@ describe('sessions', () => {
        AND ended_at < NOW() - ($1 || ' days')::INTERVAL`,
         [30]
       );
-    });
-
-    test('returns zero when no sessions match', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
-
-      const count = await deleteOldSessions(30);
-
-      expect(count).toBe(0);
     });
 
     test('uses provided retention days parameter', async () => {

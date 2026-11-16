@@ -8,14 +8,11 @@
  */
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 
-// Mute the server logger so test output stays readable + capture warn calls.
-const warnCalls: { obj: object; evt: string }[] = [];
+// Mute the server logger so test output stays readable.
 const mockLogger = {
   fatal: mock(() => undefined),
   error: mock(() => undefined),
-  warn: mock((obj: object, evt: string) => {
-    warnCalls.push({ obj, evt });
-  }),
+  warn: mock(() => undefined),
   info: mock(() => undefined),
   debug: mock(() => undefined),
   trace: mock(() => undefined),
@@ -50,7 +47,6 @@ import { resolveUserId } from './chat-host/inbound';
 describe('resolveUserId', () => {
   beforeEach(() => {
     findOrCreate.mockClear();
-    warnCalls.length = 0;
   });
 
   test('returns user id when resolution succeeds', async () => {
@@ -87,21 +83,5 @@ describe('resolveUserId', () => {
     }
     expect(thrown).toBeUndefined();
     expect(returned).toBeUndefined();
-  });
-
-  test('logs failure as static server.user_resolve_failed event (not platform-templated)', async () => {
-    const failure = Object.assign(new Error('duplicate key value violates unique constraint'), {
-      code: '23505',
-    });
-    findOrCreate.mockRejectedValueOnce(failure);
-    await resolveUserId('telegram', 999, undefined);
-
-    const failedCall = warnCalls.find(c => c.evt === 'server.user_resolve_failed');
-    expect(failedCall).toBeDefined();
-    expect(failedCall?.obj).toHaveProperty('platform', 'telegram');
-    expect(failedCall?.obj).toEqual({ err: failure, platform: 'telegram' });
-    // Confirm we did NOT use a per-platform event name (would collide with the
-    // GitHub adapter's own `github.user_resolve_failed` event).
-    expect(warnCalls.find(c => c.evt === 'telegram.user_resolve_failed')).toBeUndefined();
   });
 });

@@ -37,7 +37,7 @@ export function createInMemoryResourceStartStore(
   listReusableCheckouts: () => Promise<readonly ReusableCheckout[]>,
   recordNotice: (notice: NonNullable<ReturnType<typeof skippedFireNotice>>) => Promise<void>
 ): IResourceStartStore & {
-  /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. */
+  /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. A running run keeps its own. */
   resume(run: WorkflowRun): Promise<ResourceBlocker | null>;
   /** Give back the slot of an admitted run; whether it held one. */
   release(id: string): Promise<boolean>;
@@ -177,6 +177,8 @@ export function createInMemoryResourceStartStore(
     resume: async run => {
       const request = requests.get(run.id);
       if (request?.status !== 'admitted') return null;
+      // A running run resumed without its owner keeps the slot it holds, if it holds one.
+      if (run.status === 'running' && !released.has(run.id)) return null;
       if (run.status !== 'failed' && run.status !== 'paused')
         throw new WorkflowNotResumableError(run.id, run.status);
       const blocker = resourceResumeBlocker(await occupancy(request.resource), {

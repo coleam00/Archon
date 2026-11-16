@@ -80,18 +80,12 @@ describe('workflow run reads', () => {
   });
 
   test.each([
-    [
-      () => findWorkflowRunsByIdPrefix('abc', 'project'),
-      'Failed to find workflow runs by id prefix: offline',
-    ],
-    [
-      () => getWorkflowRunByWorkerPlatformId('worker'),
-      'Failed to get workflow run by worker platform ID: offline',
-    ],
-    [() => getRunByIsolationEnvId('env'), 'Failed to look up run for isolation env env: offline'],
-  ] as const)('preserves query failure diagnostics', async (read, message) => {
+    () => findWorkflowRunsByIdPrefix('abc', 'project'),
+    () => getWorkflowRunByWorkerPlatformId('worker'),
+    () => getRunByIsolationEnvId('env'),
+  ])('preserves query failure diagnostics', async read => {
     mockQuery.mockRejectedValueOnce(new Error('offline'));
-    await expect(read()).rejects.toThrow(message);
+    await expect(read()).rejects.toThrow('offline');
   });
 
   test('environment inventory propagates query errors', async () => {

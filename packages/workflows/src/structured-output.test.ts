@@ -1,10 +1,6 @@
 // @archon-test-isolated
 import { describe, expect, test } from 'bun:test';
-import {
-  compileOutputSchema,
-  validateStructuredOutput,
-  formatSchemaErrors,
-} from './structured-output';
+import { compileOutputSchema, validateStructuredOutput } from './structured-output';
 
 describe('validateStructuredOutput', () => {
   const schema = {
@@ -13,17 +9,12 @@ describe('validateStructuredOutput', () => {
     required: ['summary'],
   };
 
-  test('valid value passes', () => {
-    const r = validateStructuredOutput({ summary: 'hi', count: 2 }, schema);
-    expect(r.valid).toBe(true);
-  });
-
   test('missing required field fails with a root-level error', () => {
     const r = validateStructuredOutput({ count: 2 }, schema);
     expect(r.valid).toBe(false);
     if (r.valid) return;
     expect(r.errors.length).toBeGreaterThan(0);
-    expect(r.errors.some(e => e.includes('summary'))).toBe(true);
+    expect(r.errors.some(e => e.startsWith('(root):') && e.includes('summary'))).toBe(true);
   });
 
   test('wrong type fails with a path-scoped error', () => {
@@ -213,22 +204,5 @@ describe('compileOutputSchema registry hygiene', () => {
     expect(compileOutputSchema(broken)).toContain("can't resolve reference");
     expect(compileOutputSchema(fixed)).toBeNull();
     expect(validateStructuredOutput({ a: 'x' }, fixed).valid).toBe(true);
-  });
-});
-
-describe('formatSchemaErrors', () => {
-  test('renders root-level missing-property failures with the property name', () => {
-    const r = validateStructuredOutput(
-      {},
-      { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }
-    );
-    expect(r.valid).toBe(false);
-    if (r.valid) return;
-    expect(r.errors.some(line => line.startsWith('(root):') && line.includes('name'))).toBe(true);
-  });
-
-  test('returns a generic line for null/empty error input', () => {
-    expect(formatSchemaErrors(null)).toEqual(['value does not match the declared schema']);
-    expect(formatSchemaErrors([])).toEqual(['value does not match the declared schema']);
   });
 });

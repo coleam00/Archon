@@ -530,7 +530,7 @@ describe('base branch resolution ($BASE_BRANCH)', () => {
     expect(dagCall()?.baseBranch).toBe('hotfix/urgent');
   });
 
-  // A CLI `--resume` re-resolves a source and passes it in; adopting it would report a
+  // A CLI continuation re-resolves a source and passes it in; adopting it would report a
   // guess as the run's original attribution.
   it('a continuation whose record holds no source keeps it absent instead of adopting a live one (#2454)', async () => {
     await inWorktree({ ...resumeOf(recorded('release-2026')), source: 'bundled' });

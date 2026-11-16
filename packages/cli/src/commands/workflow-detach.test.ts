@@ -541,61 +541,6 @@ describe('workflowRunCommand — detach', () => {
     expect(spawnCmd).not.toContain('--conversation-id');
   });
 
-  // #2872 — a continuation already owns a run row, so the ack names it without
-  // creating anything. `wait <run-id>` behind `run --resume --detach` needs the id
-  // just as much as behind a fresh launch.
-  it('--resume --detach acks the continuation run id without creating a row', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const workflowDb = await import('@archon/core/db/workflows');
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
-      errors: [],
-    });
-    (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-paused',
-      workflow_name: 'assist',
-      working_path: null,
-    });
-    mockCreateWorkflowRun.mockClear();
-
-    const child = createDetachedChildFixture();
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
-    const savedArgv = process.argv;
-    process.argv = [
-      'bun',
-      '/abs/cli.ts',
-      'workflow',
-      'run',
-      'assist',
-      'hello',
-      '--resume',
-      '--detach',
-      '--json',
-    ];
-
-    try {
-      const commandPromise = workflowRunCommand(
-        createTestWorkflowHost(),
-        '/test/path',
-        'assist',
-        'hello',
-        {
-          resume: true,
-          detach: true,
-          json: true,
-        }
-      );
-      await finishStartupWindow(commandPromise, spawnSpy);
-    } finally {
-      process.argv = savedArgv;
-      spawnSpy.mockRestore();
-    }
-
-    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as Record<string, unknown>;
-    expect(parsed.runId).toBe('run-paused');
-    expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
-  });
-
   it('--detach --json emits a structured ack', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const tempHome = testHome;
@@ -653,7 +598,7 @@ describe('workflowRunCommand — detach', () => {
     expect(spawnCmd[idIndex + 1]).toBe('run-detached-created');
   });
 
-  // #2872 R1 — the plain launch, with no --folder/--adopt/--supersedes/--resume, is the
+  // #2872 R1 — the plain launch, with no --folder/--adopt/--supersedes, is the
   // most common invocation and had no pre-flight refusal at all: an isolating run with
   // no project to isolate sailed past, printed `Started`, and died on the identical
   // check in the child.
@@ -966,60 +911,51 @@ describe('workflowRunCommand — detach', () => {
     }
   });
 
-  it.each([
-    { writeFails: false, code: 'EBADF' },
-    { writeFails: false, code: 'EIO' },
-    { writeFails: true, code: 'EBADF' },
-    { writeFails: true, code: 'EIO' },
-  ])('preserves launch failure during log cleanup: %j', async ({ writeFails, code }) => {
-    const closeError = Object.assign(new Error('close failed'), { code });
-    const writeError = new Error('delimiter write failed');
-    const spawnError = new Error('spawn failed');
-    const originalClose = fs.closeSync;
-    const closeSpy = spyOn(fs, 'closeSync').mockImplementation(fd => {
-      originalClose(fd);
-      throw closeError;
-    });
-    const writeSpy = spyOn(fs, 'writeSync');
-    if (writeFails) {
-      writeSpy.mockImplementationOnce(() => {
-        throw writeError;
+  it.each([{ writeFails: false }, { writeFails: true }])(
+    'preserves launch failure during log cleanup: %j',
+    async ({ writeFails }) => {
+      const closeError = Object.assign(new Error('close failed'), { code: 'EIO' });
+      const writeError = new Error('delimiter write failed');
+      const spawnError = new Error('spawn failed');
+      const originalClose = fs.closeSync;
+      const closeSpy = spyOn(fs, 'closeSync').mockImplementation(fd => {
+        originalClose(fd);
+        throw closeError;
       });
-    }
-    const spawnSpy = spyOn(childProcess, 'spawn').mockImplementation(() => {
-      throw spawnError;
-    });
-    mockLogger.warn.mockClear();
+      const writeSpy = spyOn(fs, 'writeSync');
+      if (writeFails) {
+        writeSpy.mockImplementationOnce(() => {
+          throw writeError;
+        });
+      }
+      const spawnSpy = spyOn(childProcess, 'spawn').mockImplementation(() => {
+        throw spawnError;
+      });
+      mockLogger.warn.mockClear();
 
-    try {
-      await expect(spawnDetachedWorkflowRun('/test/path', 'close-failure', [])).rejects.toBe(
-        spawnError
-      );
-      expect(closeSpy).toHaveBeenCalledTimes(1);
-      if (code === 'EBADF') {
-        expect(mockLogger.warn).not.toHaveBeenCalledWith(
-          expect.anything(),
-          'cli.detached_run_log_close_failed'
+      try {
+        await expect(spawnDetachedWorkflowRun('/test/path', 'close-failure', [])).rejects.toBe(
+          spawnError
         );
-      } else {
+        expect(closeSpy).toHaveBeenCalledTimes(1);
         expect(mockLogger.warn).toHaveBeenCalledWith(
           { err: closeError },
           'cli.detached_run_log_close_failed'
         );
+        if (writeFails) {
+          expect(mockLogger.warn).toHaveBeenCalledWith(
+            { err: writeError },
+            'cli.detached_run_log_open_failed'
+          );
+        }
+        expect(mockLogger.warn).toHaveBeenCalledTimes(1 + Number(writeFails));
+      } finally {
+        closeSpy.mockRestore();
+        writeSpy.mockRestore();
+        spawnSpy.mockRestore();
       }
-      if (writeFails) {
-        expect(mockLogger.warn).toHaveBeenCalledWith(
-          { err: writeError },
-          'cli.detached_run_log_open_failed'
-        );
-      }
-      expect(mockLogger.warn).toHaveBeenCalledTimes(Number(writeFails) + Number(code !== 'EBADF'));
-    } finally {
-      closeSpy.mockRestore();
-      writeSpy.mockRestore();
-      spawnSpy.mockRestore();
     }
-  });
+  );
 
   it('throws (no false success ack) when the detached child fails to spawn', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');

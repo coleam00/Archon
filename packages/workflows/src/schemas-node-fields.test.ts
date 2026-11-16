@@ -2,9 +2,6 @@
 import { describe, test, expect } from 'bun:test';
 import {
   isLoopNode,
-  SCRIPT_NODE_AI_FIELDS,
-  LOOP_NODE_AI_FIELDS,
-  LOOP_GROUP_NODE_AI_FIELDS,
   WAIT_NODE_IGNORED_FIELDS,
   WORKFLOW_NODE_IGNORED_FIELDS,
   BASH_NODE_AI_FIELDS,
@@ -349,15 +346,6 @@ describe('dagNodeSchema — new Claude SDK options', () => {
     expect((result as AgentNode).settingSources).toEqual(['project']);
   });
 
-  test('strips settingSources from bash nodes', () => {
-    const result = dagNodeSchema.parse({
-      id: 'b',
-      bash: 'echo hi',
-      settingSources: ['project'],
-    });
-    expect('settingSources' in result).toBe(false);
-  });
-
   test('strips AI-only fields from bash nodes', () => {
     const result = dagNodeSchema.parse({
       id: 'b',
@@ -410,14 +398,6 @@ describe('dagNodeSchema — per-node Pi posture (pi:)', () => {
       pi: { extensionFlags: { plan: 42 } },
     });
     expect(result.success).toBe(false);
-  });
-
-  test('pi is warned-ignored on non-AI + loop_group nodes but supported on loop', () => {
-    // loop uses its per-iteration sendQuery, so pi must NOT be in its ignore list;
-    // loop_group never sendQuerys (body nodes carry their own pi), so it warns.
-    expect(LOOP_NODE_AI_FIELDS).not.toContain('pi');
-    expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('pi');
-    expect(SCRIPT_NODE_AI_FIELDS).toContain('pi');
   });
 });
 

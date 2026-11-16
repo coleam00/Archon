@@ -94,7 +94,7 @@ export interface AdmissionTransaction {
   binding(input: BindingIdentity): Promise<Binding | undefined>;
   owned(input: PreparationOwner): Promise<Binding | undefined>;
   canClaim(id: string): Promise<boolean>;
-  /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. */
+  /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. A running run keeps its own. */
   resume(run: WorkflowRun): Promise<ResourceBlocker | null>;
   /** Remove the run holder of an admitted run; whether one was removed. */
   release(id: string): Promise<boolean>;
@@ -495,6 +495,12 @@ export function createAdmissionTransaction(
     const resource = await slot(row.resource);
     if (await hasSlotMembership(run.id, row.resource, true))
       throw new Error(`Admitted resource request '${run.id}' disagrees with its slot membership`);
+    // A `running` run resumed with an `ownerless` cursor still holds the slot it was
+    // admitted to; it keeps that slot and takes no other. Without it, the run is refused.
+    if (run.status === 'running') {
+      if (resource.holders.some(h => h.kind === 'run' && h.id === run.id)) return null;
+      throw new WorkflowNotResumableError(run.id, run.status);
+    }
     if (run.status !== 'failed' && run.status !== 'paused')
       throw new WorkflowNotResumableError(run.id, run.status);
     if (!resource.admitted.includes(run.id)) resource.admitted.push(run.id);

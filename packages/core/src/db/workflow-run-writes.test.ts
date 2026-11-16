@@ -135,29 +135,6 @@ describe('workflow run writes', () => {
       ]);
     });
 
-    test('omitting output_root leaves it out of the SET clause entirely', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-
-      await updateWorkflowRun('workflow-run-123', { status: 'running' });
-
-      const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).not.toContain('output_root');
-    });
-
-    test('updates multiple fields', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-
-      await updateWorkflowRun('workflow-run-123', {
-        status: 'running',
-        metadata: { step: 'plan' },
-      });
-
-      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).toContain('status = $1');
-      expect(query).toContain('metadata = metadata ||');
-      expect(params).toEqual(['running', '{"step":"plan"}', 'workflow-run-123']);
-    });
-
     test('does nothing when no updates provided', async () => {
       await updateWorkflowRun('workflow-run-123', {});
 

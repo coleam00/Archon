@@ -490,55 +490,6 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
     );
   });
 
-  it('rejects an ambiguous supersedes run prefix with its candidates', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const adoption = await import('@archon/core/operations/workflow-adoption');
-    setupSupersedesMocks();
-    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
-      { id: '0b1ee8da-1111-2222-3333-444455556666' },
-      { id: '0b1ee8da-9999-8888-7777-666655554444' },
-    ]);
-
-    await expect(
-      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
-        supersedesRunId: '0b1ee8da',
-        noWorktree: true,
-      })
-    ).rejects.toThrow(
-      '0b1ee8da-1111-2222-3333-444455556666\n  0b1ee8da-9999-8888-7777-666655554444'
-    );
-    expect(workflowDb.getWorkflowRun).not.toHaveBeenCalled();
-    expect(adoption.resolveWorkflowAdoption).not.toHaveBeenCalled();
-  });
-
-  it('passes a full supersedes run id through unchanged', async () => {
-    const supersededRunId = '0b1ee8da-1111-2222-3333-444455556666';
-    const workflowDb = await import('@archon/core/db/workflows');
-    setupSupersedesMocks();
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(
-      makeContinuationRun({ id: supersededRunId })
-    );
-
-    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
-      supersedesRunId: supersededRunId,
-      noWorktree: true,
-    });
-
-    expect(workflowDb.findWorkflowRunsByIdPrefix).not.toHaveBeenCalled();
-    expect(workflowDb.getWorkflowRun).toHaveBeenCalledWith(supersededRunId);
-  });
-
-  it('keeps the unknown-id refusal for a prefix that matches nothing', async () => {
-    setupSupersedesMocks();
-
-    await expect(
-      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
-        supersedesRunId: 'deadbeef',
-        noWorktree: true,
-      })
-    ).rejects.toThrow("Cannot supersede: no workflow run 'deadbeef' exists.");
-  });
-
   it('still refuses a supersedes run that is not terminal', async () => {
     const supersededRunId = '0b1ee8da-1111-2222-3333-444455556666';
     const workflowDb = await import('@archon/core/db/workflows');

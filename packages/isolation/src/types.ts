@@ -153,15 +153,7 @@ export interface CreatedWorktreeMetadata {
   cutFromCommit?: string;
 }
 
-export interface ObservedWorktreeMetadata {
-  provenance: 'observed';
-  adopted: false;
-}
-
-export type WorktreeMetadata =
-  | AdoptedWorktreeMetadata
-  | CreatedWorktreeMetadata
-  | ObservedWorktreeMetadata;
+export type WorktreeMetadata = AdoptedWorktreeMetadata | CreatedWorktreeMetadata;
 
 interface IsolatedEnvironmentBase {
   /** For worktrees, this is the filesystem path */
@@ -184,7 +176,6 @@ export interface WorktreeEnvironment<Metadata extends WorktreeMetadata = Worktre
   metadata: Metadata;
 }
 
-export type IsolatedEnvironment = WorktreeEnvironment;
 export type WorktreeCreationEnvironment = WorktreeEnvironment<
   CreatedWorktreeMetadata | AdoptedWorktreeMetadata
 > & {
@@ -284,7 +275,6 @@ export interface DestroyResult {
  * Error contract:
  * - `create` throws on failure (caller should surface to user)
  * - `destroy` returns a `DestroyResult` with partial-failure details
- * - `get` returns null if not found, throws on unexpected I/O errors
  * - `healthCheck` returns false if missing, throws on permission errors
  */
 export interface IIsolationProvider {
@@ -299,14 +289,6 @@ export interface IIsolationProvider {
    * Best-effort cleanup. Throws only for unexpected errors (permissions, git failures).
    */
   destroy(envId: string, options?: DestroyOptions | WorktreeDestroyOptions): Promise<DestroyResult>;
-
-  get(envId: string): Promise<IsolatedEnvironment | null>;
-
-  /** For worktrees, codebaseId is the canonical repo path */
-  list(codebaseId: string): Promise<IsolatedEnvironment[]>;
-
-  /** Take ownership of externally-created environments (optional, for skill-app symbiosis) */
-  adopt?(path: string): Promise<IsolatedEnvironment | null>;
 
   healthCheck(envId: string): Promise<boolean>;
 }

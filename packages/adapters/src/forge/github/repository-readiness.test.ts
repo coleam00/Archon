@@ -358,17 +358,6 @@ describe('ensureRepoReady', () => {
     ).rejects.toThrow('not found or is private');
   });
 
-  test('throws user-friendly error for permission_denied clone error', async () => {
-    mockCloneRepository.mockResolvedValue({
-      ok: false,
-      error: { code: 'permission_denied', path: 'https://github.com/owner/repo.git' },
-    });
-
-    await expect(
-      callEnsureRepoReady('owner', 'repo', 'main', '/nonexistent/path', false)
-    ).rejects.toThrow('Authentication failed');
-  });
-
   test('throws user-friendly error for sync branch_not_found', async () => {
     const tmpDir = await mkdtemp(`${tmpdir()}/github-test-`);
     await mkdir(join(tmpDir, '.git'));
@@ -597,25 +586,6 @@ describe('App-mode readiness', () => {
       }
     }
   );
-
-  test('App-mode setup fails when the bundled credential helper is unavailable', async () => {
-    installCredentialHelperSpy.mockImplementationOnce(async () => ({
-      kind: 'failed',
-      error: new Error('bundled credential helper unavailable'),
-    }));
-    const setup = ensureRepoReady(
-      'https://github.com',
-      appAuth().auth,
-      'owner',
-      'repo',
-      'main',
-      { name: 'owner/repo', default_cwd: unclonedPath() },
-      false
-    );
-
-    await expect(setup).rejects.toThrow('bundled credential helper unavailable');
-    expect(mockCloneRepository).toHaveBeenCalled();
-  });
 
   test('credential helper install is NOT attempted in PAT mode', async () => {
     try {

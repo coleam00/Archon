@@ -7,7 +7,12 @@ import { getPluginsPath } from '@archon/paths';
 import { scanReceipts } from '@archon/plugin-manifest/store';
 import { loadConfig } from '@archon/core/config/config-loader';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import { projectRefForCodebase } from '@archon/core/operations/attention-queue';
+import {
+  attentionQueueSource,
+  projectRefForCodebase,
+} from '@archon/core/operations/attention-queue';
+import { readItem } from '@archon/workflows/item-read';
+import { itemReadLines } from './workflow-item-text';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import { resolveDryRunEnvironment } from './workflow-dry-run';
 import { createCliWorkflowHost } from '../utils/workflow-host';
@@ -523,7 +528,7 @@ export async function workflowRunsCommand(
   if (codebase instanceof Error) return refuseRuns(opts, codebase);
   // The open-work inbox contains terminal failed runs with no adopter or successor.
   try {
-    if (opts.item !== undefined) return await listItemRuns(host, opts.item, opts, codebase);
+    if (opts.item !== undefined) return await readItemRuns(host, opts.item, opts, codebase);
     if (opts.open) return await listOpenWorkRuns(host, opts, codebase);
     return await listRecentRuns(host, cwd, opts, codebase, statusFilter);
   } catch (error) {
@@ -545,7 +550,7 @@ interface RunsOptions {
   status?: string;
   limit?: number;
   open?: boolean;
-  /** List every run of this item in the project, oldest first. */
+  /** Read this item in the project: its runs, open questions and answers. */
   item?: string;
   verbose?: boolean;
 }
@@ -587,29 +592,35 @@ async function findRunsCodebase(
   }
 }
 
-async function listItemRuns(
+/** Read one item: its runs, open questions and answers (`readItem`), oldest first. */
+async function readItemRuns(
   host: WorkflowHost,
   item: string,
   opts: RunsOptions,
   codebase: RunsCodebase
 ): Promise<number> {
   if (!codebase) {
-    return refuseRuns(
-      opts,
-      new Error('--item lists the runs of an item in one registered project.')
-    );
+    return refuseRuns(opts, new Error('--item reads an item in one registered project.'));
   }
-  const runs = await host.deps.store.listItemRuns(projectRefForCodebase(codebase).key, item);
+  const project = projectRefForCodebase(codebase);
+  const read = await readItem(
+    attentionQueueSource(host.deps.store, host.records.isolation),
+    project.key,
+    item
+  );
+  if (read === null) {
+    if (opts.json) {
+      await writeJsonLine({ ok: false, error: 'not_found', item });
+      return 1;
+    }
+    await writeStderr(`No item '${item}' in project ${project.name}.\n`);
+    return 1;
+  }
   if (opts.json) {
-    await writeJsonLine({ runs, total: runs.length });
+    await writeJsonLine(read);
     return 0;
   }
-  console.log(`\nRuns of item ${item} (${String(runs.length)}):\n`);
-  for (const run of runs) {
-    console.log(
-      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow_name}${authoredOutcome(run)}  (${formatAge(run.started_at)})`
-    );
-  }
+  console.log(`\n${itemReadLines(read).join('\n')}\n`);
   return 0;
 }
 

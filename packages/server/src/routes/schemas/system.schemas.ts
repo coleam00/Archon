@@ -1,3 +1,4 @@
+import type { ArchonCommit } from '@archon/git/archon-commit';
 import type { UpdateCheckResult } from '@archon/paths';
 import { z } from '@hono/zod-openapi';
 
@@ -36,3 +37,11 @@ export const appCommitSchema = z
   .openapi('AppCommit');
 
 export type AppCommit = z.infer<typeof appCommitSchema>;
+
+// `readArchonCommit` produces the health response's commit; the two must stay identical.
+const appCommitContract: [ArchonCommit, keyof ArchonCommit] extends [AppCommit, keyof AppCommit]
+  ? [AppCommit, keyof AppCommit] extends [ArchonCommit, keyof ArchonCommit]
+    ? true
+    : false
+  : false = true;
+void appCommitContract;

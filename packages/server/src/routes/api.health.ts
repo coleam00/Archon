@@ -123,7 +123,7 @@ export function registerHealthRoutes(
     lockManager: Pick<ConversationLockManager, 'getStats'>;
     activePlatforms?: readonly string[];
     attention?: { router: Pick<AttentionRouter, 'health'> };
-    /** Read once at boot by `readAppCommit`; see there for why not per request. */
+    /** Read once at boot by `readArchonCommit` (`@archon/git/archon-commit`); see there for why not per request. */
     commit?: AppCommit;
   }
 ): void {

@@ -71,7 +71,6 @@ function assertDryRunFlags(options: WorkflowRunOptions): void {
     ['--no-worktree', options.noWorktree === true],
     ['--folder', options.folder === true],
     ['--container', options.container === true],
-    ['--resume', options.resume === true],
     ['--detach', options.detach === true],
   ] as const;
   const incompatibleFlag = incompatible.find(([, present]) => present)?.[0];

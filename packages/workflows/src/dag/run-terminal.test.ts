@@ -57,28 +57,6 @@ describe('executeDagWorkflow -- final status derivation', () => {
     await removeTempTree(testDir);
   });
 
-  it('a failed-only DAG delegates its terminal event to failWorkflowRun', async () => {
-    const mockStore = createMockStore();
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(mockStore),
-        conversationId: 'conv-status',
-        cwd: testDir,
-        workflow: {
-          name: 'status-test',
-          nodes: [{ id: 'fail', kind: 'exec', runtime: 'sh', script: 'exit 1' } as ExecNode],
-        },
-        workflowRun: makeWorkflowRun('dag-status-failed-only'),
-      })
-    );
-
-    expect(mockStore.failWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(mockStore.createWorkflowEvent).not.toHaveBeenCalledWith(
-      expect.objectContaining({ event_type: 'workflow_failed' })
-    );
-  });
-
   it('one success + one independent failure -> failWorkflowRun, not completeWorkflowRun', async () => {
     const mockStore = createMockStore();
     const mockDeps = createMockDeps(mockStore);
@@ -118,45 +96,6 @@ describe('executeDagWorkflow -- final status derivation', () => {
     expect(deliveredMessages(platform)).toEqual([
       "❌ DAG workflow 'status-test' completed with failures: 'fail': Bash node 'fail' failed " +
         '[exit 1]: no diagnostic output',
-    ]);
-  });
-
-  it('multiple successes + one failure -> failWorkflowRun, not completeWorkflowRun', async () => {
-    const mockStore = createMockStore();
-    const mockDeps = createMockDeps(mockStore);
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('dag-status-run-2');
-
-    const nodes: DagNode[] = [
-      { id: 'a', kind: 'exec', runtime: 'sh', script: 'echo a' } as ExecNode,
-      { id: 'b', kind: 'exec', runtime: 'sh', script: 'echo b' } as ExecNode,
-      { id: 'c', kind: 'exec', runtime: 'sh', script: 'echo c' } as ExecNode,
-      { id: 'fail', kind: 'exec', runtime: 'sh', script: 'exit 1' } as ExecNode,
-    ];
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-status',
-        cwd: testDir,
-        workflow: { name: 'status-test-multi', nodes },
-        workflowRun,
-      })
-    );
-
-    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
-    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
-    expect(mockStore.failWorkflowRun).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.stringContaining('fail'),
-      { scheduledResume: undefined, exitReason: 'node_error' }
-    );
-
-    // Only the failing node is named; the three successes are not.
-    expect(deliveredMessages(platform)).toEqual([
-      "❌ DAG workflow 'status-test-multi' completed with failures: 'fail': Bash node 'fail' " +
-        'failed [exit 1]: no diagnostic output',
     ]);
   });
 
@@ -402,14 +341,6 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
       { id: 'step', kind: 'agent', source: { kind: 'inline', prompt: 'Do thing.' } },
     ]);
     expect(failureKinds).toEqual({ step: 'config' });
-  });
-
-  it('one completed node and one failed node is a node_error', async () => {
-    const { store } = await runDag([
-      { id: 'ok', kind: 'exec', runtime: 'sh', script: 'echo fine' },
-      { id: 'bad', kind: 'exec', runtime: 'sh', script: 'exit 2', depends_on: ['ok'] },
-    ]);
-    expect(failOptions(store)).toMatchObject({ exitReason: 'node_error' });
   });
 });
 

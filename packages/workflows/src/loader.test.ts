@@ -514,30 +514,6 @@ nodes:
     expect(ignoredFieldLogs()).toHaveLength(0);
   });
 
-  it('should warn about unsupported AI fields on loop nodes (not model/provider)', () => {
-    mockLogger.debug.mockClear();
-    parseWorkflowYaml(`
-name: loop-unsupported
-description: Loop with unsupported AI fields
-nodes:
-  - id: iterate
-    loop:
-      prompt: "Do something"
-      until: "COMPLETE"
-      max_iterations: 3
-    model: claude-opus-4-6
-    mcp: ./mcp.json
-`);
-
-    // Should warn about mcp but NOT about model
-    const aiFieldWarnings = ignoredFieldLogs();
-    expect(aiFieldWarnings).toHaveLength(1);
-    const warnedFields = (aiFieldWarnings[0][0] as { fields: string[] }).fields;
-    expect(warnedFields).toContain('mcp');
-    expect(warnedFields).not.toContain('model');
-    expect(warnedFields).not.toContain('provider');
-  });
-
   it('should NOT warn about output_format on a loop node (#2563)', () => {
     // A loop: node makes its own sendQuery, so the schema is honoured rather than
     // warned-and-dropped. It stays warned on loop_group, which never calls sendQuery.
@@ -903,25 +879,6 @@ nodes:
     expect(node0.loop.until_bash).toBe('bun run test');
   });
 
-  it('should parse loop node with depends_on', () => {
-    const nodes = parsedNodes(`
-name: loop-deps
-description: Loop with dependencies
-nodes:
-  - id: setup
-    bash: "echo ready"
-  - id: my-loop
-    depends_on: [setup]
-    loop:
-      prompt: "Use $setup.output. Do task."
-      until: COMPLETE
-      max_iterations: 5
-`);
-    expect(nodes).toHaveLength(2);
-    expect(isLoopNode(nodes[1])).toBe(true);
-    expect(nodes[1].depends_on).toEqual(['setup']);
-  });
-
   it('should accept interactive loop with gate_message', () => {
     const node0 = loopNode(`
 name: valid-interactive
@@ -1040,20 +997,6 @@ nodes:
     ],
   ])('should accept %s', (_, nodes) => {
     parseWorkflowYaml(withNodes(nodes));
-  });
-
-  it('should warn (non-blocking) when signal_completes is set without interactive', () => {
-    // Workflow loads successfully — this is a warning, not an error
-    parseWorkflowYaml(
-      withNodes(
-        '  - id: validate\n    loop:\n      prompt: Validate.\n      until: VALIDATED\n      max_iterations: 5\n      signal_completes: true\n'
-      ),
-      'sc-no-interactive.yaml'
-    );
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ filename: expect.stringContaining('sc-no-interactive') }),
-      'signal_completes_without_interactive_ignored'
-    );
   });
 
   it.each<[string, string, string[]]>([

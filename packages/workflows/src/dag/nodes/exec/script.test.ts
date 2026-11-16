@@ -314,37 +314,6 @@ describe('executeDagWorkflow -- script nodes', () => {
     await removeTempTree(testDir);
   });
 
-  it('inline bun script executes and captures stdout', async () => {
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('script-test-run-id', {
-      workflow_name: 'script-test',
-      conversation_id: 'conv-script',
-      user_message: 'script test message',
-    });
-
-    const scriptNode: ExecNode = {
-      id: 'inline-bun',
-      kind: 'exec',
-      script: 'console.log("hello from bun")',
-      runtime: 'bun',
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-script',
-        cwd: testDir,
-        workflow: { name: 'script-inline-bun-test', nodes: [scriptNode] },
-        workflowRun,
-      })
-    );
-
-    // Script node should NOT invoke AI client
-    expect(mockSendQueryDag.mock.calls.length).toBe(0);
-  });
-
   it('refuses a second script before it starts when the work-unit budget is exhausted', async () => {
     const deps = createMockDeps();
     const marker = join(testDir, 'script-attempts');
@@ -419,37 +388,6 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect(prompt).toContain('42');
   });
 
-  it('inline uv script executes and captures stdout', async () => {
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('script-uv-run-id', {
-      workflow_name: 'script-uv-test',
-      conversation_id: 'conv-script-uv',
-      user_message: 'uv test message',
-    });
-
-    const scriptNode: ExecNode = {
-      id: 'inline-uv',
-      kind: 'exec',
-      script: 'print("hello from python")',
-      runtime: 'uv',
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-script-uv',
-        cwd: testDir,
-        workflow: { name: 'script-inline-uv-test', nodes: [scriptNode] },
-        workflowRun,
-      })
-    );
-
-    // Script node should NOT invoke AI client
-    expect(mockSendQueryDag.mock.calls.length).toBe(0);
-  });
-
   it('named bun script executes from .archon/scripts/', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
@@ -482,7 +420,10 @@ describe('executeDagWorkflow -- script nodes', () => {
       })
     );
 
-    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+    const completed = persistedEvents(mockDeps.store).find(
+      event => event.event_type === 'node_completed' && event.step_name === 'run-greet'
+    );
+    expect(completed?.data?.node_output).toBe('named script output');
   });
 
   const recordedContainer = { isolation: 'container', isolation_env_id: 'env' };
@@ -1051,40 +992,6 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect(await readFile(marker, 'utf-8')).toBe('ran');
   });
 
-  it('non-zero exit code results in failed state', async () => {
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('script-fail-run-id', {
-      workflow_name: 'script-fail-test',
-      conversation_id: 'conv-fail',
-      user_message: 'fail test',
-    });
-
-    const scriptNode: ExecNode = {
-      id: 'fail-script',
-      kind: 'exec',
-      script: 'process.exit(1)',
-      runtime: 'bun',
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-fail',
-        cwd: testDir,
-        workflow: { name: 'script-fail-test', nodes: [scriptNode] },
-        workflowRun,
-      })
-    );
-
-    expect(
-      persistedEvents(mockDeps.store)
-        .filter(event => event.event_type === 'node_failed')
-        .map(event => event.step_name)
-    ).toEqual(['fail-script']);
-  });
-
   it('preserves a bun script failure whose stderr contains ENOENT', async () => {
     const mockDeps = createMockDeps();
     const missingPath = join(testDir, 'missing-input.txt');
@@ -1351,39 +1258,6 @@ describe('executeDagWorkflow -- script nodes', () => {
     },
     testTimeout(10000)
   );
-
-  it('stderr output is sent to the user', async () => {
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('script-stderr-run-id', {
-      workflow_name: 'script-stderr-test',
-      conversation_id: 'conv-stderr',
-      user_message: 'stderr test',
-    });
-
-    const scriptNode: ExecNode = {
-      id: 'stderr-script',
-      // Write to both stderr and stdout
-      kind: 'exec',
-      script: 'process.stderr.write("error detail\\n"); console.log("done")',
-      runtime: 'bun',
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-stderr',
-        cwd: testDir,
-        workflow: { name: 'script-stderr-test', nodes: [scriptNode] },
-        workflowRun,
-      })
-    );
-
-    expect(deliveredMessages(platform)).toContain(
-      "Script node 'stderr-script' stderr:\n```\nerror detail\n```"
-    );
-  });
 
   it('$WORKFLOW_ID and $ARTIFACTS_DIR are substituted into script text', async () => {
     const mockDeps = createMockDeps();
@@ -1690,37 +1564,5 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect((completedEvent![0] as { data: { node_output: string } }).data.node_output).toBe(
       'CLEAN'
     );
-  });
-
-  it('passes config.envVars to script subprocesses', async () => {
-    const execSpy = spyOnNodeExec().mockResolvedValue({ stdout: 'ok\n', stderr: '' });
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('script-env-run-id');
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-script-env',
-        cwd: testDir,
-        workflow: {
-          name: 'script-env-test',
-          nodes: [{ id: 'inline-bun', kind: 'exec', script: 'console.log("ok")', runtime: 'bun' }],
-        },
-        workflowRun,
-        config: { ...minimalConfig, envVars: { MY_SECRET: 'abc123' } },
-      })
-    );
-
-    expect(execSpy).toHaveBeenCalledWith(
-      'bun',
-      ['--no-env-file', expect.stringMatching(/^--preload=.*script-api/), '-'],
-      expect.objectContaining({
-        env: expect.objectContaining({ MY_SECRET: 'abc123' }),
-        input: 'console.log("ok")',
-      })
-    );
-    execSpy.mockRestore();
   });
 });

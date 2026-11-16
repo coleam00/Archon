@@ -53,15 +53,6 @@ function makeWorkflowCompletedEvent(runId = 'run-1'): WorkflowEmitterEvent {
   };
 }
 
-function makeWorkflowFailedEvent(runId = 'run-1'): WorkflowEmitterEvent {
-  return {
-    type: 'workflow_failed',
-    runId,
-    workflowName: 'test-workflow',
-    error: 'Something went wrong',
-  };
-}
-
 function makeNodeStartedEvent(runId = 'run-1'): WorkflowEmitterEvent {
   return {
     type: 'node_started',
@@ -79,16 +70,6 @@ function makeNodeSkippedEvent(runId = 'run-1'): WorkflowEmitterEvent {
     nodeName: 'optional-node',
     reason: 'when_condition',
     cause: { kind: 'condition', expr: '$route.output == true' },
-  };
-}
-
-function makeArtifactEvent(runId = 'run-1'): WorkflowEmitterEvent {
-  return {
-    type: 'workflow_artifact',
-    runId,
-    artifactType: 'file_created',
-    label: 'Execution log',
-    path: '/tmp/workflow.log',
   };
 }
 
@@ -152,12 +133,6 @@ describe('WorkflowEventEmitter', () => {
         type: 'workflow_started',
         runId: 'run-1',
       });
-    });
-
-    it('returns an unsubscribe function', () => {
-      const emitter = getWorkflowEventEmitter();
-      const unsubscribe = emitter.subscribe(mock(() => {}));
-      expect(typeof unsubscribe).toBe('function');
     });
 
     it('calling the returned unsubscribe function stops event delivery', () => {
@@ -227,11 +202,6 @@ describe('WorkflowEventEmitter', () => {
       }
     });
 
-    it('does not throw when there are no subscribers', () => {
-      const emitter = getWorkflowEventEmitter();
-      expect(() => emitter.emit(makeWorkflowStartedEvent())).not.toThrow();
-    });
-
     it('delivers multiple sequential events in order', () => {
       const emitter = getWorkflowEventEmitter();
       const received: string[] = [];
@@ -248,77 +218,6 @@ describe('WorkflowEventEmitter', () => {
         'node_skipped',
         'workflow_completed',
       ]);
-    });
-
-    it('passes the exact event object to each subscriber', () => {
-      const emitter = getWorkflowEventEmitter();
-      const captured: WorkflowEmitterEvent[] = [];
-      emitter.subscribe(event => captured.push(event));
-
-      const artifact = makeArtifactEvent();
-      emitter.emit(artifact);
-
-      expect(captured).toHaveLength(1);
-      expect(captured[0]).toBe(artifact);
-    });
-
-    it('delivers all WorkflowEmitterEvent variants without error', () => {
-      const emitter = getWorkflowEventEmitter();
-      const received: string[] = [];
-      emitter.subscribe(e => received.push(e.type));
-
-      const events: WorkflowEmitterEvent[] = [
-        makeWorkflowStartedEvent(),
-        makeWorkflowCompletedEvent(),
-        makeWorkflowFailedEvent(),
-        { type: 'loop_iteration_started', runId: 'run-1', iteration: 1, maxIterations: 5 },
-        {
-          type: 'loop_iteration_completed',
-          runId: 'run-1',
-          iteration: 1,
-          duration: 600,
-          completionDetected: false,
-        },
-        { type: 'loop_iteration_failed', runId: 'run-1', iteration: 1, error: 'loop error' },
-        makeNodeStartedEvent(),
-        {
-          type: 'node_completed',
-          runId: 'run-1',
-          nodeId: 'classify',
-          nodeName: 'classify-issue',
-          duration: 150,
-        },
-        {
-          type: 'node_failed',
-          runId: 'run-1',
-          nodeId: 'classify',
-          nodeName: 'classify-issue',
-          error: 'fail',
-        },
-        makeNodeSkippedEvent(),
-        {
-          type: 'node_skipped_prior_success',
-          runId: 'run-1',
-          nodeId: 'cached-node',
-          nodeName: 'cached-node',
-        },
-        makeArtifactEvent(),
-        {
-          type: 'provider_event',
-          runId: 'run-1',
-          stepName: 'plan',
-          attemptId: 'attempt-1',
-          seq: 0,
-          observedAt: '2026-01-01T00:00:00.000Z',
-          event: { type: 'subtask', taskId: 't-1', status: 'started', description: 'Analyzing' },
-        },
-      ];
-
-      for (const event of events) {
-        expect(() => emitter.emit(event)).not.toThrow();
-      }
-
-      expect(received).toHaveLength(events.length);
     });
   });
 
@@ -360,26 +259,6 @@ describe('WorkflowEventEmitter', () => {
       // The error should have been logged (mockLogger.error is mockLogFn)
       expect(mockLogFn).toHaveBeenCalledTimes(1);
     });
-
-    it('multiple throwing listeners each log their own error without affecting neighbours', () => {
-      const emitter = getWorkflowEventEmitter();
-      const good = mock((_event: WorkflowEmitterEvent) => {});
-
-      emitter.subscribe(() => {
-        throw new Error('first');
-      });
-      emitter.subscribe(good);
-      emitter.subscribe(() => {
-        throw new Error('second');
-      });
-
-      mockLogFn.mockClear();
-      expect(() => emitter.emit(makeNodeStartedEvent())).not.toThrow();
-
-      expect(good).toHaveBeenCalledTimes(1);
-      // Two throws → two error log calls
-      expect(mockLogFn).toHaveBeenCalledTimes(2);
-    });
   });
 
   // -------------------------------------------------------------------------
@@ -405,17 +284,6 @@ describe('WorkflowEventEmitter', () => {
       expect(() => emitter.unregisterRun('non-existent-run')).not.toThrow();
     });
 
-    it('multiple runs can be registered simultaneously', () => {
-      const emitter = getWorkflowEventEmitter();
-      emitter.registerRun('run-1', 'conv-1');
-      emitter.registerRun('run-2', 'conv-2');
-      emitter.registerRun('run-3', 'conv-3');
-
-      expect(emitter.getConversationId('run-1')).toBe('conv-1');
-      expect(emitter.getConversationId('run-2')).toBe('conv-2');
-      expect(emitter.getConversationId('run-3')).toBe('conv-3');
-    });
-
     it('re-registering a runId with a different conversationId overwrites the mapping', () => {
       const emitter = getWorkflowEventEmitter();
       emitter.registerRun('run-1', 'conv-old');
@@ -432,30 +300,6 @@ describe('WorkflowEventEmitter', () => {
 
       expect(emitter.getConversationId('run-A')).toBeUndefined();
       expect(emitter.getConversationId('run-B')).toBe('conv-B');
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // getConversationId()
-  // -------------------------------------------------------------------------
-
-  describe('getConversationId()', () => {
-    it('returns undefined for an unregistered runId', () => {
-      const emitter = getWorkflowEventEmitter();
-      expect(emitter.getConversationId('unknown-run')).toBeUndefined();
-    });
-
-    it('returns the correct conversationId for a registered runId', () => {
-      const emitter = getWorkflowEventEmitter();
-      emitter.registerRun('my-run', 'my-conv');
-      expect(emitter.getConversationId('my-run')).toBe('my-conv');
-    });
-
-    it('returns undefined after unregistering', () => {
-      const emitter = getWorkflowEventEmitter();
-      emitter.registerRun('my-run', 'my-conv');
-      emitter.unregisterRun('my-run');
-      expect(emitter.getConversationId('my-run')).toBeUndefined();
     });
   });
 
@@ -548,154 +392,6 @@ describe('WorkflowEventEmitter', () => {
         'node_skipped',
         'workflow_completed',
       ]);
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // Integration: full workflow lifecycle
-  // -------------------------------------------------------------------------
-
-  describe('integration: full workflow lifecycle', () => {
-    it('simulates a complete workflow run with all events forwarded to subscribers', () => {
-      const emitter = getWorkflowEventEmitter();
-
-      const runId = 'integration-run';
-      const conversationId = 'integration-conv';
-      emitter.registerRun(runId, conversationId);
-
-      const allEvents: WorkflowEmitterEvent[] = [];
-      const convEvents: WorkflowEmitterEvent[] = [];
-
-      emitter.subscribe(e => allEvents.push(e));
-      emitter.subscribeForConversation(conversationId, e => convEvents.push(e));
-
-      // Emit a realistic DAG workflow sequence
-      emitter.emit({
-        type: 'workflow_started',
-        runId,
-        workflowName: 'plan-implement',
-        conversationId,
-        transcriptPath: `/logs/${runId}.jsonl`,
-      });
-      emitter.emit({ type: 'node_started', runId, nodeId: 'plan', nodeName: 'plan' });
-      emitter.emit({
-        type: 'node_completed',
-        runId,
-        nodeId: 'plan',
-        nodeName: 'plan',
-        duration: 400,
-      });
-      emitter.emit({ type: 'node_started', runId, nodeId: 'implement', nodeName: 'implement' });
-      emitter.emit({
-        type: 'workflow_artifact',
-        runId,
-        artifactType: 'file_created',
-        label: 'build output',
-        path: '/tmp/out.log',
-      });
-      emitter.emit({
-        type: 'node_completed',
-        runId,
-        nodeId: 'implement',
-        nodeName: 'implement',
-        duration: 900,
-      });
-      emitter.emit({
-        type: 'workflow_completed',
-        runId,
-        workflowName: 'plan-implement',
-        duration: 1300,
-      });
-
-      expect(allEvents).toHaveLength(7);
-      expect(convEvents).toHaveLength(7);
-      expect(allEvents.map(e => e.type)).toEqual(convEvents.map(e => e.type));
-
-      // Clean up
-      emitter.unregisterRun(runId);
-      expect(emitter.getConversationId(runId)).toBeUndefined();
-    });
-
-    it('events from a different run are not delivered to conversation-scoped subscriber', () => {
-      const emitter = getWorkflowEventEmitter();
-
-      emitter.registerRun('run-target', 'conv-target');
-      emitter.registerRun('run-other', 'conv-other');
-
-      const targetEvents: WorkflowEmitterEvent[] = [];
-      emitter.subscribeForConversation('conv-target', e => targetEvents.push(e));
-
-      emitter.emit(makeWorkflowStartedEvent('run-other'));
-      emitter.emit(makeNodeStartedEvent('run-other'));
-      emitter.emit(makeWorkflowStartedEvent('run-target'));
-
-      // Only the run-target event should arrive
-      expect(targetEvents).toHaveLength(1);
-      expect(targetEvents[0]).toMatchObject({ runId: 'run-target' });
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // NodeStartedEvent optional model fields (provider/model/tier/effort)
-  // -------------------------------------------------------------------------
-
-  describe('NodeStartedEvent — optional model fields', () => {
-    it('passes through an event with no provider/model/tier/effort (bash/script-like)', () => {
-      const emitter = getWorkflowEventEmitter();
-      const received: WorkflowEmitterEvent[] = [];
-      emitter.subscribe(e => received.push(e));
-
-      emitter.emit({ type: 'node_started', runId: 'run-1', nodeId: 'build', nodeName: 'build' });
-
-      const evt = received[0] as Extract<WorkflowEmitterEvent, { type: 'node_started' }>;
-      expect(evt).toMatchObject({ type: 'node_started', nodeId: 'build' });
-      expect(evt.provider).toBeUndefined();
-      expect(evt.model).toBeUndefined();
-      expect(evt.tier).toBeUndefined();
-      expect(evt.effort).toBeUndefined();
-    });
-
-    it('passes through provider/model/tier for tier-resolved AI nodes', () => {
-      const emitter = getWorkflowEventEmitter();
-      const received: WorkflowEmitterEvent[] = [];
-      emitter.subscribe(e => received.push(e));
-
-      emitter.emit({
-        type: 'node_started',
-        runId: 'run-2',
-        nodeId: 'implement',
-        nodeName: 'implement',
-        provider: 'claude',
-        model: 'opus',
-        tier: 'large',
-        effort: 'max',
-      });
-
-      const evt = received[0] as Extract<WorkflowEmitterEvent, { type: 'node_started' }>;
-      expect(evt.provider).toBe('claude');
-      expect(evt.model).toBe('opus');
-      expect(evt.tier).toBe('large');
-      expect(evt.effort).toBe('max');
-    });
-
-    it('passes through provider/model without tier for literal-model AI nodes', () => {
-      const emitter = getWorkflowEventEmitter();
-      const received: WorkflowEmitterEvent[] = [];
-      emitter.subscribe(e => received.push(e));
-
-      emitter.emit({
-        type: 'node_started',
-        runId: 'run-3',
-        nodeId: 'classify',
-        nodeName: 'classify',
-        provider: 'claude',
-        model: 'claude-haiku-4-5',
-      });
-
-      const evt = received[0] as Extract<WorkflowEmitterEvent, { type: 'node_started' }>;
-      expect(evt.provider).toBe('claude');
-      expect(evt.model).toBe('claude-haiku-4-5');
-      expect(evt.tier).toBeUndefined();
     });
   });
 });

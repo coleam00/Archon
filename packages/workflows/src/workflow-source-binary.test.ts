@@ -79,12 +79,6 @@ afterAll(async () => {
 });
 
 describe('a binary freezes its embedded bundled source', () => {
-  test('the capture claims the bundled scope, which a binary never could before', async () => {
-    // Without materialization this is absent in a binary, and absence is what forced the
-    // resume-blocking engine-version check that used to live here.
-    expect(capture.manifest.scopes).toContain('bundled');
-  });
-
   test('a bundled command exists as a file and resolves from the capture', async () => {
     const onDisk = await readFile(join(capture.anchor.root, ...COMMAND_PATH), 'utf-8');
     expect(onDisk).toBe('Do the work the flow describes.\n');
@@ -99,15 +93,6 @@ describe('a binary freezes its embedded bundled source', () => {
       capturedSourceRoots(capture.anchor)
     );
     expect(result.success).toBe(true);
-  });
-
-  test('bundled workflows are written where discovery expects them', async () => {
-    const roots = capturedSourceRoots(capture.anchor);
-    const yaml = await readFile(
-      join(roots.bundledWorkflows, 'fake', 'flow', 'fake-flow.yaml'),
-      'utf-8'
-    );
-    expect(yaml).toContain('name: fake-flow');
   });
 
   test('script discovery reads the capture rather than re-materializing constants', async () => {

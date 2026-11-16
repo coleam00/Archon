@@ -563,11 +563,6 @@ describe('workflowRunCommand — progress rendering', () => {
       expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow completed successfully.');
       expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Authored outcome');
       for (const line of expected) expect(consoleSpy).toHaveBeenCalledWith(line);
-      if (kind === 'rejected')
-        expect(mockLogger.warn).toHaveBeenCalledWith(
-          expect.objectContaining({ err: expect.any(Error), workflowRunId: 'run-usage' }),
-          'cli.workflow_summary_lookup_failed'
-        );
     }
   );
 

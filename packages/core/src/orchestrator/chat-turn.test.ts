@@ -526,22 +526,6 @@ describe('chat turn telemetry', () => {
     });
   });
 
-  test.each([
-    [' tool output\n\nFinal answer', 'Final answer'],
-    [' tool output', '🔧 Running tool output'],
-  ])('batch keeps block identity across a warning: %j', async (tail, expected) => {
-    mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'agent_message_chunk', text: '🔧 Running' };
-      yield { type: 'warning', code: 'pi.extension_notify', message: 'Waiting' };
-      yield { type: 'agent_message_chunk', text: tail, continuesPreviousBlock: true };
-    });
-    const platform = makePlatform();
-    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
-    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
-    expect(platform.sendMessage).toHaveBeenNthCalledWith(1, 'conv-1', '⚠️ Waiting');
-    expect(platform.sendMessage).toHaveBeenLastCalledWith('conv-1', expected);
-  });
-
   test('batch truncation preserves a real answer in a warning-split indicator block', async () => {
     const answers = Array.from({ length: 19 }, (_, i) => `Answer ${i + 1}`);
     mockSendQuery.mockImplementationOnce(async function* () {
@@ -604,34 +588,6 @@ describe('chat turn telemetry', () => {
         provider: 'claude',
         outcome: 'completed',
         durationMs: expect.any(Number),
-      })
-    );
-  });
-
-  test('passes provider-reported usage through to the chat turn capture', async () => {
-    mockGetOrCreateConversation.mockReturnValueOnce(
-      Promise.resolve(makeConversation({ codebase_id: null }))
-    );
-    mockSendQuery.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'answer' };
-      yield {
-        type: 'result',
-        sessionId: 'session-1',
-        cost: 0.042,
-        tokens: { input: 1200, output: 340 },
-      };
-    });
-
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
-
-    expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
-    expect(mockCaptureChatTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        outcome: 'completed',
-        costUsd: 0.042,
-        tokensIn: 1200,
-        tokensOut: 340,
       })
     );
   });
@@ -852,14 +808,6 @@ describe('message persistence for non-web platforms', () => {
     }
   }
 
-  test('does NOT call addMessage for web platform (web adapter owns persistence)', async () => {
-    const platform = makePlatform(); // makePlatform defaults getPlatformType to 'web'
-
-    await handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator });
-
-    expect(mockAddMessage).not.toHaveBeenCalled();
-  });
-
   test('platform delivery is not blocked when persistence rejects', async () => {
     const platform: IPlatformAdapter = {
       ...makePlatform(),
@@ -869,10 +817,11 @@ describe('message persistence for non-web platforms', () => {
     };
     mockAddMessage.mockImplementation(() => Promise.reject(new Error('db down')));
 
-    await expect(
-      handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator })
-    ).resolves.toBeUndefined();
-    expect(platform.sendMessage).toHaveBeenCalled();
+    await handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator });
+    // The reply itself arrives, not an error reply.
+    expect((platform.sendMessage as ReturnType<typeof mock>).mock.calls).toEqual([
+      ['conv-1', 'hello back'],
+    ]);
   });
 
   test('platform delivery is not blocked when persistence rejects (stream mode)', async () => {
@@ -884,12 +833,12 @@ describe('message persistence for non-web platforms', () => {
     };
     mockAddMessage.mockImplementation(() => Promise.reject(new Error('db down')));
 
-    await expect(
-      handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator })
-    ).resolves.toBeUndefined();
+    await handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator });
     // Stream mode delivers chunks during the sendQuery loop — a DB failure must
-    // not stop delivery, so the reply must still have reached the platform.
-    expect(platform.sendMessage).toHaveBeenCalled();
+    // not stop delivery, so the reply, not an error reply, reaches the platform.
+    expect((platform.sendMessage as ReturnType<typeof mock>).mock.calls).toEqual([
+      ['conv-1', 'hello back'],
+    ]);
   });
 
   test('passes userId to addMessage when context provides it', async () => {

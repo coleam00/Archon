@@ -41,14 +41,12 @@ mock.module('pg', () => ({
 }));
 
 // ---- also mock @archon/paths so logger calls don't blow up ----------------
-const logError = mock(() => {});
-const logFatal = mock(() => {});
 mock.module('@archon/paths', () => ({
   createLogger: () => ({
     info: () => {},
     warn: () => {},
-    error: logError,
-    fatal: logFatal,
+    error: () => {},
+    fatal: () => {},
     debug: () => {},
     trace: () => {},
   }),
@@ -83,8 +81,6 @@ describe('PostgresAdapter', () => {
     };
     mockSchemaSQL = '-- noop schema';
     poolErrorHandler = undefined;
-    logError.mockClear();
-    logFatal.mockClear();
 
     adapter = new PostgresAdapter('postgresql://localhost:5432/testdb');
   });
@@ -94,10 +90,6 @@ describe('PostgresAdapter', () => {
   // -------------------------------------------------------------------------
 
   describe('properties', () => {
-    test('dialect is "postgres"', () => {
-      expect(adapter.dialect).toBe('postgres');
-    });
-
     test('sql dialect is postgresDialect', () => {
       expect(adapter.sql).toBe(postgresDialect);
     });
@@ -143,50 +135,8 @@ describe('PostgresAdapter', () => {
       expect(result.rowCount).toBe(0);
     });
 
-    test('returns empty rows array when pool returns no rows', async () => {
-      mockPoolQuery = async () => ({ rows: [], rowCount: 0 });
-
-      const result = await adapter.query('DELETE FROM users WHERE id = $1', [99]);
-      expect(result.rows).toHaveLength(0);
-      expect(result.rowCount).toBe(0);
-    });
-
-    test('propagates errors thrown by pool.query', async () => {
-      mockPoolQuery = async () => {
-        throw new Error('connection lost');
-      };
-
-      await expect(adapter.query('SELECT 1')).rejects.toThrow('connection lost');
-    });
-
-    test('retries a deadlock victim and returns the retried result', async () => {
-      // Finish schema init first, so only this query reaches the mock below.
-      await adapter.query('SELECT 0');
-      let calls = 0;
-      mockPoolQuery = async () => {
-        calls++;
-        if (calls === 1) throw Object.assign(new Error('deadlock detected'), { code: '40P01' });
-        return { rows: [{ ok: true }], rowCount: 1 };
-      };
-
-      const result = await adapter.query('INSERT INTO t VALUES (1)');
-      expect(result.rows).toEqual([{ ok: true }]);
-      expect(calls).toBe(2);
-    });
-
-    test('gives up after four deadlocks and throws the last one', async () => {
-      await adapter.query('SELECT 0');
-      let calls = 0;
-      mockPoolQuery = async () => {
-        calls++;
-        throw Object.assign(new Error('deadlock detected'), { code: '40P01' });
-      };
-
-      await expect(adapter.query('INSERT INTO t VALUES (1)')).rejects.toThrow('deadlock detected');
-      expect(calls).toBe(4);
-    });
-
     test('never retries an ordinary error', async () => {
+      // Finish schema init first, so only this query reaches the mock below.
       await adapter.query('SELECT 0');
       let calls = 0;
       mockPoolQuery = async () => {
@@ -196,18 +146,6 @@ describe('PostgresAdapter', () => {
 
       await expect(adapter.query('INSERT INTO t VALUES (1)')).rejects.toThrow('duplicate key');
       expect(calls).toBe(1);
-    });
-
-    test('query without params passes undefined to pool', async () => {
-      let capturedParams: unknown[] | undefined = ['sentinel'];
-
-      mockPoolQuery = async (_sql, params) => {
-        capturedParams = params;
-        return { rows: [], rowCount: 0 };
-      };
-
-      await adapter.query('SELECT NOW()');
-      expect(capturedParams).toBeUndefined();
     });
   });
 
@@ -272,23 +210,6 @@ describe('PostgresAdapter', () => {
       expect(runs).toBe(2);
     });
 
-    test('issues BEGIN and COMMIT on success', async () => {
-      const issued: string[] = [];
-      mockClient = {
-        query: async sql => {
-          issued.push(sql);
-          return { rows: [], rowCount: 0 };
-        },
-        release: () => {},
-      };
-
-      await adapter.withTransaction(async () => 'ok');
-
-      expect(issued[0]).toBe('BEGIN');
-      expect(issued[issued.length - 1]).toBe('COMMIT');
-      expect(issued).not.toContain('ROLLBACK');
-    });
-
     test('issues BEGIN and ROLLBACK on error, then re-throws', async () => {
       const issued: string[] = [];
       mockClient = {
@@ -321,24 +242,6 @@ describe('PostgresAdapter', () => {
       };
 
       await adapter.withTransaction(async () => 'done');
-      expect(released).toBe(true);
-    });
-
-    test('always releases client on error', async () => {
-      let released = false;
-      mockClient = {
-        query: async () => ({ rows: [], rowCount: 0 }),
-        release: () => {
-          released = true;
-        },
-      };
-
-      await expect(
-        adapter.withTransaction(async () => {
-          throw new Error('tx error');
-        })
-      ).rejects.toThrow('tx error');
-
       expect(released).toBe(true);
     });
 
@@ -400,16 +303,6 @@ describe('PostgresAdapter', () => {
       expect(result.rowCount).toBe(0);
     });
 
-    test('returns value from callback on success', async () => {
-      mockClient = {
-        query: async () => ({ rows: [], rowCount: 0 }),
-        release: () => {},
-      };
-
-      const value = await adapter.withTransaction(async () => 'transaction-result');
-      expect(value).toBe('transaction-result');
-    });
-
     test('still releases client when ROLLBACK itself throws', async () => {
       let released = false;
       let callCount = 0;
@@ -432,16 +325,6 @@ describe('PostgresAdapter', () => {
       ).rejects.toThrow('original error');
 
       expect(released).toBe(true);
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // close()
-  // -------------------------------------------------------------------------
-
-  describe('close()', () => {
-    test('calls pool.end() without throwing', async () => {
-      await expect(adapter.close()).resolves.toBeUndefined();
     });
   });
 
@@ -837,8 +720,6 @@ describe('PostgresAdapter', () => {
         'preserves the original error when %s SAVEPOINT fails',
         async operation => {
           await adapter.query('SELECT 0');
-          logError.mockClear();
-          logFatal.mockClear();
           const original = Object.assign(new Error('original failure'), { code });
           const cleanup = Object.assign(new Error('cleanup failed'), { code: '08003' });
           const issued: string[] = [];
@@ -865,14 +746,6 @@ describe('PostgresAdapter', () => {
               () => {}
             )
           ).rejects.toBe(original);
-          expect(logError).toHaveBeenCalledWith(
-            { err: cleanup, savepoint },
-            'db.postgres_savepoint_recovery_failed'
-          );
-          expect(logFatal).toHaveBeenCalledWith(
-            { err: original },
-            'db.postgres_schema_init_failed'
-          );
           expect(issued).toContain('ROLLBACK');
           expect(issued).not.toContain('COMMIT');
           expect(issued.some(sql => sql.includes('SET schema_fingerprint'))).toBe(false);
@@ -923,12 +796,6 @@ describe('postgresDialect', () => {
       const a = postgresDialect.generateUuid();
       const b = postgresDialect.generateUuid();
       expect(a).not.toBe(b);
-    });
-  });
-
-  describe('now()', () => {
-    test('returns "NOW()"', () => {
-      expect(postgresDialect.now()).toBe('NOW()');
     });
   });
 

@@ -284,7 +284,7 @@ export function createMockStore(): MockWorkflowStore {
     findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
-    listItemRuns: mock<IWorkflowStore['listItemRuns']>(async () => {
+    getItemRuns: mock<IWorkflowStore['getItemRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
     getItem: mock<IWorkflowStore['getItem']>(async () => {
@@ -320,9 +320,6 @@ export function createMockStore(): MockWorkflowStore {
     getRunAncestry: mock<IWorkflowStore['getRunAncestry']>(async _runId => []),
     getActiveWorkflowRunByPath: mock<IWorkflowStore['getActiveWorkflowRunByPath']>(
       async (_workingPath, _self) => null
-    ),
-    findResumableRun: mock<IWorkflowStore['findResumableRun']>(
-      async (_workflowName, _workingPath) => null
     ),
     resumeWorkflowRun: mock<IWorkflowStore['resumeWorkflowRun']>(async _id => mockWorkflowRun()),
     recoverCancelledFanOutRun: mock<IWorkflowStore['recoverCancelledFanOutRun']>(async _id =>

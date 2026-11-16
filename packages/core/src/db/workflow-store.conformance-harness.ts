@@ -451,20 +451,35 @@ export function describeSqlStatusReadConformance(
       expect((await start('c'))?.status).toBe('queued');
       await run(CONFORMANCE_CODEBASE_ID, 'b');
       await run(otherProject, 'a');
+      // A `workflow:` child of an item run carries no item and is left to `workflow get`.
+      const child = await store.createWorkflowRun({
+        workflow_name: 'item-child',
+        user_message: '',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+        parent_run_id: started.runId,
+      });
       expect((await run(CONFORMANCE_CODEBASE_ID)).item_id).toBeNull();
 
       const project = projectKeyForCodebase(
         { name: 'conformance', default_cwd: '/conformance' },
         ''
       );
-      const listed = await store.listItemRuns(project, 'a');
-      expect(listed.map(row => row.id)).toEqual([started.runId, second.id]);
-      expect(await store.getItem(second.item_id ?? '')).toMatchObject({
-        projectKey: project,
-        key: 'a',
-      });
-      expect(new Set(listed.map(row => row.item_id)).size).toBe(1);
-      expect(await store.listItemRuns(project, 'c')).toEqual([]);
+      const listed = await store.getItemRuns(project, 'a');
+      expect(listed?.item).toMatchObject({ projectKey: project, key: 'a' });
+      expect(listed?.runs.map(row => ('id' in row ? row.id : row))).toEqual([
+        started.runId,
+        second.id,
+      ]);
+      expect(listed?.descendantIds).toEqual([child.id]);
+      expect(await store.getItem(second.item_id ?? '')).toEqual(listed?.item ?? null);
+      expect(listed?.runs.every(row => 'item_id' in row && row.item_id === listed.item.id)).toBe(
+        true
+      );
+      // An item with no run yet and a key nothing named read apart.
+      const waiting = await store.getItemRuns(project, 'c');
+      expect(waiting?.item).toMatchObject({ projectKey: project, key: 'c' });
+      expect(waiting?.runs).toEqual([]);
+      expect(await store.getItemRuns(project, 'never-named')).toBeNull();
       const items = await db.query<{ item: string }>(
         "SELECT key || ' in ' || project_key AS item FROM remote_agent_items"
       );
@@ -475,6 +490,47 @@ export function describeSqlStatusReadConformance(
         `c in ${project}`,
       ]);
       await expect(run(undefined, 'a')).rejects.toThrow();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('an item read finds every run below the item, and reports the ones it cannot read', async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      const create = (fields: { item_key?: string; parent_run_id?: string }) =>
+        store.createWorkflowRun({
+          workflow_name: 'item',
+          user_message: '',
+          codebase_id: CONFORMANCE_CODEBASE_ID,
+          ...fields,
+        });
+      const root = await create({ item_key: 'tree' });
+      const broken = await create({ item_key: 'tree' });
+      await harness.backdate(root.id, { started_at: new Date('2026-01-01T00:00:00Z') });
+      await harness.backdate(broken.id, { started_at: new Date('2026-01-02T00:00:00Z') });
+      const child = await create({ parent_run_id: root.id });
+      const sibling = await create({ parent_run_id: root.id });
+      const grandchild = await create({ parent_run_id: child.id });
+      // An origin that does not normalize, on one of the item's runs and on a child.
+      for (const id of [broken.id, child.id])
+        await db.query('UPDATE remote_agent_workflow_runs SET origin = $1 WHERE id = $2', [
+          '[]',
+          id,
+        ]);
+      const project = projectKeyForCodebase(
+        { name: 'conformance', default_cwd: '/conformance' },
+        ''
+      );
+      const read = await store.getItemRuns(project, 'tree');
+      expect(read?.runs.map(row => ('type' in row ? row : row.id))).toEqual([
+        root.id,
+        { type: 'degraded', reason: 'run_unreadable', runId: broken.id },
+      ]);
+      expect([...(read?.descendantIds ?? [])].sort()).toEqual(
+        [child.id, sibling.id, grandchild.id].sort()
+      );
     } finally {
       await harness.close();
     }

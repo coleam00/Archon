@@ -450,9 +450,6 @@ mock.module('@archon/isolation', () => ({
     providerType: 'worktree',
     create: mockIsolationCreate,
     destroy: mockIsolationDestroy,
-    get: mock(() => Promise.resolve(null)),
-    list: mock(() => Promise.resolve([])),
-    adopt: mock(() => Promise.resolve(null)),
     healthCheck: mock(() => Promise.resolve(true)),
   }),
   // Loaded transitively via the orchestrator → child-isolation-resolver (PR-A).

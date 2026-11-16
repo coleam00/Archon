@@ -3,7 +3,7 @@
  * mapping parsed argv onto the workflow command module.
  */
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import { isContinueSubcommand, rejectModelOnContinue } from '../dispatch-guards';
+import { isContinueSubcommand, rejectRunFlagsOnContinue } from '../dispatch-guards';
 import { writeJsonLine } from '../utils/stdout';
 import { type CliRouteContext, fail } from './context';
 import { loadRoute, usesDatabaseStore } from './route-loader';
@@ -93,9 +93,9 @@ export async function runWorkflowTypes({
  */
 export async function prepareWorkflowRoute(ctx: CliRouteContext): Promise<WorkflowRoute | number> {
   const { subcommand, values, json } = ctx;
-  const modelOnContinue = rejectModelOnContinue(subcommand, values.model);
-  if (modelOnContinue) {
-    return await fail(json, modelOnContinue);
+  const runFlagOnContinue = rejectRunFlagsOnContinue(subcommand, values);
+  if (runFlagOnContinue) {
+    return await fail(json, runFlagOnContinue);
   }
   if (subcommand === 'answer' && values.detach) {
     return await fail(json, 'Error: --detach cannot be used with workflow answer.');

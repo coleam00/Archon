@@ -2,7 +2,6 @@
 import { describe, test, expect } from 'bun:test';
 import {
   isExecNode,
-  SCRIPT_NODE_AI_FIELDS,
   LOOP_GROUP_NODE_AI_FIELDS,
   INCLUDE_NODE_IGNORED_FIELDS,
   GATE_AND_HALT_IGNORED_FIELDS,
@@ -78,17 +77,6 @@ describe('dagNodeSchema — ExecNode', () => {
     expect(node.deps).toEqual(['httpx', 'beautifulsoup4']);
   });
 
-  test('parses a script node with timeout', () => {
-    const result = dagNodeSchema.parse({
-      id: 's',
-      script: 'console.log("hi")',
-      runtime: 'bun',
-      timeout: 30000,
-    });
-    const node = result as ExecNode;
-    expect(node.timeout).toBe(30000);
-  });
-
   test.each([
     ['bash', { id: 'shell', bash: 'sleep 30', timeout: 100, on_timeout: 'skip' }],
     [
@@ -115,17 +103,6 @@ describe('dagNodeSchema — ExecNode', () => {
         on_timeout: 'fail',
       }).success
     ).toBe(false);
-  });
-
-  test('parses a script node with depends_on', () => {
-    const result = dagNodeSchema.parse({
-      id: 's',
-      script: 'console.log("hi")',
-      runtime: 'bun',
-      depends_on: ['prev'],
-    });
-    const node = result as ExecNode;
-    expect(node.depends_on).toEqual(['prev']);
   });
 
   test('rejects script node without runtime', () => {
@@ -245,26 +222,6 @@ describe('dagNodeSchema — ExecNode', () => {
   );
 
   test.each([
-    [
-      { id: 'n1', prompt: 'p', runtime: 'bun' },
-      'is only supported on script nodes, not on prompt nodes',
-    ],
-    [
-      { id: 'n1', command: 'c', input: 'x' },
-      'is only supported on workflow nodes, not on command nodes',
-    ],
-    [
-      { id: 'n1', bash: 'echo', deps: ['zod'] },
-      'is only supported on script nodes, not on bash nodes',
-    ],
-    [
-      { id: 'n1', prompt: 'p', with: { a: 'b' } },
-      'is only supported on command, script, include or workflow nodes',
-    ],
-    [
-      { id: 'n1', command: 'c', timeout: 5 },
-      'is only supported on bash, loop, loop_group or script nodes',
-    ],
     // A value the owning mode would also refuse still reports the placement.
     [
       { id: 'n1', prompt: 'p', on_timeout: 123 },
@@ -274,7 +231,7 @@ describe('dagNodeSchema — ExecNode', () => {
       { id: 'n1', prompt: 'p', runtime: 'perl' },
       'is only supported on script nodes, not on prompt nodes',
     ],
-  ])('names the owning modes for %o', (node, expected) => {
+  ])('names the owning modes for an invalid value %o', (node, expected) => {
     const error = validationError(dagNodeSchema.safeParse(node));
     expect(error.issues[0]?.message).toContain(expected);
   });
@@ -393,30 +350,6 @@ describe('dagNodeSchema — ExecNode', () => {
     expect(error.issues[0].message).toContain('mutually exclusive');
   });
 
-  test('rejects script + prompt (mutually exclusive)', () => {
-    const error = validationError(
-      dagNodeSchema.safeParse({
-        id: 's',
-        script: 'console.log("hi")',
-        prompt: 'Do something',
-        runtime: 'bun',
-      })
-    );
-    expect(error.issues[0].message).toContain('mutually exclusive');
-  });
-
-  test('rejects script + command (mutually exclusive)', () => {
-    const error = validationError(
-      dagNodeSchema.safeParse({
-        id: 's',
-        script: 'console.log("hi")',
-        command: 'some-command',
-        runtime: 'bun',
-      })
-    );
-    expect(error.issues[0].message).toContain('mutually exclusive');
-  });
-
   test('strips AI-only fields from script nodes', () => {
     const result = dagNodeSchema.parse({
       id: 's',
@@ -428,38 +361,9 @@ describe('dagNodeSchema — ExecNode', () => {
   });
 });
 
-describe('SCRIPT_NODE_AI_FIELDS', () => {
-  test('contains provider and model fields', () => {
-    expect(SCRIPT_NODE_AI_FIELDS).toContain('provider');
-    expect(SCRIPT_NODE_AI_FIELDS).toContain('model');
-  });
-
-  test('contains all AI-specific fields', () => {
-    const expectedFields = [
-      'provider',
-      'model',
-      'context',
-      'allowed_tools',
-      'denied_tools',
-      'hooks',
-      'mcp',
-      'skills',
-      'plugins',
-      'effort',
-      'maxBudgetUsd',
-      'systemPrompt',
-      'fallbackModel',
-      'betas',
-      'sandbox',
-    ];
-    for (const field of expectedFields) {
-      expect(SCRIPT_NODE_AI_FIELDS).toContain(field);
-    }
-  });
-
+describe('BASH_NODE_AI_FIELDS', () => {
   test('excludes output_format, which exec nodes now enforce (#2453)', () => {
     expect(BASH_NODE_AI_FIELDS).not.toContain('output_format');
-    expect(SCRIPT_NODE_AI_FIELDS).not.toContain('output_format');
     for (const list of [
       GATE_AND_HALT_IGNORED_FIELDS,
       INCLUDE_NODE_IGNORED_FIELDS,

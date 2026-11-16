@@ -87,7 +87,7 @@ describe('cleanupContainerEnvironments', () => {
   });
 
   // The reaper reads the same lock the worktree sweeps use, so a failed run's
-  // container survives for `--resume` exactly as a paused one does.
+  // container survives for `workflow resume` exactly as a paused one does.
   test.each(['paused', 'failed'])('never reaps the container of a %s run', async status => {
     mockGetLiveRunOwningEnv.mockResolvedValue({ id: 'run-1', status });
     const report = await cleanupContainerEnvironments(7);
@@ -645,15 +645,6 @@ describe('runScheduledCleanup', () => {
     }
   );
 
-  test('still stale-sweeps an environment git confirms is unmerged', async () => {
-    scheduledSweepFinds(sweptWorktreeEnv('stale-unmerged', { created_at: daysAgo(30) }));
-    mockWorktreeExists.mockResolvedValue(true);
-
-    const report = await runScheduledCleanup();
-
-    expect(report.removed).toContain('env-stale-unmerged (stale)');
-  });
-
   test.each([
     [undefined, 'origin'],
     ['   ', 'origin'],
@@ -727,26 +718,28 @@ describe('cleanup environment configuration', () => {
     }
   });
 
-  for (const name of variables) {
-    test.each([
-      'abc',
-      '0',
-      '-1',
-      '1.5',
-      '',
-      ' ',
-      '12days',
-      'Infinity',
-      '9007199254740993',
-      '0.99999999999999999',
-      '1.0000000000000001',
-    ])(`${name} rejects %j during module initialization`, async value => {
-      process.env[name] = value;
-      await expect(loadCleanupService()).rejects.toThrow(
-        `${name} must be a positive integer; received ${JSON.stringify(value)}`
-      );
-    });
-  }
+  // The three variables share one parser: the full table runs against one of them,
+  // and each variable keeps one case proving it goes through that parser.
+  test.each([
+    ['STALE_THRESHOLD_DAYS', 'abc'],
+    ['STALE_THRESHOLD_DAYS', '0'],
+    ['STALE_THRESHOLD_DAYS', '-1'],
+    ['STALE_THRESHOLD_DAYS', '1.5'],
+    ['STALE_THRESHOLD_DAYS', ''],
+    ['STALE_THRESHOLD_DAYS', ' '],
+    ['STALE_THRESHOLD_DAYS', '12days'],
+    ['STALE_THRESHOLD_DAYS', 'Infinity'],
+    ['STALE_THRESHOLD_DAYS', '9007199254740993'],
+    ['STALE_THRESHOLD_DAYS', '0.99999999999999999'],
+    ['STALE_THRESHOLD_DAYS', '1.0000000000000001'],
+    ['CLEANUP_INTERVAL_HOURS', 'abc'],
+    ['SESSION_RETENTION_DAYS', 'abc'],
+  ] as const)('%s rejects %j during module initialization', async (name, value) => {
+    process.env[name] = value;
+    await expect(loadCleanupService()).rejects.toThrow(
+      `${name} must be a positive integer; received ${JSON.stringify(value)}`
+    );
+  });
 
   test('rejects an interval beyond the runtime timer limit at startup', async () => {
     process.env.CLEANUP_INTERVAL_HOURS = '597';

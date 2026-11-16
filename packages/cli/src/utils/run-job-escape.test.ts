@@ -481,7 +481,6 @@ nodes:
       expect(isDetachedLaunch(['workflow', action, 'run-id'])).toBe(false);
       expect(isDetachedLaunch(['workflow', action, 'run-id', '--', '--detach'])).toBe(false);
     }
-    expect(isDetachedLaunch(['workflow', 'run', 'build', '--resume', '--detach'])).toBe(true);
     for (const decision of ['approve', 'reject', 'custom']) {
       expect(isDetachedLaunch(['workflow', 'respond', 'run-id', decision, '--detach'])).toBe(true);
     }
