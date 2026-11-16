@@ -1056,8 +1056,8 @@ There is no default timeout. Pass `--timeout <seconds>` when the host needs an u
 watches every run on the item that has not ended at call time, plus every run that starts
 on the item while it waits, and returns when the first of them reports something, as
 `workflow wait <run-id>` would for that run. Runs that had already ended are history and
-do not end the wait, unless one leaves that state while waiting, as a failed run resumed
-in place does; it is then watched too. Each result names its run: one line per run, or
+do not end the wait, unless one is resumed in place while waiting; it is then watched
+too, and reported even when it has already ended again by the time the wait looks. Each result names its run: one line per run, or
 under `--json` one `{ "ok", "action": "wait", "item", "results": [...] }` document whose
 `results` hold exactly what `workflow wait <run-id> --json` prints for each run, and whose
 `ok` is false when the exit status is `1`. Runs that reported together are all listed. An

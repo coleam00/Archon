@@ -122,6 +122,17 @@ describe('waitForItemAttention', () => {
     expect(results.map(r => [r.runId, r.result.kind])).toEqual([['old', 'attention']]);
   });
 
+  test('a failed run resumed and failed again between two re-reads is reported', async () => {
+    putRun('old', { status: 'failed', completed_at: new Date('2026-11-16T09:00:00.000Z') });
+    putRun('busy');
+    const waiting = waitOnItem();
+    await Bun.sleep(20);
+    putRun('old', { status: 'failed', completed_at: new Date('2026-11-16T10:05:00.000Z') });
+
+    const results = await waiting;
+    expect(results.map(r => [r.runId, r.result.kind])).toEqual([['old', 'attention']]);
+  });
+
   test('runs that end together are all reported, in start order', async () => {
     const a = putRun('a');
     const b = putRun('b');

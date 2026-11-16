@@ -39,9 +39,10 @@ export interface ItemRunWait {
 /**
  * Watch every run on the item that is not terminal in `initial` (the item's runs at call
  * time, start order), and every run `reread` shows that is not yet watched: one that
- * first appears, in whatever state, or a run that was terminal at call time and is now in
- * another state (a failed run resumed in place). A run that stays in the terminal state
- * it had at call time is history and never ends the wait.
+ * first appears, in whatever state, or a run that was terminal at call time and has since
+ * left that ending (a failed run resumed in place, whether it is still running or has
+ * ended again). A run that keeps the ending it had at call time is history and never ends
+ * the wait.
  *
  * The first run that needs attention, ends, loses its owner or disappears stops the
  * others. Every result is returned, in the order the runs were first watched, so runs that
@@ -57,14 +58,15 @@ export async function waitForItemAttention(
   const deadlineAt = opts.deadlineMs === undefined ? undefined : Date.now() + opts.deadlineMs;
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_ATTENTION_POLL_INTERVAL_MS;
   const stop = new AbortController();
-  // The status each run ended with before the call; the rows are read again, not kept.
-  const history = new Map<string, WorkflowRunStatus>();
+  // How each run had ended before the call. Resume rewrites the same row, so a run that
+  // fails again keeps its status; only its `completed_at` shows it ended again.
+  const history = new Map<string, string>();
   for (const run of initial)
-    if (TERMINAL_WORKFLOW_STATUSES.includes(run.status)) history.set(run.id, run.status);
+    if (TERMINAL_WORKFLOW_STATUSES.includes(run.status)) history.set(run.id, endingOf(run));
   const watched = new Set<string>();
   const watches: Promise<Watched>[] = [];
   const watchUnlessHistory = (run: WorkflowRun): void => {
-    if (watched.has(run.id) || history.get(run.id) === run.status) return;
+    if (watched.has(run.id) || history.get(run.id) === endingOf(run)) return;
     watched.add(run.id);
     watches.push(watchRun(store, run.id, stop, { ...opts, pollIntervalMs }, deadlineAt));
   };
@@ -82,6 +84,10 @@ export async function waitForItemAttention(
     return reported(settled);
   }
   return reported(await Promise.all(watches));
+}
+
+function endingOf(run: WorkflowRun): string {
+  return `${run.status}@${run.completed_at?.getTime() ?? ''}`;
 }
 
 /** A watch settles to a value, never a rejection, so no failure goes unhandled meanwhile. */
