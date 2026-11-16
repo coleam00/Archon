@@ -277,7 +277,7 @@ The process that ends a run drains only its own host: a `trigger execute --host 
 
 `archon workflow runs --item <key> --json` lists the item's runs in the order they started, each with a `cause`: `{"kind": "run_ended", "runId"}` for a start a run's end caused, `{"kind": "run_fired", "runId", "node"}` for one a node fired, `{"kind": "receipt", "receiptId", "sourceInstanceId"}` for any other trigger, or `null` for a start by hand. The receipt records the ended run as its `sourceActor` (`{"source": "archon-run-ended", "id": <run id>, "display": <outcome>}`) and uses the ended run's ID as its delivery ID. Start times on SQLite have one-second resolution, so runs that start in the same second are listed in ID order.
 
-Run-ended bindings need the database store, as items do.
+Run-ended bindings need the database store, as items do. With `store: files`, `archon trigger check` refuses any run-ended file, and a run of a workflow a run-ended binding names is refused before it starts, so the binding never sits inert.
 
 ## Choose a resource, capacity, and overlap policy
 

@@ -36,7 +36,11 @@ import { getAgentProvider } from '../services/provider-admission';
 import type { WorktreeOwnershipReaders } from '../services/cleanup/run-worktree';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger, getArchonHome } from '@archon/paths';
-import { createRunEndedPreflight, createRunEndedStarts } from './run-ended';
+import {
+  createFileStoreRunEndedRefusal,
+  createRunEndedPreflight,
+  createRunEndedStarts,
+} from './run-ended';
 import { registeredProjectKeyForPath } from '../services/codebase-checkout-resolver';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
 import { createGitHubAppAuthProvider } from '../github-auth/auth';
@@ -323,11 +327,14 @@ export function createWorkflowDeps(
     store,
     credentialStore,
     runEndedStarts: createRunEndedStarts(runEnded),
-    checkRunEndedBindings: createRunEndedPreflight({
-      ...runEnded,
-      loadConfig: loadMergedConfig,
-      providers: providerRegistry,
-    }),
+    checkRunEndedBindings:
+      credentialStore === 'files'
+        ? createFileStoreRunEndedRefusal(runEnded.triggersDirectory)
+        : createRunEndedPreflight({
+            ...runEnded,
+            loadConfig: loadMergedConfig,
+            providers: providerRegistry,
+          }),
     releaseRunResources: createRunResourceRelease(store),
     providers: providerRegistry,
     getAgentProvider,

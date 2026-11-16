@@ -507,7 +507,13 @@ export function triggersDirectory(): string {
  */
 async function checkTriggers(host: WorkflowHost): Promise<void> {
   const checked = [];
-  for (const entry of await readRunEndedBindings(triggersDirectory())) {
+  const bindings = await readRunEndedBindings(triggersDirectory());
+  // The file store has no items, so a run-ended binding can never start anything there.
+  if (host.deps.credentialStore === 'files' && bindings.length > 0)
+    throw new FileStoreUnsupportedError(
+      `Run-ended triggers (${bindings.map(entry => entry.file).join(', ')})`
+    );
+  for (const entry of bindings) {
     checked.push({
       file: entry.file,
       sourceInstanceId: entry.sourceInstanceId,
