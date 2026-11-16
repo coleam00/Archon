@@ -60,6 +60,22 @@ skipOnWindows('a DATABASE_URL with no host names no server on its own', () => {
   expect(r.out).toContain('DATABASE_URL names no host');
 });
 
+skipOnWindows('a DATABASE_URL that repeats or empties a server parameter is refused', () => {
+  // libpq takes the last value of a repeated parameter, and an empty host means
+  // the default socket, overriding both the authority and PGHOST.
+  for (const conn of [
+    { DATABASE_URL: 'postgres://named.invalid/app?host=' },
+    { DATABASE_URL: 'postgres://named.invalid/app?host=named.invalid&host=' },
+    { DATABASE_URL: 'postgres://named.invalid/app?hostaddr=' },
+    { DATABASE_URL: 'postgres:///app?host=', PGHOST: '/scratch/sock' },
+  ]) {
+    const r = run(conn);
+    expect(r.status, conn.DATABASE_URL).toBe(1);
+    expect(r.calls, conn.DATABASE_URL).toEqual([]);
+    expect(r.out).toContain('repeats or empties');
+  }
+});
+
 skipOnWindows('a named server is the one every psql call targets', () => {
   const byHost = run({ PGHOST: '/scratch/sock', PGUSER: 'postgres' });
   expect(byHost.calls.length).toBeGreaterThan(0);
@@ -69,6 +85,13 @@ skipOnWindows('a named server is the one every psql call targets', () => {
   expect(byUrl.calls.length).toBeGreaterThan(0);
   expect(new Set(byUrl.calls)).toEqual(
     new Set(['PGHOST= -d postgres://u@scratch.example:5433/postgres?sslmode=disable'])
+  );
+
+  // A host query parameter names the server, and a dbname parameter cannot
+  // move the run off the scratch database the script picked.
+  const byParam = run({ DATABASE_URL: 'postgres:///app?host=/scratch/sock&dbname=real' });
+  expect(new Set(byParam.calls)).toEqual(
+    new Set(['PGHOST= -d postgres:///postgres?host=%2Fscratch%2Fsock'])
   );
 
   // A hostless URL takes its server from PGHOST, so with PGHOST set it runs.

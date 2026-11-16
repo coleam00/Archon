@@ -24,8 +24,10 @@
  * Connection: the check creates and drops databases, so it only touches a server
  * someone named for it, and exits 1 before any psql call otherwise. Name one
  * with PGHOST, PGHOSTADDR, PGSERVICE, or a DATABASE_URL that carries a host
- * (in the authority, or as a host/hostaddr/service parameter). A DATABASE_URL
- * keeps its options; its database name is replaced. PGPORT, PGUSER, PGPASSWORD
+ * (in the authority, or as a host/hostaddr/service parameter). A repeated or
+ * empty host/hostaddr/service parameter is refused: libpq takes the last value,
+ * and an empty one means the default socket. A DATABASE_URL keeps its options;
+ * its database name is replaced. PGPORT, PGUSER, PGPASSWORD
  * and a hostless DATABASE_URL refine a named server but do not name one: on
  * their own psql reaches the default local socket, which is whatever
  * PostgreSQL happens to run on the machine. The package script passes
@@ -61,7 +63,8 @@ function git(...args: string[]): { ok: boolean; stdout: string } {
 
 /**
  * Connection target for one database. With DATABASE_URL set, the URI is passed
- * through with only its database name replaced, so `?sslmode=…` and the rest of
+ * through with only its database name replaced (path and any `dbname`
+ * parameter), so `?sslmode=…` and the rest of
  * the query string survive; otherwise psql reads the standard PG* env vars.
  *
  * One documented libpq shape is not supported: a comma-separated multi-host URI
@@ -81,6 +84,9 @@ function connectionFor(db: string): string {
     );
   }
   u.pathname = `/${db}`;
+  // A `dbname` parameter overrides the path in libpq, which would apply the
+  // schema to a database this script did not create.
+  u.searchParams.delete('dbname');
   return u.toString();
 }
 
@@ -214,26 +220,42 @@ function unnamedServerError(): string | undefined {
     'This check creates and drops databases, so it only runs on a scratch server you name:\n' +
     '  PGHOST=<host or socket dir> PGUSER=<user> bun run check:schema-upgrades\n' +
     '  DATABASE_URL=postgres://<user>@<host>:<port>/postgres bun run check:schema-upgrades';
-  if (url && !envNamesServer && !urlNamesServer(url)) {
+  const target = url ? urlTarget(url) : undefined;
+  if (target === 'cleared') {
+    return (
+      'DATABASE_URL repeats or empties a host, hostaddr or service parameter. libpq uses the\n' +
+      'last value, and an empty one means the default local socket, even with PGHOST set.\n' +
+      fix
+    );
+  }
+  if (target === 'hostless' && !envNamesServer) {
     return `DATABASE_URL names no host, so psql would use the default local socket.\n${fix}`;
   }
   if (!url && !envNamesServer) return `No PostgreSQL server was named.\n${fix}`;
   return undefined;
 }
 
+const URL_SERVER_PARAMS = ['host', 'hostaddr', 'service'];
+
 /**
- * Whether a DATABASE_URL picks a server itself: a host in the authority, or a
- * host/hostaddr/service query parameter. A URI `URL` cannot parse counts as
- * naming one; connectionFor() reports it on first use, as before.
+ * Which server a DATABASE_URL picks, read the way libpq reads it: query
+ * parameters override the authority and the environment, and a repeated one
+ * takes its last value. `named` is a host in the authority or a non-empty
+ * server parameter; `cleared` is a repeated or empty server parameter, which
+ * is refused outright because it can override every other setting;
+ * `hostless` leaves the choice to PGHOST and friends. A URI `URL` cannot parse
+ * counts as named; connectionFor() refuses it before any psql call.
  */
-function urlNamesServer(url: string): boolean {
+function urlTarget(url: string): 'named' | 'cleared' | 'hostless' {
   let u: URL;
   try {
     u = new URL(url);
   } catch {
-    return true;
+    return 'named';
   }
-  return !!u.hostname || ['host', 'hostaddr', 'service'].some(k => !!u.searchParams.get(k));
+  const values = URL_SERVER_PARAMS.map(k => u.searchParams.getAll(k));
+  if (values.some(v => v.length > 1 || v.includes(''))) return 'cleared';
+  return u.hostname || values.some(v => v.length === 1) ? 'named' : 'hostless';
 }
 
 const unnamed = unnamedServerError();
