@@ -6,11 +6,14 @@ import { AttentionAnswerPanel } from './AttentionAnswerPanel';
 import { RunActionBar } from './RunActionBar';
 import { toRun, type Run } from '../primitives/run';
 
+/** The click handler of the button labelled `label`, rendering function components on the way. */
 function buttonClick(node: ReactNode, label: string): (() => void) | undefined {
   let click: (() => void) | undefined;
   Children.forEach(node, child => {
     if (!isValidElement<{ children?: ReactNode; onClick?: () => void }>(child)) return;
     if (child.type === 'button' && child.props.children === label) click = child.props.onClick;
+    else if (typeof child.type === 'function')
+      click ??= buttonClick((child.type as (props: unknown) => ReactNode)(child.props), label);
     else click ??= buttonClick(child.props.children, label);
   });
   return click;

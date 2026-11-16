@@ -297,7 +297,21 @@ export interface ListRunsOptions {
 }
 
 type AttentionResponse = components['schemas']['RunsNeedingAttentionResponse'];
+type AttentionQueueItem = components['schemas']['AttentionQueueItem'];
+
+/** An ask a completed run left on its item: an attention item no run holds. */
+export type ItemAsk = Extract<AttentionQueueItem, { kind: 'attention' }> & { run?: undefined };
+
+export function isItemAsk(item: AttentionQueueItem): item is ItemAsk {
+  return item.kind === 'attention' && item.run === undefined;
+}
+
 export interface RunsAttention {
   runs: Run[];
+  asks: ItemAsk[];
+  /** Each listed ref the caller may not answer, with the server's reason. */
+  answerRefusals: AttentionResponse['answerRefusals'];
+  /** The id of every item the list holds open, whether a run or an ask holds it. */
+  itemIds: ReadonlySet<string>;
   degraded: NonNullable<AttentionResponse['degraded']>;
 }

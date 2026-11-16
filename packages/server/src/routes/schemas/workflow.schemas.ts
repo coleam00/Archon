@@ -415,6 +415,11 @@ export const runsNeedingAttentionResponseSchema = z
   .object({
     runs: z.array(dashboardWorkflowRunSchema),
     items: z.array(attentionQueueItemSchema.meta({ id: 'AttentionQueueItem' })),
+    /**
+     * Each listed item's ref the caller may not answer, with the reason, by the rule the
+     * answer route enforces. A ref absent here is one the caller may answer.
+     */
+    answerRefusals: z.record(z.string(), z.string()),
     degraded: z.array(attentionDegradedSchema).optional(),
   })
   .openapi('RunsNeedingAttentionResponse');

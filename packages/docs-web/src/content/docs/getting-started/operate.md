@@ -203,7 +203,9 @@ The write merges: a key it sets replaces that key, a key it unsets is removed, a
 
 Everything above is also JSON, for scripts and agents. The list, the single read, the stream and `workflow wait` share the run projection for readable runs. An unreadable stored descendant is an exception: a batch can omit its blocked parent, while a single read or `workflow wait` can fail.
 
-An ask a completed run left on its item is listed as an `attention` item with no `run`: its `askedIn` names the run that left it, its options carry a `cost`, and it carries a `context` and any `artifacts`. Answer or withdraw it by its `ref`.
+An ask a completed run left on its item is listed as an `attention` item with no `run`: its `askedIn` names the run that left it, its options carry a `cost`, and it carries a `context` and any `artifacts`. Answer or withdraw it by its `ref`. The web console shows these asks in its "Needs your input" banner, grouped by item, and answers them by `ref`.
+
+Over HTTP the list also returns `answerRefusals`: each listed `ref` the caller may not answer, with the reason, by the rule the answer route enforces. A `ref` absent from it is one the caller may answer.
 
 | Operation | CLI | HTTP |
 |---|---|---|

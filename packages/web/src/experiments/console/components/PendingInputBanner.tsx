@@ -6,6 +6,7 @@ import { ApprovalContext } from './ApprovalContext';
 import { RunActionBar } from './RunActionBar';
 import { AttentionAnswerPanel } from './AttentionAnswerPanel';
 import { ApprovalPanel } from './ApprovalPanel';
+import { ItemAsksSection, type ItemAsks } from './ItemAsksSection';
 import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince } from '../lib/format';
 import { runStatusLabel } from '../lib/run-status';
@@ -16,6 +17,8 @@ interface PendingInputBannerProps {
   /** Show the project name on each card (true on the All-projects view). */
   showProject: boolean;
   onDismiss: (runId: string) => void;
+  /** Asks completed runs left on items; they have no run card of their own. */
+  itemAsks: ItemAsks;
 }
 
 /**
@@ -30,8 +33,10 @@ export function PendingInputBanner({
   runs,
   showProject,
   onDismiss,
+  itemAsks,
 }: PendingInputBannerProps): ReactElement | null {
-  if (runs.length === 0) return null;
+  if (runs.length === 0 && itemAsks.asks.length === 0 && itemAsks.answered.length === 0)
+    return null;
 
   return (
     <div className="flex max-h-[45%] shrink-0 flex-col border-b border-warning/25 bg-warning/[0.04] py-3">
@@ -43,7 +48,7 @@ export function PendingInputBanner({
           Needs your input
         </span>
         <span className="font-mono text-console-11 tabular-nums text-warning/70">
-          {runs.length}
+          {runs.length + itemAsks.asks.length}
         </span>
       </div>
       <div className="flex min-h-0 flex-col gap-2 overflow-y-auto px-6">
@@ -55,6 +60,7 @@ export function PendingInputBanner({
             onDismiss={onDismiss}
           />
         ))}
+        <ItemAsksSection {...itemAsks} showProject={showProject} />
       </div>
     </div>
   );

@@ -14,6 +14,7 @@ import { RunActionForbiddenError } from '@archon/core/operations/run-authorizati
 import {
   AskAnswerInvalidError,
   answerAttentionItem,
+  answerPermission,
   withdrawAttentionItem,
   type AttentionItemAnswerResult,
 } from '@archon/core/operations/attention-items';
@@ -364,6 +365,7 @@ export function registerRunAttentionRoutes(
     createWorkflowStore(),
     createWorkflowHostStore().isolation
   );
+  const answerDeps = { queue: attentionQueue, operations };
 
   // GET /api/runs/attention - The attention queue. A server has no working directory, so
   // without `project` the scope is the whole install.
@@ -392,10 +394,17 @@ export function registerRunAttentionRoutes(
       const selected = selectAttentionQueue(items, { scope, labels, order });
       const ids = new Set(selected.map(item => item.run?.id));
       const runs = splitAttentionRead(rows).values.filter(run => ids.has(run.id));
+      const actor = await resolveRunActor(c);
+      const answerRefusals: Record<string, string> = {};
+      for (const item of selected) {
+        const permission = await answerPermission(answerDeps, item, actor);
+        if (permission.kind === 'refused') answerRefusals[item.ref] = permission.reason;
+      }
       // A row is a paused run, and only a running run has an owner to observe.
       return c.json({
         runs: runs.map(run => toApiDashboardWorkflowRun(run, null)),
         items: selected,
+        answerRefusals,
         ...reports,
       });
     } catch (error) {
@@ -403,8 +412,6 @@ export function registerRunAttentionRoutes(
       return apiError(c, 500, 'Failed to list runs needing attention');
     }
   });
-
-  const items = { queue: attentionQueue, operations };
 
   // POST /api/attention/answer - Answer the item a ref names, through the one answer
   // operation every surface uses. An ask a completed run left has no run to name.
@@ -419,7 +426,7 @@ export function registerRunAttentionRoutes(
           : { choose: body.choose ?? [], ...text };
       const reply = answerReply(
         body.ref,
-        await answerAttentionItem(items, body.ref, answer, actor, 'api')
+        await answerAttentionItem(answerDeps, body.ref, answer, actor, 'api')
       );
       return 'body' in reply ? c.json(reply.body, 200) : apiError(c, reply.status, reply.error);
     } catch (error) {
@@ -435,7 +442,7 @@ export function registerRunAttentionRoutes(
     const body = getValidatedBody(c, withdrawAttentionItemBodySchema);
     try {
       const actor = await resolveRunActor(c);
-      const result = await withdrawAttentionItem(items, body.ref, actor, 'api');
+      const result = await withdrawAttentionItem(answerDeps, body.ref, actor, 'api');
       const base = { ref: body.ref, action: 'withdraw' as const };
       switch (result.kind) {
         case 'withdrawn':
