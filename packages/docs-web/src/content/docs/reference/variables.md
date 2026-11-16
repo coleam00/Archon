@@ -14,7 +14,7 @@ Archon substitutes variables in command files, inline prompts, bash scripts, and
 
 These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`, `loop_group:`, and a `workflow:` node's `input:` field — which behaves like a `prompt:` body, not a bash-escaped one) — except the user-controlled ones in `bash:` and `script:` nodes, which arrive as environment variables instead (see [Shell quoting in `bash:` vs `script:`](#shell-quoting-in-bash-vs-script)).
 
-They are also substituted in a node's **AI-configuration text** — `systemPrompt:` and each entry's `agents.<id>.prompt` / `agents.<id>.description`. These go straight to the provider, so they resolve exactly as a `prompt:` does: workflow variables and `$nodeId.output` refs. A dangling `$nodeId.output` in any of the three is a load error, exactly as it is in a prompt.
+They are also substituted in a node's **AI-configuration text** — `systemPrompt:` and each entry's `agents.<id>.prompt` / `agents.<id>.description`. These go straight to the provider, so they resolve exactly as a `prompt:` does: workflow variables and `$nodeId.output` refs. A dangling `$nodeId.output` in any of the three is a load error, exactly as it is in a prompt. A command file's references get the same check when Archon discovers the project's workflows (`archon validate workflows`, a run, the server's catalog). Parsing a single workflow file on its own, and a workflow composed at run time by a fan-out, do not run this reference check.
 
 | Variable | Resolves to | Notes |
 |----------|-------------|-------|
@@ -48,7 +48,7 @@ Referencing `$BASE_BRANCH` in a prompt, `bash:`, or `script:` body **fails the n
 
 It also happens when an isolated child reuses an existing branch without its original child run record. The historical base is unknown even if current defaults are configured. Changing config or passing parent `--base` or `--from` cannot recover it. Start a new parent run so the child creates a new isolated branch with a known base.
 
-For a new top-level git run, pass `--base`, configure `worktree.baseBranch`, set the codebase default, or repair git detection. Resuming a run retains its recorded base, including an unresolved value, unless that run is explicitly retargeted with `--base`. Folder workflows that do not have a base should avoid referencing the variable.
+For a new top-level git run, pass `--base`, configure `worktree.baseBranch`, set the codebase default, or repair git detection. A resumed run keeps its recorded base, including an unresolved value, and cannot be retargeted: `--base` is refused when continuing a run. To run with a different base, start a new run. Folder workflows that do not have a base should avoid referencing the variable.
 
 If the variable is not referenced, no error occurs even if the base branch cannot be determined.
 

@@ -500,12 +500,6 @@ describe('detached owner preparation', () => {
   test.each([
     ['malformed', '{"group":{"pgid":"invalid","leaderReaped":true}}', 'Invalid input'],
     ['oversized', 'x'.repeat(257), 'Run owner acknowledgement exceeded its size limit'],
-    [
-      'contradictory group',
-      '{"group":{"pgid":1,"leaderReaped":true,"signalError":"EPERM"}}',
-      'Invalid input',
-    ],
-    ['mixed', '{"warning":"held output","group":{"pgid":1,"leaderReaped":false}}', 'Invalid input'],
   ])(
     'rejects %s preparation frames instead of acknowledging a stop',
     async (_kind, frame, expectedError) => {

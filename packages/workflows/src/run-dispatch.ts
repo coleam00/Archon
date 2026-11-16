@@ -371,9 +371,8 @@ async function resolveBaseBranch(
   // recorded at its start, then an already resolved checkout base, repo config, the codebase default,
   // then git auto-detection.
   // The override must outrank config so `--base` reports the same branch the
-  // worktree was cut from (WorktreeProvider applies the same order); it also outranks the
-  // record, because re-passing `--base` to a resume is a deliberate retarget of THIS
-  // continuation (the CLI warns that only that half of it applies).
+  // worktree was cut from (WorktreeProvider applies the same order). A continuation keeps
+  // its recorded base: the CLI refuses `--base` on every subcommand that continues a run.
   // If detection fails, leave empty — substituteWorkflowVariables throws only if $BASE_BRANCH is referenced.
   const overrideBaseBranch = opts.baseOverride?.trim();
   if (overrideBaseBranch) return overrideBaseBranch;

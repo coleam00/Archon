@@ -1171,7 +1171,7 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
   // Auto-registration failure → truthful CLI error
   // -------------------------------------------------------------------------
 
-  it('surfaces auto-registration failures on --resume instead of claiming the repo is invalid', async () => {
+  it('surfaces auto-registration failures on a continuation instead of claiming the repo is invalid', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const { registerRepository } = await import('@archon/core');
     const conversationDb = await import('@archon/core/db/conversations');

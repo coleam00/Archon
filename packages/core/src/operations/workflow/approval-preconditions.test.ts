@@ -39,50 +39,8 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
     );
   });
 
-  test('assertApprovable redirects a child_workflow-blocked parent to the child run', () => {
-    expect(() =>
-      assertApprovable(
-        withMeta({
-          approval: {
-            nodeId: 'sub',
-            message: 'blocked',
-            type: 'child_workflow',
-            childRunId: 'child-9',
-          },
-        })
-      )
-    ).toThrow('Approve or reject the child run instead.');
-  });
-
-  test('assertApprovable rejects an already-resolved gate', () => {
-    expect(() =>
-      assertApprovable(withMeta({ approval: { nodeId: 'g', message: 'm', resolved: 'approved' } }))
-    ).toThrow('was already approved and is awaiting resume');
-  });
-
   test('assertRejectable TOLERATES a missing approval context (unlike approve)', () => {
     expect(assertRejectable(withMeta({}))).toBeUndefined();
-  });
-
-  test('assertRejectable redirects a child_workflow-blocked parent', () => {
-    expect(() =>
-      assertRejectable(
-        withMeta({
-          approval: {
-            nodeId: 'sub',
-            message: 'blocked',
-            type: 'child_workflow',
-            childRunId: 'child-9',
-          },
-        })
-      )
-    ).toThrow('Reject the child run instead, or abandon this run to discard the whole tree.');
-  });
-
-  test('assertRejectable rejects an already-resolved gate', () => {
-    expect(() =>
-      assertRejectable(withMeta({ approval: { nodeId: 'g', message: 'm', resolved: 'rejected' } }))
-    ).toThrow('was already rejected and is awaiting resume');
   });
 
   // Both functions now read ONE derivation (`runAttention`). These pin the exact

@@ -11,7 +11,7 @@ import { isIncludeDirective, isLoopGroupNode } from '../schemas';
 import { collectLoopGroupSinkWarnings } from '../loader/parse-warnings';
 import { expandWorkflowIncludes } from '../include-expander';
 import { attachHomeMcpDirectory } from '../compiled-command';
-import { resolveIncludeBlockCommandContents } from './command-scan';
+import { resolveCatalogCommandContents } from './command-scan';
 import type { DiscoveryContext } from './context';
 import type { ScopeFile } from './load-dir';
 import { validateNamedScripts } from './named-scripts';
@@ -42,9 +42,9 @@ export async function expandScope(
     rawByName.set(workflow.name, workflow);
     if (!filenameByName.has(workflow.name)) filenameByName.set(workflow.name, filename);
   }
-  // Pre-resolve command-file contents for include-target command nodes so the expander
-  // can catch a block command file that references a sibling id namespacing renames.
-  const commandContents = await resolveIncludeBlockCommandContents(
+  // Pre-resolve every command node's file contents: the expander compiles included
+  // blocks from them, and the flattened graph check reads their output references.
+  const commandContents = await resolveCatalogCommandContents(
     context.roots,
     rawByName,
     context.commandScan

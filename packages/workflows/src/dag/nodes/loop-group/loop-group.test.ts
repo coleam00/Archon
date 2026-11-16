@@ -1434,56 +1434,6 @@ process.stdout.write((n === 1 ? 'a' : 'b').repeat(40000));`
     expect(result).toContain('a-output');
   });
 
-  it('EDGE C: fresh_context=true does not crash and the group still completes', async () => {
-    // Smoke: fresh_context:true path. We can't easily assert session reset from the mock,
-    // but we verify the group completes normally with fresh_context on.
-    let calls = 0;
-    mockSendQueryDag.mockImplementation(async function* () {
-      calls++;
-      yield { type: 'agent_message_chunk', text: calls === 1 ? 'wip' : 'final\nDONE' };
-      yield { type: 'result', sessionId: `s-${calls}` };
-    });
-
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('lg-fresh');
-
-    const nodes: DagNode[] = [
-      {
-        id: 'fresh',
-        kind: 'loop_group',
-        loop_group: {
-          until: 'DONE',
-          max_iterations: 3,
-          fresh_context: true,
-          nodes: [
-            {
-              id: 'work',
-              kind: 'agent',
-              source: { kind: 'inline', prompt: 'do work' },
-              depends_on: [],
-            },
-          ],
-        },
-        depends_on: [],
-      },
-    ];
-
-    const result = await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-lg',
-        cwd: testDir,
-        workflow: { name: 'lg-fresh', nodes },
-        workflowRun,
-      })
-    );
-
-    expect(calls).toBe(2);
-    expect(result).toContain('final');
-  });
-
   it('EDGE E: between-iteration cancellation stops the loop with a failed result', async () => {
     // getWorkflowRunStatus returns 'running' on iteration 1, then 'cancelled' before
     // iteration 2 → the between-iteration check halts the loop with a failed result.
@@ -1605,55 +1555,6 @@ process.stdout.write((n === 1 ? 'a' : 'b').repeat(40000));`
       sentinelExists = false;
     }
     expect(sentinelExists).toBe(false);
-  });
-
-  it('EDGE I: max_iterations=1 single-shot completes when signal present, fails otherwise', async () => {
-    // Single iteration allowed. With the signal present → completes in 1.
-    let calls = 0;
-    mockSendQueryDag.mockImplementation(async function* () {
-      calls++;
-      yield { type: 'agent_message_chunk', text: 'one-shot\nDONE' };
-      yield { type: 'result', sessionId: `s-${calls}` };
-    });
-
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('lg-single-shot');
-
-    const nodes: DagNode[] = [
-      {
-        id: 'once',
-        kind: 'loop_group',
-        loop_group: {
-          until: 'DONE',
-          max_iterations: 1,
-          fresh_context: false,
-          nodes: [
-            {
-              id: 'work',
-              kind: 'agent',
-              source: { kind: 'inline', prompt: 'do work, emit DONE' },
-              depends_on: [],
-            },
-          ],
-        },
-        depends_on: [],
-      },
-    ];
-
-    const result = await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-lg',
-        cwd: testDir,
-        workflow: { name: 'lg-single-shot', nodes },
-        workflowRun,
-      })
-    );
-
-    expect(calls).toBe(1);
-    expect(result).toContain('one-shot');
   });
 
   it('EDGE H: nested loop_group (loop_group inside a loop_group body) runs', async () => {

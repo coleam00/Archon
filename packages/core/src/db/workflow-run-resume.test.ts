@@ -337,18 +337,6 @@ describe('workflow run resume', () => {
       );
     });
 
-    test('throws on database error during SELECT after UPDATE', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running', metadata: {} }]));
-      // UPDATE succeeds
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      // SELECT fails
-      mockQuery.mockRejectedValueOnce(new Error('Connection lost'));
-
-      await expect(resumeWorkflowRun('workflow-run-123')).rejects.toThrow(
-        'Failed to resume workflow run: Connection lost'
-      );
-    });
-
     test('throws when row vanishes between UPDATE and SELECT', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running', metadata: {} }]));
       // UPDATE succeeds (rowCount 1)

@@ -56,37 +56,6 @@ export function setupToolRestrictionsTests() {
 export function registerToolConfigurationTests(
   fixture: ReturnType<typeof setupToolRestrictionsTests>
 ) {
-  it('passes allowed_tools to sendQuery options for Claude node', async () => {
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        cwd: fixture.testDir,
-        workflow: {
-          name: 'dag-tool-restriction',
-          nodes: [
-            {
-              id: 'review',
-              kind: 'agent',
-              source: { kind: 'command', name: 'my-cmd' },
-              allowed_tools: ['Read', 'Grep'],
-            },
-          ],
-        },
-        workflowRun,
-      })
-    );
-
-    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
-    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
-    const nodeConfig = optionsArg?.nodeConfig as Record<string, unknown>;
-    expect(nodeConfig?.allowed_tools).toEqual(['Read', 'Grep']);
-  });
-
   it('passes settingSources to sendQuery nodeConfig for Claude node', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();

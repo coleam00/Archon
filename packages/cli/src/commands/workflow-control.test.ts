@@ -310,7 +310,7 @@ describe('workflowResumeCommand', () => {
     });
 
     // workflowResumeCommand calls workflowRunCommand internally which needs many
-    // mocks. The --resume execution flow is tested separately in workflowRunCommand tests.
+    // mocks. The continuation flow is tested separately in workflowRunCommand tests.
     // Here we only verify the initial output by catching the downstream error.
     try {
       await workflowResumeCommand(createTestWorkflowHost(), 'run-1');

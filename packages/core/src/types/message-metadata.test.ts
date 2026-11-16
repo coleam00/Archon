@@ -15,33 +15,6 @@ describe('toPersistedMessageMetadata', () => {
     expect(result).toBeUndefined();
   });
 
-  test('returns undefined when only segment is set alongside undefined siblings', () => {
-    const result = toPersistedMessageMetadata({
-      segment: 'auto',
-      category: undefined,
-      workflowDispatch: undefined,
-      workflowResult: undefined,
-    });
-    expect(result).toBeUndefined();
-  });
-
-  test('persists category', () => {
-    const result = toPersistedMessageMetadata({ category: 'workflow_status' });
-    expect(result).toEqual({ category: 'workflow_status' });
-  });
-
-  test('persists workflowDispatch', () => {
-    const dispatch = { workerConversationId: 'worker-1', workflowName: 'assist' };
-    const result = toPersistedMessageMetadata({ workflowDispatch: dispatch });
-    expect(result).toEqual({ workflowDispatch: dispatch });
-  });
-
-  test('persists workflowResult', () => {
-    const outcome = { workflowName: 'review', runId: 'run-123' };
-    const result = toPersistedMessageMetadata({ workflowResult: outcome });
-    expect(result).toEqual({ workflowResult: outcome });
-  });
-
   test('persists every non-segment field together', () => {
     const result = toPersistedMessageMetadata({
       category: 'workflow_result',
@@ -54,14 +27,6 @@ describe('toPersistedMessageMetadata', () => {
       workflowDispatch: { workerConversationId: 'w', workflowName: 'wf' },
       workflowResult: { workflowName: 'wf', runId: 'r' },
     });
-  });
-
-  test('does not include segment in any output', () => {
-    const result = toPersistedMessageMetadata({
-      category: 'workflow_status',
-      segment: 'auto',
-    });
-    expect(result).not.toHaveProperty('segment');
   });
 
   test('a new MessageMetadata field flows through without changing the helper (#2709)', () => {
@@ -86,7 +51,7 @@ describe('toPersistedMessageMetadata', () => {
       workflowDispatch: { workerConversationId: 'w', workflowName: 'wf' },
       workflowResult: undefined,
     });
-    expect(result).toEqual({
+    expect(result).toStrictEqual({
       workflowDispatch: { workerConversationId: 'w', workflowName: 'wf' },
     });
   });

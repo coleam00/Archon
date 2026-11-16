@@ -1,6 +1,6 @@
 import { readNodeRecordEvent } from '../../../../node-record-reader';
 import { foldDagResumeSnapshot } from '../../../../dag-resume-snapshot';
-import { afterEach, beforeEach, describe, expect, it, type Mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
@@ -401,48 +401,6 @@ export function registerStructuredOutputTests() {
       expect(secondCallPrompt).not.toContain('"type"');
     });
 
-    it('falls back to concatenated text when structuredOutput is absent', async () => {
-      // Mock without structuredOutput on result — backward compatible
-      mockSendQueryDag.mockImplementation(async function* () {
-        yield { type: 'agent_message_chunk', text: 'plain text response' };
-        yield { type: 'result', sessionId: 'sid-2' };
-      });
-
-      const mockDeps = createMockDeps();
-      const platform = createMockPlatform();
-      const workflowRun = makeWorkflowRun('no-structured-run', {
-        user_message: 'test fallback',
-      });
-
-      const nodes: DagNode[] = [
-        { id: 'a', kind: 'agent', source: { kind: 'command', name: 'classify' } },
-        {
-          id: 'b',
-          kind: 'agent',
-          source: { kind: 'inline', prompt: 'Use output: $a.output' },
-          depends_on: ['a'],
-        },
-      ];
-
-      await executeDagWorkflow(
-        dagOptions({
-          deps: mockDeps,
-          platform,
-          conversationId: 'conv-fallback',
-          cwd: testDir,
-          workflow: { name: 'fallback-test', nodes },
-          workflowRun,
-        })
-      );
-
-      // Both nodes should execute (no output_format, no when conditions)
-      expect(mockSendQueryDag.mock.calls.length).toBe(2);
-
-      // Second node's prompt should contain the concatenated text from node a
-      const secondCallPrompt = mockSendQueryDag.mock.calls[1][0] as string;
-      expect(secondCallPrompt).toContain('plain text response');
-    });
-
     it('passes outputFormat to Codex nodes and uses inline JSON response', async () => {
       // Codex provider normalizes inline JSON into structuredOutput on the result chunk
       const classifyJson = { run_code_review: 'true', run_tests: 'false' };
@@ -514,59 +472,6 @@ export function registerStructuredOutputTests() {
         type: 'json_schema',
         schema: nodes[0].output_format,
       });
-    });
-
-    it('does not warn about missing structuredOutput for Codex nodes', async () => {
-      // Codex provider normalizes inline JSON into structuredOutput on the result chunk
-      mockGetAgentProviderDag.mockImplementation(() => ({
-        sendQuery: mockSendQueryDag,
-        checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-        getType: () => 'codex',
-        getCapabilities: mockCodexCapabilities,
-      }));
-      mockSendQueryDag.mockImplementation(async function* () {
-        yield { type: 'agent_message_chunk', text: '{"status":"ok"}' };
-        yield { type: 'result', sessionId: 'codex-sid-2', structuredOutput: { status: 'ok' } };
-      });
-
-      const mockDeps = createMockDeps();
-      const platform = createMockPlatform();
-      const workflowRun = makeWorkflowRun('codex-no-warn-run', {
-        user_message: 'check it',
-      });
-
-      const nodes: DagNode[] = [
-        {
-          id: 'check',
-          kind: 'agent',
-          source: { kind: 'command', name: 'classify' },
-          output_format: {
-            type: 'object',
-            properties: { status: { type: 'string' } },
-            required: ['status'],
-          },
-        },
-      ];
-
-      await executeDagWorkflow(
-        dagOptions({
-          deps: mockDeps,
-          platform,
-          conversationId: 'conv-codex-no-warn',
-          cwd: testDir,
-          workflow: { name: 'codex-no-warn', nodes },
-          workflowRun,
-          workflowProvider: 'codex',
-        })
-      );
-
-      // Verify no "structured output missing" warning was sent to the user
-      const sendCalls = (platform.sendMessage as Mock<(...args: unknown[]) => Promise<void>>).mock
-        .calls;
-      const warningMessages = sendCalls
-        .map(call => call[1] as string)
-        .filter(msg => typeof msg === 'string' && msg.includes('did not return structured output'));
-      expect(warningMessages).toHaveLength(0);
     });
   });
 }

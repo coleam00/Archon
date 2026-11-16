@@ -71,20 +71,12 @@ function activeIds(manager: ConversationLockManager): string[] {
 }
 
 describe('ConversationLockManager', () => {
-  test('initializes with correct maxConcurrent', () => {
-    const manager = new ConversationLockManager(5);
-    const stats = manager.getStats();
-    expect(stats.maxConcurrent).toBe(5);
-    expect(stats.active).toBe(0);
-    expect(stats.queuedTotal).toBe(0);
-  });
-
   test('getStats returns empty state initially', () => {
-    const manager = new ConversationLockManager(10);
+    const manager = new ConversationLockManager(5);
     const stats = manager.getStats();
     expect(stats).toEqual({
       active: 0,
-      maxConcurrent: 10,
+      maxConcurrent: 5,
       queuedTotal: 0,
       activeConversations: [],
       queuedConversations: [],

@@ -598,7 +598,7 @@ describe('workflowRunCommand — detach', () => {
     expect(spawnCmd[idIndex + 1]).toBe('run-detached-created');
   });
 
-  // #2872 R1 — the plain launch, with no --folder/--adopt/--supersedes/--resume, is the
+  // #2872 R1 — the plain launch, with no --folder/--adopt/--supersedes, is the
   // most common invocation and had no pre-flight refusal at all: an isolating run with
   // no project to isolate sailed past, printed `Started`, and died on the identical
   // check in the child.

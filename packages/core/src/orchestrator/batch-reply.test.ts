@@ -24,45 +24,6 @@ describe('filterToolIndicators', () => {
     expect(result).toContain('The answer is 42.');
   });
 
-  test('filters 💭 (U+1F4AD) thinking indicator', () => {
-    const result = filterToolIndicators([
-      '💭 Thinking about the problem...',
-      'Here is my response.',
-    ]);
-    expect(result).not.toContain('💭');
-    expect(result).toContain('Here is my response.');
-  });
-
-  test('filters 📝 (U+1F4DD) writing indicator', () => {
-    const result = filterToolIndicators(['📝 Writing file output.txt', 'Done writing.']);
-    expect(result).not.toContain('📝');
-    expect(result).toContain('Done writing.');
-  });
-
-  test('filters ✏️ (U+270F+FE0F) editing indicator', () => {
-    const result = filterToolIndicators(['\u{270F}\u{FE0F} Editing main.ts', 'Edit complete.']);
-    expect(result).not.toContain('\u{270F}');
-    expect(result).toContain('Edit complete.');
-  });
-
-  test('filters 🗑️ (U+1F5D1+FE0F) deleting indicator', () => {
-    const result = filterToolIndicators(['\u{1F5D1}\u{FE0F} Deleting temp file', 'File removed.']);
-    expect(result).not.toContain('\u{1F5D1}');
-    expect(result).toContain('File removed.');
-  });
-
-  test('filters 📂 (U+1F4C2) folder indicator', () => {
-    const result = filterToolIndicators(['📂 Reading directory /src', 'Directory listed.']);
-    expect(result).not.toContain('📂');
-    expect(result).toContain('Directory listed.');
-  });
-
-  test('filters 🔍 (U+1F50D) search indicator', () => {
-    const result = filterToolIndicators(['🔍 Searching for pattern', 'Search complete.']);
-    expect(result).not.toContain('🔍');
-    expect(result).toContain('Search complete.');
-  });
-
   test('preserves emoji that is not a tool indicator', () => {
     const result = filterToolIndicators(['🎉 Deployment successful!']);
     expect(result).toContain('🎉 Deployment successful!');

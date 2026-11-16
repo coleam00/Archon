@@ -82,7 +82,7 @@ A node references `$BASE_BRANCH`, but the run has no resolved base. Causes:
 2. For the reused-branch child, start a new parent run so the child cuts a new isolated branch with a known base.
 3. Or remove the `$BASE_BRANCH` reference if the node doesn't need it.
 
-A resumed run keeps its recorded base unless it is retargeted with `--base`. See [`$BASE_BRANCH` fail-fast](https://archon.diy/reference/variables/#base_branch-fail-fast).
+A resumed run keeps its recorded base, even an unresolved one; `--base` is refused when continuing a run. To use a different base, start a new run. See [`$BASE_BRANCH` fail-fast](https://archon.diy/reference/variables/#base_branch-fail-fast).
 
 ### "Claude Code not found" / "Codex CLI binary not found"
 

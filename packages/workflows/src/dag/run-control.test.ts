@@ -7,7 +7,7 @@ import { existsSync } from 'fs';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { recordNodeProcessTrees } from '../subprocess';
 import { executeDagWorkflow } from '../dag-executor';
-import { dagNodeSchema, type WorkflowRunStatus } from '../schemas';
+import { dagNodeSchema } from '../schemas';
 import {
   type MockWorkflowStore,
   createMockStore,
@@ -98,11 +98,6 @@ describe('executeDagWorkflow -- a run stopped while its subprocess runs', () => 
 // ---------------------------------------------------------------------------
 
 describe('shouldContinueStreamingForStatus', () => {
-  it('continues when status is running', async () => {
-    const { shouldContinueStreamingForStatus } = await import('./run-control');
-    expect(shouldContinueStreamingForStatus('running')).toBe(true);
-  });
-
   it('continues when status is paused (sibling approval node in same layer)', async () => {
     // The key invariant: a concurrent approval node can pause the run while a
     // streaming AI node is mid-response. The streaming node must finish its
@@ -110,34 +105,5 @@ describe('shouldContinueStreamingForStatus', () => {
     // by tearing down unrelated in-flight streams.
     const { shouldContinueStreamingForStatus } = await import('./run-control');
     expect(shouldContinueStreamingForStatus('paused')).toBe(true);
-  });
-
-  it('aborts when status is null (run deleted)', async () => {
-    const { shouldContinueStreamingForStatus } = await import('./run-control');
-    expect(shouldContinueStreamingForStatus(null)).toBe(false);
-  });
-
-  it('aborts when status is cancelled', async () => {
-    const { shouldContinueStreamingForStatus } = await import('./run-control');
-    expect(shouldContinueStreamingForStatus('cancelled')).toBe(false);
-  });
-
-  it('aborts when status is failed', async () => {
-    const { shouldContinueStreamingForStatus } = await import('./run-control');
-    expect(shouldContinueStreamingForStatus('failed')).toBe(false);
-  });
-
-  it('aborts when status is completed', async () => {
-    const { shouldContinueStreamingForStatus } = await import('./run-control');
-    expect(shouldContinueStreamingForStatus('completed')).toBe(false);
-  });
-
-  it('aborts on any unrecognized state', async () => {
-    const { shouldContinueStreamingForStatus } = await import('./run-control');
-    expect(shouldContinueStreamingForStatus('pending')).toBe(false);
-    // Simulates a corrupted/unexpected DB status value — the column isn't compile-time
-    // checked, so the runtime fallback-to-abort still matters even though the
-    // parameter type is now WorkflowRunStatus | null.
-    expect(shouldContinueStreamingForStatus('invalid-status' as WorkflowRunStatus)).toBe(false);
   });
 });

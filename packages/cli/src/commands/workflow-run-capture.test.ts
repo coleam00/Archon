@@ -53,12 +53,10 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
     });
   });
 
-  it('executes the graph the run froze on `run <name> --resume`, not the one in the checkout', () =>
+  it('executes the graph the continued run froze, not the one in the checkout', () =>
     recordCapturedSourceCalls(async capturedSourceOwnerCalls => {
-      // The name form names its run indirectly, so it used to reach the resumable row only
-      // after the graph was already chosen from live discovery — while the executor still
-      // fed that graph the frozen commands and scripts. Two vintages in one run, on the one
-      // resume form that never carried a run object.
+      // Choosing the graph from live discovery while the executor feeds it the frozen
+      // commands and scripts would run two vintages in one run.
       const { executeWorkflow } = await import('@archon/workflows/executor');
       const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
       const conversationDb = await import('@archon/core/db/conversations');
