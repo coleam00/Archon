@@ -104,8 +104,6 @@ mock.module('@archon/git', () => ({
     })
   ),
   CanonicalRepoPathUnavailableError: MockCanonicalRepoPathUnavailableError,
-  getRemoteUrl: mock(() => Promise.resolve(null)),
-  checkout: mock(() => Promise.resolve()),
   toRepoPath: mock((path: string) => path),
   toWorktreePath: mock((path: string) => path),
   toBranchName: mock((branch: string) => branch),

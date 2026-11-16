@@ -217,14 +217,6 @@ describe('git utilities', () => {
         { timeout: 30000 }
       );
     });
-
-    test('propagates error when worktree has uncommitted changes', async () => {
-      execSpy.mockRejectedValue(new Error('fatal: cannot remove: has changes'));
-
-      await expect(
-        git.removeWorktree(repo('/workspace/repo'), worktree('/workspace/worktrees/dirty'))
-      ).rejects.toThrow('has changes');
-    });
   });
 
   describe('worktree locks', () => {

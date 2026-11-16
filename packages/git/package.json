@@ -25,7 +25,6 @@
     ],
     [
       "src/exec.test.ts",
-      "src/forge.test.ts",
       "src/github-host.test.ts",
       "src/refresh-worktree-index.test.ts",
       "src/worktree-path.test.ts"
@@ -44,9 +43,6 @@
     ],
     [
       "src/branch.test.ts"
-    ],
-    [
-      "src/checkout.integration.test.ts"
     ],
     [
       "src/git-failures.integration.test.ts"

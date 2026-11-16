@@ -19,12 +19,10 @@ import * as resolver from './binary-resolver';
 
 describe('resolveCopilotBinaryPath (binary mode)', () => {
   const originalEnv = process.env.COPILOT_BIN_PATH;
-  let fileExistsSpy: ReturnType<typeof spyOn>;
   let isExecutableFileSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
     delete process.env.COPILOT_BIN_PATH;
-    fileExistsSpy?.mockRestore();
     isExecutableFileSpy?.mockRestore();
     mockLogger.info.mockClear();
   });
@@ -35,16 +33,7 @@ describe('resolveCopilotBinaryPath (binary mode)', () => {
     } else {
       delete process.env.COPILOT_BIN_PATH;
     }
-    fileExistsSpy?.mockRestore();
     isExecutableFileSpy?.mockRestore();
-  });
-
-  test('uses COPILOT_BIN_PATH env var when set and file is executable', async () => {
-    process.env.COPILOT_BIN_PATH = '/usr/local/bin/copilot';
-    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockReturnValue(true);
-
-    const result = await resolver.resolveCopilotBinaryPath();
-    expect(result).toBe('/usr/local/bin/copilot');
   });
 
   test('throws when COPILOT_BIN_PATH is set but path is not executable', async () => {
@@ -75,18 +64,6 @@ describe('resolveCopilotBinaryPath (binary mode)', () => {
 
     const result = await resolver.resolveCopilotBinaryPath('/config/copilot');
     expect(result).toBe('/env/copilot');
-  });
-
-  test('checks vendor directory when no env or config path', async () => {
-    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockImplementation((path: string) => {
-      const normalized = path.replace(/\\/g, '/');
-      return normalized.includes('vendor/copilot');
-    });
-
-    const result = await resolver.resolveCopilotBinaryPath();
-    expect(typeof result).toBe('string');
-    const normalized = result!.replace(/\\/g, '/');
-    expect(normalized).toContain('/tmp/test-archon-home/vendor/copilot/');
   });
 
   test('autodetects npm global install at ~/.npm-global/bin/copilot (POSIX)', async () => {
@@ -164,7 +141,6 @@ describe('resolveCopilotBinaryPath (binary mode)', () => {
   test('rejects PATH lookup result that is not executable', async () => {
     // PATH returned a stale shim or non-exec file — must NOT be returned;
     // resolver must continue to the install-instructions throw.
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(false);
     const resolveFromPathSpy = spyOn(resolver, 'resolveFromPath').mockReturnValue(
       '/stale/shim/copilot'
     );

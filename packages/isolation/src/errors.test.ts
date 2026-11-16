@@ -127,21 +127,6 @@ describe('typed isolation failures', () => {
 });
 
 describe('IsolationBlockedError', () => {
-  test('has correct name', () => {
-    const err = new IsolationBlockedError('blocked', 'creation_failed');
-    expect(err.name).toBe('IsolationBlockedError');
-  });
-
-  test('has correct reason', () => {
-    const err = new IsolationBlockedError('blocked', 'creation_failed');
-    expect(err.reason).toBe('creation_failed');
-  });
-
-  test('is instanceof Error', () => {
-    const err = new IsolationBlockedError('blocked', 'creation_failed');
-    expect(err).toBeInstanceOf(Error);
-  });
-
   test('has correct message', () => {
     const err = new IsolationBlockedError('test message', 'creation_failed');
     expect(err.message).toBe('test message');

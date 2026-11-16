@@ -20,7 +20,6 @@
 import {
   accessSync as _accessSync,
   constants as fsConstants,
-  existsSync as _existsSync,
   statSync as _statSync,
 } from 'node:fs';
 import { execFileSync as _execFileSync } from 'node:child_process';
@@ -48,11 +47,6 @@ export function resolveFromPath(): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-/** Wrapper for existsSync — enables spyOn in tests (direct imports can't be spied on). */
-export function fileExists(path: string): boolean {
-  return _existsSync(path);
 }
 
 /**

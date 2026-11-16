@@ -263,44 +263,13 @@ describe('PiProvider lifecycle', () => {
     expect(mockResourceLoaderReload).toHaveBeenCalledTimes(1);
   });
 
-  // Semaphore tests run last — the module-level piSemaphore singleton persists
-  // across tests once initialized, so these must not affect tests that run before.
-  test('maxConcurrent initializes semaphore and logs pi.semaphore_initialized', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript(scriptedAgentEnd());
-
-    await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'google/gemini-2.5-pro',
-        assistantConfig: { maxConcurrent: 2 },
-      })
-    );
-
-    expect(mockLogger.info).toHaveBeenCalledWith({ maxConcurrent: 2 }, 'pi.semaphore_initialized');
-    // Semaphore slot released: dispose fires on successful completion
-    expect(mockDispose).toHaveBeenCalledTimes(1);
-  });
-
-  test('semaphore is not initialized when maxConcurrent is absent', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript(scriptedAgentEnd());
-
-    await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'google/gemini-2.5-pro',
-      })
-    );
-
-    const initCalls = (mockLogger.info.mock.calls as unknown[][]).filter(
-      c => c[1] === 'pi.semaphore_initialized'
-    );
-    expect(initCalls).toHaveLength(0);
-  });
-
+  // Semaphore tests run last: turn.ts keeps one process-wide semaphore, sized by the
+  // first call that sets maxConcurrent, and every later call in the process shares it
+  // whether or not it sets maxConcurrent. Tests that run earlier stay uncapped.
   test('a caller that aborts while waiting for a maxConcurrent slot disposes its session', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
-    // The process-wide semaphore was sized 2 by the first maxConcurrent test above.
+    // This is the first call that sets maxConcurrent, so it sizes the semaphore to 2.
     const releases: (() => void)[] = [];
     const holdSlot = (): Promise<void> =>
       new Promise<void>(resolve => {
@@ -344,7 +313,7 @@ describe('PiProvider lifecycle', () => {
   test('a retry after watchdog aborts on wedged sessions gets a maxConcurrent slot', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
-    // The process-wide semaphore was sized 2 by the first maxConcurrent test above.
+    // The semaphore is still the one the test above sized to 2.
     const options = { model: 'google/gemini-2.5-pro', assistantConfig: { maxConcurrent: 2 } };
     const wedged = (): Promise<void> => new Promise<void>(() => undefined);
     mockPrompt.mockImplementationOnce(wedged).mockImplementationOnce(wedged);

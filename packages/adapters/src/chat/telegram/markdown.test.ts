@@ -42,30 +42,11 @@ describe('telegram-markdown', () => {
       });
     });
 
-    describe('lists', () => {
-      test('converts bullet lists', () => {
-        const input = '- Item 1\n- Item 2';
-        const result = convertToTelegramMarkdown(input);
-        // Library converts - to bullet point or escapes it
-        expect(result).toBeDefined();
-        expect(result.length).toBeGreaterThan(0);
-      });
-    });
-
     describe('links', () => {
       test('preserves markdown links', () => {
         const result = convertToTelegramMarkdown('[Click here](https://example.com)');
         expect(result).toContain('[Click here]');
         expect(result).toContain('https://example.com');
-      });
-    });
-
-    describe('special characters', () => {
-      test('escapes special characters', () => {
-        const input = 'Price is $100. Use + or -';
-        const result = convertToTelegramMarkdown(input);
-        // Should have escaped . + -
-        expect(result).toBeDefined();
       });
     });
 

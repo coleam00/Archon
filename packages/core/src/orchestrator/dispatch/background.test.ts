@@ -231,7 +231,6 @@ mock.module('../../utils/workflow-source-root', () => ({
 
 mock.module('../../services/cleanup-service', () => ({
   getWorktreeStatusBreakdown: mock(() => Promise.resolve({ active: 0, stale: 0, merged: 0 })),
-  STALE_THRESHOLD_DAYS: 7,
 }));
 
 // Mock @archon/isolation — shared resolve mock so tests can control return values

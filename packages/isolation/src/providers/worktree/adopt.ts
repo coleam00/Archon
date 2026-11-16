@@ -4,11 +4,9 @@
  */
 
 import {
-  GitFailure,
   addSafeDirectory,
   findWorktreeByBranch,
   getCurrentBranchStrict,
-  isSameWorktreePath,
   listWorktrees,
   toBranchName,
   toRepoPath,
@@ -16,16 +14,12 @@ import {
   verifyWorktreeOwnership,
   worktreeExists,
 } from '@archon/git';
-import type { BranchName, RepoPath, WorktreeInfo, WorktreePath } from '@archon/git';
+import type { BranchName, WorktreePath } from '@archon/git';
 import { IsolationFailure } from '../../errors';
-import type {
-  IsolatedEnvironment,
-  IsolationRequest,
-  WorktreeCreationEnvironment,
-} from '../../types';
+import type { IsolationRequest, WorktreeCreationEnvironment } from '../../types';
 import { isPRIsolationRequest } from '../../types';
 import { refuseUnfinishedWorktree } from './setup-lock';
-import { getForkReviewBranch, getGitCommandAnchors, getLog } from './shared';
+import { getForkReviewBranch, getLog } from './shared';
 
 /**
  * Find existing worktree for adoption
@@ -138,7 +132,7 @@ async function verifySameRepository(
  * Hand an existing checkout to a run, once it is proven usable.
  *
  * An existing checkout may still belong to a setup in progress or a failed
- * setup attempt. It must pass the same completeness check as public `adopt()`.
+ * setup attempt, so it must pass the setup completeness check first.
  */
 async function adoptWorktree(
   path: string,
@@ -170,46 +164,5 @@ async function adoptWorktree(
       ...(adoptedFrom ? { adoptedFrom } : {}),
       request,
     },
-  };
-}
-
-/** `WorktreeProvider.adopt()`: adopt a checkout by path, outside any request. */
-export async function adoptPath(path: string): Promise<IsolatedEnvironment | null> {
-  if (!(await worktreeExists(toWorktreePath(path)))) {
-    return null;
-  }
-
-  await addSafeDirectory(toRepoPath(path));
-  let repoPath: RepoPath;
-  let worktrees: WorktreeInfo[];
-  try {
-    repoPath = (await getGitCommandAnchors(path)).active;
-    worktrees = await listWorktrees(repoPath);
-  } catch (error) {
-    if (error instanceof GitFailure && error.kind === 'not_repository') return null;
-    throw error;
-  }
-
-  const wt = worktrees.find(w => isSameWorktreePath(w.path, path));
-
-  if (!wt) {
-    // Worktree directory exists but isn't registered with git - possible corruption
-    getLog().warn(
-      { path, repoPath, registeredWorktreeCount: worktrees.length },
-      'worktree_adopt_not_registered'
-    );
-    return null;
-  }
-
-  await refuseUnfinishedWorktree(path);
-  getLog().warn({ worktreePath: path, branchName: wt.branch }, 'worktree_adopted');
-  return {
-    id: path,
-    provider: 'worktree',
-    workingPath: path,
-    branchName: toBranchName(wt.branch),
-    status: 'active',
-    createdAt: new Date(),
-    metadata: { provenance: 'adopted', adopted: true },
   };
 }

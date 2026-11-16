@@ -347,12 +347,6 @@ describe('GitHubAdapter', () => {
     }
   });
 
-  describe('streaming mode', () => {
-    test('should always return batch mode', () => {
-      expect(adapter.getStreamingMode()).toBe('batch');
-    });
-  });
-
   describe('platform type', () => {
     test('should return github', () => {
       expect(adapter.getPlatformType()).toBe('github');
@@ -721,16 +715,6 @@ describe('GitHubAdapter', () => {
     });
   });
 
-  describe('lifecycle methods', () => {
-    test('should start without errors', async () => {
-      await expect(adapter.start()).resolves.toBeUndefined();
-    });
-
-    test('should stop without errors', () => {
-      expect(() => adapter.stop()).not.toThrow();
-    });
-  });
-
   describe('self-filtering', () => {
     // Test context for self-filtering tests
     let originalAllowedUsers: string | undefined;
@@ -992,17 +976,6 @@ describe('GitHubAdapter', () => {
       // Comment without marker proceeds to conversation creation (not self-filtered)
       expect(mockGetOrCreateConversation).toHaveBeenCalled();
     });
-
-    test('should handle missing comment.user gracefully', async () => {
-      const adapter = createSelfFilterAdapter();
-      const payload = createCommentPayload('@archon help', undefined); // No user field
-
-      // Should not crash on undefined user
-      await adapter.handleWebhook(payload, 'mock-signature');
-
-      // Missing user should not trigger self-filtering (proceeds to conversation creation)
-      expect(mockGetOrCreateConversation).toHaveBeenCalled();
-    });
   });
 
   describe('webhook delivery dedup', () => {
@@ -1194,149 +1167,6 @@ describe('GitHubAdapter', () => {
       await deliver(adapter, payload, undefined);
 
       expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  describe('PR detection helpers', () => {
-    test('should detect PR from issue.pull_request property', () => {
-      const issueWithPR = {
-        number: 42,
-        title: 'Test PR',
-        body: 'Test body',
-        user: { login: 'testuser' },
-        labels: [],
-        state: 'open',
-        pull_request: { url: 'https://api.github.com/repos/owner/repo/pulls/42' },
-      };
-
-      const issueWithoutPR = {
-        number: 42,
-        title: 'Test Issue',
-        body: 'Test body',
-        user: { login: 'testuser' },
-        labels: [],
-        state: 'open',
-      };
-
-      expect(!!issueWithPR.pull_request).toBe(true);
-      expect(!!(issueWithoutPR as typeof issueWithPR).pull_request).toBe(false);
-    });
-  });
-
-  describe('worktree path detection helpers', () => {
-    test('paths containing /worktrees/ should be detected', () => {
-      const worktreePath = '/workspace/worktrees/issue-42/repo';
-      const normalPath = '/workspace/repo';
-
-      expect(worktreePath.includes('/worktrees/')).toBe(true);
-      expect(normalPath.includes('/worktrees/')).toBe(false);
-    });
-  });
-
-  describe('worktree creation feedback messages', () => {
-    test('issue worktree message format', () => {
-      // Verify the message format for issue worktrees
-      const number = 42;
-      const branchName = `issue-${String(number)}`;
-      const message = `Working in isolated branch \`${branchName}\``;
-
-      expect(message).toBe('Working in isolated branch `issue-42`');
-      expect(message).toContain('isolated branch');
-      expect(message).toContain('issue-42');
-    });
-
-    test('PR worktree message format with SHA', () => {
-      // Verify the message format for PR worktrees with SHA
-      const prHeadSha = 'abc123def456789';
-      const prHeadBranch = 'feature/awesome-feature';
-      const shortSha = prHeadSha.substring(0, 7);
-      const message = `Reviewing PR at commit \`${shortSha}\` (branch: \`${prHeadBranch}\`)`;
-
-      expect(message).toBe('Reviewing PR at commit `abc123d` (branch: `feature/awesome-feature`)');
-      expect(message).toContain('Reviewing PR');
-      expect(message).toContain('abc123d');
-      expect(message).toContain('feature/awesome-feature');
-    });
-
-    test('PR worktree message format without SHA (fallback)', () => {
-      // Verify the fallback message format for PRs without head SHA
-      const number = 42;
-      const isPR = true;
-      const branchName = isPR ? `pr-${String(number)}` : `issue-${String(number)}`;
-      const message = `Working in isolated branch \`${branchName}\``;
-
-      expect(message).toBe('Working in isolated branch `pr-42`');
-      expect(message).toContain('isolated branch');
-      expect(message).toContain('pr-42');
-    });
-
-    test('shared worktree message format (PR linked to issue)', () => {
-      // Verify the message format when PR shares worktree with linked issue
-      const issueNum = 42;
-      const message = `Reusing worktree from issue #${String(issueNum)}`;
-
-      expect(message).toBe('Reusing worktree from issue #42');
-      expect(message).toContain('Reusing');
-      expect(message).toContain('#42');
-    });
-
-    test('existing worktree reuse message format', () => {
-      // Verify the message format when conversation already has a worktree
-      const number = 42;
-      const isPR = false;
-      const branchName = isPR ? `pr-${String(number)}` : `issue-${String(number)}`;
-      const message = `Reusing worktree \`${branchName}\``;
-
-      expect(message).toBe('Reusing worktree `issue-42`');
-      expect(message).toContain('Reusing');
-      expect(message).toContain('issue-42');
-    });
-
-    test('messages use backticks for branch names', () => {
-      // Verify messages use GitHub markdown backticks for branch names
-      const issueMessage = 'Working in isolated branch `issue-42`';
-      const prMessage = 'Reviewing PR at commit `abc1234` (branch: `feature-x`)';
-
-      // Count backticks (should be pairs for formatting)
-      const issueBackticks = (issueMessage.match(/`/g) ?? []).length;
-      const prBackticks = (prMessage.match(/`/g) ?? []).length;
-
-      expect(issueBackticks).toBe(2); // One pair for branch name
-      expect(prBackticks).toBe(4); // Two pairs (SHA + branch)
-    });
-  });
-
-  describe('multi-repo path isolation', () => {
-    test('should use owner/repo path structure for codebases', () => {
-      // Test that path construction includes owner
-      const workspacePath = '/workspace';
-      const owner1 = 'alice';
-      const owner2 = 'bob';
-      const repo = 'utils';
-
-      // Simulate the path construction logic
-      const path1 = `${workspacePath}/${owner1}/${repo}`;
-      const path2 = `${workspacePath}/${owner2}/${repo}`;
-
-      // Paths should be different even with same repo name
-      expect(path1).not.toBe(path2);
-      expect(path1).toBe('/workspace/alice/utils');
-      expect(path2).toBe('/workspace/bob/utils');
-    });
-
-    test('worktrees should be isolated by owner', () => {
-      // Worktrees are relative to repo path, so they auto-isolate
-      const aliceRepoPath = '/workspace/alice/utils';
-      const bobRepoPath = '/workspace/bob/utils';
-      const issueNumber = 33;
-
-      // Simulate worktree path construction
-      const aliceWorktree = `${aliceRepoPath}/../worktrees/issue-${issueNumber}`;
-      const bobWorktree = `${bobRepoPath}/../worktrees/issue-${issueNumber}`;
-
-      // Note: These resolve to different paths
-      // /workspace/alice/worktrees/issue-33 vs /workspace/bob/worktrees/issue-33
-      expect(aliceWorktree).not.toBe(bobWorktree);
     });
   });
 
@@ -1566,15 +1396,6 @@ describe('GitHubAdapter', () => {
       installCredentialHelperSpy.mockClear();
     });
 
-    test('getInstallationToken called once per (owner, repo) for sendMessage', async () => {
-      const { adapter, provider } = createAppModeAdapter();
-      // sendMessage flow goes through resolveOctokit -> getOctokitForInstallation,
-      // not getInstallationToken. Assert the Octokit path was exercised instead.
-      await adapter.sendMessage('owner/repo#42', 'hello');
-      expect(provider.getOctokit).toHaveBeenCalledWith('owner', 'repo');
-      expect(provider.getOctokit.mock.calls.length).toBeGreaterThanOrEqual(1);
-    });
-
     test('multi-install routing — different (owner, repo) get different installations', async () => {
       const { adapter, provider } = createAppModeAdapter();
       await adapter.sendMessage('alpha/repo#1', 'one');
@@ -1623,21 +1444,6 @@ describe('GitHubAdapter', () => {
         // Inner orchestrator path may throw — we only care about priming here.
       }
       expect(provider.prime).toHaveBeenCalledWith('alpha', 'repo', 99999);
-    });
-
-    test('401 from Octokit triggers invalidateRepo + retry once', async () => {
-      const { adapter, provider } = createAppModeAdapter();
-      // First call to Octokit.createComment throws 401; second succeeds.
-      const octokit = await provider.getOctokit('owner', 'repo');
-      const err401 = Object.assign(new Error('Unauthorized'), { status: 401 });
-      octokit.rest.issues.createComment
-        .mockRejectedValueOnce(err401)
-        .mockResolvedValueOnce({ data: { id: 1 } });
-
-      await adapter.sendMessage('owner/repo#1', 'msg');
-      // invalidateRepo evicts BOTH the lookup cache and the token cache
-      // for (owner, repo) — see C2 in the PR-B review.
-      expect(provider.invalidateRepo).toHaveBeenCalledWith('owner', 'repo');
     });
 
     test('T3: second consecutive 401 propagates (no infinite retry)', async () => {

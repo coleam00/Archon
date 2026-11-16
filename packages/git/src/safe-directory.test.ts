@@ -50,28 +50,6 @@ describe('git utilities', () => {
         { timeout: 10000 }
       );
     });
-
-    test('uses execFileAsync (not shell exec)', async () => {
-      execSpy.mockResolvedValue(output());
-
-      await git.addSafeDirectory(repo('/workspace/path with spaces'));
-
-      // If this were shell exec, spaces in the path would cause issues.
-      // execFileAsync passes args as array, so path with spaces is safe.
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        [
-          'config',
-          '--global',
-          '--fixed-value',
-          '--replace-all',
-          'safe.directory',
-          '/workspace/path with spaces',
-          '/workspace/path with spaces',
-        ],
-        { timeout: 10000 }
-      );
-    });
     test('times out a hung initial config read before any write', async () => {
       execSpy.mockRestore();
       const realExec = git.execFileAsync;

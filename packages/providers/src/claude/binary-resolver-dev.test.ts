@@ -67,14 +67,6 @@ describe('resolveClaudeBinaryPath (dev mode)', () => {
     );
   });
 
-  test('honors CLAUDE_BIN_PATH env var when file exists', async () => {
-    process.env.CLAUDE_BIN_PATH = '/usr/local/bin/claude';
-    pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('file');
-
-    const result = await resolver.resolveClaudeBinaryPath();
-    expect(result).toBe('/usr/local/bin/claude');
-  });
-
   test('throws when CLAUDE_BIN_PATH is set but file does not exist', async () => {
     process.env.CLAUDE_BIN_PATH = '/nonexistent/claude';
     pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('missing');

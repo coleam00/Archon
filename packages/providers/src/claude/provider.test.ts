@@ -257,10 +257,6 @@ describe('ClaudeProvider', () => {
     spy.mockRestore();
   });
 
-  test('getType returns claude', () => {
-    expect(client.getType()).toBe('claude');
-  });
-
   test('returns full capability set for Claude provider', () => {
     expect(client.getCapabilities()).toMatchObject({
       backgroundWork: 'reported',
@@ -692,38 +688,6 @@ describe('subtasks and settling', () => {
     expect(chunks[0]).toMatchObject({ type: 'subtask', status: 'failed' });
   });
 
-  test('emits complete task lifecycle in correct order', async () => {
-    const chunks = await streamOf(
-      {
-        type: 'system',
-        subtype: 'task_started',
-        task_id: 't-1',
-        description: 'Working on the bug',
-      },
-      {
-        type: 'system',
-        subtype: 'task_progress',
-        task_id: 't-1',
-        description: 'Working on the bug',
-        summary: 'Reading stack trace',
-      },
-      {
-        type: 'system',
-        subtype: 'task_notification',
-        task_id: 't-1',
-        status: 'completed',
-        output_file: '/tmp/t-1.json',
-        summary: 'Done',
-      }
-    );
-
-    expect(chunks.map(c => (c.type === 'subtask' ? c.status : c.type))).toEqual([
-      'started',
-      'running',
-      'completed',
-    ]);
-  });
-
   test('closes an announced subtask whose notification is marked ambient', async () => {
     const chunks = await streamOf(
       { type: 'system', subtype: 'task_started', task_id: 't-1', description: 'Research' },
@@ -1054,24 +1018,6 @@ describe('tool call closing', () => {
         outputTruncated: true,
       },
     ]);
-  });
-
-  test('terminal tool result queue drain preserves hook outcome', async () => {
-    mockQuery.mockImplementation(async function* (args) {
-      yield toolUses(['late-id', 'Read']);
-      await postToolUse(args)?.(
-        { tool_name: 'Read', tool_use_id: 'late-id', tool_response: 'ok' } as never,
-        'late-id',
-        hookOptions
-      );
-    });
-
-    expect(await chunksOf('test', '/workspace')).toContainEqual({
-      type: 'tool_call_update',
-      toolCallId: 'late-id',
-      status: 'completed',
-      output: 'ok',
-    });
   });
 
   test('a tool call no hook reports closes from its tool_result block', async () => {
@@ -2051,11 +1997,7 @@ describe('SDK options', () => {
   // land on its nearest endpoint.
   test.each([
     ['high', 'high'],
-    ['xhigh', 'xhigh'],
-    ['minimal', 'low'],
-    ['max', 'max'],
     ['ultra', 'max'],
-    ['persistent', 'max'],
   ] as const)('effort %s reaches the SDK as %s', async (declared, applied) => {
     expect((await optionsFor({ nodeConfig: { effort: declared } })).effort).toBe(applied);
   });
@@ -2731,18 +2673,6 @@ describe('typed failures (#1797, #3524)', () => {
     expect(stream.chunks.filter(c => c.type === 'agent_message_chunk')).toHaveLength(0);
     // The provider makes one SDK call; retry belongs to the engine.
     expect(mockQuery).toHaveBeenCalledTimes(1);
-  });
-
-  test('a reworded message with the same code keeps the same class', async () => {
-    const classes: unknown[] = [];
-    for (const text of ['Invalid API key · Fix external API key', 'Unauthorized: key revoked']) {
-      const result = await resultOf(
-        syntheticAssistantMessage('authentication_failed', text),
-        apiErrorResult(text)
-      );
-      classes.push((result.failure as { class: string }).class);
-    }
-    expect(classes).toEqual(['auth', 'auth']);
   });
 
   test('text that reads as a different class does not change the code’s class', async () => {

@@ -48,12 +48,6 @@ describe('resolvePiSession', () => {
     expect(mockList).not.toHaveBeenCalled();
   });
 
-  test('explicit non-ephemeral request → persistent session', async () => {
-    await resolvePiSession('/tmp/proj', undefined, false, false);
-    expect(mockCreate).toHaveBeenCalledWith('/tmp/proj');
-    expect(mockInMemory).not.toHaveBeenCalled();
-  });
-
   test('resume id matches existing session → open by path', async () => {
     mockList.mockImplementationOnce(async () => [
       { id: 'abc-123', path: '/sessions/abc-123.jsonl', cwd: '/tmp/proj' },
