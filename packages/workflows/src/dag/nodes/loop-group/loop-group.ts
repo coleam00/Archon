@@ -5,7 +5,7 @@ import { finishNodeExecution } from '../../../node-execution';
 import { serializeNodeOutput, type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeExecutionRecord } from '../../../schemas/node-execution';
 import { NodeEventWriteError, recordNodeState } from '../../../node-event-write';
-import type { DagNode, LoopGroupNode } from '../../../schemas';
+import type { DagNode, LoopGroupNode, NodeOutput } from '../../../schemas';
 import { nodeInvocationKey } from '../../../node-record-reader';
 import { resolvedBodyNodes } from '../../../graph-plan';
 import { type ModelAliasPreset, type TierName } from '../../../model-validation';
@@ -20,6 +20,7 @@ import type {
 } from './loop-group-state';
 import {
   completeEscalatedResume,
+  completeInterruptedRound,
   finalizeGroupOnBareApprove,
   initialLoopGroupState,
   readLoopGroupResume,
@@ -223,10 +224,12 @@ async function executeLoopGroupBody(
   }
   const loopPrevOutputs = resume.isLoopResume
     ? restoreLoopPrevOutputs(run)
-    : resume.continuesInterruptedIteration
-      ? await restorePreviousIteration(run)
-      : undefined;
-  const resumedCompletion = await completeEscalatedResume(run, loopPrevOutputs);
+    : await restoreInterruptedPrev(run);
+  const resumedCompletion =
+    (await completeEscalatedResume(run, loopPrevOutputs)) ??
+    (loopPrevOutputs !== undefined
+      ? await completeInterruptedRound(run, loopPrevOutputs)
+      : undefined);
   if (resumedCompletion !== undefined) return resumedCompletion;
 
   const state = initialLoopGroupState(run, loopPrevOutputs);
@@ -264,6 +267,20 @@ async function executeLoopGroupBody(
 }
 
 /**
+ * `$LOOP_PREV` for the round that starts after a failure or kill: the interrupted round
+ * when it is done, else the round before it. Undefined for every other shape.
+ */
+async function restoreInterruptedPrev(
+  run: LoopGroupRun
+): Promise<Map<string, NodeOutput> | undefined> {
+  const round = run.resume.interruptedRound;
+  if (round === undefined) return undefined;
+  // restorePreviousIteration reads the iteration before `resumeIteration`.
+  const resumeIteration = round.done ? round.iteration + 1 : round.iteration;
+  return restorePreviousIteration({ ...run, resume: { resumeIteration } });
+}
+
+/**
  * The round this group invocation stopped in when the run resumes after it failed or was
  * killed inside the group. Undefined on a fresh run (no unfinished invocations), and when
  * the group never got as far as a body row.
@@ -278,15 +295,15 @@ async function readInterruptedIteration(
   if (unfinished?.node.kind !== 'loop_group') return undefined;
   const { lifecycle } = unfinished;
   if (lifecycle.status !== 'failed' && lifecycle.status !== 'started') return undefined;
-  const iteration = await findInterruptedIteration({
+  const found = await findInterruptedIteration({
     ctx,
     node,
     bodyNodes,
     bodyStepNamePrefix: `${stepName}.`,
   });
-  if (iteration === undefined) return undefined;
+  if (found === undefined) return undefined;
   return {
-    iteration,
+    ...found,
     exhausted: lifecycle.status === 'failed' && lifecycle.failureKind === 'max_iterations',
   };
 }

@@ -94,8 +94,9 @@ export function readLoopGroupResume(
   });
   // Leaf rows already own prior spend; only its completeness proof carries into this segment.
   progress.usage.costPartial = hasIncompleteGroupCost(ctx, loopGateMeta, ownerInvocationKey);
-  const { startIteration, restoredIteration, continuesInterruptedIteration } = startOf(
+  const { startIteration, restoredIteration, interruptedRound } = startOf(
     { ...shape, isLoopResume, resumeIteration, enclosingPauseFrame, interrupted },
+    node,
     progress
   );
   const loopGateRunMeta = (ctx.workflowRun.metadata ?? {}) as LoopGateRunMetadata;
@@ -116,7 +117,7 @@ export function readLoopGroupResume(
     isLoopResume,
     bodySessionCursors,
     bodySessionCursorAncestry: withOwnCursors(ctx, shape.ownerInvocationKey, bodySessionCursors),
-    continuesInterruptedIteration,
+    interruptedRound,
     resumeIteration: restoredIteration,
     startIteration,
     feedbackGiven,
@@ -126,9 +127,9 @@ export function readLoopGroupResume(
 }
 
 /**
- * The iteration a group starts at, and the one whose successor `$LOOP_PREV` restores. Every
- * pause shape keeps its own start; only a failure or kill outside a pause re-enters the
- * round it stopped in.
+ * The iteration a group starts at, and the iteration it resumes from. Every pause shape
+ * keeps its own start; only a failure or kill outside a pause continues from the round it
+ * stopped in.
  */
 function startOf(
   shape: Pick<ResumeShape, 'restoredAncestry'> & {
@@ -137,36 +138,52 @@ function startOf(
     enclosingPauseFrame: { iteration: number } | undefined;
     interrupted: InterruptedIteration | undefined;
   },
+  node: LoopGroupNode,
   progress: LoopGroupProgress
-): { startIteration: number; restoredIteration: number; continuesInterruptedIteration: boolean } {
+): {
+  startIteration: number;
+  restoredIteration: number;
+  interruptedRound: LoopGroupResume['interruptedRound'];
+} {
   const { isLoopResume, resumeIteration, enclosingPauseFrame, interrupted } = shape;
-  if (isLoopResume) {
-    return {
-      startIteration: resumeIteration + 1,
-      restoredIteration: resumeIteration,
-      continuesInterruptedIteration: false,
-    };
-  }
+  const paused = { restoredIteration: resumeIteration, interruptedRound: undefined };
+  if (isLoopResume) return { ...paused, startIteration: resumeIteration + 1 };
   if (shape.restoredAncestry !== undefined || enclosingPauseFrame !== undefined) {
     return {
+      ...paused,
       startIteration:
         shape.restoredAncestry !== undefined ? (enclosingPauseFrame?.iteration ?? 1) : 1,
-      restoredIteration: resumeIteration,
-      continuesInterruptedIteration: false,
     };
   }
-  if (interrupted === undefined) {
-    return {
-      startIteration: 1,
-      restoredIteration: resumeIteration,
-      continuesInterruptedIteration: false,
-    };
-  }
+  if (interrupted === undefined) return { ...paused, startIteration: 1 };
   progress.lastStartedIteration = interrupted.iteration;
-  // A group that ran out of rounds has none left: it starts past its last and fails again.
-  const startIteration = interrupted.exhausted ? interrupted.iteration + 1 : interrupted.iteration;
-  // $LOOP_PREV restores the iteration before the one that starts.
-  return { startIteration, restoredIteration: startIteration, continuesInterruptedIteration: true };
+  // An interactive group's gate follows the completion check, so a finished round re-runs.
+  const done =
+    interrupted.exhausted || (interrupted.finished && node.loop_group.interactive !== true);
+  return {
+    startIteration: done ? interrupted.iteration + 1 : interrupted.iteration,
+    restoredIteration: interrupted.iteration,
+    interruptedRound: { ...interrupted, done },
+  };
+}
+
+/**
+ * Finish the round a kill or failure interrupted after its body finished: re-run its
+ * completion check against its restored outputs. Undefined when the group goes on to the
+ * next round. A group that ran out of rounds already failed this check and is not rechecked.
+ */
+export async function completeInterruptedRound(
+  run: LoopGroupRun,
+  roundOutputs: Map<string, NodeOutput>
+): Promise<LoopGroupBodyResult | undefined> {
+  const round = run.resume.interruptedRound;
+  if (round?.done !== true || round.exhausted) return undefined;
+  const roundResult = loopGroupIterationOutput(run.bodyNodes, roundOutputs);
+  const rawIterationOutput = roundResult?.output ?? '';
+  const completed = await resumedCompletion(run, roundOutputs, rawIterationOutput);
+  if (typeof completed !== 'boolean') return completed;
+  if (!completed) return undefined;
+  return completeResumedIteration(run, roundResult, rawIterationOutput);
 }
 
 function hasIncompleteGroupCost(

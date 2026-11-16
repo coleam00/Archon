@@ -1003,10 +1003,13 @@ Suspension and failure have different recovery rules:
   same-body source and its consumer resumes within the paused iteration, which re-runs
   the source. The consumer forks the re-run, matching the `$source.output` it reads.
 - **Failure resume** (`/workflow resume <id>` after a crash/failure): the group
-  resumes in the iteration it stopped in, read from the run's body-node history, and
-  re-runs that iteration's body in full. Earlier iterations stay done, and `$LOOP_PREV.*`
-  reads the last completed one, restored the same way as after a pause; if its history
-  or full output cannot be restored, the resume fails. Iterations already used count
+  resumes in the iteration it stopped in, read from the run's body-node history. An
+  iteration whose body did not finish re-runs in full. One whose body finished re-runs
+  only its completion check, then the group goes on to the next iteration; in an
+  interactive group it re-runs in full, because its gate was never reached. Earlier
+  iterations stay done, and `$LOOP_PREV.*` reads the last completed one, restored the
+  same way as after a pause; if its history or full output cannot be restored, the
+  resume fails. Iterations already used count
   against `max_iterations`, so a group that failed by running out of iterations fails
   again without running one. With `fresh_context: false`, the re-entered iteration starts
   a new session.

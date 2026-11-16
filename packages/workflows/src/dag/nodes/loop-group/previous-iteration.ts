@@ -56,15 +56,17 @@ function restorationError(
 
 /**
  * The round a failed or interrupted run stopped in: the highest iteration of THIS group
- * invocation that has any body row. Undefined when no body row was written for it.
+ * invocation that has any body row, and whether every body node finished in it (its
+ * latest row there is completed or skipped). Undefined when no body row was written.
  */
 export async function findInterruptedIteration(
   run: Omit<PreviousIterationRun, 'resume'>
-): Promise<number | undefined> {
+): Promise<{ iteration: number; finished: boolean } | undefined> {
   const runId = run.ctx.workflowRun.id;
   const events = await run.ctx.deps.store.listEventsForRuns([runId], NODE_STATE_EVENT_TYPES);
   let interrupted: number | undefined;
-  for (const { iteration } of ownBodyRecords(
+  let latest = new Map<string, WorkflowEventRow['event_type']>();
+  for (const { row, path, iteration } of ownBodyRecords(
     run,
     events.get(runId) ?? [],
     (stepName, reason) =>
@@ -72,9 +74,17 @@ export async function findInterruptedIteration(
         `Loop group '${run.node.id}' cannot find the iteration it stopped in from node '${stepName}': ${reason}`
       )
   )) {
-    if (iteration !== undefined && iteration > (interrupted ?? 0)) interrupted = iteration;
+    if (iteration === undefined || iteration < (interrupted ?? 0)) continue;
+    if (iteration > (interrupted ?? 0)) latest = new Map();
+    interrupted = iteration;
+    latest.set(path, row.event_type);
   }
-  return interrupted;
+  if (interrupted === undefined) return undefined;
+  const finished = run.bodyNodes.every(body => {
+    const eventType = latest.get(run.bodyStepNamePrefix + body.id);
+    return eventType === 'node_completed' || eventType === 'node_skipped';
+  });
+  return { iteration: interrupted, finished };
 }
 
 function selectPreviousIterationRows(

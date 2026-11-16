@@ -38,6 +38,8 @@ export interface LoopGroupProgress {
 /** The round a failed or interrupted group invocation stopped in, read from its body rows. */
 export interface InterruptedIteration {
   iteration: number;
+  /** Every body node finished in it, so its body does not run again. */
+  finished: boolean;
   /** The group failed because it ran out of rounds, so it has none left. */
   exhausted: boolean;
 }
@@ -51,10 +53,12 @@ export interface InterruptedIteration {
  *    like any other body node's output — so `loopUserInput` stays scoped to the
  *    legacy shape.
  *  - a body terminal wait this group owns.
- *  - a group that failed or was interrupted outside any pause
- *    (`continuesInterruptedIteration`): it re-enters the round it stopped in and re-runs
- *    that round's body in full. Earlier rounds stay done, `$LOOP_PREV` reads the round
- *    before, and the rounds already used count against max_iterations.
+ *  - a group that failed or was interrupted outside any pause (`interruptedRound`):
+ *    earlier rounds stay done and the rounds already used count against max_iterations.
+ *    A round whose body did not finish runs again in full, with `$LOOP_PREV` read from
+ *    the round before. A round whose body finished re-runs only its completion check and
+ *    the group goes on to the next round, unless the group is interactive: its gate
+ *    follows that check and was never reached, so the round re-runs in full.
  */
 export interface LoopGroupResume {
   loopGateMeta: ApprovalContext | undefined;
@@ -63,14 +67,12 @@ export interface LoopGroupResume {
   isEscalatedGateResume: boolean;
   isEscalatedWaitResume: boolean;
   isLoopResume: boolean;
-  continuesInterruptedIteration: boolean;
+  /** Set only for the failure or kill shape; `done` means the round does not run again. */
+  interruptedRound: (InterruptedIteration & { done: boolean }) | undefined;
   /** Named owner sessions of body nodes that resume a session context; undefined when none do. */
   bodySessionCursors: Map<string, SessionCursor> | undefined;
   bodySessionCursorAncestry: Map<string, Map<string, SessionCursor>>;
-  /**
-   * The iteration the run paused in; for `continuesInterruptedIteration`, the iteration
-   * that starts, so `$LOOP_PREV` restores the one before it.
-   */
+  /** The iteration the run paused, failed or was interrupted in. */
   resumeIteration: number;
   startIteration: number;
   feedbackGiven: boolean;
