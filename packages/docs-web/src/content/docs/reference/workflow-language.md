@@ -2004,8 +2004,8 @@ the producer was skipped, such as `all_done`:
 The directive resolves at run time, so the block can read the input only where a run-time
 value can go: a `command:` or `script:` node's `with:` value that is exactly
 `$INPUTS.<name>`, a `workflow:` node's or nested include's `with:`, the
-`INPUTS_<UPPER_SNAKE>` env var of a `bash:` or `script:` node, and an AI node's prompt or
-command body. Any other surface that names the input, such as `when:`, `systemPrompt:`, a
+`INPUTS_<UPPER_SNAKE>` env var of a `bash:` or `script:` node or a `loop:` or `loop_group:`
+`until_bash:` check, and an AI node's prompt or command body. Any other surface that names the input, such as `when:`, `systemPrompt:`, a
 `loop:` prompt, or an approval message, is substituted at load, so it is a load error that
 names the node and field.
 

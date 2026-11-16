@@ -35,12 +35,8 @@ import {
 import { type JsonValue } from '../../../output-ref';
 import { RunSourceUnreadableError } from '../../node-source';
 import { beginExecution, type RunLayersContext } from '../../run-context';
-import {
-  resolveRunInputs,
-  nodeTemplateReferences,
-  type ShellInputContext,
-  resolveChildRunInputs,
-} from '../../references';
+import { resolveRunInputs, nodeTemplateReferences, type ShellInputContext } from '../../references';
+import { resolveChildRunInputs } from '../fan-out-shared';
 
 const LIVE_CHILD_STATUSES: readonly WorkflowRunStatus[] = workflowRunStatusSchema.exclude(
   terminalWorkflowRunStatusSchema.options

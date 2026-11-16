@@ -1,5 +1,8 @@
-import { resolveFanOutItems, resolveFanOutStaticInputs } from '../../dag/nodes/fan-out-shared';
-import { resolveChildRunInputs } from '../../dag/references';
+import {
+  resolveChildRunInputs,
+  resolveFanOutItems,
+  resolveFanOutStaticInputs,
+} from '../../dag/nodes/fan-out-shared';
 import {
   isWorkflowNode,
   type ComposeFanOutNode,
