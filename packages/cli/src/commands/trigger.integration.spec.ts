@@ -723,21 +723,34 @@ nodes:
       'item-1',
     ]);
     // Each of the script's fires is its own CLI process, so each start gets its own deadline.
-    // A script that throws ends the first run; that ends the wait at once instead of at the deadline.
+    // A script that throws fails the first run; that ends the wait at once instead of at the
+    // deadline. A completed first run does not: its last start may still be queued behind the
+    // other project's resource, with no run row yet.
     const step = async (reached: () => boolean, label: string): Promise<void> => {
       await waitFor(() => {
         if (reached()) return true;
         const first = runs()[0];
-        return first && isTerminalRunStatus(first.status) ? true : undefined;
+        return first && isTerminalRunStatus(first.status) && first.status !== 'completed'
+          ? true
+          : undefined;
       }, label);
       if (!reached())
-        throw new Error(`The first run ended before ${label}: ${JSON.stringify(runs())}`);
+        throw new Error(`The first run failed before ${label}: ${JSON.stringify(runs())}`);
     };
     // Nothing may still execute when afterEach removes the temp tree, on success or failure.
+    // A queued start has no run row yet but will run, so it counts as not ended.
     // A run that does not end in time is left for afterEach to stop.
+    const queued = () =>
+      readRows(
+        database,
+        "SELECT id FROM remote_agent_resource_start_requests WHERE status = 'queued'"
+      ).length;
     const allEnded = () =>
       waitFor(
-        () => (runs().every(run => isTerminalRunStatus(run.status)) ? runs() : undefined),
+        () =>
+          queued() === 0 && runs().every(run => isTerminalRunStatus(run.status))
+            ? runs()
+            : undefined,
         'all runs to end'
       ).catch((error: unknown) => {
         for (const run of readRows<RunRow>(
