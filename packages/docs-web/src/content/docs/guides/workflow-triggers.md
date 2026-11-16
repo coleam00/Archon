@@ -277,7 +277,7 @@ A result pointer that names nothing in the result starts nothing. The run still 
 archon trigger fire --config ~/.archon/triggers/build-after-plan.json --item <key> --inputs inputs.json
 ```
 
-A run on an item is refused before it starts, naming the file, when a run-ended binding its end could fire in its project is broken: the started workflow does not exist or does not declare an input the binding maps, or the ended workflow does not declare the binding's outcome or an input it reads. The run is cancelled before its first node, so a binding that names a missing stage is found before the stage feeding it does any work. With `--detach`, the refusal is the command's result and the run is cancelled before the child starts. `archon trigger check` reports these problems, and also a `launch.cwd` that does not exist, a binding that starts the workflow that ended, and two files that start the same stage, which no run is refused for.
+A run on an item is refused before it starts, naming the file, when a run-ended binding its end could fire in its project is broken: the started workflow does not exist or does not declare an input the binding maps, the ended workflow does not declare the binding's outcome or an input it reads, or, for a binding with [`checkout: "ended-run"`](#work-in-the-checkout-the-ended-run-left), either workflow pins `worktree.enabled: false`. The run is cancelled before its first node, so a binding that names a missing stage is found before the stage feeding it does any work. With `--detach`, the refusal is the command's result and the run is cancelled before the child starts. `archon trigger check` reports these problems, and also a `launch.cwd` that does not exist, a binding that starts the workflow that ended, and two files that start the same stage, which no run is refused for.
 
 A file can change while a run is running. The ended run fails instead of completing, naming the file, when a file in the directory is not JSON or has an invalid `on`, when two run-ended files share a `sourceInstanceId`, or when a binding for the ended workflow in its project names an outcome that workflow cannot complete with or reads an input it does not declare. A run never completes without the hand-off it owes. Fix the file, then run `archon workflow resume <run-id>`; the resumed run completes and writes the start.
 
@@ -297,6 +297,60 @@ While a start waits for capacity it has no run yet. `archon workflow runs --item
 `archon workflow runs --item <key> --json` lists the item's runs in the order they started, each with an `awaitingExecution` (above, `null` unless its start is admitted and not yet running) and a `cause`: `{"kind": "run_ended", "runId"}` for a start a run's end caused, `{"kind": "run_fired", "runId", "node"}` for one a node fired, `{"kind": "receipt", "receiptId", "sourceInstanceId"}` for any other trigger, or `null` for a start by hand. The receipt records the ended run as its `sourceActor` (`{"source": "archon-run-ended", "id": <run id>, "display": <outcome>}`) and uses the ended run's ID as its delivery ID. Start times on SQLite have one-second resolution; runs that start in the same second are listed in the order they were written.
 
 Run-ended bindings need the database store, as items do. With `store: files`, `archon trigger check` refuses any run-ended file, and such a file never fires: the file store refuses every run on an item, and a run with no item causes nothing.
+
+### Work in the checkout the ended run left
+
+By default the started run gets a fresh worktree cut from the base branch. With `"checkout": "ended-run"` in `on.runEnded`, it works on the ended run's branch at the commit that run ended on, so stages that must see the same checkout can be separate runs: build, then a check on the built commit, then build again on the same branch when the check sends it back. Each round is a run on the item, so `archon workflow runs --item <key>` shows how many times it went back, and each stage takes its own resource slot.
+
+The binding's `launch.isolation` must be `{ "kind": "default" }`; the engine picks the checkout. The started workflow decides how it gets it:
+
+- A workflow that changes its checkout (the default) continues in the ended run's worktree, on its branch. If that worktree is gone and the branch survives, the branch is checked out again in a new worktree. Admission keys the start by the branch, so it waits for or is skipped behind another run on that branch by its overlap policy, as with an explicit `branch`.
+- A workflow with `mutates_checkout: false` gets a worktree of its own on a new branch cut at the ended run's commit. Checks run beside each other, and none of them is on the build's branch. When such a run ends, a binding with `checkout: "ended-run"` on its outcome hands on the branch and commit it was given, not its own branch.
+
+This loop uses three bindings in `ARCHON_HOME/triggers/`. `check` declares `mutates_checkout: false` and completes with `pass` or `return`:
+
+```json
+{ "version": 1, "sourceInstanceId": "check-after-build",
+  "binding": { "bindingId": "check", "bindingRevision": null, "hostId": "alice-macbook",
+    "runAsUserId": "2a568f73-e217-40ca-b17d-a784d19fd43a", "resource": "check", "overlap": "queue",
+    "launch": { "cwd": "/Users/alice/Projects/widgets", "workflowName": "check", "inputs": {},
+      "isolation": { "kind": "default" } } },
+  "on": { "runEnded": { "workflowName": "build", "outcome": "built", "checkout": "ended-run" } } }
+```
+
+```json
+{ "version": 1, "sourceInstanceId": "build-after-return",
+  "binding": { "bindingId": "build", "bindingRevision": null, "hostId": "alice-macbook",
+    "runAsUserId": "2a568f73-e217-40ca-b17d-a784d19fd43a", "resource": "build", "overlap": "queue",
+    "launch": { "cwd": "/Users/alice/Projects/widgets", "workflowName": "build", "inputs": {},
+      "isolation": { "kind": "default" } } },
+  "on": { "runEnded": { "workflowName": "check", "outcome": "return", "checkout": "ended-run" } } }
+```
+
+```json
+{ "version": 1, "sourceInstanceId": "land-after-pass",
+  "binding": { "bindingId": "land", "bindingRevision": null, "hostId": "alice-macbook",
+    "runAsUserId": "2a568f73-e217-40ca-b17d-a784d19fd43a", "resource": "land", "overlap": "queue",
+    "launch": { "cwd": "/Users/alice/Projects/widgets", "workflowName": "land", "inputs": {},
+      "isolation": { "kind": "default" } } },
+  "on": { "runEnded": { "workflowName": "check", "outcome": "pass", "checkout": "ended-run" } } }
+```
+
+The first `build` runs as usual, in a worktree on a new branch. Each later `build` works in that same worktree, sees every commit the builds before it made, and adds to them. Each `check` reads the commit the build before it ended on. `land` runs on the branch once a check passes. To pass inputs as well, add `inputs` beside `checkout`.
+
+The branch and commit are read when the run completes and recorded on the start's receipt, where `archon trigger inspect` shows them as `checkoutFrom`. A run whose worktree its end hands to a stage keeps that worktree: its terminal record says `retained` with reason `in_use`, where it would otherwise have been removed. Nothing removes it automatically after that; `archon isolation cleanup` does, once no run uses it. If cleanup removes it before the stage starts, the stage checks the branch out again, or is refused when the branch is gone too.
+
+A start never falls back to a fresh checkout of the base branch. It is refused instead:
+
+- **The ended run left no branch**: it ran in place (with `--no-worktree`, or in a folder project), its worktree is gone, or its worktree is on another branch or a detached HEAD. The command that ended the run prints that the next stage was not started, and `archon trigger list` shows the receipt as `unmatched` with a `reason` that begins `Checkout:` and names the run and the path. To recover, run the ended workflow again on the item in a worktree; its end starts the stage. If its branch survives, `archon workflow run <workflow> --adopt <run-id> --item <key>` continues that branch instead of starting a new one.
+- **The branch moved after the ended run's commit**, or is gone. The started run fails before its first node with `launch_failed`, and `archon workflow get <run-id>` shows the branch, the commit it is at and the commit the run ended on. So when two checks of one commit both return it, the second build start is refused once the first build has committed.
+- **The project is a folder project, or the started workflow pins `worktree.enabled: false`.** Preparation fails; `archon trigger inspect` shows it. `archon trigger check` reports a binding whose ended or started workflow pins `worktree.enabled: false`; a folder project is only known when a start is prepared.
+
+`archon trigger fire` refuses a file with `checkout`, because a fire has no ended run to take the checkout from. To start such a stage by hand on a run's checkout, run `archon workflow run <workflow> --adopt <run-id> --item <key>`, naming the run whose worktree or branch holds the work. After a read-only check, that is not the check: its own branch and worktree are throwaway, and adopting it is refused once they are cleaned up. Adopt the run the check was given, `metadata.checkout_handoff.runId` in `archon workflow get <check-run-id> --json`. Adoption does not check the commit: it continues the branch as it is now.
+
+A worktree separates checkouts; it is not a sandbox. A check with `mutates_checkout: false` is not on the build's branch, but nothing stops its commands from writing to the repository. The commit check above is what refuses a build on a branch something else moved.
+
+An older Archon binary that prepares one of these starts reads only the branch in `launch.isolation`: it runs the stage on that branch with no commit check and no read-only copy, or fails when it cannot check the branch out. It never uses the base branch.
 
 ## Choose a resource, capacity, and overlap policy
 

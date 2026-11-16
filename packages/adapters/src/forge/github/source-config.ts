@@ -14,7 +14,7 @@ import { jsonValueSchema } from '@archon/workflows/output-ref';
 import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
 
 export const githubSourceBindingSchema = resourceStartBindingIntentSchema
-  .omit({ bindingRevision: true, eventInputs: true })
+  .omit({ bindingRevision: true, eventInputs: true, checkoutFrom: true })
   .extend({
     selector: forgeEventSelectorSchema,
     inputMapping: z.record(z.string(), createForgeInputBindingSchema(jsonValueSchema)),

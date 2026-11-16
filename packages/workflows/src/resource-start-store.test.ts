@@ -264,3 +264,14 @@ test('unknown foreign checkout identity only blocks guarded shared checkouts', (
     id: readOnly.run.id,
   });
 });
+test('two read-only copies of one handed-off commit hold no checkout of each other', () => {
+  const copy = (): PreparedWorkflowLaunch => {
+    const base = launch(false);
+    return {
+      ...base,
+      execution: { ...base.execution, isolation: { kind: 'worktree', fromBranch: 'c'.repeat(40) } },
+    };
+  };
+  const held = heldCheckouts([{ id: 'first-check', launch: copy() }]);
+  expect(resourceStartBlocker({ ...slot(), heldCheckouts: held }, copy(), 'host')).toBeNull();
+});
