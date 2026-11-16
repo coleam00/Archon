@@ -612,7 +612,9 @@ export function buildNoticeTerminalBlocks(notice: TerminalNotice): {
     });
   return {
     blocks,
-    fallbackText: `${TERMINAL_HEADER[notice.status]} (${notice.workflowName})`,
+    fallbackText: `${TERMINAL_HEADER[notice.status]} (${notice.workflowName})${
+      outcome ? ` · authored outcome: ${outcomeText(outcome)}` : ''
+    }`,
   };
 }
 

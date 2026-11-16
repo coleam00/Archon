@@ -118,6 +118,9 @@ test('an unreadable item, a failed run and a lost owner say which run and what s
     text({ type: 'terminal', ...run, status: 'completed', outcome: null, cause: null })
   ).not.toContain(more);
   expect(
+    text({ type: 'terminal', ...run, status: 'completed', outcome: null, cause: null })
+  ).toContain('Run run-1 completed.');
+  expect(
     text({ type: 'terminal', ...run, status: 'completed', outcome: 'built', cause: null })
   ).toContain('Run run-1 completed (built).');
 });

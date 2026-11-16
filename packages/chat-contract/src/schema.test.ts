@@ -72,13 +72,15 @@ test('generated schema and runtime agree on actor and action constraints', () =>
 test('a named outcome travels as completedOutcome, not authoredOutcome', () => {
   const event = { type: 'terminal', runId: 'r', status: 'completed' } as const;
   const notice = { ...event, workflowName: 'w' } as const;
+  expect(chatWireSchemas.ChatRunEvent.parse({ ...event, completedOutcome: 'built' })).toMatchObject(
+    {
+      completedOutcome: 'built',
+    }
+  );
   expect(
-    chatWireSchemas.ChatRunEvent.safeParse({ ...event, completedOutcome: 'built' }).success
-  ).toBe(true);
+    chatWireSchemas.ChatAttentionNotice.parse({ ...notice, completedOutcome: 'built' })
+  ).toMatchObject({ completedOutcome: 'built' });
   expect(
     chatWireSchemas.ChatRunEvent.safeParse({ ...event, authoredOutcome: 'built' }).success
   ).toBe(false);
-  expect(
-    chatWireSchemas.ChatAttentionNotice.safeParse({ ...notice, completedOutcome: 'built' }).success
-  ).toBe(true);
 });

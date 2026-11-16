@@ -294,6 +294,30 @@ test('a destination thread hosts the notice, and the follow-up closes it in that
   ]);
 });
 
+test.each([
+  ['a named outcome', { completedOutcome: 'return' }, ' · authored outcome: return'],
+  [
+    'a boolean outcome',
+    { completedOutcome: 'failed', authoredOutcome: 'failed' },
+    ' · authored outcome: failed',
+  ],
+  ['no declared outcome', {}, ''],
+] as const)('a terminal notice posts %s in its text', async (_, fields, suffix) => {
+  await plugin.attentionNotice({
+    destination: 'C9',
+    notice: {
+      type: 'terminal',
+      runId: 'run-1',
+      workflowName: 'deploy',
+      status: 'completed',
+      ...fields,
+    },
+  });
+  expect(slack.posts[0]).toMatchObject({
+    text: `:white_check_mark: Workflow completed (deploy)${suffix}`,
+  });
+});
+
 test('a failed terminal post still closes the run notices, and the failure surfaces', async () => {
   await notify(wait('select', [{ id: 'eu' }]));
   slack.failPost = new Error('channel_not_found');
