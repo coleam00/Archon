@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { dryRunResultSchema, type DryRunResult } from '@archon/workflows/dry-run';
 import { workflowRunCommand } from './workflow-run-owned';
 import { captureWorkflowCommand } from '../test-support/command';
 
@@ -36,13 +37,7 @@ function write(path: string, text: string): void {
   writeFileSync(path, text);
 }
 
-interface DryRunJson {
-  outcome: string;
-  missingStubs: string[];
-  trace: { nodeId: string; state: string; reason?: string }[];
-}
-
-async function dryRun(fx: Fixture, workflow: string): Promise<DryRunJson> {
+async function dryRun(fx: Fixture, workflow: string): Promise<DryRunResult> {
   // The JSON result goes through process.stdout.write, which captureCommand does not see.
   let json = '';
   const write = spyOn(process.stdout, 'write').mockImplementation(((
@@ -68,7 +63,7 @@ async function dryRun(fx: Fixture, workflow: string): Promise<DryRunJson> {
     write.mockRestore();
   }
   if (!json.trim()) throw new Error(`No dry-run result in output:\n${result.output}`);
-  return JSON.parse(json) as DryRunJson;
+  return dryRunResultSchema.parse(JSON.parse(json));
 }
 
 describe('workflow run --dry-run --workflow-source', () => {
