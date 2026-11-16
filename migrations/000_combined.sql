@@ -605,6 +605,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_start_receipt_bindings (
   host_id TEXT,
   intent TEXT,
   event_input_names TEXT,
+  item_key TEXT,
   preparation_status VARCHAR(20) NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
   preparation_owner TEXT,
   preparation_error TEXT,
@@ -728,6 +729,10 @@ ALTER TABLE remote_agent_workflow_runs ADD COLUMN IF NOT EXISTS origin JSONB;
 -- Names of a binding's event-derived inputs, kept beside the intent: older binaries
 -- parse `intent` strictly and would refuse an extra key.
 ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS event_input_names TEXT;
+
+-- The item a source plugin's binding mapped from its event; null means the receipt's
+-- item_key, if any. One receipt can start several bindings, not all on an item.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS item_key TEXT;
 
 -- The durable thing runs are about: a key within a project, and when it was first named.
 -- No status, stage or config; where an item stands is derived from its runs. project_key

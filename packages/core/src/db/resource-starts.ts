@@ -289,8 +289,13 @@ function parseStoredJson(value: unknown): unknown {
 }
 
 /** Reverses `storableIntent` in `./start-receipt-writes`. */
-function readStoredIntent(intent: unknown, eventInputNames: unknown): ResourceStartBindingIntent {
-  const stored = resourceStartBindingIntentSchema.parse(parseStoredJson(intent));
+function readStoredIntent(
+  intent: unknown,
+  eventInputNames: unknown,
+  itemKey: unknown
+): ResourceStartBindingIntent {
+  const parsed = resourceStartBindingIntentSchema.parse(parseStoredJson(intent));
+  const stored = typeof itemKey === 'string' ? { ...parsed, itemKey } : parsed;
   if (eventInputNames == null) return stored;
   const names = new Set(z.array(z.string()).parse(parseStoredJson(eventInputNames)));
   for (const name of names)
@@ -342,7 +347,8 @@ function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
     status: row.preparation_status as StartBindingInspection['status'],
     ownerId: typeof row.preparation_owner === 'string' ? row.preparation_owner : null,
     error: typeof row.preparation_error === 'string' ? row.preparation_error : null,
-    intent: row.intent == null ? null : readStoredIntent(row.intent, row.event_input_names),
+    intent:
+      row.intent == null ? null : readStoredIntent(row.intent, row.event_input_names, row.item_key),
     requestStatus,
     disposition: requestDisposition,
   };
@@ -562,18 +568,18 @@ export async function completeStartBindingPreparation(
         [input.receiptId, input.bindingId]
       );
     }
-    const binding = await query<{ intent: unknown }>(
-      `SELECT intent FROM remote_agent_start_receipt_bindings
+    const binding = await query<{ intent: unknown; item_key: string | null }>(
+      `SELECT intent, item_key FROM remote_agent_start_receipt_bindings
         WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3${getDialect().rowLock()}`,
       [input.receiptId, input.bindingId, input.ownerId]
     );
-    const rawIntent = binding.rows[0]?.intent;
-    if (!rawIntent) return null;
-    const persisted = resourceStartBindingIntentSchema.parse(parseStoredJson(rawIntent));
+    const row = binding.rows[0];
+    if (!row?.intent) return null;
+    const persisted = resourceStartBindingIntentSchema.parse(parseStoredJson(row.intent));
     const disposition = await admitResourceStartWithQuery(
       query,
       preparedBindingStart(persisted, input),
-      await namedItem(query, input)
+      await namedItem(query, input, row.item_key)
     );
     await query(
       `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'complete', preparation_error = NULL, updated_at = ${getDialect().now()}
@@ -585,15 +591,20 @@ export async function completeStartBindingPreparation(
 }
 
 /**
- * The item the receipt named, in the project preparation resolved. It is written with the
- * start request, so a start that waits for capacity already has its item.
+ * The item the binding mapped, else the one its receipt named, in the project preparation
+ * resolved. It is written with the start request, so a start that waits for capacity
+ * already has its item.
  */
-async function namedItem(query: Query, input: PreparedBindingInput): Promise<string | null> {
+async function namedItem(
+  query: Query,
+  input: PreparedBindingInput,
+  bindingItemKey: string | null
+): Promise<string | null> {
   const receipt = await query<{ item_key: string | null }>(
     'SELECT item_key FROM remote_agent_start_receipts WHERE id = $1',
     [input.receiptId]
   );
-  const key = receipt.rows[0]?.item_key;
+  const key = bindingItemKey ?? receipt.rows[0]?.item_key;
   if (!key) return null;
   return ensureItem(query, input.launch.run.codebase_id, key);
 }

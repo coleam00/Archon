@@ -2416,12 +2416,14 @@ bindings:
     event:                            # the source plugin's selector, without `repository`
       kind: pr.lifecycle
       actions: [opened]
+    item: { field: subject.number, prefix: pr- }   # the run is on the item pr-<number>
     inputs:
       number: { event: subject.number }   # an event field; event bindings only
   follow-up:                          # neither schedule nor event: fire-only
     workflow: review-follow-up
     resource: follow-up
     overlap: queue
+    item: { field: number, prefix: pr- }  # a key of the fire's --inputs
 ```
 
 A binding sets `schedule:` (a timer binding, written as a file
@@ -2444,6 +2446,13 @@ the pack, naming the file and the binding. Beyond each binding's shape, a `{ bin
 input must name a declared timer or fire-only binding, and an `{ event: <field> }` input belongs to an
 event binding. Bindings sharing a resource need not agree on its capacity. An `event:` selector
 and its fields are checked against the source plugin when a binding is generated, not at load.
+
+`item:` names the [item](/reference/cli/#items) a start is on, from one field of its event and
+an optional fixed `prefix`; see
+[putting a start on its event's item](/guides/workflow-triggers/#put-a-start-on-the-item-its-event-names).
+An event binding's `field` is a source plugin event field, checked when the binding is
+generated; a fire-only binding's is a key of the fire's `--inputs`. A timer binding with
+`item:` is refused at load, since a tick is about no item.
 
 ## Launching a Separate Governed Run with `workflow:`
 

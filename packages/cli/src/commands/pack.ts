@@ -123,7 +123,12 @@ function generate(
   const kinded = kindedPackBinding(binding);
   switch (kinded.kind) {
     case 'fire':
-      return { id, kind: kinded.kind, path, document: fireConfig };
+      return {
+        id,
+        kind: kinded.kind,
+        path,
+        document: { ...fireConfig, ...(kinded.binding.item ? { item: kinded.binding.item } : {}) },
+      };
     case 'timer':
       return {
         id,
@@ -146,6 +151,7 @@ function generate(
           ...intent,
           selector: { ...kinded.binding.event, repository: target.repo },
           inputMapping: fields,
+          ...(kinded.binding.item ? { item: kinded.binding.item } : {}),
         },
       };
   }

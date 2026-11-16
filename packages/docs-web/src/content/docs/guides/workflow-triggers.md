@@ -214,6 +214,39 @@ A binding file without `schedule` is fire-only: no clock starts it. A workflow n
 
 `archon trigger schedule install` refuses a fire-only binding, because it has no timer to install. A `schedule` that is present must be complete: a file with an empty or partial `schedule` is invalid, not fire-only.
 
+## Put a start on the item its event names
+
+A binding can declare which field of its start's event names the [item](/reference/cli/#items) the run is on, so a run that an event starts belongs to the issue or pull request the event is about. `item` holds the `field` and an optional fixed `prefix`; the key is the prefix followed by the field's value, with a number written in decimal. There is no expression: the engine reads one field and gives the key no other meaning.
+
+In a fire-only file, `item` sits beside `binding`, and `field` is a key of the fire's `--inputs`:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "widgets-build-round",
+  "binding": { "bindingId": "widgets-build-round", "...": "as in the fire-only file above" },
+  "item": { "field": "number", "prefix": "issue-" }
+}
+```
+
+`archon trigger fire --config widgets-build-round.json --inputs inputs.json` with `{"number": 42}` in `inputs.json` starts a run on item `issue-42`. The fired start's item is chosen in this order:
+
+1. `--item <key>`, when the fire passes it. The mapping is not read.
+2. The binding's `item` mapping. A run that fires the binding while on another item still starts on the mapped item.
+3. The item of the run that fired it, as [items](/reference/cli/#items) describe.
+
+A fire whose `--inputs` lacks the field, or holds it empty or as anything but text or a number, is refused before anything is recorded or started, and the error names the binding and the field. A redelivery of a recorded `--delivery-id` keeps the item of its first acceptance.
+
+A GitHub source plugin binding declares `item` beside `inputMapping`, and `field` is one of the plugin's event fields, checked against the selector's event kind when the configuration loads:
+
+```json
+"item": { "field": "subject.number", "prefix": "issue-" }
+```
+
+Two events about the same issue start runs on the same item. An event whose field is unavailable rejects that binding, and its receipt records the binding as `rejected` with the reason (`Item: field 'subject.number' is missing`); other bindings the event matches still start, each on its own mapped item or on none.
+
+A timer file refuses `item`, since a tick is about no item, and so does a run-ended file, whose start is on the ended run's item. Items need the database store and a [registered project](/reference/cli/#items): on the file store, a start whose binding maps an item is refused before a run starts.
+
 ## Start a stage when a run on an item ends
 
 A trigger file with `on.runEnded` starts its binding when a run of a named workflow completes with a named outcome on an [item](/reference/cli/#items). It is how one stage hands an item to the next with no node that fires anything: the hand-off is a file the deployment owns, the engine reads it at the moment a run completes, and the start goes through the same receipt, preparation, admission, capacity, overlap and queue order as any binding start.

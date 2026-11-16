@@ -4,13 +4,17 @@
  *
  * A declaration starts nothing. `archon pack bindings` turns it into binding files for one
  * repository, and the operator registers each file. The declaration holds what the pack
- * knows (the workflow, what starts it, how starts may overlap, its inputs); the
- * operator supplies what only the install knows (the repository, the host, the run-as
- * user, the checkout).
+ * knows (the workflow, what starts it, how starts may overlap, its inputs, the item a
+ * start is on); the operator supplies what only the install knows (the repository, the
+ * host, the run-as user, the checkout).
  */
 import { z } from 'zod';
 import { jsonValueSchema } from '../output-ref';
-import { resourceStartBindingIntentSchema, resourceStartOverlapSchema } from './resource-start';
+import {
+  itemMappingSchema,
+  resourceStartBindingIntentSchema,
+  resourceStartOverlapSchema,
+} from './resource-start';
 
 /** A binding id and a resource name both end up in a file name and a resource key. */
 const BINDING_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
@@ -64,6 +68,8 @@ export const packEventBindingSchema = z
       .refine(event => !Object.hasOwn(event, 'repository'), {
         message: "must not name 'repository'; the operator supplies it",
       }),
+    /** `field` is one of the source plugin's event fields, checked there like `event`. */
+    item: itemMappingSchema.optional(),
   })
   .strict();
 
@@ -72,7 +78,13 @@ export const packEventBindingSchema = z
  * an operator. It is its own strict shape, so a `schedule:` or `event:` key that is
  * present but invalid is refused by its own schema and never read as fire-only.
  */
-export const packFireBindingSchema = z.object(bindingShape).strict();
+export const packFireBindingSchema = z
+  .object({
+    ...bindingShape,
+    /** `field` is a key of the fire's `--inputs`, the only event a fire has. */
+    item: itemMappingSchema.optional(),
+  })
+  .strict();
 
 export type PackTimerBinding = z.infer<typeof packTimerBindingSchema>;
 export type PackEventBinding = z.infer<typeof packEventBindingSchema>;

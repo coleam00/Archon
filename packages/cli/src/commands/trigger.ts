@@ -25,6 +25,7 @@ import {
   type AwaitingExecution,
 } from '@archon/workflows/resource-start-store';
 import {
+  mappedItemKey,
   resourceStartBindingIntentSchema,
   RUN_SOURCE_ACTOR,
   requestingRun,
@@ -209,6 +210,39 @@ async function inheritedItemKey(
   return item.key;
 }
 
+/**
+ * The item a fire's start is on: `--item` first, then the binding's `item` mapping read
+ * from `--inputs`, then the calling run's item. A binding that maps its item never
+ * inherits one, and a fire whose inputs cannot name the item is refused before anything
+ * is recorded. A recorded delivery keeps its first acceptance's item, so only `--item`
+ * is read for it.
+ */
+async function fireItemKey(
+  host: WorkflowHost,
+  fire: {
+    config: TriggerConfig;
+    explicit: string | undefined;
+    eventInputs: Readonly<Record<string, unknown>> | undefined;
+    sourceActor: SourceReceiptInput['sourceActor'];
+    recorded: boolean;
+  }
+): Promise<string | undefined> {
+  const { config, recorded } = fire;
+  if (fire.explicit !== undefined || recorded) return fire.explicit;
+  if (config.item === undefined)
+    return inheritedItemKey(host, fire.sourceActor, { cwd: config.binding.launch.cwd, recorded });
+  const inputs = fire.eventInputs ?? {};
+  const mapped = mappedItemKey(
+    config.item,
+    Object.hasOwn(inputs, config.item.field) ? inputs[config.item.field] : undefined
+  );
+  if (!mapped.ok)
+    throw new Error(
+      `Binding '${config.binding.bindingId}' names its item from the fire's --inputs, but its ${mapped.reason}. Nothing was recorded or started.`
+    );
+  return mapped.key;
+}
+
 async function triggerFire(
   host: WorkflowHost,
   options: TriggerOptions,
@@ -243,9 +277,13 @@ async function triggerFire(
     options.deliveryId !== undefined &&
     (await host.deps.store.hasStartReceiptForDelivery(config.sourceInstanceId, options.deliveryId));
   if (!recorded) await assertKnownRunAsUser(host, config);
-  const itemKey =
-    options.item ??
-    (await inheritedItemKey(host, sourceActor, { cwd: config.binding.launch.cwd, recorded }));
+  const itemKey = await fireItemKey(host, {
+    config,
+    explicit: options.item,
+    eventInputs,
+    sourceActor,
+    recorded,
+  });
   const binding = {
     ...config.binding,
     ...(eventInputs !== undefined ? { eventInputs } : {}),

@@ -52,14 +52,15 @@ export async function insertStartReceipt(
   for (const binding of input.bindings) {
     await query(
       `INSERT INTO remote_agent_start_receipt_bindings
-       (receipt_id,binding_id,binding_revision,host_id,intent,event_input_names,preparation_status)
-       VALUES ($1,$2,$3,$4,$5,$6,'pending')`,
+       (receipt_id,binding_id,binding_revision,host_id,intent,event_input_names,item_key,preparation_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'pending')`,
       [
         input.receipt.id,
         binding.bindingId,
         binding.bindingRevision,
         binding.hostId,
         ...storableIntent(binding),
+        binding.itemKey ?? null,
       ]
     );
   }
@@ -83,10 +84,11 @@ export async function insertStartReceipt(
 /**
  * Older binaries parse the `intent` column strictly, so it keeps their shape: event
  * inputs are merged into `launch.inputs` (an older binary passes them through, as it
- * always did) and their names go to `event_input_names`. `readStoredIntent` reverses it.
+ * always did) and their names go to `event_input_names`; the binding's item key goes to
+ * its own `item_key` column. `readStoredIntent` reverses it.
  */
 function storableIntent(binding: ResourceStartBindingIntent): [string, string | null] {
-  const { eventInputs, ...intent } = binding;
+  const { eventInputs, itemKey: _itemKey, ...intent } = binding;
   if (!eventInputs || Object.keys(eventInputs).length === 0) return [JSON.stringify(intent), null];
   return [
     JSON.stringify({
