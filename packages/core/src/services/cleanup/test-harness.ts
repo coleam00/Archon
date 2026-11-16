@@ -268,6 +268,13 @@ mock.module('../../db/isolation-environments', () => ({
   createIsolationStore: () => ({}),
 }));
 
+export const mockGetWaitingHandoffOfEnv =
+  mock<typeof import('../../db/isolation-env-users').getWaitingHandoffOfEnv>();
+mock.module('../../db/isolation-env-users', () => ({
+  getWaitingHandoffOfEnv: mockGetWaitingHandoffOfEnv,
+  runOwnsEnvSql: mock(),
+}));
+
 export const mockGetWorkflowRun = mock<typeof WorkflowDb.getWorkflowRun>(async () => null);
 export const mockGetRunIdsByIsolationEnvId = mock<typeof WorkflowDb.getRunIdsByIsolationEnvId>();
 export const mockGetRunByIsolationEnvId = mock<typeof WorkflowDb.getRunByIsolationEnvId>();
@@ -345,6 +352,7 @@ export function resetCleanupMocks(): void {
   mockListAllActiveWithCodebase.mockReset().mockResolvedValue([]);
   mockMarkWorktreeDestroyed.mockReset().mockResolvedValue(undefined);
   mockGetLiveRunOwningEnv.mockReset().mockResolvedValue(null);
+  mockGetWaitingHandoffOfEnv.mockReset().mockResolvedValue(null);
   mockGetById.mockReset().mockResolvedValue(null);
   mockListByCodebase.mockReset().mockResolvedValue([]);
   mockListByCodebaseWithAge.mockReset().mockResolvedValue([]);

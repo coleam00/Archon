@@ -66,6 +66,106 @@ export function isolationStatusReadTests(
     expect(await getRunIdsByIsolationEnvId(env.id)).toEqual([failed, completed].sort());
   });
 
+  test('cleanup keeps a checkout handed to a waiting start, and only while it waits', async () => {
+    const db = getDb();
+    const { getCleanupRunLock } = await import('../services/cleanup/run-lock');
+    const { toRepoPath } = await import('@archon/git');
+    const env = await createEnv(randomUUID());
+    const lock = async () =>
+      getCleanupRunLock(
+        { id: env.id, working_path: env.working_path, branch_name: null },
+        toRepoPath('/tmp/no-repo'),
+        { kind: 'merged' }
+      );
+    const from = await seedRun(env.id, 'completed');
+    const receiptId = randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_start_receipts (id, source_instance_id, content_digest, received_at, outcome)
+       VALUES ($1, 'run-ended', 'digest', $2, 'matched')`,
+      [receiptId, new Date().toISOString()]
+    );
+    const checkoutFrom = { runId: from, branch: 'task-build', commit: 'a'.repeat(40) };
+    await db.query(
+      `INSERT INTO remote_agent_start_receipt_bindings (receipt_id, binding_id, checkout_from, preparation_status)
+       VALUES ($1, 'next', $2, 'pending')`,
+      [receiptId, JSON.stringify(checkoutFrom)]
+    );
+    const setBinding = (status: string) =>
+      db.query(
+        'UPDATE remote_agent_start_receipt_bindings SET preparation_status = $1 WHERE receipt_id = $2',
+        [status, receiptId]
+      );
+
+    for (const status of ['pending', 'preparing', 'failed']) {
+      await setBinding(status);
+      expect(await lock()).toMatchObject({
+        kind: 'locked',
+        blocker: { reason: 'pending_handoff', waitingFor: 'preparation', fromRunId: from },
+      });
+    }
+    for (const status of ['rejected', 'unmatched']) {
+      await setBinding(status);
+      expect(await lock()).toEqual({ kind: 'free' });
+    }
+
+    // Prepared and queued behind capacity: the request still waits for a slot.
+    await setBinding('complete');
+    expect(await lock()).toEqual({ kind: 'free' });
+    const requestId = randomUUID();
+    await db.query(
+      'INSERT INTO remote_agent_resource_slots (resource_key, capacity) VALUES ($1, 1) ON CONFLICT DO NOTHING',
+      ['handoff-test']
+    );
+    await db.query(
+      `INSERT INTO remote_agent_resource_start_requests (id, resource_key, host_id, overlap_policy, status, launch, receipt_id, binding_id)
+       VALUES ($1, 'handoff-test', 'host', 'queue', 'queued', '{}', $2, 'next')`,
+      [requestId, receiptId]
+    );
+    const queued = await lock();
+    expect(queued).toMatchObject({
+      kind: 'locked',
+      blocker: { reason: 'pending_handoff', waitingFor: 'capacity', requestId },
+    });
+    expect(queued.kind === 'locked' && queued.blocker.display).toContain(
+      `archon trigger withdraw ${requestId}`
+    );
+    const setRequest = (status: string) =>
+      db.query('UPDATE remote_agent_resource_start_requests SET status = $1 WHERE id = $2', [
+        status,
+        requestId,
+      ]);
+    for (const status of ['withdrawn', 'skipped']) {
+      await setRequest(status);
+      expect(await lock()).toEqual({ kind: 'free' });
+    }
+
+    // Admitted: its run holds the checkout before its lane records an environment.
+    await setRequest('admitted');
+    const conversationId = randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id)
+       VALUES ($1, 'cli', $2)`,
+      [conversationId, conversationId]
+    );
+    await db.query(
+      `INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message, status, metadata)
+       VALUES ($1, $2, 'next-stage', 'test', 'pending', $3)`,
+      [
+        requestId,
+        conversationId,
+        JSON.stringify({ checkout_handoff: { ...checkoutFrom, lane: 'continue' } }),
+      ]
+    );
+    expect(await lock()).toMatchObject({
+      kind: 'locked',
+      blocker: { reason: 'live_run', runId: requestId, runStatus: 'pending' },
+    });
+    await db.query("UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1", [
+      requestId,
+    ]);
+    expect(await lock()).toEqual({ kind: 'free' });
+  });
+
   test.each(['unexpected', ''])(
     'isolation reads reject %j without changing persisted state',
     async status => {

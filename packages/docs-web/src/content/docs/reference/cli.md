@@ -2100,6 +2100,12 @@ age or merge state. The scheduled sweep and chat `/worktree cleanup` apply the s
 run lock. Stale environments with quiet conversations still pass the activity filter;
 the run lock is what keeps them on disk.
 
+A start a run's end handed its worktree (`checkout: "ended-run"`, see
+[workflow triggers](/guides/workflow-triggers/)) keeps that worktree the same way while
+it waits: still being prepared, or queued for its resource. Its run then keeps it once
+admitted. The skip reason names the start; `archon trigger withdraw <request-id>`
+withdraws a queued one. A start that was withdrawn, skipped or refused keeps nothing.
+
 A **failed** run keeps its environment only until its outcome is settled:
 
 - `--merged` (and the server's scheduled merged cleanup) removes it once Git integration
@@ -2303,7 +2309,8 @@ archon complete feature-auth --force  # skip the uncommitted-change, live-run, o
 
 Without `--force`, completion refuses an environment a workflow run can still claim, the
 same live-run lock `/worktree remove` applies: a running, pending or paused run, or a
-failed run that can still be resumed. Unlike `isolation cleanup`, completion never
+failed run that can still be resumed, or a start handed its worktree that still waits.
+Unlike `isolation cleanup`, completion never
 releases a failed run's lock by merge state or age. If that lookup fails, completion
 refuses rather than skipping the check. A failed open-PR query warns and skips that
 check; it does not bypass the other safety checks.

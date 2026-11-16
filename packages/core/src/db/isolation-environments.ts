@@ -1,4 +1,3 @@
-import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 /**
  * Database operations for isolation environments
  */
@@ -31,6 +30,7 @@ import { toHydratedTimestamp } from './timestamps';
 import { readWorkflowRunStatus } from './workflow-run-status';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
+import { runOwnsEnvSql } from './isolation-env-users';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -533,6 +533,9 @@ export type FailedRunRelease = { kind: 'settled' } | { kind: 'stale'; staleDays:
  *
  * Run metadata, conversation links, and same-codebase checkout paths all pin
  * estate. Creation proof governs deletion, while any claimable user blocks it.
+ * A run started on a hand-off (`checkout_handoff`) from a run that owns the
+ * environment owns it too: between admission and the lane's layout it records no
+ * environment of its own yet.
  * `excludeRunId` leaves out a run that is still claimable while it decides about
  * its own environment.
  */
@@ -543,10 +546,6 @@ export async function getLiveRunOwningEnv(
 ): Promise<{ id: string; status: WorkflowRunStatus } | null> {
   const postgres = getDatabaseType() === 'postgresql';
   const dialect = getDialect();
-  const envIdExtract = dialect.jsonText('r.metadata', ISOLATION_ENV_ID_METADATA_KEY);
-  // UUID identifiers must compare as text so $1 has one type across metadata,
-  // conversation links, and environment associations.
-  const conversationEnvMatch = postgres ? 'c.isolation_env_id::text' : 'c.isolation_env_id';
   // Placeholders follow the status lists' lengths so a new status extends an IN
   // list without a hand-edited parameter position.
   const params: unknown[] = [envId];
@@ -573,7 +572,6 @@ export async function getLiveRunOwningEnv(
     excludeRunId === undefined
       ? ''
       : `AND ${postgres ? 'r.id::text' : 'r.id'} <> $${String(params.push(excludeRunId))}`;
-  const ownedEnvExtract = dialect.jsonText('r.metadata', 'owned_worktree.envId');
   const result = await pool.query<{ id: string; status: string }>(
     `SELECT r.id, r.status
      FROM remote_agent_workflow_runs r
@@ -581,9 +579,11 @@ export async function getLiveRunOwningEnv(
      WHERE (r.status NOT IN (${unclaimable}))
        ${releaseFilter}
        ${exclusion}
-       AND (${envIdExtract} = $1 OR ${ownedEnvExtract} = $1 OR ${conversationEnvMatch} = $1
-         OR EXISTS (SELECT 1 FROM remote_agent_isolation_environments e
-           WHERE ${postgres ? 'e.id::text' : 'e.id'} = $1 AND e.codebase_id = r.codebase_id AND e.working_path = r.working_path))
+       AND (${runOwnsEnvSql('r', 'c')}
+         OR EXISTS (SELECT 1 FROM remote_agent_workflow_runs h
+           LEFT JOIN remote_agent_conversations hc ON hc.id = h.conversation_id
+           WHERE ${postgres ? 'h.id::text' : 'h.id'} = ${dialect.jsonText('r.metadata', 'checkout_handoff.runId')}
+             AND ${runOwnsEnvSql('h', 'hc')}))
      ORDER BY r.started_at DESC
      LIMIT 1`,
     params

@@ -529,9 +529,9 @@ async function completeRun(
 
 /**
  * A worktree this end hands to the stage it starts is kept for that stage, which works in
- * it once admitted. `in_use` is the reason an older binary also reads. Only the end's own
- * write keeps it: `archon isolation cleanup` before the stage starts can still remove it,
- * and then the stage checks the branch out again or is refused.
+ * it once admitted. `in_use` is the reason an older binary also reads. After this write,
+ * cleanup reads the waiting start from its binding and request rows and keeps the
+ * worktree until the start has run, or was withdrawn, skipped or refused.
  */
 function keepHandedOff(
   disposition: WorktreeDisposition | null | undefined,
