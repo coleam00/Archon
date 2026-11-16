@@ -487,6 +487,7 @@ These routes record the decision and return. The server's continuation scheduler
 | GET | `/api/runs/attention/stream` | Stream the attention queue as server-sent events; `level=quiet\|notices\|protocol` selects how much, and `Last-Event-ID` resumes ([stream over HTTP](/getting-started/operate/#stream-over-http)) |
 | GET | `/api/runs/{runId}/attention` | Read `{ item: <attention item> }`, or `{ item: null }` when there is no queue item |
 | POST | `/api/runs/{runId}/attention/labels` | Set or remove labels on the exact attention wait occurrence a run is paused at |
+| GET | `/api/items` | Read the [item](/reference/cli/#items) named by `key` in `project`: its runs, open questions and answers, as `archon workflow runs --item --json` prints them; 404 when no start has named the key. `project` takes a codebase id, a codebase name or a project key |
 
 List and count responses add a `degraded` array when a paused row or a descendant needed
 to project its attention item cannot be read:

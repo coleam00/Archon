@@ -22,6 +22,7 @@ import { registerConfigRoutes } from './api.config';
 import { registerConversationRoutes } from './api.conversations';
 import { registerConversationProcessingRoute } from './api.conversation-processing';
 import { registerHealthRoutes } from './api.health';
+import { registerItemRoutes } from './api.items';
 import { registerMessageRoutes } from './api.messages';
 import { registerMetricViewsRoute, registerMetricsRoute } from './api.metrics';
 import { registerProviderKeyRoutes } from './api.provider-keys';
@@ -106,6 +107,7 @@ export function registerApiRoutes(
   registerWorkflowListRoute(app);
   registerWorkflowRunLaunchRoute(app, { webAdapter, dispatchToOrchestrator });
   registerRunAttentionRoutes(app, operations);
+  registerItemRoutes(app);
   // A host per stream keeps registration free of I/O; the API-types generator registers too.
   registerAttentionStreamRoute(app, (listener, options) =>
     createSqlWorkflowHost().engine.watchAttention(listener, options)

@@ -395,7 +395,7 @@ export function createInMemoryWorkflowStore(
       write(view => view.findWorkflowRunsByIdPrefix(prefix, codebase)),
     findAdoptingRuns: id => write(view => view.findAdoptingRuns(id)),
     findOpenWorkRuns: options => write(view => view.findOpenWorkRuns(options)),
-    listItemRuns: unsupported,
+    getItemRuns: unsupported,
     getItem: unsupported,
     listWorkflowRuns: options => write(view => view.listWorkflowRuns(options)),
     listDueWorkflowContinuations: (now, limit) =>
