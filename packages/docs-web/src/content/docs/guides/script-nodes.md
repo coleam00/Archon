@@ -350,9 +350,11 @@ a per-run ephemeral environment:
   any `pyproject.toml` in the checkout. It writes no `.venv` or `uv.lock` into the
   checkout, and ignores the repository's project dependencies, its `[tool.uv]` or
   `uv.toml` settings, its `.python-version`, and packages installed in an existing
-  `.venv`. Your own uv config (for example
-  `~/.config/uv/uv.toml`) still applies. The script still runs with the checkout
-  as its working directory.
+  `.venv`. On a host run, your own uv config (for example `~/.config/uv/uv.toml`)
+  still applies. A [container run](/guides/container-isolation/) does not see the
+  host's uv config or environment, so an index or setting its `deps` need must
+  come from the image. The script still runs with the checkout as its working
+  directory.
 
 ## Output and Data Flow
 

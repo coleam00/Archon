@@ -167,16 +167,16 @@ test.skipIf(!Bun.which('uv'))(
     try {
       await execFileAsync('uv', ['venv', '--quiet', '.venv'], { cwd: checkout, timeout: 60_000 });
       // Plain uv run from the checkout picks up its .venv; put a module in that venv only.
+      // Ask the venv's own interpreter, so an inherited VIRTUAL_ENV cannot point the write elsewhere.
+      const venvPython = join(
+        checkout,
+        '.venv',
+        process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'
+      );
       const { stdout } = await execFileAsync(
-        'uv',
-        [
-          'run',
-          '--no-project',
-          'python',
-          '-c',
-          'import sysconfig; print(sysconfig.get_paths()["purelib"])',
-        ],
-        { cwd: checkout, timeout: 60_000 }
+        venvPython,
+        ['-c', 'import sysconfig; print(sysconfig.get_paths()["purelib"])'],
+        { timeout: 60_000 }
       );
       await writeFile(join(stdout.trim(), 'archon_venv_only.py'), '');
       const invocation = scriptInvocation(
