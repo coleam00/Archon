@@ -612,6 +612,7 @@ async function provisionWorktree(
     const fromBranch = options.fromBranch?.trim();
     if (fromBranch) {
       await refuseUnappliedStartPoint(
+        git.toRepoPath(codebase.default_cwd),
         git.toWorktreePath(existingEnv.working_path),
         branchIdentifier,
         fromBranch

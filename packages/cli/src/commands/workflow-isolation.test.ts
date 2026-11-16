@@ -1531,6 +1531,7 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
       })
     ).rejects.toBe(refusal);
     expect(mockRefuseUnappliedStartPoint).toHaveBeenLastCalledWith(
+      '/test/path',
       '/worktrees/feat',
       'my-feature',
       'dev'

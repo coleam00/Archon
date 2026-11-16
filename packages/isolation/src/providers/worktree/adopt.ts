@@ -16,7 +16,7 @@ import {
   verifyWorktreeOwnership,
   worktreeExists,
 } from '@archon/git';
-import type { BranchName, WorktreePath } from '@archon/git';
+import type { BranchName, RepoPath, WorktreePath } from '@archon/git';
 import { IsolationFailure } from '../../errors';
 import type { IsolationRequest, WorktreeCreationEnvironment } from '../../types';
 import { isPRIsolationRequest } from '../../types';
@@ -84,7 +84,12 @@ async function adoptAtPath(
   if (request.workflowType === 'task' && request.taskBranch?.kind === 'new') {
     const { fromBranch } = request.taskBranch;
     if (fromBranch) {
-      await refuseUnappliedStartPoint(worktreePath, expectedBranch ?? branchName, fromBranch);
+      await refuseUnappliedStartPoint(
+        request.canonicalRepoPath,
+        worktreePath,
+        expectedBranch ?? branchName,
+        fromBranch
+      );
     }
   }
 
@@ -96,45 +101,32 @@ async function adoptAtPath(
  * checkout's history does not contain: the run would start from a different base
  * than asked. A start point at or behind HEAD is accepted, so later stages that
  * pass the same start point keep working once the branch has its own commits.
- * Only reads; the operator owns the worktree and branch.
+ * The start point resolves in the canonical repository, where creation resolves
+ * it; resolved inside the worktree, `HEAD` or `HEAD~1` would name the worktree's
+ * own commits and always pass. Only reads; the operator owns the worktree and branch.
  */
 export async function refuseUnappliedStartPoint(
+  repoPath: RepoPath,
   worktreePath: WorktreePath,
   branch: string,
   fromBranch: string
 ): Promise<void> {
-  if (await isAncestorOf(worktreePath, fromBranch)) return;
+  const { stdout } = await execFileAsync(
+    'git',
+    ['-C', repoPath, 'rev-parse', '--verify', '--end-of-options', `${fromBranch}^{commit}`],
+    { timeout: 10000 }
+  );
+  const fromCommit = stdout.trim();
+  if (await isAncestorOf(worktreePath, fromCommit)) return;
 
-  // These reads only enrich the refusal; one that fails leaves its value out.
-  const [mergeBase, head, from] = await Promise.all([
-    readGit(worktreePath, ['merge-base', 'HEAD', fromBranch]),
-    readGit(worktreePath, ['rev-parse', '--short=12', 'HEAD']),
-    readGit(worktreePath, ['rev-parse', '--short=12', fromBranch]),
-  ]);
-  const position = [
-    mergeBase ? `based on ${mergeBase.slice(0, 12)}` : undefined,
-    head ? `now at ${head}` : undefined,
-  ].filter(Boolean);
   throw new IsolationFailure(
     'branch_exists',
-    `Branch "${branch}" already has a worktree at ${worktreePath}` +
-      (position.length > 0 ? ` (${position.join(', ')})` : '') +
-      `. --from ${fromBranch}${from ? ` (${from})` : ''} is not in its history, ` +
+    `Branch "${branch}" already has a worktree at ${worktreePath}. ` +
+      `--from ${fromBranch} (${fromCommit.slice(0, 12)}) is not in its history, ` +
       'so the run would start from a different base. Choose a different --branch, ' +
       'omit --from to continue in this worktree, or remove the worktree and delete the ' +
       `branch to start fresh from ${fromBranch}.`
   );
-}
-
-async function readGit(worktreePath: WorktreePath, args: string[]): Promise<string | undefined> {
-  try {
-    const { stdout } = await execFileAsync('git', ['-C', worktreePath, ...args], {
-      timeout: 10000,
-    });
-    return stdout.trim() || undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 export async function findRegisteredWorktree(
