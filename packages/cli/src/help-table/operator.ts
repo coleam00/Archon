@@ -27,6 +27,13 @@ export const operatorHelp: HelpGroup = {
     },
     {
       command: 'pack',
+      subcommand: 'graph',
+      spec: 'pack graph <pack>',
+      description:
+        "Show a pack's stages, their outcomes and the run-ended arrows between them,\neach active in this install or declared and inactive (--json for the read)",
+    },
+    {
+      command: 'pack',
       subcommand: 'bindings',
       spec: 'pack bindings <pack>',
       description:

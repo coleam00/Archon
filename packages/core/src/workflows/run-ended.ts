@@ -205,7 +205,7 @@ export function launchProjectKey(
 }
 
 /** The project a binding launches in; a failure to resolve it names the file. */
-async function bindingProjectKey(
+export async function bindingProjectKey(
   candidate: RunEndedBinding,
   dependencies: Pick<RunEndedStartsDependencies, 'projectKeyOf'>
 ): Promise<string | null> {

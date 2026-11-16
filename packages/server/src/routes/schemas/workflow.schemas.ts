@@ -15,6 +15,7 @@ import { z } from '@hono/zod-openapi';
 import { openAttentionQueueCountsSchema } from '@archon/workflows/attention-counts';
 import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import { packGraphSchema } from '@archon/workflows/pack-graph';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
 import {
   attentionWatchLevelSchema,
@@ -436,6 +437,9 @@ export const itemReadQuerySchema = z.object({
   project: z.string().min(1),
   key: z.string().min(1),
 });
+
+/** GET /api/packs/{pack}/graph response: the pack's stages and run-ended arrows. */
+export const packGraphResponseSchema = packGraphSchema.meta({ id: 'PackGraph' });
 
 /** GET /api/items response: the item, its runs, open questions and answers. */
 export const itemReadResponseSchema = itemReadSchema.meta({ id: 'ItemRead' });

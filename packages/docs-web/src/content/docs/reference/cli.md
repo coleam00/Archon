@@ -2586,6 +2586,21 @@ A link is a directed relation from one item to another: `depends_on`, `part_of` 
 
 Items need the database store and a registered project. With `store: files`, or in a directory with no project, naming an item fails.
 
+### `pack graph`
+
+Show how a pack's stages connect in this install: each stage with the outcomes it can end with and its nodes, and every [run-ended arrow](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends) between them.
+
+```bash
+archon pack graph <pack> [--cwd <checkout>] [--json]
+```
+
+- `<pack>` is discovered from `--cwd` as `pack bindings` discovers it, and the arrows are those of that checkout's project.
+- An arrow the pack declares as a [`run_ended:` binding](/reference/workflow-language/#pack-bindings) is `active` when a trigger file in `ARCHON_HOME/triggers/` launches it in this project, and declared and inactive when none does. A trigger file the pack does not declare is an active arrow with `declared: null`.
+- Each outcome value has `startsNothing` when no active arrow leaves it. The text output lists those, and marks the ones whose stage declares no `asks` as ending in silence.
+- `--json` prints the read, the same shape as [`GET /api/packs/{pack}/graph`](/reference/api/#workflows). The guide shows [the shape and how to draw an item's path with it](/guides/workflow-triggers/#see-how-a-packs-stages-connect).
+
+An invalid trigger file fails the command, as it fails item runs. With `store: files`, any run-ended file in the triggers directory is refused, as `trigger check` refuses it.
+
 ### `pack bindings`
 
 Write the [trigger bindings a pack declares](/reference/workflow-language/#pack-bindings) as files for one repository. The command registers and schedules nothing; it prints what registers each file.

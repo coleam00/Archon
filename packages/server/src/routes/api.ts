@@ -8,6 +8,10 @@ import {
 } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import * as codebaseDb from '@archon/core/db/codebases';
+import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
+import { readPackGraph } from '@archon/core/workflows/pack-graph';
+import { getTriggersPath, launchProjectKey } from '@archon/core/workflows/run-ended';
+import { providerRegistry } from '@archon/providers';
 import type { WebAdapter } from '../adapters/web';
 import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
 import { isApiGateEnabled } from '../auth';
@@ -25,6 +29,7 @@ import { registerHealthRoutes } from './api.health';
 import { registerItemRoutes } from './api.items';
 import { registerMessageRoutes } from './api.messages';
 import { registerMetricViewsRoute, registerMetricsRoute } from './api.metrics';
+import { registerPackGraphRoute } from './api.packs';
 import { registerProviderKeyRoutes } from './api.provider-keys';
 import { registerProviderRoutes } from './api.providers';
 import { registerAttentionStreamRoute, registerRunAttentionRoutes } from './api.run-attention';
@@ -122,6 +127,16 @@ export function registerApiRoutes(
   registerMetricViewsRoute(app, {
     codebaseCwd: async id => (await codebaseDb.getCodebase(id))?.default_cwd ?? null,
     loadConfig,
+  });
+  registerPackGraphRoute(app, {
+    codebaseCwd: async id => (await codebaseDb.getCodebase(id))?.default_cwd ?? null,
+    readPackGraph: (cwd, pack) =>
+      readPackGraph(cwd, pack, {
+        loadConfig,
+        providers: providerRegistry,
+        triggersDirectory: getTriggersPath,
+        projectKeyOf: launchProjectKey(path => registeredProjectKeyForPath(path, codebaseDb)),
+      }),
   });
   registerWorkflowDefinitionRoutes(app);
   registerArtifactRoutes(app);
