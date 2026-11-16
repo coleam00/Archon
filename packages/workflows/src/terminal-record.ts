@@ -33,10 +33,12 @@ import {
 } from './schemas/node-outcomes';
 import {
   nodeFailureKindSchema,
+  type NodeExecutionMetadata,
   type NodeFailureKind,
   type NodeInvocation,
 } from './schemas/node-execution';
 import type { FanOutOutcome } from './schemas/fan-out-outcome';
+import type { LoopRound, LoopRoundNode } from './schemas/loop-rounds';
 
 export interface TerminalRecordEvent {
   event_type: string;
@@ -55,6 +57,8 @@ interface NodeEventFold {
   nodes: Map<string, RunNodeState>;
   outputs: Map<string, Record<string, unknown>>;
   failureOrder: Map<string, number>;
+  /** Each key's latest recorded `metadata.timing`; a cache record carries none. */
+  timings: Map<string, NodeExecutionMetadata['timing']>;
 }
 
 /**
@@ -72,7 +76,8 @@ function foldNodeEvents(
   const nodes = new Map<string, RunNodeState>();
   const outputs = new Map<string, Record<string, unknown>>();
   const failureOrder = new Map<string, number>();
-  const folded = { graph, nodes, outputs, failureOrder };
+  const timings = new Map<string, NodeExecutionMetadata['timing']>();
+  const folded = { graph, nodes, outputs, failureOrder, timings };
   if (graph)
     for (const nodeId of graph.node_ids)
       nodes.set(keyOf(nodeId, []), { node_id: nodeId, state: 'pending' });
@@ -99,12 +104,20 @@ function foldNodeEvents(
 }
 
 function foldNodeRecord(
-  { nodes, outputs, failureOrder }: Omit<NodeEventFold, 'graph'>,
+  { nodes, outputs, failureOrder, timings }: Omit<NodeEventFold, 'graph'>,
   record: ReadNodeRecordEvent,
   key: string,
   index: number
 ): void {
   const nodeId = record.path;
+  // A reset discards the invocation's earlier timing with its state; a prior-success
+  // replay carries no timing and keeps the entry the original completion wrote.
+  if (record.metadata) timings.set(key, record.metadata.timing);
+  else if (
+    record.eventType === 'node_always_run_reset' ||
+    record.eventType === 'node_prior_cache_invalidated'
+  )
+    timings.delete(key);
   switch (record.eventType) {
     case 'node_started':
     case 'node_suspended':
@@ -212,6 +225,46 @@ export function buildNodeOutcomes(
     first_failed_node: firstFailed === undefined ? null : parseNodeInvocationKey(firstFailed).path,
     nodes: outcomes,
   });
+}
+
+/**
+ * Each round of each `loop_group` the run has entered, in the order each round first
+ * appeared, with the body node invocations it recorded. A running round lists the nodes
+ * it has reached; one it has not reached yet is absent. Empty when the run ran no loop.
+ */
+export function buildLoopRounds(
+  run: Pick<WorkflowRun, 'id' | 'metadata'>,
+  events: readonly TerminalRecordEvent[]
+): LoopRound[] {
+  const { nodes, outputs, timings } = foldNodeEvents(run, events, nodeInvocationKey);
+  const rounds = new Map<string, LoopRound>();
+  for (const [key, state] of nodes) {
+    const { loopPath } = parseNodeInvocationKey(key);
+    if (loopPath.length === 0) continue;
+    const roundKey = JSON.stringify(loopPath);
+    let round = rounds.get(roundKey);
+    if (!round) {
+      round = { loop_group_path: loopPath, nodes: [] };
+      rounds.set(roundKey, round);
+    }
+    round.nodes.push(loopRoundNode(state, timings.get(key), outputs.get(key)));
+  }
+  return [...rounds.values()];
+}
+
+function loopRoundNode(
+  state: RunNodeState,
+  timing: NodeExecutionMetadata['timing'] | undefined,
+  data: Record<string, unknown> | undefined
+): LoopRoundNode {
+  const entry: LoopRoundNode = { ...state };
+  if (timing) entry.started_at = timing.startedAt;
+  if (timing?.durationMs !== undefined) entry.duration_ms = timing.durationMs;
+  if (!data) return entry;
+  if (typeof data.node_output === 'string') entry.output = data.node_output;
+  if (data.node_output_truncated === true) entry.output_truncated = true;
+  if (Object.hasOwn(data, 'structured_output')) entry.structured_output = data.structured_output;
+  return entry;
 }
 
 /**

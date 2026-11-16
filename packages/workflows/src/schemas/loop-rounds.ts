@@ -1,0 +1,30 @@
+import { z } from 'zod';
+import { nodeArtifactLoopFrameSchema } from './node-artifact';
+import { runNodeStateSchema } from './terminal-record';
+
+/**
+ * One body node's invocation in one loop round: its state as the terminal record folds
+ * it, plus that invocation's timing and output. `output` and `output_truncated` are the
+ * stored `node_output` as the event log bounds it at write, present only on a completed
+ * node, as `structured_output` is.
+ */
+export const loopRoundNodeSchema = runNodeStateSchema.extend({
+  started_at: z.string().datetime({ offset: true }).optional(),
+  duration_ms: z.number().optional(),
+  output: z.string().optional(),
+  output_truncated: z.boolean().optional(),
+  structured_output: z.unknown().optional(),
+});
+export type LoopRoundNode = z.infer<typeof loopRoundNodeSchema>;
+
+/**
+ * One iteration of the innermost loop in `loop_group_path` (frames outermost first,
+ * iterations 1-based). A nested loop's rounds are separate entries whose path extends the
+ * outer round's path; the inner group node itself lists under the outer round. Body nodes
+ * a running round has not reached yet are absent.
+ */
+export const loopRoundSchema = z.object({
+  loop_group_path: z.array(nodeArtifactLoopFrameSchema).min(1),
+  nodes: z.array(loopRoundNodeSchema),
+});
+export type LoopRound = z.infer<typeof loopRoundSchema>;

@@ -10,6 +10,7 @@ import { writeNodeArtifact } from './artifacts-index';
 import { observeArtifactManifest } from './terminal-artifact-manifest';
 import {
   terminalReason,
+  buildLoopRounds,
   buildNodeOutcomes,
   buildRunNodeStates,
   buildTerminalRecord,
@@ -598,6 +599,117 @@ describe('node outcomes observation', () => {
       state,
       ...(eventType === 'node_failed' ? { error: 'boom' } : {}),
     });
+  });
+});
+
+type Frame = { groupId: string; iteration: number };
+/** A node record as the engine writes it inside a loop body: typed metadata with frames. */
+function invocation(
+  event_type: string,
+  step_name: string,
+  loopPath: Frame[],
+  data: Record<string, unknown> = {},
+  durationMs?: number
+): TerminalRecordEvent {
+  const id = `${step_name}-${JSON.stringify(loopPath)}`;
+  const startedAt = '2026-11-16T10:00:00Z';
+  return node(event_type, step_name, {
+    node: { id: step_name.split('.').pop(), kind: 'exec', runtime: 'sh' },
+    invocation: { id, startedAt, loopPath },
+    attempt: { id: `${id}-attempt`, startedAt },
+    binding: {},
+    timing: { startedAt, ...(durationMs === undefined ? {} : { durationMs }) },
+    spend: {
+      tokens: { source: 'unavailable', reason: 'not_applicable' },
+      costUsd: { source: 'unavailable', reason: 'not_applicable' },
+      stopReason: { source: 'unavailable', reason: 'not_applicable' },
+      numTurns: { source: 'unavailable', reason: 'not_applicable' },
+    },
+    accounting: 'node',
+    ...data,
+  });
+}
+function round(iteration: number, outcome: 'done' | 'fix running'): TerminalRecordEvent[] {
+  const path = [{ groupId: 'group', iteration }];
+  return [
+    invocation('node_started', 'group.check', path),
+    invocation('node_completed', 'group.check', path, { node_output: `check ${iteration}` }, 10),
+    invocation('node_started', 'group.fix', path),
+    ...(outcome === 'done'
+      ? [invocation('node_completed', 'group.fix', path, { node_output: `fix ${iteration}` }, 20)]
+      : []),
+  ];
+}
+const loopRun = {
+  ...run,
+  metadata: { [RUN_GRAPH_METADATA_KEY]: { node_ids: ['group'], returns: 'group' } },
+};
+
+describe('loop rounds', () => {
+  it('reads each round with its own nodes, durations and outputs', () => {
+    const rounds = buildLoopRounds(loopRun, [
+      ...round(1, 'done'),
+      ...round(2, 'done'),
+      ...round(3, 'done'),
+    ]);
+    expect(rounds.map(entry => entry.loop_group_path)).toEqual([
+      [{ groupId: 'group', iteration: 1 }],
+      [{ groupId: 'group', iteration: 2 }],
+      [{ groupId: 'group', iteration: 3 }],
+    ]);
+    expect(rounds[0]?.nodes).toEqual([
+      {
+        node_id: 'group.check',
+        state: 'completed',
+        started_at: '2026-11-16T10:00:00Z',
+        duration_ms: 10,
+        output: 'check 1',
+      },
+      {
+        node_id: 'group.fix',
+        state: 'completed',
+        started_at: '2026-11-16T10:00:00Z',
+        duration_ms: 20,
+        output: 'fix 1',
+      },
+    ]);
+    expect(rounds[2]?.nodes.map(entry => entry.output)).toEqual(['check 3', 'fix 3']);
+  });
+
+  it('shows a running loop as its finished rounds and the node the current round is in', () => {
+    const rounds = buildLoopRounds(loopRun, [
+      node('node_started', 'group'),
+      ...round(1, 'done'),
+      ...round(2, 'done'),
+      ...round(3, 'fix running'),
+    ]);
+    expect(rounds).toHaveLength(3);
+    expect(rounds[2]?.nodes.map(({ node_id, state }) => ({ node_id, state }))).toEqual([
+      { node_id: 'group.check', state: 'completed' },
+      { node_id: 'group.fix', state: 'running' },
+    ]);
+    expect(rounds[2]?.nodes[1]).not.toHaveProperty('output');
+    expect(rounds[2]?.nodes[1]).not.toHaveProperty('duration_ms');
+  });
+
+  it('lists a nested loop round apart from the outer round that holds its group node', () => {
+    const outer = [{ groupId: 'outer', iteration: 1 }];
+    const inner = [...outer, { groupId: 'inner', iteration: 1 }];
+    const rounds = buildLoopRounds(loopRun, [
+      invocation('node_started', 'outer.inner', outer),
+      invocation('node_completed', 'outer.inner.step', inner, { node_output: 'x' }, 5),
+      invocation('node_completed', 'outer.inner', outer, {}, 7),
+    ]);
+    expect(rounds.map(entry => [entry.loop_group_path, entry.nodes.map(n => n.node_id)])).toEqual([
+      [outer, ['outer.inner']],
+      [inner, ['outer.inner.step']],
+    ]);
+  });
+
+  it('is empty for a run that ran no loop', () => {
+    expect(
+      buildLoopRounds(run, [node('node_completed', 'discover', { node_output: 'ok' })])
+    ).toEqual([]);
   });
 });
 

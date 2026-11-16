@@ -2297,6 +2297,65 @@ describe('workflowGetCommand', () => {
     );
     expect(parsed.events).toBeUndefined();
     expect(parsed.transcript_path).toBeNull();
+    expect(parsed).not.toHaveProperty('loop_rounds');
+  });
+
+  it('reads each loop round in verbose JSON and text', async () => {
+    const { startNodeExecution, finishNodeExecution, newNodeInvocation } = await import(
+      '@archon/workflows/node-execution'
+    );
+    const { serializeNodeStateRecord } = await import(
+      '@archon/workflows/node-record-serialization'
+    );
+    const roundRow = (iteration: number, text: string): WorkflowEventRow => ({
+      ...serializeNodeStateRecord(
+        finishNodeExecution(
+          startNodeExecution({
+            runId: 'run-loop',
+            path: 'fix.check',
+            node: { id: 'check', kind: 'exec', runtime: 'sh', script: 'true' },
+            invocation: newNodeInvocation([{ groupId: 'fix', iteration }]),
+          }),
+          { status: 'completed' },
+          { durationMs: iteration * 1000, output: { text } }
+        )
+      ),
+      id: `round-${String(iteration)}`,
+      step_index: null,
+      created_at: new Date().toISOString(),
+    });
+    const events = [roundRow(1, 'first verdict'), roundRow(2, 'second verdict')];
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    const loopRun = {
+      id: 'run-loop',
+      checkout_baseline: null,
+      workflow_name: 'deliver',
+      status: 'completed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    };
+    for (let i = 0; i < 2; i++) {
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(loopRun);
+      (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce(events);
+    }
+
+    await workflowGetCommand(createTestWorkflowHost(), 'run-loop', true, true);
+    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+      loop_rounds: Array<{ nodes: Array<Record<string, unknown>> }>;
+    };
+    expect(parsed.loop_rounds.map(round => round.nodes[0]?.output)).toEqual([
+      'first verdict',
+      'second verdict',
+    ]);
+
+    await workflowGetCommand(createTestWorkflowHost(), 'run-loop', false, true);
+    const calls: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    const rounds = calls.slice(calls.indexOf('  Rounds:'));
+    expect(rounds.filter(line => line.includes('fix round'))).toHaveLength(2);
+    expect(rounds.filter(line => line.includes('fix.check'))).toHaveLength(2);
+    expect(rounds.some(line => line.includes('first verdict'))).toBe(true);
   });
 
   it('reads attribution and observed duration from a terminal row without a start-row join', async () => {
