@@ -58,6 +58,22 @@ export function currentPackDir(): PackDirScope | undefined {
   return packDirContext.getStore();
 }
 
+/**
+ * Scope holding `$NODE_SCRATCH_DIR`: the executing node invocation's own scratch
+ * directory, entered per node at dispatch beside the pack-dir scope. The layer walker
+ * creates the directory before entering and removes it when the invocation ends.
+ */
+const nodeScratchContext = new AsyncLocalStorage<string>();
+
+export function runWithNodeScratch<T>(dir: string, fn: () => Promise<T>): Promise<T> {
+  return nodeScratchContext.run(dir, fn);
+}
+
+/** The executing node invocation's scratch directory; undefined outside node dispatch. */
+export function currentNodeScratchDir(): string | undefined {
+  return nodeScratchContext.getStore();
+}
+
 /** Matches what the substitution below replaces as `$PACK_DIR`. */
 export const PACK_DIR_REFERENCE = /\$PACK_DIR/;
 
@@ -91,6 +107,9 @@ export interface TemplateReferences {
  *   without a resolved value.
  * - $PACK_DIR - The directory of the pack that authored the node, in the run's source
  *   roots (see {@link runWithPackDir}). Throws when that workflow is not in a pack.
+ * - $NODE_SCRATCH_DIR - The executing node invocation's own scratch directory (see
+ *   {@link runWithNodeScratch}), removed when the invocation ends. Throws outside node
+ *   dispatch.
  * - $ADOPTED_RUN_DIR (#2747) - The adopted run's artifact directory, resolved
  *   through its persisted `output_root`. Read-only by contract; throws if
  *   referenced without an adoption active.
@@ -184,6 +203,20 @@ export function substituteWorkflowVariables(
     // Engine-controlled like $ARTIFACTS_DIR, so substituted under shellSafe too. A node
     // with no pack directory fails: an empty path would point a read at the checkout.
     variable('PACK_DIR', () => packDirOrThrow(currentPackDir())),
+    // Engine-controlled, so substituted under shellSafe too. Outside node dispatch there
+    // is no invocation to own the directory, and an empty path would point writes at the
+    // checkout.
+    variable('NODE_SCRATCH_DIR', () => {
+      const dir = currentNodeScratchDir();
+      if (dir === undefined) {
+        throw new Error(
+          '$NODE_SCRATCH_DIR is referenced outside a node invocation. ' +
+            "It names the running node invocation's own scratch directory; " +
+            'if you are seeing this from a workflow node, please report it as a bug.'
+        );
+      }
+      return dir;
+    }),
     // $TYPED_ARTIFACTS_FILE is delivered by every executable invocation context (bash,
     // script, agent prompt, loop attempt), and to exec subprocesses as TYPED_ARTIFACTS_FILE.
     // A context that never supplied one must fail loudly: substituting '' would read as

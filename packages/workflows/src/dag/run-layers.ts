@@ -42,6 +42,7 @@ import { skipNode } from './skip-node';
 import { dispatchNode } from './dispatch';
 import { nodePackDir } from '../pack-dir';
 import { runWithPackDir } from '../workflow-variables';
+import { releaseAdmittedScratch, releaseInvocationScratch, runInNodeScratch } from './node-scratch';
 import { getStaleCachedDependencies } from './stale-dependencies';
 /**
  * Await thunks one at a time, collecting outcomes in `Promise.allSettled` shape so the
@@ -143,28 +144,43 @@ async function runLayerPhase(
   const nodeThunks = layer.map(
     (node, index): (() => Promise<LayerNodeResult>) =>
       async (): Promise<LayerNodeResult> => {
+        const invocation =
+          ctx.unfinishedInvocations?.get(
+            nodeInvocationKey(ctx.stepNamePrefix + node.id, ctx.loopGroupPath)
+          )?.invocation ?? newNodeInvocation(ctx.loopGroupPath);
         const nodeCtx: RunLayersContext = {
           ...ctx,
           currentExecution: undefined,
           interactionAdmission: peers?.[index].admission ?? ctx.interactionAdmission,
           guardedLayerSnapshots,
-          nodeInvocation:
-            ctx.unfinishedInvocations?.get(
-              nodeInvocationKey(ctx.stepNamePrefix + node.id, ctx.loopGroupPath)
-            )?.invocation ?? newNodeInvocation(ctx.loopGroupPath),
+          nodeInvocation: invocation,
         };
         try {
+          const admitted = await admitNode(nodeCtx, node);
+          if (admitted !== undefined) {
+            await releaseAdmittedScratch(
+              nodeCtx,
+              node,
+              invocation.id,
+              admitted,
+              ctx.priorCompletedNodes
+            );
+          }
           const result =
-            (await admitNode(nodeCtx, node)) ??
-            (await runWithPackDir(
-              await nodePackDir(nodeCtx.workflowSourceRoots, nodeCtx.workflowPack, node),
-              () => dispatchNode(nodeCtx, node, isParallelLayer)
+            admitted ??
+            (await runInNodeScratch(nodeCtx, node, invocation.id, async () =>
+              runWithPackDir(
+                await nodePackDir(nodeCtx.workflowSourceRoots, nodeCtx.workflowPack, node),
+                () => dispatchNode(nodeCtx, node, isParallelLayer)
+              )
             ));
           if (result.output.state === 'failed') nodeCtx.interactionAdmission?.failed(node.id);
           return result;
         } catch (error) {
           if (isWorkflowExecutionInterruption(error)) throw error;
           nodeCtx.interactionAdmission?.failed(node.id);
+          // A failed admission settles an invocation a prior pass may have left scratch for.
+          await releaseInvocationScratch(nodeCtx, node, invocation.id);
           return await recordPreExecutionFailure(nodeCtx, node, error);
         } finally {
           peers?.[index].finished();

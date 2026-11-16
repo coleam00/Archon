@@ -20,6 +20,7 @@ import {
   spyOnNodeExec,
   dagOptions,
   makeWorkflowRun,
+  nodeExecCalls,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
 import type { DagNode, ExecNode } from '../../../schemas';
@@ -486,8 +487,9 @@ describe('executeDagWorkflow -- bash nodes', () => {
         })
       );
 
-      expect(execSpy).toHaveBeenCalledTimes(1);
-      const firstCall = execSpy.mock.calls[0];
+      const nodeCalls = nodeExecCalls(execSpy.mock.calls);
+      expect(nodeCalls).toHaveLength(1);
+      const firstCall = nodeCalls[0];
 
       expect(firstCall?.[1]).toEqual(bashInvocation('echo $USER_MESSAGE').args);
       expect(firstCall?.[2]?.input).toBe('echo $USER_MESSAGE');

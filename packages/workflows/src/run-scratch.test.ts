@@ -1,6 +1,16 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { chmod, link, lstat, mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  link,
+  lstat,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { execFileAsync } from '@archon/git';
@@ -130,6 +140,10 @@ test.each(['real', 'root-link', 'engine-link', 'scratch-link'] as const)(
     const sibling = join(base, 'sibling');
     await git('worktree', 'add', '-q', '--detach', inScratch);
     await git('worktree', 'add', '-q', '--detach', sibling);
+    // A registration whose checkout is gone: `git worktree prune` would drop it.
+    const missing = join(base, 'missing');
+    await git('worktree', 'add', '-q', '--detach', missing);
+    await rm(missing, { recursive: true, force: true });
     // Uncommitted work never keeps a scratch worktree registered.
     await writeFile(join(inScratch, 'dirty.txt'), 'tried a mutation');
 
@@ -149,8 +163,8 @@ test.each(['real', 'root-link', 'engine-link', 'scratch-link'] as const)(
       .map(line => resolve(line.slice('worktree '.length).trim()));
     expect(listed.sort()).toEqual(
       (boundary === 'real'
-        ? [resolve(repo), resolve(sibling)]
-        : [resolve(repo), resolve(sibling), resolve(inScratch)]
+        ? [resolve(repo), resolve(sibling), resolve(missing)]
+        : [resolve(repo), resolve(sibling), resolve(missing), resolve(inScratch)]
       ).sort()
     );
     expect(existsSync(join(sibling, '.git'))).toBe(true);

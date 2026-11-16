@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import { expect, test } from 'bun:test';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -369,4 +370,47 @@ test('a repeated resume continues the group execution that failed, not an earlie
       .map(e => e.data.iteration);
     // First execution 1-3; the always_run re-execution fails in 1, then resumes in 1.
     expect(iterations).toEqual([1, 2, 3, 1, 1, 2, 3]);
+  }));
+
+test('a body node killed mid-round gets its scratch back on the re-run, which releases it', () =>
+  inTempRoot(async root => {
+    let killedScratch = '';
+    const result = await stopThenResume(root, {
+      group: completesInRoundThree,
+      failOnce: false,
+      nodes: [
+        withCheck(completesInRoundThree, {
+          bash: 'echo "$NODE_SCRATCH_DIR" >> scratch-dirs; n=$(cat counter); if [ "$n" = 2 ] && [ ! -f failed ]; then touch failed; exit 1; fi; echo "checked-$n"',
+        }),
+      ],
+      afterFirstRun: async (_store, storeRoot, runId) => {
+        // A kill writes no failure and releases nothing: drop the failures the first run
+        // recorded and put back the scratch its in-process release removed.
+        const log = join(storeRoot, 'runs', runId, 'log.jsonl');
+        const lines = (await readFile(log, 'utf8')).trim().split('\n');
+        const kept = lines.map(line => {
+          const entry = JSON.parse(line) as {
+            events: { step_name?: string; event_type: string }[];
+          };
+          const events = entry.events.filter(
+            e =>
+              e.event_type !== 'node_failed' ||
+              (e.step_name !== 'rounds' && e.step_name !== 'rounds.check')
+          );
+          return JSON.stringify({ ...entry, events });
+        });
+        await writeFile(log, `${kept.join('\n')}\n`);
+        killedScratch = (await readFile(join(root, 'scratch-dirs'), 'utf8')).trim().split('\n')[1];
+        await mkdir(killedScratch, { recursive: true });
+        await writeFile(join(killedScratch, 'left-by-kill'), 'x');
+      },
+    });
+    expect(result.status).toBe('completed');
+    expect(result.iterations).toEqual([1, 2, 2, 3]);
+    const dirs = (await readFile(join(root, 'scratch-dirs'), 'utf8')).trim().split('\n');
+    // Round two's re-run reuses the killed invocation, so its scratch is released when the
+    // re-run ends rather than held to the end of the group.
+    expect(dirs).toHaveLength(4);
+    expect(dirs[2]).toBe(killedScratch);
+    expect(existsSync(killedScratch)).toBe(false);
   }));
