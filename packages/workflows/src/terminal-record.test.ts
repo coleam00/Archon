@@ -37,6 +37,7 @@ const run = {
   id: 'run-1',
   status: 'failed' as const,
   outcome: null,
+  completed_outcome: null,
   output_root: null,
   checkout_baseline: null,
   metadata: {

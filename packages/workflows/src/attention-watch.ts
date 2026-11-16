@@ -49,7 +49,6 @@ import {
   attentionAnsweringRunSchema,
   terminalRunStatusForEventType,
   terminalWorkflowRunStatusSchema,
-  workflowRunOutcomeSchema,
   workflowRunStatusSchema,
   type AttentionAnsweringRun,
   type WorkflowRun,
@@ -155,7 +154,11 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
     type: z.literal('terminal'),
     ...lineBase,
     status: terminalWorkflowRunStatusSchema,
-    outcome: workflowRunOutcomeSchema.nullable(),
+    /**
+     * The outcome the run completed with: `succeeded` or `failed` for a boolean outcome, or
+     * the value of a named one. Null when the run did not complete or declares none.
+     */
+    outcome: z.string().min(1).nullable(),
     /**
      * Where a failed run failed: its terminal record's first failed node and the failure
      * kind that node's `node_failed` event recorded (null when it recorded none). Null

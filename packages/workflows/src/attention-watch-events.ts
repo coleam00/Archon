@@ -8,6 +8,7 @@ import type { WorkflowEventRow } from './schemas/workflow-event';
 import {
   attentionAnswererSchema,
   attentionOccurrence,
+  displayedRunOutcome,
   gateOccurrence,
   isApprovalContext,
   isGateResolved,
@@ -90,11 +91,19 @@ export function indexAnswers(page: WorkflowEventPage): Map<string, AnswerOrigin>
 export function terminalFacts(
   event: WorkflowEventRow,
   status: RunTerminalStatus
-): { outcome: 'succeeded' | 'failed' | null; firstFailedNode: string | null; reason: string[] } {
+): { outcome: string | null; firstFailedNode: string | null; reason: string[] } {
   try {
     const record = getTerminalRecord(status, [event]);
     return {
-      outcome: record?.outcome ?? null,
+      // From the record on this event, not the run row: a replayed earlier terminal event
+      // of a run that later resumed and completed must not show the later outcome.
+      outcome: record
+        ? displayedRunOutcome({
+            status: record.status,
+            outcome: record.outcome,
+            completed_outcome: record.completed_outcome ?? null,
+          })
+        : null,
       firstFailedNode: record?.first_failed_node ?? null,
       reason:
         status === 'failed' && event.data.exit_reason === 'launch_failed'

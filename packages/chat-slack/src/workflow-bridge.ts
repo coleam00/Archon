@@ -10,6 +10,7 @@ import {
   parseApprovalValue,
   buildClosedApprovalBlocks,
   buildStatusBlocks,
+  shownOutcome,
   type SlackApprovalAction,
   type NodeSnapshot,
   type NodeState,
@@ -34,7 +35,6 @@ interface RunState {
   startedAt: number;
   status: 'running' | 'paused';
   approvalDeliveryFailed?: boolean;
-  authoredOutcome?: RunSnapshot['authoredOutcome'];
   nodes: Map<string, NodeSnapshot>;
   pendingEdit?: ReturnType<typeof setTimeout>;
   approvals: Map<string, ApprovalMessage>;
@@ -146,7 +146,7 @@ export class SlackWorkflowBridge {
     }
     await this.updateStatusMessage(state, {
       status: event.status,
-      authoredOutcome: event.authoredOutcome,
+      outcome: shownOutcome(event),
       totalCostUsd: event.totalCostUsd,
       failureReason: event.error,
     });
@@ -163,7 +163,6 @@ export class SlackWorkflowBridge {
       return;
     }
     state.status = 'paused';
-    state.authoredOutcome = event.authoredOutcome;
     await this.updateStatusMessage(state);
 
     const { blocks, fallbackText } = buildApprovalBlocks({
@@ -260,7 +259,7 @@ export class SlackWorkflowBridge {
   private async updateStatusMessage(
     state: RunState,
     overlay: Partial<
-      Pick<RunSnapshot, 'status' | 'authoredOutcome' | 'totalCostUsd' | 'failureReason'>
+      Pick<RunSnapshot, 'status' | 'outcome' | 'totalCostUsd' | 'failureReason'>
     > = {}
   ): Promise<boolean> {
     if (!state.statusMessageTs) return false;
@@ -286,7 +285,6 @@ export class SlackWorkflowBridge {
       workflowName: state.workflowName,
       startedAt: state.startedAt,
       status: state.status,
-      authoredOutcome: state.authoredOutcome,
       approvalDeliveryFailed: state.approvalDeliveryFailed,
       nodes: [...state.nodes.values()],
     };

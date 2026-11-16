@@ -8075,8 +8075,7 @@ export interface components {
           parentRunId: string | null;
           /** @enum {string} */
           status: 'completed' | 'failed' | 'cancelled';
-          /** @enum {string|null} */
-          outcome: 'succeeded' | 'failed' | null;
+          outcome: string | null;
           cause: {
             node: string;
             /** @enum {string|null} */
@@ -8357,6 +8356,7 @@ export interface components {
           status: 'completed' | 'failed' | 'cancelled';
           /** @enum {string|null} */
           outcome: 'succeeded' | 'failed' | null;
+          completed_outcome?: string | null;
           error: string | null;
           first_failed_node: string | null;
           nodes: {
