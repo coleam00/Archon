@@ -15,8 +15,9 @@ import { INPUT_NAME_SOURCE, jsonValueSchema, type JsonValue } from '../output-re
  * On command/script `with:` maps, a plain OBJECT value is ALWAYS parsed as this
  * directive (any other object shape is a load error naming both accepted forms) —
  * reserving the object position removes the literal-vs-directive grammar ambiguity
- * without a `$literal` escape. Include/workflow `with:` maps have no directive, so
- * objects there stay ordinary JSON literals.
+ * without a `$literal` escape. Include/workflow `with:` maps have no directive: objects
+ * there are JSON literals, and an object with exactly a directive's shape is a load
+ * error rather than a silent literal.
  */
 export const bindingDirectiveSchema = z.strictObject({
   from: z.string().min(1, "'from' must be a non-empty $node.output reference"),
