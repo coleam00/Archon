@@ -241,6 +241,12 @@ export interface IWorkflowStore
    * its place as its run's unreadable entry, not thrown. A store without items has none.
    */
   listOpenItemAsks(): Promise<AttentionRead<StoredItemAsk>[]>;
+  /**
+   * Every ask left on the item, open or closed, oldest set first. The rows are the item's
+   * record of its asks: they outlive the run that left them, so its answers and settled
+   * sets still read after that run is deleted.
+   */
+  listItemAsks(itemId: string): Promise<AttentionRead<StoredItemAsk>[]>;
   /** One ask, open or closed; null when no ask has the id. Throws when its row does not read. */
   getItemAsk(id: string): Promise<StoredItemAsk | null>;
   /**

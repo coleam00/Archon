@@ -7967,7 +7967,7 @@ export interface components {
             at: string;
             via: string | null;
             ref: string;
-            question: string | null;
+            question: string;
             answer:
               | {
                   text: string;

@@ -2,11 +2,14 @@
  * Asks on an item (`remote_agent_item_asks`): the decisions a completed run left for an
  * operator. A row opens in the write that completes its run and closes once, as answered,
  * withdrawn or replaced. The asks one run left are a set; the write that closes the last
- * open one of a set records `asks_settled` on that run. Nothing here logs an ask's text.
+ * open one of a set records `asks_settled` on that run. The rows are the item's record of its
+ * asks and outlive the run; the events are notices for readers of the run's event tail.
+ * Nothing here logs an ask's text.
  */
 import { isDeepStrictEqual } from 'node:util';
 import {
   storedItemAskSchema,
+  type AskClosedEventData,
   type AsksSettledData,
   type ItemAsk,
   type ItemAskAct,
@@ -16,7 +19,6 @@ import {
 } from '@archon/workflows/schemas/item-ask';
 import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import { attentionAnswerSchema, type AttentionAnswer } from '@archon/workflows/schemas/run-wait';
-import { OTHER_ATTENTION_OPTION } from '@archon/workflows/schemas/wait-node';
 import { getDatabase, getDatabaseType, pool } from './connection';
 import type { TransactionQuery } from './resource-slots';
 import { toHydratedTimestamp } from './timestamps';
@@ -164,18 +166,31 @@ export async function openItemAsksForCompletedRun(
     );
 }
 
-export async function listOpenItemAsks(): Promise<AttentionRead<StoredItemAsk>[]> {
-  const result = await pool.query<AskRow>(
-    `SELECT * FROM remote_agent_item_asks WHERE closed_as IS NULL
-     ORDER BY created_at, run_id, position`
-  );
-  return result.rows.map(row => {
+function readAsks(rows: readonly AskRow[]): AttentionRead<StoredItemAsk>[] {
+  return rows.map(row => {
     const read = readAsk(row);
     if (read !== undefined) return read;
     getLog().error({ askId: row.id }, 'item_ask_unreadable');
     // The queue names an unreadable entry by run: the run that left the ask.
     return { type: 'degraded', reason: 'run_unreadable', runId: row.run_id };
   });
+}
+
+export async function listOpenItemAsks(): Promise<AttentionRead<StoredItemAsk>[]> {
+  const result = await pool.query<AskRow>(
+    `SELECT * FROM remote_agent_item_asks WHERE closed_as IS NULL
+     ORDER BY created_at, run_id, position`
+  );
+  return readAsks(result.rows);
+}
+
+export async function listItemAsks(itemId: string): Promise<AttentionRead<StoredItemAsk>[]> {
+  const result = await pool.query<AskRow>(
+    `SELECT * FROM remote_agent_item_asks WHERE item_id = $1
+     ORDER BY created_at, run_id, position`,
+    [itemId]
+  );
+  return readAsks(result.rows);
 }
 
 export async function getItemAsk(id: string): Promise<StoredItemAsk | null> {
@@ -197,19 +212,6 @@ function priorClose(ask: StoredItemAsk, write: CloseWrite): ItemAskCloseResult |
     (write.as !== 'answered' ||
       (closed.as === 'answered' && isDeepStrictEqual(closed.answer, write.answer)));
   return same ? { kind: 'unchanged', ask } : { kind: 'refused', ask };
-}
-
-/** The option an answer chose, with what it does, as the item's history shows it. */
-function chosen(
-  ask: StoredItemAsk,
-  answer: AttentionAnswer
-): { id: string; does: string } | undefined {
-  if (!('decision' in answer)) return undefined;
-  const option = ask.ask.options.find(candidate => candidate.id === answer.decision);
-  if (option !== undefined) return { id: option.id, does: option.does };
-  return answer.decision === OTHER_ATTENTION_OPTION.id
-    ? { id: OTHER_ATTENTION_OPTION.id, does: OTHER_ATTENTION_OPTION.does }
-    : undefined;
 }
 
 async function closeItemAsk(
@@ -263,11 +265,8 @@ async function closeItemAsk(
         via: input.via,
         by,
         fromRun: input.fromRun ?? null,
-        question: before.ask.question,
-        ...(write.as === 'answered'
-          ? { answer: write.answer, chosen: chosen(before, write.answer) }
-          : {}),
-      },
+        ...(write.as === 'answered' ? { answer: write.answer } : {}),
+      } satisfies AskClosedEventData,
     });
     const others = set.rows.filter(candidate => candidate.id !== input.askId);
     const settled = others.every(candidate => candidate.closed_as !== null);

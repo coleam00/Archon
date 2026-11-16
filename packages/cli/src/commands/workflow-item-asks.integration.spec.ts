@@ -184,6 +184,15 @@ test('a run on an item opens its asks when it completes; they are listed, answer
   const first = items.find(item => item.message === 'Keep it?');
   const second = items.find(item => item.message === 'Rename it?');
   if (first === undefined || second === undefined) throw new Error('Expected two asks');
+  // The text names each as an open ask on its item, and reads one by its ref.
+  const text = (await runCli(fixture, ['workflow', 'attention'])).stdout;
+  expect(text).toContain('2 item(s) need attention');
+  expect(text).toContain(`${first.ref}  open ask`);
+  expect(text).toContain('item issue-1');
+  expect(text).not.toContain('paused');
+  const one = await runCli(fixture, ['workflow', 'attention', first.ref]);
+  expect(one.exitCode).toBe(0);
+  expect(one.stdout).toContain('Keep it?');
   for (const item of items)
     await watch.next(
       'attention',
@@ -259,7 +268,7 @@ test('a run on an item opens its asks when it completes; they are listed, answer
   expect(read.questions).toEqual([]);
   expect(read.answers.map(answer => answer.kind)).toEqual(['ask', 'ask', 'asks_settled']);
   expect(read.answers[2]).toMatchObject({ answered: 1, withdrawn: 1 });
-  // The history says what was asked and what the chosen option does, without the ask's row.
+  // The history says what was asked and what the chosen option does, from the ask's row.
   expect(read.answers[0]).toMatchObject({
     question: 'Keep it?',
     chosen: { id: 'keep', does: 'Keep the flag.' },

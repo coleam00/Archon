@@ -147,6 +147,7 @@ export function createWorkflowStore(): IWorkflowStore {
     recordItemRuling: itemRulingsDb.recordItemRuling,
     withdrawItemRuling: itemRulingsDb.withdrawItemRuling,
     listOpenItemAsks: itemAsksDb.listOpenItemAsks,
+    listItemAsks: itemAsksDb.listItemAsks,
     getItemAsk: itemAsksDb.getItemAsk,
     answerItemAsk: itemAsksDb.answerItemAsk,
     withdrawItemAsk: itemAsksDb.withdrawItemAsk,

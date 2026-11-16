@@ -38,7 +38,7 @@ function answerText(answer: Exclude<ItemAnswer, { kind: 'ruling' }>): string {
         ? `asks settled: all ${String(answer.withdrawn)} withdrawn, none answered`
         : `asks settled: ${String(answer.answered)} answered, ${String(answer.withdrawn)} withdrawn`;
     case 'ask': {
-      const asked = answer.question === null ? `ask ${answer.ref} ` : `ask "${answer.question}" `;
+      const asked = `ask "${answer.question}" `;
       if (answer.withdrawn) return `${asked}withdrawn${answererText(answer.by)}`;
       const means = answer.chosen === null ? '' : ` (${answer.chosen.does})`;
       return `${answeredText(answer, asked)}${means}`;

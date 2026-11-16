@@ -206,6 +206,7 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     recordItemRuling: mock(unexpected('recordItemRuling')),
     withdrawItemRuling: mock(unexpected('withdrawItemRuling')),
     listOpenItemAsks: mock(unexpected('listOpenItemAsks')),
+    listItemAsks: mock(unexpected('listItemAsks')),
     getItemAsk: mock(unexpected('getItemAsk')),
     answerItemAsk: mock(unexpected('answerItemAsk')),
     withdrawItemAsk: mock(unexpected('withdrawItemAsk')),

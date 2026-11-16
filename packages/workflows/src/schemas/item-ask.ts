@@ -58,6 +58,19 @@ const askOptionSchema = attentionOptionSchema
   })
   .describe('One real choice. An option nobody would pick is not an option.');
 
+// The pointer shape, with what each field holds for the model that writes it.
+const askArtifactSchema = artifactPointerSchema
+  .extend({
+    type: artifactPointerSchema.shape.type.describe('Always "archon_artifact".'),
+    run_id: artifactPointerSchema.shape.run_id.describe(
+      'The id of this run ($WORKFLOW_ID); a pointer names its own run only.'
+    ),
+    path: artifactPointerSchema.shape.path.describe(
+      "The file's path relative to this run's artifacts directory ($ARTIFACTS_DIR)."
+    ),
+  })
+  .describe('A file this run wrote under its artifacts directory.');
+
 const askFields = {
   question: z
     .string()
@@ -89,7 +102,7 @@ const askFields = {
     })
     .describe('The option you recommend and why.'),
   artifacts: z
-    .array(artifactPointerSchema)
+    .array(askArtifactSchema)
     .describe(
       'Artifacts of this run the operator should read to decide, as artifact pointers; empty when there are none.'
     ),
@@ -233,8 +246,21 @@ export const askClosedEventDataSchema = z.object({
   fromRun: attentionAnsweringRunSchema.nullable(),
   /** Set on `ask_answered` only. */
   answer: attentionAnswerSchema.optional(),
-  /** What was asked, so the item's history reads without the ask's row. */
-  question: z.string().optional(),
-  /** On `ask_answered`: the chosen option and what it does (`other`: the answer text says). */
-  chosen: z.object({ id: z.string(), does: z.string() }).optional(),
 });
+export type AskClosedEventData = z.infer<typeof askClosedEventDataSchema>;
+
+/**
+ * The option an answer chose and what it does, or undefined when the answer chose none
+ * the ask offers. `other` reads as the reserved option: its answer text says what to do.
+ */
+export function chosenAskOption(
+  ask: StoredAsk,
+  answer: z.infer<typeof attentionAnswerSchema>
+): { id: string; does: string } | undefined {
+  if (!('decision' in answer)) return undefined;
+  const option = ask.options.find(candidate => candidate.id === answer.decision);
+  if (option !== undefined) return { id: option.id, does: option.does };
+  return answer.decision === OTHER_ATTENTION_OPTION.id
+    ? { id: OTHER_ATTENTION_OPTION.id, does: OTHER_ATTENTION_OPTION.does }
+    : undefined;
+}

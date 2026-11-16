@@ -400,6 +400,7 @@ export function createInMemoryWorkflowStore(
     recordItemRuling: unsupported,
     withdrawItemRuling: unsupported,
     listOpenItemAsks: async () => [],
+    listItemAsks: async () => [],
     getItemAsk: async () => null,
     answerItemAsk: unsupported,
     withdrawItemAsk: unsupported,

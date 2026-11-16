@@ -1867,6 +1867,24 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
       },
     });
 
+    // Every field the model writes carries its own guidance: walk each property of the
+    // sent schema, through objects and array items, and require a description on it.
+    const undescribed: string[] = [];
+    const walk = (schema: unknown, path: string): void => {
+      if (typeof schema !== 'object' || schema === null) return;
+      const { properties, items } = schema as { properties?: unknown; items?: unknown };
+      if (typeof properties === 'object' && properties !== null)
+        for (const [key, property] of Object.entries(properties)) {
+          const description = (property as { description?: unknown }).description;
+          if (typeof description !== 'string' || description.trim() === '')
+            undescribed.push(`${path}.${key}`);
+          walk(property, `${path}.${key}`);
+        }
+      walk(items, `${path}[]`);
+    };
+    walk({ properties: { asks: (declared?.properties as Record<string, unknown>).asks } }, '');
+    expect(undescribed).toEqual([]);
+
     mockSendQueryDag.mockClear();
     await run(createMockStore(), { asks: false });
     const undeclared = sentSchema();
@@ -1899,6 +1917,21 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
     expect(store.failWorkflowRun.mock.calls[0]?.[1]).toContain(
       "returns.asks 'asks' on node 'decide': [0].recommendation.option names 'neither'"
     );
+  });
+
+  it('fails the run naming the field when the asks value has the wrong type, and opens none', async () => {
+    // The node's own output check refuses it. Its node_failed error is what `workflow get`
+    // prints as the run's reason (`terminalReason`); the run-level summary is the generic
+    // one every node failure has.
+    mockStructuredResult({ summary: 'done', asks: 'keep the flag' });
+    const store = createMockStore();
+    await run(store);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    const failed = store.createWorkflowEvent.mock.calls
+      .map(([event]) => event)
+      .find(event => event.event_type === 'node_failed' && event.step_name === 'decide');
+    expect(String(failed?.data?.error)).toContain('/asks');
   });
 
   it('opens no asks from a workflow: child, whose asks stay data in its result', async () => {

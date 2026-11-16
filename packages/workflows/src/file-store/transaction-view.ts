@@ -84,6 +84,7 @@ export type TransactionView = Omit<
   | 'recordItemRuling'
   | 'withdrawItemRuling'
   | 'listOpenItemAsks'
+  | 'listItemAsks'
   | 'getItemAsk'
   | 'answerItemAsk'
   | 'withdrawItemAsk'

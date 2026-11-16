@@ -2187,7 +2187,8 @@ What the engine does with them:
   tool). Who may answer is the rule of the run that left the ask: its starter, or an admin.
 - **The run stays while its asks are open.** Deleting a run that left open asks is refused, and
   run cleanup skips it, until each ask is answered or withdrawn: the run's starter decides who
-  may answer, and its events hold the answers and the settle.
+  may answer. Once they are closed the run may go; the item keeps its asks, their answers and
+  the settled set, and `archon workflow runs --item` still reads them.
 - **A set settles once.** When every ask a run left is answered or withdrawn, the engine records
   `asks_settled` on that run once, with how many were `answered` and `withdrawn`; `answered: 0`
   means every ask was withdrawn. Settling records a fact and starts nothing: no trigger binds to

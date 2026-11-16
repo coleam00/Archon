@@ -153,7 +153,8 @@ Commands:
   workflow artifacts <run-id> [path] List a run's artifact files, or print one
   workflow logs <run-id>     Print or follow a run's JSONL transcript
   workflow wait <run-id>     Block until the run ends or needs attention
-  workflow attention [<run-id>] List, count or stream the attention queue, or read the item one run stands for
+  workflow attention [<run-id>|ask:<id>]
+                             List, count or stream the attention queue, or read the item one run or ask stands for
                              (defaults to the current project)
   workflow attention label <run-id> --occurrence <id>
                              Set or remove labels on the attention wait a run is paused at

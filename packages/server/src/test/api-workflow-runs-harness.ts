@@ -436,9 +436,12 @@ export const mockGetItemRuns = mock<typeof import('@archon/core/db/items')['getI
 const unusedItemWrite = mock(async () => {
   throw new Error('Item writes are not used by the route tests');
 });
+export const mockGetItem = mock<typeof import('@archon/core/db/items')['getItem']>(
+  async () => null
+);
 mock.module('@archon/core/db/items', () => ({
   getItemRuns: mockGetItemRuns,
-  getItem: mock(async () => null),
+  getItem: mockGetItem,
   ensureItem: unusedItemWrite,
   ensureItemInProject: unusedItemWrite,
   continuedItem: unusedItemWrite,
@@ -458,6 +461,8 @@ mock.module('@archon/core/db/item-rulings', () => ({
 }));
 
 type ItemAsksDb = typeof import('@archon/core/db/item-asks');
+export const mockListOpenItemAsks = mock<ItemAsksDb['listOpenItemAsks']>(async () => []);
+export const mockListItemAsks = mock<ItemAsksDb['listItemAsks']>(async () => []);
 export const mockGetItemAsk = mock<ItemAsksDb['getItemAsk']>(async () => null);
 export const mockAnswerItemAsk = mock<ItemAsksDb['answerItemAsk']>(async () => {
   throw new Error('Unexpected answerItemAsk');
@@ -469,7 +474,8 @@ mock.module('@archon/core/db/item-asks', () => ({
   openItemAsksForCompletedRun: mock(async () => {
     throw new Error('Unexpected openItemAsksForCompletedRun');
   }),
-  listOpenItemAsks: mock(async () => []),
+  listOpenItemAsks: mockListOpenItemAsks,
+  listItemAsks: mockListItemAsks,
   getItemAsk: mockGetItemAsk,
   answerItemAsk: mockAnswerItemAsk,
   withdrawItemAsk: mockWithdrawItemAsk,

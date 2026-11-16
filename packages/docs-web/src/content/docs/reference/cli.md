@@ -652,7 +652,7 @@ than returning a partial report.
 
 `--item <key>` reads one [item](#items) in the current project and ignores the other filters. It prints three sections, each oldest first: the item's runs (id, workflow, status, authored outcome, start and end), the questions open in those runs or their sub-runs and the asks open on the item, and the answers recorded in them (attention answers and gate decisions, with the run, node, time and surface) together with the item's [rulings](#workflow-rule) (text, time, surface, who when they said, and when it was withdrawn). A sub-run is not listed as a run; its question or answer names its own run id, and `workflow get` on the parent shows it. The read reports recorded facts only; it computes no position for the item. It needs a registered project.
 
-`--json` prints `{ item, runs, questions, answers, degraded }`: `item` is `{ id, projectKey, key }`; each run is `{ id, workflow, status, outcome, startedAt, completedAt }`; each question is the attention queue item `workflow attention --json` lists; each answer has `kind` `attention` (with `answer`, `by`, `fromRun`) or `gate` (with `decision`, and `text` for its comment or rejection reason), and `runId`, `node`, `occurrence`, `at`, `via`, null where the row does not record them; or `kind` `ruling`, with `id`, `text`, `at`, `via`, `by`, `fromRun` and `withdrawn` (null, or `{ at, via, by, fromRun }`), and no run. An [ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) a completed run left reads as `kind` `ask`, with its `ref`, the `question` it asked, `answer` (null for a withdrawal), `chosen` (the chosen option's `id` and what it `does`, or null), `withdrawn`, `by` and `fromRun`, on the run that left it; `kind` `asks_settled` records that the last open ask of that run's set closed, with `answered` and `withdrawn` counts. Open asks on the item are among its questions. `degraded` names each part that could not be read: a run in the item's tree, one of its own runs or a paused child (`reason: "run_unreadable"`, `runId`), or a ruling (`reason: "ruling_unreadable"`, `rulingId`); the rest of the item still reads. An item named with no run yet reads with empty sections but for its rulings; a key nothing has named exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "item": "<key>" }`.
+`--json` prints `{ item, runs, questions, answers, degraded }`: `item` is `{ id, projectKey, key }`; each run is `{ id, workflow, status, outcome, startedAt, completedAt }`; each question is the attention queue item `workflow attention --json` lists; each answer has `kind` `attention` (with `answer`, `by`, `fromRun`) or `gate` (with `decision`, and `text` for its comment or rejection reason), and `runId`, `node`, `occurrence`, `at`, `via`, null where the row does not record them; or `kind` `ruling`, with `id`, `text`, `at`, `via`, `by`, `fromRun` and `withdrawn` (null, or `{ at, via, by, fromRun }`), and no run. An [ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) a completed run left reads as `kind` `ask`, with its `ref`, the `question` it asked, `answer` (null for a withdrawal), `chosen` (the chosen option's `id` and what it `does`, or null), `withdrawn`, `by` and `fromRun`, and `runId` naming the run that left it; `kind` `asks_settled` records that the last open ask of that run's set closed, with `answered` and `withdrawn` counts, at the time of that close. Both are read from the item's asks, so they stay after the run that left them is deleted. Open asks on the item are among its questions. `degraded` names each part that could not be read: a run in the item's tree, one of its own runs or a paused child (`reason: "run_unreadable"`, `runId`), or a ruling (`reason: "ruling_unreadable"`, `rulingId`); the rest of the item still reads. An item named with no run yet reads with empty sections but for its rulings; a key nothing has named exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "item": "<key>" }`.
 
 `--item-of <run-id>` reads the item a run belongs to, the item of its top-level run when it is a `workflow:` sub-run, in whichever project the run is. It prints the same read as `--item`. A run on no item, or one the store does not know, exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "run": "<run-id>" }`. It is the host command behind the `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to) export.
 
@@ -1149,6 +1149,7 @@ archon workflow attention --json --all --count-by label:class
 archon workflow attention --json --count-by label:class --since 30d
 archon workflow attention --json --count-by answerer --since 30d
 archon workflow attention <run-id> --json                          # one item
+archon workflow attention ask:<id> --json                          # one ask a completed run left
 archon workflow attention --watch --json --all                     # what needs someone, as it happens
 archon workflow attention --watch --json --label stage=merge       # one queue's questions
 archon workflow attention --watch --notices --json                 # also runs that ended or resumed, and notices
@@ -1175,7 +1176,9 @@ origin data can instead make a single read fail. Batch lists omit a parent block
 unreadable paused descendant and report that child through `degraded`; if the descendant
 is not paused, they report the affected paused parent instead. An absent parent does not
 mean its block has cleared. An unknown run id prints `error: "not_found"` and
-exits `1`. The item shape is described in the [Operate page](/getting-started/operate/#queue-items).
+exits `1`. With an ask's ref (`ask:<id>`) it prints `{ ok, action, ref, item }`: the open
+ask, or null once it was answered, withdrawn or replaced; an unknown ref prints
+`error: "not_found"` and exits `1`. The item shape is described in the [Operate page](/getting-started/operate/#queue-items).
 
 Batch list and count reads add an optional `degraded` array when a paused row or a descendant
 needed to project its attention item cannot be read. Each entry has the shape
@@ -1206,7 +1209,9 @@ labels, the question's first line, the recommendation and its reason, each optio
 it does, and the commands that answer that occurrence, including the `--recommended` form
 when a recommendation exists; a failed run, a lost owner and an unreadable item name the run and the reason a failed outcome gave, and the
 command that shows more; the close of an ask is one line. The list prints the same blocks,
-and `workflow attention <run-id>` prints the whole message. Read the watch unfiltered: a
+and `workflow attention <run-id>` prints the whole message. An open ask a completed run left
+is headed by its ref, `open ask`, its project and item key, and when it opened, and prints
+its whole question and context in every form, since its run is no longer paused. Read the watch unfiltered: a
 filter in the pipe can hold lines until the watch ends. Scope and `--label` work as for the list;
 `--sort`, `--count-by` and a run id are refused. See
 [Stream the queue](/getting-started/operate/#stream-the-queue).

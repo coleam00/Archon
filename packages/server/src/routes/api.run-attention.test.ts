@@ -12,6 +12,8 @@ import {
   mockRecordItemRuling,
   mockWithdrawItemRuling,
   mockGetItemAsk,
+  mockGetItem,
+  mockListOpenItemAsks,
   mockAnswerItemAsk,
   mockWithdrawItemAsk,
   mockGetUserById,
@@ -521,6 +523,32 @@ describe('asks answered and withdrawn by ref over HTTP', () => {
     mockGetItemAsk.mockImplementation(async () => ask);
     mockGetWorkflowRun.mockImplementation(async () => left);
   };
+
+  test('the attention list carries a stored open ask with its item and no run', async () => {
+    const item = { id: 'item-1', projectKey: 'acme/widgets', key: 'issues/7' };
+    withAsk(open);
+    mockListOpenItemAsks.mockImplementation(async () => [open]);
+    mockGetItem.mockImplementation(async () => item);
+    mockListAttentionQueueRows.mockImplementation(async () => []);
+    try {
+      const response = await makeApp().app.request('/api/runs/attention');
+      expect(response.status).toBe(200);
+      const { items } = runsNeedingAttentionResponseSchema.parse(await response.json());
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        ref: 'ask:a1',
+        item,
+        message: 'Keep the flag?',
+        context: 'Two readings.',
+        askedIn: { runId: left.id, workflow: 'plan' },
+      });
+      expect(items[0]).not.toHaveProperty('run');
+    } finally {
+      mockListOpenItemAsks.mockImplementation(async () => []);
+      mockGetItem.mockImplementation(async () => null);
+      mockListAttentionQueueRows.mockReset();
+    }
+  });
 
   test('an answer is recorded through the API surface and says when it settled the set', async () => {
     withAsk(open);

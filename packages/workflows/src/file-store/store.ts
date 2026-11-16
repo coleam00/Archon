@@ -369,6 +369,7 @@ export async function createFileWorkflowStore(
     // An ask belongs to an item, and this store holds none, so it holds no asks: the
     // readers see an empty set rather than a failure that would break every queue read.
     listOpenItemAsks: async () => [],
+    listItemAsks: async () => [],
     getItemAsk: async () => null,
     answerItemAsk: async () => {
       throw new FileStoreUnsupportedError('items');

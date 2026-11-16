@@ -2233,7 +2233,7 @@ declare module 'archon:script' {
       readonly at: string;
       readonly via: string | null;
       readonly ref: string;
-      readonly question: string | null;
+      readonly question: string;
       readonly answer: {
         readonly text: string;
       } | {

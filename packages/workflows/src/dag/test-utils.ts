@@ -295,6 +295,7 @@ export function createMockStore(): MockWorkflowStore {
     recordItemRuling: notUsed(),
     withdrawItemRuling: notUsed(),
     listOpenItemAsks: notUsed(),
+    listItemAsks: notUsed(),
     getItemAsk: notUsed(),
     answerItemAsk: notUsed(),
     withdrawItemAsk: notUsed(),

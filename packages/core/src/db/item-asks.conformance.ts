@@ -7,6 +7,7 @@
 import { expect, test } from 'bun:test';
 import type { ItemAsk } from '@archon/workflows/schemas/item-ask';
 import { openAskItems } from '@archon/workflows/attention-queue';
+import { readItemOfRun } from '@archon/workflows/item-read';
 import { watchAttentionQueue, type AttentionStreamLine } from '@archon/workflows/attention-watch';
 import type { WorkflowStoreHarness } from '@archon/workflows/store-conformance';
 import { CONFORMANCE_CODEBASE_ID } from '@archon/workflows/store-conformance';
@@ -177,6 +178,76 @@ export function describeSqlItemAskConformance(makeHarness: () => Promise<Harness
     }
   });
 
+  test("an item keeps its asks' answers and settled sets after their runs are deleted or cleaned up", async () => {
+    const harness = await makeHarness();
+    try {
+      const deps = itemDeps(harness);
+      const kept = await completeWithAsks(harness, [ask('Keep the flag?'), ask('Rename it?')]);
+      const [one, two] = await openRefs(harness);
+      await answerAttentionItem(deps, one ?? '', { choose: ['drop'] }, operator, 'cli');
+      await withdrawAttentionItem(deps, two ?? '', operator, 'api');
+      const swept = await completeWithAsks(harness, [ask('Ship it?')], { workflow: 'review' });
+      const [three] = await openRefs(harness);
+      await withdrawAttentionItem(deps, three ?? '', operator, 'cli');
+      // A third set, half answered and then replaced, never settles.
+      await completeWithAsks(harness, [ask('Split it?'), ask('Now?')], { workflow: 'triage' });
+      const [four] = await openRefs(harness);
+      await answerAttentionItem(deps, four ?? '', { recommended: true }, operator, 'cli');
+      const latest = await completeWithAsks(harness, [], { workflow: 'triage' });
+
+      const source = attentionQueueSource(harness.store, {
+        findLatestByCodebaseAndWorkingPath: async () => null,
+      });
+      const before = await readItemOfRun(source, latest);
+      const answersOf = (read: typeof before) =>
+        (read?.answers ?? []).map(answer =>
+          answer.kind === 'ask'
+            ? {
+                kind: answer.kind,
+                runId: answer.runId,
+                question: answer.question,
+                chosen: answer.chosen?.id ?? null,
+                withdrawn: answer.withdrawn,
+              }
+            : answer.kind === 'asks_settled'
+              ? {
+                  kind: answer.kind,
+                  runId: answer.runId,
+                  answered: answer.answered,
+                  withdrawn: answer.withdrawn,
+                }
+              : { kind: answer.kind }
+        );
+      const expected = answersOf(before);
+      expect(expected).toEqual([
+        { kind: 'ask', runId: kept, question: 'Keep the flag?', chosen: 'drop', withdrawn: false },
+        { kind: 'ask', runId: kept, question: 'Rename it?', chosen: null, withdrawn: true },
+        { kind: 'asks_settled', runId: kept, answered: 1, withdrawn: 1 },
+        { kind: 'ask', runId: swept, question: 'Ship it?', chosen: null, withdrawn: true },
+        { kind: 'asks_settled', runId: swept, answered: 0, withdrawn: 1 },
+        expect.objectContaining({ question: 'Split it?', chosen: 'keep' }),
+      ]);
+
+      // One run deleted by hand, one by age.
+      const { deleteWorkflowRun } = await import('./workflow-run-writes');
+      await deleteWorkflowRun(kept);
+      await harness.backdate(swept, { started_at: new Date('2020-01-01T00:00:00Z') });
+      await harness.db.query(
+        'UPDATE remote_agent_workflow_runs SET active_phase_started_at = NULL WHERE id = $1',
+        [swept]
+      );
+      expect(await harness.store.deleteOldWorkflowRuns(1)).toEqual({ count: 1 });
+      expect(await harness.store.getWorkflowRun(kept)).toBeNull();
+      expect(await harness.store.getWorkflowRun(swept)).toBeNull();
+
+      const after = await readItemOfRun(source, latest);
+      expect(answersOf(after)).toEqual(expected);
+      expect(after?.degraded).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('a later completed run of the same workflow on the item replaces the open asks', async () => {
     const harness = await makeHarness();
     try {
@@ -279,6 +350,28 @@ export function describeSqlItemAskConformance(makeHarness: () => Promise<Harness
         answerAttentionItem(deps, ref ?? '', { choose: ['other'] }, operator, 'cli')
       ).rejects.toThrow("needs text with option 'other'");
       expect(await settledEvents(harness, third)).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('two closes racing for the last open asks of a set settle it once', async () => {
+    const harness = await makeHarness();
+    try {
+      const deps = itemDeps(harness);
+      for (const round of [1, 2, 3]) {
+        const runId = await completeWithAsks(harness, [ask('A?'), ask('B?'), ask('C?')], {
+          item: `race-${String(round)}`,
+        });
+        const [a, b, c] = await openRefs(harness);
+        await withdrawAttentionItem(deps, a ?? '', operator, 'cli');
+        const results = await Promise.all([
+          answerAttentionItem(deps, b ?? '', { choose: ['keep'] }, operator, 'cli'),
+          withdrawAttentionItem(deps, c ?? '', operator, 'api'),
+        ]);
+        expect(results.filter(result => 'settled' in result && result.settled)).toHaveLength(1);
+        expect(await settledEvents(harness, runId)).toEqual([{ answered: 1, withdrawn: 2 }]);
+      }
     } finally {
       await harness.close();
     }
