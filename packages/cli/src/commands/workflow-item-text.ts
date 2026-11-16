@@ -83,7 +83,13 @@ function runLines(run: ItemRun): string[] {
     lines.push(
       `            admitted, not started. If no process is running it: archon trigger execute ${waiting.requestId} --host ${waiting.hostId}`
     );
-  if (run.heldBehind) lines.push(...heldBehindLines('waits behind', run.heldBehind));
+  if (run.heldBehind)
+    lines.push(
+      ...heldBehindLines(
+        run.status === 'cancelled' ? 'refused, held by' : 'waits behind',
+        run.heldBehind
+      )
+    );
   return lines;
 }
 

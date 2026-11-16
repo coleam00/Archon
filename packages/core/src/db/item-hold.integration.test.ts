@@ -428,15 +428,52 @@ describe('one run of a workflow per item', () => {
     expect((await getWorkflowRun(String(refused.workflowRunId)))?.status).toBe('cancelled');
 
     const waited = start(false);
-    for (
-      let tries = 0;
-      !messages.some(text => text.includes("Waiting for item 'issue-1'"));
-      tries++
-    ) {
-      if (tries > 100) throw new Error('the start did not wait for its item');
-      await Bun.sleep(50);
+    try {
+      // Something waits behind the holder once the second start is held at its claim.
+      for (let tries = 0; (await store.listWaitedItemHolders()).length === 0; tries++) {
+        if (tries > 100) throw new Error('the start did not wait for its item');
+        await Bun.sleep(50);
+      }
+    } finally {
+      await end(holder);
     }
-    await end(holder);
     expect(await waited).toMatchObject({ success: true });
+
+    // After the holder ended, the refused start still names the run it was refused for.
+    const item = await store.getItem(String((await getWorkflowRun(holder))?.item_id));
+    const read = await readItem(source(), String(item?.projectKey), 'issue-1');
+    expect(read?.runs.find(run => run.id === refused.workflowRunId)).toMatchObject({
+      status: 'cancelled',
+      heldBehind: { runId: holder, workflow: 'build', status: 'completed', owner: null },
+    });
+  });
+
+  test('the single read of a lost-owner holder that kept tool-call attention matches the list', async () => {
+    const holder = await pending('build', 'issue-1');
+    await claimPendingWorkflowRun(holder);
+    const at = new Date().toISOString();
+    await getDatabase().query('UPDATE remote_agent_workflow_runs SET metadata = $2 WHERE id = $1', [
+      holder,
+      JSON.stringify({
+        ...(await getWorkflowRun(holder))?.metadata,
+        tool_call_attention: [
+          {
+            streamId: 's',
+            nodeId: 'work',
+            provider: 'claude',
+            toolCallId: 't',
+            name: 'Bash',
+            startedAt: at,
+            lastProgressAt: at,
+            raisedAt: at,
+            thresholdMs: 1000,
+          },
+        ],
+      }),
+    ]);
+    await pending('build', 'issue-1');
+    const { queue, single } = await readsOfHeldItem();
+    expect(queue).toEqual([expect.objectContaining({ kind: 'owner_lost', ref: holder })]);
+    expect(single).toEqual(queue[0] as typeof single);
   });
 });

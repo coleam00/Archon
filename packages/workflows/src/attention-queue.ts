@@ -538,15 +538,16 @@ export async function readAttentionQueueItem(
 ): Promise<RunAttentionQueueItem | null | undefined> {
   const run = await source.store.getWorkflowRun(runId);
   if (run === null) return undefined;
-  const resolution = await resolveRunAttention(source.store, run);
-  if (resolution.kind !== 'attention') {
-    // A run that needs an owner may be an item holder whose owner is gone.
-    if (resolution.kind !== 'owner_required' || source.ownerLost === undefined) return null;
+  // A held item's holder whose owner is gone reads as the list lists it, by the same rule.
+  if (run.item_id !== null && source.ownerLost !== undefined) {
     const holders = await source.ownerLost.holders();
-    return holders.some(holder => holder.id === run.id)
-      ? ownerLostItem(source, run, new Map())
+    const lost = holders.some(holder => holder.id === run.id)
+      ? await ownerLostItem(source, run, new Map())
       : null;
+    if (lost !== null) return lost;
   }
+  const resolution = await resolveRunAttention(source.store, run);
+  if (resolution.kind !== 'attention') return null;
   const holder =
     resolution.attention.runId === run.id
       ? run

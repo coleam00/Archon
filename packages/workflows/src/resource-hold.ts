@@ -31,6 +31,8 @@ export interface StartHold {
   waiting: string;
   refusal: string;
   log: Record<string, unknown>;
+  /** The run holding the start's item, recorded with a refusal. */
+  heldBy?: string;
 }
 
 /** One try of a waiting start: what holds it, or that its wait is over. */
@@ -43,6 +45,7 @@ export function itemHold(itemKey: string, holderRunId: string, workflow: string)
     waiting: `item '${itemKey}' (held by ${by}). The run starts when that run ends.`,
     refusal: `Item '${itemKey}' is held by ${by}; the start does not wait.`,
     log: { itemKey, holderRunId },
+    heldBy: holderRunId,
   };
 }
 
@@ -64,7 +67,14 @@ export async function waitForTurn(input: {
     const tried = await input.attempt();
     if ('done' in tried) return tried.done;
     if (input.noWait)
-      return refuseStart(deps, platform, conversationId, workflowRun, tried.held.refusal);
+      return refuseStart(
+        deps,
+        platform,
+        conversationId,
+        workflowRun,
+        tried.held.refusal,
+        tried.held.heldBy
+      );
     if (!announced) {
       announced = true;
       getLog().info({ workflowRunId: workflowRun.id, ...tried.held.log }, 'workflow.start_wait');
@@ -108,11 +118,15 @@ export async function refuseStart(
   platform: IWorkflowPlatform,
   conversationId: string,
   workflowRun: WorkflowRun,
-  error: string
+  error: string,
+  heldBy?: string
 ): Promise<WorkflowExecutionResult> {
   await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${error}`);
   await requireTerminalStatusWrite(
-    deps.store.cancelWorkflowRun(workflowRun.id, { cancel_reason: 'precondition_failed' }),
+    deps.store.cancelWorkflowRun(workflowRun.id, {
+      cancel_reason: 'precondition_failed',
+      ...(heldBy === undefined ? {} : { held_by_run_id: heldBy }),
+    }),
     { workflowRunId: workflowRun.id, site: 'workflow.start_refused' }
   );
   return { success: false, workflowRunId: workflowRun.id, error };

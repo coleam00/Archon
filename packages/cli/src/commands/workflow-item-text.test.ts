@@ -125,16 +125,8 @@ test('a start held behind a run whose owner is gone prints both actions on that 
   } as const;
   const text = itemReadLines({
     ...read,
-    runs: [
-      {
-        ...read.runs[0]!,
-        id: 'run-waiting',
-        status: 'pending',
-        outcome: null,
-        completedAt: null,
-        heldBehind,
-      },
-    ],
+    // No run carries the holder, so only the start's own line can name it.
+    runs: [],
     starts: [
       {
         requestId: 'req-queued',
@@ -146,6 +138,24 @@ test('a start held behind a run whose owner is gone prints both actions on that 
     ],
   }).join('\n');
   expect(text).toContain('req-queu');
+  expect(text).toContain(`waits behind run ${holder.slice(0, 8)}`);
   expect(text).toContain(`archon workflow resume ${holder}`);
   expect(text).toContain(`archon workflow abandon ${holder}`);
+});
+
+test('a start refused for a held item keeps naming the run that held it', () => {
+  const holder = 'a1b2c3d4-0000-4000-8000-000000000001';
+  const text = itemReadLines({
+    ...read,
+    runs: [
+      {
+        ...read.runs[0]!,
+        id: 'run-refused',
+        status: 'cancelled',
+        outcome: null,
+        heldBehind: { runId: holder, workflow: 'deliver', status: 'completed', owner: null },
+      },
+    ],
+  }).join('\n');
+  expect(text).toContain(`refused, held by run ${holder.slice(0, 8)}`);
 });

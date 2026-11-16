@@ -74,7 +74,10 @@ export const itemRunSchema = z.object({
    * `archon trigger execute <requestId> --host <hostId>`.
    */
   awaitingExecution: z.object({ requestId: z.string(), hostId: z.string() }).nullable(),
-  /** Set while the run is a pending start waiting for another run of its workflow on the item. */
+  /**
+   * Set while the run is a pending start waiting for another run of its workflow on the
+   * item, and kept on a start that was refused for it (`--no-wait`), which is cancelled.
+   */
   heldBehind: itemHeldBehindSchema.nullable(),
 });
 export type ItemRun = z.infer<typeof itemRunSchema>;
@@ -196,6 +199,16 @@ async function itemHolds(source: ItemReadSource, itemId: string, runs: readonly 
   for (const run of runs)
     if (run.status === 'pending')
       requests.set(run.id, await source.store.getResourceStartRequest(run.id));
+  // A start refused because a run held the item records that run on its cancellation.
+  const cancelled = runs.filter(run => run.status === 'cancelled').map(run => run.id);
+  const refusedBy = new Map<string, string>();
+  if (cancelled.length > 0)
+    for (const [runId, events] of await source.store.listEventsForRuns(cancelled, [
+      'workflow_cancelled',
+    ])) {
+      const holder = events.map(event => event.data.held_by_run_id).find(id => id !== undefined);
+      if (typeof holder === 'string') refusedBy.set(runId, holder);
+    }
   const rows = runs.map(run => ({
     id: run.id,
     workflow_name: run.workflow_name,
@@ -228,11 +241,15 @@ async function itemHolds(source: ItemReadSource, itemId: string, runs: readonly 
   return {
     request: (runId: string) => requests.get(runId) ?? null,
     /** A pending run that holds nothing waits behind its workflow's holder. */
-    runHeldBehind: (run: WorkflowRun) =>
-      run.status === 'pending' &&
-      !holdsItem({ status: run.status, admitted: requests.get(run.id)?.status === 'admitted' })
+    runHeldBehind: (run: WorkflowRun) => {
+      const refused = refusedBy.get(run.id);
+      if (refused !== undefined)
+        return byId.get(refused)?.workflow_name === run.workflow_name ? describe(refused) : null;
+      return run.status === 'pending' &&
+        !holdsItem({ status: run.status, admitted: requests.get(run.id)?.status === 'admitted' })
         ? holderOf(run.id, run.workflow_name)
-        : null,
+        : null;
+    },
     startHeldBehind: (start: ResourceStartRequestInspection) => {
       const workflow = start.launch.run.workflow_name;
       if (start.status === 'queued') return holderOf(start.id, workflow);
