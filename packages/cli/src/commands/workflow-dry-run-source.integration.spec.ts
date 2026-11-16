@@ -39,7 +39,11 @@ function write(path: string, text: string): void {
   writeFileSync(path, text);
 }
 
-async function dryRun(fx: Fixture, workflow: string): Promise<DryRunResult> {
+async function dryRun(
+  fx: Fixture,
+  workflow: string,
+  source: string | null = fx.source
+): Promise<DryRunResult> {
   // The JSON result goes through process.stdout.write, which captureCommand does not see.
   let json = '';
   const write = spyOn(process.stdout, 'write').mockImplementation(((
@@ -55,7 +59,7 @@ async function dryRun(fx: Fixture, workflow: string): Promise<DryRunResult> {
   try {
     result = await captureWorkflowCommand(fx.home, async host => {
       await workflowRunCommand(host, fx.target, workflow, '', {
-        discoveryCwd: fx.source,
+        ...(source === null ? {} : { discoveryCwd: source }),
         dryRun: true,
         defaultStubs: true,
         json: true,
@@ -192,5 +196,14 @@ describe('workflow run --dry-run --workflow-source', () => {
     const error = await refusal(fx, packFolder);
 
     expect(error).toContain(`did you mean ${fx.source}?`);
+  });
+
+  test('without a source, a global workflow still resolves and runs', async () => {
+    const fx = fixture();
+    writeGlobalProbe(fx);
+
+    const result = await dryRun(fx, 'probe', null);
+
+    expect(result.outcome).toBe('completed');
   });
 });
