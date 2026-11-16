@@ -18,7 +18,9 @@ import {
   type RunTerminalStatus,
   type WorkflowRun,
 } from './schemas/workflow-run';
-import type { WorkflowEventPage } from './store';
+import type { IWorkflowStore, WorkflowEventPage } from './store';
+import { askIdOfRef } from './attention-queue';
+import type { StoredItemAsk } from './schemas/item-ask';
 import { failedOutcomeReason, getTerminalRecord } from './terminal-record';
 
 function getLog(): ReturnType<typeof createLogger> {
@@ -118,5 +120,36 @@ export function terminalFacts(
       'workflow.attention_watch_terminal_record_unreadable'
     );
     return { outcome: null, firstFailedNode: null, reason: [] };
+  }
+}
+
+/**
+ * Why an item no run holds left the list, from what the store holds for it: an ask's row
+ * says whether it was answered, withdrawn or replaced. Anything else, or a row that cannot
+ * be read, is `no_longer_listed`: the stream saw it go, and nothing says why.
+ */
+export async function closedWithoutRun(store: Pick<IWorkflowStore, 'getItemAsk'>, ref: string) {
+  const askId = askIdOfRef(ref);
+  let closed: StoredItemAsk['closed'] = null;
+  try {
+    closed = askId === undefined ? null : ((await store.getItemAsk(askId))?.closed ?? null);
+  } catch (error) {
+    getLog().warn({ err: error as Error, ref }, 'workflow.attention_watch_ask_unreadable');
+  }
+  switch (closed?.as) {
+    case 'answered':
+      return {
+        reason: 'answered',
+        answeredVia: closed.act.via,
+        answeredBy: closed.act.by,
+        answeredFromRun: closed.act.fromRun,
+        answeredAt: closed.act.at,
+      } as const;
+    case 'withdrawn':
+      return { reason: 'withdrawn' } as const;
+    case 'replaced':
+      return { reason: 'replaced', replacedByRunId: closed.byRunId } as const;
+    case undefined:
+      return { reason: 'no_longer_listed' } as const;
   }
 }

@@ -731,3 +731,53 @@ describe('run-ended binding refusal', () => {
     ).toBe('running');
   });
 });
+
+describe('asks without an item', () => {
+  const declaresAsks = makeWorkflow({
+    name: 'decide',
+    nodes: [
+      {
+        id: 'decide',
+        kind: 'agent',
+        source: { kind: 'inline', prompt: 'Decide' },
+        output_format: { type: 'object', properties: {} },
+      },
+    ],
+    returns: 'decide',
+    result: { asks: 'asks' },
+  });
+
+  it('refuses a top-level run with no item before any node runs, naming why', async () => {
+    const store = makeStore();
+    const platform = makePlatform();
+    const result = await startWorkflow({
+      store,
+      platform,
+      workflow: declaresAsks,
+      options: { preCreatedRun: makeRun({ status: 'pending', item_id: null }) },
+    });
+    if (result.success) throw new Error('Expected the run to be refused');
+    expect(result.error).toContain("declares returns.asks 'asks', so it runs on an item");
+    expect(sentMessages(platform)[0]).toContain('--item <key>');
+    expect(store.cancelWorkflowRun).toHaveBeenCalledWith(
+      'run-123',
+      { cancel_reason: 'precondition_failed' },
+      { pendingOnly: true }
+    );
+    expect(store.claimPendingWorkflowRun).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('does not refuse a child run of the same workflow, which carries no item', async () => {
+    const store = makeStore();
+    await startWorkflow({
+      store,
+      workflow: declaresAsks,
+      options: {
+        preCreatedRun: makeRun({ status: 'pending', item_id: null, parent_run_id: 'parent' }),
+      },
+    });
+    expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(store.claimPendingWorkflowRun).toHaveBeenCalled();
+  });
+});
