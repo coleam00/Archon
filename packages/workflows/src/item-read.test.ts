@@ -249,6 +249,16 @@ describe('reading an item', () => {
 
   test('a run reads the item of its root, and a run with no item reads null', async () => {
     expect((await readItemOfRun(source, 'child'))?.item).toEqual(item);
+    // Two levels down: the walk must reach the root, not stop at the first parent.
+    const grandchild = run('grandchild', { parent_run_id: 'child', item_id: null });
+    const deeper: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        getWorkflowRun: async id => (id === 'grandchild' ? grandchild : (runs.get(id) ?? null)),
+      },
+    };
+    expect((await readItemOfRun(deeper, 'grandchild'))?.item).toEqual(item);
     expect(await readItemOfRun(source, 'unrelated')).toBeNull();
     expect(await readItemOfRun(source, 'missing')).toBeNull();
   });
