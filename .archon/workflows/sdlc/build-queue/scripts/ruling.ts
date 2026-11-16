@@ -24,7 +24,7 @@ import { type AskedBy, type BuildAsk, type BuildEffect, type BuildStatus, itemPu
 import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
-import type { NodeOutput } from '../../.shared/outputs.generated.ts';
+import { type NodeOutput, OUTPUT_ENUMS } from '../../.shared/outputs.generated.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { answeredChoice, rulingHeading } from '../../.shared/queue.ts';
 import { readWorkItem, writeClaimed } from '../../.shared/workitem.ts';
@@ -45,8 +45,12 @@ type Outcome = NodeOutput<'archon-build-queue', 'ruling'>['outcome'];
 /** The run's outcome for each effect an answer can have. */
 const OUTCOME = { continue: 'continue', ready: 'ready', park: 'parked' } as const satisfies Record<BuildEffect, Outcome>;
 
-/** Apply's decisions that end a run with nothing asked; `asked` pauses, and `launch` never reaches the record. */
-const DECIDED: readonly Outcome[] = ['ready', 'continue', 'parked', 'idle', 'order', 'handoff'];
+/**
+ * The outcomes the node declares. Apply decides two values that are not among them and
+ * never end a run with nothing asked: `asked` pauses for its answer, and `launch` never
+ * reaches the record.
+ */
+const OUTCOMES: readonly Outcome[] = OUTPUT_ENUMS['archon-build-queue'].ruling.outcome;
 
 /** Refuse a ready answer before any write when the item has no pull request to hand on. */
 function requireReadyPr(item: QualifiedPr, id: string): void {
@@ -65,7 +69,7 @@ const ABOUT: Record<AskedBy, string> = {
 function main(): void {
   const answer = input('decision').trim();
   if (answer === '') {
-    const decided = DECIDED.find(outcome => outcome === input('decided').trim());
+    const decided = OUTCOMES.find(outcome => outcome === input('decided').trim());
     if (decided === undefined) throw new Error(`apply decided "${input('decided')}" and nothing was answered`);
     emit({ outcome: decided, section: '', summary: input('decided_summary') });
     return;
