@@ -453,7 +453,8 @@ const loopGroupShape = (loopGroupNodeConfigSchema as unknown as z.ZodObject<z.Zo
  * Absent on purpose — these node fields do not silently strip, so there is
  * nothing to warn about:
  *   `output_format` — free-form JSON Schema (`z.record`); every key is accepted
- *   `sandbox`       — `.passthrough()`; unknown keys are preserved, not dropped
+ *   `sandbox`       — `.passthrough()` at every level (top, `network`, `filesystem`,
+ *                     `ripgrep`); unknown keys are preserved, not dropped
  *   `hooks`         — `.strict()`; unknown keys already hard-error at parse time
  * `loop_group.nodes` is deliberately not modelled here: its entries are full DAG
  * nodes, so the loader recurses into them with KNOWN_DAG_NODE_KEYS instead.

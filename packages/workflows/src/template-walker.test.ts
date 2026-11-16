@@ -113,6 +113,18 @@ const STRING_FIELD_CLASSIFICATIONS = {
     kind: 'literal',
     reason: 'Unmodelled sandbox values pass through as provider configuration',
   },
+  'sandbox.network.*': {
+    kind: 'literal',
+    reason: 'Unmodelled sandbox network values pass through as provider configuration',
+  },
+  'sandbox.filesystem.*': {
+    kind: 'literal',
+    reason: 'Unmodelled sandbox filesystem values pass through as provider configuration',
+  },
+  'sandbox.ripgrep.*': {
+    kind: 'literal',
+    reason: 'Unmodelled sandbox ripgrep values pass through as provider configuration',
+  },
   output_type: { kind: 'literal', reason: 'Output type is an artifact classification tag' },
   command: { kind: 'literal', reason: 'Resource identifier resolved before execution' },
   prompt: { kind: 'template', slots: ['agent.prompt'] },

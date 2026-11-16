@@ -825,6 +825,37 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     expect(nodeConfig?.effort).toBe('high');
   });
 
+  it('forwards a node sandbox with nested keys unchanged', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const sandbox = {
+      enabled: true,
+      network: { allowedDomains: ['github.com'], deniedDomains: ['evil.example'] },
+      filesystem: { allowRead: ['/x'], denyRead: ['/y'] },
+    };
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'node-sandbox-test',
+          nodes: [
+            { id: 'step1', kind: 'agent', source: { kind: 'command', name: 'my-cmd' }, sandbox },
+          ],
+        },
+        workflowRun,
+      })
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg?.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig?.sandbox).toEqual(sandbox);
+  });
+
   it('per-node effort overrides workflow-level effort', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
