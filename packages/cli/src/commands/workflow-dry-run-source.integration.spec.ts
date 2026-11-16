@@ -97,4 +97,47 @@ describe('workflow run --dry-run --workflow-source', () => {
     expect(result.trace.find(entry => entry.nodeId === 'hello')?.reason).toBeUndefined();
     expect(result.outcome).toBe('completed');
   });
+
+  // A same-named global workflow stands in for any other scope the name could resolve from.
+  function writeGlobalProbe(fx: Fixture): void {
+    write(
+      join(fx.home, 'workflows', 'probe.yaml'),
+      'name: probe\ndescription: global\nnodes:\n  - id: probe\n    bash: echo global\n'
+    );
+  }
+
+  async function refusal(fx: Fixture, source: string): Promise<string> {
+    const result = await captureWorkflowCommand(fx.home, async host => {
+      await workflowRunCommand(host, fx.target, 'probe', '', {
+        discoveryCwd: source,
+        dryRun: true,
+        defaultStubs: true,
+      });
+    });
+    expect(result.status).toBe(1);
+    expect(result.stdout).not.toContain('Dry-run:');
+    return result.stderr;
+  }
+
+  test('refuses when the source lacks the workflow another scope has', async () => {
+    const fx = fixture();
+    writeGlobalProbe(fx);
+
+    const error = await refusal(fx, fx.source);
+
+    expect(error).toContain(`--workflow-source ${fx.source}`);
+    expect(error).toContain(join(fx.source, '.archon', 'workflows'));
+    expect(error).toContain('global scope');
+  });
+
+  test('points a pack folder passed as the source at its checkout root', async () => {
+    const fx = fixture();
+    writeGlobalProbe(fx);
+    const packFolder = join(fx.source, '.archon', 'workflows', 'demo-pack');
+    mkdirSync(packFolder, { recursive: true });
+
+    const error = await refusal(fx, packFolder);
+
+    expect(error).toContain(`did you mean ${fx.source}?`);
+  });
 });

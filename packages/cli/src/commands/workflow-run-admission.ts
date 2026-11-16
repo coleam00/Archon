@@ -1,4 +1,5 @@
 import { rmSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
@@ -27,6 +28,7 @@ import {
   findWorkflowLoadError,
   type ResolvedWorkflow,
   type WorkflowLoadError,
+  type WorkflowSource,
   type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
@@ -161,13 +163,23 @@ export async function selectRunWorkflow(request: OwnedRunRequest): Promise<RunSe
       workflowEntries.map(ws => ws.workflow)
     );
   if (!workflow) throw workflowNotFoundError(workflowName, workflowEntries, errors);
+  const workflowEntry = workflowEntries.find(ws => ws.workflow === workflow);
+  // An explicit --workflow-source that lacks the named workflow would otherwise run another
+  // scope's copy while recording the source as its origin (#5826). Commands, scripts and
+  // composed workflows may still resolve from other scopes; the named workflow may not.
+  if (
+    !isContinuation &&
+    options.discoveryCwd !== undefined &&
+    workflowEntry?.source !== 'project'
+  ) {
+    throw workflowNotInSourceError(workflowName, options.discoveryCwd, workflowEntry?.source);
+  }
   // Name the selection in the capture's manifest, now that it is known. The manifest is
   // outside the digest, so this records provenance without disturbing what was frozen.
   if (source.preparedSource) {
     await recordSelectedWorkflow(source.preparedSource.anchor.root, workflow.name);
   }
   assertDetachedRowWorkflow(preCreatedRun, workflow);
-  const workflowEntry = workflowEntries.find(ws => ws.workflow === workflow);
 
   // Keys this workflow's YAML declares that the engine drops (#2213). Written to
   // stderr, never stdout: in --json mode Pino is silenced and stdout must stay
@@ -367,6 +379,35 @@ function workflowNotFoundError(
     );
   }
   return unknownWorkflowError(workflowName, workflowEntries);
+}
+
+function workflowNotInSourceError(
+  workflowName: string,
+  sourceRoot: string,
+  resolvedScope: WorkflowSource | undefined
+): Error {
+  const root = resolve(sourceRoot);
+  const searched = join(root, '.archon', 'workflows');
+  const lines = [
+    `Workflow '${workflowName}' is not in --workflow-source ${root}: Archon looked in ${searched}` +
+      (resolvedScope ? ` and found it only in the ${resolvedScope} scope.` : '.') +
+      ' Nothing was started.',
+  ];
+  const checkout = checkoutRootAbove(root);
+  if (checkout !== undefined) {
+    lines.push(`--workflow-source takes the checkout root; did you mean ${checkout}?`);
+  }
+  return new Error(lines.join('\n'));
+}
+
+/** The checkout whose `.archon/workflows` contains `path`, when the path sits inside one. */
+function checkoutRootAbove(path: string): string | undefined {
+  for (let dir = path; dirname(dir) !== dir; dir = dirname(dir)) {
+    if (basename(dir) === 'workflows' && basename(dirname(dir)) === '.archon') {
+      return dirname(dirname(dir));
+    }
+  }
+  return undefined;
 }
 
 function unknownWorkflowError(
