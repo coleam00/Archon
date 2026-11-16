@@ -22,6 +22,7 @@ mock.module('@archon/paths', () => ({
 import {
   substituteWorkflowVariables,
   buildPromptWithContext,
+  runWithNodeScratch,
   runWithPackDir,
 } from './workflow-variables';
 import { buildExecNodeEnvironment, EXEC_NODE_ENVIRONMENT_NAMES } from './exec-environment';
@@ -130,6 +131,20 @@ describe('substituteWorkflowVariables', () => {
     expect(prompt).toBe(
       'message_SUFFIX message_SUFFIX feedback_SUFFIX rejection_SUFFIX previous_SUFFIX'
     );
+  });
+
+  it('replaces $NODE_SCRATCH_DIR with the node scope directory', async () => {
+    const { prompt } = await runWithNodeScratch('/scope/dir', async () =>
+      substituteWorkflowVariables(
+        'Work in $NODE_SCRATCH_DIR/wt',
+        'run-1',
+        'm',
+        '/tmp',
+        'main',
+        'docs/'
+      )
+    );
+    expect(prompt).toBe('Work in /scope/dir/wt');
   });
 
   it('replaces $WORKFLOW_ID with the run ID', () => {

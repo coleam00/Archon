@@ -38,7 +38,7 @@
 
 import { hostname } from 'node:os';
 import { lstat, open, readdir, realpath, rm } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { execFileAsync, GitFailure } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { isPidProvablyGone } from '@archon/paths/process-owner';
@@ -161,13 +161,20 @@ export async function releaseNodeScratch({
 }): Promise<void> {
   const scratchDir = getNodeScratchDir(artifactsDir, invocationId);
   try {
-    const stat = await lstat(scratchDir);
+    const stat = await lstat(scratchDir).catch((error: unknown) => {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
+      throw error;
+    });
     if (!(await nodeScratchRootIsDirectory(artifactsDir, logContext))) {
-      getLog().warn({ ...logContext, path: scratchDir }, 'node_scratch.ancestor_not_directory');
+      if (stat) {
+        getLog().warn({ ...logContext, path: scratchDir }, 'node_scratch.ancestor_not_directory');
+      }
       return;
     }
-    // An empty directory, the common case, costs no git subprocess.
-    if (stat.isDirectory() && (await readdir(scratchDir)).length > 0) {
+    // Git is asked even when the directory is empty or gone: a node that deleted a
+    // worktree's files left its registration behind, and only Git knows it. A link in
+    // place of the directory is never followed, so it is only removed.
+    if (!stat || stat.isDirectory()) {
       const git =
         execContext.kind === 'container'
           ? await containerGit(execContext, repoPath, logContext)
@@ -256,7 +263,8 @@ async function deregisterScratchWorktrees(
   try {
     // Git prints resolved paths, so the scratch directory is resolved to compare. A
     // container mounts it at the path as given, so that form is matched too.
-    const roots = [scratchDir, await realpath(scratchDir)];
+    // The parent is resolved, not `scratchDir` itself, which a node may have deleted.
+    const roots = [scratchDir, join(await realpath(dirname(scratchDir)), basename(scratchDir))];
     const { stdout } = await git(['worktree', 'list', '--porcelain', '-z'], 10000);
     for (const field of stdout.split('\0')) {
       if (!field.startsWith('worktree ')) continue;

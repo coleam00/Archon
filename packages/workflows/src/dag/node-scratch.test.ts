@@ -358,6 +358,39 @@ describe('executeDagWorkflow -- node scratch', () => {
     expect(worktreePaths(repo)).toHaveLength(1);
   });
 
+  for (const removed of ['$NODE_SCRATCH_DIR/wt', '$NODE_SCRATCH_DIR']) {
+    it(`deregisters a worktree whose files the node deleted (${removed})`, async () => {
+      const repo = await initRepo(join(testDir, 'repo'));
+      git(repo, 'branch', 'probe');
+      // Git keeps the registration after `rm -rf`, so `next` can only check `probe`
+      // out if release asked Git, not the now empty or missing directory.
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          cwd: repo,
+          artifactsDir,
+          workflow: {
+            name: 'node-scratch-branch-reuse',
+            nodes: [
+              exec(
+                'first',
+                `git worktree add -q "$NODE_SCRATCH_DIR/wt" probe\nrm -rf "${removed}"`
+              ),
+              exec(
+                'next',
+                'git worktree add -q "$NODE_SCRATCH_DIR/wt" probe && echo ok > "$ARTIFACTS_DIR/next.txt"',
+                ['first']
+              ),
+            ],
+          },
+          workflowRun: makeWorkflowRun('node-scratch-branch-reuse'),
+        })
+      );
+      expect((await readFile(join(artifactsDir, 'next.txt'), 'utf8')).trim()).toBe('ok');
+      expect(worktreePaths(repo)).toHaveLength(1);
+    });
+  }
+
   it('logs a failed release and keeps the node completed', async () => {
     failNodeScratchRemoval = true;
     const store = createMockDeps().store;
