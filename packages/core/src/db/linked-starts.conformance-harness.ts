@@ -23,52 +23,102 @@ const byCli = { via: 'cli', by: null, fromRun: null } as const;
 
 type Harness = WorkflowStoreHarness & { db: IDatabase };
 
+/** What a binding follows and the outcome it starts on; an order of members by default. */
+interface Binding {
+  kind: LinkedRunEndedStart['link']['kind'];
+  holder: LinkedRunEndedStart['link']['holder'];
+  outcome: string;
+}
+const ORDER: Binding = { kind: 'part_of', holder: 'to', outcome: 'approved' };
+
+type Ended = { runId: string; written: SourceReceiptAcceptance[] };
+
+export interface Reviews {
+  /** Start a run of `review` on `item`. */
+  start: (item: string) => Promise<string>;
+  /** Complete a started run with `outcome`, as the engine would for `binding`. */
+  finish: (
+    runId: string,
+    item: string,
+    outcome: string,
+    form: RunEndedLinked['form'],
+    binding?: Binding
+  ) => Promise<Ended>;
+  /** Start and complete a run of `review` on `item`. */
+  complete: (
+    item: string,
+    outcome: string,
+    form: RunEndedLinked['form'],
+    binding?: Binding
+  ) => Promise<Ended>;
+}
+
+/** Runs of `review` on items of the conformance project, completed as the engine would. */
+export function reviews({ db, store }: Harness): Reviews {
+  const start = async (item: string): Promise<string> => {
+    const runId = crypto.randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message, status, item_id)
+       VALUES ($1, $2, 'review', '', 'running', $3)`,
+      [runId, CONFORMANCE_CONVERSATION_ID, await itemId(store, item)]
+    );
+    return runId;
+  };
+  const finish: Reviews['finish'] = async (runId, item, outcome, form, binding = ORDER) => {
+    const written = await store.completeWorkflowRun(runId, { duration_ms: 1 }, undefined, {
+      outcome: { kind: 'enum', value: outcome },
+      // The engine passes a linked start only for the outcome the binding names.
+      ...(outcome === binding.outcome
+        ? {
+            linkedStarts: [
+              linkedStart(form, binding, runId, await itemId(store, item), item, outcome),
+            ],
+          }
+        : {}),
+    });
+    return { runId, written: written.startReceipts };
+  };
+  return {
+    start,
+    finish,
+    complete: async (item, outcome, form, binding) =>
+      finish(await start(item), item, outcome, form, binding),
+  };
+}
+
 export interface LinkedOrder {
   order: string;
   members: string[];
   /** Complete a run of `review` on `member` with `outcome`, as the engine would. */
-  complete: (
-    member: string,
-    outcome: string,
-    form: RunEndedLinked['form']
-  ) => Promise<{ runId: string; written: SourceReceiptAcceptance[] }>;
+  complete: (member: string, outcome: string, form: RunEndedLinked['form']) => Promise<Ended>;
 }
 
 /** An order whose members are `part_of` it, and a way to end a member's review. */
 export async function linkedOrder(
-  { db, store }: Harness,
+  harness: Harness,
   order: string,
   members: string[]
 ): Promise<LinkedOrder> {
-  for (const member of members)
-    await store.recordItemLink({
-      projectKey,
-      fromKey: member,
-      toKey: order,
-      kind: 'part_of',
-      ...byCli,
-    });
-  return {
-    order,
-    members,
-    complete: async (member, outcome, form) => {
-      const runId = crypto.randomUUID();
-      const item = await itemId(store, member);
-      await db.query(
-        `INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message, status, item_id)
-         VALUES ($1, $2, 'review', '', 'running', $3)`,
-        [runId, CONFORMANCE_CONVERSATION_ID, item]
-      );
-      const written = await store.completeWorkflowRun(runId, { duration_ms: 1 }, undefined, {
-        outcome: { kind: 'enum', value: outcome },
-        // The engine passes a linked start only for the outcome the binding names.
-        ...(outcome === 'approved'
-          ? { linkedStarts: [linkedStart(form, runId, item, member, outcome)] }
-          : {}),
-      });
-      return { runId, written: written.startReceipts };
-    },
-  };
+  for (const member of members) await link(harness, member, order, 'part_of');
+  const { complete } = reviews(harness);
+  return { order, members, complete: (member, outcome, form) => complete(member, outcome, form) };
+}
+
+/** Record an active link from `from` to `to`; returns its id. */
+export async function link(
+  { store }: Harness,
+  from: string,
+  to: string,
+  kind: Binding['kind']
+): Promise<string> {
+  const recorded = await store.recordItemLink({
+    projectKey,
+    fromKey: from,
+    toKey: to,
+    kind,
+    ...byCli,
+  });
+  return recorded.link.id;
 }
 
 async function itemId(store: IWorkflowStore, key: string): Promise<string> {
@@ -77,8 +127,17 @@ async function itemId(store: IWorkflowStore, key: string): Promise<string> {
   return found.item.id;
 }
 
+/** The item keys of every receipt written so far. */
+async function startedOn(store: IWorkflowStore): Promise<(string | null | undefined)[]> {
+  const keys = [];
+  for (const { id } of await store.listStartReceipts())
+    keys.push((await store.getStartReceipt(id))?.itemKey);
+  return keys.sort();
+}
+
 function linkedStart(
   form: RunEndedLinked['form'],
+  binding: Binding,
   runId: string,
   itemId: string,
   member: string,
@@ -86,15 +145,15 @@ function linkedStart(
 ): LinkedRunEndedStart {
   return {
     form,
-    link: { kind: 'part_of', holder: 'to' },
+    link: { kind: binding.kind, holder: binding.holder },
     workflowName: 'review',
-    outcome: 'approved',
+    outcome: binding.outcome,
     endedRunId: runId,
     endedItemId: itemId,
     acceptance: {
       receipt: {
         id: crypto.randomUUID(),
-        sourceInstanceId: `order-${form}`,
+        sourceInstanceId: `${binding.kind}-${form}`,
         deliveryId: runId,
         contentDigest: `digest-${member}`,
         receivedAt: new Date().toISOString(),
@@ -201,6 +260,78 @@ export function describeLinkedStartConformance(makeHarness: () => Promise<Harnes
           verdict: 'approved',
         });
       }
+    } finally {
+      await harness.close();
+    }
+  });
+
+  // A depends_on link reads from the waiting item to its dependency, so the waiting item
+  // holds it from the 'from' end; no part_of link is involved.
+  const WAIT: Binding = { kind: 'depends_on', holder: 'from', outcome: 'approved' };
+
+  test('items that depend on another start when it ends, each of them, in either form', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      await link(harness, 'waiter-1', 'dependency', 'depends_on');
+      await link(harness, 'waiter-2', 'dependency', 'depends_on');
+      const { complete } = reviews(harness);
+      // The dependency is the one that ends; nothing starts on it.
+      expect((await complete('dependency', 'approved', 'each', WAIT)).written).toHaveLength(2);
+      expect(await startedOn(store)).toEqual(['waiter-1', 'waiter-2']);
+      expect((await complete('dependency', 'approved', 'all', WAIT)).written).toHaveLength(2);
+      expect(await startedOn(store)).toEqual(['waiter-1', 'waiter-1', 'waiter-2', 'waiter-2']);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a link ended before its dependency ends starts nothing, in either form', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const id = await link(harness, 'waiter', 'dependency', 'depends_on');
+      await store.endItemLink({ linkId: id, ...byCli });
+      const { complete } = reviews(harness);
+      expect((await complete('dependency', 'approved', 'each', WAIT)).written).toEqual([]);
+      expect((await complete('dependency', 'approved', 'all', WAIT)).written).toEqual([]);
+      expect(await store.listStartReceipts()).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("a member's latest review is the one that completed last, not the one started last", async () => {
+    const harness = await makeHarness();
+    try {
+      const { start, finish, complete } = reviews(harness);
+      await linkedOrder(harness, 'order-3', ['m1', 'm2']);
+      const first = await start('m1');
+      const second = await start('m1');
+      // Completed in the other order, within one second on SQLite.
+      await finish(second, 'm1', 'declined', 'all');
+      await finish(first, 'm1', 'approved', 'all');
+      expect((await complete('m2', 'approved', 'all')).written).toHaveLength(1);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a member completed before outcomes were recorded counts by its boolean outcome', async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      await linkedOrder(harness, 'order-4', ['old', 'new']);
+      // The shape an older binary wrote: `outcome` set, `completed_outcome` null.
+      const old = await reviews(harness).start('old');
+      await db.query(
+        "UPDATE remote_agent_workflow_runs SET status = 'completed', outcome = 'succeeded', completed_at = started_at WHERE id = $1",
+        [old]
+      );
+      expect((await store.getWorkflowRun(old))?.completed_outcome).toBeNull();
+      const binding = { ...ORDER, outcome: 'succeeded' };
+      const ended = await reviews(harness).complete('new', 'succeeded', 'all', binding);
+      expect(ended.written).toHaveLength(1);
     } finally {
       await harness.close();
     }

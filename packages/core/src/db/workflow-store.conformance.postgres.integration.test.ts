@@ -16,7 +16,12 @@ import {
   describeSqlStatusReadConformance,
 } from './workflow-store.conformance-harness';
 import { describeItemLinkConformance } from './item-links.conformance-harness';
-import { describeLinkedStartConformance, linkedOrder } from './linked-starts.conformance-harness';
+import {
+  describeLinkedStartConformance,
+  link,
+  linkedOrder,
+  reviews,
+} from './linked-starts.conformance-harness';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
 import { getSchemaSQL } from './bundled-schema';
 
@@ -342,7 +347,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
         transaction(async query => {
           let counted = false;
           const result = await callback(async <T>(sql: string, params?: unknown[]) => {
-            if (sql.includes('ORDER BY completed_at DESC')) counted = true;
+            if (sql.includes('MAX(e.event_order)')) counted = true;
             return query<T>(sql, params);
           });
           if (counted) {
@@ -369,6 +374,73 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
       await harness.close();
     }
   });
+  test.each(['each', 'all'] as const)(
+    'an %s start and an unlink of its link are ordered: the unlink waits for the completion',
+    async form => {
+      const harness = await makeHarness();
+      let interception: ReturnType<typeof spyOn> | undefined;
+      let unlink: Promise<unknown> | undefined;
+      const release = Promise.withResolvers<void>();
+      try {
+        const { db, store } = harness;
+        const linkId = await link(harness, 'waiter', 'dependency', 'depends_on');
+        const binding = { kind: 'depends_on', holder: 'from', outcome: 'approved' } as const;
+        const { start, finish } = reviews(harness);
+        const runId = await start('dependency');
+        // Pause the completion right after it found the waiter, end the link from another
+        // connection, and see whether that end can commit before the completion does.
+        const found = Promise.withResolvers<void>();
+        const transaction = db.withTransaction.bind(db);
+        interception = spyOn(db, 'withTransaction').mockImplementation(callback =>
+          transaction(query =>
+            callback(async <T>(sql: string, params?: unknown[]) => {
+              const result = await query<T>(sql, params);
+              if (sql.includes('JOIN remote_agent_items i ON i.id = l.')) {
+                found.resolve();
+                await release.promise;
+              }
+              return result;
+            })
+          )
+        );
+        const completion = finish(runId, 'dependency', 'approved', form, binding);
+        await found.promise;
+        interception.mockRestore();
+        interception = undefined;
+        let ended = false;
+        unlink = store.endItemLink({ linkId, via: 'cli', by: null, fromRun: null }).then(() => {
+          ended = true;
+        });
+        let waiting = false;
+        for (let attempt = 0; attempt < 200 && !waiting && !ended; attempt++) {
+          const result = await db.query<{ waiting: boolean }>(
+            `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock') AS waiting`
+          );
+          waiting = result.rows[0]?.waiting ?? false;
+          if (!waiting) await Bun.sleep(10);
+        }
+        expect(ended).toBe(false);
+        expect(waiting).toBe(true);
+        release.resolve();
+        // The link was active when the run completed, so the start stands; the end follows.
+        expect((await completion).written.map(receipt => receipt.receipt.itemKey)).toEqual([
+          'waiter',
+        ]);
+        await unlink;
+        const after = await db.query<{ ended_at: unknown }>(
+          'SELECT ended_at FROM remote_agent_item_links WHERE id = $1',
+          [linkId]
+        );
+        expect(after.rows[0]?.ended_at).not.toBeNull();
+      } finally {
+        release.resolve();
+        interception?.mockRestore();
+        await unlink?.catch(() => undefined);
+        await harness.close();
+      }
+    }
+  );
+
   test('SQL attention reads report unreadable origins without losing valid rows or writing state', async () => {
     const harness = await makeHarness();
     try {

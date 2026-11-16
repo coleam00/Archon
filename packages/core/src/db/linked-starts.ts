@@ -5,6 +5,10 @@
  * linked to a holder is done, must be read after the completing write and before its
  * commit: read earlier, two members ending at the same moment each see the other
  * unfinished and nothing starts, and a link ended meanwhile would still count.
+ *
+ * Every link row read here is share-locked on PostgreSQL, so an end of one of those links
+ * (`endItemLink`) waits until this completion commits: the links counted are the links
+ * active when the run completed. SQLite already serializes writers.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import type {
@@ -14,6 +18,12 @@ import type {
 import { getDatabaseType, getDialect } from './connection';
 import type { TransactionQuery } from './resource-slots';
 import { insertStartReceipt } from './start-receipt-writes';
+
+/** Share-locks the selected link rows on PostgreSQL; SQLite needs no row lock. */
+function shareLock(table?: string): string {
+  if (getDatabaseType() !== 'postgresql') return '';
+  return table === undefined ? ' FOR SHARE' : ` FOR SHARE OF ${table}`;
+}
 
 interface Holder {
   id: string;
@@ -34,7 +44,7 @@ async function holdersOf(query: TransactionQuery, start: LinkedRunEndedStart): P
     `SELECT i.id, i.key FROM remote_agent_item_links l
      JOIN remote_agent_items i ON i.id = l.${holder}
      WHERE l.${member} = $1 AND l.kind = $2 AND l.ended_at IS NULL
-     ORDER BY i.id`,
+     ORDER BY i.id${shareLock('l')}`,
     [start.endedItemId, start.link.kind]
   );
   return found.rows.map(row => ({ id: String(row.id), key: row.key }));
@@ -43,23 +53,28 @@ async function holdersOf(query: TransactionQuery, start: LinkedRunEndedStart): P
 /**
  * Whether `itemId`'s latest completed run of `workflowName` completed with `outcome`. A
  * member re-run to another outcome is no longer done; failed and cancelled runs have no
- * outcome and do not count either way. SQLite records `completed_at` to the second, and
- * its rowid (insertion order) breaks a tie only approximately; two runs of one stage on
- * one item completing in the same second is the case it can misorder.
+ * outcome and do not count either way. "Latest" is completion order: the `event_order` of
+ * the run's `workflow_completed` event, a sequence both backends assign in commit order.
+ * `completed_at` cannot order them: SQLite records it to the second, and on PostgreSQL it
+ * is the completing transaction's start. A run written before completed_outcome existed
+ * reads its boolean `outcome`, as `displayedRunOutcome` does.
  */
 async function isDone(
   query: TransactionQuery,
   itemId: string,
   start: LinkedRunEndedStart
 ): Promise<boolean> {
-  const tieBreak = getDatabaseType() === 'sqlite' ? 'rowid' : 'id';
-  const latest = await query<{ completed_outcome: string | null }>(
-    `SELECT completed_outcome FROM remote_agent_workflow_runs
-     WHERE item_id = $1 AND workflow_name = $2 AND status = 'completed'
-     ORDER BY completed_at DESC, ${tieBreak} DESC LIMIT 1`,
+  const latest = await query<{ completed_outcome: string | null; outcome: string | null }>(
+    `SELECT r.completed_outcome, r.outcome FROM remote_agent_workflow_runs r
+     WHERE r.item_id = $1 AND r.workflow_name = $2 AND r.status = 'completed'
+     ORDER BY COALESCE((SELECT MAX(e.event_order) FROM remote_agent_workflow_events e
+                        WHERE e.workflow_run_id = r.id AND e.event_type = 'workflow_completed'), 0) DESC,
+              r.completed_at DESC
+     LIMIT 1`,
     [itemId, start.workflowName]
   );
-  return latest.rows[0]?.completed_outcome === start.outcome;
+  const row = latest.rows[0];
+  return (row?.completed_outcome ?? row?.outcome) === start.outcome;
 }
 
 /** The receipt for one holder, from the one the engine built for the ended run. */
@@ -92,11 +107,18 @@ async function receiptForHolder(
   const { holder: holderEnd, member } = ends(start.link);
   const linked = await query<{ id: string }>(
     `SELECT ${member} AS id FROM remote_agent_item_links
-     WHERE ${holderEnd} = $1 AND kind = $2 AND ended_at IS NULL`,
+     WHERE ${holderEnd} = $1 AND kind = $2 AND ended_at IS NULL${shareLock()}`,
     [holder.id, start.link.kind]
   );
   const members = linked.rows.map(row => String(row.id)).sort();
-  for (const id of members) if (!(await isDone(query, id, start))) return undefined;
+  // A holder with no active member is never done: there is no set to have finished.
+  if (members.length === 0) return undefined;
+  for (const id of members) {
+    // The ended item is done by this completion: it completed with the outcome, and on
+    // PostgreSQL its own completion event has no order until it commits.
+    if (id === start.endedItemId) continue;
+    if (!(await isDone(query, id, start))) return undefined;
+  }
   const set = createHash('sha256').update(JSON.stringify(members)).digest('hex');
   // The digest is the set, not the binding: an edited file then replays the receipt when a
   // member re-runs, rather than conflicting with it and failing that completion.
