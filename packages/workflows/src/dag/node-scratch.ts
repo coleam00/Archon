@@ -7,7 +7,7 @@ import { getNodeScratchDir } from '@archon/paths/archon-paths';
 import { isWorkflowExecutionInterruption } from '../execution-interruption';
 import { nodeScratchRootIsDirectory, releaseNodeScratch } from '../run-scratch';
 import { runWithNodeScratch } from '../workflow-variables';
-import type { DagNode } from '../schemas';
+import { isLoopGroupNode, type DagNode } from '../schemas';
 import type { PersistedNodeOutput } from '../store';
 import type { LayerNodeResult, RunLayersContext } from './run-context';
 
@@ -53,7 +53,7 @@ export async function runInNodeScratch(
         artifactsDir: ctx.artifactsDir,
         invocationId,
         repoPath: ctx.cwd,
-        container: ctx.execContext.kind === 'container',
+        execContext: ctx.execContext,
         logContext: { workflowRunId: ctx.workflowRun.id, nodeId: node.id, invocationId },
       });
     }
@@ -65,8 +65,11 @@ export async function runInNodeScratch(
  * nothing, but on resume it can settle an invocation a prior pass suspended: skipped by
  * its condition or trigger rule (the reused `invocationId`), or replayed as the success an
  * approval recorded while the run was paused (the replayed completion's invocation).
- * Each is released by id, so scratch a workflow keeps elsewhere under the run's scratch is
- * never touched. A directory that was never made costs one `lstat`.
+ * A skipped `loop_group` never dispatches again, so the body invocations a prior pass left
+ * suspended under it (recorded with their own ids) are released with it; suspended work
+ * elsewhere in the run is not. Each is released by id, so scratch a workflow keeps
+ * elsewhere under the run's scratch is never touched. A directory that was never made
+ * costs one `lstat`.
  */
 export async function releaseAdmittedScratch(
   ctx: RunLayersContext,
@@ -76,14 +79,36 @@ export async function releaseAdmittedScratch(
   priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput> | undefined
 ): Promise<void> {
   if (result.output.state === 'running') return;
+  const ids = new Set([invocationId]);
   const replayed = priorCompletedNodes?.get(node.id)?.execution?.invocation.id;
-  for (const id of new Set([invocationId, ...(replayed === undefined ? [] : [replayed])])) {
+  if (replayed !== undefined) ids.add(replayed);
+  if (isLoopGroupNode(node)) {
+    for (const id of suspendedDescendants(ctx, node.id)) ids.add(id);
+  }
+  for (const id of ids) {
     await releaseNodeScratch({
       artifactsDir: ctx.artifactsDir,
       invocationId: id,
       repoPath: ctx.cwd,
-      container: ctx.execContext.kind === 'container',
+      execContext: ctx.execContext,
       logContext: { workflowRunId: ctx.workflowRun.id, nodeId: node.id, invocationId: id },
     });
   }
+}
+
+/**
+ * Invocation ids of the unfinished body invocations recorded under loop_group `groupId`
+ * in this context: their path is inside the group's, and their loop path enters the group
+ * from this context's own.
+ */
+function suspendedDescendants(ctx: RunLayersContext, groupId: string): string[] {
+  const groupPath = ctx.stepNamePrefix + groupId;
+  const depth = ctx.loopGroupPath.length;
+  const ids: string[] = [];
+  for (const { path, invocation } of ctx.unfinishedInvocations?.values() ?? []) {
+    if (path.startsWith(`${groupPath}.`) && invocation.loopPath[depth]?.groupId === groupId) {
+      ids.push(invocation.id);
+    }
+  }
+  return ids;
 }

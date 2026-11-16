@@ -162,7 +162,7 @@ async function simulateNode(
         artifactsDir: ctx.artifactsDir,
         invocationId,
         repoPath: ctx.execWorkspace,
-        container: false,
+        execContext: { kind: 'host' },
         logContext: { workflowRunId: 'dry-run', nodeId: node.id, invocationId },
       });
     }

@@ -20,10 +20,36 @@ mock.module('node:fs/promises', () => ({
   },
 }));
 
+// Stands in for the run's container: `docker exec` runs its command here, and the
+// arguments are recorded. Captured before mocking, as `rm` is above.
+const dockerCalls: string[][] = [];
+const realGit = await import('@archon/git');
+const realExecFileAsync = realGit.execFileAsync;
+mock.module('@archon/git', () => ({
+  ...realGit,
+  execFileAsync: async (
+    cmd: string,
+    args: string[],
+    options?: Parameters<typeof realExecFileAsync>[2]
+  ) => {
+    if (cmd !== 'docker') return realExecFileAsync(cmd, args, options);
+    dockerCalls.push(args);
+    // `exec -w <cwd> [-i] [-u <user>] [-e K=V]... <container> <cmd> <args...>`
+    const cwd = args[2];
+    let i = 3;
+    while (args[i]?.startsWith('-')) i += args[i] === '-i' ? 1 : 2;
+    return realExecFileAsync(args[i + 1], args.slice(i + 2), { ...options, cwd });
+  },
+}));
+
 import { existsSync } from 'fs';
 import { mkdir, readdir, readFile, symlink, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { getNodeScratchRoot, getRunScratchDir } from '@archon/paths/archon-paths';
+import {
+  getNodeScratchDir,
+  getNodeScratchRoot,
+  getRunScratchDir,
+} from '@archon/paths/archon-paths';
 import { nodeInvocationKey } from '../node-record-reader';
 import { releaseNodeScratch } from '../run-scratch';
 import type { NodeExecutionMetadata } from '../schemas/node-execution';
@@ -33,6 +59,7 @@ import {
   createMockPlatform,
   dagOptions,
   makeWorkflowRun,
+  mockLogger,
   persistedEvents,
 } from './test-utils';
 import { executeDagWorkflow } from '../dag-executor';
@@ -91,6 +118,7 @@ describe('executeDagWorkflow -- node scratch', () => {
 
   afterEach(async () => {
     failNodeScratchRemoval = false;
+    dockerCalls.length = 0;
     await removeTempTree(testDir);
   });
 
@@ -333,26 +361,184 @@ describe('executeDagWorkflow -- node scratch', () => {
   it('logs a failed release and keeps the node completed', async () => {
     failNodeScratchRemoval = true;
     const store = createMockDeps().store;
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(store),
-        cwd: testDir,
-        artifactsDir,
-        workflow: {
-          name: 'node-scratch-release-fails',
-          nodes: [
-            exec('work', 'echo bulk > "$NODE_SCRATCH_DIR/file"'),
-            exec('after', 'echo ran > "$ARTIFACTS_DIR/after.txt"', ['work']),
-          ],
-        },
-        workflowRun: makeWorkflowRun('node-scratch-release-fails'),
-      })
-    );
+    // Every level shares one spy in test-utils, so warnings get their own here.
+    const warn = mock((_data: unknown, _message?: string): void => undefined);
+    const sharedWarn = mockLogger.warn;
+    mockLogger.warn = warn;
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          artifactsDir,
+          workflow: {
+            name: 'node-scratch-release-fails',
+            nodes: [
+              exec('work', 'echo bulk > "$NODE_SCRATCH_DIR/file"'),
+              exec('after', 'echo ran > "$ARTIFACTS_DIR/after.txt"', ['work']),
+            ],
+          },
+          workflowRun: makeWorkflowRun('node-scratch-release-fails'),
+        })
+      );
+    } finally {
+      mockLogger.warn = sharedWarn;
+    }
     const events = persistedEvents(store);
+    const work = events.find(
+      event => event.event_type === 'node_completed' && event.step_name === 'work'
+    )?.data as unknown as NodeExecutionMetadata;
+    const invocationId = work.invocation.id;
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: 'work',
+        invocationId,
+        path: getNodeScratchDir(artifactsDir, invocationId),
+      }),
+      'node_scratch.remove_failed'
+    );
     expect(events.some(event => event.event_type === 'node_failed')).toBe(false);
     expect(await readFile(join(artifactsDir, 'after.txt'), 'utf8')).toBe('ran\n');
     // Left for run-end release.
     expect(await readdir(getNodeScratchRoot(artifactsDir))).toHaveLength(2);
+  });
+
+  it('deregisters only the node scratch worktrees, by path, never pruning', async () => {
+    const repo = await initRepo(join(testDir, 'repo'));
+    const own = getNodeScratchDir(artifactsDir, 'own');
+    const other = getNodeScratchDir(artifactsDir, 'other');
+    const sibling = join(testDir, 'sibling');
+    // A registration whose checkout is gone: `git worktree prune` would drop it.
+    const missing = join(testDir, 'missing');
+    for (const path of [join(own, 'wt'), join(other, 'wt'), sibling, missing]) {
+      git(repo, 'worktree', 'add', '-q', '--detach', path, 'HEAD');
+    }
+    await removeTempTree(missing);
+
+    await releaseNodeScratch({
+      artifactsDir,
+      invocationId: 'own',
+      repoPath: repo,
+      execContext: { kind: 'host' },
+      logContext: {},
+    });
+    expect(existsSync(own)).toBe(false);
+    expect(worktreePaths(repo)).toHaveLength(4);
+    for (const path of [join(other, 'wt'), sibling, missing]) {
+      expect(worktreePaths(repo).some(line => line.endsWith(path))).toBe(true);
+    }
+  });
+
+  it("deregisters a container node's worktrees through the container's git", async () => {
+    const repo = await initRepo(join(testDir, 'repo'));
+    git(repo, 'branch', 'probe');
+    const first = getNodeScratchDir(artifactsDir, 'first');
+    git(repo, 'worktree', 'add', '-q', join(first, 'wt'), 'probe');
+
+    await releaseNodeScratch({
+      artifactsDir,
+      invocationId: 'first',
+      repoPath: repo,
+      execContext: { kind: 'container', containerId: 'run-container' },
+      logContext: {},
+    });
+    expect(existsSync(first)).toBe(false);
+    expect(dockerCalls.some(args => args.includes('remove') && args.at(-1)?.endsWith('wt'))).toBe(
+      true
+    );
+    // The next node can check out the branch the released one had.
+    git(
+      repo,
+      'worktree',
+      'add',
+      '-q',
+      join(getNodeScratchDir(artifactsDir, 'next'), 'wt'),
+      'probe'
+    );
+  });
+
+  it('releases the scratch of body nodes a resume leaves behind by skipping their suspended loop_group', async () => {
+    const repo = await initRepo(join(testDir, 'repo'));
+    const runId = 'node-scratch-group-skip';
+    const decision = join(testDir, 'decision');
+    await writeFile(decision, 'go');
+    const nodesFor = (): DagNode[] => [
+      exec('prod', `cat "${decision}"`),
+      dagNodeSchema.parse({
+        id: 'grp',
+        depends_on: ['prod'],
+        when: "$prod.output == 'go'",
+        loop_group: {
+          max_iterations: 2,
+          until_bash: 'false',
+          nodes: [
+            {
+              id: 'check',
+              approval: { message: 'Continue?', decisions: [{ id: 'approve' }] },
+            },
+          ],
+        },
+      }) as DagNode,
+    ];
+    let store = createEscalationStore(runId);
+    const run = (options: Partial<Parameters<typeof dagOptions>[0]>) =>
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: repo,
+          artifactsDir,
+          workflow: { name: 'node-scratch-group-skip', nodes: nodesFor() },
+          workflowRun: makeWorkflowRun(runId),
+          ...options,
+        })
+      );
+    await run({});
+    expect(store.getState().status).toBe('paused');
+    const suspended = persistedEvents(store)
+      .filter(event => event.event_type === 'node_suspended')
+      .map(event => ({
+        ...(event.data as unknown as NodeExecutionMetadata),
+        path: event.step_name ?? '',
+      }));
+    const body = suspended.find(execution => execution.path === 'grp.check');
+    if (!body) throw new Error('grp.check did not suspend');
+    const bodyScratch = getNodeScratchDir(artifactsDir, body.invocation.id);
+    git(repo, 'worktree', 'add', '-q', '--detach', join(bodyScratch, 'wt'), 'HEAD');
+    await writeFile(join(bodyScratch, 'wt', 'bulk'), Buffer.alloc(4 * 1024 * 1024));
+    // Suspended elsewhere in the run, under a group whose path shares a prefix: kept.
+    const unrelated = {
+      ...body,
+      path: 'grp2.check',
+      invocation: {
+        ...body.invocation,
+        id: 'unrelated',
+        loopPath: [{ groupId: 'grp2', iteration: 1 }],
+      },
+    };
+    const unrelatedScratch = getNodeScratchDir(artifactsDir, 'unrelated');
+    await mkdir(unrelatedScratch, { recursive: true });
+
+    await writeFile(decision, 'stop');
+    store = createEscalationStore(runId);
+    store.getDagResumeSnapshot.mockImplementation(async () => ({
+      ...(await createMockDeps().store.getDagResumeSnapshot(runId)),
+      unfinishedInvocations: new Map(
+        [...suspended, unrelated].map(execution => [
+          nodeInvocationKey(execution.path, execution.invocation.loopPath),
+          execution,
+        ])
+      ),
+    }));
+    await run({ priorCompletedNodes: new Map() });
+    expect(
+      persistedEvents(store).some(
+        event => event.event_type === 'node_skipped' && event.step_name === 'grp'
+      )
+    ).toBe(true);
+    expect(existsSync(bodyScratch)).toBe(false);
+    expect(worktreePaths(repo)).toHaveLength(1);
+    expect(existsSync(unrelatedScratch)).toBe(true);
   });
 
   for (const linked of ['scratch', 'nodes'] as const) {
@@ -372,7 +558,7 @@ describe('executeDagWorkflow -- node scratch', () => {
         artifactsDir,
         invocationId: 'victim',
         repoPath: repo,
-        container: false,
+        execContext: { kind: 'host' },
         logContext: {},
       });
       expect(existsSync(join(victimDir, 'victim', 'uncommitted'))).toBe(true);
