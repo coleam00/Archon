@@ -172,6 +172,15 @@ async function endRun(
   );
 }
 
+/** Resume an ended run as the engine does: back to running, with a `workflow_resumed` event. */
+async function resumeRun(runId: string): Promise<void> {
+  await endRun(runId, 'running');
+  await insertWorkflowEvent(getDatabase().query.bind(getDatabase()), {
+    workflow_run_id: runId,
+    event_type: 'workflow_resumed',
+  });
+}
+
 async function recordPullRequest(runId: string, number: number): Promise<void> {
   const prRef = { repo, number };
   const audit = forgeOperationAuditSchema.parse({
@@ -274,7 +283,7 @@ test('a run that ends and then resumes shows in progress again, and its second e
   await endRun(run, 'failed');
   await tracker.scan();
   expect(fake.status()?.body).toContain('| implement | failed |');
-  await endRun(run, 'running');
+  await resumeRun(run);
   await tracker.scan();
   expect(fake.status()?.body).toContain('| implement | in progress |');
   await endRun(run, 'completed', 'delivered');
@@ -440,18 +449,37 @@ async function pauseAtWait(runId: string): Promise<void> {
   });
 }
 
+/**
+ * The end of `endedRunId` matched a run-ended binding whose next stage is still being
+ * prepared; `admitNextStage` completes that preparation, as admission does with its run.
+ */
 async function recordRunEndedStart(endedRunId: string): Promise<void> {
+  const receiptId = crypto.randomUUID();
   await getDatabase().query(
     `INSERT INTO remote_agent_start_receipts
      (id, source_instance_id, delivery_id, content_digest, received_at, source_actor, outcome)
      VALUES ($1, 'next-stage', $2, 'digest', $3, $4, 'matched')`,
     [
-      crypto.randomUUID(),
+      receiptId,
       endedRunId,
       new Date().toISOString(),
       JSON.stringify({ source: 'archon-run-ended', id: endedRunId }),
     ]
   );
+  await getDatabase().query(
+    `INSERT INTO remote_agent_start_receipt_bindings (receipt_id, binding_id, preparation_status)
+     VALUES ($1, 'next-stage', 'pending')`,
+    [receiptId]
+  );
+}
+
+async function admitNextStage(endedRunId: string, itemKey: string, workflow: string) {
+  await getDatabase().query(
+    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'complete'
+      WHERE receipt_id IN (SELECT id FROM remote_agent_start_receipts WHERE delivery_id = $1)`,
+    [endedRunId]
+  );
+  return startRun(itemKey, workflow);
 }
 
 test('an open ask gets one new comment with its options and the command that answers it', async () => {
@@ -526,7 +554,7 @@ test('the result is posted once, when a run ends without starting a next stage',
   await tracker.scan();
   expect(newComments(fake)).toEqual([]);
 
-  const implement = await startRun('issue-7', 'implement');
+  const implement = await admitNextStage(plan, 'issue-7', 'implement');
   await recordPullRequest(implement, 12);
   await endRun(implement, 'completed', 'delivered');
   await tracker.scan();
@@ -547,7 +575,28 @@ test('a run-ended chain that ends between two scans still gets its result', asyn
   await tracker.scan();
   await recordRunEndedStart(plan);
   await endRun(plan, 'completed', 'ready');
-  const implement = await startRun('issue-7', 'implement');
+  const implement = await admitNextStage(plan, 'issue-7', 'implement');
+  await endRun(implement, 'completed', 'delivered');
+  await tracker.scan();
+  const comments = newComments(fake);
+  expect(comments.length).toBe(1);
+  expect(comments[0]).toContain('the `implement` stage completed with outcome `delivered`.');
+});
+
+test('with overlapping runs, no result is posted while a stage the earlier one started has no run', async () => {
+  const fake = fakeForge();
+  const tracker = await activeTracker(fake.forge);
+  const plan = await startRun('issue-7', 'plan');
+  const docs = await startRun('issue-7', 'docs');
+  await tracker.scan();
+  await recordRunEndedStart(plan);
+  await endRun(plan, 'completed', 'ready');
+  await endRun(docs, 'completed', 'written');
+  await tracker.scan();
+  expect(newComments(fake)).toEqual([]);
+
+  const implement = await admitNextStage(plan, 'issue-7', 'implement');
+  await tracker.scan();
   await endRun(implement, 'completed', 'delivered');
   await tracker.scan();
   const comments = newComments(fake);
@@ -562,10 +611,25 @@ test('a run that resumes after its result was posted replaces that result when i
   await endRun(run, 'failed');
   await tracker.scan();
   expect(newComments(fake)[0]).toContain('the `implement` stage failed');
-  await endRun(run, 'running');
+  await resumeRun(run);
   await tracker.scan();
   await endRun(run, 'completed', 'delivered');
   await tracker.scan();
+  const comments = newComments(fake);
+  expect(comments.length).toBe(1);
+  expect(comments[0]).toContain('the `implement` stage completed with outcome `delivered`.');
+});
+
+test('a run that resumes and ends again between two scans shows its new end', async () => {
+  const fake = fakeForge();
+  const tracker = await activeTracker(fake.forge);
+  const run = await startRun('issue-7', 'implement');
+  await endRun(run, 'failed');
+  await tracker.scan();
+  await resumeRun(run);
+  await endRun(run, 'completed', 'delivered');
+  await tracker.scan();
+  expect(fake.status()?.body).toContain('| implement | completed | delivered |');
   const comments = newComments(fake);
   expect(comments.length).toBe(1);
   expect(comments[0]).toContain('the `implement` stage completed with outcome `delivered`.');

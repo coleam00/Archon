@@ -31,8 +31,10 @@ import { getItemRuns } from '@archon/core/db/items';
 import {
   listTrackerCandidateRuns,
   listTrackerItemsOwingComments,
+  listTrackerLedger,
   recordTrackerBaseline,
-  runEndStartedStage,
+  runEndStageOwed,
+  TRACKER_RESUMED_KEY,
   TRACKER_STARTED_KEY,
   TRACKER_TERMINAL_KEY,
   trackerAskKey,
@@ -43,7 +45,6 @@ import {
 } from '@archon/core/db/item-tracker';
 import {
   hasAnyAttentionNotice,
-  listAttentionNotices,
   listEventsForRuns,
   persistWorkflowEvent,
 } from '@archon/core/db/workflow-events';
@@ -308,8 +309,7 @@ export class ItemTracker {
     );
     for (const run of runs) shown.set(run.id, statusKey(isTerminalRunStatus(run.status)));
     const latest = latestTrackerStatusKeys(
-      await listAttentionNotices([...shown.keys()]),
-      tracked.destination
+      await listTrackerLedger([...shown.keys()], tracked.destination)
     );
     for (const [runId, key] of shown)
       if (latest.get(runId) !== key) await this.record(tracked, { runId, key });
@@ -427,8 +427,10 @@ async function owedRunsByItem(
   candidates: readonly TrackerCandidateRun[]
 ): Promise<Map<string, TrackerCandidateRun[]>> {
   const latest = latestTrackerStatusKeys(
-    await listAttentionNotices(candidates.map(run => run.id)),
-    tracked.destination
+    await listTrackerLedger(
+      candidates.map(run => run.id),
+      tracked.destination
+    )
   );
   const owedByItem = new Map<string, TrackerCandidateRun[]>();
   for (const run of candidates) {
@@ -465,15 +467,15 @@ async function itemFacts(tracked: Tracked, itemKey: string): Promise<ItemFacts |
     listItemRulings(found.item.id),
   ]);
   const openAsks = splitAttentionRead(asks).values.filter(ask => ask.closed === null);
-  const ledger = await listAttentionNotices([
-    ...new Set([...runs.map(run => run.id), ...openAsks.map(ask => ask.runId)]),
-  ]);
-  const mine = ledger.filter(({ data }) => data.destination === tracked.destination);
+  const ledger = await listTrackerLedger(
+    [...new Set([...runs.map(run => run.id), ...openAsks.map(ask => ask.runId)])],
+    tracked.destination
+  );
   const posted = new Set<string>();
-  for (const { runId, data } of mine) {
-    // A run that started again after its result was posted owes its result again.
-    if (data.key === TRACKER_STARTED_KEY) posted.delete(postedKey({ runId, key: RESULT_KEY }));
-    posted.add(postedKey({ runId, key: data.key }));
+  for (const row of ledger) {
+    // A run that resumed after its result was posted owes its result again.
+    if (row.key === TRACKER_RESUMED_KEY) posted.delete(postedKey({ ...row, key: RESULT_KEY }));
+    posted.add(postedKey(row));
   }
   const comments: OwedComment[] = [
     ...questionComments(runs),
@@ -484,7 +486,7 @@ async function itemFacts(tracked: Tracked, itemKey: string): Promise<ItemFacts |
   ].filter(owed => !posted.has(postedKey(owed.row)));
   // A ruling is shown once the item has a run, and its row is recorded on one; the
   // baseline picks that run in SQL, so a posted ruling is found on any of them.
-  const postedKeys = new Set(mine.map(({ data }) => data.key));
+  const postedKeys = new Set(ledger.map(row => row.key));
   const anchor = runs[0]?.id;
   if (anchor !== undefined)
     for (const ruling of rulings) {
@@ -525,7 +527,7 @@ async function openQuestionRows(tracked: Tracked): Promise<TrackerRow[]> {
 /**
  * The run whose end is the end of the work on the item, or undefined while work remains:
  * the last run in start order that just ended, when no run on the item is live, no ask is
- * open and its end started no next stage.
+ * open and no run's end started a next stage that has no run yet.
  */
 async function finalResult(
   owedRuns: readonly TrackerCandidateRun[],
@@ -537,9 +539,9 @@ async function finalResult(
   if (!last || openAsks.length > 0) return undefined;
   if (runs.some(run => !isTerminalRunStatus(run.status))) return undefined;
   if (posted.has(postedKey({ runId: last.id, key: RESULT_KEY }))) return undefined;
-  // An earlier ended run was followed by a later one, so only the last can have started
-  // the stage that is still owed.
-  if (await runEndStartedStage(last.id)) return undefined;
+  // Any ended run can own the owed stage: with overlapping runs, the one that ended last
+  // need not be the one that started last.
+  if (await runEndStageOwed(runs.map(run => run.id))) return undefined;
   return last;
 }
 
@@ -547,17 +549,17 @@ function statusKey(terminal: boolean): TrackerStatusKey {
   return terminal ? TRACKER_TERMINAL_KEY : TRACKER_STARTED_KEY;
 }
 
-/** Each run's latest status row for `destination`; the ledger arrives in event order. */
-function latestTrackerStatusKeys(
-  ledger: Awaited<ReturnType<typeof listAttentionNotices>>,
-  destination: string
-): Map<string, TrackerStatusKey> {
-  const latest = new Map<string, TrackerStatusKey>();
-  for (const { runId, data } of ledger) {
-    if (data.destination !== destination) continue;
-    if (data.key === TRACKER_STARTED_KEY || data.key === TRACKER_TERMINAL_KEY)
-      latest.set(runId, data.key);
-  }
+type LatestStatus = TrackerStatusKey | typeof TRACKER_RESUMED_KEY;
+
+/**
+ * Each run's latest status row or resume; the ledger arrives in event order. A resume
+ * matches neither status, so the run's status is owed again.
+ */
+function latestTrackerStatusKeys(ledger: readonly TrackerRow[]): Map<string, LatestStatus> {
+  const latest = new Map<string, LatestStatus>();
+  for (const { runId, key } of ledger)
+    if (key === TRACKER_STARTED_KEY || key === TRACKER_TERMINAL_KEY || key === TRACKER_RESUMED_KEY)
+      latest.set(runId, key);
   return latest;
 }
 

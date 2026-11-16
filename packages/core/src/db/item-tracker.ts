@@ -15,6 +15,8 @@ import { insertWorkflowEvent } from './workflow-events';
 export const TRACKER_STARTED_KEY = 'started';
 export const TRACKER_TERMINAL_KEY = 'terminal';
 export type TrackerStatusKey = typeof TRACKER_STARTED_KEY | typeof TRACKER_TERMINAL_KEY;
+/** The ledger key a run's `workflow_resumed` event reads as; the tracker never writes it. */
+export const TRACKER_RESUMED_KEY = 'resumed';
 
 export interface TrackerCandidateRun {
   id: string;
@@ -22,14 +24,15 @@ export interface TrackerCandidateRun {
   terminal: boolean;
 }
 
-const terminalStatuses = (from: number): string =>
-  TERMINAL_WORKFLOW_STATUSES.map((_, i) => `$${String(from + i)}`).join(', ');
+const placeholders = (values: readonly unknown[], from: number): string =>
+  values.map((_, i) => `$${String(from + i)}`).join(', ');
+const terminalStatuses = (from: number): string => placeholders(TERMINAL_WORKFLOW_STATUSES, from);
 
 /**
  * Runs on the items of `projectKey` whose status comment may owe an update to
  * `destination`: every run that has not ended, and every ended run whose latest tracker
- * row is not `terminal`. An ended run with a `terminal` row and no later `started` row is
- * settled, so the set stays bounded to live and newly ended runs.
+ * row is not `terminal`. An ended run with a `terminal` row and no later `started` row or
+ * resume is settled, so the set stays bounded to live and newly ended runs.
  */
 export async function listTrackerCandidateRuns(
   projectKey: string,
@@ -47,7 +50,9 @@ export async function listTrackerCandidateRuns(
       WHERE i.project_key = $1 AND (
         r.status NOT IN (${statuses})
         OR NOT EXISTS (SELECT 1 FROM remote_agent_workflow_events t WHERE ${trackerRow('t', TRACKER_TERMINAL_KEY)}
-          AND NOT EXISTS (SELECT 1 FROM remote_agent_workflow_events s WHERE ${trackerRow('s', TRACKER_STARTED_KEY)}
+          AND NOT EXISTS (SELECT 1 FROM remote_agent_workflow_events s
+            WHERE (${trackerRow('s', TRACKER_STARTED_KEY)}
+              OR (s.workflow_run_id = r.id AND s.event_type = 'workflow_resumed'))
             AND COALESCE(s.event_order, 0) > COALESCE(t.event_order, 0))))`,
     [projectKey, destination, ...TERMINAL_WORKFLOW_STATUSES]
   );
@@ -112,19 +117,50 @@ export async function listTrackerItemsOwingComments(
 }
 
 /**
- * True when the end of `runId` started a next stage: a run-ended binding matched it, and
- * its receipt was written by the write that ended the run.
+ * True when the end of one of `runIds` started a next stage that has no run yet: a
+ * run-ended binding matched it and is still being prepared, or its start waits in the
+ * resource queue. Admission creates the run in the same write that ends both states.
  */
-export async function runEndStartedStage(runId: string): Promise<boolean> {
+export async function runEndStageOwed(runIds: readonly string[]): Promise<boolean> {
+  if (runIds.length === 0) return false;
   const result = await pool.query<{ source_actor: string | null }>(
-    "SELECT source_actor FROM remote_agent_start_receipts WHERE delivery_id = $1 AND outcome = 'matched'",
-    [runId]
+    `SELECT r.source_actor FROM remote_agent_start_receipts r
+      WHERE r.outcome = 'matched' AND r.delivery_id IN (${placeholders(runIds, 1)})
+        AND (EXISTS (SELECT 1 FROM remote_agent_start_receipt_bindings b WHERE b.receipt_id = r.id
+              AND b.preparation_status IN ('pending', 'preparing'))
+          OR EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.receipt_id = r.id
+              AND q.status = 'queued'))`,
+    [...runIds]
   );
   return result.rows.some(row => {
     if (row.source_actor === null) return false;
     const actor = JSON.parse(row.source_actor) as { source?: unknown } | null;
     return actor?.source === RUN_ENDED_SOURCE_ACTOR;
   });
+}
+
+/**
+ * The ledger of `destination` on `runIds` in event order. A run's `workflow_resumed` event
+ * reads as a `resumed` row, so what the tracker showed before it is stale whether or not
+ * the tracker saw the run live again before it ended again.
+ */
+export async function listTrackerLedger(
+  runIds: readonly string[],
+  destination: string
+): Promise<TrackerRow[]> {
+  if (runIds.length === 0) return [];
+  const field = (key: string): string => getDialect().jsonText('e.data', key);
+  const result = await pool.query<{ workflow_run_id: string; key: string }>(
+    `SELECT e.workflow_run_id,
+            CASE WHEN e.event_type = 'workflow_resumed' THEN '${TRACKER_RESUMED_KEY}' ELSE ${field('key')} END AS key
+       FROM remote_agent_workflow_events e
+      WHERE e.workflow_run_id IN (${placeholders(runIds, 2)})
+        AND (e.event_type = 'workflow_resumed'
+          OR (e.event_type = 'attention_notice_sent' AND ${field('destination')} = $1))
+      ORDER BY COALESCE(e.event_order, 0) ASC, e.created_at ASC, e.id ASC`,
+    [destination, ...runIds]
+  );
+  return result.rows.map(row => ({ runId: row.workflow_run_id, key: row.key }));
 }
 
 /**
