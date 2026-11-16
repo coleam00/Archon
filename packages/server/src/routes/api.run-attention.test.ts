@@ -15,6 +15,7 @@ import {
   mockGetItem,
   mockListOpenItemAsks,
   mockAnswerItemAsk,
+  mockAnswerAttentionWait,
   mockWithdrawItemAsk,
   mockGetUserById,
   makeUser,
@@ -616,5 +617,64 @@ describe('asks answered and withdrawn by ref over HTTP', () => {
     withAsk(null);
     expect((await post('/api/attention/withdraw', { ref: 'ask:missing' })).status).toBe(404);
     expect((await post('/api/attention/withdraw', { ref: `${left.id}:pause-1` })).status).toBe(400);
+  });
+});
+
+describe("answers to a paused run's attention wait by ref over HTTP", () => {
+  const pausedAt = (fields: Partial<WorkflowAttentionWaitContext>): WorkflowRun => ({
+    ...MOCK_RUNNING_RUN,
+    status: 'paused',
+    metadata: {
+      wait: {
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: '2026-11-16T10:00:00.000Z',
+        message: 'Merge it?',
+        pauseId: 'pause-1',
+        form: 'select',
+        options: [{ id: 'merge' }],
+        ...fields,
+      },
+    },
+  });
+  const answer = async (run: WorkflowRun, body: object) => {
+    mockGetWorkflowRun.mockImplementation(async id => (id === run.id ? run : null));
+    const response = await makeApp().app.request('/api/attention/answer', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ref: `${run.id}:pause-1`, ...body }),
+    });
+    return { status: response.status, body: await response.text() };
+  };
+
+  test('an answer the wait does not declare is 400 and is not recorded', async () => {
+    const calls = mockAnswerAttentionWait.mock.calls.length;
+    try {
+      const undeclared = await answer(pausedAt({}), { choose: ['nope'] });
+      expect(undeclared.status).toBe(400);
+      expect(undeclared.body).toContain('nope');
+      expect((await answer(pausedAt({ other: true }), { choose: ['other'] })).status).toBe(400);
+      expect(
+        (await answer(pausedAt({ form: 'message', options: [] }), { choose: ['merge'] })).status
+      ).toBe(400);
+      expect((await answer(pausedAt({}), { recommended: true })).status).toBe(400);
+      expect(mockAnswerAttentionWait.mock.calls.length).toBe(calls);
+    } finally {
+      mockGetWorkflowRun.mockReset();
+    }
+  });
+
+  test("a store failure while recording a valid answer is the server's 500", async () => {
+    mockAnswerAttentionWait.mockImplementationOnce(async () => {
+      throw new Error('db down');
+    });
+    try {
+      const failed = await answer(pausedAt({}), { choose: ['merge'] });
+      expect(failed.status).toBe(500);
+      expect(failed.body).not.toContain('db down');
+    } finally {
+      mockGetWorkflowRun.mockReset();
+    }
   });
 });
