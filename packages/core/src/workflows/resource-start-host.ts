@@ -1,4 +1,7 @@
-import type { QueuedResourceStartInspection } from '@archon/workflows/resource-start-store';
+import type {
+  PendingStartBindingInspection,
+  QueuedResourceStartInspection,
+} from '@archon/workflows/resource-start-store';
 import { createRunWorktreeSetupExecutor } from './worktree-setup';
 import type { WorktreeSetupExecutor } from '@archon/isolation';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
@@ -72,10 +75,7 @@ import type { Codebase } from '../schemas/codebase';
 import type { WorkflowHost } from './host-store';
 import { registerRepository } from '../handlers/clone';
 import { ensureIsolationConfigured } from '../orchestrator/dispatch/isolation-resolver';
-import {
-  registeredProjectKeyForPath,
-  resolveCodebaseForPath,
-} from '../services/codebase-checkout-resolver';
+import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { createRegisteredWorktree, type RegisteredWorktreeInput } from './registered-worktree';
@@ -102,15 +102,6 @@ async function findOrRegisterCodebase(host: WorkflowHost, cwd: string): Promise<
     throw new Error(`Cannot prepare a resource start from '${cwd}': register the project first.`);
   }
   return registered;
-}
-
-/**
- * The project a start from `cwd` runs in, or null when none is registered there yet.
- * Preparation resolves `cwd` the same way and registers an unknown checkout as a new
- * project, so null is never a project that already exists.
- */
-export function registeredStartProjectKey(host: WorkflowHost, cwd: string): Promise<string | null> {
-  return registeredProjectKeyForPath(cwd, host.records.codebases);
 }
 
 async function selectBindingWorkflow(
@@ -403,36 +394,46 @@ function receiptIdOfLaunch(launch: PreparedWorkflowLaunch | undefined): string |
 
 /**
  * Prepare this host's pending receipt bindings, or only those of `receiptIds`, and hand
- * each one admitted now to the host. Failures are collected, not thrown.
+ * each one admitted now to the host. Failures are collected, not thrown. The store selects
+ * `receiptIds` before its page limit, so a host backlog cannot hide a known receipt.
  */
 async function preparePendingBindings(
   host: ResourceStartHost,
   failures: ResourceStartDrainFailure[],
-  receiptIds?: ReadonlySet<string>
+  receiptIds?: readonly string[]
 ): Promise<void> {
-  for (const binding of await host.deps.store.listPendingStartBindings({ hostId: host.hostId })) {
-    if ('document' in binding) {
-      if (!receiptIds) failures.push({ error: binding.error });
-      continue;
-    }
-    if (receiptIds && !receiptIds.has(binding.receiptId)) continue;
-    if (!binding.intent) continue;
-    const identity = {
-      receiptId: binding.receiptId,
-      bindingId: binding.bindingId,
-      ownerId: randomUUID(),
-    };
-    if (!(await host.deps.store.claimStartBindingPreparation(identity))) continue;
-    let disposition: ResourceStartDisposition;
-    try {
-      disposition = await prepareClaimedBinding(host, binding.intent, identity);
-    } catch (error) {
-      failures.push({ receiptId: binding.receiptId, error });
-      continue;
-    }
-    if (disposition.status === 'admitted')
-      await startAdmittedRequest(host, failures, disposition.requestId, binding.receiptId);
+  const pending = await host.deps.store.listPendingStartBindings({
+    hostId: host.hostId,
+    receiptIds,
+  });
+  for (const binding of pending) await preparePendingBinding(host, failures, binding);
+}
+
+async function preparePendingBinding(
+  host: ResourceStartHost,
+  failures: ResourceStartDrainFailure[],
+  binding: PendingStartBindingInspection
+): Promise<void> {
+  if ('document' in binding) {
+    failures.push({ error: binding.error });
+    return;
   }
+  if (!binding.intent) return;
+  const identity = {
+    receiptId: binding.receiptId,
+    bindingId: binding.bindingId,
+    ownerId: randomUUID(),
+  };
+  if (!(await host.deps.store.claimStartBindingPreparation(identity))) return;
+  let disposition: ResourceStartDisposition;
+  try {
+    disposition = await prepareClaimedBinding(host, binding.intent, identity);
+  } catch (error) {
+    failures.push({ receiptId: binding.receiptId, error });
+    return;
+  }
+  if (disposition.status === 'admitted')
+    await startAdmittedRequest(host, failures, disposition.requestId, binding.receiptId);
 }
 
 async function startAdmittedRequest(
@@ -458,7 +459,7 @@ export async function startReceiptBindings(
   receiptIds: ReadonlySet<string>
 ): Promise<void> {
   const failures: ResourceStartDrainFailure[] = [];
-  await preparePendingBindings(host, failures, receiptIds);
+  await preparePendingBindings(host, failures, [...receiptIds]);
   if (failures.length > 0) throw new ResourceStartDrainError(failures);
 }
 

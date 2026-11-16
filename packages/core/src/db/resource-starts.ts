@@ -428,10 +428,16 @@ export async function listStartReceipts(
 export async function listPendingStartBindings(options: {
   hostId: string;
   limit?: number;
+  receiptIds?: readonly string[];
 }): Promise<StartBindingInspection[]> {
+  const receiptIds = options.receiptIds;
+  if (receiptIds?.length === 0) return [];
+  const receiptFilter = receiptIds
+    ? ` AND receipt_id IN (${receiptIds.map((_, index) => `$${String(index + 3)}`).join(', ')})`
+    : '';
   const result = await getDatabase().query<Record<string, unknown>>(
-    "SELECT * FROM remote_agent_start_receipt_bindings WHERE host_id = $1 AND preparation_status IN ('pending','failed') ORDER BY created_at, binding_id LIMIT $2",
-    [options.hostId, options.limit ?? 100]
+    `SELECT * FROM remote_agent_start_receipt_bindings WHERE host_id = $1 AND preparation_status IN ('pending','failed')${receiptFilter} ORDER BY created_at, binding_id LIMIT $2`,
+    [options.hostId, options.limit ?? 100, ...(receiptIds ?? [])]
   );
   return result.rows.map(inspectBinding);
 }

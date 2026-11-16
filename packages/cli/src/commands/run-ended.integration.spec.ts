@@ -342,6 +342,50 @@ describe('a run-ended binding', () => {
     expect(runs.map(run => run.workflow_name)).toEqual(['stage-a', 'stage-b']);
   }, 90_000);
 
+  test('a hand run starts the stage its end caused even behind a page of older pending work on the host', async () => {
+    const fixture = await makeFixture('backlog');
+    fixture.bind('build-after-plan', RUN_ENDED);
+    // More older pending bindings on the binding's host than one page of the host-wide
+    // list holds; the ending process must still find the start its own end wrote.
+    const database = new Database(join(fixture.archonHome, 'archon.db'));
+    try {
+      database.run('PRAGMA busy_timeout = 5000');
+      for (let index = 0; index < 101; index++) {
+        const receiptId = crypto.randomUUID();
+        database.run(
+          "INSERT INTO remote_agent_start_receipts (id, source_instance_id, delivery_id, content_digest, received_at, outcome) VALUES (?, 'backlog', ?, 'digest', '2026-01-01T00:00:00.000Z', 'matched')",
+          [receiptId, receiptId]
+        );
+        database.run(
+          "INSERT INTO remote_agent_start_receipt_bindings (receipt_id, binding_id, host_id, preparation_status, created_at) VALUES (?, 'old', ?, 'pending', '2026-01-01 00:00:00')",
+          [receiptId, HOST]
+        );
+      }
+    } finally {
+      database.close();
+    }
+    await fixture.cli([
+      'workflow',
+      'run',
+      'stage-a',
+      '--no-worktree',
+      '--item',
+      'issue-1',
+      '--input',
+      'plan=p1',
+      '--input',
+      'issue=i1',
+    ]);
+    const runs = await waitFor(() => completedRuns(fixture, 2), 'A and the B its end started');
+    expect(runs.map(run => run.workflow_name)).toEqual(['stage-a', 'stage-b']);
+    // The older work is the host's own drain's to prepare, not the ending process's.
+    expect(
+      fixture.rows<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM remote_agent_start_receipt_bindings WHERE binding_id = 'old' AND preparation_status = 'pending'"
+      )
+    ).toEqual([{ count: 101 }]);
+  }, 90_000);
+
   test('a start admitted by a process that died before spawning it is shown, and runs once by hand', async () => {
     const fixture = await makeFixture('stranded');
     fixture.bind('build-after-plan', RUN_ENDED);
@@ -484,19 +528,23 @@ describe('a run end on a trigger host', () => {
       () => (existsSync(join(fixture.projectRoot, 'held-started')) ? true : undefined),
       'the held run to take the slot'
     );
-    // Another host's start queues behind the held run; nothing drains that host.
-    await fixture.cli([
-      'trigger',
-      'fire',
-      '--config',
-      fixture.fireConfig('other', 'quick', 'pool', 1, 'other-host'),
-    ]);
     const queued = () =>
       fixture.rows<{ status: string }>(
         "SELECT status FROM remote_agent_resource_start_requests WHERE host_id = 'other-host'"
       );
-    expect(queued()).toEqual([{ status: 'queued' }]);
-    writeFileSync(join(fixture.projectRoot, 'release'), '');
+    // Released in a finally, so a failed step cannot leave the held run polling forever.
+    try {
+      // Another host's start queues behind the held run; nothing drains that host.
+      await fixture.cli([
+        'trigger',
+        'fire',
+        '--config',
+        fixture.fireConfig('other', 'quick', 'pool', 1, 'other-host'),
+      ]);
+      expect(queued()).toEqual([{ status: 'queued' }]);
+    } finally {
+      writeFileSync(join(fixture.projectRoot, 'release'), '');
+    }
     expect(await held.exited).toBe(0);
 
     // The slot is free and nothing runs: the hand start is admitted, not refused as full

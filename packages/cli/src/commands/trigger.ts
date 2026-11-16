@@ -8,11 +8,11 @@ import { z } from '@hono/zod-openapi';
 import { getArchonHome } from '@archon/paths';
 import {
   drainResourceStartHost,
-  registeredStartProjectKey,
   ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
 import { readRunEndedBindings, runEndedBindingCheck } from '@archon/core/workflows/run-ended';
+import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
 import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
 import {
   collectCredentialValues,
@@ -197,7 +197,7 @@ async function inheritedItemKey(
     (await host.deps.store.getWorkflowRun(caller.runId));
   const item = root?.item_id ? await host.deps.store.getItem(root.item_id) : null;
   if (!item) return undefined;
-  const project = await registeredStartProjectKey(host, start.cwd);
+  const project = await registeredProjectKeyForPath(start.cwd, host.records.codebases);
   if (project === null)
     throw new Error(
       `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start's checkout (${start.cwd}) is not a registered project, so it cannot be that item's project. The start cannot inherit the item: pass --item <key> to name its item there.`

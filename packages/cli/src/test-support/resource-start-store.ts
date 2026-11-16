@@ -310,9 +310,11 @@ export function createInMemoryResourceStartStore(
     listPendingStartBindings: async ({
       hostId,
       limit = 100,
+      receiptIds,
     }): ReturnType<IResourceStartStore['listPendingStartBindings']> =>
       structuredClone(
         [...receipts.values()]
+          .filter(receipt => !receiptIds || receiptIds.includes(receipt.id))
           .flatMap(receipt => receipt.bindings)
           .filter(
             item =>

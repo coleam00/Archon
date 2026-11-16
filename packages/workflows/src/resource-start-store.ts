@@ -526,10 +526,15 @@ export interface IResourceStartStore {
       'id' | 'sourceInstanceId' | 'deliveryId' | 'outcome' | 'reason' | 'receivedAt'
     >[]
   >;
-  /** Damaged receipts are reported as entries beside the bindings; `limit` counts bindings only. */
+  /**
+   * Damaged receipts are reported as entries beside the bindings; `limit` counts bindings only.
+   * `receiptIds` selects only those receipts' bindings, before the limit applies, and reports
+   * no damaged entries: a caller starting known receipts must not lose them behind a backlog.
+   */
   listPendingStartBindings(options: {
     hostId: string;
     limit?: number;
+    receiptIds?: readonly string[];
   }): Promise<PendingStartBindingInspection[]>;
   getResourceStartRequest(id: string): Promise<ResourceStartRequestInspection | null>;
   listQueuedResourceStartsForHost(hostId: string): Promise<QueuedResourceStartInspection[]>;

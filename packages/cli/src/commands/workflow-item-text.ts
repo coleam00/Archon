@@ -35,22 +35,26 @@ function causeText(cause: ItemRun['cause']): string {
   return ` · trigger ${cause.sourceInstanceId}`;
 }
 
+/** One run, and how to start it when it was admitted but no process is running it. */
+function runLines(run: ItemRun): string[] {
+  const outcome = run.outcome === null ? '' : ` · authored outcome: ${run.outcome}`;
+  const ended = run.completedAt === null ? '' : ` → ${minute(run.completedAt)}`;
+  const lines = [
+    `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow}${outcome}  ${minute(run.startedAt)}${ended}${causeText(run.cause)}`,
+  ];
+  const waiting = run.awaitingExecution;
+  if (waiting)
+    lines.push(
+      `            admitted, not started. If no process is running it: archon trigger execute ${waiting.requestId} --host ${waiting.hostId}`
+    );
+  return lines;
+}
+
 /** The item read as lines a terminal prints, each section saying `none` when empty. */
 export function itemReadLines(read: ItemRead): string[] {
   const lines = [`Item ${read.item.key} (${read.item.projectKey})`, '', 'Runs:'];
   if (read.runs.length === 0) lines.push('  none');
-  for (const run of read.runs) {
-    const outcome = run.outcome === null ? '' : ` · authored outcome: ${run.outcome}`;
-    const ended = run.completedAt === null ? '' : ` → ${minute(run.completedAt)}`;
-    lines.push(
-      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow}${outcome}  ${minute(run.startedAt)}${ended}${causeText(run.cause)}`
-    );
-    const waiting = run.awaitingExecution;
-    if (waiting)
-      lines.push(
-        `            admitted, not started. If no process is running it: archon trigger execute ${waiting.requestId} --host ${waiting.hostId}`
-      );
-  }
+  for (const run of read.runs) lines.push(...runLines(run));
   lines.push('', 'Open questions:');
   if (read.questions.length === 0) lines.push('  none');
   for (const question of read.questions) lines.push(...attentionItemLines(question, 'brief'));
