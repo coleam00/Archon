@@ -1770,6 +1770,65 @@ for (const damagedLaunch of ['{', '{}', 'mismatched-id']) {
   });
 }
 
+test('a run end prepares every start it caused, past one page of receipts and one page of bindings', async () => {
+  const { createSqlWorkflowHost } = await import('../workflows/sql-host');
+  const { startReceiptBindings, ResourceStartDrainError } = await import(
+    '../workflows/resource-start-host'
+  );
+  const host = createSqlWorkflowHost();
+  // 101 receipts, so their ids span two pages; the first has 101 bindings, so the first
+  // page of ids holds more pending bindings than one read returns.
+  const receiptIds = Array.from({ length: 101 }, () => crypto.randomUUID());
+  const binding = (index: number) => ({
+    bindingId: `binding-${String(index)}`,
+    bindingRevision: null,
+    hostId: 'host',
+    // No such user: preparation ends at its first step, which keeps 201 of them cheap
+    // and still takes each binding out of pending.
+    runAsUserId: '99999999-9999-4999-8999-999999999999',
+    resource: 'pool',
+    overlap: 'skip' as const,
+    launch: {
+      cwd: '/tmp/test',
+      workflowName: 'test',
+      inputs: {},
+      isolation: { kind: 'in-place' as const },
+    },
+  });
+  for (const [index, receiptId] of receiptIds.entries())
+    await host.deps.store.acceptStartReceipt({
+      receipt: {
+        id: receiptId,
+        sourceInstanceId: `caused-${String(index)}`,
+        deliveryId: null,
+        contentDigest: 'digest',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched',
+      bindings: [
+        binding(0),
+        ...Array.from({ length: index === 0 ? 100 : 0 }, (_, more) => binding(more + 1)),
+      ],
+    });
+
+  const error = await startReceiptBindings(
+    { ...host, hostId: 'host', startAdmitted: async () => {} },
+    new Set(receiptIds)
+  ).catch((caught: unknown) => caught);
+
+  if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
+  expect(error.failures).toHaveLength(201);
+  expect(
+    (
+      await getDatabase().query(
+        'SELECT preparation_status AS status, COUNT(*) AS count FROM remote_agent_start_receipt_bindings GROUP BY preparation_status'
+      )
+    ).rows
+  ).toEqual([{ status: 'rejected', count: 201 }]);
+});
+
 for (const phase of ['admission', 'drain'] as const) {
   for (const guarded of [false, true]) {
     test(`foreign SQL membership wins over a local request during ${phase}, guarded=${guarded}`, async () => {
