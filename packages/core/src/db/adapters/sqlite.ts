@@ -621,7 +621,7 @@ export class SqliteAdapter implements IDatabase {
         position INTEGER NOT NULL,
         ask TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        closed_as TEXT CHECK (closed_as IN ('answered', 'withdrawn', 'replaced')),
+        closed_as TEXT,
         answer TEXT,
         closed_at TEXT,
         closed_via TEXT,

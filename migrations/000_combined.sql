@@ -813,6 +813,8 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_links (
 -- own set. run_id is the run that left it and names the set; like from_run_id on a
 -- ruling it has no foreign key, so run cleanup keeps the record. `ask` is the JSON the
 -- run left, read tolerantly because more than one binary reads it.
+-- closed_as is checked in code, not by a constraint: a later binary may close an ask in a
+-- way this one does not know, and a reader treats that row as unreadable, not as open.
 CREATE TABLE IF NOT EXISTS remote_agent_item_asks (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
   item_id UUID NOT NULL REFERENCES remote_agent_items(id),
@@ -821,7 +823,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_asks (
   position INTEGER NOT NULL,
   ask JSONB NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  closed_as TEXT CHECK (closed_as IN ('answered', 'withdrawn', 'replaced')),
+  closed_as TEXT,
   answer JSONB,
   closed_at TIMESTAMP WITH TIME ZONE,
   closed_via TEXT,
