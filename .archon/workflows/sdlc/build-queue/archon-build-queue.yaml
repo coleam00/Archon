@@ -237,6 +237,7 @@ nodes:
       pull_request: { from: "$facts.output.pull_request" }
       continues: "$facts.output.continues"
       lane: "$INPUTS.build_lane"
+      ci: "$INPUTS.ci"
     output_format:
       type: object
       properties:
@@ -357,6 +358,7 @@ nodes:
       ending: { from: "$ship.output", if_skipped: null }
       reviewed: "$checkout.output.reviewed"
       at_cap: "$facts.output.at_cap"
+      ci: "$INPUTS.ci"
     output_format:
       type: object
       properties:
