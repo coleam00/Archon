@@ -11,6 +11,9 @@ import {
   mockListItemRulings,
   mockRecordItemRuling,
   mockWithdrawItemRuling,
+  mockGetItemAsk,
+  mockAnswerItemAsk,
+  mockWithdrawItemAsk,
   mockGetUserById,
   makeUser,
   setSessionUserId,
@@ -20,6 +23,7 @@ import {
 } from '../test/api-workflow-runs-harness';
 import { describe, test, expect } from 'bun:test';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import {
   ItemRulingNotFoundError,
   ItemRulingOutsideProjectError,
@@ -475,5 +479,114 @@ describe('rulings on an item over HTTP', () => {
       `/api/items?project=${encodeURIComponent(project)}&key=issues%2F8`
     );
     expect(itemReadSchema.parse(await response.json()).answers).toEqual([ruling()]);
+  });
+});
+
+describe('asks answered and withdrawn by ref over HTTP', () => {
+  const left: WorkflowRun = { ...MOCK_RUNNING_RUN, status: 'completed' };
+  const open: StoredItemAsk = {
+    id: 'a1',
+    itemId: 'item-1',
+    runId: left.id,
+    workflowName: 'plan',
+    position: 0,
+    ask: {
+      question: 'Keep the flag?',
+      context: 'Two readings.',
+      options: [
+        { id: 'keep', does: 'Keep it.', cost: 'One more flag.' },
+        { id: 'drop', does: 'Drop it.', cost: 'Old configs break.' },
+      ],
+      recommendation: { option: 'keep', why: 'Nothing needs it gone.' },
+      artifacts: [],
+    },
+    openedAt: '2026-11-16T10:00:00.000Z',
+    closed: null,
+  };
+  const answered: StoredItemAsk = {
+    ...open,
+    closed: {
+      as: 'answered',
+      answer: { decision: 'keep', text: '' },
+      act: { at: '2026-11-16T11:00:00.000Z', via: 'api', by: null, fromRun: null },
+    },
+  };
+  const post = (path: string, body: object) =>
+    makeApp().app.request(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const withAsk = (ask: StoredItemAsk | null): void => {
+    mockGetItemAsk.mockImplementation(async () => ask);
+    mockGetWorkflowRun.mockImplementation(async () => left);
+  };
+
+  test('an answer is recorded through the API surface and says when it settled the set', async () => {
+    withAsk(open);
+    mockAnswerItemAsk.mockImplementationOnce(async () => ({
+      kind: 'closed',
+      ask: answered,
+      settled: true,
+    }));
+    const response = await post('/api/attention/answer', { ref: 'ask:a1', recommended: true });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ref: 'ask:a1',
+      action: 'answer',
+      unchanged: false,
+      settled: true,
+    });
+    expect(mockAnswerItemAsk.mock.calls.at(-1)?.[0]).toMatchObject({
+      askId: 'a1',
+      answer: { decision: 'keep', text: '' },
+      via: 'api',
+    });
+  });
+
+  test('a repeat is unchanged, a different answer is 409, an undeclared option is 400', async () => {
+    withAsk(answered);
+    mockAnswerItemAsk.mockImplementationOnce(async () => ({ kind: 'unchanged', ask: answered }));
+    const repeat = await post('/api/attention/answer', { ref: 'ask:a1', choose: ['keep'] });
+    expect(repeat.status).toBe(200);
+    expect(await repeat.json()).toMatchObject({ unchanged: true });
+
+    mockAnswerItemAsk.mockImplementationOnce(async () => ({ kind: 'refused', ask: answered }));
+    expect((await post('/api/attention/answer', { ref: 'ask:a1', choose: ['drop'] })).status).toBe(
+      409
+    );
+
+    const calls = mockAnswerItemAsk.mock.calls.length;
+    expect((await post('/api/attention/answer', { ref: 'ask:a1', choose: ['nope'] })).status).toBe(
+      400
+    );
+    expect(mockAnswerItemAsk.mock.calls.length).toBe(calls);
+  });
+
+  test("a withdrawal is 200, an unknown ref is 404, and a paused run's item is 400", async () => {
+    withAsk(open);
+    mockWithdrawItemAsk.mockImplementationOnce(async () => ({
+      kind: 'closed',
+      ask: {
+        ...open,
+        closed: {
+          as: 'withdrawn',
+          act: { at: '2026-11-16T11:00:00.000Z', via: 'api', by: null, fromRun: null },
+        },
+      },
+      settled: false,
+    }));
+    const withdrawn = await post('/api/attention/withdraw', { ref: 'ask:a1' });
+    expect(withdrawn.status).toBe(200);
+    expect(await withdrawn.json()).toEqual({
+      ref: 'ask:a1',
+      action: 'withdraw',
+      unchanged: false,
+      settled: false,
+    });
+
+    withAsk(null);
+    expect((await post('/api/attention/withdraw', { ref: 'ask:missing' })).status).toBe(404);
+    expect((await post('/api/attention/withdraw', { ref: `${left.id}:pause-1` })).status).toBe(400);
   });
 });

@@ -233,4 +233,8 @@ export const askClosedEventDataSchema = z.object({
   fromRun: attentionAnsweringRunSchema.nullable(),
   /** Set on `ask_answered` only. */
   answer: attentionAnswerSchema.optional(),
+  /** What was asked, so the item's history reads without the ask's row. */
+  question: z.string().optional(),
+  /** On `ask_answered`: the chosen option and what it does (`other`: the answer text says). */
+  chosen: z.object({ id: z.string(), does: z.string() }).optional(),
 });

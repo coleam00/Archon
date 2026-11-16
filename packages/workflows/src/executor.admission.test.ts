@@ -768,7 +768,7 @@ describe('asks without an item', () => {
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
-  it('starts a child run of the same workflow, which opens no asks', async () => {
+  it('does not refuse a child run of the same workflow, which carries no item', async () => {
     const store = makeStore();
     await startWorkflow({
       store,

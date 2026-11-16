@@ -101,8 +101,12 @@ export const itemAnswerSchema = z.discriminatedUnion('kind', [
     ...answerFields,
     /** The ask's ref, as the queue listed it. */
     ref: z.string(),
+    /** What was asked; null on an event written before it was recorded. */
+    question: z.string().nullable(),
     /** Null for a withdrawal. */
     answer: attentionAnswerSchema.nullable(),
+    /** The option the answer chose and what it does; null when none is recorded. */
+    chosen: z.object({ id: z.string(), does: z.string() }).nullable(),
     withdrawn: z.boolean(),
     by: attentionAnswererSchema.nullable(),
     /** Reported from the answering run's environment and not verified. */
@@ -186,7 +190,9 @@ function itemAnswer(row: WorkflowEventRow): ItemAnswer {
       kind: 'ask',
       ...base,
       ref: askItemRef(field(z.string(), data.ask) ?? ''),
+      question: field(z.string(), data.question),
       answer: row.event_type === 'ask_answered' ? field(attentionAnswerSchema, data.answer) : null,
+      chosen: field(z.object({ id: z.string(), does: z.string() }), data.chosen),
       withdrawn: row.event_type === 'ask_withdrawn',
       by: field(attentionAnswererSchema, data.by),
       fromRun: field(attentionAnsweringRunSchema, data.fromRun),

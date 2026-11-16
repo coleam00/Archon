@@ -7967,6 +7967,7 @@ export interface components {
             at: string;
             via: string | null;
             ref: string;
+            question: string | null;
             answer:
               | {
                   text: string;
@@ -7980,6 +7981,10 @@ export interface components {
                   text: string;
                 }
               | unknown;
+            chosen: {
+              id: string;
+              does: string;
+            } | null;
             withdrawn: boolean;
             by:
               | {

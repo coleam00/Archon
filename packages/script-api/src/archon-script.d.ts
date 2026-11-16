@@ -2233,6 +2233,7 @@ declare module 'archon:script' {
       readonly at: string;
       readonly via: string | null;
       readonly ref: string;
+      readonly question: string | null;
       readonly answer: {
         readonly text: string;
       } | {
@@ -2241,6 +2242,10 @@ declare module 'archon:script' {
       } | {
         readonly decisions: ReadonlyArray<string>;
         readonly text: string;
+      } | null;
+      readonly chosen: {
+        readonly id: string;
+        readonly does: string;
       } | null;
       readonly withdrawn: boolean;
       readonly by: {

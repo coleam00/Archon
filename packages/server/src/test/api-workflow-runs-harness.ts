@@ -457,6 +457,24 @@ mock.module('@archon/core/db/item-rulings', () => ({
   withdrawItemRuling: mockWithdrawItemRuling,
 }));
 
+type ItemAsksDb = typeof import('@archon/core/db/item-asks');
+export const mockGetItemAsk = mock<ItemAsksDb['getItemAsk']>(async () => null);
+export const mockAnswerItemAsk = mock<ItemAsksDb['answerItemAsk']>(async () => {
+  throw new Error('Unexpected answerItemAsk');
+});
+export const mockWithdrawItemAsk = mock<ItemAsksDb['withdrawItemAsk']>(async () => {
+  throw new Error('Unexpected withdrawItemAsk');
+});
+mock.module('@archon/core/db/item-asks', () => ({
+  openItemAsksForCompletedRun: mock(async () => {
+    throw new Error('Unexpected openItemAsksForCompletedRun');
+  }),
+  listOpenItemAsks: mock(async () => []),
+  getItemAsk: mockGetItemAsk,
+  answerItemAsk: mockAnswerItemAsk,
+  withdrawItemAsk: mockWithdrawItemAsk,
+}));
+
 mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mockListWorkflowEvents,
   listEventsForRuns: mockListEventsForRuns,

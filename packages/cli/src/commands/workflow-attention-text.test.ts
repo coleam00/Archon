@@ -154,13 +154,18 @@ test('the close of an ask is one line that says who answered when that was recor
 
 test('an item no run holds is named by its ref and answered by it, not by a run command', () => {
   const { run: _, ...withoutRun } = ask;
-  const block = opened({ ...withoutRun, ref: 'ask:1' });
+  const block = opened({
+    ...withoutRun,
+    ref: 'ask:1',
+    context: 'Review passed.\nMerging now blocks the Friday deploy.',
+  });
   expect(block).toContain('ask:1');
   expect(block).toContain('Merge pull request 42?');
   expect(block).toContain('option merge: Squash-merge it.');
   expect(block).toContain('archon workflow answer --ref ask:1 --choose <option>');
-  expect(block).not.toContain('respond');
-  expect(block).not.toContain('resume');
+  // The listing is the only text read of an ask, so its whole context is in it.
+  expect(block).toContain('context: Review passed.');
+  expect(block).toContain('Merging now blocks the Friday deploy.');
   expect(
     text({
       type: 'resolved',

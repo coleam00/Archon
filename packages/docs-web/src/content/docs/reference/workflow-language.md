@@ -2185,6 +2185,9 @@ What the engine does with them:
   them, next to paused runs, and answered or withdrawn by their ref (`archon workflow answer
   --ref`/`--withdraw`, `POST /api/attention/answer`, `POST /api/attention/withdraw`, or the chat
   tool). Who may answer is the rule of the run that left the ask: its starter, or an admin.
+- **The run stays while its asks are open.** Deleting a run that left open asks is refused, and
+  run cleanup skips it, until each ask is answered or withdrawn: the run's starter decides who
+  may answer, and its events hold the answers and the settle.
 - **A set settles once.** When every ask a run left is answered or withdrawn, the engine records
   `asks_settled` on that run once, with how many were `answered` and `withdrawn`; `answered: 0`
   means every ask was withdrawn. Settling records a fact and starts nothing: no trigger binds to

@@ -107,8 +107,12 @@ function refItemLines(item: Ask, detail: AttentionItemDetail): string[] {
   const lines = [question(item.message, detail)];
   if (item.askedIn !== undefined)
     lines.push(`left by run ${item.askedIn.runId} (${item.askedIn.workflow})`);
-  if (item.context !== undefined)
-    lines.push(`context: ${detail === 'full' ? item.context : firstLine(item.context)}`);
+  // Context is printed whole in every form: no other command reads an ask a finished run
+  // left, so a cut here would be an answer given without knowing what was cut.
+  if (item.context !== undefined) {
+    const [head = '', ...rest] = item.context.trim().split('\n');
+    lines.push(`context: ${head}`, ...rest.map(line => `  ${line}`));
+  }
   lines.push(...offerLines(item));
   for (const artifact of item.artifacts ?? [])
     lines.push(`artifact: ${artifact.path} (run ${artifact.run_id})`);

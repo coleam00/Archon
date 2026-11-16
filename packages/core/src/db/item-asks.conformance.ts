@@ -127,6 +127,56 @@ export function describeSqlItemAskConformance(makeHarness: () => Promise<Harness
     }
   });
 
+  test('a completion that loses to a failed or cancelled run opens no asks', async () => {
+    const harness = await makeHarness();
+    try {
+      for (const end of ['fail', 'cancel'] as const) {
+        const run = await harness.store.createWorkflowRun({
+          workflow_name: 'plan',
+          user_message: '',
+          codebase_id: CONFORMANCE_CODEBASE_ID,
+          item_key: `lost-${end}`,
+        });
+        await harness.store.claimPendingWorkflowRun(run.id);
+        if (end === 'fail') await harness.store.failWorkflowRun(run.id, 'boom');
+        else await harness.store.cancelWorkflowRun(run.id);
+        await expect(
+          harness.store.completeWorkflowRun(run.id, { duration_ms: 1 }, undefined, {
+            asks: [ask('Keep the flag?')],
+          })
+        ).rejects.toThrow();
+      }
+      expect(await openRefs(harness)).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a run that left open asks is not deleted, by hand or by cleanup, until they close', async () => {
+    const harness = await makeHarness();
+    try {
+      const runId = await completeWithAsks(harness, [ask('Keep the flag?')]);
+      // Imported here, after the harness has pointed the connection at its database.
+      const { deleteWorkflowRun } = await import('./workflow-run-writes');
+      await expect(deleteWorkflowRun(runId)).rejects.toThrow('open ask(s)');
+      await harness.backdate(runId, { started_at: new Date('2020-01-01T00:00:00Z') });
+      await harness.db.query(
+        'UPDATE remote_agent_workflow_runs SET active_phase_started_at = NULL WHERE id = $1',
+        [runId]
+      );
+      expect(await harness.store.deleteOldWorkflowRuns(1)).toEqual({ count: 0 });
+      // Still answerable by its run's rule, and once closed the run deletes as before.
+      const [ref] = await openRefs(harness);
+      expect(
+        await withdrawAttentionItem(itemDeps(harness), ref ?? '', operator, 'cli')
+      ).toMatchObject({ kind: 'withdrawn', settled: true });
+      expect(await harness.store.deleteOldWorkflowRuns(1)).toEqual({ count: 1 });
+      expect(await harness.store.getWorkflowRun(runId)).toBeNull();
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('a later completed run of the same workflow on the item replaces the open asks', async () => {
     const harness = await makeHarness();
     try {

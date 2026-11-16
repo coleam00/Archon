@@ -172,7 +172,8 @@ test('a run on an item opens its asks when it completes; they are listed, answer
   expect(started.exitCode).toBe(0);
 
   const items = await listed(fixture);
-  expect(items.map(item => item.message)).toEqual(['Keep it?', 'Rename it?']);
+  // Both asks open at the same time; the queue does not order them within the set.
+  expect(items.map(item => item.message).sort()).toEqual(['Keep it?', 'Rename it?']);
   for (const item of items) {
     expect(item.run).toBeUndefined();
     expect(item.item?.key).toBe('issue-1');
@@ -180,7 +181,8 @@ test('a run on an item opens its asks when it completes; they are listed, answer
     expect(item.options.map(option => option.id)).toEqual(['keep', 'drop', 'other']);
     expect(item.options[0]?.cost).toBe('One more flag to maintain.');
   }
-  const [first, second] = items;
+  const first = items.find(item => item.message === 'Keep it?');
+  const second = items.find(item => item.message === 'Rename it?');
   if (first === undefined || second === undefined) throw new Error('Expected two asks');
   for (const item of items)
     await watch.next(
@@ -257,6 +259,15 @@ test('a run on an item opens its asks when it completes; they are listed, answer
   expect(read.questions).toEqual([]);
   expect(read.answers.map(answer => answer.kind)).toEqual(['ask', 'ask', 'asks_settled']);
   expect(read.answers[2]).toMatchObject({ answered: 1, withdrawn: 1 });
+  // The history says what was asked and what the chosen option does, without the ask's row.
+  expect(read.answers[0]).toMatchObject({
+    question: 'Keep it?',
+    chosen: { id: 'keep', does: 'Keep the flag.' },
+  });
+  expect(read.answers[1]).toMatchObject({ question: 'Rename it?', withdrawn: true });
+  const history = (await runCli(fixture, ['workflow', 'runs', '--item', 'issue-1'])).stdout;
+  expect(history).toContain('ask "Keep it?" answered keep');
+  expect(history).toContain('(Keep the flag.)');
 
   // A second completed run replaces the first run's open asks.
   expect((await run(fixture, 'leave-asks', 'issue-1')).exitCode).toBe(0);

@@ -16,6 +16,7 @@ import {
 } from '@archon/workflows/schemas/item-ask';
 import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import { attentionAnswerSchema, type AttentionAnswer } from '@archon/workflows/schemas/run-wait';
+import { OTHER_ATTENTION_OPTION } from '@archon/workflows/schemas/wait-node';
 import { getDatabase, getDatabaseType, pool } from './connection';
 import type { TransactionQuery } from './resource-slots';
 import { toHydratedTimestamp } from './timestamps';
@@ -198,6 +199,19 @@ function priorClose(ask: StoredItemAsk, write: CloseWrite): ItemAskCloseResult |
   return same ? { kind: 'unchanged', ask } : { kind: 'refused', ask };
 }
 
+/** The option an answer chose, with what it does, as the item's history shows it. */
+function chosen(
+  ask: StoredItemAsk,
+  answer: AttentionAnswer
+): { id: string; does: string } | undefined {
+  if (!('decision' in answer)) return undefined;
+  const option = ask.ask.options.find(candidate => candidate.id === answer.decision);
+  if (option !== undefined) return { id: option.id, does: option.does };
+  return answer.decision === OTHER_ATTENTION_OPTION.id
+    ? { id: OTHER_ATTENTION_OPTION.id, does: OTHER_ATTENTION_OPTION.does }
+    : undefined;
+}
+
 async function closeItemAsk(
   input: { askId: string } & ItemAskActInput,
   write: CloseWrite
@@ -249,7 +263,10 @@ async function closeItemAsk(
         via: input.via,
         by,
         fromRun: input.fromRun ?? null,
-        ...(write.as === 'answered' ? { answer: write.answer } : {}),
+        question: before.ask.question,
+        ...(write.as === 'answered'
+          ? { answer: write.answer, chosen: chosen(before, write.answer) }
+          : {}),
       },
     });
     const others = set.rows.filter(candidate => candidate.id !== input.askId);
