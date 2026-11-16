@@ -46,6 +46,9 @@
       "src/routes/workflow-run.test.ts"
     ],
     [
+      "src/routes/workflow.test.ts"
+    ],
+    [
       "src/commands/image-chat-plugin.test.ts"
     ],
     [
@@ -126,6 +129,9 @@
     ],
     [
       "src/commands/workflow-wait.test.ts"
+    ],
+    [
+      "src/commands/workflow-item-runs.test.ts"
     ],
     [
       "src/commands/workflow-detach.test.ts"

@@ -3,12 +3,15 @@
  * folder: what it writes is read back with the schemas of the loaders that consume it.
  */
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github/source-config';
 import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
+import { readRunEndedBindings } from '@archon/core/workflows/run-ended';
+import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { packCommand, type PackBindingsOptions } from './pack';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
@@ -59,21 +62,70 @@ let logSpy: ReturnType<typeof spyOn>;
 const originalArchonHome = process.env.ARCHON_HOME;
 const originalDefaultAssistant = process.env.DEFAULT_AI_ASSISTANT;
 
-async function writePack(declaration: string): Promise<void> {
-  const pack = join(cwd, '.archon', 'workflows', 'fixture');
+// `fixture-plan` ends with an outcome; `build` starts `fixture-build` from it.
+const RUN_ENDED_DECLARATION = `bindings:
+  build:
+    workflow: fixture-build
+    resource: build
+    capacity: 2
+    overlap: queue
+    isolation: { kind: in-place }
+    run_ended: { workflow: fixture-plan, outcome: [planned, blocked] }
+    inputs:
+      plan: { result: /plan }
+      issue: { input: issue }
+      mode: fast
+`;
+
+const PLAN_WORKFLOW = `name: fixture-plan
+description: d
+inputs:
+  issue: { required: true }
+returns: { node: decide, outcome: outcome }
+nodes:
+  - id: decide
+    bash: echo '{"outcome":"planned","plan":"p"}'
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [planned, blocked] }
+        plan: { type: string }
+      required: [outcome, plan]
+`;
+
+const BUILD_WORKFLOW = `name: fixture-build
+description: d
+inputs:
+  plan: { required: true }
+  issue: { required: true }
+  mode: {}
+nodes:
+  - id: a
+    bash: echo hi
+`;
+
+async function writeWorkflow(packDir: string, name: string, body: string): Promise<void> {
+  await mkdir(join(packDir, name), { recursive: true });
+  await writeFile(join(packDir, name, `${name}.yaml`), body);
+}
+
+async function writePack(declaration: string, dir: string = cwd): Promise<void> {
+  const pack = join(dir, '.archon', 'workflows', 'fixture');
   // The fixture pack is the whole subject: keep the bundled packs out of discovery.
-  await mkdir(join(cwd, '.archon'), { recursive: true });
+  await mkdir(join(dir, '.archon'), { recursive: true });
   await writeFile(
-    join(cwd, '.archon', 'config.yaml'),
+    join(dir, '.archon', 'config.yaml'),
     'defaults:\n  loadDefaultWorkflows: false\n  loadDefaultCommands: false\n'
   );
   await mkdir(join(pack, '.pack'), { recursive: true });
-  await mkdir(join(pack, 'fixture-sweep'), { recursive: true });
   await writeFile(join(pack, '.pack', 'pack.yaml'), declaration);
-  await writeFile(
-    join(pack, 'fixture-sweep', 'fixture-sweep.yaml'),
+  await writeWorkflow(
+    pack,
+    'fixture-sweep',
     'name: fixture-sweep\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n'
   );
+  await writeWorkflow(pack, 'fixture-plan', PLAN_WORKFLOW);
+  await writeWorkflow(pack, 'fixture-build', BUILD_WORKFLOW);
 }
 
 function options(extra: Partial<PackBindingsOptions> = {}): PackBindingsOptions {
@@ -272,6 +324,7 @@ describe('archon pack bindings', () => {
     [{ only: 'nope' }, "--only names 'nope'"],
     [{ repo: 'acme/widgets' }, '--repo must be <host>/<owner>/<name>'],
     [{ out: undefined }, 'Usage: archon pack bindings'],
+    [{ host: undefined }, 'Usage: archon pack bindings'],
   ])('refuses %p', async (extra, reason) => {
     await writePack(DECLARATION);
     await expect(packCommand('bindings', ['fixture'], options(extra))).rejects.toThrow(reason);
@@ -285,5 +338,94 @@ describe('archon pack bindings', () => {
     await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(
       "Pack 'fixture' declares no bindings"
     );
+  });
+});
+
+describe('archon pack bindings: run-ended', () => {
+  it('writes one trigger file per outcome to --out, mapping inputs from the ended run, and activates none', async () => {
+    const source = join(root, 'pack source');
+    const runConfig = join(root, 'run.yaml');
+    await writeFile(runConfig, 'assistants: {}\n');
+    await writePack(RUN_ENDED_DECLARATION, source);
+    await mkdir(cwd, { recursive: true });
+    await packCommand(
+      'bindings',
+      ['fixture'],
+      options({ config: runConfig, workflowSource: source })
+    );
+
+    expect(existsSync(join(root, 'home', 'triggers'))).toBe(false);
+    const bindings = await readRunEndedBindings(out);
+    expect(bindings.map(entry => entry.runEnded.outcome).sort()).toEqual(['blocked', 'planned']);
+    for (const entry of bindings) {
+      const name = basename(entry.file, '.json');
+      expect(entry.sourceInstanceId).toBe(name);
+      expect(entry.binding).toEqual({
+        bindingId: name,
+        bindingRevision: null,
+        hostId: 'host-1',
+        runAsUserId: 'user-1',
+        resource: 'fixture:git.example.com/acme/widgets:build',
+        capacity: 2,
+        overlap: 'queue',
+        launch: {
+          cwd,
+          workflowName: 'fixture-build',
+          inputs: { mode: 'fast' },
+          discoveryCwd: source,
+          configSource: runConfig,
+          isolation: { kind: 'in-place' },
+        },
+      });
+      expect(entry.runEnded).toEqual({
+        workflowName: 'fixture-plan',
+        outcome: entry.runEnded.outcome,
+        inputs: { plan: { result: '/plan' }, issue: { input: 'issue' } },
+      });
+    }
+  });
+
+  it.each([
+    [
+      'an ended workflow the pack lacks',
+      RUN_ENDED_DECLARATION.replace('workflow: fixture-plan', 'workflow: absent'),
+      "names workflow 'absent'",
+    ],
+    [
+      'an outcome the ended workflow does not declare',
+      RUN_ENDED_DECLARATION.replace('[planned, blocked]', '[planned, shipped]'),
+      "outcome 'shipped' is not one",
+    ],
+    [
+      'an input the ended workflow does not declare',
+      RUN_ENDED_DECLARATION.replace('{ input: issue }', '{ input: title }'),
+      "reads 'title'",
+    ],
+    [
+      'a binding that starts the workflow whose end fires it',
+      RUN_ENDED_DECLARATION.replace('workflow: fixture-build', 'workflow: fixture-plan'),
+      'the workflow whose end fires it',
+    ],
+  ])('refuses %s, writing nothing', async (_case, declaration, reason) => {
+    await writePack(declaration);
+    await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(reason);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it('refuses run-ended bindings on the file store, writing nothing', async () => {
+    await writePack(RUN_ENDED_DECLARATION);
+    await mkdir(join(root, 'home'), { recursive: true });
+    await writeFile(join(root, 'home', 'config.yaml'), 'store: files\n');
+    const databaseUrl = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = '';
+    try {
+      await expect(packCommand('bindings', ['fixture'], options())).rejects.toBeInstanceOf(
+        FileStoreUnsupportedError
+      );
+    } finally {
+      if (databaseUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = databaseUrl;
+    }
+    expect(existsSync(out)).toBe(false);
   });
 });

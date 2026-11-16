@@ -30,6 +30,12 @@ import { declaredOutcome } from '@archon/workflows/completed-outcome';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { getArchonHome } from '@archon/paths';
+
+/** `ARCHON_HOME/triggers`: where run-ended trigger files are read from. */
+export function getTriggersPath(): string {
+  return join(getArchonHome(), 'triggers');
+}
 
 /** A trigger file whose binding the end of a run starts. */
 export interface RunEndedBinding {

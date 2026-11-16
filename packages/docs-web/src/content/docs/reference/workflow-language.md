@@ -2533,19 +2533,42 @@ bindings:
     item: { field: subject.number, prefix: pr- }   # the run is on the item pr-<number>
     inputs:
       number: { event: subject.number }   # an event field; event bindings only
-  follow-up:                          # neither schedule nor event: fire-only
+  follow-up:                          # no schedule, event or run_ended: fire-only
     workflow: review-follow-up
     resource: follow-up
     overlap: queue
     item: { field: number, prefix: pr- }  # a key of the fire's --inputs
+  fix:
+    workflow: review-fix
+    resource: fix
+    overlap: queue
+    run_ended:                        # starts when a run of this pack's workflow ends
+      workflow: review-pull-request
+      outcome: [changes, blocked]     # one outcome, or a list: one file per outcome
+    inputs:
+      number: { input: number }       # one of the ended run's inputs; run-ended bindings only
+      findings: { result: /findings } # a JSON Pointer into the ended run's result
 ```
 
-A binding sets `schedule:` (a timer binding, written as a file
+A binding sets at most one of `schedule:` (a timer binding, written as a file
 `archon trigger fire --config` reads), `event:` (an entry for the GitHub source plugin's
-`bindings` array), or neither. With neither it is a
+`bindings` array) and `run_ended:`. With none it is a
 [fire-only binding](/guides/workflow-triggers/#start-a-binding-only-with-trigger-fire): the
 same file as a timer binding without a schedule, started only when a run or an operator fires
-it. Setting both is refused, and so is a `schedule:` or `event:` key with an invalid value.
+it. Setting more than one is refused, and so is a `schedule:`, `event:` or `run_ended:` key
+with an invalid value.
+
+A `run_ended:` binding is a
+[run-ended trigger file](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends):
+it starts its workflow on an item when a run of `run_ended.workflow`, a workflow of this pack,
+completes on that item with `run_ended.outcome`. `{ input: <name> }` and
+`{ result: <JSON Pointer> }` inputs read the ended run's inputs and result, as
+`on.runEnded.inputs` does; every other input is written as the start's own input.
+`archon pack bindings` writes one file per outcome, which the operator registers by copying it
+into the triggers directory, and refuses the whole set, writing nothing, when the ended workflow does not
+declare the outcome or an input read from it, or the started workflow does not declare an input
+mapped to it. A stage that needs both a clock and a hand-off declares two bindings with the
+same `workflow` and `resource`; they share the resource's slots and overlap policy.
 `capacity`, `overlap` and `isolation` mean what they mean in a
 [binding](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). The
 resource is written as `<pack>:<host>/<owner>/<name>:<resource>`, so bindings that declare the
@@ -2557,8 +2580,9 @@ binding's `capacity` applies to it. An omitted `capacity` means the workflow's d
 
 The declaration is validated when the pack loads, and an invalid one fails every workflow of
 the pack, naming the file and the binding. Beyond each binding's shape, a `{ binding: <id> }`
-input must name a declared timer or fire-only binding, and an `{ event: <field> }` input belongs to an
-event binding. Bindings sharing a resource need not agree on its capacity. An `event:` selector
+input must name a declared timer or fire-only binding, an `{ event: <field> }` input belongs to an
+event binding, and an `{ input: <name> }` or `{ result: <pointer> }` input to a run-ended
+binding. Bindings sharing a resource need not agree on its capacity. An `event:` selector
 and its fields are checked against the source plugin when a binding is generated, not at load.
 
 `item:` names the [item](/reference/cli/#items) a start is on, from one field of its event and
@@ -2566,7 +2590,8 @@ an optional fixed `prefix`; see
 [putting a start on its event's item](/guides/workflow-triggers/#put-a-start-on-the-item-its-event-names).
 An event binding's `field` is a source plugin event field, checked when the binding is
 generated; a fire-only binding's is a key of the fire's `--inputs`. A timer binding with
-`item:` is refused at load, since a tick is about no item.
+`item:` is refused at load, since a tick is about no item, and so is a run-ended binding with
+`item:`, since its start is on the ended run's item.
 
 ## Launching a Separate Governed Run with `workflow:`
 

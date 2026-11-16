@@ -284,6 +284,8 @@ Save the file in `ARCHON_HOME/triggers/` (`~/.archon/triggers/` by default), for
 }
 ```
 
+A workflow pack can declare this hand-off as a [`run_ended:` binding](/reference/workflow-language/#pack-bindings); [`archon pack bindings`](/reference/cli/#pack-bindings) writes it, checked, to its `--out` directory for one repository; copying the file into this directory registers it.
+
 Every process that completes a run reads each `*.json` file in that directory that has `on`, at each completion, so a new file applies to the next run that ends and removing it turns the binding off. Archon reads these files only from the install's home, never from a repository. Bindings do not belong in workflow YAML. `archon trigger check` lists every run-ended binding that is active and checks it against the workflows of the project it launches in.
 
 A binding starts once for an ended run that meets all of these:

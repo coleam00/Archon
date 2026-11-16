@@ -306,8 +306,22 @@ test('a workflow that declares asks is refused at start without an item', async 
   expect(`${result.stdout}${result.stderr}`).toContain(
     "declares returns.asks 'asks', so it runs on an item"
   );
+  // A detached start is refused in the result it prints, not later in its child.
+  const detached = await runCli(fixture, [
+    'workflow',
+    'run',
+    'leave-asks',
+    'go',
+    '--folder',
+    '--detach',
+    '--json',
+  ]);
+  expect(detached.exitCode).not.toBe(0);
+  const refused = JSON.parse(detached.stdout) as { ok: boolean; error: string };
+  expect(refused.ok).toBe(false);
+  expect(refused.error).toContain("declares returns.asks 'asks', so it runs on an item");
   const runs = JSON.parse(
     (await runCli(fixture, ['workflow', 'runs', '--all', '--json'])).stdout
   ) as { runs: { status: string }[] };
-  expect(runs.runs.map(stored => stored.status)).toEqual(['cancelled']);
+  expect(runs.runs.map(stored => stored.status)).toEqual(['cancelled', 'cancelled']);
 }, 120_000);

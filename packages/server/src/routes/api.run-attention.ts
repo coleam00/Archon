@@ -12,12 +12,12 @@ import {
 } from '@archon/core/operations/attention-queue';
 import { RunActionForbiddenError } from '@archon/core/operations/run-authorization';
 import {
-  AskAnswerInvalidError,
   answerAttentionItem,
   withdrawAttentionItem,
   type AttentionItemAnswerResult,
 } from '@archon/core/operations/attention-items';
 import {
+  AttentionAnswerInvalidError,
   StaleGateAnswerError,
   assertLabelable,
   type WorkflowOperations,
@@ -347,7 +347,7 @@ function answerReply(ref: string, result: AttentionItemAnswerResult): AttentionI
 function answerRefusal(error: unknown): { status: 400 | 404 | 409; error: string } | undefined {
   if (error instanceof RunActionForbiddenError) return { status: 404, error: error.message };
   if (error instanceof StaleGateAnswerError) return { status: 409, error: error.message };
-  if (error instanceof AskAnswerInvalidError) return { status: 400, error: error.message };
+  if (error instanceof AttentionAnswerInvalidError) return { status: 400, error: error.message };
   return undefined;
 }
 
