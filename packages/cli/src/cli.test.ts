@@ -2416,6 +2416,7 @@ describe('receipt policies in the CLI host', () => {
 
   it('reads -v before a command as --verbose, not as a version request', async () => {
     const root = mkdtempSync(join(tmpdir(), 'cli-verbose-not-version-'));
+    expect(spawnSync('git', ['init', '-q', '.'], { cwd: root }).status).toBe(0);
     try {
       const result = spawnSync(process.execPath, [CLI_ENTRY, '-v', 'workflow', 'list'], {
         cwd: root,
@@ -2427,6 +2428,10 @@ describe('receipt policies in the CLI host', () => {
           ARCHON_TELEMETRY_DISABLED: '1',
         },
       });
+      // The command ran (a parse rejection exits 1) with debug logging on, which
+      // only --verbose enables; commands default to warn.
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain('"level":20');
       expect(`${result.stdout}${result.stderr}`).not.toContain('Archon CLI v');
     } finally {
       await removeTempTree(root);
