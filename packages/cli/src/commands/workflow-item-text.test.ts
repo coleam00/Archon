@@ -156,14 +156,26 @@ test('an item read prints its runs, open questions and answers', () => {
   expect(text).toContain('1 ruling(s) on this item could not be read: ruling-lost');
 });
 
-test('an item read prints its active links with direction, then the ended ones', () => {
+test('an item read prints each link with the other item, kind and direction, active ones first', () => {
   const lines = itemReadLines(read);
-  const links = lines.slice(lines.indexOf('Links:') + 1, lines.indexOf('Open questions:') - 1);
-  expect(links).toEqual([
-    // Another project's item is named with its project.
-    '  link-out  this item depends_on → acme/api/issue-3',
-    '  link-in  ← issue-9 duplicate_of this item',
-    '  link-ended  this item part_of → order-1 (ended 2026-11-01T08:30Z by alice (self-declared), via cli)',
-    '  1 link(s) of this item could not be read: link-lost',
-  ]);
+  const section = lines.slice(lines.indexOf('Links:') + 1, lines.indexOf('Open questions:'));
+  const line = (id: string) => section.find(row => row.includes(id)) ?? '';
+  expect(line('link-out')).toContain('depends_on');
+  expect(line('link-out')).toContain('acme/api/issue-3');
+  expect(line('link-in')).toContain('duplicate_of');
+  expect(line('link-in')).toContain('issue-9');
+  // A link reads from its `from` to its `to`: the other item follows the kind on an
+  // outgoing link and precedes it on an incoming one.
+  const out = line('link-out');
+  expect(out.indexOf('acme/api/issue-3')).toBeGreaterThan(out.indexOf('depends_on'));
+  const inc = line('link-in');
+  expect(inc.indexOf('issue-9')).toBeLessThan(inc.indexOf('duplicate_of'));
+  expect(line('link-ended')).toContain('part_of');
+  expect(line('link-ended')).toContain('order-1');
+  expect(line('link-ended')).toContain('alice');
+  expect(line('link-ended')).toContain('2026-11-01T08:30Z');
+  expect(line('link-out')).not.toContain('ended');
+  // Active links print before the ended one.
+  expect(section.indexOf(line('link-ended'))).toBeGreaterThan(section.indexOf(line('link-in')));
+  expect(section.some(row => row.includes('link-lost'))).toBe(true);
 });

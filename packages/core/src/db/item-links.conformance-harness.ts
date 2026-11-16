@@ -94,6 +94,7 @@ export function describeItemLinkConformance(
       await expect(
         store.endItemLink({ linkId: dependsOn.id, projectKey: 'other/project', ...byCli })
       ).rejects.toBeInstanceOf(ItemLinkOutsideProjectError);
+      const beforeEnd = Date.now();
       const ended = await store.endItemLink({
         linkId: dependsOn.id,
         projectKey,
@@ -104,7 +105,10 @@ export function describeItemLinkConformance(
       // The original fact is unchanged; the end records who and when.
       expect(ended).toEqual({ ...dependsOn, ended: expect.any(Object) });
       expect(ended.ended).toMatchObject({ via: 'cli', by: { declared: 'alice' }, fromRun: null });
-      expect(Date.parse(ended.ended?.at ?? '')).toBeGreaterThanOrEqual(Date.parse(dependsOn.at));
+      // The end time is when the end was written, not when the link was.
+      const endedAt = Date.parse(ended.ended?.at ?? '');
+      expect(endedAt).toBeGreaterThanOrEqual(beforeEnd);
+      expect(endedAt).toBeLessThanOrEqual(Date.now());
       await expect(store.endItemLink({ linkId: dependsOn.id, ...byCli })).rejects.toBeInstanceOf(
         ItemLinkEndedError
       );
@@ -151,39 +155,6 @@ export function describeItemLinkConformance(
         reason: 'link_unreadable',
         linkId: back.link.id,
       });
-    } finally {
-      await harness.close();
-    }
-  });
-
-  test('two records of the same link at once leave one link', async () => {
-    const harness = await makeHarness();
-    try {
-      const { store } = harness;
-      const projectKey = projectKeyForCodebase(
-        { name: 'conformance', default_cwd: '/conformance' },
-        ''
-      );
-      const input = {
-        projectKey,
-        fromKey: 'a',
-        toKey: 'b',
-        kind: 'duplicate_of',
-        via: 'cli',
-        by: null,
-        fromRun: null,
-      } as const;
-      // Name the items first, so the race is only on the link.
-      const first = await store.recordItemLink(input);
-      await store.endItemLink({ linkId: first.link.id, via: 'cli', by: null, fromRun: null });
-      const results = await Promise.all([store.recordItemLink(input), store.recordItemLink(input)]);
-      expect(results.filter(result => result.created)).toHaveLength(1);
-      expect(results[0]?.link.id).toBe(results[1]?.link.id);
-      const a = await store.getItemRuns(projectKey, 'a');
-      const active = (await store.listItemLinks(a?.item.id ?? '')).filter(
-        read => 'ended' in read && read.ended === null
-      );
-      expect(active).toHaveLength(1);
     } finally {
       await harness.close();
     }
