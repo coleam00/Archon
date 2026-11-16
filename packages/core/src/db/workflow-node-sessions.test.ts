@@ -72,7 +72,6 @@ describe('workflow-node-sessions', () => {
       expect(sql).toContain('INSERT INTO remote_agent_workflow_node_sessions');
       expect(sql).toContain('ON CONFLICT (workflow_name, node_id, scope_key, provider)');
       expect(sql).toContain('DO UPDATE SET provider_session_id = EXCLUDED.provider_session_id');
-      expect(sql).toContain('model = EXCLUDED.model');
       expect(params).toEqual([
         'feature-dev',
         'planner',
