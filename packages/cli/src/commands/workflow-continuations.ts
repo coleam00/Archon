@@ -17,6 +17,7 @@ import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/w
 import { deadlineWaitCursor, type WorkflowResumeCursor } from '@archon/workflows/store';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
+import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
 
 import {
@@ -205,14 +206,6 @@ async function report(
   return ok;
 }
 
-function validateFlags(values: Values, allowed: string[]): void {
-  const allowedKeys = new Set(['cwd', 'help', 'json', ...allowed]);
-  for (const [key, value] of Object.entries(values)) {
-    if (value !== undefined && !allowedKeys.has(key))
-      throw new Error(`--${key} is not supported by this command`);
-  }
-}
-
 export async function workflowContinuationCommand(
   host: WorkflowHost,
   action: 'wake' | 'signal',
@@ -256,10 +249,7 @@ async function wakeSchedule(args: string[], values: Values, json: boolean): Prom
     );
   }
   validateFlags(values, operation === 'install' ? ['interval'] : []);
-  const interval = values.interval === undefined ? 5 : Number(values.interval);
-  if (!Number.isSafeInteger(interval) || interval <= 0)
-    throw new Error('--interval must be a positive integer in seconds');
-  const config = workflowWakeScheduleConfig(interval);
+  const config = workflowWakeScheduleConfig(parseIntervalSeconds(values, 5));
   const result =
     operation === 'install'
       ? { path: await installMacosNativeSchedule(config) }

@@ -5,6 +5,7 @@
 import { createHash } from 'node:crypto';
 import { getArchonHome } from '@archon/paths';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
+import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
 import {
   inspectMacosNativeSchedule,
@@ -13,7 +14,7 @@ import {
   type NativeScheduleConfig,
 } from '../triggers/native-schedule';
 
-/** The server's default cleanup interval (`CLEANUP_INTERVAL_HOURS`, 6 hours). */
+/** Six hours. */
 export const ISOLATION_CLEANUP_INTERVAL_SECONDS = 21600;
 
 /**
@@ -55,14 +56,6 @@ function parseOperation(args: string[]): Operation {
     throw new Error(USAGE);
   }
   return operation;
-}
-
-function validateFlags(values: Values, allowed: string[]): void {
-  const allowedKeys = new Set(['cwd', 'help', 'json', ...allowed]);
-  for (const [key, value] of Object.entries(values)) {
-    if (value !== undefined && !allowedKeys.has(key))
-      throw new Error(`--${key} is not supported by this command`);
-  }
 }
 
 interface Outcome {
@@ -110,10 +103,7 @@ const OPERATIONS = { install, remove, status } satisfies Record<
 
 async function runOperation(operation: Operation, values: Values): Promise<string> {
   validateFlags(values, operation === 'install' ? ['interval'] : []);
-  const interval =
-    values.interval === undefined ? ISOLATION_CLEANUP_INTERVAL_SECONDS : Number(values.interval);
-  if (!Number.isSafeInteger(interval) || interval <= 0)
-    throw new Error('--interval must be a positive integer in seconds');
+  const interval = parseIntervalSeconds(values, ISOLATION_CLEANUP_INTERVAL_SECONDS);
   const { result, text } = await OPERATIONS[operation](isolationCleanupScheduleConfig(interval));
   if (values.json !== true) return text;
   return JSON.stringify({ ok: true, action: `isolation cleanup schedule ${operation}`, ...result });
