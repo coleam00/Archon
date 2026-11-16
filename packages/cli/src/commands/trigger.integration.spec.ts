@@ -733,14 +733,30 @@ nodes:
       if (!reached())
         throw new Error(`The first run ended before ${label}: ${JSON.stringify(runs())}`);
     };
-    await step(() => runs().length >= 2, "the script's fire naming item-2 to record its run");
-    await step(() => existsSync(refusal), "the script's inherited fire to be refused");
-    await step(() => runs().length === 3, "the script's fire with no item to record its run");
-    // Nothing may still execute when afterEach removes the temp tree.
-    const settled = await waitFor(
-      () => (runs().every(run => isTerminalRunStatus(run.status)) ? runs() : undefined),
-      'all three runs to end'
-    );
+    // Nothing may still execute when afterEach removes the temp tree, on success or failure.
+    // A run that does not end in time is left for afterEach to stop.
+    const allEnded = () =>
+      waitFor(
+        () => (runs().every(run => isTerminalRunStatus(run.status)) ? runs() : undefined),
+        'all runs to end'
+      ).catch((error: unknown) => {
+        for (const run of readRows<RunRow>(
+          database,
+          'SELECT id,status FROM remote_agent_workflow_runs'
+        ))
+          if (!isTerminalRunStatus(run.status)) activeRuns.add(run.id);
+        throw error;
+      });
+    try {
+      await step(() => runs().length >= 2, "the script's fire naming item-2 to record its run");
+      await step(() => existsSync(refusal), "the script's inherited fire to be refused");
+      await step(() => runs().length === 3, "the script's fire with no item to record its run");
+    } catch (failure) {
+      // Let every admitted run end before reporting the step that failed, and report that step.
+      await allEnded().catch(() => undefined);
+      throw failure;
+    }
+    const settled = await allEnded();
     expect(settled.map(run => run.status)).toEqual(['completed', 'completed', 'completed']);
     const projects = readRows<{ project_key: string; key: string }>(
       database,
