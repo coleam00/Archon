@@ -25,7 +25,11 @@ export async function refuseBrokenRunEndedBindings(
         { cancel_reason: 'precondition_failed' },
         { pendingOnly: true }
       ),
-      { workflowRunId: run.id, site: 'workflow.run_ended_binding_refused' }
+      {
+        workflowRunId: run.id,
+        site: 'workflow.run_ended_binding_refused',
+        failure: new Error(reason),
+      }
     );
     return reason;
   }

@@ -109,23 +109,7 @@ export async function launchDetachedOwnedRun(
   const declaration = await resolveContinuationDeclaration(host, options, detachCodebase);
   if (declaration && 'lane' in declaration) admission.aiConfigurationRun = declaration.adoptedRun;
   const adoptionLane = declaration && 'lane' in declaration ? declaration.lane : undefined;
-  if (
-    detachCodebase?.kind !== 'folder' &&
-    adoptionLane?.kind !== 'checkout-branch' &&
-    (!admission.wantsIsolation || adoptionLane?.kind === 'reuse-worktree')
-  ) {
-    await assertInheritedWorkflowExecutionCwd(
-      host,
-      adoptionLane?.kind === 'reuse-worktree'
-        ? adoptionLane.environment.working_path
-        : (admission.continuationRun?.working_path ?? cwd)
-    );
-  }
-  await refuseUnreusableBranchWorktree(host, detachCodebase, options, {
-    isFolder: detachIsFolder,
-    wantsIsolation: admission.wantsIsolation,
-    adoption: adoptionLane,
-  });
+  await refuseDetachedWorkspace(request, admission, adoptionLane, detachCodebase, detachIsFolder);
   const prepared = await prepareLaneAiConfiguration(
     request,
     admission,
@@ -158,6 +142,34 @@ export async function launchDetachedOwnedRun(
     resolvedInputs: admission.resolvedInputs,
     runConfig: admission.runConfig,
   });
+}
+
+/**
+ * The workspace refusals the child's lane would make, read before the fork. The child's
+ * adoption binding forces isolation on for checkout-branch and off for reuse-worktree;
+ * the same decision picks the check here.
+ */
+async function refuseDetachedWorkspace(
+  { host, cwd, options }: OwnedRunRequest,
+  admission: OwnedRunAdmission,
+  adoptionLane: AdoptionLane | undefined,
+  codebase: Codebase | null,
+  isFolder: boolean
+): Promise<void> {
+  const isolates =
+    adoptionLane?.kind === 'checkout-branch' ||
+    (admission.wantsIsolation && adoptionLane?.kind !== 'reuse-worktree');
+  if (isolates) {
+    if (!isFolder) await refuseUnreusableBranchWorktree(host, codebase, options);
+    return;
+  }
+  if (codebase?.kind === 'folder') return;
+  await assertInheritedWorkflowExecutionCwd(
+    host,
+    adoptionLane?.kind === 'reuse-worktree'
+      ? adoptionLane.environment.working_path
+      : (admission.continuationRun?.working_path ?? cwd)
+  );
 }
 
 function detachedLaneConfig(

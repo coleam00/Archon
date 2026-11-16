@@ -3,7 +3,6 @@ import type { IsolationEnvironmentRow } from '@archon/isolation';
 import * as git from '@archon/git';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { Codebase } from '@archon/core/schemas/codebase';
-import type { AdoptionLane } from '@archon/core/operations/workflow-adoption';
 import type { WorkflowRunOptions } from './workflow-shared';
 
 /**
@@ -43,19 +42,15 @@ export async function reusedBranchWorktree(
 
 /**
  * The worktree-reuse refusals a detached child makes, read before the fork so a --json
- * caller gets them as the result (#5783). Looks up the branch's worktree exactly when a
- * foreground run does: after adoption has set or cleared isolation.
+ * caller gets them as the result (#5783). The caller calls it only for a launch that
+ * isolates in a git project, as the child's worktree step does.
  */
 export async function refuseUnreusableBranchWorktree(
   host: WorkflowHost,
   codebase: Codebase | null,
-  options: Pick<WorkflowRunOptions, 'branchName' | 'fromBranch'>,
-  lane: { isFolder: boolean; wantsIsolation: boolean; adoption: AdoptionLane | undefined }
+  options: Pick<WorkflowRunOptions, 'branchName' | 'fromBranch'>
 ): Promise<void> {
-  const isolates =
-    lane.adoption?.kind === 'checkout-branch' ||
-    (lane.wantsIsolation && lane.adoption?.kind !== 'reuse-worktree');
-  if (!isolates || lane.isFolder || !codebase || !options.branchName) return;
+  if (!codebase || !options.branchName) return;
   await reusedBranchWorktree(
     await host.records.isolation.findActiveByWorkflow(codebase.id, 'task', options.branchName),
     codebase,
