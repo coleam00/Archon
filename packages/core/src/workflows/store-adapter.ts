@@ -35,7 +35,9 @@ import * as envVarDb from '../db/env-vars';
 import { getAgentProvider } from '../services/provider-admission';
 import type { WorktreeOwnershipReaders } from '../services/cleanup/run-worktree';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
-import { createLogger } from '@archon/paths';
+import { createLogger, getArchonHome } from '@archon/paths';
+import { createRunEndedStarts } from './run-ended';
+import { registeredProjectKeyForPath } from '../services/codebase-checkout-resolver';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
 import { createGitHubAppAuthProvider } from '../github-auth/auth';
 import { installGitHubCliShim } from '../github-auth/gh-shim-install';
@@ -315,6 +317,11 @@ export function createWorkflowDeps(
   return {
     store,
     credentialStore,
+    runEndedStarts: createRunEndedStarts({
+      triggersDirectory: () => join(getArchonHome(), 'triggers'),
+      getItem: id => store.getItem(id),
+      projectKeyOf: cwd => registeredProjectKeyForPath(cwd, codebaseDb),
+    }),
     releaseRunResources: createRunResourceRelease(store),
     providers: providerRegistry,
     getAgentProvider,

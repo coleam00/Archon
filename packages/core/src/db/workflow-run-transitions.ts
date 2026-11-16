@@ -50,6 +50,7 @@ import {
   observeRunTerminalArtifacts,
 } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
+import { insertStartReceipt } from './start-receipt-writes';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
 
@@ -379,6 +380,8 @@ export async function completeWorkflowRun(
           },
           artifacts
         );
+        // The starts this end causes commit with it, and only when this write won.
+        for (const receipt of result?.startReceipts ?? []) await insertStartReceipt(query, receipt);
       }
       return update;
     });

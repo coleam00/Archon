@@ -7290,6 +7290,25 @@ export interface components {
         startedAt: string;
         /** Format: date-time */
         completedAt: string | null;
+        cause:
+          | {
+              /** @enum {string} */
+              kind: 'run_ended';
+              runId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'run_fired';
+              runId: string;
+              node: string | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'receipt';
+              receiptId: string;
+              sourceInstanceId: string;
+            }
+          | unknown;
       }[];
       questions: (
         | {

@@ -2,8 +2,7 @@ import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { createHash, randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
-import { mkdir, open, readFile, rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import { getArchonHome } from '@archon/paths';
@@ -13,20 +12,26 @@ import {
   ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
+import { readRunEndedBindings, runEndedBindingProblems } from '@archon/core/workflows/run-ended';
 import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
 import {
   collectCredentialValues,
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
+import { declaredOutcome } from '@archon/workflows/completed-outcome';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 import {
   resourceStartBindingIntentSchema,
   RUN_SOURCE_ACTOR,
   requestingRun,
+  triggerConfigSchema,
   type SourceReceiptInput,
+  type TriggerConfig,
 } from '@archon/workflows/schemas/resource-start';
 import { assertItemKey, readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
+import { resolveWorkflowName } from '@archon/workflows/router';
+import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { writeJsonLine } from '../utils/stdout';
@@ -40,36 +45,18 @@ import { resolveCliUserId } from './auth';
 import { readCallingNode } from '../utils/calling-node';
 import { requestedBy } from '../utils/requested-by';
 
-/**
- * The file `trigger fire --config` reads. Without `schedule` the binding is fire-only:
- * nothing but `trigger fire` starts it, and `trigger schedule install` refuses it. A
- * `schedule` that is present must be complete, so a half-written one is never fire-only.
- */
-export const triggerFireConfigSchema = z
-  .object({
-    version: z.literal(1),
-    sourceInstanceId: z.string().min(1),
-    binding: resourceStartBindingIntentSchema.omit({ eventInputs: true }),
-    schedule: z
-      .object({ intervalSeconds: z.number().int().positive(), runAtLoad: z.boolean() })
-      .strict()
-      .optional(),
-  })
-  .strict();
+export { spawnAdmitted } from '../utils/spawn-admitted';
 
-type TriggerFireConfig = z.infer<typeof triggerFireConfigSchema>;
 /** A configuration a clock can start. One without `schedule` is fire-only and is not this. */
-type TimerTriggerConfig = TriggerFireConfig & {
-  schedule: NonNullable<TriggerFireConfig['schedule']>;
+type TimerTriggerConfig = TriggerConfig & {
+  schedule: NonNullable<TriggerConfig['schedule']>;
 };
-function isTimerConfig(config: TriggerFireConfig): config is TimerTriggerConfig {
+function isTimerConfig(config: TriggerConfig): config is TimerTriggerConfig {
   return config.schedule !== undefined;
 }
 
-async function loadFireConfig(path: string): Promise<TriggerFireConfig> {
-  const value = triggerFireConfigSchema.safeParse(
-    JSON.parse(await readFile(path, 'utf8')) as unknown
-  );
+async function loadFireConfig(path: string): Promise<TriggerConfig> {
+  const value = triggerConfigSchema.safeParse(JSON.parse(await readFile(path, 'utf8')) as unknown);
   if (!value.success)
     throw new Error(
       `Invalid trigger configuration fields: ${value.error.issues.map(issue => issue.path.join('.')).join(', ')}`
@@ -79,43 +66,9 @@ async function loadFireConfig(path: string): Promise<TriggerFireConfig> {
   return value.data;
 }
 
-async function assertKnownRunAsUser(host: WorkflowHost, config: TriggerFireConfig): Promise<void> {
+async function assertKnownRunAsUser(host: WorkflowHost, config: TriggerConfig): Promise<void> {
   if (!(await host.records.users.getUserById(config.binding.runAsUserId)))
     throw new Error('Trigger binding names an unknown run-as user.');
-}
-
-/** Hand one admitted request to a detached `trigger execute` process with its own log. */
-export async function spawnAdmitted(
-  host: WorkflowHost,
-  requestId: string,
-  hostId: string
-): Promise<void> {
-  const request = await host.deps.store.getResourceStartRequest(requestId);
-  if (request?.status !== 'admitted') throw new Error('The admitted start request is unavailable.');
-  const [executable, ...prefix] = cliProgramArguments();
-  const logDirectory = join(getArchonHome(), 'logs');
-  await mkdir(logDirectory, { recursive: true });
-  const log = await open(join(logDirectory, `trigger-run-${requestId}.log`), 'a', 0o600);
-  try {
-    const child = spawn(
-      executable,
-      [...prefix, 'trigger', 'execute', requestId, '--host', hostId],
-      {
-        cwd: request.launch.execution.cwd,
-        detached: true,
-        stdio: ['ignore', log.fd, log.fd],
-        windowsHide: true,
-        env: { ...process.env, ARCHON_HOME: getArchonHome(), [DETACHED_RUN_OWNER_ENV]: '1' },
-      }
-    );
-    await new Promise<void>((resolveSpawn, reject) => {
-      child.once('error', reject);
-      child.once('spawn', resolveSpawn);
-    });
-    child.unref();
-  } finally {
-    await log.close();
-  }
 }
 
 /**
@@ -543,6 +496,82 @@ async function installTimer(
   });
 }
 
+/** The directory run-ended bindings are read from; `trigger check` lists the same files. */
+export function triggersDirectory(): string {
+  return join(getArchonHome(), 'triggers');
+}
+
+/**
+ * List every run-ended binding that is active (each `on.runEnded` file in the triggers
+ * directory) and check it against the workflows of the project it launches in: the
+ * ended workflow declares the outcome and every input the binding reads from it, and
+ * the started workflow exists and declares every input the binding maps. A completion
+ * refuses a binding with the first two problems; the last two would fail preparation.
+ */
+async function checkTriggers(host: WorkflowHost): Promise<void> {
+  const checked = [];
+  for (const entry of await readRunEndedBindings(triggersDirectory())) {
+    checked.push({
+      file: entry.file,
+      sourceInstanceId: entry.sourceInstanceId,
+      bindingId: entry.binding.bindingId,
+      hostId: entry.binding.hostId,
+      runEnded: entry.runEnded,
+      workflowName: entry.binding.launch.workflowName,
+      cwd: entry.binding.launch.cwd,
+      problems: await runEndedProblems(host, entry),
+    });
+  }
+  await writeJsonLine({ directory: triggersDirectory(), runEnded: checked });
+  const broken = checked.filter(entry => entry.problems.length > 0).length;
+  if (broken > 0)
+    throw new Error(`${String(broken)} run-ended binding(s) have problems; see "problems" above.`);
+}
+
+/** The input names a workflow declares: its own `inputs:` and its pack's settings. */
+function declaredInputNames(workflow: {
+  inputs?: Record<string, unknown>;
+  pack?: { settings?: Record<string, unknown> };
+}): string[] {
+  return [...Object.keys(workflow.inputs ?? {}), ...Object.keys(workflow.pack?.settings ?? {})];
+}
+
+async function runEndedProblems(
+  host: WorkflowHost,
+  { binding, runEnded }: Awaited<ReturnType<typeof readRunEndedBindings>>[number]
+): Promise<string[]> {
+  const discovered = await discoverWorkflowsWithConfig(
+    binding.launch.discoveryCwd ?? binding.launch.cwd,
+    host.deps.loadConfig,
+    host.deps.providers
+  );
+  const workflows = discovered.workflows.map(found => found.workflow);
+  const problems: string[] = [];
+  // A completion matches the ended run's own name exactly, so this does too.
+  const ended = workflows.find(workflow => workflow.name === runEnded.workflowName);
+  const outcome = ended ? declaredOutcome(ended) : undefined;
+  if (!ended) problems.push(`workflow '${runEnded.workflowName}' is not in this project`);
+  else if (!outcome)
+    problems.push(`workflow '${runEnded.workflowName}' declares no returns.outcome`);
+  else
+    problems.push(
+      ...runEndedBindingProblems(runEnded, {
+        outcomeForm: outcome.form,
+        declaredInputs: declaredInputNames(ended),
+      })
+    );
+  const target = resolveWorkflowName(binding.launch.workflowName, workflows);
+  if (!target) {
+    problems.push(`workflow '${binding.launch.workflowName}' is not in this project`);
+    return problems;
+  }
+  const declared = declaredInputNames(target);
+  for (const name of Object.keys(runEnded.inputs ?? {}))
+    if (!declared.includes(name))
+      problems.push(`workflow '${target.name}' does not declare input '${name}'`);
+  return problems;
+}
+
 export interface TriggerDependencies {
   /** Hands an admitted request to its executor; by default `trigger execute` in this process. */
   dispatch?: TriggerDispatch;
@@ -565,6 +594,8 @@ export async function triggerCommand(
       return triggerWhoami(host);
     case 'list':
       return triggerList(host, options);
+    case 'check':
+      return checkTriggers(host);
     case 'fire':
       return triggerFire(host, options, dispatch, dependencies.env ?? process.env);
     case 'drain':
@@ -581,7 +612,7 @@ export async function triggerCommand(
       return scheduleTrigger(host, args, options);
     default:
       throw new Error(
-        'Usage: archon trigger <fire|drain|execute|list|inspect|withdraw|recover-preparation|schedule|whoami>'
+        'Usage: archon trigger <fire|drain|execute|list|check|inspect|withdraw|recover-preparation|schedule|whoami>'
       );
   }
 }

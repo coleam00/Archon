@@ -23,6 +23,7 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import type { WorkflowEventRow } from './schemas/workflow-event';
+import { readResourceStartReceiptId, startCause, startCauseSchema } from './schemas/resource-start';
 import type { IWorkflowStore } from './store';
 
 export const itemRunSchema = z.object({
@@ -34,6 +35,12 @@ export const itemRunSchema = z.object({
   startedAt: z.string().datetime(),
   /** Null while the run has not ended. */
   completedAt: z.string().datetime().nullable(),
+  /**
+   * What started the run, read from the start receipt its start recorded: a run on this
+   * item that ended, a node that fired it, or another trigger source. Null for a start
+   * by hand, which has no receipt.
+   */
+  cause: startCauseSchema.nullable(),
 });
 export type ItemRun = z.infer<typeof itemRunSchema>;
 
@@ -89,10 +96,14 @@ export const itemReadSchema = z.object({
 export type ItemRead = z.infer<typeof itemReadSchema>;
 
 export interface ItemReadSource extends AttentionQueueSource {
-  store: AttentionQueueSource['store'] & Pick<IWorkflowStore, 'getItemRuns' | 'listEventsForRuns'>;
+  store: AttentionQueueSource['store'] &
+    Pick<IWorkflowStore, 'getItemRuns' | 'listEventsForRuns' | 'getStartReceipt'>;
 }
 
-function itemRun(run: WorkflowRun): ItemRun {
+async function itemRun(source: ItemReadSource, run: WorkflowRun): Promise<ItemRun> {
+  // The receipt stays the one owner of why a start happened; this only reads it.
+  const receiptId = readResourceStartReceiptId(run.metadata);
+  const receipt = receiptId ? await source.store.getStartReceipt(receiptId) : null;
   return {
     id: run.id,
     workflow: run.workflow_name,
@@ -100,6 +111,7 @@ function itemRun(run: WorkflowRun): ItemRun {
     outcome: displayedRunOutcome(run),
     startedAt: run.started_at.toISOString(),
     completedAt: run.completed_at?.toISOString() ?? null,
+    cause: receipt ? startCause(receipt) : null,
   };
 }
 
@@ -164,7 +176,7 @@ export async function readItem(
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   return {
     item: found.item,
-    runs: own.values.map(itemRun),
+    runs: await Promise.all(own.values.map(run => itemRun(source, run))),
     questions,
     answers,
     // A paused item run the store could not read is in both reports; list it once.

@@ -14,7 +14,7 @@ import { join, resolve } from 'node:path';
 import type { JsonValue } from '@archon/workflows/output-ref';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { triggerFireConfigSchema } from './trigger';
+import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 import { itemReadSchema } from '@archon/workflows/item-read';
 import { standardWebhooksSourceConfigSchema } from '@archon/adapters/sources/standard-webhooks/source-plugin';
 import {
@@ -575,7 +575,7 @@ describe('trigger CLI durable execution', () => {
       const identity = JSON.parse(
         (await runCli(cliPath, projectRoot, archonHome, ['trigger', 'whoami'])).stdout
       ) as { runAsUserId: string };
-      const config = triggerFireConfigSchema.parse(JSON.parse(configJson));
+      const config = triggerConfigSchema.parse(JSON.parse(configJson));
       config.binding.runAsUserId = identity.runAsUserId;
       config.binding.launch.cwd = projectRoot;
       // The server recipe defers to the guide's Standard Webhooks source; only

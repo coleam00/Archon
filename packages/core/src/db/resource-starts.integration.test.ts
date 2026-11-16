@@ -25,9 +25,11 @@ import { addResourceSlotHolder, liveResourceSlotHolders, lockResourceSlot } from
 import {
   resourceStartIntentSchema,
   type PreparedWorkflowLaunch,
+  type SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import {
   claimPendingWorkflowRun,
+  completeWorkflowRun,
   getWorkflowRun,
   resumeWorkflowRun,
   WorkflowResourceBusyError,
@@ -1016,6 +1018,76 @@ describe('durable resource starts', () => {
       { status: 'admitted', requestId: third, runId: third },
     ]);
     expect((await claimPendingWorkflowRun(third))?.status).toBe('running');
+  });
+
+  test('a completion writes the starts it causes in its own commit, and only once', async () => {
+    const ended = '0d0d0d0d-0d0d-4d0d-8d0d-0d0d0d0d0d0d';
+    expect(
+      await admitResourceStart({
+        resource: 'stage-a',
+        capacity: 1,
+        hostId: 'host',
+        overlap: 'queue',
+        launch: launch(ended),
+      })
+    ).toMatchObject({ status: 'admitted' });
+    expect((await claimPendingWorkflowRun(ended))?.status).toBe('running');
+    const caused = (): SourceReceiptAcceptance => ({
+      receipt: {
+        id: crypto.randomUUID(),
+        sourceInstanceId: 'stage-b-after-a',
+        deliveryId: ended,
+        contentDigest: 'digest',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: { source: 'archon-run-ended', id: ended, display: 'planned' },
+        itemKey: 'item-1',
+      },
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: 'stage-b',
+          bindingRevision: 'r1',
+          hostId: 'host',
+          runAsUserId: '22222222-2222-4222-8222-222222222222',
+          resource: 'stage-b',
+          overlap: 'queue',
+          launch: {
+            cwd: '/tmp/test',
+            workflowName: 'b',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+          eventInputs: { plan: 'the plan' },
+        },
+      ],
+    });
+    const first = caused();
+    const outcome = { kind: 'enum', value: 'planned' } as const;
+    await completeWorkflowRun(ended, { duration_ms: 1 }, undefined, {
+      outcome,
+      startReceipts: [first],
+    });
+    const receipt = await getStartReceipt(first.receipt.id);
+    expect(receipt).toMatchObject({
+      deliveryId: ended,
+      itemKey: 'item-1',
+      sourceActor: { source: 'archon-run-ended', id: ended, display: 'planned' },
+      bindings: [{ bindingId: 'stage-b', status: 'pending', hostId: 'host' }],
+    });
+    expect(receipt?.bindings[0]?.intent?.eventInputs).toEqual({ plan: 'the plan' });
+    expect((await getWorkflowRun(ended))?.completed_outcome).toBe('planned');
+
+    // A second completion loses the change from running and writes nothing.
+    const second = caused();
+    await expect(
+      completeWorkflowRun(ended, { duration_ms: 1 }, undefined, {
+        outcome,
+        startReceipts: [second],
+      })
+    ).rejects.toThrow('not in running state');
+    expect(await getStartReceipt(second.receipt.id)).toBeNull();
+    expect((await listStartReceipts()).map(row => row.id)).toEqual([first.receipt.id]);
   });
 
   test('the install config beats a declared capacity, which beats the default of 1', async () => {

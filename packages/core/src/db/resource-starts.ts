@@ -3,7 +3,6 @@ import { insertWorkflowEvent } from './workflow-events';
 import { z } from 'zod';
 import {
   DIRECT_START_HOST_ID,
-  SourceReceiptDigestConflictError,
   drainableStarts,
   preparedBindingStart,
   skippedFireNotice,
@@ -50,6 +49,7 @@ import { loadResourceCapacities } from '../config/concurrency-config';
 import { insertWorkflowRun } from './workflows';
 import { ensureItem } from './items';
 import { WorkflowStatusReadError } from './workflow-run-reads';
+import { insertStartReceipt } from './start-receipt-writes';
 
 interface RequestRow {
   id: string;
@@ -279,94 +279,14 @@ export async function hasStartReceiptForDelivery(
 export async function acceptStartReceipt(
   input: SourceReceiptAcceptance
 ): Promise<{ receiptId: string; replay: boolean }> {
-  return getDatabase().withTransaction(async query => {
-    const inserted = await query(
-      `INSERT INTO remote_agent_start_receipts
-       (id, source_instance_id, delivery_id, content_digest, received_at, occurred_at, source_actor, outcome, reason, item_key)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-       ON CONFLICT DO NOTHING`,
-      [
-        input.receipt.id,
-        input.receipt.sourceInstanceId,
-        input.receipt.deliveryId,
-        input.receipt.contentDigest,
-        input.receipt.receivedAt,
-        input.receipt.occurredAt,
-        JSON.stringify(input.receipt.sourceActor),
-        input.outcome,
-        input.reason ?? null,
-        input.receipt.itemKey ?? null,
-      ]
-    );
-    if (inserted.rowCount === 0) {
-      if (input.receipt.deliveryId === null) {
-        throw new Error(`Source receipt id '${input.receipt.id}' already exists`);
-      }
-      const found = await query<{ id: string; content_digest: string }>(
-        'SELECT id, content_digest FROM remote_agent_start_receipts WHERE source_instance_id = $1 AND delivery_id = $2',
-        [input.receipt.sourceInstanceId, input.receipt.deliveryId]
-      );
-      const prior = found.rows[0];
-      if (!prior) throw new Error(`Source receipt id '${input.receipt.id}' already exists`);
-      if (prior.content_digest !== input.receipt.contentDigest)
-        throw new SourceReceiptDigestConflictError(
-          'Delivery identity was reused with different verified content'
-        );
-      return { receiptId: prior.id, replay: true };
-    }
-    for (const binding of input.bindings) {
-      await query(
-        `INSERT INTO remote_agent_start_receipt_bindings
-         (receipt_id,binding_id,binding_revision,host_id,intent,event_input_names,preparation_status)
-         VALUES ($1,$2,$3,$4,$5,$6,'pending')`,
-        [
-          input.receipt.id,
-          binding.bindingId,
-          binding.bindingRevision,
-          binding.hostId,
-          ...storableIntent(binding),
-        ]
-      );
-    }
-    for (const evaluated of input.evaluatedBindings ?? []) {
-      await query(
-        `INSERT INTO remote_agent_start_receipt_bindings
-         (receipt_id,binding_id,binding_revision,host_id,intent,preparation_status,preparation_error)
-         VALUES ($1,$2,$3,NULL,NULL,$4,$5)`,
-        [
-          input.receipt.id,
-          evaluated.bindingId,
-          evaluated.bindingRevision,
-          evaluated.status,
-          evaluated.reason,
-        ]
-      );
-    }
-    return { receiptId: input.receipt.id, replay: false };
-  });
+  return getDatabase().withTransaction(query => insertStartReceipt(query, input));
 }
 
 function parseStoredJson(value: unknown): unknown {
   return typeof value === 'string' ? JSON.parse(value) : value;
 }
 
-/**
- * Older binaries parse the `intent` column strictly, so it keeps their shape: event
- * inputs are merged into `launch.inputs` (an older binary passes them through, as it
- * always did) and their names go to `event_input_names`. `readStoredIntent` reverses it.
- */
-function storableIntent(binding: ResourceStartBindingIntent): [string, string | null] {
-  const { eventInputs, ...intent } = binding;
-  if (!eventInputs || Object.keys(eventInputs).length === 0) return [JSON.stringify(intent), null];
-  return [
-    JSON.stringify({
-      ...intent,
-      launch: { ...intent.launch, inputs: { ...intent.launch.inputs, ...eventInputs } },
-    }),
-    JSON.stringify(Object.keys(eventInputs)),
-  ];
-}
-
+/** Reverses `storableIntent` in `./start-receipt-writes`. */
 function readStoredIntent(intent: unknown, eventInputNames: unknown): ResourceStartBindingIntent {
   const stored = resourceStartBindingIntentSchema.parse(parseStoredJson(intent));
   if (eventInputNames == null) return stored;

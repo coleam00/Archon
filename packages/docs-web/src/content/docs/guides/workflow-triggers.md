@@ -16,7 +16,7 @@ Schedules and event bindings are deployment configuration. They do not belong in
 Every binding names a `hostId`. A host prepares accepted work for its own ID, admits it, and starts the run. Two hosts ship with Archon:
 
 - The server, when `ARCHON_TRIGGER_HOST` names its host ID. It prepares and starts work as soon as a webhook receipt commits, and it checks for queued work every few seconds, so a queued start begins shortly after the run blocking it ends. The server never guesses its host ID; without `ARCHON_TRIGGER_HOST` it records webhook receipts but starts nothing.
-- The CLI, through `archon trigger fire` and `archon trigger drain --host <hostId>`. Each admitted run executes in its own detached process.
+- The CLI, through `archon trigger fire` and `archon trigger drain --host <hostId>`. Each admitted run executes in its own detached `trigger execute` process, and when that run ends the same process drains its host again, so queued work and [starts the end caused](#start-a-stage-when-a-run-on-an-item-ends) are admitted with no other command.
 
 Both hosts use the same admission records, so a server and a scheduled CLI command can serve the same host ID without starting a run twice.
 
@@ -214,6 +214,69 @@ A binding file without `schedule` is fire-only: no clock starts it. A workflow n
 
 `archon trigger schedule install` refuses a fire-only binding, because it has no timer to install. A `schedule` that is present must be complete: a file with an empty or partial `schedule` is invalid, not fire-only.
 
+## Start a stage when a run on an item ends
+
+A trigger file with `on.runEnded` starts its binding when a run of a named workflow completes with a named outcome on an [item](/reference/cli/#items). It is how one stage hands an item to the next with no node that fires anything: the hand-off is a file the deployment owns, the engine reads it at the moment a run completes, and the start goes through the same receipt, preparation, admission, capacity, overlap and FIFO order as any binding start.
+
+Save the file in `ARCHON_HOME/triggers/` (`~/.archon/triggers/` by default), for example `~/.archon/triggers/build-after-plan.json`:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "build-after-plan",
+  "binding": {
+    "bindingId": "build",
+    "bindingRevision": null,
+    "hostId": "alice-macbook",
+    "runAsUserId": "2a568f73-e217-40ca-b17d-a784d19fd43a",
+    "resource": "build",
+    "overlap": "queue",
+    "launch": {
+      "cwd": "/Users/alice/Projects/widgets",
+      "workflowName": "build",
+      "inputs": {},
+      "isolation": { "kind": "default" }
+    }
+  },
+  "on": {
+    "runEnded": {
+      "workflowName": "plan",
+      "outcome": "planned",
+      "inputs": {
+        "plan": { "result": "/plan" },
+        "issue": { "input": "issue" }
+      }
+    }
+  }
+}
+```
+
+Every process that completes a run reads each `*.json` file in that directory that has `on`, at each completion, so a new file applies to the next run that ends and removing it turns the binding off. Archon reads these files only from the install's home, never from a repository. Bindings do not belong in workflow YAML. `archon trigger check` lists every run-ended binding that is active and checks it against the workflows of the project it launches in.
+
+A binding starts once for an ended run that meets all of these:
+
+- The run is on an item and has no parent run. A `workflow:` child's end is its parent's business, so a parent that runs two stages as children never starts a third from one child's outcome.
+- Its workflow is `workflowName`, matched exactly.
+- It completed with `outcome`: a value of the outcome the workflow declares in [`returns: { node, outcome }`](/reference/workflow-language/), or `succeeded` or `failed` for a boolean outcome. A failed or cancelled run starts nothing; it only frees its resource.
+- The binding's `launch.cwd` is in the item's project. A run of a workflow with the same name in another project never starts it.
+
+The started run is on the same item. `inputs` maps each input of the started workflow to data from the ended run, and nothing else:
+
+- `{ "result": "<JSON Pointer>" }` reads the ended run's result, the output of its `returns:` node, with an RFC 6901 pointer. `""` passes the whole result.
+- `{ "input": "<name>" }` passes one of the ended run's own inputs, so a stage can hand on what it was given, such as the item's text or a policy path. An input the run was not given passes nothing.
+
+The values are resolved when the run completes and frozen into the start's receipt, where `archon trigger inspect` shows them. As with other event inputs, they reach only a workflow that declares them under `inputs:`. A result pointer that names nothing records the binding as rejected on the receipt, with the pointer, and nothing starts.
+
+The ended run fails instead of completing, naming the file, when a file in the directory is not JSON or has an invalid `on`, when two run-ended files share a `sourceInstanceId`, or when a binding for the ended workflow in its project names an outcome that workflow cannot complete with or reads an input it does not declare. A run never completes without the hand-off it owes. Fix the file, then run `archon workflow resume <run-id>`; the resumed run completes and writes the start.
+
+The start is written in the same database transaction that completes the run, so it exists exactly when the end does. A run completes once, so its end causes each start once. The start is then the host's work like any accepted receipt: the process that ended the run drains its own host (below), and if that process dies after the commit, the start waits as a pending binding until the next drain of its host, whether that is another run ending there, a `trigger fire`, `archon trigger drain --host <hostId>` or the server's loop.
+
+The process that ends a run drains only its own host: a `trigger execute --host <hostId>` process drains `<hostId>`, and any other CLI process, such as `workflow run`, `workflow cancel` or `workflow abandon`, drains the host `ARCHON_TRIGGER_HOST` names when it is set. A binding names the host its work executes on, so a run that ends in one host's process never starts another host's work; another host's queue is that host's to drain. A server with `ARCHON_TRIGGER_HOST` drains its host on its loop, a few seconds after a run ends there.
+
+`archon workflow runs --item <key> --json` lists the item's runs in the order they started, each with a `cause`: `{"kind": "run_ended", "runId"}` for a start a run's end caused, `{"kind": "run_fired", "runId", "node"}` for one a node fired, `{"kind": "receipt", "receiptId", "sourceInstanceId"}` for any other trigger, or `null` for a start by hand. The receipt records the ended run as its `sourceActor` (`{"source": "archon-run-ended", "id": <run id>, "display": <outcome>}`) and uses the ended run's ID as its delivery ID. Start times on SQLite have one-second resolution, so runs that start in the same second are listed in ID order.
+
+Run-ended bindings need the database store, as items do.
+
 ## Choose a resource, capacity, and overlap policy
 
 `resource` names the work that must not overlap. Use the same sufficiently qualified resource for every schedule or webhook binding that can mutate that work. A trigger ID or workflow name does not imply a resource.
@@ -255,7 +318,7 @@ Host listing retains failures for damaged requests assigned to the selected host
 
 In the file store, a missing or corrupt slot queue or request envelope may hide which host owns a candidate. Listing reports those unclassifiable candidates as unattributed failures with their document paths and original errors. The host attempts independent resources before reporting failure. Unreadable slot membership reports its document error when it could affect admission, drain, or resume. An intact admitted request on a different resource with a provably separate checkout does not prevent independent work from draining. Repair damaged documents before relying on drain to reach their resource or checkout. A request whose host is known is reported as a failure even when it is the resource's only queued member. A start receipt that cannot be read or validated is reported on every host pass as an unattributed failure naming its document path and keeping the original error. Its bindings are not prepared until the document is repaired; the document is left unchanged, and other receipts and queued requests continue.
 
-The server rechecks its own host about every five seconds, including requests waiting on foreign holders. `archon trigger drain --host <hostId>` runs one drain and can run after every earlier Archon process has exited, because the queue is durable. For CLI-only hosts, schedule this drain to keep queued work advancing after a foreign holder ends. Neither recovers a request that was already admitted to a run.
+The server rechecks its own host about every five seconds, including requests waiting on foreign holders. On a CLI-only host, the process that ends a run drains its own host (see [who drains](#start-a-stage-when-a-run-on-an-item-ends)), so work queued behind that host's runs is admitted when they end. `archon trigger drain --host <hostId>` runs one drain and can run after every earlier Archon process has exited, because the queue is durable. A CLI-only host still needs it, scheduled or by hand, when queued work waits on something no run of that host ends: a slot or checkout held by a hand start or by another host's run, a process that died between a run's end and its drain, or a request whose foreign holder ends. Neither recovers a request that was already admitted to a run.
 
 A malformed stored checkout-guard declaration is never admitted. Drains pass over that request and log `resource_start.invalid_queued_guard` with its request ID, so valid queued work can continue. The request stays queued and can be inspected and withdrawn with the trigger CLI. New starts with malformed declarations are rejected before storage.
 
@@ -294,7 +357,7 @@ Every run of that workflow then takes a slot on the resource, however it starts:
 
 To set the capacity that starts of the workflow declare, write `resource: { name: build, capacity: 3 }`. Hand starts and sub-runs declare it, and so does a binding start whose binding sets no `capacity`; a binding's own `capacity` wins over it. Without either, a start declares 1. The number applies to that start only; a drain uses the number the last binding start declared.
 
-A hand start of a full resource waits as a `pending` run and prints `Waiting for resource 'build'`, then starts when a slot frees. It waits behind runnable queued trigger requests but holds no queue position itself, so a waiting process that dies strands nothing. `archon workflow run --no-wait` refuses instead and names the resource. Interrupting the wait (Ctrl-C or SIGTERM) fails the pending run, so it leaves no pending run and no request. On Windows a signal ends the process at once, so an interrupted wait there leaves a `pending` run to end with `archon workflow abandon`. If admission fails while the start waits, for example because the install config became invalid, the run is cancelled with the reason; a run an operator cancels while it waits ends without a slot.
+A hand start of a full resource waits as a `pending` run and prints `Waiting for resource 'build'`, then starts when a slot frees. It waits behind runnable queued trigger requests but holds no queue position itself, so a waiting process that dies strands nothing. A queued request moves when its own host drains; a hand start does not drain another host's queue, so if the message names a queued start and no run is holding the resource, find its host with `archon trigger inspect <request-id>` and run `archon trigger drain --host <hostId>`. `archon workflow run --no-wait` refuses instead and names the resource, and says whether a run holds it or a start is queued ahead. Interrupting the wait (Ctrl-C or SIGTERM) fails the pending run, so it leaves no pending run and no request. On Windows a signal ends the process at once, so an interrupted wait there leaves a `pending` run to end with `archon workflow abandon`. If admission fails while the start waits, for example because the install config became invalid, the run is cancelled with the reason; a run an operator cancels while it waits ends without a slot.
 
 An included workflow runs inside its parent's run and takes no slot of its own. A `workflow:` sub-run takes none when one of its ancestor runs already holds the same resource, so a workflow that runs another declaring its resource holds one slot. A sub-run whose ancestors hold no slot on its resource waits for one like a hand start. A workflow without `resource:` that no binding starts takes no slot.
 
@@ -528,7 +591,7 @@ done < "$poll_dir/items.jsonl"
 /opt/archon/bin/archon trigger drain --host orders-host
 ```
 
-The final drain also advances queued work on ticks with no items. On CLI-only hosts, continue scheduling drains until queued work has started.
+The final drain also advances queued work on ticks with no items. Each run's own process admits the next queued start when it ends; the drain covers queued work that waits on something else, as [described above](#choose-a-resource-capacity-and-overlap-policy).
 
 `--inputs` reads a JSON object, including from `/dev/stdin` on Unix, and treats its values as event inputs. Each name must be declared by the workflow. Event inputs override `launch.inputs` literals; literals still pass through to workflows without `inputs:`. The local operator's access to the Archon installation is the trust boundary, so `fire` needs no signature.
 

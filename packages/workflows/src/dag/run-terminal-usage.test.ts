@@ -41,6 +41,8 @@ import {
 import { executeDagWorkflow } from '../dag-executor';
 import type { DagNode, AgentNode, WorkflowRun } from '../schemas';
 import type { IWorkflowStore, PersistedNodeOutput } from '../store';
+import type { RunEndedFacts, WorkflowDeps } from '../deps';
+import type { SourceReceiptAcceptance } from '../schemas/resource-start';
 
 /**
  * #2469 — a run's spend has to survive its outcome. Usage used to be written only in
@@ -980,11 +982,12 @@ describe('executeDagWorkflow -- the outcome is written when the run completes (#
       workflowRun?: WorkflowRun;
       outcome?: string | false;
       priorCompletedNodes?: Map<string, PersistedNodeOutput>;
+      runEndedStarts?: WorkflowDeps['runEndedStarts'];
     } = {}
   ): Promise<void> => {
     await executeDagWorkflow(
       dagOptions({
-        deps: createMockDeps(store),
+        deps: { ...createMockDeps(store), runEndedStarts: options.runEndedStarts },
         conversationId: 'conv-outcome',
         cwd: testDir,
         workflow: {
@@ -1048,6 +1051,51 @@ describe('executeDagWorkflow -- the outcome is written when the run completes (#
     );
 
     expect(completedWith(store)).toEqual({ outcome: { kind: 'enum', value: 'built' } });
+  });
+
+  it('hands the starts its end causes, read from its result and inputs, to the completing write', async () => {
+    mockStructuredResult({ green: true, plan: 'ship it' });
+    const store = createMockStore();
+    const receipt = { receipt: { id: 'r' } } as unknown as SourceReceiptAcceptance;
+    const seen: RunEndedFacts[] = [];
+
+    await run(store, [resultNode()], {
+      workflowRun: makeWorkflowRun('ended-run', { metadata: { inputs: { issue: 'i-1' } } }),
+      runEndedStarts: async ended => {
+        seen.push(ended);
+        return [receipt];
+      },
+    });
+
+    expect(seen).toMatchObject([
+      {
+        run: { id: 'ended-run' },
+        outcome: { kind: 'boolean', value: 'succeeded' },
+        outcomeForm: { kind: 'boolean' },
+        result: { green: true, plan: 'ship it' },
+        inputs: { issue: 'i-1' },
+      },
+    ]);
+    expect(completedWith(store)).toEqual({
+      outcome: { kind: 'boolean', value: 'succeeded' },
+      startReceipts: [receipt],
+    });
+  });
+
+  it('fails the run naming the reason when its run-ended triggers cannot be read', async () => {
+    mockStructuredResult({ green: true });
+    const store = createMockStore();
+
+    await run(store, [resultNode()], {
+      runEndedStarts: async () => {
+        throw new Error('Trigger file /home/triggers/b.json is not readable JSON');
+      },
+    });
+
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun.mock.calls[0]?.[1]).toContain(
+      'Trigger file /home/triggers/b.json is not readable JSON'
+    );
   });
 
   it('fails the run naming the field when the completed value is not of the declared form', async () => {

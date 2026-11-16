@@ -10,6 +10,7 @@
  */
 import type { AttentionRead } from './schemas/attention-degraded';
 import type { IResourceStartStore } from './resource-start-store';
+import type { SourceReceiptAcceptance } from './schemas/resource-start';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { ProviderEventQuery, ProviderEventRecord } from './schemas/provider-event';
 import type { WorkflowEventRow } from './schemas/workflow-event';
@@ -418,12 +419,22 @@ export interface IWorkflowStore
    * This is the only writer of the run's outcome. `result.outcome` sets
    * `completed_outcome` to its value, and `outcome` to it for the boolean form; both are
    * null when it is absent, replacing anything an older binary wrote while the run ran.
+   *
+   * `result.startReceipts` are the starts this end causes (run-ended bindings). They are
+   * accepted in the same transaction, and only when this call wins the change from
+   * `running` to `completed`, so a start exists exactly when the end does: a crash
+   * after the commit leaves them pending for their host's next drain, and a second
+   * completion is refused before it can write them again. A store without items refuses
+   * a non-empty list.
    */
   completeWorkflowRun(
     id: string,
     completion: { duration_ms: number },
     metadata?: Record<string, unknown>,
-    result?: { outcome?: RunCompletedOutcome }
+    result?: {
+      outcome?: RunCompletedOutcome;
+      startReceipts?: readonly SourceReceiptAcceptance[];
+    }
   ): Promise<void>;
   /**
    * Atomically fail a pending or running run and persist its matching lifecycle event.

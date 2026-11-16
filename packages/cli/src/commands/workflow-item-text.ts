@@ -2,7 +2,7 @@
  * The text of an item read (`workflow runs --item`): its runs, open questions and answers,
  * each oldest first. Built from the same `ItemRead` that `--json` prints.
  */
-import type { ItemAnswer, ItemRead } from '@archon/workflows/item-read';
+import type { ItemAnswer, ItemRead, ItemRun } from '@archon/workflows/item-read';
 import { answererText, attentionItemLines } from './workflow-attention-text';
 
 /** A recorded time to the minute, or the stored text when it does not parse. */
@@ -27,6 +27,14 @@ function answerText(answer: ItemAnswer): string {
   return `answered ${parts.filter(part => part !== undefined).join(': ')}${answererText(answer.by)}`;
 }
 
+function causeText(cause: ItemRun['cause']): string {
+  if (cause === null) return '';
+  if (cause.kind === 'run_ended') return ` · after run ${cause.runId.slice(0, 8)} ended`;
+  if (cause.kind === 'run_fired')
+    return ` · fired by run ${cause.runId.slice(0, 8)}${cause.node === null ? '' : ` (${cause.node})`}`;
+  return ` · trigger ${cause.sourceInstanceId}`;
+}
+
 /** The item read as lines a terminal prints, each section saying `none` when empty. */
 export function itemReadLines(read: ItemRead): string[] {
   const lines = [`Item ${read.item.key} (${read.item.projectKey})`, '', 'Runs:'];
@@ -35,7 +43,7 @@ export function itemReadLines(read: ItemRead): string[] {
     const outcome = run.outcome === null ? '' : ` · authored outcome: ${run.outcome}`;
     const ended = run.completedAt === null ? '' : ` → ${minute(run.completedAt)}`;
     lines.push(
-      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow}${outcome}  ${minute(run.startedAt)}${ended}`
+      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow}${outcome}  ${minute(run.startedAt)}${ended}${causeText(run.cause)}`
     );
   }
   lines.push('', 'Open questions:');

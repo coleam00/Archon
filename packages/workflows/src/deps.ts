@@ -23,6 +23,10 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import type { WorktreeDisposition } from './schemas/terminal-record';
+import type { SourceReceiptAcceptance } from './schemas/resource-start';
+import type { RunCompletedOutcome } from './schemas';
+import type { JsonValue } from './output-ref';
+import type { OutcomeForm } from './completed-outcome';
 import type {
   IAgentProvider,
   MessageChunk,
@@ -268,6 +272,20 @@ export interface StoredProviderCredential {
 
 export type ReleaseVerificationImages = (runId: string, containerEnvId: string) => Promise<void>;
 
+/** What the engine knows about a run at the moment it completes with an outcome. */
+export interface RunEndedFacts {
+  run: WorkflowRun;
+  /** The input names the ended workflow declares: its `inputs:` and its pack's settings. */
+  declaredInputs: readonly string[];
+  /** The form of the declared outcome, so a binding can be checked against it. */
+  outcomeForm: OutcomeForm;
+  outcome: RunCompletedOutcome;
+  /** The run's result: its `returns:` node output, parsed. */
+  result: JsonValue | undefined;
+  /** The run's own inputs, as `$INPUTS` saw them. */
+  inputs: Readonly<Record<string, JsonValue>>;
+}
+
 export interface WorkflowDeps {
   /**
    * Releases a terminal run's recorded verification images; retains live writers and returns
@@ -279,6 +297,13 @@ export interface WorkflowDeps {
   ) => Promise<void | string[]>;
   providers: ProviderRegistry;
   store: IWorkflowStore;
+  /**
+   * Optional: the starts a run's completion causes (run-ended bindings), as receipts the
+   * completing write accepts in its own transaction. Absent, a completion causes none.
+   * It throws when a binding it must read is unreadable or invalid, and the run then
+   * fails naming the reason, so a completion never silently drops its hand-off.
+   */
+  runEndedStarts?: (ended: RunEndedFacts) => Promise<readonly SourceReceiptAcceptance[]>;
   /**
    * Optional: release the worktree a completed run created. `assess` runs before the
    * completion write and its result goes into the terminal record; it returns null when
