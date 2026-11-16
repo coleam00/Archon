@@ -194,6 +194,7 @@ try {
     'packages/core/src/config/run-config-handoff.ts',
     'packages/core/src/utils/token-crypto.ts',
     'packages/paths/src/archon-paths.ts',
+    'packages/paths/src/bundled-build.ts',
     'packages/paths/src/home-paths.ts',
     'packages/paths/src/log-error-serializer.ts',
     'packages/paths/src/logger.ts',

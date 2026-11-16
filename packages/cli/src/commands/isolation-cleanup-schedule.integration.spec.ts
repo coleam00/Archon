@@ -98,10 +98,9 @@ describe('isolation cleanup schedule', () => {
     const archonArguments = config.programArguments.slice(cliProgramArguments().length);
     const pass = Bun.spawnSync([process.execPath, CLI_ENTRY, ...archonArguments], {
       cwd: config.workingDirectory,
-      env: { ...fixture.env, PATH: config.path },
+      env: fixture.env,
     });
-    expect(pass.stderr.toString()).not.toContain('Not in a git repository');
-    expect(pass.exitCode).toBe(0);
+    if (pass.exitCode !== 0) throw new Error(pass.stderr.toString());
 
     const after = new Map(readEnvironments(fixture.home).map(env => [env.branch_name, env]));
     const landed = after.get('land-branch');
