@@ -261,6 +261,8 @@ The ladder is the union of every provider's vocabulary. Codex accepts all eight 
       denyWrite: ['/etc', '/usr']
 ```
 
+Archon type-checks the keys shown here and hands any other Claude sandbox setting, at any level of the block, to Claude as written. Archon does not catch a misspelled key.
+
 **settingSources** controls which filesystem setting sources a capable provider discovers. For Claude these are the project's `CLAUDE.md` and `.claude/` skills, commands and agents, and the user-level `~/.claude/`. For skills it controls eligibility, not activation: `skills:` selects the exact active set, and each declared skill must exist under an enabled source. Fewer sources give a leaner context and a faster node start:
 
 ```yaml
@@ -3426,7 +3428,7 @@ Node 'plan': 'interactive' is only honoured inside 'loop:' or 'loop_group:';
 
 An AI field on a node that runs no AI, such as `model:` on a `bash:` node, only warns.
 
-The check covers the workflow root, every node, the nested config blocks (`wait:`, the deprecated `approval:` and `approval.on_reject:`, `retry:`, `loop:`, `loop_group:`, `pi:`, each `agents:` entry, `worktree:`, `container:`) and every node in a `loop_group` body. Three blocks are exempt: `output_format:` is free-form JSON Schema, `sandbox:` passes unknown keys through, and `hooks:` already rejects an unknown key as an error.
+The check covers the workflow root, every node, the nested config blocks (`wait:`, the deprecated `approval:` and `approval.on_reject:`, `retry:`, `loop:`, `loop_group:`, `pi:`, each `agents:` entry, `worktree:`, `container:`) and every node in a `loop_group` body. Three blocks are exempt: `output_format:` is free-form JSON Schema, `sandbox:` passes every key it does not list, including those inside `network:` and `filesystem:`, to Claude unchanged, and `hooks:` already rejects an unknown key as an error.
 
 Dropped-key warnings appear in `archon validate workflows`, inline in `archon workflow list` (`parseWarnings` in `--json`), on stderr before `archon workflow run` starts, in chat `/workflow list`, and as a marker in the console's workflow picker. Every run that starts also records them as a `workflow_parse_warnings` event, which `archon workflow get <run-id> --verbose` shows. Chat and the console post them to the conversation at run start on a best-effort basis.
 
