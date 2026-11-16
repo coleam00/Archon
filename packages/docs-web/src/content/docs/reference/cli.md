@@ -2132,6 +2132,52 @@ The explicit lease refuses deletion if the tip changes after inspection. It cann
 detect a same-commit republish, so delete only while no one is reusing or publishing
 that branch. If ownership is uncertain, leave the remote branch in place.
 
+### `isolation cleanup schedule`
+
+Install a host timer that runs `isolation cleanup --merged` on an install that runs no
+server. A server already sweeps merged worktrees on its cleanup schedule, so do not
+install the timer beside one. Nothing installs it but this command:
+
+```bash
+archon isolation cleanup schedule install --interval 21600 --json
+archon isolation cleanup schedule status --json
+archon isolation cleanup schedule remove --json
+```
+
+The interval is a positive integer in seconds, defaulting to 21600 (6 hours, the server's
+default). The job runs at load and then every interval, from the Archon home, and records
+an absolute executable, `ARCHON_HOME`, and the installing shell's `PATH`, which must
+contain `git` and `gh`. There is one job per install: one pass covers every project
+registered there, and launchd never starts a pass while the previous one runs.
+Reinstalling identical configuration verifies that its launchd job is registered; to
+change the interval, executable or `PATH`, remove it and install again. `install`
+refuses a file-store install, because merged cleanup needs the database. `status`
+reports whether the job is installed and whether launchd has it loaded.
+
+`isolation` commands act on every registered project, so they run from any directory,
+including one that is not a git repository. launchd discards the job's output; read its
+last exit status with `launchctl print gui/$(id -u)/<label>`, where `<label>` is the
+plist file name `status` reports, without `.plist`. Native installation is macOS-only;
+see [workflow trigger scheduling](/guides/workflow-triggers/#macos-scheduling-limits)
+for login, sleep, and environment caveats.
+
+On Linux, use a systemd user service with `Type=oneshot`,
+`ExecStart=/absolute/path/to/archon isolation cleanup --merged`,
+`WorkingDirectory=` and `Environment=ARCHON_HOME=` set to the Archon home, and an
+`Environment=PATH=...` that contains `git` and `gh`. Pair it with a timer that sets
+`OnBootSec=5min` and `OnUnitActiveSec=6h`, and enable it with
+`systemctl --user enable --now <name>.timer`. With cron instead:
+
+```cron
+0 */6 * * * cd /absolute/path/to/.archon && ARCHON_HOME=/absolute/path/to/.archon PATH=/usr/local/bin:/usr/bin:/bin /absolute/path/to/archon isolation cleanup --merged
+```
+
+On Windows Task Scheduler, select the absolute Archon executable, set arguments to
+`isolation cleanup --merged`, repeat the task every 6 hours, and select "Do not start a
+new instance" if it is already running. Use the Archon home as the working directory,
+and set `ARCHON_HOME` and a `PATH` that contains `git` and `gh` in the task's environment
+or in a wrapper that sets them.
+
 ### `complete <branch> [branch2 ...]`
 
 Remove a branch's worktree and local branch, and mark its isolation environment as destroyed.

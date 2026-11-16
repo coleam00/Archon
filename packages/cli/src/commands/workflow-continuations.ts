@@ -44,6 +44,7 @@ export function workflowWakeScheduleConfig(intervalSeconds = 5): NativeScheduleC
     archonHome,
     path: process.env.PATH ?? '',
     schedule: { intervalSeconds, runAtLoad: true },
+    removeCommand: 'archon workflow wake schedule remove',
   };
 }
 
