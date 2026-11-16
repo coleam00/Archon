@@ -264,7 +264,7 @@ Two files that bind the same outcome of the same workflow to the same stage in o
 
 The started run is on the same item. `inputs` maps each input of the started workflow to data from the ended run, and nothing else:
 
-- `{ "result": "<JSON Pointer>" }` reads the ended run's result, the output of its `returns:` node, with an RFC 6901 pointer. `""` passes the whole result.
+- `{ "result": "<JSON Pointer>" }` reads the ended run's result, the output of its `returns:` node, with an RFC 6901 pointer. `""` passes the whole result. It pins the result of the run whose end started the stage; a stage that declares a [`result_of` input](/reference/workflow-language/#reading-an-earlier-runs-result) instead reads the latest completed run's result when it starts, with no mapping.
 - `{ "input": "<name>" }` passes one of the ended run's own inputs, so a stage can hand on what it was given, such as the item's text or a policy path. An input the run was not given passes nothing.
 
 The values are resolved when the run completes and frozen into the start's receipt, where `archon trigger inspect` shows them. As with other event inputs, they reach only a workflow that declares them under `inputs:`.

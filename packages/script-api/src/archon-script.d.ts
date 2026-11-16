@@ -2052,6 +2052,7 @@ declare module 'archon:script' {
         readonly requestId: string;
         readonly hostId: string;
       } | null;
+      readonly hasResult: boolean;
     }>;
     readonly questions: ReadonlyArray<{
       readonly kind: 'attention';

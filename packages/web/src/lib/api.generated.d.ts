@@ -5817,6 +5817,7 @@ export interface components {
           required?: boolean;
           default?: unknown;
           description?: string;
+          result_of?: string;
         };
       };
       returns?: string;
@@ -7684,6 +7685,7 @@ export interface components {
           requestId: string;
           hostId: string;
         } | null;
+        hasResult: boolean;
       }[];
       questions: (
         | {

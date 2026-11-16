@@ -212,6 +212,7 @@ describe('reading an item', () => {
         completedAt: '2026-11-01T09:30:00.000Z',
         cause: null,
         awaitingExecution: null,
+        hasResult: false,
       },
       {
         id: 'second',
@@ -222,6 +223,7 @@ describe('reading an item', () => {
         completedAt: null,
         cause: { kind: 'run_ended', runId: 'first' },
         awaitingExecution: null,
+        hasResult: false,
       },
     ]);
     // The children's questions are the item's, under their own run ids, oldest first; the

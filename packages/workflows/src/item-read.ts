@@ -5,6 +5,7 @@
  * Where the item stands is left to the reader; this computes no position and stores nothing.
  */
 import { z } from 'zod';
+import { createLogger } from '@archon/paths';
 import {
   askItemRef,
   attentionQueueItemSchema,
@@ -46,6 +47,13 @@ import type { WorkflowEventRow } from './schemas/workflow-event';
 import { readResourceStartReceiptId, startCause, startCauseSchema } from './schemas/resource-start';
 import type { IWorkflowStore } from './store';
 import { awaitingExecution } from './resource-start-store';
+import { readCompletedRunResult } from './run-result';
+
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('workflow.item-read');
+  return cachedLog;
+}
 
 export const itemRunSchema = z.object({
   id: z.string(),
@@ -68,6 +76,13 @@ export const itemRunSchema = z.object({
    * `archon trigger execute <requestId> --host <hostId>`.
    */
   awaitingExecution: z.object({ requestId: z.string(), hostId: z.string() }).nullable(),
+  /**
+   * The run completed with a readable `returns:` value: the value a `result_of` input
+   * naming its workflow reads while it is the latest completed run. Read it with
+   * `archon workflow get <id> --json` at `terminal_record.returns.value`, or from the run
+   * detail API.
+   */
+  hasResult: z.boolean(),
 });
 export type ItemRun = z.infer<typeof itemRunSchema>;
 
@@ -189,7 +204,21 @@ export interface ItemReadSource extends AttentionQueueSource {
     >;
 }
 
-async function itemRun(source: ItemReadSource, run: WorkflowRun): Promise<ItemRun> {
+function hasResult(run: WorkflowRun, events: readonly WorkflowEventRow[]): boolean {
+  try {
+    return readCompletedRunResult(run, events).kind === 'result';
+  } catch (error) {
+    // One unreadable record must not fail the whole item read.
+    getLog().warn({ err: error, workflowRunId: run.id }, 'item_read.terminal_record_unreadable');
+    return false;
+  }
+}
+
+async function itemRun(
+  source: ItemReadSource,
+  run: WorkflowRun,
+  terminalEvents: ReadonlyMap<string, WorkflowEventRow[]>
+): Promise<ItemRun> {
   // The receipt stays the one owner of why a start happened; this only reads it.
   const receiptId = readResourceStartReceiptId(run.metadata);
   const receipt = receiptId ? await source.store.getStartReceipt(receiptId) : null;
@@ -205,6 +234,7 @@ async function itemRun(source: ItemReadSource, run: WorkflowRun): Promise<ItemRu
     completedAt: run.completed_at?.toISOString() ?? null,
     cause: receipt ? startCause(receipt) : null,
     awaitingExecution: awaitingExecution(request),
+    hasResult: hasResult(run, terminalEvents.get(run.id) ?? []),
   };
 }
 
@@ -336,6 +366,11 @@ export async function readItem(
   for (const read of await source.store.listItemLinks(found.item.id))
     if ('type' in read) unreadableLinks.push(read);
     else links.push(readLink(found.item.id, read));
+  const completedIds = own.values.filter(run => run.status === 'completed').map(run => run.id);
+  const terminalEvents =
+    completedIds.length === 0
+      ? new Map<string, WorkflowEventRow[]>()
+      : await source.store.listEventsForRuns(completedIds, ['workflow_completed']);
   const asks = splitAttentionRead(await source.store.listItemAsks(found.item.id));
   const answers = [
     ...[...events.values()].flat().map(itemAnswer),
@@ -347,7 +382,7 @@ export async function readItem(
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   return {
     item: found.item,
-    runs: await Promise.all(own.values.map(run => itemRun(source, run))),
+    runs: await Promise.all(own.values.map(run => itemRun(source, run, terminalEvents))),
     questions,
     answers,
     links,

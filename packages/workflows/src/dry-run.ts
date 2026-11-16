@@ -13,6 +13,7 @@ import type { ResolvedAiProfile } from './model-validation';
 import type { WorkflowConfig } from './deps';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import { resolveRunStartInputs, type RunStartInputs } from './pack-settings';
+import { unsuppliedResultInputs } from './run-result';
 import {
   isExecNode,
   isAgentNode,
@@ -129,7 +130,8 @@ interface DryRunOptions {
    * same contract a real run enforces before any cost. Pack settings and declared
    * defaults are layered under them here, by the function a real run starts with
    * (`resolveRunStartInputs`), so the effective `$INPUTS` map cannot diverge between
-   * simulation and execution (#2610).
+   * simulation and execution (#2610). A `result_of` input left unsupplied previews as
+   * `null`: a dry run has no item to read it from.
    */
   inputs?: Record<string, string>;
   /**
@@ -204,11 +206,14 @@ export async function dryRunWorkflow(options: DryRunOptions): Promise<DryRunResu
   const tempRoot = join(getArchonTempPath(), `dry-run-${randomUUID()}`);
   // The same layering a real run fixes at its start: pack defaults, then declared
   // defaults, then the project's `.archon/packs/` file, then supplied values.
-  const ctx = createDryRunContext(
-    options,
-    tempRoot,
-    await resolveRunStartInputs(options.cwd, options.workflow, options.inputs)
-  );
+  const { inputs } = await resolveRunStartInputs(options.cwd, options.workflow, options.inputs);
+  const unread = unsuppliedResultInputs(options.workflow, inputs);
+  const ctx = createDryRunContext(options, tempRoot, {
+    inputs:
+      unread.size === 0
+        ? inputs
+        : { ...Object.fromEntries([...unread.keys()].map(name => [name, null])), ...inputs },
+  });
   const outputs = new Map<string, NodeOutput>();
   try {
     await simulateNodes(options.workflow.plan, outputs, ctx);

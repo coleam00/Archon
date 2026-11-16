@@ -31,6 +31,7 @@ import { ContinuedItemProjectError, type WorkflowRunOrigin } from './schemas/wor
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { refuseBrokenRunEndedBindings } from './run-ended-refusal';
 import { holdWorkflowResource } from './resource-hold';
+import { resolveResultInputs, unsuppliedResultInputs } from './run-result';
 import { workflowPathPriorityTime } from './workflow-path-lock';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -89,6 +90,9 @@ export async function admitWorkflowRun(
   }
 
   let checkoutBaselineSample: CheckoutSample | undefined;
+  const resultInputs = dispatch.isContinuation
+    ? new Map<string, string>()
+    : unsuppliedResultInputs(workflow, dispatch.startInputs);
   if (!dispatch.isContinuation) {
     const claimed = await claimPendingRun(
       deps,
@@ -97,6 +101,7 @@ export async function admitWorkflowRun(
       cwd,
       workflow,
       workflowRun,
+      resultInputs,
       execContext,
       opts
     );
@@ -119,6 +124,17 @@ export async function admitWorkflowRun(
     if (stamped.stopped) return stamped;
     workflowRun = stamped.value;
   }
+
+  // Read after the resource wait, so the run reads the latest result when it starts work.
+  const resolved = await resolveResultInputs(
+    deps,
+    platform,
+    conversationId,
+    workflowRun,
+    resultInputs
+  );
+  if (resolved.stopped) return resolved;
+  workflowRun = resolved.value;
 
   const blocked = await holdCheckoutPathLock(
     deps,
@@ -266,6 +282,35 @@ async function refuseAsksWithoutItem(
 }
 
 /**
+ * A run whose `result_of` inputs were not supplied reads them from its item, so with no
+ * item it is refused before it does any work. A `workflow:` child carries no item, so its
+ * parent must pass such an input through `with:`.
+ */
+async function refuseResultInputsWithoutItem(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflow: ResolvedWorkflow,
+  workflowRun: WorkflowRun,
+  resultInputs: ReadonlyMap<string, string>
+): Promise<WorkflowExecutionResult | undefined> {
+  const [first] = resultInputs;
+  if (first === undefined || workflowRun.item_id !== null) return undefined;
+  const [input, source] = first;
+  const reason = `Workflow '${workflow.name}' reads input '${input}' from result_of '${source}', which resolves from the run's item: start it with --item <key>, or supply '${input}'`;
+  await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${reason}`);
+  await requireTerminalStatusWrite(
+    deps.store.cancelWorkflowRun(
+      workflowRun.id,
+      { cancel_reason: 'precondition_failed' },
+      { pendingOnly: true }
+    ),
+    { workflowRunId: workflowRun.id, site: 'workflow.result_inputs_without_item_refused' }
+  );
+  return { success: false, workflowRunId: workflowRun.id, error: reason };
+}
+
+/**
  * Take the workflow's resource slot, win execution ownership of a pending row, then sample
  * the checkout the run starts from.
  */
@@ -276,6 +321,7 @@ async function claimPendingRun(
   cwd: string,
   workflow: ResolvedWorkflow,
   workflowRun: WorkflowRun,
+  resultInputs: ReadonlyMap<string, string>,
   execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
   { onExecutionClaimed, noWait }: ExecuteWorkflowOptions
 ): Promise<RunPhase<CheckoutSample>> {
@@ -289,6 +335,15 @@ async function claimPendingRun(
     workflowRun
   );
   if (askless) return { stopped: true, result: askless };
+  const itemless = await refuseResultInputsWithoutItem(
+    deps,
+    platform,
+    conversationId,
+    workflow,
+    workflowRun,
+    resultInputs
+  );
+  if (itemless) return { stopped: true, result: itemless };
   const refused = await holdWorkflowResource(
     deps,
     platform,

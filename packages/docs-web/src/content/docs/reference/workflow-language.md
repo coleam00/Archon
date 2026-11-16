@@ -72,7 +72,7 @@ The same tree works under `~/.archon/workflows/` for home-scoped workflows. Exis
 | `budget` | Ceiling on the run's total work and spend. See [Run budgets](#run-budgets). |
 | `persist_sessions` | Default for every AI node's `persist_session`. See [Persistent sessions](#persistent-sessions-across-re-runs). |
 | `requires` | `[github]` refuses the run before any work unless the triggering user has connected a GitHub identity. Enforced only when per-user GitHub is enabled (GitHub App mode with `TOKEN_ENCRYPTION_KEY`). `github` is the only value. |
-| `inputs`, `returns` | The workflow's signature, including the outcome a run completes with (`returns: { node, outcome }`). See [Workflow signature](#workflow-signature-inputs-returns-and-inputs). |
+| `inputs`, `returns` | The workflow's signature, including the outcome a run completes with (`returns: { node, outcome }`) and inputs filled from an earlier run's result (`result_of`). See [Workflow signature](#workflow-signature-inputs-returns-and-inputs). |
 | `tags` | Free-form labels carried on the parsed workflow. The engine gives them no meaning. |
 | `deprecated` | `{ message }` announces removal at every run start. See [Deprecating a workflow](#deprecating-a-workflow). |
 
@@ -1708,6 +1708,60 @@ holds every link from or to the item, each with its `direction` and the `other` 
 ended link stays with `ended` set, and the engine acts on no link. Like
 `state`, it runs on the host: a container-isolated node cannot call it.
 
+### Reading an earlier run's result
+
+A stage that needs what an earlier run on its item returned declares it as an input, naming
+the workflow:
+
+```yaml
+name: merge
+inputs:
+  build:
+    result_of: build    # the latest completed run of `build` on this run's item
+  review:
+    result_of: review
+returns: { node: decide, outcome: verdict }
+nodes:
+  - id: decide
+    prompt: |
+      The build returned $INPUTS.build. The last review returned $INPUTS.review.
+      ...
+```
+
+When a run starts, after any wait for its [resource](/guides/workflow-triggers/#workflows-that-declare-a-resource) slot, the engine fills each
+`result_of` input the run was not supplied:
+
+- The value is the result the latest **completed** run of that workflow on the item returned:
+  the value its `returns:` node's `output_format` certified, or the text of an untyped
+  `returns:` node. It is the value `archon workflow get <id> --json` shows at
+  `terminal_record.returns.value`. "Latest" is the run that completed last.
+- A failed, cancelled, paused or running run has no result, even when its `returns:` node
+  completed. When there is no completed run of the workflow on the item, or the latest one has
+  no readable result (it declares no `returns:`, its `returns:` node was skipped), the value is
+  `null`. The engine never falls back to an older run; a node that needs an older one reads
+  the item's runs itself. The start says on the run's conversation which run each input read,
+  or why it is `null`, so a misspelled workflow name shows as "no completed run".
+- The value is read from the database, not the run's artifacts directory, so it reads the same
+  on every host that shares the database. A typed result is stored whole whatever its size.
+  An untyped `returns:` node's text past the 32 KiB node output cap is kept whole only in a
+  file on the host that ran it, so it reads `null` on every host; declare `output_format` on
+  the `returns:` node to make a large result readable.
+- A supplied value wins, as it does over a `default:`: `--input`, a parent's `with:`, or a
+  [run-ended binding](/guides/workflow-triggers/)'s mapping. A stage a run-ended binding starts
+  needs no `{ "result" }` mapping to read the ended run's result: that run completed before
+  the stage starts, so it is the latest one, unless a later run of the same workflow completed
+  first.
+- The value is resolved once, written into the run's `$INPUTS`, and kept on resume.
+- A run with no item is refused before it does any work, unless every `result_of` input is
+  supplied. A `workflow:` child carries no item, so its parent passes the value through
+  `with:`.
+- `result_of` with `default:` or `required: true` is contradictory, and the input is dropped at
+  load with a warning. A dry run has no item and previews an unsupplied `result_of` input as
+  `null`.
+
+`archon workflow runs --item <key>` shows, for each run, `hasResult`: whether a reader would
+get a value from it.
+
 ## Durable state documents
 
 Use `archon state` for a standing agent's small JSON ledger, cursor or index when updates
@@ -2102,9 +2156,11 @@ nodes:
     depends_on: [synthesize]
 ```
 
-- **`inputs:`**: a map of input name → `{ required?, default?, description? }`. `required: true`
+- **`inputs:`**: a map of input name → `{ required?, default?, description?, result_of? }`. `required: true`
   and `default:` are mutually exclusive (a required input has no default; declaring both drops
-  the key at load with a warning). Values come from `with:` on the `include:`/`workflow:` node
+  the key at load with a warning). `result_of: <workflow>` fills an unsupplied input with what
+  the latest completed run of that workflow on the run's item returned, and excludes both
+  (see [Reading an earlier run's result](#reading-an-earlier-runs-result)). Values come from `with:` on the `include:`/`workflow:` node
   that references this workflow, or, for a direct run, from `--input name=value` on the CLI or
   the run form in the web console (see [Running a workflow that declares
   inputs](#running-a-workflow-that-declares-inputs)). Whichever channel supplies them, the same

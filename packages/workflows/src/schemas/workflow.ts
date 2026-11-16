@@ -155,6 +155,13 @@ export const workflowInputSpecSchema = z.object({
   // logical type through the input contract instead of arriving as text.
   default: jsonValueSchema.optional(),
   description: z.string().optional(),
+  /**
+   * Fill this input, when the run is not supplied it, with the result of the latest
+   * completed run of the named workflow on the run's item: the value its `returns:` node
+   * completed with, or `null` when there is no such run or it has no readable result.
+   * Resolved once when the run starts; a run on no item is refused.
+   */
+  result_of: z.string().min(1).optional(),
 });
 
 export type WorkflowInputSpec = z.infer<typeof workflowInputSpecSchema>;
