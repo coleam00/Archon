@@ -167,7 +167,10 @@ Schema initialization is serialized rather than retried; the former
 Upgrades are verified, not assumed: CI applies the current schema on top of a database built from
 every distinct schema Archon has ever released, re-applies it to confirm idempotence, and compares
 the result against a fresh install — columns, indexes, column comments, constraints and sequences.
-Run the same check yourself against any PostgreSQL with `bun run check:schema-upgrades`.
+Run the same check yourself with `bun run check:schema-upgrades`. It creates and drops databases, so
+with no server named it starts a throwaway PostgreSQL of its own (it needs `initdb` and `pg_ctl`) and
+removes it afterwards. To run it on a scratch server you own, name that server with `PGHOST`,
+`PGHOSTADDR`, `PGSERVICE` or `DATABASE_URL`; a `DATABASE_URL` in `.env` is not read.
 
 If schema application fails (permissions, syntax error, network), the process aborts at the first DB operation with the underlying Postgres error logged at `db.postgres_schema_init_failed`.
 

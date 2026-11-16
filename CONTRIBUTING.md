@@ -179,7 +179,7 @@ drop; never run destructive verification against a configured live database.
 
 | CI job | Needs | Run it yourself |
 | --- | --- | --- |
-| `schema-upgrade` | a live PostgreSQL; the SQLite half also reads every release tag | `bun run check:schema-upgrades` (`PGHOST`/`PGUSER`/… or `DATABASE_URL`) and `bun run check:sqlite-vintages` |
+| `schema-upgrade` | a PostgreSQL; the SQLite half also reads every release tag | `bun run check:schema-upgrades`, which starts and removes a throwaway PostgreSQL of its own (it needs `initdb` and `pg_ctl`); to use a scratch server you own instead, name it with `PGHOST`, `PGHOSTADDR`, `PGSERVICE` or `DATABASE_URL`. Then `bun run check:sqlite-vintages` |
 | `postgres-parity` | a PostgreSQL service; conformance creates and drops scratch databases and requires `CREATE DATABASE` permission | `ARCHON_TEST_PG_URL=postgres://… bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts`, then the same for `packages/core/src/db/resource-slots.postgres.integration.test.ts`, `packages/core/src/db/provider-attempts.postgres.integration.test.ts`, `packages/core/src/db/workflows.postgres.integration.test.ts`, `packages/core/src/db/workflow-events.provider-events.postgres.integration.test.ts`, `packages/core/src/db/workflow-store.conformance.postgres.integration.test.ts`, `packages/core/src/db/state-documents.postgres.integration.test.ts`, `packages/core/src/db/codebase-rename.postgres.integration.test.ts`, and `packages/core/src/db/schema-convergence.postgres.integration.test.ts`; then `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/users.postgres.integration.test.ts`, `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/codebase-delete.postgres.integration.test.ts`, and `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/user-provider-key-store.postgres.integration.test.ts` |
 | `docker-build` | a Docker daemon, and ~14GB of free disk for the image | `docker build .` |
 | Linux `test` Slack conformance and smoke | compiled Slack plugin with a stubbed client for conformance, and the unmodified release binary for initialization and missing-token smoke | CI only; source conformance runs in `cd packages/chat-slack && bun run test` |
@@ -195,7 +195,9 @@ negative proof), run in CI. Local `check:cli-import-boundary` still checks start
 and policy import boundaries. Do not compile these binaries locally on macOS.
 
 **Schema changes**: run `bun run check:schema-upgrades` and `bun run check:sqlite-vintages`
-yourself if you touched `migrations/000_combined.sql`. A statement that applies cleanly to a fresh install can
+yourself if you touched `migrations/000_combined.sql`. Both are safe as written: with no server
+named, the upgrade check runs on a throwaway PostgreSQL it starts and removes, and it does not read
+`DATABASE_URL` from `.env`. A statement that applies cleanly to a fresh install can
 abort the whole apply on an upgrade, and nothing before that job catches it.
 
 **SDLC workflows**: We do not accept pull requests from outside contributors
