@@ -328,6 +328,8 @@ recommends under `bindings:` in `.pack/pack.yaml`:
   changed runs no agent.
 - `metrics-prs` and `metrics-test-value` refresh the pack's metrics.
 - `worktree-cleanup` removes merged worktrees, for an install that runs no server.
+  `archon isolation cleanup schedule install` schedules the same sweep with no workflow;
+  prefer it.
 
 **Ask the user** which to enable. Then write them as files:
 

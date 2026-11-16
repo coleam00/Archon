@@ -18,6 +18,8 @@ export interface NativeScheduleConfig {
     intervalSeconds: number;
     runAtLoad: boolean;
   };
+  /** The command a refused reinstall tells the operator to run; not part of the job. */
+  removeCommand: string;
 }
 
 export interface RenderedMacosLaunchAgent {
@@ -145,20 +147,23 @@ function resolveRuntime(options: NativeScheduleOptions): {
 }
 
 /** The installed job differs from the one rendered now, often because PATH changed. */
-function differentConfiguration(path: string): Error {
+function differentConfiguration(path: string, removeCommand: string): Error {
   return new Error(
     `Refusing to replace an existing native schedule with different configuration: ${path}. ` +
       "The job records the installing shell's PATH, so a different PATH or an upgrade changes it. " +
-      'Remove it (`archon trigger schedule remove`, or `archon workflow wake schedule remove` for the wake schedule), ' +
-      'then install it again from the shell whose PATH the job should use.'
+      `Remove it (\`${removeCommand}\`), then install it again from the shell whose PATH the job should use.`
   );
 }
 
-async function writeOwnedConfiguration(path: string, contents: string): Promise<boolean> {
+async function writeOwnedConfiguration(
+  path: string,
+  contents: string,
+  removeCommand: string
+): Promise<boolean> {
   try {
     const existing = await readFile(path, 'utf8');
     if (existing !== contents) {
-      throw differentConfiguration(path);
+      throw differentConfiguration(path, removeCommand);
     }
     return false;
   } catch (error) {
@@ -173,7 +178,7 @@ async function writeOwnedConfiguration(path: string, contents: string): Promise<
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     const existing = await readFile(path, 'utf8');
     if (existing !== contents) {
-      throw differentConfiguration(path);
+      throw differentConfiguration(path, removeCommand);
     }
     return false;
   } finally {
@@ -190,7 +195,7 @@ export async function installMacosNativeSchedule(
   const runtime = resolveRuntime(options);
   await mkdir(runtime.directory, { recursive: true, mode: 0o700 });
   const path = join(runtime.directory, `${rendered.label}.plist`);
-  const created = await writeOwnedConfiguration(path, rendered.plist);
+  const created = await writeOwnedConfiguration(path, rendered.plist, config.removeCommand);
   if (!created) {
     await runtime.runCommand('/bin/launchctl', ['print', `${runtime.domain}/${rendered.label}`]);
     return path;
@@ -203,6 +208,28 @@ export async function installMacosNativeSchedule(
     throw error;
   }
   return path;
+}
+
+/** The installed job's plist and whether launchd has it loaded; `undefined` when not installed. */
+export async function inspectMacosNativeSchedule(
+  id: string,
+  options: NativeScheduleOptions = {}
+): Promise<{ path: string; registered: boolean } | undefined> {
+  const label = jobLabel(id);
+  const runtime = resolveRuntime(options);
+  const path = join(runtime.directory, `${label}.plist`);
+  try {
+    await access(path, constants.F_OK);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+  try {
+    await runtime.runCommand('/bin/launchctl', ['print', `${runtime.domain}/${label}`]);
+    return { path, registered: true };
+  } catch {
+    return { path, registered: false };
+  }
 }
 
 export async function removeMacosNativeSchedule(

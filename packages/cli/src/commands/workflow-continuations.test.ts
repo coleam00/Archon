@@ -57,6 +57,7 @@ mock.module('../utils/stdout', () => ({ writeStdout }));
 mock.module('../triggers/native-schedule', () => ({
   installMacosNativeSchedule: install,
   removeMacosNativeSchedule: remove,
+  inspectMacosNativeSchedule: mock(async () => undefined),
 }));
 import { workflowContinuationCommand, workflowWakeScheduleCommand } from './workflow-continuations';
 
