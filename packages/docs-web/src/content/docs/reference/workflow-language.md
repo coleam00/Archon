@@ -1938,8 +1938,10 @@ command/script directive, `{ from, if_skipped }` or `{ outputs }`, is a load err
 input. Those directives are read only on a command or script node's own `with:` (see
 [Binding values](#binding-values-into-command-and-script-nodes)); passed through an include
 it would reach the block as data, and its `if_skipped` would never apply. To carry a skip
-fallback across an include, bind it with `if_skipped` in a `script:` node's own `with:`, have
-that node print the value, and pass `$<that-node>.output` to the include. Any other object,
+fallback across an include, bind it with `if_skipped` in a `script:` node's own `with:`, set
+`trigger_rule: all_done` on that node so it runs when its source is skipped (see
+[Reading across a skipped branch](#reading-across-a-skipped-branch)), have it print the value,
+and pass `$<that-node>.output` to the include. Any other object,
 such as `{ from: alice, to: bob }`, stays a literal. The same rule holds for a `workflow:`
 node's `with:`.
 
