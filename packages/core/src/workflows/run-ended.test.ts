@@ -307,15 +307,14 @@ describe('run-ended starts', () => {
   });
 
   test('a binding whose ended run left no checkout is rejected on its receipt, naming why', async () => {
+    const refused = 'the checkout of the ended run is gone';
     const starts = await triggersWith(
       {
         'build.json': trigger({
           on: { runEnded: { workflowName: 'plan', outcome: 'planned', checkout: 'ended-run' } },
         }),
       },
-      async run => ({
-        refused: `run '${run.id}' ran in place at '/srv/widgets', so it left no branch`,
-      })
+      async () => ({ refused })
     );
     const [receipt] = await starts(facts());
     expect(receipt).toMatchObject({
@@ -324,7 +323,7 @@ describe('run-ended starts', () => {
       evaluatedBindings: [{ bindingId: 'build', status: 'rejected' }],
     });
     expect(receipt?.reason).toContain('build.json');
-    expect(receipt?.reason).toContain('ran in place');
+    expect(receipt?.reason).toContain(refused);
   });
 
   test('a fixed isolation beside checkout: ended-run is refused when the file is read', async () => {

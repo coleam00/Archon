@@ -184,7 +184,7 @@ async function reportUnstartedStages(
     await safeSendMessage(
       ctx.platform,
       ctx.conversationId,
-      `\u26a0\ufe0f The next stage was not started: ${accepted.reason ?? 'its binding was rejected'}. Receipt ${accepted.receipt.id} records it (archon trigger inspect ${accepted.receipt.id}). After fixing the trigger, start the stage with archon trigger fire.`,
+      `\u26a0\ufe0f The next stage was not started: ${accepted.reason ?? 'its binding was rejected'}. Receipt ${accepted.receipt.id} records it (archon trigger inspect ${accepted.receipt.id}). Fix what it names, then start the stage again: for a binding that maps inputs, with archon trigger fire --item <key>; for one that takes this run's checkout (on.runEnded.checkout), which a fire refuses, run '${ctx.workflow.name}' again on the item in a worktree, and its end starts the stage.`,
       { workflowId: ctx.workflowRun.id }
     );
   }

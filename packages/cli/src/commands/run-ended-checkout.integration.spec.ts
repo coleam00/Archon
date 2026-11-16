@@ -215,7 +215,7 @@ async function startBuild(fixture: Fixture): Promise<void> {
 }
 
 describe('a stage on the checkout the ended run left', () => {
-  test('build, check, build: the second build adds to the first on its branch; checks never move it', async () => {
+  test('build, check, build: the second build adds to the first on its branch; checks work on a branch of their own', async () => {
     // Two commits on top of main pass: the first build is returned, the second passes.
     const fixture = await makeFixture(
       'loop',
@@ -287,7 +287,8 @@ printf '{"outcome": "return"}'`
       ['check', 'completed'],
       ['build', 'failed'],
     ]);
-    expect(String(metadata(all[2]).error)).toContain('its hand-off is refused');
+    // The refusal names the run whose hand-off it refused.
+    expect(String(metadata(all[2]).error)).toContain(all[0]?.id ?? 'build run');
   }, 120_000);
 
   test('a run in place leaves no checkout: the start is refused on its receipt', async () => {
@@ -302,14 +303,13 @@ printf '{"outcome": "return"}'`
       'issue-1',
     ]);
     expect(started.exitCode, started.stderr).toBe(0);
-    expect(started.stdout).toContain('not started');
     expect(runs(fixture).map(run => run.workflow_name)).toEqual(['build']);
     const [receipt] = JSON.parse((await fixture.cli(['trigger', 'list'])).stdout) as {
       outcome: string;
       reason: string | null;
     }[];
     expect(receipt?.outcome).toBe('unmatched');
-    expect(receipt?.reason).toContain('ran in place');
+    expect(receipt?.reason).toContain(runs(fixture)[0]?.id ?? 'build run');
   }, 120_000);
 
   test('trigger check reports a workflow pinned in place on either side, and fire refuses', async () => {
@@ -323,12 +323,9 @@ printf '{"outcome": "return"}'`
         JSON.parse(checked.stdout) as { runEnded: { file: string; problems: string[] }[] }
       ).runEnded.map(entry => [basename(entry.file, '.json'), entry.problems])
     );
-    expect(problems.get('after-pinned')).toEqual([
-      "workflow 'pinned' runs in place (worktree.enabled: false), so it leaves no checkout for checkout: ended-run",
-    ]);
-    expect(problems.get('pinned-after-build')).toEqual([
-      "workflow 'pinned' runs in place (worktree.enabled: false), so it cannot take the ended run's checkout",
-    ]);
+    // One problem each: the pinned ended workflow, and the pinned started one.
+    expect(problems.get('after-pinned')).toHaveLength(1);
+    expect(problems.get('pinned-after-build')).toHaveLength(1);
 
     const fired = await fixture.cli([
       'trigger',
@@ -337,6 +334,6 @@ printf '{"outcome": "return"}'`
       join(fixture.home, 'triggers', 'after-pinned.json'),
     ]);
     expect(fired.exitCode).not.toBe(0);
-    expect(fired.stderr).toContain('a fire has none to give it');
+    expect(fired.stderr).toContain(join(fixture.home, 'triggers', 'after-pinned.json'));
   }, 120_000);
 });

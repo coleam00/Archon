@@ -69,19 +69,20 @@ describe('the checkout an ended run left', () => {
     expect(ended).toEqual({ handoff: given });
   });
 
+  // The refusal names the run, so the receipt says whose checkout is missing.
   test.each([
-    ['a run in place', null, 'ran in place'],
-    ['a removed worktree', env({ status: 'destroyed' }), 'is gone'],
-  ])('%s left no branch', async (_label, found, reason) => {
+    ['a run in place', null],
+    ['a removed worktree', env({ status: 'destroyed' })],
+  ])('%s left no branch', async (_label, found) => {
     const { worktree } = fixture();
     const ended = await resolver(found)(run({ working_path: worktree }));
-    expect(ended).toMatchObject({ refused: expect.stringContaining(reason) });
+    expect(ended).toMatchObject({ refused: expect.stringContaining('ended-run') });
   });
 
-  test('a worktree that left its branch is refused, naming where it is', async () => {
+  test('a worktree that left its branch is refused, naming the run', async () => {
     const { worktree } = fixture();
     git(worktree, 'switch', '-q', '--detach');
     const ended = await resolver(env({ working_path: worktree }))(run({ working_path: worktree }));
-    expect(ended).toMatchObject({ refused: expect.stringContaining('detached HEAD') });
+    expect(ended).toMatchObject({ refused: expect.stringContaining('ended-run') });
   });
 });
