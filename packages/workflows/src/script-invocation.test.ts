@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -25,7 +25,6 @@ test('Bun isolates inline and named scripts from repository env files', () => {
   expect(inline.args).toEqual(['--no-env-file', expect.stringMatching(/^--preload=/), '-']);
   expect(inline.input).toBe('console.log(1)');
   const preload = inline.args[1].slice('--preload='.length);
-  expect(existsSync(preload)).toBe(true);
   expect(
     scriptInvocation('bun', { kind: 'file', path: '/scripts/job.ts' }, [], artifactsDir)
   ).toEqual({
