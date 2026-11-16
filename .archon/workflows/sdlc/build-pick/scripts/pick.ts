@@ -10,8 +10,11 @@
  * `limit` deep and each pass ranks afresh.
  *
  * A fire that answers with a run that has already ended, for an item that still waits,
- * is a start that died before it claimed the issue. No later pass starts that item, so
- * the pick names it and ends as a failed outcome; it fires nothing new for it.
+ * is a start that died before it claimed the issue. A claim is a write and moves the
+ * work item's revision, so a replay that answers with an ended run for an item still
+ * waiting at that revision can only be a start that never claimed. No later pass starts
+ * that item, so the pick names it and ends as a failed outcome; it fires nothing new for
+ * it.
  *
  * With `orders_only` on it first marks done each open work order whose members all
  * finished, and starts only members of an open order. With `revisit_blocked` on it also

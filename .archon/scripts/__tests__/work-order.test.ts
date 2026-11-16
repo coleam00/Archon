@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
-import type { BuildRecord } from '../../workflows/sdlc/.shared/build';
+import { type BuildRecord, startRevisit } from '../../workflows/sdlc/.shared/build';
 import type { MergeRecord } from '../../workflows/sdlc/.shared/merge';
 import type { WorkOrder } from '../../workflows/sdlc/.shared/order';
 import { state } from 'archon:script';
@@ -145,6 +145,25 @@ describe('the build pick', () => {
     const picked = pick(store({ 'work/7': waiting(7) }), ended, 'pick-1');
     expect(picked.output).toMatchObject({ started: [], stranded: [7], healthy: false });
     expect(picked.output.summary).toContain('#7 (stranded: run fired-run failed before it claimed the issue');
+  }, 60_000);
+
+  test('with revisit_blocked on, the pick fires one start that names no issue and no item, keyed by its six-hour window', () => {
+    const picked = pick(store({}), { INPUTS_REVISIT_BLOCKED: 'true' }, 'pick-1');
+    expect(picked.fires.map(({ item, inputs }) => ({ item, inputs }))).toEqual([{ item: undefined, inputs: { revisit_blocked: 'true' } }]);
+    expect(picked.fires[0]?.delivery).toMatch(/^build-revisit:\d+$/);
+    // The pick reads the clock itself, so the window is checked on the key's own function.
+    const scratch = track(mkdtempSync(join(tmpdir(), 'archon-revisit-')));
+    const calls = join(scratch, 'calls.jsonl');
+    inStore({ ARTIFACTS_DIR: scratch, ARCHON_CALL_LOG: calls }, () => {
+      for (const at of ['2026-11-06T00:00:00.000Z', '2026-11-06T05:59:59.000Z', '2026-11-06T06:00:00.000Z']) startRevisit('/bindings/build-queue.json', at);
+    });
+    const [first, sameWindow, nextWindow] = readFileSync(calls, 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as string[])
+      .map(argv => argv[argv.indexOf('--delivery-id') + 1]);
+    expect(sameWindow).toBe(first);
+    expect(nextWindow).not.toBe(first);
   }, 60_000);
 });
 
