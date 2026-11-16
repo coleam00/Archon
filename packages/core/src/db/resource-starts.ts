@@ -36,9 +36,10 @@ import {
   resourceStartBindingIntentSchema,
 } from '@archon/workflows/schemas/resource-start';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
-import { getDatabase, getDatabaseType, getDialect } from './connection';
+import { getDatabase, getDialect } from './connection';
 import {
   addResourceSlotHolder,
+  lockAdmission,
   lockResourceSlot,
   lockResourceSlotForAdmission,
   resourceStartOccupancy,
@@ -60,12 +61,6 @@ interface RequestRow {
   blocker_run_id: string | null;
   blocker_kind: NonNullable<ResourceStartRequestInspection['blocker']>['kind'] | null;
   launch: unknown;
-}
-
-// Different resource rows can reserve the same checkout. Hold one transaction lock
-// across occupancy and publication; SQLite already serializes writers.
-async function lockCheckoutReservations(query: Query): Promise<void> {
-  if (getDatabaseType() === 'postgresql') await query('SELECT pg_advisory_xact_lock(1797)');
 }
 
 /** Start requests are the run holder's durable FIFO waiters for a resource slot. */
@@ -116,7 +111,7 @@ async function admitResourceStartWithQuery(
   intent: ResourceStartIntent,
   itemId: string | null = null
 ): Promise<ResourceStartDisposition> {
-  await lockCheckoutReservations(query);
+  await lockAdmission(query);
   const { capacity } = await lockResourceSlotForAdmission(query, intent.resource, intent.capacity);
   const existing = await query<RequestRow>(
     'SELECT * FROM remote_agent_resource_start_requests WHERE id = $1',
@@ -128,7 +123,8 @@ async function admitResourceStartWithQuery(
   const blocker = resourceStartBlocker(
     await resourceStartOccupancy(query, intent.resource, capacity),
     launch,
-    intent.hostId
+    intent.hostId,
+    itemId
   );
   const status = blocker && intent.overlap === 'skip' ? 'skipped' : 'queued';
   await query(
@@ -217,7 +213,7 @@ export async function admitPendingRun(input: {
   const launch = preparedWorkflowLaunchSchema.parse(input.launch);
   const id = launch.run.id;
   return getDatabase().withTransaction(async query => {
-    await lockCheckoutReservations(query);
+    await lockAdmission(query);
     // A hand start is checked against its own number and leaves the slot's recorded one.
     await lockResourceSlot(query, input.resource);
     const capacity = (await loadResourceCapacities()).get(input.resource) ?? input.capacity;
@@ -228,16 +224,18 @@ export async function admitPendingRun(input: {
     const request = existing.rows[0];
     if (request?.status === 'admitted') return null;
     if (request) throw new Error(`Run '${id}' already has a ${request.status} resource request`);
-    const run = await query<{ status: string }>(
-      'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+    const run = await query<{ status: string; item_id: string | null }>(
+      'SELECT status, item_id FROM remote_agent_workflow_runs WHERE id = $1',
       [id]
     );
     const status = run.rows[0]?.status;
     if (status !== 'pending') throw new Error(`Run '${id}' is ${status ?? 'missing'}, not pending`);
+    const itemId = run.rows[0]?.item_id;
     const blocker = resourceStartBlocker(
       await resourceStartOccupancy(query, input.resource, capacity),
       launch,
-      DIRECT_START_HOST_ID
+      DIRECT_START_HOST_ID,
+      itemId == null ? null : String(itemId)
     );
     if (blocker) return blocker;
     await query(
@@ -257,7 +255,7 @@ export async function drainResourceStarts(options: {
   hostId: string;
 }): Promise<ResourceStartDisposition[]> {
   return getDatabase().withTransaction(async query => {
-    await lockCheckoutReservations(query);
+    await lockAdmission(query);
     const { capacity } = await lockResourceSlotForAdmission(query, options.resource);
     const slot = await resourceStartOccupancy(query, options.resource, capacity);
     const admitted: ResourceStartDisposition[] = [];
@@ -488,6 +486,18 @@ export async function getResourceStartRequest(
     [id]
   );
   return result.rows[0] ? inspectRequest(result.rows[0]) : null;
+}
+
+export async function listItemStartRequests(
+  itemId: string
+): Promise<ResourceStartRequestInspection[]> {
+  const result = await getDatabase().query<RequestInspectionRow>(
+    `${requestInspectionSelect}
+      WHERE r.item_id = $1 AND r.status IN ('queued', 'skipped')
+      ORDER BY r.queue_position`,
+    [itemId]
+  );
+  return result.rows.map(inspectRequest);
 }
 
 export async function listQueuedResourceStartsForHost(

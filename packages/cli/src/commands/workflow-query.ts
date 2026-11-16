@@ -7,10 +7,7 @@ import { getPluginsPath } from '@archon/paths';
 import { scanReceipts } from '@archon/plugin-manifest/store';
 import { loadConfig } from '@archon/core/config/config-loader';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import {
-  attentionQueueSource,
-  projectRefForCodebase,
-} from '@archon/core/operations/attention-queue';
+import { itemReadSource, projectRefForCodebase } from '@archon/core/operations/attention-queue';
 import { readItem, readItemOfRun } from '@archon/workflows/item-read';
 import { itemReadLines } from './workflow-item-text';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
@@ -611,7 +608,7 @@ async function readItemRuns(
   }
   const project = projectRefForCodebase(codebase);
   const read = await readItem(
-    attentionQueueSource(host.deps.store, host.records.isolation),
+    itemReadSource(host.deps.store, host.records.isolation),
     project.key,
     item
   );
@@ -640,10 +637,7 @@ async function readItemOfRunCommand(
   runId: string,
   opts: RunsOptions
 ): Promise<number> {
-  const read = await readItemOfRun(
-    attentionQueueSource(host.deps.store, host.records.isolation),
-    runId
-  );
+  const read = await readItemOfRun(itemReadSource(host.deps.store, host.records.isolation), runId);
   if (read === null) {
     if (opts.json) {
       await writeJsonLine({ ok: false, error: 'not_found', run: runId });

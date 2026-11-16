@@ -12,6 +12,8 @@ import {
 import { stateProjectKeySchema } from '@archon/workflows/state-document-store';
 import type { Codebase } from '../schemas/codebase';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
+import { observeRunOwner } from '../services/run-attention-watch';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowHostStore } from '../workflows/host-store';
 
 /**
@@ -35,6 +37,24 @@ export function attentionQueueSource<Store extends AttentionQueueSource['store']
               new Date()
             )
           )?.branch_name ?? null),
+  };
+}
+
+/**
+ * The item read's source on a host (`readItem`): the queue's, and what this process
+ * observes about a running run's owner (`observeRunOwner`), so a start held behind a run
+ * whose owner is gone says so. Observing never changes the run.
+ */
+export function itemReadSource<Store extends AttentionQueueSource['store']>(
+  store: Store,
+  isolation: Pick<IWorkflowHostStore['isolation'], 'findLatestByCodebaseAndWorkingPath'>
+): AttentionQueueSource & {
+  store: Store;
+  observeOwner: (run: WorkflowRun) => ReturnType<typeof observeRunOwner>;
+} {
+  return {
+    ...attentionQueueSource(store, isolation),
+    observeOwner: run => observeRunOwner(store, run),
   };
 }
 

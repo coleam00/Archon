@@ -143,6 +143,8 @@ export function createFileAdmissionStore(
         }
         return admitted;
       }),
+    // No start names an item here (`FileStoreUnsupportedError('items')`).
+    listItemStartRequests: async () => [],
     getResourceStartRequest: id =>
       query(async tx => {
         const row = await tx.request(id);

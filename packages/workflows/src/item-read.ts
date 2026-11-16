@@ -1,7 +1,9 @@
 /**
- * The read of one item (`workflow runs --item`): its runs, the questions open in them, and
- * the answers recorded in them with the rulings recorded on the item, each oldest first.
- * Where the item stands is left to the reader; this computes no position and stores nothing.
+ * The read of one item (`workflow runs --item`): its runs, its starts that have no run yet,
+ * the questions open in its runs, and the answers recorded in them with the rulings
+ * recorded on the item, each oldest first. A start waiting or refused because another run
+ * of its workflow works the item names that run (`item-hold`). Where the item stands is
+ * left to the reader; this computes no position and stores nothing.
  */
 import { z } from 'zod';
 import {
@@ -31,7 +33,27 @@ import {
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import { readResourceStartReceiptId, startCause, startCauseSchema } from './schemas/resource-start';
 import type { IWorkflowStore } from './store';
-import { awaitingExecution } from './resource-start-store';
+import { awaitingExecution, type ResourceStartRequestInspection } from './resource-start-store';
+import { holdsItem, itemHolder, itemHolders } from './item-hold';
+import {
+  runOwnerObservationSchema,
+  type RunOwnerObservation,
+} from './schemas/workflow-run-listing';
+
+/**
+ * The run of the same workflow that holds the item, which a start waits behind or was
+ * refused for. `owner` is what the reading process observes about that run's execution
+ * owner while it is running (`unreachable`: its owner is gone, and only an operator's
+ * `archon workflow resume` or `archon workflow abandon` moves it); null when the run is not
+ * running or the reader observes no owners. The engine never ends that run by itself.
+ */
+export const itemHeldBehindSchema = z.object({
+  runId: z.string(),
+  workflow: z.string(),
+  status: workflowRunStatusSchema,
+  owner: runOwnerObservationSchema.nullable(),
+});
+export type ItemHeldBehind = z.infer<typeof itemHeldBehindSchema>;
 
 export const itemRunSchema = z.object({
   id: z.string(),
@@ -54,8 +76,25 @@ export const itemRunSchema = z.object({
    * `archon trigger execute <requestId> --host <hostId>`.
    */
   awaitingExecution: z.object({ requestId: z.string(), hostId: z.string() }).nullable(),
+  /** Set while the run is a pending start waiting for another run of its workflow on the item. */
+  heldBehind: itemHeldBehindSchema.nullable(),
 });
 export type ItemRun = z.infer<typeof itemRunSchema>;
+
+/**
+ * A start on the item that has no run: `queued` waits for admission, `skipped` was refused
+ * (its binding's `overlap: skip`). `heldBehind` names the run of its workflow on the item a
+ * queued start waits behind now, or that a skipped start was refused for; null when it
+ * waits for, or was refused for, capacity or its checkout instead.
+ */
+export const itemStartSchema = z.object({
+  requestId: z.string(),
+  workflow: z.string(),
+  resource: z.string(),
+  status: z.enum(['queued', 'skipped']),
+  heldBehind: itemHeldBehindSchema.nullable(),
+});
+export type ItemStart = z.infer<typeof itemStartSchema>;
 
 /**
  * Where an answer was recorded. A field the event row does not carry is null, so an older
@@ -105,6 +144,7 @@ export type ItemAnswer = z.infer<typeof itemAnswerSchema>;
 export const itemReadSchema = z.object({
   item: workflowItemSchema,
   runs: z.array(itemRunSchema),
+  starts: z.array(itemStartSchema),
   questions: z.array(attentionQueueItemSchema),
   answers: z.array(itemAnswerSchema),
   degraded: z.array(
@@ -122,16 +162,21 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'listItemRulings'
       | 'getStartReceipt'
       | 'getResourceStartRequest'
+      | 'listItemStartRequests'
     >;
+  /** What this process observes about a running run's owner. Without it `owner` is null. */
+  observeOwner?: (run: WorkflowRun) => Promise<RunOwnerObservation | null>;
 }
 
-async function itemRun(source: ItemReadSource, run: WorkflowRun): Promise<ItemRun> {
+async function itemRun(
+  source: ItemReadSource,
+  run: WorkflowRun,
+  request: ResourceStartRequestInspection | null,
+  heldBehind: ItemHeldBehind | null
+): Promise<ItemRun> {
   // The receipt stays the one owner of why a start happened; this only reads it.
   const receiptId = readResourceStartReceiptId(run.metadata);
   const receipt = receiptId ? await source.store.getStartReceipt(receiptId) : null;
-  // Only a start from a receipt is executed by another process; only a pending run waits.
-  const request =
-    receipt && run.status === 'pending' ? await source.store.getResourceStartRequest(run.id) : null;
   return {
     id: run.id,
     workflow: run.workflow_name,
@@ -141,6 +186,65 @@ async function itemRun(source: ItemReadSource, run: WorkflowRun): Promise<ItemRu
     completedAt: run.completed_at?.toISOString() ?? null,
     cause: receipt ? startCause(receipt) : null,
     awaitingExecution: awaitingExecution(request),
+    heldBehind,
+  };
+}
+
+/**
+ * Who holds the item for each of its workflows, from the item's own runs (`itemHolders`),
+ * and a reader of the run a start is held behind. A pending run's start request says
+ * whether it was admitted.
+ */
+async function itemHolds(source: ItemReadSource, itemId: string, runs: readonly WorkflowRun[]) {
+  const requests = new Map<string, ResourceStartRequestInspection | null>();
+  for (const run of runs)
+    if (run.status === 'pending')
+      requests.set(run.id, await source.store.getResourceStartRequest(run.id));
+  const rows = runs.map(run => ({
+    id: run.id,
+    workflow_name: run.workflow_name,
+    item_id: itemId,
+    status: run.status,
+    admitted: requests.get(run.id)?.status === 'admitted',
+  }));
+  const held = itemHolders(rows);
+  const byId = new Map(runs.map(run => [run.id, run]));
+  const behind = new Map<string, Promise<ItemHeldBehind>>();
+  const describe = (runId: string): Promise<ItemHeldBehind> | null => {
+    const run = byId.get(runId);
+    if (run === undefined) return null;
+    let read = behind.get(runId);
+    if (read === undefined) {
+      read = (async () => ({
+        runId,
+        workflow: run.workflow_name,
+        status: run.status,
+        owner:
+          run.status === 'running' && source.observeOwner ? await source.observeOwner(run) : null,
+      }))();
+      behind.set(runId, read);
+    }
+    return read;
+  };
+  const holderOf = (runId: string, workflow: string): Promise<ItemHeldBehind> | null => {
+    const holder = itemHolder(held, { runId, workflow, itemId });
+    return holder === undefined ? null : describe(holder);
+  };
+  return {
+    request: (runId: string) => requests.get(runId) ?? null,
+    /** A pending run that holds nothing waits behind its workflow's holder. */
+    runHeldBehind: (run: WorkflowRun) =>
+      run.status === 'pending' &&
+      !holdsItem({ status: run.status, admitted: requests.get(run.id)?.status === 'admitted' })
+        ? holderOf(run.id, run.workflow_name)
+        : null,
+    startHeldBehind: (start: ResourceStartRequestInspection) => {
+      const workflow = start.launch.run.workflow_name;
+      if (start.status === 'queued') return holderOf(start.id, workflow);
+      // A skipped start keeps the blocker it was refused for.
+      const blocker = start.blocker?.kind === 'run' ? byId.get(start.blocker.id) : undefined;
+      return blocker?.workflow_name === workflow ? describe(blocker.id) : null;
+    },
   };
 }
 
@@ -207,9 +311,26 @@ export async function readItem(
     // Stable, so rows that tie on `at` keep their store order: append order within a run,
     // recording order among rulings.
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const holds = await itemHolds(source, found.item.id, own.values);
+  const starts: ItemStart[] = [];
+  for (const start of await source.store.listItemStartRequests(found.item.id)) {
+    if (start.status !== 'queued' && start.status !== 'skipped') continue;
+    starts.push({
+      requestId: start.id,
+      workflow: start.launch.run.workflow_name,
+      resource: start.resource,
+      status: start.status,
+      heldBehind: (await holds.startHeldBehind(start)) ?? null,
+    });
+  }
   return {
     item: found.item,
-    runs: await Promise.all(own.values.map(run => itemRun(source, run))),
+    runs: await Promise.all(
+      own.values.map(async run =>
+        itemRun(source, run, holds.request(run.id), (await holds.runHeldBehind(run)) ?? null)
+      )
+    ),
+    starts,
     questions,
     answers,
     // A paused item run the store could not read is in both reports; list it once.

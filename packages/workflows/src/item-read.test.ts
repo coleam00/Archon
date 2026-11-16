@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
+import type { ResourceStartRequestInspection } from './resource-start-store';
+import type { PreparedWorkflowLaunch } from './schemas/resource-start';
 import type { ItemRuling } from './schemas/item-ruling';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { WorkflowItem, WorkflowRun } from './schemas/workflow-run';
@@ -160,6 +162,7 @@ const source: ItemReadSource = {
     getItem: async id => (id === item.id ? item : null),
     listItemRulings: async id => (id === item.id ? rulings : []),
     getResourceStartRequest: async () => null,
+    listItemStartRequests: async () => [],
     getStartReceipt: async id =>
       id === SECOND_RECEIPT
         ? {
@@ -193,6 +196,7 @@ describe('reading an item', () => {
         completedAt: '2026-11-01T09:30:00.000Z',
         cause: null,
         awaitingExecution: null,
+        heldBehind: null,
       },
       {
         id: 'second',
@@ -203,6 +207,7 @@ describe('reading an item', () => {
         completedAt: null,
         cause: { kind: 'run_ended', runId: 'first' },
         awaitingExecution: null,
+        heldBehind: null,
       },
     ]);
     // The children's questions are the item's, under their own run ids, oldest first; the
@@ -268,6 +273,7 @@ describe('reading an item', () => {
     expect(await readItem(empty, item.projectKey, item.key)).toEqual({
       item,
       runs: [],
+      starts: [],
       questions: [],
       answers: rulings,
       degraded: [],
@@ -323,5 +329,84 @@ describe('reading an item', () => {
       { ...unreadable, runId: 'lost-child' },
       { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'lost-ruling' },
     ]);
+  });
+
+  test('a start held behind the run of its workflow on the item names that run and its owner', async () => {
+    // `second` runs `deliver` on the item and its owner is gone. A hand start of `deliver`
+    // waits behind it; a `review` run on the same item is held by nothing.
+    const waiting = run('waiting', {
+      status: 'pending',
+      started_at: new Date('2026-11-01T12:00:00Z'),
+    });
+    const review = run('review', {
+      workflow_name: 'review',
+      status: 'pending',
+      started_at: new Date('2026-11-01T12:01:00Z'),
+    });
+    const request = (
+      id: string,
+      workflow: string,
+      fields: Partial<ResourceStartRequestInspection>
+    ): ResourceStartRequestInspection => ({
+      id,
+      resource: 'build',
+      hostId: 'host',
+      overlap: 'queue',
+      status: 'queued',
+      runStatus: null,
+      blocker: null,
+      blockerRunStatus: null,
+      launch: {
+        version: 2,
+        run: { id, workflow_name: workflow, codebase_id: 'c', user_message: '', metadata: {} },
+        execution: { cwd: '/repo', conversationId: 'c', isolation: { kind: 'in-place' } },
+      } satisfies PreparedWorkflowLaunch,
+      ...fields,
+    });
+    const observed: string[] = [];
+    const held: ItemReadSource = {
+      ...source,
+      observeOwner: async row => {
+        observed.push(row.id);
+        return 'unreachable';
+      },
+      store: {
+        ...source.store,
+        getItemRuns: async () => ({
+          item,
+          runs: [first, second, waiting, review],
+          descendantIds: [],
+        }),
+        listItemStartRequests: async () => [
+          request('queued-deliver', 'deliver', {}),
+          request('queued-review', 'review', {}),
+          request('skipped-deliver', 'deliver', {
+            status: 'skipped',
+            overlap: 'skip',
+            blocker: { kind: 'run', id: 'second' },
+          }),
+        ],
+      },
+    };
+    const read = await readItem(held, item.projectKey, item.key);
+    const behindSecond = {
+      runId: 'second',
+      workflow: 'deliver',
+      status: 'running',
+      owner: 'unreachable',
+    } as const;
+    expect(read?.runs.map(row => [row.id, row.heldBehind])).toEqual([
+      ['first', null],
+      ['second', null],
+      ['waiting', behindSecond],
+      ['review', null],
+    ]);
+    expect(read?.starts.map(start => [start.requestId, start.status, start.heldBehind])).toEqual([
+      ['queued-deliver', 'queued', behindSecond],
+      ['queued-review', 'queued', null],
+      ['skipped-deliver', 'skipped', behindSecond],
+    ]);
+    // The holder's owner is observed once per read, however many starts wait behind it.
+    expect(observed).toEqual(['second']);
   });
 });

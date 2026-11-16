@@ -12,6 +12,8 @@ import {
   preparedWorkflowLaunchSchema,
   type PreparedWorkflowLaunch,
 } from '@archon/workflows/schemas/resource-start';
+import { itemHolder, itemHolders, type ItemRunRow } from '@archon/workflows/item-hold';
+import { WorkflowItemHeldError } from '@archon/workflows/store';
 /**
  * Keyed resource slots: a durable counting lock with typed holders.
  *
@@ -54,6 +56,82 @@ export type ResourceSlotHolder =
   | { kind: 'attempt'; id: string; owner: ProcessOwner };
 
 const terminalList = TERMINAL_WORKFLOW_STATUSES.map(status => `'${status}'`).join(', ');
+
+/**
+ * Serialize admission decisions for the rest of the transaction. Different resource rows
+ * can reserve the same checkout, and starts of one workflow on one item can name different
+ * resources, so one lock covers every slot. SQLite already serializes writers, and replays
+ * a transaction whose read snapshot went stale before it wrote.
+ */
+export async function lockAdmission(query: TransactionQuery): Promise<void> {
+  if (getDatabaseType() === 'postgresql') await query('SELECT pg_advisory_xact_lock(1797)');
+}
+
+/**
+ * Non-terminal top-level runs on an item, oldest first, for the item rule (`itemHolders`).
+ * `itemId` narrows to one item. Read under `lockAdmission`.
+ */
+export async function liveItemRuns(
+  query: TransactionQuery,
+  itemId?: string
+): Promise<ItemRunRow[]> {
+  const rows = await query<{
+    id: string;
+    workflow_name: string;
+    item_id: string;
+    status: WorkflowRunStatus;
+    admitted: boolean | number;
+  }>(
+    `SELECT w.id, w.workflow_name, w.item_id, w.status,
+       EXISTS (
+         SELECT 1 FROM remote_agent_resource_start_requests q
+          WHERE q.id = w.id AND q.status = 'admitted'
+       ) AS admitted
+       FROM remote_agent_workflow_runs w
+      WHERE w.item_id IS NOT NULL AND w.parent_run_id IS NULL
+        AND w.status NOT IN (${terminalList})${itemId === undefined ? '' : ' AND w.item_id = $1'}
+      ORDER BY w.started_at, w.id`,
+    itemId === undefined ? [] : [itemId]
+  );
+  return rows.rows.map(row => ({
+    id: String(row.id),
+    workflow_name: row.workflow_name,
+    item_id: String(row.item_id),
+    status: row.status,
+    admitted: Boolean(row.admitted),
+  }));
+}
+
+/**
+ * The refusal for claiming or resuming `runId` now: another run of its workflow holds its
+ * item. Only a top-level run on an item in one of `statuses` is checked, and only then is
+ * `lockAdmission` taken, so the read and the caller's write are one admission decision.
+ */
+export async function heldItemRefusal(
+  query: TransactionQuery,
+  runId: string,
+  statuses: readonly WorkflowRunStatus[]
+): Promise<WorkflowItemHeldError | undefined> {
+  const run = (
+    await query<{ workflow_name: string; item_id: string; status: WorkflowRunStatus; key: string }>(
+      `SELECT w.workflow_name, w.item_id, w.status, i.key
+         FROM remote_agent_workflow_runs w JOIN remote_agent_items i ON i.id = w.item_id
+        WHERE w.id = $1 AND w.parent_run_id IS NULL`,
+      [runId]
+    )
+  ).rows[0];
+  if (!run || !statuses.includes(run.status)) return undefined;
+  await lockAdmission(query);
+  const itemId = String(run.item_id);
+  const holder = itemHolder(itemHolders(await liveItemRuns(query, itemId)), {
+    runId,
+    workflow: run.workflow_name,
+    itemId,
+  });
+  return holder === undefined
+    ? undefined
+    : new WorkflowItemHeldError(runId, holder, run.workflow_name, run.key);
+}
 
 /**
  * Create the slot if needed and take its lock for the rest of the transaction, then
@@ -220,9 +298,10 @@ export async function removeResourceSlotHolder(
 }
 
 /**
- * What a run-start slot holds, read under its lock (`lockResourceSlot`): live holders,
- * capacity waiters, the checkouts live admitted runs hold, and the queued start requests. The
- * queued rows are locked too, so a concurrent withdrawal cannot race their admission.
+ * What a run-start slot holds, read under its lock (`lockResourceSlot`) and `lockAdmission`:
+ * live holders, capacity waiters, the checkouts live admitted runs hold, the items live runs
+ * hold, and the queued start requests. The queued rows are locked too, so a concurrent
+ * withdrawal cannot race their admission.
  */
 export async function resourceStartOccupancy(
   query: TransactionQuery,
@@ -260,7 +339,7 @@ export async function resourceStartOccupancy(
     [resource]
   );
   const queued = await query<Record<string, unknown>>(
-    `SELECT id, host_id, resource_key, status, launch FROM remote_agent_resource_start_requests
+    `SELECT id, host_id, resource_key, status, launch, item_id FROM remote_agent_resource_start_requests
       WHERE resource_key = $1 AND status = 'queued'
       ORDER BY queue_position${getDialect().rowLock()}`,
     [resource]
@@ -333,6 +412,7 @@ export async function resourceStartOccupancy(
     heldCheckouts: heldCheckouts(liveRuns, reusable.rows),
     foreignHeldCheckouts: heldCheckouts(foreign, reusable.rows),
     unknownForeignCheckoutHolder,
+    heldItems: itemHolders(await liveItemRuns(query)),
   };
 }
 
@@ -346,6 +426,7 @@ const queuedResourceStartSchema = z
     host_id: z.string().min(1),
     resource_key: z.string().min(1),
     status: z.literal('queued'),
+    item_id: z.preprocess(value => (value == null ? null : String(value)), z.string().nullable()),
     launch: z.preprocess(
       value => (typeof value === 'string' ? JSON.parse(value) : value),
       preparedWorkflowLaunchSchema
@@ -359,5 +440,5 @@ export function parseQueuedResourceStart(value: unknown, resource?: string) {
   const row = queuedResourceStartSchema.parse(value);
   if (resource !== undefined && row.resource_key !== resource)
     throw new Error(`Queued request '${row.id}' does not belong to resource '${resource}'`);
-  return { id: row.id, hostId: row.host_id, launch: row.launch };
+  return { id: row.id, hostId: row.host_id, launch: row.launch, itemId: row.item_id };
 }

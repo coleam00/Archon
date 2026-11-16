@@ -594,6 +594,70 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
       await harness.close();
     }
   });
+  test('a claim or hand admission waits for an admission in flight on the same item', async () => {
+    const harness = await makeHarness();
+    const { store, db } = harness;
+    try {
+      const pending = async (item: string): Promise<string> =>
+        (
+          await store.createWorkflowRun({
+            id: randomUUID(),
+            workflow_name: 'build',
+            codebase_id: CONFORMANCE_CODEBASE_ID,
+            user_message: '',
+            item_key: item,
+          })
+        ).id;
+      // Another admission holds the lock and makes `holder` hold the item, then commits
+      // while `attempt` is already waiting. Without the shared lock `attempt` reads before
+      // that commit and both runs hold the item.
+      const racedBy = async <T>(holder: string, attempt: () => Promise<T>): Promise<T> => {
+        let raced: Promise<T> | undefined;
+        await db.withTransaction(async query => {
+          await query('SELECT pg_advisory_xact_lock(1797)');
+          await query("UPDATE remote_agent_workflow_runs SET status = 'running' WHERE id = $1", [
+            holder,
+          ]);
+          raced = attempt();
+          raced.catch(() => undefined);
+          await Bun.sleep(100);
+        });
+        if (!raced) throw new Error('attempt did not start');
+        return raced;
+      };
+      const [holder, claim] = [await pending('issue-1'), await pending('issue-1')];
+      await expect(
+        racedBy(holder, () => store.claimPendingWorkflowRun(claim))
+      ).rejects.toMatchObject({ name: 'WorkflowItemHeldError', holderRunId: holder });
+
+      const [slotHolder, admit] = [await pending('issue-2'), await pending('issue-2')];
+      expect(
+        await racedBy(slotHolder, () =>
+          store.admitPendingRun({
+            resource: 'builds',
+            capacity: 5,
+            launch: {
+              version: 2,
+              run: {
+                id: admit,
+                workflow_name: 'build',
+                codebase_id: CONFORMANCE_CODEBASE_ID,
+                user_message: '',
+                metadata: {},
+              },
+              execution: {
+                cwd: '/conformance',
+                conversationId: 'c',
+                isolation: { kind: 'in-place' },
+              },
+            },
+          })
+        )
+      ).toEqual({ kind: 'run', id: slotHolder });
+    } finally {
+      await harness.close();
+    }
+  });
   test('conversation reset rolls back all rows and events when a terminal insert fails', async () => {
     const harness = await makeHarness();
     const { store, db } = harness;

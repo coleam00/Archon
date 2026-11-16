@@ -128,6 +128,7 @@ export function createWorkflowStore(): IWorkflowStore {
     listStartReceipts: resourceStarts.listStartReceipts,
     listPendingStartBindings: resourceStarts.listPendingStartBindings,
     getResourceStartRequest: resourceStarts.getResourceStartRequest,
+    listItemStartRequests: resourceStarts.listItemStartRequests,
     listQueuedResourceStartsForHost: resourceStarts.listQueuedResourceStartsForHost,
     withdrawQueuedResourceStart: resourceStarts.withdrawQueuedResourceStart,
     claimStartBindingPreparation: resourceStarts.claimStartBindingPreparation,

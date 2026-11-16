@@ -83,6 +83,7 @@ export class InMemoryStore implements IWorkflowStore {
   getResourceStartRequest: IWorkflowStore['getResourceStartRequest'] = async () => {
     throw new Error('Unexpected getResourceStartRequest');
   };
+  listItemStartRequests: IWorkflowStore['listItemStartRequests'] = async () => [];
   listQueuedResourceStartsForHost: IWorkflowStore['listQueuedResourceStartsForHost'] = async () => {
     throw new Error('Unexpected listQueuedResourceStartsForHost');
   };

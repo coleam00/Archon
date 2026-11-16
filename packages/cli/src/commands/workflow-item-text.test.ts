@@ -14,8 +14,10 @@ const read: ItemRead = {
       completedAt: '2026-11-01T09:30:00.000Z',
       cause: null,
       awaitingExecution: null,
+      heldBehind: null,
     },
   ],
+  starts: [],
   questions: [
     {
       kind: 'awaiting_response',
@@ -111,4 +113,39 @@ test('an item read prints its runs, open questions and answers', () => {
   expect(lines[ruling]).toContain('by operator-agent (self-declared)');
   expect(lines[ruling]).toContain('(withdrawn 2026-11-01T10:05Z)');
   expect(text).toContain('1 ruling(s) on this item could not be read: ruling-lost');
+});
+
+test('a start held behind a run whose owner is gone prints both actions on that run', () => {
+  const holder = 'a1b2c3d4-0000-4000-8000-000000000001';
+  const heldBehind = {
+    runId: holder,
+    workflow: 'deliver',
+    status: 'running',
+    owner: 'unreachable',
+  } as const;
+  const text = itemReadLines({
+    ...read,
+    runs: [
+      {
+        ...read.runs[0]!,
+        id: 'run-waiting',
+        status: 'pending',
+        outcome: null,
+        completedAt: null,
+        heldBehind,
+      },
+    ],
+    starts: [
+      {
+        requestId: 'req-queued',
+        workflow: 'deliver',
+        resource: 'build',
+        status: 'queued',
+        heldBehind,
+      },
+    ],
+  }).join('\n');
+  expect(text).toContain('req-queu');
+  expect(text).toContain(`archon workflow resume ${holder}`);
+  expect(text).toContain(`archon workflow abandon ${holder}`);
 });

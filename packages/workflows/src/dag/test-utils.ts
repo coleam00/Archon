@@ -228,6 +228,7 @@ export function createMockStore(): MockWorkflowStore {
     listQueuedResourceStartsForHost: mock<IWorkflowStore['listQueuedResourceStartsForHost']>(
       unexpected('listQueuedResourceStartsForHost')
     ),
+    listItemStartRequests: mock<IWorkflowStore['listItemStartRequests']>(async () => []),
     withdrawQueuedResourceStart: mock<IWorkflowStore['withdrawQueuedResourceStart']>(
       unexpected('withdrawQueuedResourceStart')
     ),

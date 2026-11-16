@@ -233,11 +233,17 @@ export function attentionStreamText(
       return [`Run ${line.runId} resumed (${line.status}).${runContextText(line)}`];
     case 'notice':
       return [noticeText(line)];
-    case 'owner_lost':
+    case 'owner_lost': {
+      // A run on an item holds it, so the later starts of its workflow on it wait behind it.
+      const held =
+        line.item == null
+          ? ''
+          : ` It holds item ${line.item}: later starts of ${line.workflow ?? 'its workflow'} on it wait behind it.`;
       return [
-        `Run ${line.runId} is ${line.observedStatus} but its owner is gone.${runContextText(line)} ` +
-          `Show more with ${command(`get ${line.runId}`)}, or abandon it with ${command(`abandon ${line.runId}`)}.`,
+        `Run ${line.runId} is ${line.observedStatus} but its owner is gone.${runContextText(line)}${held} ` +
+          `Show more with ${command(`get ${line.runId}`)}, continue it with ${command(`resume ${line.runId}`)}, or abandon it with ${command(`abandon ${line.runId}`)}.`,
       ];
+    }
     case 'ready':
       return [
         `Watching ${scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`} for attention. Ctrl-C stops.`,

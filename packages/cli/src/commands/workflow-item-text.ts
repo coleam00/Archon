@@ -1,8 +1,15 @@
 /**
- * The text of an item read (`workflow runs --item`): its runs, open questions, and answers
- * with rulings, each oldest first. Built from the same `ItemRead` that `--json` prints.
+ * The text of an item read (`workflow runs --item`): its runs, its starts with no run,
+ * open questions, and answers with rulings, each oldest first. Built from the same
+ * `ItemRead` that `--json` prints.
  */
-import type { ItemAnswer, ItemRead, ItemRun } from '@archon/workflows/item-read';
+import type {
+  ItemAnswer,
+  ItemHeldBehind,
+  ItemRead,
+  ItemRun,
+  ItemStart,
+} from '@archon/workflows/item-read';
 import { answererText, attentionItemLines } from './workflow-attention-text';
 
 /** A recorded time to the minute, or the stored text when it does not parse. */
@@ -35,6 +42,35 @@ function causeText(cause: ItemRun['cause']): string {
   return ` · trigger ${cause.sourceInstanceId}`;
 }
 
+/**
+ * The run a start is held behind. When that run's owner is gone, only an operator moves
+ * it, so both actions are printed; the engine never ends it.
+ */
+function heldBehindLines(verb: string, held: ItemHeldBehind): string[] {
+  const lines = [
+    `            ${verb} run ${held.runId.slice(0, 8)} (${held.workflow}, ${held.status}): one run of a workflow works an item at a time.`,
+  ];
+  if (held.owner === 'unreachable')
+    lines.push(
+      `            Run ${held.runId.slice(0, 8)} has lost its owner. Continue it with archon workflow resume ${held.runId}, or end it with archon workflow abandon ${held.runId}.`
+    );
+  return lines;
+}
+
+function startLines(start: ItemStart): string[] {
+  const lines = [
+    `  ${start.requestId.slice(0, 8)}  ${start.status.padEnd(9)}  ${start.workflow} · resource ${start.resource}`,
+  ];
+  if (start.heldBehind)
+    lines.push(
+      ...heldBehindLines(
+        start.status === 'queued' ? 'waits behind' : 'refused, held by',
+        start.heldBehind
+      )
+    );
+  return lines;
+}
+
 /** One run, and how to start it when it was admitted but no process is running it. */
 function runLines(run: ItemRun): string[] {
   const outcome = run.outcome === null ? '' : ` · authored outcome: ${run.outcome}`;
@@ -47,6 +83,7 @@ function runLines(run: ItemRun): string[] {
     lines.push(
       `            admitted, not started. If no process is running it: archon trigger execute ${waiting.requestId} --host ${waiting.hostId}`
     );
+  if (run.heldBehind) lines.push(...heldBehindLines('waits behind', run.heldBehind));
   return lines;
 }
 
@@ -66,6 +103,10 @@ export function itemReadLines(read: ItemRead): string[] {
   const lines = [`Item ${read.item.key} (${read.item.projectKey})`, '', 'Runs:'];
   if (read.runs.length === 0) lines.push('  none');
   for (const run of read.runs) lines.push(...runLines(run));
+  if (read.starts.length > 0) {
+    lines.push('', 'Starts with no run yet:');
+    for (const start of read.starts) lines.push(...startLines(start));
+  }
   lines.push('', 'Open questions:');
   if (read.questions.length === 0) lines.push('  none');
   for (const question of read.questions) lines.push(...attentionItemLines(question, 'brief'));

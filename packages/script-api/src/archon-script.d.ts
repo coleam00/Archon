@@ -1999,6 +1999,24 @@ declare module 'archon:script' {
         readonly requestId: string;
         readonly hostId: string;
       } | null;
+      readonly heldBehind: {
+        readonly runId: string;
+        readonly workflow: string;
+        readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
+      } | null;
+    }>;
+    readonly starts: ReadonlyArray<{
+      readonly requestId: string;
+      readonly workflow: string;
+      readonly resource: string;
+      readonly status: 'queued' | 'skipped';
+      readonly heldBehind: {
+        readonly runId: string;
+        readonly workflow: string;
+        readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
+      } | null;
     }>;
     readonly questions: ReadonlyArray<{
       readonly kind: 'attention';

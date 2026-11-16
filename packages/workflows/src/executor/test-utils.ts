@@ -178,6 +178,7 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     listStartReceipts: mock(unexpected('listStartReceipts')),
     listPendingStartBindings: mock(unexpected('listPendingStartBindings')),
     getResourceStartRequest: mock(unexpected('getResourceStartRequest')),
+    listItemStartRequests: mock(async () => []),
     listQueuedResourceStartsForHost: mock(unexpected('listQueuedResourceStartsForHost')),
     withdrawQueuedResourceStart: mock(unexpected('withdrawQueuedResourceStart')),
     claimStartBindingPreparation: mock(unexpected('claimStartBindingPreparation')),
