@@ -26,7 +26,7 @@ import { loadStoreSelection } from '@archon/core/config/store-selection';
 import {
   getTriggersPath,
   type RunEndedBinding,
-  runEndedBindingCheck,
+  runEndedTriggerCheck,
 } from '@archon/core/workflows/run-ended';
 import { providerRegistry } from '@archon/providers';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
@@ -383,9 +383,9 @@ function targetFrom(packKey: string, options: PackBindingsOptions): Target {
 }
 
 /**
- * Check every run-ended file as `archon trigger check` and a run's preflight check it,
- * before any is written: a file that fails here would fail every item run of its ended
- * workflow once it is in the triggers directory.
+ * Check every run-ended file as `archon trigger check` checks it before any is written: a
+ * file that fails a run's preflight would fail every item run of its ended workflow once it
+ * is in the triggers directory, and one that never starts or loops is refused with it.
  */
 async function assertRunEndedChecks(
   ended: readonly { id: string; check: RunEndedBinding }[]
@@ -396,12 +396,18 @@ async function assertRunEndedChecks(
     throw new FileStoreUnsupportedError(
       `Run-ended bindings (${[...new Set(ended.map(item => item.id))].join(', ')})`
     );
-  const problems: string[] = [];
-  for (const { id, check } of ended) {
-    const found = await runEndedBindingCheck(check, { loadConfig, providers: providerRegistry });
-    for (const problem of found)
-      problems.push(`  Binding '${id}' (outcome '${check.runEnded.outcome}'): ${problem}`);
-  }
+  const found = await runEndedTriggerCheck(
+    ended.map(item => item.check),
+    // Without the install's codebase records each checkout counts as its own project, so a
+    // duplicate of a file already installed, or one in another checkout of the project, is
+    // left to `archon trigger check`.
+    { loadConfig, providers: providerRegistry, projectKeyOf: async () => null }
+  );
+  const problems = ended.flatMap(({ id, check }, index) =>
+    found[index].map(
+      problem => `  Binding '${id}' (outcome '${check.runEnded.outcome}'): ${problem}`
+    )
+  );
   if (problems.length > 0)
     throw new Error(
       ['Run-ended bindings have problems:', ...problems, 'Nothing was written.'].join('\n')

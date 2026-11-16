@@ -401,6 +401,11 @@ describe('archon pack bindings: run-ended', () => {
       RUN_ENDED_DECLARATION.replace('{ input: issue }', '{ input: title }'),
       "reads 'title'",
     ],
+    [
+      'a binding that starts the workflow whose end fires it',
+      RUN_ENDED_DECLARATION.replace('workflow: fixture-build', 'workflow: fixture-plan'),
+      'the workflow whose end fires it',
+    ],
   ])('refuses %s, writing nothing', async (_case, declaration, reason) => {
     await writePack(declaration);
     await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(reason);
