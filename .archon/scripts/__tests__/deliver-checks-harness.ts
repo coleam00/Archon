@@ -14,7 +14,6 @@ import { spawnSync } from 'node:child_process';
 import { trackTempRoots } from './temp-roots';
 
 export const PACK = resolve(import.meta.dir, '../../workflows/sdlc');
-export const SCRIPTS = join(PACK, 'deliver/scripts');
 
 /**
  * The host Archon CLI argv, from `ARCHON_CLI_COMMAND` (a JSON string array), the contract a
@@ -67,16 +66,12 @@ export interface TrackerPr {
 export interface TrackerFake {
   readonly issueLabels?: readonly string[];
   readonly repositoryLabels?: readonly string[];
-  /** A refusal message for `pr.ready` and `pr.draft`; omit for a flip that succeeds. */
-  readonly readyFail?: string;
   /** The pull request every `pr.view` reports. */
   readonly pr?: TrackerPr;
   /** No pull request matches a head lookup until one is created. */
   readonly noOpenPr?: boolean;
   /** Existing comments, in listing order. */
   readonly comments?: readonly TrackerComment[];
-  /** A refusal message for every write. */
-  readonly writeFail?: string;
   /** Drop every write instead of applying it, so the plugin's read-back disagrees. */
   readonly writeLost?: boolean;
   /** Existing tracker issues; `workitem.create` appends to them. */
@@ -110,8 +105,6 @@ export interface TrackerIssue {
 export type ForgeFake =
   /** The stateful fake forge, seeded from `tracker`. The default. */
   | { readonly kind: 'state' }
-  /** No `ARCHON_CLI_COMMAND` at all. */
-  | { readonly kind: 'no-host' }
   /** The real CLI with a scratch Archon home whose config holds this `forge:` section. */
   | { readonly kind: 'home'; readonly config: Readonly<Record<string, unknown>> }
   /**
@@ -121,15 +114,7 @@ export type ForgeFake =
    */
   | { readonly kind: 'command'; readonly argv: readonly string[]; readonly fakeForge?: boolean }
   /** A fake CLI that prints this document, or fails when `response` is omitted. */
-  | {
-      readonly kind: 'fake';
-      readonly response?: string | readonly string[];
-      /**
-       * The exit status for a successful response. The real CLI exits 2 when the
-       * operation completed and only its run audit could not be persisted.
-       */
-      readonly okExitCode?: number;
-    };
+  | { readonly kind: 'fake'; readonly response?: string | readonly string[] };
 
 export interface ScriptRun {
   readonly code: number;
@@ -173,7 +158,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
 /**
  * A Bun preload that answers `archon forge <op>` from one in-memory tracker, logging
  * each argv to `forgeLog` and each request to `requestLog`. Every write reads back as
- * the plugin's does: `writeFail` refuses it, `writeLost` reports a failed read-back.
+ * the plugin's does: `writeLost` reports a failed read-back.
  */
 function fakeForgePreload(fake: TrackerFake, logs: { forge: string; requests: string; side: string }): string {
   return `import { appendFileSync, readFileSync } from 'node:fs';
@@ -199,7 +184,6 @@ const side = (kind, value) => appendFileSync(logs.side + '.' + kind, JSON.string
 const done = value => ({ ok: true, value });
 const refused = (op, message) => ({ ok: false, op, outcome: 'refused', message });
 function write(op, apply, value) {
-  if (fake.writeFail !== undefined) return refused(op, fake.writeFail);
   if (fake.writeLost) return { ok: false, op, outcome: 'verification_failed', message: 'the write did not read back' };
   apply();
   return done({ outcome: 'applied', ...value() });
@@ -325,10 +309,7 @@ function answer(op, request) {
     }, () => ({ pr: record(request.repo) }));
     case 'pr.edit-body': return write(op, () => { side('bodies', request.body); pr.body = request.body; }, () => ({ pr: record(request.ref.repo) }));
     case 'pr.ready':
-    case 'pr.draft': {
-      if (fake.readyFail !== undefined) return refused(op, fake.readyFail);
-      return write(op, () => { pr.isDraft = op === 'pr.draft'; }, () => ({ pr: record(request.ref.repo) }));
-    }
+    case 'pr.draft': return write(op, () => { pr.isDraft = op === 'pr.draft'; }, () => ({ pr: record(request.ref.repo) }));
     default: return refused(op, 'the fake forge has no ' + op);
   }
 }
@@ -397,7 +378,6 @@ function forgeEnv(
   forge: ForgeFake,
   logs: { forge: string; requests: string; reads: string }
 ): Record<string, string> {
-  if (forge.kind === 'no-host') return { ARCHON_CLI_COMMAND: '' };
   // Never executed: the preload answers every `forge` call under this command.
   if (forge.kind === 'state') return { ARCHON_CLI_COMMAND: JSON.stringify([process.execPath, join(root, 'fake-forge')]) };
   if (forge.kind === 'command') return { ARCHON_CLI_COMMAND: JSON.stringify(forge.argv) };
@@ -423,7 +403,7 @@ else {
   writeFileSync(${JSON.stringify(logs.reads)}, String(reads + 1));
   const chosen = JSON.parse(responses[Math.min(reads, responses.length - 1)]);
   process.stdout.write(JSON.stringify(chosen));
-  process.exitCode = chosen.ok === true ? ${String(forge.okExitCode ?? 0)} : 1;
+  process.exitCode = chosen.ok === true ? 0 : 1;
 }
 `
   );
@@ -504,14 +484,10 @@ function git(cwd: string, ...args: string[]): string {
 /**
  * A checkout on a feature branch whose remote, named `upstream` and configured with
  * the recorded repository's URL, is a local bare repository (`url.insteadOf`), so a
- * script finds the remote by URL and fetches the base without a network. With
- * `conflict`, the base has since changed the same line the feature changed. `track`
- * owns the temp root's removal: pass the calling test file's own `trackTempRoots()`.
+ * script finds the remote by URL and fetches the base without a network. `track` owns
+ * the temp root's removal: pass the calling test file's own `trackTempRoots()`.
  */
-export function gitCheckout(
-  options: { readonly conflict?: boolean },
-  track: (root: string) => string
-): string {
+export function gitCheckout(track: (root: string) => string): string {
   const root = track(mkdtempSync(join(tmpdir(), 'archon-pack-git-')));
   const bare = join(root, 'remote.git');
   const work = join(root, 'work');
@@ -528,13 +504,6 @@ export function gitCheckout(
   git(work, 'checkout', '-q', '-b', 'feature');
   writeFileSync(join(work, 'a.txt'), 'feature\n');
   git(work, 'commit', '-q', '-am', 'feature');
-  if (options.conflict === true) {
-    git(work, 'checkout', '-q', 'dev');
-    writeFileSync(join(work, 'a.txt'), 'moved base\n');
-    git(work, 'commit', '-q', '-am', 'base moved');
-    git(work, 'push', '-q', 'upstream', 'dev');
-    git(work, 'checkout', '-q', 'feature');
-  }
   return work;
 }
 

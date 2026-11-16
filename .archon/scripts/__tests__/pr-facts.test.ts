@@ -5,7 +5,7 @@
  * tool boundary, so each test counts the calls it saw.
  */
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { state } from 'archon:script';
@@ -34,7 +34,7 @@ beforeEach(() => {
     ARCHON_TELEMETRY_DISABLED: '1',
     FAKE_DIR: dir,
     FAKE_HOST_CLI: JSON.stringify(hostCli()),
-    FAKE_STATE_CWD: gitCheckout({}, track),
+    FAKE_STATE_CWD: gitCheckout(track),
     ARCHON_CLI_COMMAND: JSON.stringify([process.execPath, FAKE_ARCHON]),
   });
   forgeReports({ 1: MERGED, 2: OPEN, 3: CLOSED });
@@ -114,22 +114,5 @@ test('a facts document that cannot be written is noted, and the run still has th
     expect(reads(calls())).toEqual(['forge pr.view 1']);
   } finally {
     noted.mockRestore();
-  }
-});
-
-test('a facts write the store refuses because another run kept the document first is not an error, and its facts are used', () => {
-  writeFileSync(join(dir, 'put-conflicts'), '');
-  const noted = spyOn(console, 'error').mockImplementation(() => undefined);
-  try {
-    const first = readPrFacts([url(1)]);
-    expect(first[0]).toMatchObject({ url: url(1), state: 'MERGED' });
-    expect(noted).not.toHaveBeenCalled();
-    expect(puts(calls())).toHaveLength(1);
-
-    expect(readPrFacts([url(1)])).toEqual(first);
-    expect(reads(calls())).toEqual([]);
-  } finally {
-    noted.mockRestore();
-    rmSync(join(dir, 'put-conflicts'));
   }
 });

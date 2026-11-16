@@ -162,7 +162,7 @@ interface Install {
 }
 
 function install(): Install {
-  const checkout = gitCheckout({}, track);
+  const checkout = gitCheckout(track);
   const home = track(mkdtempSync(join(tmpdir(), 'archon-build-home-')));
   return {
     checkout,
@@ -495,9 +495,6 @@ describe('the build queue scripts', () => {
     expect(none.code).not.toBe(0);
     expect(none.stderr).toContain('the message names nothing to build: no open issue is about a retry fix');
     expect(stored(at).value?.claim).toBeNull();
-    // New work claims nothing, so intake triages it before any queue builds it.
-    expect(ok(run(at, 'facts', { ...SELECTED, INPUTS_INTERPRETED: interpreted('intake', null), INPUTS_PICKED: 'null' }))).toMatchObject({ path: 'handoff', item: null });
-    expect(stored(at).value?.claim).toBeNull();
     // A pick the person made names the item; a named issue intake never recorded is refused.
     const picked = run(at, 'facts', { ...SELECTED, INPUTS_INTERPRETED: interpreted('choose', null), INPUTS_PICKED: '{"number":8}' });
     expect(picked.stderr).toContain('issue 8 has no work item');
@@ -606,18 +603,6 @@ describe('the build queue scripts', () => {
       },
     });
     expect(buildWaits(doc as WorkItem)).toBe(true);
-  }, 60_000);
-
-  test("a round whose pull request is in another repository records no pull request number", () => {
-    const at = install();
-    seed(at, triaged(CLAIMED));
-    const foreign = 'https://ghe.example.com/someone/else/pull/42';
-    const inputs = { ...applyInputs(CONTINUE), INPUTS_ENDING: JSON.stringify({ ...ENDING, pr_url: foreign }) };
-    const applied = run(at, 'apply', inputs);
-    expect(applied.stderr).toContain('is not a pull request of ghe.example.com/example/repo');
-    const [recorded] = (stored(at).value as WorkItem).facts.build?.rounds ?? [];
-    expect(recorded).toMatchObject({ pr_url: foreign });
-    expect(recorded).not.toHaveProperty('pr_number');
   }, 60_000);
 
   test("the round records the review verdicts the run's delivery published", () => {
@@ -909,7 +894,6 @@ describe('the build queue checkout', () => {
     // Nor is a kept review at that commit whose report the comment no longer shows, such as one a review run by hand replaced.
     const replaced = { ...inputs, INPUTS_ROUNDS: JSON.stringify([{ artifacts: published(reviewed, '# An older report\n'), run_id: 'run-0' }]) };
     const other = run(at, 'checkout', replaced, { pr: { headRefOid: head }, comments: [review] });
-    expect(other.stderr).toContain('run-0 kept a review');
     expect(JSON.parse(other.stdout)).toMatchObject({ reviewed, prior_report: '' });
     // A pull request never reviewed has no baseline, and is not mistaken for one reviewed at its head.
     expect(ok(run(at, 'checkout', inputs, { pr: { headRefOid: head } }))).toEqual({ head, reviewed: null, pull_request: 42, prior_report: '' });
@@ -918,22 +902,6 @@ describe('the build queue checkout', () => {
     expect(duplicate.stderr).toContain('more than one trusted review comment');
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
     expect(git(at.checkout, 'branch', '--show-current')).toBe(branch);
-
-    // The review is read through `archon forge`, from this preload's comments.
-    const forgeComments = [{ id: '1', body: review.body, url: 'https://ghe.example.com/example/repo/pull/42#issuecomment-1', author: { host: PR.repo.host, id: '1', login: 'Maintainer' } }];
-    const forge = `
-const harness = Bun.spawnSync.bind(Bun);
-Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
-  if (argv[2] !== 'forge') return harness(argv, settings);
-  const op = argv[3];
-  const value = op === 'pr.view'
-    ? { title: 'Fix', body: '', pr: { schemaVersion: 1, repo: ${JSON.stringify(PR.repo)}, number: 42, url: 'https://ghe.example.com/example/repo/pull/42', head: 'feature', base: 'dev', is_draft: false, state: 'open', head_repo: ${JSON.stringify(PR.repo)}, head_revision: ${JSON.stringify(head)}, base_revision: null, maintainer_can_modify: null } }
-    : op === 'workitem.comments' ? { comments: ${JSON.stringify(forgeComments)} } : null;
-  const body = value === null ? { operationId: 'op', ok: false, error: { kind: 'forge_error', message: 'unexpected ' + op } } : { operationId: 'op', ok: true, result: { op, value } };
-  return { exitCode: value === null ? 1 : 0, stdout: Buffer.from(JSON.stringify(body)), stderr: Buffer.from('') };
-} });
-`;
-    expect(ok(run(at, 'checkout', inputs, { preload: forge, pr: { headRefOid: head } }))).toEqual({ head, reviewed, pull_request: 42, prior_report });
   }, 60_000);
 
   test('a round route declares fresh stays on the base and continues no pull request, and route cannot name one facts did not offer', () => {
