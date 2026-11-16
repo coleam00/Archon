@@ -58,17 +58,35 @@ function restorationError(
  * The round a failed or interrupted run stopped in: the highest iteration of THIS group
  * invocation that has any body row, and whether every body node finished in it (its
  * latest row there is completed or skipped). Undefined when no body row was written.
+ *
+ * Only rows after the group execution `invocationId` first started count. A retry of that
+ * execution reuses its id, so its earlier rounds stay; an earlier execution of the group
+ * (one that completed before an `always_run` re-execution) has another id and is ignored.
  */
 export async function findInterruptedIteration(
-  run: Omit<PreviousIterationRun, 'resume'>
+  run: Omit<PreviousIterationRun, 'resume'>,
+  invocationId: string
 ): Promise<{ iteration: number; finished: boolean } | undefined> {
   const runId = run.ctx.workflowRun.id;
   const events = await run.ctx.deps.store.listEventsForRuns([runId], NODE_STATE_EVENT_TYPES);
+  const rows = events.get(runId) ?? [];
+  const groupPath = run.bodyStepNamePrefix.slice(0, -1);
+  const executionStart = rows.findIndex(
+    row =>
+      row.step_name === groupPath &&
+      row.event_type === 'node_started' &&
+      readNodeRecordEvent(row)?.metadata?.invocation.id === invocationId
+  );
+  if (executionStart === -1) {
+    throw new Error(
+      `Loop group '${run.node.id}' cannot find the iteration it stopped in: the start of its execution is missing`
+    );
+  }
   let interrupted: number | undefined;
   let latest = new Map<string, WorkflowEventRow['event_type']>();
   for (const { row, path, iteration } of ownBodyRecords(
     run,
-    events.get(runId) ?? [],
+    rows.slice(executionStart),
     (stepName, reason) =>
       new Error(
         `Loop group '${run.node.id}' cannot find the iteration it stopped in from node '${stepName}': ${reason}`

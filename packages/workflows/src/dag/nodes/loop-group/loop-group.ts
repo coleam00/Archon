@@ -295,12 +295,15 @@ async function readInterruptedIteration(
   if (unfinished?.node.kind !== 'loop_group') return undefined;
   const { lifecycle } = unfinished;
   if (lifecycle.status !== 'failed' && lifecycle.status !== 'started') return undefined;
-  const found = await findInterruptedIteration({
-    ctx,
-    node,
-    bodyNodes,
-    bodyStepNamePrefix: `${stepName}.`,
-  });
+  const found = await findInterruptedIteration(
+    {
+      ctx,
+      node,
+      bodyNodes,
+      bodyStepNamePrefix: `${stepName}.`,
+    },
+    unfinished.invocation.id
+  );
   if (found === undefined) return undefined;
   return {
     ...found,

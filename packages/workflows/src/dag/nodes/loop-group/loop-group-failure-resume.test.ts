@@ -278,3 +278,81 @@ test('a group that ran out of rounds fails again on resume without a new round',
       'max_iterations'
     );
   }));
+
+test('a group stopped after its first body node resumes in that round', () =>
+  inTempRoot(async root => {
+    const result = await stopThenResume(root, {
+      group: completesInRoundThree,
+      failOnce: false,
+      // Round two's count finished; its check never starts.
+      ...stopAtRecord(
+        event =>
+          event.step_name === 'rounds.check' &&
+          event.event_type === 'node_started' &&
+          event.data?.iteration === 2
+      ),
+    });
+    expect(result.counterAfterFirstRun).toBe('2');
+    expect(result.status).toBe('completed');
+    expect(result.iterations).toEqual([1, 2, 2, 3]);
+    expect(result.countOutputs).toEqual([
+      "run=1 prev=['']",
+      "run=2 prev=['checked-1']",
+      "run=3 prev=['checked-1']",
+      "run=4 prev=['checked-3']",
+    ]);
+    expect(result.messages).toContain("Loop-group node 'rounds' completed after 3 iterations");
+  }));
+
+test('a repeated resume continues the group execution that failed, not an earlier one', () =>
+  inTempRoot(async root => {
+    const storeRoot = join(root, 'store');
+    const store = await createFileWorkflowStore({ root: storeRoot });
+    const created = await store.createWorkflowRun({ workflow_name: 'rounds', user_message: '' });
+    const run = await store.claimPendingWorkflowRun(created.id, root);
+    if (!run) throw new Error('Claim failed');
+    const workflow = {
+      name: 'rounds',
+      nodes: [
+        {
+          ...(withCheck(
+            { on_exhausted: 'complete' },
+            {
+              // The re-executed group fails once, in its first round.
+              bash: 'n=$(cat counter); if [ "$n" = 4 ] && [ ! -f failed ]; then touch failed; exit 1; fi; echo "checked-$n"',
+            }
+          ) as Record<string, unknown>),
+          always_run: true,
+        },
+        {
+          id: 'after',
+          depends_on: ['rounds'],
+          bash: 'if [ ! -f after-failed ]; then touch after-failed; exit 1; fi; echo after',
+        },
+      ].map(node => dagNodeSchema.parse(node)),
+    };
+    const options = dagOptions({
+      deps: createMockDeps(store),
+      cwd: root,
+      workflowRun: run,
+      workflow,
+    });
+    await executeDagWorkflow(options);
+    const counter = async () => (await readFile(join(root, 'counter'), 'utf8')).trim();
+    expect(await counter()).toBe('3');
+    for (const expected of ['4', '7']) {
+      const candidate = await store.getWorkflowRun(run.id);
+      if (!candidate) throw new Error('Missing run');
+      expect(candidate.status).toBe('failed');
+      const resumed = await hydrateResumableRun({ store }, candidate);
+      if (!resumed) throw new Error('Missing resume');
+      await executeDagWorkflow({ ...options, ...resumed, workflowRun: resumed.preCreatedRun });
+      expect(await counter()).toBe(expected);
+    }
+    expect((await store.getWorkflowRun(run.id))?.status).toBe('completed');
+    const iterations = (await store.listWorkflowEvents(run.id))
+      .filter(e => e.step_name === 'rounds' && e.event_type === 'loop_iteration_started')
+      .map(e => e.data.iteration);
+    // First execution 1-3; the always_run re-execution fails in 1, then resumes in 1.
+    expect(iterations).toEqual([1, 2, 3, 1, 1, 2, 3]);
+  }));
