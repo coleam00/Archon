@@ -15,9 +15,10 @@ import { INPUT_NAME_SOURCE, jsonValueSchema, type JsonValue } from '../output-re
  * On command/script `with:` maps, a plain OBJECT value is ALWAYS parsed as this
  * directive (any other object shape is a load error naming both accepted forms) —
  * reserving the object position removes the literal-vs-directive grammar ambiguity
- * without a `$literal` escape. Include/workflow `with:` maps have no directive: objects
- * there are JSON literals, and an object with exactly a directive's shape is a load
- * error rather than a silent literal.
+ * without a `$literal` escape. Include and `workflow:` `with:` maps also take JSON
+ * object literals, so there only an object with exactly this shape is the directive
+ * (#5760, {@link isBindingDirectiveShape}); any other object stays data. There is no
+ * escape for passing a directive-shaped object as data.
  */
 export const bindingDirectiveSchema = z.strictObject({
   from: z.string().min(1, "'from' must be a non-empty $node.output reference"),
@@ -81,6 +82,16 @@ export function isBindingDirective(value: unknown): value is BindingDirective {
     !Array.isArray(value) &&
     typeof (value as Record<string, unknown>).from === 'string'
   );
+}
+
+/**
+ * Whether an include's or `workflow:` node's `with:` value is a binding directive
+ * (#5760). Those maps also carry object literals, so the loose {@link isBindingDirective}
+ * check would misread `{ from: 'alice', to: 'bob' }`: only the strict shape counts, the
+ * same one the loader validates.
+ */
+export function isBindingDirectiveShape(value: unknown): value is BindingDirective {
+  return bindingDirectiveSchema.safeParse(value).success;
 }
 
 /** Whether a `with:` value is a typed-outputs directive: an object carrying `outputs`. */

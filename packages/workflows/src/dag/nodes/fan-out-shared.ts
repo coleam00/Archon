@@ -6,7 +6,7 @@ import {
   resolveRunInputs,
   nodeTemplateReferences,
   type ShellInputContext,
-  resolveWorkflowValue,
+  resolveChildRunInputs,
 } from '../references';
 
 export function resolveFanOutItems(
@@ -52,14 +52,7 @@ export function resolveFanOutStaticInputs(
   parentInputs: Record<string, JsonValue> | undefined = resolveRunInputs(ctx.workflowRun)
 ): { inputs: Record<string, JsonValue> } | { error: string } {
   try {
-    return {
-      inputs: Object.fromEntries(
-        Object.entries(node.with ?? {}).map(([name, rawValue]) => [
-          name,
-          resolveWorkflowValue(rawValue, ctx, parentInputs, false),
-        ])
-      ),
-    };
+    return { inputs: resolveChildRunInputs(node.id, node.with ?? {}, ctx, parentInputs) };
   } catch (err) {
     return {
       error: `fan_out 'with:' on '${node.id}' could not be resolved: ${(err as Error).message}`,

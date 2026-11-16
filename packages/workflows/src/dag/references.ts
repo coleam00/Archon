@@ -9,6 +9,7 @@ import {
   inputEnvKey,
   isExecNode,
   isBindingDirective,
+  isBindingDirectiveShape,
   isTypedOutputsDirective,
 } from '../schemas';
 import {
@@ -88,7 +89,8 @@ export interface ShellInputContext {
  *     this node was authored in, stamped at expansion when it arrived through `include:`.
  *     These win: a node's own file is the nearer contract. This bag is their only channel
  *     into a shell or script: the include `$INPUTS` macro rewrites a bash body to a quoted
- *     reference to it and refuses an inline script body (#2115).
+ *     reference to it and refuses an inline script body (#2115). A composed binding
+ *     directive (#5760) resolves like a command/script binding, then rides as text.
  *   - node-local `with:` bindings on script nodes (#2637), the nearest contract.
  *
  * A composed value resolves like a `workflow:` node's `with:` template — workflow variables
@@ -118,7 +120,11 @@ export function inputEnvVars(
     env[inputEnvKey(name)] =
       typeof value === 'string'
         ? resolveValueTemplate(value, ctx, runInputs)
-        : canonicalValueText(value);
+        : canonicalValueText(
+            isBindingDirectiveShape(value)
+              ? resolveBindingDirective(node.id, name, value, ctx)
+              : value
+          );
   }
   // Node-local bindings (#2637) — a script node's own `with:` map, resolved against
   // upstream outputs. Third and NEAREST source: the node's own file is the nearest
@@ -239,6 +245,27 @@ export function resolveWorkflowValue(
     // unknown whole-text ref to '' with a warn — byte-identical to pre-#2637.
   }
   return resolveValueTemplate(rawValue, ctx, runInputs);
+}
+
+/**
+ * Resolve a `workflow:` node's or runtime-width include's `with:` map for its child runs.
+ * A binding directive (#5760) resolves as on a command/script node, so a failed or
+ * fallback-less skipped producer throws before any child spawns; every other value keeps
+ * the lenient {@link resolveWorkflowValue} path. Executor and dry-run both call this.
+ */
+export function resolveChildRunInputs(
+  consumerId: string,
+  withMap: Record<string, JsonValue>,
+  ctx: ShellInputContext,
+  runInputs: Record<string, JsonValue> | undefined
+): Record<string, JsonValue> {
+  const resolved: Record<string, JsonValue> = {};
+  for (const [name, rawValue] of Object.entries(withMap)) {
+    resolved[name] = isBindingDirectiveShape(rawValue)
+      ? resolveBindingDirective(consumerId, name, rawValue, ctx)
+      : resolveWorkflowValue(rawValue, ctx, runInputs, false);
+  }
+  return resolved;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { resolveFanOutItems, resolveFanOutStaticInputs } from '../../dag/nodes/fan-out-shared';
-import { resolveNodeBindings } from '../../dag/references';
+import { resolveChildRunInputs } from '../../dag/references';
 import {
   isWorkflowNode,
   type ComposeFanOutNode,
@@ -43,7 +43,7 @@ function resolveChildRunStub(
     );
   }
   if (node.fan_out === undefined && node.with !== undefined) {
-    resolveNodeBindings(node.id, node.with, bindingShellContext(ctx, outputs), ctx.inputs);
+    resolveChildRunInputs(node.id, node.with, bindingShellContext(ctx, outputs), ctx.inputs);
   }
   return { stub, state: 'stubbed' };
 }

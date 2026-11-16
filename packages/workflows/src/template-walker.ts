@@ -10,9 +10,11 @@ import type {
   WorkflowNode,
 } from './schemas';
 import type { JsonValue } from './output-ref';
+import type { BindingDirective } from './schemas/node-bindings';
 import {
   isAgentNode,
   isBindingDirective,
+  isBindingDirectiveShape,
   isComposeFanOutNode,
   isExecNode,
   isGateNode,
@@ -169,6 +171,8 @@ interface SlotEmitter {
     bindings: Record<string, unknown> | undefined,
     write: (name: string, value: JsonValue) => void
   ): void;
+  /** The `from` and `if_skipped` positions of one binding directive at `path`. */
+  directive(path: string, directive: BindingDirective): void;
 }
 
 function walk(node: DagNode, callbacks: WalkCallbacks, prefix = '', recursive = true): void {
@@ -218,23 +222,26 @@ function slotEmitter(node: DagNode, callbacks: WalkCallbacks, prefix: string): S
           write(name, value);
         });
       } else if (isBindingDirective(binding)) {
-        slot('binding.from', `with.${name}.from`, binding.from, value => (binding.from = value));
-        if (binding.if_skipped !== undefined) {
-          if (typeof binding.if_skipped === 'string')
-            slot(
-              'binding.if_skipped',
-              `with.${name}.if_skipped`,
-              binding.if_skipped,
-              value => (binding.if_skipped = value)
-            );
-          valueSlot('binding.if_skipped', `with.${name}.if_skipped`, binding.if_skipped, value => {
-            binding.if_skipped = value;
-          });
-        }
+        directive(`with.${name}`, binding);
       }
     }
   };
-  return { slot, valueSlot, bindings };
+  function directive(path: string, binding: BindingDirective): void {
+    slot('binding.from', `${path}.from`, binding.from, value => (binding.from = value));
+    if (binding.if_skipped !== undefined) {
+      if (typeof binding.if_skipped === 'string')
+        slot(
+          'binding.if_skipped',
+          `${path}.if_skipped`,
+          binding.if_skipped,
+          value => (binding.if_skipped = value)
+        );
+      valueSlot('binding.if_skipped', `${path}.if_skipped`, binding.if_skipped, value => {
+        binding.if_skipped = value;
+      });
+    }
+  }
+  return { slot, valueSlot, bindings, directive };
 }
 
 /** Slots every node kind can carry. */
@@ -388,6 +395,9 @@ function walkComposition(node: WorkflowNode | ComposeFanOutNode, emit: SlotEmitt
     for (const [name, value] of Object.entries(withMap)) {
       if (typeof value === 'string')
         emit.slot(withName, `with.${name}`, value, next => (withMap[name] = next));
+      // A directive (#5760) is walked through its parts, so an enclosing include
+      // namespaces its producer.
+      else if (isBindingDirectiveShape(value)) emit.directive(`with.${name}`, value);
       emit.valueSlot(withName, `with.${name}`, value, next => (withMap[name] = next));
     }
   const fanOutName: TemplateSlotName = workflow
@@ -409,6 +419,7 @@ function walkComposedInputs(node: DagNode, emit: SlotEmitter): void {
         value,
         next => (inputs[name] = next)
       );
+    else if (isBindingDirectiveShape(value)) emit.directive(`composed.inputs.${name}`, value);
     emit.valueSlot(
       'composed.inputs.*',
       `composed.inputs.${name}`,

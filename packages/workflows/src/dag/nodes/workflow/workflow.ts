@@ -23,19 +23,23 @@ import {
   terminalWorkflowRunStatusSchema,
 } from '../../../schemas/run-status';
 import { readSubrunMetadata } from '../../../schemas';
-import { type JsonValue } from '../../../output-ref';
 import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { executeFanOutWorkflowNode } from './fan-out';
-import { childOutcomeFromRun, type ChildWorkflowOutcome } from '../../child-run';
+import {
+  childOutcomeFromRun,
+  type ChildWorkflowOutcome,
+  type RunChildWorkflowArgs,
+} from '../../child-run';
+import { type JsonValue } from '../../../output-ref';
 import { RunSourceUnreadableError } from '../../node-source';
 import { beginExecution, type RunLayersContext } from '../../run-context';
 import {
   resolveRunInputs,
   nodeTemplateReferences,
   type ShellInputContext,
-  resolveWorkflowValue,
+  resolveChildRunInputs,
 } from '../../references';
 
 const LIVE_CHILD_STATUSES: readonly WorkflowRunStatus[] = workflowRunStatusSchema.exclude(
@@ -122,7 +126,11 @@ export async function executeWorkflowNode(
     return executeFanOutWorkflowNode(node, ctx, node.fan_out, ctx.runChildWorkflow, execution);
   }
 
-  const childArgs = resolveChildArguments(node, ctx, executionNodeId);
+  // A `with:` binding directive whose producer failed, or was skipped with no
+  // `if_skipped` (#5760), fails the node here, before the child spawns.
+  const resolved = resolveChildArguments(node, ctx, executionNodeId);
+  if ('error' in resolved) return failResult(resolved.error, 'config');
+  const childArgs = resolved.args;
 
   // Build the completed result AND write the node_completed event. Unlike
   // command/prompt/bash/script nodes (which write their own inside their executor)
@@ -305,7 +313,11 @@ export async function executeWorkflowNode(
   }
 }
 
-function resolveChildArguments(node: WorkflowNode, ctx: RunLayersContext, executionNodeId: string) {
+function resolveChildArguments(
+  node: WorkflowNode,
+  ctx: RunLayersContext,
+  executionNodeId: string
+): { args: RunChildWorkflowArgs } | { error: string } {
   const parentRun = ctx.workflowRun;
   const parentInputs = resolveRunInputs(parentRun);
 
@@ -340,14 +352,16 @@ function resolveChildArguments(node: WorkflowNode, ctx: RunLayersContext, execut
     loopBodyScopes: ctx.loopBodyScopes,
   };
   let resolvedInputs: Record<string, JsonValue> | undefined;
-  if (node.with !== undefined) {
-    resolvedInputs = {};
-    for (const [name, rawValue] of Object.entries(node.with)) {
-      resolvedInputs[name] = resolveWorkflowValue(rawValue, withResolutionCtx, parentInputs, false);
-    }
+  try {
+    resolvedInputs =
+      node.with !== undefined
+        ? resolveChildRunInputs(node.id, node.with, withResolutionCtx, parentInputs)
+        : undefined;
+  } catch (err) {
+    return { error: `'with:' on '${node.id}' could not be resolved: ${(err as Error).message}` };
   }
 
-  return {
+  const args: RunChildWorkflowArgs = {
     parentRun,
     nodeId: executionNodeId,
     childWorkflowName: node.workflow,
@@ -359,6 +373,7 @@ function resolveChildArguments(node: WorkflowNode, ctx: RunLayersContext, execut
     isolation: node.isolation,
     ...(resolvedInputs !== undefined ? { inputs: resolvedInputs } : {}),
   };
+  return { args };
 }
 
 async function findExistingChild(

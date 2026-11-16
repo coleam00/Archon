@@ -79,8 +79,9 @@ export const workflowNodeSchema = dagNodeBaseSchema.extend({
   input: z.string().optional(),
   // Named inputs passed to the child sub-run as `$INPUTS.<name>` (#2470). Mutually
   // exclusive with `input:`. Same identifier-keyed JSON-value map as `include.with`
-  // (#2637): non-string values reach the child with their logical type. A directive-
-  // shaped object is refused in node-validation.ts (validateLiteralWith).
+  // (#2637): non-string values reach the child with their logical type. An object with
+  // exactly the `{ from, if_skipped }` shape is a binding directive (#5760), resolved
+  // before the child spawns; node-validation.ts validates it.
   with: z.record(z.string(), jsonValueSchema).optional(),
   isolation: z.enum(['inherit', 'worktree']).optional(),
   fan_out: fanOutConfigSchema.optional(),
