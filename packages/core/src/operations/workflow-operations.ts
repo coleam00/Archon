@@ -53,10 +53,12 @@ export {
 } from './workflow/answer-admission';
 export {
   assertAnswerable,
+  AttentionAnswerInvalidError,
   attentionAnswerFor,
   attentionSugarRequest,
   type AttentionAnswerOperationResult,
   type AttentionAnswerRequest,
+  RecommendationRefusedError,
 } from './workflow/answer';
 export {
   assertLabelable,
