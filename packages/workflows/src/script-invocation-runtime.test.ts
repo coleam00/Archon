@@ -3,9 +3,10 @@ import { expect, test } from 'bun:test';
 import { execFileAsync } from '@archon/git';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { existsSync } from 'node:fs';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { scriptInvocation } from './script-invocation';
 import { recordNodeProcessTrees, runSubprocess } from './subprocess';
 
@@ -122,6 +123,75 @@ test.skipIf(!Bun.which('uv'))(
     } finally {
       await removeTempTree(checkout);
       await removeTempTree(artifactsDir);
+    }
+  },
+  60_000
+);
+
+// Builds a one-module wheel and a PEP 503 index for it, so the install needs no network.
+const buildIndex = `
+import base64, hashlib, os, sys, zipfile
+root = sys.argv[1]
+files = {
+    'archon_probe_dep.py': 'VALUE = "installed"\\n',
+    'archon_probe_dep-1.0.dist-info/METADATA': 'Metadata-Version: 2.1\\nName: archon-probe-dep\\nVersion: 1.0\\n',
+    'archon_probe_dep-1.0.dist-info/WHEEL': 'Wheel-Version: 1.0\\nGenerator: archon-test\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n',
+}
+def digest(text):
+    return base64.urlsafe_b64encode(hashlib.sha256(text.encode()).digest()).rstrip(b'=').decode()
+record = ''.join(f'{name},sha256={digest(text)},{len(text.encode())}\\n' for name, text in files.items())
+files['archon_probe_dep-1.0.dist-info/RECORD'] = record + 'archon_probe_dep-1.0.dist-info/RECORD,,\\n'
+wheel = 'archon_probe_dep-1.0-py3-none-any.whl'
+with zipfile.ZipFile(os.path.join(root, wheel), 'w') as archive:
+    for name, text in files.items():
+        archive.writestr(name, text)
+os.makedirs(os.path.join(root, 'simple', 'archon-probe-dep'))
+with open(os.path.join(root, 'simple', 'archon-probe-dep', 'index.html'), 'w') as page:
+    page.write(f'<a href="../../{wheel}">{wheel}</a>\\n')
+`;
+
+test.skipIf(!Bun.which('uv'))(
+  'uv installs a dependency named in deps',
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'archon-uv-deps-'));
+    try {
+      const checkout = join(dir, 'checkout');
+      const index = join(dir, 'index');
+      const config = join(dir, 'config');
+      await Promise.all(
+        [checkout, index, join(config, 'uv')].map(d => mkdir(d, { recursive: true }))
+      );
+      // A scratch user config (XDG on Unix, APPDATA on Windows) points uv at the local index,
+      // and a scratch cache keeps a previous install from satisfying this one.
+      const env = {
+        ...process.env,
+        XDG_CONFIG_HOME: config,
+        APPDATA: config,
+        UV_CACHE_DIR: join(dir, 'cache'),
+      };
+      await execFileAsync('uv', ['run', '--no-project', 'python', '-c', buildIndex, index], {
+        cwd: dir,
+        env,
+        timeout: 60_000,
+      });
+      await writeFile(
+        join(config, 'uv', 'uv.toml'),
+        `index-url = ${JSON.stringify(pathToFileURL(join(index, 'simple')).href)}\n`
+      );
+      const invocation = scriptInvocation(
+        'uv',
+        { kind: 'inline', code: 'import archon_probe_dep; print(archon_probe_dep.VALUE)' },
+        ['archon-probe-dep'],
+        join(dir, 'artifacts')
+      );
+      const result = await execFileAsync(invocation.command, invocation.args, {
+        cwd: checkout,
+        env,
+        timeout: 60_000,
+      });
+      expect(result.stdout.trim()).toBe('installed');
+    } finally {
+      await removeTempTree(dir);
     }
   },
   60_000

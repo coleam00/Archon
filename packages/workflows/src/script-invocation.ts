@@ -27,11 +27,11 @@ export function scriptInvocation(
       args: ['--no-env-file', 'run', preloadFlag, source.path],
     };
   }
-  // Keep the checkout's uv project out of the script. --no-project stops uv creating .venv
-  // and uv.lock in the checkout and installing its dependencies. --project moves config and
-  // .python-version discovery to an empty engine-owned directory, so the checkout's
-  // uv.toml, [tool.uv] and Python pin do not apply. The user's own uv config and the
-  // script's working directory stay as they are.
+  // Keep the checkout's uv project out of the script. --project moves project, config and
+  // .python-version discovery from the checkout to an empty engine-owned directory, so the
+  // checkout's .venv, uv.lock, dependencies, uv.toml, [tool.uv] and Python pin do not apply.
+  // --no-project stops uv walking up from that directory into an ancestor's project. The
+  // user's own uv config and the script's working directory stay as they are.
   return {
     command: runtime,
     args: [

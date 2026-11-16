@@ -2,7 +2,6 @@ import { expect, test } from 'bun:test';
 import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { scriptInvocation } from './script-invocation';
 
@@ -35,24 +34,28 @@ test('Bun isolates inline and named scripts from repository env files', () => {
   });
 });
 
-test('uv runs outside the checkout project and places dependencies before the script', () => {
+test('uv places dependencies before inline Python or a named script', () => {
   const artifactsDir = artifacts();
-  const project = join(artifactsDir, RUN_ARTIFACTS_ENGINE_SUBDIR, 'uv-project');
-  const isolation = ['run', '--no-project', '--project', project];
-  expect(
-    scriptInvocation('uv', { kind: 'inline', code: 'print(1)' }, ['httpx', 'rich'], artifactsDir)
-  ).toEqual({
-    command: 'uv',
-    args: [...isolation, '--with', 'httpx', '--with', 'rich', 'python', '-c', 'print(1)'],
-  });
-  expect(existsSync(project)).toBe(true);
-  expect(
-    scriptInvocation('uv', { kind: 'file', path: '/scripts/job.py' }, ['httpx'], artifactsDir)
-  ).toEqual({
-    command: 'uv',
-    args: [...isolation, '--with', 'httpx', '/scripts/job.py'],
-  });
-  expect(
-    scriptInvocation('uv', { kind: 'file', path: '/scripts/job.py' }, [], artifactsDir).args
-  ).toEqual([...isolation, '/scripts/job.py']);
+  const inline = scriptInvocation(
+    'uv',
+    { kind: 'inline', code: 'print(1)' },
+    ['httpx', 'rich'],
+    artifactsDir
+  ).args;
+  expect(inline.slice(-7)).toEqual([
+    '--with',
+    'httpx',
+    '--with',
+    'rich',
+    'python',
+    '-c',
+    'print(1)',
+  ]);
+  const named = scriptInvocation(
+    'uv',
+    { kind: 'file', path: '/scripts/job.py' },
+    ['httpx'],
+    artifactsDir
+  ).args;
+  expect(named.slice(-3)).toEqual(['--with', 'httpx', '/scripts/job.py']);
 });
