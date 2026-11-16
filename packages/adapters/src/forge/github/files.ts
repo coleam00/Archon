@@ -2,6 +2,7 @@
 
 import { z } from 'zod';
 import { prFileSchema, type ForgeRequest, type ForgeResponse } from '@archon/forge/operations';
+import type { PrRef } from '@archon/forge';
 import { GitHubError, githubPages, githubRequest, location, type Fetch } from './api';
 
 const pullSchema = z.object({
@@ -14,6 +15,7 @@ const pullFileSchema = z.object({
   status: prFileSchema.shape.status,
   patch: z.string().optional(),
 });
+type PrFile = z.infer<typeof prFileSchema>;
 /** A directory answers with its listing, a symlink or submodule with its own `type`. */
 const nonFileSchema = z.union([
   z.array(z.unknown()),
@@ -25,13 +27,17 @@ const contentsSchema = z.object({
   content: z.string(),
 });
 
-export async function handleGithubPrFiles(
-  request: Extract<ForgeRequest, { op: 'pr.files' }>,
+/**
+ * Every file a pull request changes, with the head the list belongs to. A list
+ * GitHub truncated, or one read while the head moved, throws rather than answers.
+ */
+export async function readPullFiles(
   fetchImpl: Fetch,
-  token: string
-): Promise<ForgeResponse> {
-  const { root, path } = location(request.ref.repo);
-  const base = `${root}/repos/${path}/pulls/${String(request.ref.number)}`;
+  token: string,
+  ref: PrRef
+): Promise<{ head: string; files: PrFile[] }> {
+  const { root, path } = location(ref.repo);
+  const base = `${root}/repos/${path}/pulls/${String(ref.number)}`;
   const pull = pullSchema.parse(await githubRequest(fetchImpl, token, base));
   const expected = pull.changed_files;
   const rows = await githubPages(fetchImpl, token, `${base}/files`, value =>
@@ -42,7 +48,7 @@ export async function handleGithubPrFiles(
   if (rows.length !== expected) {
     throw new GitHubError({
       kind: 'forge_error',
-      message: `GitHub listed ${String(rows.length)} of the ${String(expected)} files pull request ${String(request.ref.number)} changes`,
+      message: `GitHub listed ${String(rows.length)} of the ${String(expected)} files pull request ${String(ref.number)} changes`,
     });
   }
   // The files endpoint lists the head as it is when each page is read, not a
@@ -51,25 +57,30 @@ export async function handleGithubPrFiles(
   if (after.head.sha !== pull.head.sha) {
     throw new GitHubError({
       kind: 'forge_error',
-      message: `Pull request ${String(request.ref.number)}'s head moved from ${pull.head.sha} to ${after.head.sha} while its files were read`,
+      message: `Pull request ${String(ref.number)}'s head moved from ${pull.head.sha} to ${after.head.sha} while its files were read`,
     });
   }
   return {
+    head: pull.head.sha,
+    files: rows.map(row => ({
+      path: row.filename,
+      previous_path: row.previous_filename ?? null,
+      status: row.status,
+      patch: row.patch ?? null,
+    })),
+  };
+}
+
+export async function handleGithubPrFiles(
+  request: Extract<ForgeRequest, { op: 'pr.files' }>,
+  fetchImpl: Fetch,
+  token: string
+): Promise<ForgeResponse> {
+  const { head, files } = await readPullFiles(fetchImpl, token, request.ref);
+  return {
     operationId: request.operationId,
     ok: true,
-    result: {
-      op: request.op,
-      value: {
-        ref: request.ref,
-        head_revision: pull.head.sha,
-        files: rows.map(row => ({
-          path: row.filename,
-          previous_path: row.previous_filename ?? null,
-          status: row.status,
-          patch: row.patch ?? null,
-        })),
-      },
-    },
+    result: { op: request.op, value: { ref: request.ref, head_revision: head, files } },
   };
 }
 

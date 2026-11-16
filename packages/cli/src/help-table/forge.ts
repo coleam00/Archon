@@ -34,6 +34,8 @@ const forgeOperationDescriptions = {
   'repo.file': "Read one file's text at a commit",
   'pr.thread.reply': 'Reply on one review thread and verify the reply',
   'pr.thread.resolve': 'Resolve one review thread and verify the result',
+  'pr.review.submit':
+    'Submit a comment review with inline findings at one commit (presentation, not a gate)',
   'comment.upsert': 'Write the one marked comment on a pull request',
 } satisfies Record<ForgeRequest['op'], string>;
 
