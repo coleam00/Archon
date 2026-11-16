@@ -2826,8 +2826,9 @@ sends one notice. The node and the run still complete. The all-refused failure a
 applies, and its `node_failed` event carries the `not_started` slots.
 
 Read the record with `archon workflow get <run-id>` (see the [CLI reference](/reference/cli/#workflow-get)),
-from `run.nodes[].fan_out_outcome` on `GET /api/workflows/runs/{runId}`, or on the node's line
-in the console. It is not a `$node.*` reference: a downstream node that decides what the
+from `run.nodes[].fan_out_outcome` on `GET /api/workflows/runs/{runId}`, as `fan_out_outcome`
+on the node's `node_complete` or `node_error` line in the run's JSONL transcript (only when the
+outcome was settled, so not for an empty item list or a failure before every slot settled), or on the node's line in the console. It is not a `$node.*` reference: a downstream node that decides what the
 results are worth reads the `archon_failed` markers in `$<id>.output`, as below.
 
 ##### Why `all_done` is the default
