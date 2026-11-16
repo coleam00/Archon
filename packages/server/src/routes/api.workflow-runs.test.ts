@@ -562,12 +562,10 @@ describe('GET /api/workflows/runs/:runId', () => {
         event('node_started', 'flaky'),
         event('node_completed', 'flaky.check', inRound(1, { node_output: 'first' })),
         event('node_failed', 'flaky.check', inRound(2, { error: 'second' })),
+        // Round 3 is in `check` now.
+        event('node_started', 'flaky.check', inRound(3, { timing: { startedAt } })),
       ]);
-      expect(run.nodes).toContainEqual({
-        node_id: 'flaky.check',
-        state: 'failed',
-        error: 'second',
-      });
+      expect(run.nodes).toContainEqual({ node_id: 'flaky.check', state: 'running' });
       expect(run.loop_rounds).toEqual([
         {
           loop_group_path: [{ groupId: 'flaky', iteration: 1 }],
@@ -592,6 +590,10 @@ describe('GET /api/workflows/runs/:runId', () => {
               duration_ms: 20,
             },
           ],
+        },
+        {
+          loop_group_path: [{ groupId: 'flaky', iteration: 3 }],
+          nodes: [{ node_id: 'flaky.check', state: 'running', started_at: startedAt }],
         },
       ]);
     });

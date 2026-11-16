@@ -131,14 +131,9 @@ function foldNodeRecord(
   index: number
 ): void {
   const nodeId = record.path;
-  // A reset discards the invocation's earlier timing with its state; a prior-success
-  // replay carries no timing and keeps the entry the original completion wrote.
+  // Cache records (replay, reset, invalidation) carry no invocation or timing, and fold
+  // under the top-level key, which no loop round reads.
   if (record.metadata) foldTiming(timings, key, record.metadata);
-  else if (
-    record.eventType === 'node_always_run_reset' ||
-    record.eventType === 'node_prior_cache_invalidated'
-  )
-    timings.delete(key);
   switch (record.eventType) {
     case 'node_started':
     case 'node_suspended':
