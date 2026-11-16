@@ -3,7 +3,7 @@
  *
  * A run whose `number` is empty and whose message (`$ARGUMENTS`) is not was started by
  * a person saying what to build; the interpret agent reads the message. Every other
- * run picks up as a scheduled run does.
+ * run builds the issue its `number` names, or with none builds nothing.
  */
 
 import { emit, input, refuse } from 'archon:script';

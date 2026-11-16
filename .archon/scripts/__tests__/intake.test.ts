@@ -462,15 +462,15 @@ describe('the intake scripts', () => {
       INPUTS_ITEM: JSON.stringify(decided.item),
       INPUTS_DECISION: JSON.stringify(decided.decision),
       ...READY_VERDICT,
-      INPUTS_BUILD_QUEUE_BINDING: '/bindings/build-queue.json',
+      INPUTS_BUILD_PICK_BINDING: '/bindings/build-pick.json',
       ARCHON_CALL_LOG: calls,
     });
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
     expect(labelWrites(applied, 7)).toEqual({ add: ['archon-ready', 'archon-size-s', 'archon-type-feature'], remove: [] });
-    // The routed item starts a build-queue pickup, once per run. The fire names no item, so
-    // the binding's own orders_only decides what the pickup may take.
+    // The routed item starts a build pick, once per run. The fire names no issue and no
+    // item: the pick ranks the waiting items under its own orders_only.
     const fire = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[0] === 'trigger');
-    expect(fire?.slice(0, 6)).toEqual(['trigger', 'fire', '--config', '/bindings/build-queue.json', '--delivery-id', 'build-pickup:ghe.example.com/example/repo#7:run-1']);
+    expect(fire?.slice(0, 6)).toEqual(['trigger', 'fire', '--config', '/bindings/build-pick.json', '--delivery-id', 'build-pick:ghe.example.com/example/repo#7:run-1']);
     expect(JSON.parse(readFileSync(fire?.[fire.indexOf('--inputs') + 1] ?? '', 'utf8'))).toEqual({});
     const doc = stored(at).value;
     expect(doc).toMatchObject({ stage: 'deliver', trust: 'maintainer', claim: null, requests: [] });

@@ -11,7 +11,8 @@ workflows. Each run does one step and stops only for a decision it cannot make:
 | Workflow | One run |
 |---|---|
 | `archon-intake` | Records an issue event and triages that issue, or the best waiting one when it does not wait. The verdict becomes the item's stage and a route label. |
-| `archon-build-queue` | Claims the best waiting triaged item, or the one `number` names, and takes it to a pull request whose review says Ready, one round per run. |
+| `archon-build-pick` | Starts one `archon-build-queue` run for every waiting triaged item, in rank order, through the build-queue binding. Builds nothing itself. |
+| `archon-build-queue` | Claims the issue `number` names and takes it to a pull request whose review says Ready, one round per run, on the issue's item (`issue-<number>`). |
 | `archon-merge-queue` | Claims the items the build queue finished and merges what policy allows, one at a time, through a gate. |
 | `archon-discoveries` | Decides the out-of-scope findings finished runs recorded: file, track, drop or ask. |
 
@@ -98,7 +99,7 @@ passes both.
 
 ```bash
 archon workflow run archon-intake --input number=<issue> --detach
-archon workflow run archon-build-queue --detach
+archon workflow run archon-build-queue --input number=<issue> --item issue-<issue> --detach
 archon workflow run archon-merge-queue --detach
 archon workflow run archon-discoveries --detach
 ```
@@ -112,12 +113,14 @@ refusal with its reason.
 Optional inputs, with their defaults in each workflow's YAML:
 
 - `archon-intake`: `action` (`opened` by default; `edited`, `reopened`, or `added`
-  for a label), `label` and `label_actor` for a label event, and `build_queue_binding`
-  (the binding file a routed item's build-queue run is fired through).
+  for a label), `label` and `label_actor` for a label event, and `build_pick_binding`
+  (the binding file a routed item's build pick is fired through).
+- `archon-build-pick`: `build_queue_binding` (required: the binding file it fires once
+  per waiting issue) and `orders_only` (`true` starts only members of an open work
+  order).
 - `archon-build-queue`: `number` (the issue to build; empty claims the item the
-  message names, or the first in order), `orders_only` (`true` claims only members of
-  an open work order), `revisit_blocked` (`true`: a run that names no item also sends
-  blocked items that no longer look blocked back to intake), `round_limit` (default
+  message names, and with no message nothing), `revisit_blocked` (`true`: a run with no
+  `number` sends blocked items that no longer look blocked back to intake), `round_limit` (default
   `3`), the rounds after which a run that wants another also judges whether the rounds
   converge, and `build_queue_binding` (the binding file follow-up rounds fire).
 - `archon-merge-queue`: `limit` (default `10` items claimed), `merge_method`
@@ -165,11 +168,13 @@ Read the result from the issue's labels:
 
 ## Build queue
 
-A run claims the waiting item that sorts first and works it for one round. To build
-a chosen issue, name it:
+A run works the issue it names for one round. `archon-build-pick` starts a run for
+each waiting item, in rank order, when its binding fires. To build a chosen issue by
+hand, name it and its item:
 
 ```bash
-archon workflow run archon-build-queue $R --input number=<issue> --detach
+archon workflow run archon-build-queue $R --input number=<issue> --item issue-<issue> --detach
+archon workflow runs --item issue-<issue>   # the issue's build runs, questions and answers
 ```
 
 A named issue that cannot be claimed refuses the run before any agent, with the
@@ -188,8 +193,8 @@ A round ends one of three ways, recorded on the item:
   instead). A pull request that changed nothing material since its last
   review never continues; the round ends as done or ask. The run starts the
   item's next round at once by firing the binding file `build_queue_binding` names,
-  with the item's `number`. With no binding set, or when the fire is skipped or
-  refused, the item waits for the next queue run and the run's summary says why.
+  with the item's `number`, on the issue's item. With no binding set, or when the
+  fire is refused, the item waits for the next build pick and the run's summary says why.
   That round's first review continues from the review the earlier round published:
   it checks those findings and reads what changed since, not the whole pull request.
 - `ask`: the run pauses as one attention item labelled `stage: build` and `kind: route`,

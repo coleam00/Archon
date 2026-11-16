@@ -58,7 +58,7 @@ bindings:
       number: { event: subject.number }
       kind: { event: subject.kind }
       action: { event: event.action }
-      build_queue_binding: { binding: build-queue }
+      build_pick_binding: { binding: build-pick }
   intake-labels:
     workflow: archon-intake
     resource: intake
@@ -80,14 +80,27 @@ bindings:
       action: { event: event.action }
       label: { event: label.name }
       label_actor: { event: label.actor.login }
+      build_pick_binding: { binding: build-pick }
+  # Starts one build-queue run per waiting issue, in rank order, and builds nothing
+  # itself. Its own resource, so a pick never holds a build slot. `queue`, so a pick
+  # that intake fires while another runs still runs after it and sees the routed item.
+  build-pick:
+    workflow: archon-build-pick
+    resource: build-pick
+    overlap: queue
+    schedule: { interval_seconds: 1800 }
+    inputs:
       build_queue_binding: { binding: build-queue }
+  # Fire-only: no clock starts it. The pick fires it once per waiting issue, and a round
+  # that continues fires it for its next round, each with the issue's number and on the
+  # issue's item. `queue`, so a start that finds every slot busy keeps its place and
+  # runs when a slot frees.
   build-queue:
     workflow: archon-build-queue
     resource: build
     capacity: 10
-    overlap: skip
+    overlap: queue
     isolation: { kind: worktree }
-    schedule: { interval_seconds: 1800 }
     inputs:
       repo_host: { repo: host }
       repo_path: { repo: path }

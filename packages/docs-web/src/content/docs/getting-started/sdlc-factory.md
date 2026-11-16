@@ -12,7 +12,7 @@ The bundled `sdlc` pack is a software factory made of five queues. You write an 
 | Queue | What it does |
 |---|---|
 | `archon-intake` | Checks the issue's author against your maintainer list, triages a maintainer's issue and labels its route |
-| `archon-build-queue` | Takes one triaged issue through build rounds until its pull request is reviewed Ready, or a maintainer's `ready` answer hands it to the merge queue |
+| `archon-build-queue` | Started once per waiting issue by `archon-build-pick`, which ranks them. Takes one triaged issue through build rounds until its pull request is reviewed Ready, or a maintainer's `ready` answer hands it to the merge queue |
 | `archon-merge-queue` | Merges the Ready, green pull requests the build queue finished, and sends back what it can't merge |
 | `archon-discoveries` | Files, tracks or drops what runs noticed outside their own task |
 | `archon-split` | Files the issues a large item splits into when triage judged it can't be built as one work item, and sends them back through intake. Its agent can also hand the item back to be built whole. They are opened by the install's login, so that login must be in `maintainers.json`, or intake treats them as outside items |
@@ -48,5 +48,5 @@ On your machine it keeps state documents (`archon state list --prefix work/`), w
 ## Pause or stop it
 
 - **Stop new runs.** Remove the schedules (`archon trigger schedule remove --config <file>`, or the cron or systemd entry) and the intake webhook bindings. Removing a schedule does not cancel work already accepted.
-- **Stop runs in flight.** Runs start follow-ups by firing the binding files directly: intake fires a build-queue run for an item it routed, a build round that continues fires the next round, a merge-queue return fires a build round, answering `merge` fires a sweep, and a sweep that merged fires a discoveries pass. A run that sends an issue back to intake launches that intake run itself. So removing schedules alone does not stop a chain. List the runs with `archon workflow status --all` and `archon workflow cancel` or `archon workflow abandon` them.
+- **Stop runs in flight.** Runs start follow-ups by firing the binding files directly: intake fires a build pick for an item it routed, the pick fires a build-queue run for each waiting issue, a build round that continues fires the next round, a merge-queue return fires a build round, answering `merge` fires a sweep, and a sweep that merged fires a discoveries pass. A run that sends an issue back to intake launches that intake run itself. So removing schedules alone does not stop a chain. List the runs with `archon workflow status --all` and `archon workflow cancel` or `archon workflow abandon` them.
 - **Stop one item.** Answer its attention item with `park`, where the item offers it. A paused run waiting on you does nothing until you answer.

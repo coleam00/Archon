@@ -29,7 +29,7 @@ function main(): void {
   const runId = workflowRunId();
   const later = 'the next sweep that merges, or a scheduled pass, starts one';
   // The binding names the repository, so the drain takes no inputs.
-  emit({ summary: followUp(binding, `discoveries-drain:${runId}`, {}, 'a discoveries drain', later) });
+  emit({ summary: followUp(binding, `discoveries-drain:${runId}`, {}, 'a discoveries drain', { later }) });
 }
 
 try {

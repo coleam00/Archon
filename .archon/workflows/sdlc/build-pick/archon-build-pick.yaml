@@ -1,0 +1,56 @@
+name: archon-build-pick
+description: |
+  The build queue's pick: starts one archon-build-queue run for every work item that
+  waits for the build queue. One script lists the waiting items, ranks them in the
+  pack's pickup order (most urgent, then most important, then smallest, then oldest)
+  and fires the operator's build-queue binding once per issue, with the issue's number
+  and on the issue's engine item (`issue-<number>`). It claims and builds nothing: each
+  run it starts claims its own issue. The binding's capacity decides how many run at
+  once, and the rest queue in the order they were fired. An issue that still waits
+  where an earlier pass found it is fired with the same delivery, which starts nothing
+  twice. A pass that finds nothing waiting names the stored items no pickup can act
+  on, once each, and ends as a failed outcome.
+
+  Use when: a schedule binding the operator installed starts it, intake fires it for
+  an item it routed (see https://archon.diy/guides/sdlc-operations/#build-queue), or
+  an operator wants the waiting items started now.
+  NOT for: building one named issue (archon-build-queue with number).
+
+inputs:
+  build_queue_binding:
+    required: true
+    description: >-
+      The absolute path of the operator's binding config for this repository's build
+      queue. The pick fires it once per waiting issue with `archon trigger fire`, so
+      each run is admitted under that binding's resource, capacity and overlap policy.
+  orders_only:
+    default: "false"
+    description: >-
+      "true" starts only items that are members of an open work order (a
+      `work-order/<id>` state document; see
+      https://archon.diy/guides/sdlc-operations/#work-orders), and nothing when no
+      order is open. It first marks done each open order whose members have all
+      merged. Anything else starts every waiting item.
+
+# False when a fire started nothing, or when nothing waits and stored items no pickup
+# can act on were found.
+returns: { node: pick, outcome: healthy }
+
+# Reads and writes only the state store: runs in the launch checkout beside any other
+# run, and creates no worktree.
+worktree:
+  enabled: false
+mutates_checkout: false
+
+nodes:
+  - id: pick
+    script: pick
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        # The issues whose build-queue run started or queued, in rank order.
+        started: { type: array, items: { type: integer, minimum: 1 } }
+        summary: { type: string }
+        healthy: { type: boolean }
+      required: [started, summary, healthy]

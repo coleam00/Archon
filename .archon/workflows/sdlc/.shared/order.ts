@@ -1,6 +1,6 @@
 /**
  * Work orders: the work items an operator approved for the factory, one state document
- * `work-order/<id>` each. With `orders_only` on, the build queue claims only members
+ * `work-order/<id>` each. With `orders_only` on, the build pick starts only members
  * of an open order.
  *
  * An order holds no progress of its own: whether it is done is read from its members'

@@ -187,6 +187,16 @@ export function workItemName(number: number): string {
   return `work/${String(number)}`;
 }
 
+/**
+ * The engine item a run that works this issue is on: what its start names with `--item`
+ * and what `archon workflow runs --item` reads. The engine gives the key no meaning. Its
+ * shape is a contract once answers and rulings are recorded under it, so every start
+ * builds it here.
+ */
+export function itemKey(number: number): string {
+  return `issue-${String(number)}`;
+}
+
 export function bodyDigest(body: string): string {
   return `sha256:${createHash('sha256').update(body, 'utf8').digest('hex')}`;
 }
@@ -696,22 +706,28 @@ export function claimable(item: Read | undefined, pickup: Pickup): item is Read 
 }
 
 /**
- * Read every work item in one state call, release terminal claims, then claim the
- * first waiting item in `PICKUP_ORDER` with a conditional write. A conflict re-reads the
- * item once and claims it only if it still waits unclaimed; otherwise the next
- * candidate is tried.
+ * Every unclaimed item that waits for the queue, in `PICKUP_ORDER`, each at the revision
+ * it now has: all work items read in one state call, the claims of ended runs released.
+ */
+export function waitingItems(at: string, runId: string, pickup: Pickup): Read[] {
+  const items = state.listValues('work/')
+    .map(stored => read(stored.name, stored))
+    .filter((item): item is Read => item !== undefined)
+    .map(item => releaseIfTerminal(item, at, runId, pickup));
+  return sortCandidates(items.filter((item): item is Read => claimable(item, pickup)), PICKUP_ORDER);
+}
+
+/**
+ * Claim the first waiting item with a conditional write. A conflict re-reads the item
+ * once and claims it only if it still waits unclaimed; otherwise the next candidate is
+ * tried.
  */
 export function claimNext(
   at: string,
   runId: string,
   pickup: Pickup = INTAKE_PICKUP
 ): WorkItem | null {
-  const items = state.listValues('work/')
-    .map(stored => read(stored.name, stored))
-    .filter((item): item is Read => item !== undefined)
-    .map(item => releaseIfTerminal(item, at, runId, pickup));
-  const waiting = items.filter((item): item is Read => claimable(item, pickup));
-  for (const candidate of sortCandidates(waiting, PICKUP_ORDER)) {
+  for (const candidate of waitingItems(at, runId, pickup)) {
     const won = claimItem(candidate, at, runId, pickup);
     if (won !== null) return won;
   }

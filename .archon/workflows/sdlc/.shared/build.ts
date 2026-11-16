@@ -9,13 +9,14 @@
 
 import { input, state } from 'archon:script';
 import { type QualifiedPr, sameRepo } from './identity.ts';
-import { followUp } from './follow-up.ts';
+import { type Fired, fire, followUp } from './follow-up.ts';
 import type { NodeOutput } from './outputs.generated.ts';
 import { findPrByHead, PR_CREATE_UNRESOLVED, prFromUrl } from './pr.ts';
 import { type Ask, clipped, type DecisionEntry, withDecision } from './queue.ts';
 import {
   type Claim,
   type HistoryEntry,
+  itemKey,
   newest,
   type Pickup,
   parseWorkItem,
@@ -284,17 +285,40 @@ export function withBuild(doc: WorkItem, change: BuildChange): WorkItem {
 /** The reason of a round recorded at release: its run ended before it decided the round. */
 export const ENDED_UNDECIDED = 'ended_undecided';
 
+/** The inputs that make a build-queue start work one issue. */
+function buildInputs(item: QualifiedPr): Record<string, string> {
+  return { repo_host: item.repo.host, repo_path: item.repo.path, number: String(item.number) };
+}
+
 /**
  * Start the item's next build-queue round now, through the operator's build-queue
- * binding (`build_queue_binding`). One run starts at most one next round per item.
+ * binding (`build_queue_binding`), on the issue's item. One run starts at most one next
+ * round per item.
  */
 export function nextRound(item: QualifiedPr, runId: string): string {
   const { host, path } = item.repo;
   return followUp(
     input('build_queue_binding'),
     `build-round:${host}/${path}#${String(item.number)}:${runId}`,
-    { repo_host: host, repo_path: path, number: String(item.number) },
-    'its next round'
+    buildInputs(item),
+    'its next round',
+    { later: 'the next build pick starts it', item: itemKey(item.number) }
+  );
+}
+
+/**
+ * Start a waiting item's build-queue run through `binding`, on the issue's item. The
+ * key holds the revision the item was read waiting at, so a pick that finds it still
+ * waiting there fires the same delivery, which starts nothing twice; a round that ended
+ * or a re-triage moves the revision, and the item starts again.
+ */
+export function startWaiting(binding: string, item: QualifiedPr, revision: number): Fired {
+  const { host, path } = item.repo;
+  return fire(
+    binding,
+    `build-start:${host}/${path}#${String(item.number)}@${String(revision)}`,
+    buildInputs(item),
+    itemKey(item.number)
   );
 }
 

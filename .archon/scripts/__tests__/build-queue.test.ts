@@ -209,7 +209,7 @@ function stored(at: Install): { revision: number; value: WorkItem | null } {
 
 function run(
   at: Install,
-  script: 'start' | 'facts' | 'handoff' | 'blocked' | 'apply' | 'checkout' | 'ruling' | 'retriage',
+  script: 'start' | 'facts' | 'handoff' | 'blocked' | 'apply' | 'checkout' | 'ruling' | 'retriage' | 'pick',
   inputs: Record<string, string>,
   options: {
     issue?: TrackerSubject;
@@ -220,7 +220,7 @@ function run(
     artifacts?: ScriptOptions['artifacts'];
   } = {}
 ): ScriptRun {
-  return runPackScript(`build-queue/scripts/${script}`, {
+  return runPackScript(script === 'pick' ? 'build-pick/scripts/pick' : `build-queue/scripts/${script}`, {
     cwd: at.checkout,
     preload: options.preload,
     artifacts: options.artifacts,
@@ -243,6 +243,8 @@ function run(
       INPUTS_BUILD_LANE: 'auto',
       INPUTS_ROUTE: 'deliver',
       INPUTS_ITEM: JSON.stringify(SUBJECT),
+      // A build-queue run claims the issue its start names.
+      ...(script === 'facts' ? { INPUTS_NUMBER: '7' } : {}),
       ...inputs,
     },
   });
@@ -275,7 +277,8 @@ function callLog(): string {
 
 /**
  * The next round fires the build-queue binding for the item it continues, keyed by the
- * item and this run alone, so a retry repeats the key and starts nothing twice.
+ * item and this run alone, so a retry repeats the key and starts nothing twice. The fire
+ * names the issue's item, so the round is on it whichever run fired it.
  */
 function expectNextRound(calls: string): void {
   const fire = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[0] === 'trigger');
@@ -284,6 +287,7 @@ function expectNextRound(calls: string): void {
   ]);
   const inputs = fire?.[fire.indexOf('--inputs') + 1] ?? '';
   expect(JSON.parse(readFileSync(inputs, 'utf8'))).toEqual({ number: '7', repo_host: 'ghe.example.com', repo_path: 'example/repo' });
+  expect(fire?.slice(-2)).toEqual(['--item', 'issue-7']);
 }
 
 function applyInputs(answer: Record<string, unknown>): Record<string, string> {
@@ -394,8 +398,12 @@ describe('the build queue scripts', () => {
       requests: [request],
     });
     expect(readFileSync(join(picked.artifacts, 'build/issue.md'), 'utf8')).toContain('The contract.');
-    // The item is now claimed, so the next pickup finds nothing.
-    expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle', item: null });
+    // The item is now claimed, so a second run for the issue is refused.
+    const second = run(at, 'facts', { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' });
+    expect(second.code).not.toBe(0);
+    expect(second.stderr).toContain('issue 7 is claimed by run run-1');
+    // A run that names no issue claims none: the pick starts the waiting items.
+    expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-3', INPUTS_NUMBER: '' }))).toMatchObject({ path: 'idle', item: null });
   }, 60_000);
 
   test('facts verifies a PR explicitly reconciled by newer triage before continuing it', () => {
@@ -527,15 +535,6 @@ describe('the build queue scripts', () => {
     expect(launch).toEqual(expect.arrayContaining(['archon-intake', 'number=100', '--detach']));
   }, 60_000);
 
-  test('items intake has not routed, and items the queue finished, are never picked up', () => {
-    const at = install();
-    seed(at, triaged({ stage: 'needs_contract' }));
-    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'idle' });
-    seed(at, triaged({}, record({ status: 'ready' })));
-    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'idle' });
-    expect(stored(at).value?.claim).toBeNull();
-  }, 60_000);
-
   test("a blocked item is listed for one run at a time with when and on what its verdict blocked it, and one judged unblocked gets the run's re-triage request and one intake pickup", () => {
     const at = install();
     // An item blocked before verdicts stored what they wait on is listed with the verdict's time alone.
@@ -659,7 +658,7 @@ describe('the build queue scripts', () => {
     expect((stored(at).value as WorkItem).facts.build?.rounds[0]?.validation).toEqual({ head: 'b'.repeat(40), passed: true });
   }, 60_000);
 
-  test('a continue whose next round fails to start leaves the item waiting for the next queue run', () => {
+  test('a continue whose next round fails to start leaves the item waiting for the next build pick', () => {
     const at = install();
     seed(at, triaged(CLAIMED));
     const applied = run(at, 'apply', {
@@ -669,7 +668,7 @@ describe('the build queue scripts', () => {
     });
     expect(applied.code).toBe(0);
     expect(applied.stderr).toContain('its next round did not start');
-    expect((JSON.parse(applied.stdout) as { summary: string }).summary).toContain('its next round did not start (refused), so the next queue run picks it up');
+    expect((JSON.parse(applied.stdout) as { summary: string }).summary).toContain('its next round did not start (refused), so the next build pick starts it');
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'next', brief: 'continue PR 42 on R1' } } });
   }, 60_000);
 
@@ -685,7 +684,6 @@ describe('the build queue scripts', () => {
       item: '7',
       pr: '42',
       asked: { ask: QUESTION, brief: 'continue PR 42 under the ruling', by: 'stop' },
-      healthy: true,
     });
     expect(stored(at).value).toMatchObject({
       claim: { run_id: 'run-1' },
@@ -693,28 +691,27 @@ describe('the build queue scripts', () => {
     });
   }, 60_000);
 
-  test('an asked item whose run was abandoned unanswered is never picked up again, and idle runs name it once per state', () => {
+  test('an asked item whose run was abandoned unanswered is never started again, and picks that find nothing waiting name it once per state', () => {
     const at = install();
     seed(at, triaged(CLAIMED));
     ok(run(at, 'apply', applyInputs(ASK)));
-    // The wait refused the ask, the run failed and was abandoned: the next pickup frees its claim and takes nothing.
-    const later = { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"cancelled"}' };
-    expect(ok(run(at, 'facts', later))).toMatchObject({ path: 'idle', item: null });
+    // The wait refused the ask, the run failed and was abandoned: the next pick frees its claim and starts nothing.
+    const later = { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"cancelled"}', ...SELECTED };
+    const idle = ok(run(at, 'pick', later));
+    expect(idle).toMatchObject({ started: [], healthy: false });
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'asking' } } });
-    const idle = ok(run(at, 'apply', { ...later, INPUTS_PATH: 'idle' }));
-    expect(idle).toMatchObject({ decision: 'idle', healthy: false, question: '' });
     const named =
       'work/7 (issue 7 is recorded asking (run run-1, ask stop: the plan asks to relax a constraint), but no run waits on that question; re-triage it to start it over)';
     expect(idle.summary).toContain(named);
-    // Reported once: the next idle run finds the report on the item and is healthy.
-    expect(ok(run(at, 'apply', { ...later, INPUTS_PATH: 'idle' }))).toMatchObject({ healthy: true, summary: 'No item waits for the build queue.' });
+    // Reported once: the next pick finds the report on the item and is healthy.
+    expect(ok(run(at, 'pick', later))).toMatchObject({ healthy: true, summary: 'No item waits for the build queue.' });
     // Another write to the item since the report, and it is still stuck: reported again.
     const reported = stored(at);
     const touched = { at: AT, stage: 'intake' as const, run_id: 'run-3', outcome: 'quiet', summary: 'a comment arrived' };
     inProcess(at, () =>
       expect(state.put('work/7', { ...reported.value, history: [...(reported.value?.history ?? []), touched] }, { ifRevision: reported.revision }).ok).toBe(true)
     );
-    const again = ok(run(at, 'apply', { ...later, INPUTS_PATH: 'idle' }));
+    const again = ok(run(at, 'pick', later));
     expect(again).toMatchObject({ healthy: false });
     expect(again.summary).toContain(named);
   }, 60_000);

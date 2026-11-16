@@ -1,14 +1,13 @@
 /**
- * Claim the build queue's next item and write the issue the deciding agents read.
+ * Claim the run's item and write the issue the deciding agents read.
  *
- * It claims the waiting item that sorts first with intake's claim and order, or the
- * item the `number` input names, or the one the run's message resolved to, and writes
- * only that claim. A message interpret resolved to nothing refuses the run with its
- * reason; one it resolved to a work order or to new work claims nothing and goes to
- * `order` or `handoff`. With `orders_only` on it
- * first marks done each open work order whose members all finished. A named item that cannot
- * be claimed refuses the run with the reason. A closed issue goes to `closed`, which
- * apply parks without an agent.
+ * It claims the item the `number` input names, or the one the run's message resolved
+ * to, with intake's claim, and writes only that claim. A run that names neither claims
+ * nothing: archon-build-pick ranks the waiting items and starts one run for each. A
+ * message interpret resolved to nothing refuses the run with its reason; one it resolved
+ * to a work order or to new work claims nothing and goes to `order` or `handoff`. A named
+ * item that cannot be claimed refuses the run with the reason. A closed issue goes to
+ * `closed`, which apply parks without an agent.
  *
  * It also resolves the item's pull request as the forge reports it now. An open one
  * whose head is in the item's repository is the candidate the round continues;
@@ -29,12 +28,9 @@ import { artifactsDir, emit, input, refuse, runId as workflowRunId } from 'archo
 import { type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
 import { viewIssue } from '../../.shared/issue.ts';
-import { openOrderMembers } from '../../.shared/order.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import {
   claimNamed,
-  claimNext,
-  type Pickup,
   readWorkItem,
   updateClaimed,
   type WorkItem,
@@ -58,8 +54,8 @@ interface Interpreted {
 
 /**
  * The item the run names: the `number` input, else the item interpret resolved the
- * message to, or the one the person picked from its options. Null names none, so the
- * run picks up the waiting item that sorts first; `order` and `handoff` claim nothing.
+ * message to, or the one the person picked from its options. Null names none, and
+ * `order` and `handoff` claim nothing.
  */
 function namedItem(): number | null | 'order' | 'handoff' {
   const number = input('number').trim();
@@ -157,16 +153,6 @@ function emitItem(
   });
 }
 
-/**
- * With `orders_only` on, an item waits only while it is a member of an open work order,
- * so no open order claims nothing. A named item is claimed either way.
- */
-function pickup(): Pickup {
-  if (input('orders_only').trim() !== 'true') return BUILD_PICKUP;
-  const members = openOrderMembers(new Date().toISOString());
-  return { ...BUILD_PICKUP, waits: doc => members.has(doc.subject.number) && BUILD_PICKUP.waits(doc) };
-}
-
 function main(): void {
   const limit = positive('round_limit', input('round_limit').trim());
   const runId = workflowRunId();
@@ -176,15 +162,12 @@ function main(): void {
     emit({ path: named, ...NOTHING, ...NO_ITEM_PR });
     return;
   }
-  if (named !== null) requireRunRepo(named);
-  const doc =
-    named === null
-      ? claimNext(new Date().toISOString(), runId, pickup())
-      : claimNamed(named, new Date().toISOString(), runId, BUILD_PICKUP);
-  if (doc === null) {
+  if (named === null) {
     emit({ path: 'idle', ...NOTHING, ...NO_ITEM_PR });
     return;
   }
+  requireRunRepo(named);
+  const doc = claimNamed(named, new Date().toISOString(), runId, BUILD_PICKUP);
   const issue = viewIssue(doc.subject);
   writeIssue(issue.title, issue.url, issue.body);
   const closed = issue.state === 'closed';

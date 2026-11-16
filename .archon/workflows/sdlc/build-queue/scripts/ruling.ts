@@ -9,8 +9,8 @@
  * work item as the item's next owner, and the claim is released: `continue` keeps it in
  * the build queue, `ready` hands its pull request to the merge queue, and `park` stops
  * all work until a re-triage. A `continue` then starts the item's next build-queue run
- * at once through the operator's build-queue binding; if it does not start, the item
- * waits for the next queue run as before.
+ * at once through the operator's build-queue binding, on the issue's item; if it does
+ * not start, the item waits for the next build pick.
  *
  * Bound inputs: INPUTS_ITEM from facts; INPUTS_ASKED, what apply asked; INPUTS_DECISION,
  * the id of the chosen option (`other` for the wait's own), and INPUTS_TEXT, the answer's text;

@@ -1,8 +1,10 @@
 name: archon-build-queue
 description: |
   The build queue: takes intake's triaged work items to a reviewed, ready pull
-  request and stops only for decisions that belong to a person. Each run claims the
-  best waiting item with intake's claim, or the one the number input names. One
+  request and stops only for decisions that belong to a person. Each run works one
+  issue: it claims the item the number input names, with intake's claim, and is on
+  that issue's engine item (`issue-<number>`) when its start names it, as
+  archon-build-pick's starts and a round's follow-up do. One
   agent routes it (and proves a bug's symptom first) and launches archon-build from a
   brief, or marks a pull request already reviewed Ready, with no red check the change
   caused, ready without another round; one agent answers how that round ended; and after several rounds that each
@@ -14,14 +16,16 @@ description: |
 
   A person can also say what to build in the run's message instead of naming a number:
   one agent resolves the message to an issue to claim, a choice between issues, a work
-  order for several issues, which the run writes and the scheduled queue builds, or new
+  order for several issues, which the run writes and the build pick starts, or new
   work it files and hands to intake. Neither is built in the run that wrote it.
 
-  Use when: a trigger binding the operator installed starts it (see
+  Use when: archon-build-pick or a round's follow-up starts it through the fire-only
+  binding the operator installed (see
   https://archon.diy/guides/sdlc-operations/#build-queue), or a person names the
-  item, by number or in words.
-  NOT for: triaging an item (archon-intake), delivering one item by hand
-  (archon-ship), or merging (archon-merge-queue).
+  item, by number (with `--item issue-<number>`) or in words.
+  NOT for: starting the waiting items (archon-build-pick), triaging an item
+  (archon-intake), delivering one item by hand (archon-ship), or merging
+  (archon-merge-queue).
 
 requires: [github]
 
@@ -37,23 +41,14 @@ inputs:
   number:
     default: ""
     description: >-
-      The issue to build. Empty claims the item the run's message names, or with no
-      message the waiting item that sorts first. A number claims that item, and refuses
-      the run with the reason when it cannot: it has no work item, another run holds it,
-      or it does not wait for the build queue.
-  orders_only:
-    default: "false"
-    description: >-
-      "true" claims only items that are members of an open work order (a
-      `work-order/<id>` state document; see
-      https://archon.diy/guides/sdlc-operations/#work-orders), and
-      nothing when no order is open. It first marks done each open order whose members
-      have all merged. A named item is claimed either way. Anything else picks from
-      every waiting item.
+      The issue to build. A number claims that item, and refuses the run with the
+      reason when it cannot: it has no work item, another run holds it, or it does not
+      wait for the build queue. Empty claims the item the run's message names, and with
+      no message nothing: archon-build-pick starts the waiting items.
   revisit_blocked:
     default: ""
     description: >-
-      "true" makes a run that names no item also revisit the blocked items: one agent
+      "true" makes a run with no number also revisit the blocked items: one agent
       judges which no longer look blocked, and each of those gets this run's re-triage
       request and one intake pickup. Anything else revisits nothing.
   round_limit:
@@ -64,14 +59,13 @@ inputs:
   build_queue_binding:
     default: ""
     description: >-
-      The absolute path of the operator's timer-binding config for this repository's
-      build queue. A decision that wants the item's next round now fires it with
-      `archon trigger fire`, so the round is admitted under that binding's resource,
-      capacity and overlap policy, at most once per decision. Empty starts no
-      follow-up; the next queue run picks the item up.
+      The absolute path of the operator's binding config for this repository's build
+      queue. A decision that wants the item's next round now fires it with
+      `archon trigger fire --item issue-<number>`, so the round is admitted under that
+      binding's resource, capacity and overlap policy, at most once per decision, on
+      the issue's item. Empty starts no follow-up; the next build pick starts the item.
 
-# False only when a run that claimed nothing found stored items no pickup can act on.
-returns: { node: apply, outcome: healthy }
+returns: apply
 
 nodes:
   - id: start
@@ -168,10 +162,11 @@ nodes:
         item: ""
         pr: ""
 
-  # Claims the item and writes the issue's body to build/issue.md, so every agent
+  # Claims the named item and writes the issue's body to build/issue.md, so every agent
   # reads the same text. With a message it claims the item interpret or the pick
   # resolved, refuses with interpret's reason when it resolved none, and claims
-  # nothing when the message is a work order or new work for intake.
+  # nothing when the message is a work order or new work for intake. A run that names
+  # nothing claims nothing.
   - id: facts
     script: facts
     runtime: bun
@@ -402,7 +397,7 @@ nodes:
       required: [summary]
 
   # Writes the work order the message named and starts intake on each member it has
-  # not seen. The scheduled build queue builds the members; this run claims none.
+  # not seen. The build pick starts the members; this run claims none.
   - id: order
     script: order
     runtime: bun
@@ -463,10 +458,9 @@ nodes:
         # What the ruling node needs: the ask, the brief a continue option launches and
         # which decision asked; null when nothing is asked.
         asked: { type: [object, 'null'] }
-        healthy: { type: boolean }
-      required: [decision, summary, question, options, recommendation, class, item, pr, asked, healthy]
+      required: [decision, summary, question, options, recommendation, class, item, pr, asked]
 
-  # A paused run gives its resource slot back, so the next scheduled run can work
+  # A paused run gives its resource slot back, so the next queued start can work
   # another item while this one waits.
   - id: ask
     depends_on: [apply]

@@ -2,8 +2,8 @@
  * Write the work order the run's message named, approved by the run's user, and start
  * intake on each member it has not seen.
  *
- * The run builds nothing: the scheduled build queue with `orders_only` claims the
- * members, each only once intake has triaged it and it waits for the build queue. The
+ * The run builds nothing: the build pick with `orders_only` starts a run for each
+ * member, only once intake has triaged it and it waits for the build queue. The
  * write is conditional on the order not existing, so an id already taken refuses the
  * run instead of replacing an order someone approved.
  *
@@ -50,7 +50,7 @@ function main(): void {
     return `#${String(number)} (intake run ${run})`;
   });
   const lines = [
-    `Wrote ${name} with members ${order.members.map(number => `#${String(number)}`).join(', ')}, approved by ${by}; the scheduled build queue with orders_only builds each once intake has triaged it.`,
+    `Wrote ${name} with members ${order.members.map(number => `#${String(number)}`).join(', ')}, approved by ${by}; the build pick with orders_only starts each once intake has triaged it.`,
     ...(intake.length === 0 ? [] : [`Not yet triaged, sent to intake first: ${intake.join(', ')}.`]),
     ...declared.unresolved.map(part => `Not in the order: "${part.named}": ${part.why}`),
   ];

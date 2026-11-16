@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
@@ -76,64 +76,83 @@ function inStore<T>(env: Record<string, string>, body: () => T): T {
   }
 }
 
-/** Run the pickup; the fake forge answers as issue `serves`, so claiming another issue fails the run. */
-function facts(env: Record<string, string>, inputs: Record<string, string>, runId: string, serves = 0): Record<string, unknown> {
-  const result: ScriptRun = runPackScript('build-queue/scripts/facts', {
-    cwd: env.INTAKE_STATE_CWD,
-    forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
-    tracker: {
-      issue: { number: serves, author: 'Maintainer', body: 'The contract.' },
-      issueLabels: ['archon-ready'],
-      repositoryLabels: [],
-      pr: { state: 'OPEN', headRefName: 'feature' },
-    },
-    inputs: {
-      ...env,
-      WORKFLOW_ID: runId,
-      INPUTS_REPO_HOST: PR.repo.host,
-      INPUTS_REPO_PATH: PR.repo.path,
-      INPUTS_REPO: JSON.stringify(PR.repo),
-      INPUTS_ROUND_LIMIT: '3',
-      INPUTS_NUMBER: '',
-      ...inputs,
-    },
-  });
-  if (result.code !== 0) throw new Error(`facts exited ${String(result.code)}: ${result.stderr}`);
-  return JSON.parse(result.stdout) as Record<string, unknown>;
+interface Fire {
+  readonly delivery: string | undefined;
+  readonly item: string | undefined;
+  readonly inputs: unknown;
 }
 
-const claimedNumber = (output: Record<string, unknown>): unknown => (output.item as { number: number } | null)?.number ?? null;
+/** Run the build pick; `fires` are the build-queue starts it fired, in the order it fired them. */
+function pick(env: Record<string, string>, inputs: Record<string, string>, runId: string): { output: Record<string, unknown>; fires: Fire[] } {
+  const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-pick-calls-'))), 'calls.jsonl');
+  const result: ScriptRun = runPackScript('build-pick/scripts/pick', {
+    cwd: env.INTAKE_STATE_CWD,
+    forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
+    inputs: { ...env, WORKFLOW_ID: runId, INPUTS_BUILD_QUEUE_BINDING: '/bindings/build-queue.json', ARCHON_CALL_LOG: calls, ...inputs },
+  });
+  if (result.code !== 0) throw new Error(`pick exited ${String(result.code)}: ${result.stderr}`);
+  const argvs = existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]) : [];
+  const after = (argv: string[], flag: string) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] : undefined);
+  const fires = argvs
+    .filter(argv => argv[0] === 'trigger' && argv[1] === 'fire' && after(argv, '--config') === '/bindings/build-queue.json')
+    .map(argv => ({
+      delivery: after(argv, '--delivery-id'),
+      item: after(argv, '--item'),
+      inputs: JSON.parse(readFileSync(after(argv, '--inputs') ?? '', 'utf8')) as unknown,
+    }));
+  return { output: JSON.parse(result.stdout) as Record<string, unknown>, fires };
+}
 
-describe('build-queue pickup with work orders', () => {
-  test('off, the pickup ignores orders; on, it claims only a member of an open order', () => {
+const firedItems = (picked: { fires: Fire[] }): unknown[] => picked.fires.map(fire => fire.item);
+
+describe('the build pick', () => {
+  test('starts one build-queue run per waiting issue, in rank order, each with its number and on its item', () => {
+    // 8 sorts first on urgency; 6 is finished and does not wait.
+    const env = store({ 'work/6': merged(6), 'work/7': waiting(7), 'work/8': waiting(8, 'now'), 'work/9': waiting(9) });
+    const first = pick(env, {}, 'pick-1');
+    const start = (number: number) => ({
+      delivery: `build-start:ghe.example.com/example/repo#${String(number)}@1`,
+      item: `issue-${String(number)}`,
+      inputs: { number: String(number), repo_host: 'ghe.example.com', repo_path: 'example/repo' },
+    });
+    expect(first.fires).toEqual([start(8), start(7), start(9)]);
+    expect(first.output).toMatchObject({ started: [8, 7, 9], healthy: true });
+    // It claimed nothing: each run it starts claims its own issue.
+    expect(inStore(env, () => state.get('work/8').value)).toMatchObject({ claim: null });
+    // An issue still waiting where the first pass found it is fired with the same delivery, which the engine starts once.
+    expect(pick(env, {}, 'pick-2').fires).toEqual(first.fires);
+  }, 60_000);
+});
+
+describe('the build pick with work orders', () => {
+  test('off, the pick ignores orders; on, it starts only a member of an open order', () => {
     // 8 sorts first on urgency, but only 9 is in the order.
     const documents = { 'work/7': waiting(7), 'work/8': waiting(8, 'now'), 'work/9': waiting(9), 'work-order/next': order([9]) };
-    expect(claimedNumber(facts(store(documents), {}, 'run-off', 8))).toBe(8);
-    expect(claimedNumber(facts(store(documents), { INPUTS_ORDERS_ONLY: 'false' }, 'run-off', 8))).toBe(8);
-    expect(claimedNumber(facts(store(documents), { INPUTS_ORDERS_ONLY: 'true' }, 'run-on', 9))).toBe(9);
+    expect(firedItems(pick(store(documents), { INPUTS_ORDERS_ONLY: 'false' }, 'run-off'))).toEqual(['issue-8', 'issue-7', 'issue-9']);
+    expect(firedItems(pick(store(documents), { INPUTS_ORDERS_ONLY: 'true' }, 'run-on'))).toEqual(['issue-9']);
   }, 60_000);
 
-  test('on, with no open order, nothing is claimed', () => {
+  test('on, with no open order, nothing is started', () => {
     for (const orders of [{}, { 'work-order/old': order([7], 'done') }]) {
-      const env = store({ 'work/7': waiting(7), ...orders });
-      expect(facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-on')).toMatchObject({ path: 'idle', item: null });
-      expect(inStore(env, () => state.get('work/7').value)).toMatchObject({ claim: null });
+      const picked = pick(store({ 'work/7': waiting(7), ...orders }), { INPUTS_ORDERS_ONLY: 'true' }, 'run-on');
+      expect(picked.fires).toEqual([]);
+      expect(picked.output).toMatchObject({ started: [], healthy: true });
     }
   }, 60_000);
 
-  test('an open order whose members all merged is marked done once, and builds nothing more', () => {
+  test('an open order whose members all merged is marked done once, and starts nothing more', () => {
     const env = store({ 'work/7': merged(7), 'work/8': merged(8), 'work/9': waiting(9), 'work-order/next': order([7, 8]) });
-    expect(facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-1')).toMatchObject({ path: 'idle' });
+    expect(pick(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-1').fires).toEqual([]);
     const done = inStore(env, () => state.get('work-order/next'));
     expect(done.value).toMatchObject({ members: [7, 8], status: 'done' });
     expect(typeof (done.value as WorkOrder).done_at).toBe('string');
-    facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-2');
+    pick(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-2');
     expect(inStore(env, () => state.get('work-order/next').revision)).toBe(done.revision);
   }, 60_000);
 
   test('an order with an unmerged member stays open and keeps its members building', () => {
     const env = store({ 'work/7': merged(7), 'work/9': waiting(9), 'work-order/next': order([7, 9]) });
-    expect(claimedNumber(facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-1', 9))).toBe(9);
+    expect(firedItems(pick(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-1'))).toEqual(['issue-9']);
     expect(inStore(env, () => state.get('work-order/next').value)).toMatchObject({ status: 'open', done_at: null });
   }, 60_000);
 
@@ -141,13 +160,8 @@ describe('build-queue pickup with work orders', () => {
     const rebuilt = merged(7);
     const retriaged = { ...rebuilt, facts: { ...rebuilt.facts, triage: { ...TRIAGE, at: '2026-11-06T01:00:00.000Z' } } };
     const env = store({ 'work/7': retriaged, 'work/8': merged(8), 'work-order/next': order([7, 8]) });
-    expect(claimedNumber(facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-1', 7))).toBe(7);
+    expect(firedItems(pick(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-1'))).toEqual(['issue-7']);
     expect(inStore(env, () => state.get('work-order/next').value)).toMatchObject({ status: 'open', done_at: null });
-  }, 60_000);
-
-  test('on, a named item is claimed though no open order holds it, so its follow-up rounds still start', () => {
-    const env = store({ 'work/7': waiting(7) });
-    expect(claimedNumber(facts(env, { INPUTS_ORDERS_ONLY: 'true', INPUTS_NUMBER: '7' }, 'run-1', 7))).toBe(7);
   }, 60_000);
 });
 

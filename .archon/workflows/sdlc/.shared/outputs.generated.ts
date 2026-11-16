@@ -14,6 +14,13 @@ export interface WorkflowOutputs {
       readonly summary: string;
     };
   };
+  'archon-build-pick': {
+    pick: {
+      readonly started: ReadonlyArray<number>;
+      readonly summary: string;
+      readonly healthy: boolean;
+    };
+  };
   'archon-build-queue': {
     start: {
       readonly repo: {
@@ -153,7 +160,6 @@ export interface WorkflowOutputs {
       readonly item: string;
       readonly pr: string;
       readonly asked: Readonly<Record<string, unknown>> | null;
-      readonly healthy: boolean;
     };
     ruling: {
       readonly decision: 'continue' | 'ready' | 'park';

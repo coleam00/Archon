@@ -271,14 +271,23 @@ or `parked`), and `value.facts.merge.status` is the merge queue's (`waiting`, `a
 its status and its artifacts, not the stage's decision.
 
 ```bash
-archon workflow run archon-build-queue --input number=42 --detach
+archon workflow run archon-build-queue --input number=42 --item issue-42 --detach
 archon workflow wait <run-id> --json
 archon state get work/42
+archon workflow runs --item issue-42
 ```
 
 The build queue works the issue toward a reviewed pull request, one round per run. A
 round that continues a pull request starts its review from the review the earlier round
 published, not from the start.
+
+`--item issue-42` puts the run on the issue's engine item, and every later round the
+queue starts for the issue is on it too. `archon workflow runs --item issue-42` is the
+one place to read an issue's build history: its build runs, the questions asked in them
+and every answer. Name the item `issue-<number>` with the same number as `--input
+number`. Items need the database store, which is the default (`store: database`); with
+`store: files` a start that names an item is refused, so the build queue does not run
+there. Intake runs are on no item.
 
 ```bash
 archon workflow run archon-merge-queue --detach
@@ -322,10 +331,14 @@ The pack installs no binding and starts nothing by itself. It declares the bindi
 recommends under `bindings:` in `.pack/pack.yaml`:
 
 - `intake-issues` and `intake-labels` start intake on GitHub issue and label events.
-- `build-queue`, `split-queue`, `merge-queue` and `discoveries` start the queues on a
-  schedule. Intake also starts the build queue for an item it routed, by firing the
-  `build-queue` file. The merge queue's schedule is short, and a sweep where nothing
-  changed runs no agent.
+- `build-pick`, `split-queue`, `merge-queue` and `discoveries` start on a schedule.
+  The merge queue's schedule is short, and a sweep where nothing changed runs no agent.
+- `build-queue` has no schedule: it is fire-only. `build-pick` starts one build-queue
+  run for each waiting issue, in rank order, by firing the `build-queue` file with the
+  issue's number and item, and a round that continues fires it for its next round. The
+  file's capacity decides how many run at once; the rest queue and start as slots
+  free. Intake fires the `build-pick` file for an item it routed, so the build queue
+  needs `build-pick` and `build-queue` together.
 - `metrics-prs` and `metrics-test-value` refresh the pack's metrics.
 - `worktree-cleanup` removes merged worktrees, for an install that runs no server.
 
@@ -339,7 +352,7 @@ archon pack bindings sdlc \
   --run-as <the id whoami printed> \
   --cwd /path/to/the/clone \
   --out /path/for/binding/files \
-  --only build-queue,merge-queue,discoveries
+  --only build-pick,build-queue,merge-queue,discoveries
 ```
 
 `--host` is the id of the execution host that starts the runs: a name you choose for
@@ -368,6 +381,19 @@ Registering a file starts runs, so ask first:
 
   On Linux or Windows, run the same `trigger fire` command from cron, systemd or Task
   Scheduler. If a queue is already scheduled another way, remove that schedule first.
+- **The fire-only binding**, `build-queue`, is a whole file that is never scheduled:
+  `trigger schedule install` refuses it. Do not fire it by hand without a number; to
+  build one issue through it, name the issue and its item:
+
+  ```bash
+  printf '{"number":"42"}' > /tmp/build-42.json
+  archon trigger fire --config <build-queue file> --inputs /tmp/build-42.json --item issue-42
+  ```
+
+  Firing the `build-pick` file starts every waiting issue. If the build queue was
+  scheduled from an earlier version of this pack, remove that schedule, and write
+  `build-pick`, `build-queue` and the intake bindings again with `--force`:
+  [Its bindings](https://archon.diy/guides/sdlc-operations/#its-bindings) has the steps.
 - **An event binding** is one entry for the GitHub source plugin's `bindings` array on
   a running server with a webhook. See
   [Configure GitHub event starts](https://archon.diy/guides/workflow-triggers/#configure-github-event-starts).
@@ -384,6 +410,20 @@ archon workflow wake schedule install   # macOS
 On Linux or Windows, run `archon workflow wake` from cron, systemd or Task Scheduler
 every minute. Without either, an answered run waits forever, and it keeps its place in
 the queue, so the runs behind it wait too.
+
+**Something has to admit a queued build.** When more issues wait than the build queue's
+capacity, the rest are queued. A running `archon serve` with `ARCHON_TRIGGER_HOST` set
+to the bindings' `--host` admits a queued build about five seconds after a slot frees.
+Without a server, a queued build starts only at the next `archon trigger fire` on that
+host, or when a drain runs. So without a server, run this every minute from cron,
+systemd or launchd:
+
+```bash
+archon trigger drain --host <the --host the bindings were written with>
+```
+
+Without it, a queued issue can wait until the next scheduled pick, 30 minutes by
+default.
 
 **Ask the user** how many issues the factory works at once. The pack recommends 10 for
 intake and 10 for the build queue; the merge queue, the split queue and the discoveries

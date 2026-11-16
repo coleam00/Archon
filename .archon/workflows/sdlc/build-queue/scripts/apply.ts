@@ -11,7 +11,8 @@
  * its claim until the ruling node records the answer. The round carries the review
  * verdicts its delivery published and the latest validation its CI agent ran. A
  * continue then starts the item's next round at once through the operator's
- * build-queue binding; if it does not start, the item waits for the next queue run.
+ * build-queue binding, on the issue's item; if it does not start, the item waits for
+ * the next build pick.
  *
  * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ORDER and INPUTS_HANDOFF,
  * the order's and the handoff's summaries, empty when skipped; INPUTS_ROUTE,
@@ -40,7 +41,6 @@ import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { runReviews } from '../../.shared/review-rounds.ts';
 import { announce, type DecisionEntry } from '../../.shared/queue.ts';
-import { idleOutcome, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
 type RouteOutput = NodeOutput<'archon-build-queue', 'route'>;
@@ -158,24 +158,21 @@ function summaryOf(item: QualifiedPr | null, decision: Decision): string {
   return `${subject}${decision.kind}. ${decision.reason}`;
 }
 
-/** The summary once the writes are done; a continue starts the next round now instead of waiting for the next queue run. */
+/** The summary once the writes are done; a continue starts the next round now instead of waiting for the next build pick. */
 function afterWrite(summary: string, wrote: string | null, decision: Decision, item: QualifiedPr, runId: string): string {
   const written = wrote === null ? summary : `${summary} (${wrote})`;
   return decision.kind === 'continue' ? `${written}; ${nextRound(item, runId)}` : written;
 }
 
 /** The summary of a path with no item, so nothing is written or asked; null on an item's path. */
-function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; summary: string; healthy: boolean } | null {
+function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; summary: string } | null {
   switch (path) {
     case 'idle':
-      return {
-        decision: path,
-        ...idleOutcome('No item waits for the build queue.', stuckItems(workflowRunId(), 'build')),
-      };
+      return { decision: path, summary: 'The run named no issue, so it built none; archon-build-pick starts the waiting items.' };
     case 'order':
-      return { decision: path, summary: input('order'), healthy: true };
+      return { decision: path, summary: input('order') };
     case 'handoff':
-      return { decision: path, summary: input('handoff'), healthy: true };
+      return { decision: path, summary: input('handoff') };
     default:
       return null;
   }
@@ -281,7 +278,6 @@ function main(): void {
     ...(asking === null ? NO_ASK : raisedAsk(asking)),
     item: String(item.number),
     pr: prLabel(round),
-    healthy: true,
   };
 
   if (decision.kind === 'launch') throw new Error('a launch reached apply without its round');
