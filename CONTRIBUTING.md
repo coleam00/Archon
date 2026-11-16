@@ -14,17 +14,17 @@ Thank you for your interest in contributing to Archon!
 
 ### Code Quality
 
-Packages using the shared test runner without legacy `testGroups` discover tests
-under `src` automatically (`*.test.ts`, `*.spec.ts`, and their `.tsx` equivalents).
-Core uses this default. A test that uses `mock.module()`, directly
+Packages using the shared test runner discover tests under `src` automatically
+(`*.test.ts`, `*.spec.ts`, and their `.tsx` equivalents). Core uses this default.
+A package's legacy `testGroups` pin only the files they name into fixed processes;
+discovery groups every other test, so a new test needs no manifest edit. A test that uses `mock.module()`, directly
 or through a helper, must start with the exact line `// @archon-test-isolated`;
 discovery fails on a direct call without it.
 Use the same directive for any other test requiring a fresh process. Unmarked tests
 share one process. Run package test scripts to preserve isolation; requested selectors
 retain Bun's substring-filter meaning and run only matching files, preserving the same
 isolation groups. Every requested group runs, and any failed group makes the command
-fail. Discovery errors, including selected files outside explicit `testGroups`, stop
-the request before any group starts. Test flags apply to each selected group; JUnit output
+fail. Discovery errors stop the request before any group starts. Test flags apply to each selected group; JUnit output
 is combined across groups and, from the repository root, across every started owner.
 Name filters (`-t` or `--test-name-pattern`) are supported only when the request selects
 one isolation group, preserving Bun's native exit result. Requests selecting multiple

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { terminalRecordSchema } from '@archon/workflows/schemas/terminal-record';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';

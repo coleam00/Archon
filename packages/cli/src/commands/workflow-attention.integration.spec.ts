@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { getLog } from './workflow-shared';
 import * as chatScope from '../workflow-scope';
 import { afterEach, expect, spyOn, test } from 'bun:test';

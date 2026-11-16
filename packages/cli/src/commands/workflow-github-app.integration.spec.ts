@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterEach, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { generateKeyPairSync } from 'node:crypto';
