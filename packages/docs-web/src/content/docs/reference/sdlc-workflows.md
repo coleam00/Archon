@@ -75,7 +75,7 @@ The stage after intake. [`archon-build-pick`](#archon-build-pick) starts one run
 
 **When to use it**: You want triaged issues worked to reviewed pull requests without answering every routine stop yourself. The pack's [setup guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-up-the-pack) runs it by hand and binds it.
 
-**What it produces**: Reviewed pull requests, the queue's record on each work item (`facts.build`: status, rounds and decisions), and attention items for the decisions that need a person.
+**What it produces**: Reviewed pull requests, the queue's record on each work item (`facts.build`: status, rounds and decisions), and attention items for the decisions that need a person. A run completes with what it left its issue as, as its outcome: `ready` (the pull request waits for the merge queue), `continue` (another round is owed and was started) or `parked` (nothing starts until a re-triage); a run that worked no issue completes `idle`, `order` or `handoff`. `archon workflow runs --item issue-<number>` shows the outcome of each of an issue's build runs.
 
 #### `archon-build-pick`
 

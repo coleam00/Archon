@@ -1,5 +1,7 @@
 /**
- * Act on a person's answer to the build queue's attention item.
+ * End the build-queue run: act on a person's answer to its attention item, or, when
+ * nothing was asked, pass on what apply decided. Either way the node's `outcome` is the
+ * run's outcome.
  *
  * The answer names one of the options the ask declared, so its effect is read from that
  * option's value, never from the answer's text. An `other` answer names none: its text
@@ -12,15 +14,17 @@
  * at once through the operator's build-queue binding, on the issue's item; if it does
  * not start, the item waits for the next build pick.
  *
- * Bound inputs: INPUTS_ITEM from facts; INPUTS_ASKED, what apply asked; INPUTS_DECISION,
- * the id of the chosen option (`other` for the wait's own), and INPUTS_TEXT, the answer's text;
- * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
+ * Bound inputs: INPUTS_ITEM from facts; INPUTS_ASKED, what apply asked; INPUTS_DECIDED
+ * and INPUTS_DECIDED_SUMMARY, apply's decision and summary; INPUTS_DECISION, the id of
+ * the chosen option (`other` for the wait's own, empty when nothing was asked), and
+ * INPUTS_TEXT, the answer's text; INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
  */
 
 import { type AskedBy, type BuildAsk, type BuildEffect, type BuildStatus, itemPullRequest, nextRound, withBuild } from '../../.shared/build.ts';
 import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { answeredChoice, rulingHeading } from '../../.shared/queue.ts';
 import { readWorkItem, writeClaimed } from '../../.shared/workitem.ts';
@@ -35,6 +39,14 @@ const STATUS = { continue: 'next', ready: 'ready', park: 'parked' } as const sat
   BuildEffect,
   BuildStatus
 >;
+
+type Outcome = NodeOutput<'archon-build-queue', 'ruling'>['outcome'];
+
+/** The run's outcome for each effect an answer can have. */
+const OUTCOME = { continue: 'continue', ready: 'ready', park: 'parked' } as const satisfies Record<BuildEffect, Outcome>;
+
+/** Apply's decisions that end a run with nothing asked; `asked` pauses, and `launch` never reaches the record. */
+const DECIDED: readonly Outcome[] = ['ready', 'continue', 'parked', 'idle', 'order', 'handoff'];
 
 /** Refuse a ready answer before any write when the item has no pull request to hand on. */
 function requireReadyPr(item: QualifiedPr, id: string): void {
@@ -51,11 +63,18 @@ const ABOUT: Record<AskedBy, string> = {
 };
 
 function main(): void {
+  const answer = input('decision').trim();
+  if (answer === '') {
+    const decided = DECIDED.find(outcome => outcome === input('decided').trim());
+    if (decided === undefined) throw new Error(`apply decided "${input('decided')}" and nothing was answered`);
+    emit({ outcome: decided, section: '', summary: input('decided_summary') });
+    return;
+  }
   const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
   const asked = nullableJson(input('asked')) as Asked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');
-  const choice = answeredChoice(asked.ask, input('decision').trim(), 'continue');
+  const choice = answeredChoice(asked.ask, answer, 'continue');
   const { effect } = choice.value;
   const words = input('text').trim();
   const at = new Date().toISOString();
@@ -94,7 +113,7 @@ function main(): void {
     ready: () => 'its pull request waits for the merge queue',
     park: () => 'the queue stops working it until a re-triage',
   }[effect]();
-  emit({ decision: effect, section: heading, summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${next}.` });
+  emit({ outcome: OUTCOME[effect], section: heading, summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${next}.` });
 }
 
 try {

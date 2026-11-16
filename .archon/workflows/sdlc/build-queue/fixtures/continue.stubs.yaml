@@ -84,7 +84,8 @@ apply:
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: completed
-  reached: [facts, route, ship__continues, ship__report, answer, apply]
+  authored: ready
+  reached: [facts, route, ship__continues, ship__report, answer, apply, ruling]
   resolved-text-contains:
     answer: '"pr_url":"https://github.com/example/repo/pull/1"'
 exec-code: true

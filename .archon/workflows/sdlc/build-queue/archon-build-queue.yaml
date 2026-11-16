@@ -66,7 +66,14 @@ inputs:
       binding's resource, capacity and overlap policy, once for the state the decision
       left the item in, on the issue's item. Empty starts no follow-up; the next build pick starts the item.
 
-returns: apply
+# The run completes with what it left its issue as: `ready` (its pull request waits for
+# the merge queue), `continue` (another round is owed and was started) or `parked`
+# (nothing starts until a re-triage). A run that worked no issue completes `idle`,
+# `order` or `handoff`. While a question is a pause inside the run, the ruling node is
+# the run's last word: it passes apply's decision through when nothing was asked. When a
+# run can end with its asks, the ask and ruling nodes go and apply becomes the end, so
+# build nothing on the pass-through.
+returns: { node: ruling, outcome: outcome }
 
 nodes:
   - id: start
@@ -482,18 +489,22 @@ nodes:
     script: ruling
     runtime: bun
     depends_on: [facts, apply, ask]
+    # Runs when nothing was asked too, to end the run with apply's decision.
+    trigger_rule: none_failed_min_one_success
     with:
       item: { from: "$facts.output.item" }
       asked: { from: "$apply.output.asked" }
-      decision: "$ask.output.decision"
-      text: "$ask.output.text"
+      decided: "$apply.output.decision"
+      decided_summary: "$apply.output.summary"
+      decision: { from: "$ask.output.decision", if_skipped: "" }
+      text: { from: "$ask.output.text", if_skipped: "" }
     output_format:
       type: object
       properties:
-        decision: { type: string, enum: [continue, ready, park] }
+        outcome: { type: string, enum: [ready, continue, parked, idle, order, handoff] }
         section: { type: string }
         summary: { type: string }
-      required: [decision, section, summary]
+      required: [outcome, section, summary]
 
   # Revisit pickup is independent of item pickup: an unresolved PR create must
   # not suppress revisits of other items.

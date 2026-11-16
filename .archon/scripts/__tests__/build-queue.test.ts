@@ -804,7 +804,7 @@ describe('the build queue scripts', () => {
     const at = install();
     seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '' })));
     const ruled = run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: ASKED, INPUTS_DECISION: 'other', INPUTS_TEXT: 'Split it in two.' });
-    expect(ok(ruled)).toMatchObject({ decision: 'continue' });
+    expect(ok(ruled)).toMatchObject({ outcome: 'continue' });
     expect(ruled.bodies[0]).toContain("The maintainer's words: Split it in two.");
     expect(stored(at).value).toMatchObject({
       claim: null,
@@ -812,11 +812,20 @@ describe('the build queue scripts', () => {
     });
   }, 60_000);
 
+  test('with nothing asked, the run ends with what apply decided, and an unanswered ask refuses', () => {
+    const at = install();
+    const unasked = { INPUTS_ITEM: 'null', INPUTS_ASKED: 'null', INPUTS_DECISION: '', INPUTS_TEXT: '', INPUTS_DECIDED_SUMMARY: 'Issue 7: ready.' };
+    const passed = run(at, 'ruling', { ...unasked, INPUTS_DECIDED: 'ready' });
+    expect(ok(passed)).toEqual({ outcome: 'ready', section: '', summary: 'Issue 7: ready.' });
+    expect(passed.bodies).toEqual([]);
+    expect(run(at, 'ruling', { ...unasked, INPUTS_DECIDED: 'asked' }).code).not.toBe(0);
+  }, 60_000);
+
   test('a park with no ruling and no words writes no section and stops working the item', () => {
     const at = install();
     seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '' })));
     const ruled = run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: ASKED, INPUTS_DECISION: 'park', INPUTS_TEXT: '' });
-    expect(ok(ruled)).toMatchObject({ decision: 'park', section: '' });
+    expect(ok(ruled)).toMatchObject({ outcome: 'parked', section: '' });
     expect(ruled.bodies).toEqual([]);
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'parked', brief: '' } } });
   }, 60_000);
@@ -827,7 +836,7 @@ describe('the build queue scripts', () => {
   test('a ready answer releases the item to the merge queue with the PR triage named', () => {
     const at = install();
     seed(at, triaged({ ...CLAIMED, facts: { triage: { ...TRIAGE, pull_request: 42 } } }, record({ status: 'asking', brief: '' })));
-    expect(ok(run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: READY_ASKED, INPUTS_DECISION: 'operator-finishes', INPUTS_TEXT: '' })).decision).toBe('ready');
+    expect(ok(run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: READY_ASKED, INPUTS_DECISION: 'operator-finishes', INPUTS_TEXT: '' })).outcome).toBe('ready');
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { build: { status: 'ready' } } });
     expect(buildWaits(doc)).toBe(false);
