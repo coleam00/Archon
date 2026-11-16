@@ -1075,9 +1075,10 @@ release did not record that output, so its first resumed iteration sees both as 
 
 By default a legacy interactive loop gates even on an iteration that met its completion
 condition. `signal_completes: true` completes the node on that iteration instead, so the
-gate appears only on iterations that did not complete. Setting it without
-`interactive: true` has no effect and emits a loader warning. Replace it with a terminal
-wait whose `when:` skips it on success, as in the second example under
+gate appears only on iterations that did not complete. Without `interactive: true` the
+flag has no effect, and the load warnings (`archon validate`) say to remove it. Replace
+the interactive shape with a terminal wait whose `when:` skips it on success, as in the
+second example under
 [Pausing to ask inside the body](#pausing-to-ask-inside-the-body).
 
 ## See Also

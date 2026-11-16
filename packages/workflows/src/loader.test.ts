@@ -999,6 +999,70 @@ nodes:
     parseWorkflowYaml(withNodes(nodes));
   });
 
+  it.each([
+    [
+      'a loop',
+      'validate',
+      `  - id: validate
+    loop:
+      prompt: Validate.
+      until_bash: "true"
+      max_iterations: 5
+      signal_completes: true
+`,
+    ],
+    [
+      'a loop nested in a loop_group body',
+      'inner',
+      `  - id: grp
+    loop_group:
+      until_bash: "true"
+      max_iterations: 3
+      nodes:
+        - id: inner
+          loop:
+            prompt: Work.
+            until_bash: "true"
+            max_iterations: 2
+            signal_completes: true
+`,
+    ],
+    [
+      'a loop_group',
+      'grp',
+      `  - id: grp
+    loop_group:
+      until_bash: "true"
+      max_iterations: 3
+      signal_completes: true
+      nodes:
+        - id: work
+          bash: "echo hi"
+`,
+    ],
+  ])('warns when %s sets signal_completes without interactive, and still loads', (_, id, nodes) => {
+    const { workflow, warnings } = parseWorkflowYaml(withNodes(nodes));
+    expect(workflow).not.toBeNull();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(`'${id}'`);
+    expect(warnings[0]).toContain('signal_completes');
+  });
+
+  it('does not warn about signal_completes on an interactive loop', () => {
+    const { warnings } = parseWorkflowYaml(
+      withNodes(`  - id: validate
+    loop:
+      prompt: Validate.
+      until_bash: "true"
+      max_iterations: 5
+      interactive: true
+      gate_message: Review.
+      signal_completes: true
+`)
+    );
+    expect(warnings.filter(w => w.includes('signal_completes'))).toEqual([]);
+  });
+
   it.each<[string, string, string[]]>([
     [
       'a loop node that declares no completion channel',

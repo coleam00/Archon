@@ -6,6 +6,7 @@ import { ignoredFieldsForNode } from '../schemas/node-ignored-fields';
 import { getLog } from './log';
 import {
   collectLoopUntilDeprecationWarnings,
+  collectSignalCompletesWithoutInteractiveWarnings,
   collectUnknownNodeKeys,
   nodeIdForMessages,
 } from './parse-warnings';
@@ -95,6 +96,7 @@ function parseDagNode(
   }
   collectUnknownNodeKeys(raw, id, `Node '${id}'`, warnings);
   collectLoopUntilDeprecationWarnings(node, id, warnings);
+  collectSignalCompletesWithoutInteractiveWarnings(node, id, warnings);
 
   collectIgnoredFieldWarnings(node, raw as Record<string, unknown>, id, warnings);
 
