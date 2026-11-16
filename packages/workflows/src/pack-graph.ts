@@ -15,6 +15,7 @@ import { declaredOutcome } from './completed-outcome';
 import { readComposedMeta } from './compiled-command';
 import type { PackBinding } from './schemas/pack-bindings';
 import { kindedPackBinding } from './schemas/pack-bindings';
+import { isComposeFanOutNode } from './schemas/node-guards';
 import type { RunEndedTrigger } from './schemas/resource-start';
 import type {
   ResolvedWorkflow,
@@ -30,6 +31,11 @@ const packGraphNodeSchema = z.object({
   dependsOn: z.array(z.string()),
   /** The include blocks the node came from, outermost first; empty when the stage authored it. */
   blocks: z.array(z.object({ include: z.string(), workflow: z.string() })),
+  /**
+   * An `include:` with `fan_out:` stays one node, because its width is known only at run
+   * time; `workflow` names its body in the graph's `fanOutBlocks`. Null for any other node.
+   */
+  fanOut: z.object({ workflow: z.string() }).nullable(),
 });
 
 const packGraphStageSchema = z.object({
@@ -43,7 +49,10 @@ const packGraphStageSchema = z.object({
       values: z.array(
         z.object({
           value: z.string(),
-          /** No active arrow leaves this outcome. Whether that is a dead end is the pack's call. */
+          /**
+           * No active arrow without problems leaves this outcome. Whether that is a dead end
+           * is the pack's call.
+           */
           startsNothing: z.boolean(),
         })
       ),
@@ -60,7 +69,15 @@ const arrowEndsSchema = {
   to: z.string(),
 };
 const declaredSourceSchema = z.object({ binding: z.string() });
-const installedSourceSchema = z.object({ file: z.string(), sourceInstanceId: z.string() });
+const installedSourceSchema = z.object({
+  file: z.string(),
+  sourceInstanceId: z.string(),
+  /**
+   * What the check a run gets before it starts finds wrong with the file. Non-empty means
+   * a run of `from.stage` on an item is refused before it starts, so the arrow starts nothing.
+   */
+  problems: z.array(z.string()),
+});
 
 /** An arrow is active exactly when a trigger file in this install launches it. */
 const packGraphArrowSchema = z.discriminatedUnion('active', [
@@ -83,6 +100,15 @@ export const packGraphSchema = z.object({
   pack: z.string(),
   stages: z.array(packGraphStageSchema),
   arrows: z.array(packGraphArrowSchema),
+  /** The body of each fan-out include a stage or another body names, once per workflow. */
+  fanOutBlocks: z.array(z.object({ workflow: z.string(), nodes: z.array(packGraphNodeSchema) })),
+  /**
+   * Every workflow that failed to load from the source the pack was read from. A failed
+   * stage is missing from `stages`, so a non-empty list means the graph may be incomplete.
+   */
+  discoveryErrors: z.array(
+    z.object({ filename: z.string(), workflowName: z.string().nullable(), error: z.string() })
+  ),
 });
 
 export type PackGraph = z.infer<typeof packGraphSchema>;
@@ -145,11 +171,13 @@ export interface InstalledArrow {
   sourceInstanceId: string;
   runEnded: RunEndedTrigger;
   launchWorkflow: string;
+  problems: readonly string[];
 }
 
 type Stage = Pick<ResolvedWorkflow, 'name' | 'returns' | 'result' | 'nodes'>;
+type GraphNode = PackGraph['stages'][number]['nodes'][number];
 
-function stageNodes(stage: Stage): PackGraph['stages'][number]['nodes'] {
+function stageNodes(stage: Pick<Stage, 'nodes'>): GraphNode[] {
   return stage.nodes.map(node => ({
     id: node.id,
     kind: node.kind,
@@ -158,7 +186,33 @@ function stageNodes(stage: Stage): PackGraph['stages'][number]['nodes'] {
       include: boundary.includeId,
       workflow: boundary.workflow,
     })),
+    fanOut: isComposeFanOutNode(node) ? { workflow: node.include } : null,
   }));
+}
+
+/**
+ * The body of every fan-out include reachable from the stages, resolved by name among
+ * `workflows` as discovery resolved it, and the bodies those bodies fan out to.
+ */
+function fanOutBlocks(
+  stages: readonly Pick<Stage, 'nodes'>[],
+  workflows: readonly Pick<Stage, 'name' | 'nodes'>[]
+): PackGraph['fanOutBlocks'] {
+  const blocks: PackGraph['fanOutBlocks'] = [];
+  const pending = stages.flatMap(stage => stageNodes(stage));
+  for (let node = pending.shift(); node !== undefined; node = pending.shift()) {
+    const name = node.fanOut?.workflow;
+    if (name === undefined || blocks.some(block => block.workflow === name)) continue;
+    const body =
+      workflows.find(w => w.name === name) ?? workflows.find(w => w.name.endsWith(`:${name}`));
+    // Discovery refuses a fan-out whose target does not resolve, so this is a caller's bug.
+    if (body === undefined)
+      throw new Error(`Fan-out include '${name}' is not a discovered workflow`);
+    const nodes = stageNodes(body);
+    blocks.push({ workflow: name, nodes });
+    pending.push(...nodes);
+  }
+  return blocks;
 }
 
 interface GraphInput {
@@ -166,15 +220,21 @@ interface GraphInput {
   stages: readonly Stage[];
   declared: Readonly<Record<string, PackBinding>> | undefined;
   installed: readonly InstalledArrow[];
+  /** Every discovered workflow, stages included, where a fan-out include's body is found. */
+  workflows: readonly Pick<Stage, 'name' | 'nodes'>[];
+  discoveryErrors: WorkflowLoadResult['errors'];
 }
 
 /** One key per arrow, as `runEndedTriggerCheck` keys a duplicate within a project. */
 const arrowKey = (from: string, outcome: string, to: string): string =>
   JSON.stringify([from, outcome, to]);
 
-const installedSource = (entry: InstalledArrow): { file: string; sourceInstanceId: string } => ({
+const installedSource = (
+  entry: InstalledArrow
+): { file: string; sourceInstanceId: string; problems: string[] } => ({
   file: entry.file,
   sourceInstanceId: entry.sourceInstanceId,
+  problems: [...entry.problems],
 });
 
 /** Each declared run-ended binding as one arrow per outcome it lists, from stage to stage. */
@@ -277,12 +337,18 @@ export function buildPackGraph(input: GraphInput): PackGraph {
   const arrows = graphArrows(input);
   const started = new Set(
     arrows
-      .filter(arrow => arrow.active)
+      .filter(arrow => arrow.active && arrow.installed.problems.length === 0)
       .map(arrow => arrowKey(arrow.from.stage, arrow.from.outcome, ''))
   );
   return {
     pack: input.packKey,
     stages: input.stages.map(stage => graphStage(stage, started)),
     arrows,
+    fanOutBlocks: fanOutBlocks(input.stages, input.workflows),
+    discoveryErrors: input.discoveryErrors.map(e => ({
+      filename: e.filename,
+      workflowName: e.workflowName ?? null,
+      error: e.error,
+    })),
   };
 }

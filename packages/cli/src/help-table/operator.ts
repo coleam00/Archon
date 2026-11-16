@@ -31,6 +31,12 @@ export const operatorHelp: HelpGroup = {
       spec: 'pack graph <pack>',
       description:
         "Show a pack's stages, their outcomes and the run-ended arrows between them,\neach active in this install or declared and inactive (--json for the read)",
+      scopedFlags: [
+        {
+          spec: '--workflow-source <dir>',
+          description: "Where the pack's workflows are found when it is not in the checkout",
+        },
+      ],
     },
     {
       command: 'pack',

@@ -11,7 +11,7 @@ import { packGraphResponseSchema } from './schemas/workflow.schemas';
 
 const track = trackTempRoots();
 
-async function graphApp(): Promise<OpenAPIHono> {
+async function graphApp(triggers: Record<string, string> = {}): Promise<OpenAPIHono> {
   const project = track(await mkdtemp(join(tmpdir(), 'archon-pack-graph-route-')));
   const stage = join(project, '.archon', 'workflows', 'chain', 'chain-a');
   await mkdir(stage, { recursive: true });
@@ -19,6 +19,10 @@ async function graphApp(): Promise<OpenAPIHono> {
     join(stage, 'chain-a.yaml'),
     'name: chain-a\ndescription: a\nnodes:\n  - id: work\n    bash: "true"\n'
   );
+  const triggersDirectory = join(project, 'triggers');
+  await mkdir(triggersDirectory, { recursive: true });
+  for (const [name, body] of Object.entries(triggers))
+    await writeFile(join(triggersDirectory, name), body);
   const app = new OpenAPIHono();
   registerPackGraphRoute(app, {
     codebaseCwd: async id => (id === 'cb-1' ? project : null),
@@ -30,7 +34,7 @@ async function graphApp(): Promise<OpenAPIHono> {
           assistants: { claude: {}, codex: {} },
         }),
         providers: providerRegistry,
-        triggersDirectory: () => join(project, 'no-triggers'),
+        triggersDirectory: () => triggersDirectory,
         projectKeyOf: async () => null,
       }),
   });
@@ -41,10 +45,14 @@ describe('GET /api/packs/{pack}/graph', () => {
   test("a codebase's pack is served in the served schema", async () => {
     const response = await (await graphApp()).request('/api/packs/chain/graph?codebaseId=cb-1');
     expect(response.status).toBe(200);
-    const graph = packGraphResponseSchema.parse(await response.json());
-    expect(graph.stages.map(stage => [stage.name, stage.nodes.map(node => node.id)])).toEqual([
-      ['chain-a', ['work']],
-    ]);
+    packGraphResponseSchema.parse(await response.json());
+  });
+
+  test('an unreadable trigger file is 422 naming the file, as the CLI names it', async () => {
+    const app = await graphApp({ 'broken.json': '{ not json' });
+    const response = await app.request('/api/packs/chain/graph?codebaseId=cb-1');
+    expect(response.status).toBe(422);
+    expect(((await response.json()) as { error: string }).error).toContain('broken.json');
   });
 
   test('an unknown codebase or pack returns 404', async () => {

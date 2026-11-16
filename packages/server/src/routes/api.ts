@@ -130,13 +130,18 @@ export function registerApiRoutes(
   });
   registerPackGraphRoute(app, {
     codebaseCwd: async id => (await codebaseDb.getCodebase(id))?.default_cwd ?? null,
-    readPackGraph: (cwd, pack) =>
-      readPackGraph(cwd, pack, {
-        loadConfig,
-        providers: providerRegistry,
-        triggersDirectory: getTriggersPath,
-        projectKeyOf: launchProjectKey(path => registeredProjectKeyForPath(path, codebaseDb)),
-      }),
+    readPackGraph: (cwd, pack, workflowSource) =>
+      readPackGraph(
+        cwd,
+        pack,
+        {
+          loadConfig,
+          providers: providerRegistry,
+          triggersDirectory: getTriggersPath,
+          projectKeyOf: launchProjectKey(path => registeredProjectKeyForPath(path, codebaseDb)),
+        },
+        workflowSource === undefined ? {} : { workflowSource }
+      ),
   });
   registerWorkflowDefinitionRoutes(app);
   registerArtifactRoutes(app);

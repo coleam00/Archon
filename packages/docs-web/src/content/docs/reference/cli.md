@@ -2591,15 +2591,16 @@ Items need the database store and a registered project. With `store: files`, or 
 Show how a pack's stages connect in this install: each stage with the outcomes it can end with and its nodes, and every [run-ended arrow](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends) between them.
 
 ```bash
-archon pack graph <pack> [--cwd <checkout>] [--json]
+archon pack graph <pack> [--cwd <checkout>] [--workflow-source <dir>] [--json]
 ```
 
-- `<pack>` is discovered from `--cwd` as `pack bindings` discovers it, and the arrows are those of that checkout's project.
+- `<pack>` is discovered from `--cwd` as `pack bindings` discovers it, and the arrows are those of that checkout's project. With `--workflow-source`, the pack is discovered from there instead, as a binding's `launch.discoveryCwd` discovers it; the arrows are still those of `--cwd`'s project.
+- Each active arrow is checked as a run is checked before it starts. A file that check refuses is shown as `[active, refused: <problem>]`: every run of its ended stage on an item is refused until the file is fixed.
 - An arrow the pack declares as a [`run_ended:` binding](/reference/workflow-language/#pack-bindings) is `active` when a trigger file in `ARCHON_HOME/triggers/` launches it in this project, and declared and inactive when none does. A trigger file the pack does not declare is an active arrow with `declared: null`.
-- Each outcome value has `startsNothing` when no active arrow leaves it. The text output lists those, and marks the ones whose stage declares no `asks` as ending in silence.
+- Each outcome value has `startsNothing` when no active arrow without problems leaves it. The text output lists those, and marks the ones whose stage declares no `asks` as ending in silence.
 - `--json` prints the read, the same shape as [`GET /api/packs/{pack}/graph`](/reference/api/#workflows). The guide shows [the shape and how to draw an item's path with it](/guides/workflow-triggers/#see-how-a-packs-stages-connect).
 
-An invalid trigger file fails the command, as it fails item runs. With `store: files`, any run-ended file in the triggers directory is refused, as `trigger check` refuses it.
+Workflows that failed to load are listed after the graph, because a stage among them is missing from it. An invalid trigger file fails the command, as it fails item runs. With `store: files`, any run-ended file in the triggers directory is refused, as `trigger check` refuses it.
 
 ### `pack bindings`
 

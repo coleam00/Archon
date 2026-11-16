@@ -3800,6 +3800,8 @@ export interface paths {
         query: {
           /** @description The codebase whose project the pack is discovered from and its arrows launch in */
           codebaseId: string;
+          /** @description An absolute directory the pack's workflows are discovered from instead of the codebase, as a binding's launch.discoveryCwd names it */
+          workflowSource?: string;
         };
         header?: never;
         path: {
@@ -3819,8 +3821,26 @@ export interface paths {
             'application/json': components['schemas']['PackGraph'];
           };
         };
+        /** @description workflowSource is not an absolute path */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Codebase not found, or no workflow of the pack was found */
         404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description A trigger file in the install cannot be read, or the store cannot hold run-ended bindings; the error names the file */
+        422: {
           headers: {
             [name: string]: unknown;
           };
@@ -9500,6 +9520,9 @@ export interface components {
             include: string;
             workflow: string;
           }[];
+          fanOut: {
+            workflow: string;
+          } | null;
         }[];
       }[];
       arrows: (
@@ -9517,6 +9540,7 @@ export interface components {
             installed: {
               file: string;
               sourceInstanceId: string;
+              problems: string[];
             };
           }
         | {
@@ -9533,6 +9557,26 @@ export interface components {
             installed: unknown;
           }
       )[];
+      fanOutBlocks: {
+        workflow: string;
+        nodes: {
+          id: string;
+          kind: string;
+          dependsOn: string[];
+          blocks: {
+            include: string;
+            workflow: string;
+          }[];
+          fanOut: {
+            workflow: string;
+          } | null;
+        }[];
+      }[];
+      discoveryErrors: {
+        filename: string;
+        workflowName: string | null;
+        error: string;
+      }[];
     };
     ValidateWorkflowResponse: {
       valid: boolean;

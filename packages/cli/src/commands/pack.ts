@@ -492,7 +492,8 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
   );
 }
 
-const GRAPH_USAGE = 'Usage: archon pack graph <pack> [--cwd <checkout>] [--json]';
+const GRAPH_USAGE =
+  'Usage: archon pack graph <pack> [--cwd <checkout>] [--workflow-source <dir>] [--json]';
 
 /** The graph as plain lines; `--json` prints the read itself, which is the contract. */
 function graphText(graph: PackGraph): string {
@@ -502,26 +503,42 @@ function graphText(graph: PackGraph): string {
     lines.push(`  ${stage.name}${values === undefined ? ' (no outcome)' : `: ${values}`}`);
   }
   lines.push('', `Arrows: ${String(graph.arrows.length)}`);
-  for (const arrow of graph.arrows)
-    lines.push(
-      `  ${arrow.from.stage}:${arrow.from.outcome} -> ${arrow.to} [${arrow.active ? 'active' : 'declared, inactive'}]`
-    );
+  for (const arrow of graph.arrows) {
+    const problems = arrow.active ? arrow.installed.problems : [];
+    const state = !arrow.active
+      ? 'declared, inactive'
+      : problems.length > 0
+        ? `active, refused: ${problems.join('; ')}`
+        : 'active';
+    lines.push(`  ${arrow.from.stage}:${arrow.from.outcome} -> ${arrow.to} [${state}]`);
+  }
   const nothing = graph.stages.flatMap(stage =>
     (stage.outcome?.values ?? [])
       .filter(v => v.startsNothing)
       .map(v => `  ${stage.name}:${v.value}${stage.asks ? '' : ' (no asks: ends in silence)'}`)
   );
   if (nothing.length > 0) lines.push('', 'Outcomes that start nothing:', ...nothing);
+  if (graph.discoveryErrors.length > 0)
+    lines.push(
+      '',
+      'Workflows that failed to load (a stage among them is missing above):',
+      ...graph.discoveryErrors.map(e => `  ${e.filename}: ${e.error}`)
+    );
   return lines.join('\n');
 }
 
 async function packGraph(packKey: string, options: PackBindingsOptions): Promise<void> {
-  const graph = await readPackGraph(resolve(options.cwd), packKey, {
-    loadConfig,
-    providers: providerRegistry,
-    triggersDirectory: getTriggersPath,
-    projectKeyOf: launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb)),
-  });
+  const graph = await readPackGraph(
+    resolve(options.cwd),
+    packKey,
+    {
+      loadConfig,
+      providers: providerRegistry,
+      triggersDirectory: getTriggersPath,
+      projectKeyOf: launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb)),
+    },
+    options.workflowSource === undefined ? {} : { workflowSource: resolve(options.workflowSource) }
+  );
   if (options.json) await writeJsonLine(graph);
   else console.log(graphText(graph));
 }
