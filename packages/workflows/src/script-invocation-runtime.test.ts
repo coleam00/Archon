@@ -2,6 +2,7 @@
 import { expect, test } from 'bun:test';
 import { execFileAsync } from '@archon/git';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { existsSync } from 'node:fs';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,15 +35,20 @@ async function checkInlineScript(mode: (typeof launchModes)[number], shim: boole
       INPUTS_MESSAGE: 'input € & | <> % ! ^ "',
       ARCHON_INLINE_SHIM: '',
     };
-    const invocation = scriptInvocation('bun', {
-      kind: 'inline',
-      code: [
-        'import { value } from "./value.ts";',
-        'const message: string = await Promise.resolve(process.env.INPUTS_MESSAGE!);',
-        "const literal: string = 'source € & | <> % ! ^ \" `';",
-        'console.log(JSON.stringify({ value, message, literal, canary: process.env.ARCHON_INLINE_ENV_CANARY, shim: process.env.ARCHON_INLINE_SHIM }));',
-      ].join('\r\n'),
-    });
+    const invocation = scriptInvocation(
+      'bun',
+      {
+        kind: 'inline',
+        code: [
+          'import { value } from "./value.ts";',
+          'const message: string = await Promise.resolve(process.env.INPUTS_MESSAGE!);',
+          "const literal: string = 'source € & | <> % ! ^ \" `';",
+          'console.log(JSON.stringify({ value, message, literal, canary: process.env.ARCHON_INLINE_ENV_CANARY, shim: process.env.ARCHON_INLINE_SHIM }));',
+        ].join('\r\n'),
+      },
+      [],
+      join(dir, 'artifacts')
+    );
     let command = process.execPath;
     if (shim) {
       await writeFile(
@@ -77,3 +83,46 @@ async function checkInlineScript(mode: (typeof launchModes)[number], shim: boole
     await removeTempTree(dir);
   }
 }
+
+test.skipIf(!Bun.which('uv'))(
+  'inline uv runs outside the checkout uv project, config and Python pin',
+  async () => {
+    const checkout = await mkdtemp(join(tmpdir(), 'archon-uv-checkout-'));
+    const artifactsDir = await mkdtemp(join(tmpdir(), 'archon-uv-artifacts-'));
+    try {
+      // Each planted file fails the node if uv reads it.
+      await writeFile(
+        join(checkout, 'pyproject.toml'),
+        [
+          '[project]',
+          'name = "checkout"',
+          'version = "0.0.0"',
+          'requires-python = ">=3.99"',
+          'dependencies = ["archon-nonexistent-dependency"]',
+          '',
+          '[tool.uv]',
+          'index-url = "http://127.0.0.1:9/simple"',
+          '',
+        ].join('\n')
+      );
+      await writeFile(join(checkout, '.python-version'), '3.99\n');
+      const invocation = scriptInvocation(
+        'uv',
+        { kind: 'inline', code: 'print("ok")' },
+        [],
+        artifactsDir
+      );
+      const result = await execFileAsync(invocation.command, invocation.args, {
+        cwd: checkout,
+        timeout: 60_000,
+      });
+      expect(result.stdout.trim()).toBe('ok');
+      expect(existsSync(join(checkout, '.venv'))).toBe(false);
+      expect(existsSync(join(checkout, 'uv.lock'))).toBe(false);
+    } finally {
+      await removeTempTree(checkout);
+      await removeTempTree(artifactsDir);
+    }
+  },
+  60_000
+);

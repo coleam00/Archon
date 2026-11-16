@@ -512,6 +512,7 @@ describe('script node deps field — command construction', () => {
     const [cmd, args] = scriptCall as [string, string[]];
     expect(cmd).toBe('uv');
     expect(args[0]).toBe('run');
+    expect(args).toContain('--no-project');
     expect(args).toContain('--with');
     expect(args).toContain('httpx');
     expect(args).toContain('beautifulsoup4');

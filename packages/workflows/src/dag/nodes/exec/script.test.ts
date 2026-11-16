@@ -179,7 +179,7 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
         { env: NodeJS.ProcessEnv },
       ];
       expect(cmd).toBe('uv');
-      expect(args).toEqual(['run', 'python', '-c', "import os; print(os.environ['ARGUMENTS'])"]);
+      expect(args.slice(-3)).toEqual(['python', '-c', "import os; print(os.environ['ARGUMENTS'])"]);
       expect(opts.env.ARGUMENTS).toBe('py-message');
       expect(opts.env.CONTEXT).toBe('ISSUE #42 body text');
       expect(opts.env.EXTERNAL_CONTEXT).toBe('ISSUE #42 body text');

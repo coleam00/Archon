@@ -75,10 +75,14 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
    below), it's treated as inline code. Otherwise it's treated as a named-script
    reference.
 3. **Dispatch.**
-   - `runtime: bun` + inline → `bun --no-env-file -e '<code>'`
-   - `runtime: bun` + named  → `bun --no-env-file run <path>`
-   - `runtime: uv` + inline  → `uv run [--with dep ...] python -c '<code>'`
-   - `runtime: uv` + named   → `uv run [--with dep ...] <path>`
+   - `runtime: bun` + inline → `bun --no-env-file --preload=<file> -` (code on stdin)
+   - `runtime: bun` + named  → `bun --no-env-file run --preload=<file> <path>`
+   - `runtime: uv` + inline  → `uv run --no-project --project <run dir> [--with dep ...] python -c '<code>'`
+   - `runtime: uv` + named   → `uv run --no-project --project <run dir> [--with dep ...] <path>`
+
+   The preload file provides the `archon:script` module. `<run dir>` is an empty
+   directory Archon keeps in the run's artifact directory; see
+   [Dependencies](#dependencies-uv-only) for why.
 4. **Capture.** `stdout` (with the trailing newline stripped) becomes
    `$nodeId.output`. On a successful run, `stderr` is logged as a warning and
    posted to the conversation but does **not** fail the node. A non-zero exit
@@ -342,6 +346,12 @@ a per-run ephemeral environment:
   the field, or switch to `uv` if you need explicit dependency management.
 - **No persistent environment** — each run is isolated; there is no `requirements.txt`
   or lockfile to maintain.
+- **The target repository's uv project does not apply** — a uv node runs outside
+  any `pyproject.toml` in the checkout. It writes no `.venv` or `uv.lock` into the
+  checkout, and ignores the repository's project dependencies, its `[tool.uv]` or
+  `uv.toml` settings, and its `.python-version`. Your own uv config (for example
+  `~/.config/uv/uv.toml`) still applies. The script still runs with the checkout
+  as its working directory.
 
 ## Output and Data Flow
 
@@ -462,7 +472,8 @@ and bash nodes.
 `--no-env-file`, so variables in the target repo's `.env` do **not** leak into
 the script. Archon-managed env (from `~/.archon/.env` and `<repo>/.archon/.env`)
 passes through normally. `uv`-launched Python subprocesses do not auto-load
-`.env` at all. See [Security Model](/reference/security/#target-repo-env-isolation)
+`.env` at all, and a uv node does not join the target repository's uv project
+(see [Dependencies](#dependencies-uv-only)). See [Security Model](/reference/security/#target-repo-env-isolation)
 for the full story.
 
 ## Validation

@@ -9,7 +9,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
-import type { ScriptRuntime } from '../script-discovery';
 import { scriptApiModuleSource } from '@archon/script-api/text';
 
 export { scriptApiDeclaration } from '@archon/script-api/text';
@@ -30,16 +29,14 @@ plugin({
 const PRELOAD_FILE = `preload-${createHash('sha256').update(scriptApiPreloadSource).digest('hex').slice(0, 16)}.ts`;
 
 /**
- * The preload file for a script of `runtime` in this run, written on first use; undefined
- * for a runtime that cannot import the module.
+ * The preload file for a Bun script in this run, written on first use.
  *
  * It lives in the engine's part of the run's artifact directory, which a container run
  * mounts at the same path, so the same argv works on both sides of that boundary. The
  * name carries the content's hash and the file arrives by rename, so parallel nodes and
  * a resumed run under another Archon version never read a partial or foreign copy.
  */
-export function scriptApiPreload(runtime: ScriptRuntime, artifactsDir: string): string | undefined {
-  if (runtime !== 'bun') return undefined;
+export function scriptApiPreload(artifactsDir: string): string {
   const dir = join(artifactsDir, RUN_ARTIFACTS_ENGINE_SUBDIR, 'script-api');
   const path = join(dir, PRELOAD_FILE);
   if (existsSync(path)) return path;
