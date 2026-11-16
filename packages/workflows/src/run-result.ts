@@ -59,17 +59,22 @@ type ItemResultStore = Pick<IWorkflowStore, 'getItemRuns' | 'listEventsForRuns'>
 
 /**
  * The result of the latest completed run of each named workflow on an item: greatest
- * `completed_at`, a tie to the run that started later. No older run is read in its place.
- * `unreadableRunIds` names item runs whose rows did not read and so were not considered.
+ * `completed_at`, a tie to the run that started later. No older run is read in its place,
+ * so an item run whose row does not read throws: it may be the latest, and an unreadable
+ * row names no workflow to rule it out.
  */
 export async function latestResultsOnItem(
   store: ItemResultStore,
   item: { projectKey: string; key: string },
   workflowNames: readonly string[]
-): Promise<{ results: Map<string, LatestResult>; unreadableRunIds: string[] }> {
+): Promise<Map<string, LatestResult>> {
   const found = await store.getItemRuns(item.projectKey, item.key);
   if (found === null) throw new Error(`Item '${item.key}' was not found`);
   const { values: runs, degraded } = splitAttentionRead(found.runs);
+  if (degraded.length > 0)
+    throw new Error(
+      `item runs ${degraded.map(report => report.runId).join(', ')} did not read, and any of them may be the latest`
+    );
   const latest = new Map<string, WorkflowRun>();
   for (const run of runs) {
     if (run.status !== 'completed' || run.completed_at === null) continue;
@@ -95,7 +100,7 @@ export async function latestResultsOnItem(
         : { runId: run.id, result: readCompletedRunResult(run, events.get(run.id) ?? []) }
     );
   }
-  return { results, unreadableRunIds: degraded.map(report => report.runId) };
+  return results;
 }
 
 /** The declared `result_of` inputs a fresh run was not supplied, by input name. */
@@ -144,7 +149,7 @@ export async function refuseResultInputsWithoutItem(
 /**
  * Fill a claimed fresh run's unsupplied `result_of` inputs from its item and write them
  * into its `$INPUTS`, once, so a resume keeps them. Says on the run's conversation what
- * each input read. A store error or an unreadable record fails the run.
+ * each input read. A store error, an unreadable item run or record fails the run.
  */
 export async function resolveResultInputs(
   deps: WorkflowDeps,
@@ -158,9 +163,7 @@ export async function resolveResultInputs(
     // A run with no item was refused before its claim.
     const item = workflowRun.item_id ? await deps.store.getItem(workflowRun.item_id) : null;
     if (item === null) throw new Error(`Item '${String(workflowRun.item_id)}' was not found`);
-    const { results, unreadableRunIds } = await latestResultsOnItem(deps.store, item, [
-      ...new Set(unsupplied.values()),
-    ]);
+    const results = await latestResultsOnItem(deps.store, item, [...new Set(unsupplied.values())]);
     const resolved: Record<string, JsonValue> = {};
     const lines: string[] = [];
     const read: Record<string, string | null> = {};
@@ -178,10 +181,6 @@ export async function resolveResultInputs(
             : `• \`${input}\`: null, the latest completed run of \`${workflowName}\`, \`${runId}\`, has no result: ${result.reason}`
       );
     }
-    if (unreadableRunIds.length > 0)
-      lines.push(
-        `• Item runs that did not read and were not considered: ${unreadableRunIds.join(', ')}`
-      );
     const metadata = runInputsMetadata(
       { ...readSubrunMetadata(workflowRun.metadata).inputs, ...resolved },
       Object.hasOwn(workflowRun.metadata, SUBRUN_METADATA_KEYS.inputsValues)

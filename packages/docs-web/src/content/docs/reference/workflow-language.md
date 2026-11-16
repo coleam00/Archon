@@ -1741,6 +1741,8 @@ When a run starts, after any wait for its [resource](/guides/workflow-triggers/#
   `null`. The engine never falls back to an older run; a node that needs an older one reads
   the item's runs itself. The start says on the run's conversation which run each input read,
   or why it is `null`, so a misspelled workflow name shows as "no completed run".
+- A run on the item, or its terminal record, that the engine cannot read fails the starting
+  run, naming that run: it may be the latest one, so no value is read in its place.
 - The value is read from the database, not the run's artifacts directory, so it reads the same
   on every host that shares the database. A typed result is stored whole whatever its size.
   An untyped `returns:` node's text past the 32 KiB node output cap is kept whole only in a
