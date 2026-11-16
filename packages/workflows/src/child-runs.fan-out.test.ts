@@ -17,7 +17,7 @@ import {
 } from './schemas/workflow-run';
 import { settlingProvider } from './test-settling-provider';
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { mkdir, writeFile } from 'fs/promises';
+import { mkdir, readFile, writeFile } from 'fs/promises';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -1046,6 +1046,18 @@ nodes:
         { index: 1, outcome: 'failed', child_run_id: childBoom.id },
       ],
     });
+    // The run log line carries that same record, so a JSONL reader needs no database.
+    const logLines = (
+      await readFile(join(parentRun!.output_root!, 'logs', `${parentRun!.id}.jsonl`), 'utf-8')
+    )
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    const workLogLine = logLines.find(l => l.type === 'node_complete' && l.step === 'work');
+    expect(workLogLine?.fan_out_outcome).toEqual(workFanOutOutcome(store.events, 'node_completed'));
+    expect(logLines.find(l => l.type === 'node_complete' && l.step === 'plan')).not.toHaveProperty(
+      'fan_out_outcome'
+    );
     expect(sentMessages(platform)).toContain(
       '**Fan-out completed with unfinished children** (node `work`): ' +
         `1 of 2 children did not complete (1 failed). Each slot's outcome is in the console run view and \`archon workflow get ${String(parentRun?.id)}\`.`
