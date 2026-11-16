@@ -7,7 +7,7 @@ import { getNodeScratchDir } from '@archon/paths/archon-paths';
 import { isWorkflowExecutionInterruption } from '../execution-interruption';
 import { nodeScratchRootIsDirectory, releaseNodeScratch } from '../run-scratch';
 import { runWithNodeScratch } from '../workflow-variables';
-import { isLoopGroupNode, type DagNode } from '../schemas';
+import { isLoopGroupNode, type DagNode, type LoopGroupNode } from '../schemas';
 import type { PersistedNodeOutput } from '../store';
 import type { LayerNodeResult, RunLayersContext } from './run-context';
 
@@ -49,13 +49,10 @@ export async function runInNodeScratch(
     throw error;
   } finally {
     if (!keep) {
-      await releaseNodeScratch({
-        artifactsDir: ctx.artifactsDir,
-        invocationId,
-        repoPath: ctx.cwd,
-        execContext: ctx.execContext,
-        logContext: { workflowRunId: ctx.workflowRun.id, nodeId: node.id, invocationId },
-      });
+      // A loop_group that ends takes with it the body invocations a prior pass left
+      // unfinished in iterations this pass never walked again.
+      const ids = isLoopGroupNode(node) ? unfinishedBodyInvocations(ctx, node.id) : [];
+      await releaseInvocations(ctx, node, [invocationId, ...ids]);
     }
   }
 }
@@ -68,8 +65,7 @@ export async function runInNodeScratch(
  * A skipped `loop_group` never dispatches again, so the body invocations a prior pass left
  * suspended under it (recorded with their own ids) are released with it; suspended work
  * elsewhere in the run is not. Each is released by id, so scratch a workflow keeps
- * elsewhere under the run's scratch is never touched. A directory that was never made
- * costs one `lstat`.
+ * elsewhere under the run's scratch is never touched.
  */
 export async function releaseAdmittedScratch(
   ctx: RunLayersContext,
@@ -83,9 +79,47 @@ export async function releaseAdmittedScratch(
   const replayed = priorCompletedNodes?.get(node.id)?.execution?.invocation.id;
   if (replayed !== undefined) ids.add(replayed);
   if (isLoopGroupNode(node)) {
-    for (const id of suspendedDescendants(ctx, node.id)) ids.add(id);
+    for (const id of unfinishedBodyInvocations(ctx, node.id)) ids.add(id);
   }
-  for (const id of ids) {
+  await releaseInvocations(ctx, node, ids);
+}
+
+/**
+ * Release the body invocations of the iteration a resumed loop_group paused in, once the
+ * group moves past it without walking it again: the terminal gate the resume answered
+ * (`answeredGateId`, which its approval may already have recorded complete), the terminal
+ * wait it settled, and anything else that iteration left unfinished. The group's own
+ * invocation is not among them; it is still running.
+ */
+export async function releasePausedIterationScratch(
+  ctx: RunLayersContext,
+  node: LoopGroupNode,
+  iteration: number,
+  answeredGateId: string | undefined
+): Promise<void> {
+  const ids = unfinishedBodyInvocations(ctx, node.id, iteration);
+  await releaseInvocations(
+    ctx,
+    node,
+    answeredGateId === undefined ? ids : [answeredGateId, ...ids]
+  );
+}
+
+/** Release a node's invocation scratch outside dispatch, as a failed admission settles it. */
+export async function releaseInvocationScratch(
+  ctx: RunLayersContext,
+  node: DagNode,
+  invocationId: string
+): Promise<void> {
+  await releaseInvocations(ctx, node, [invocationId]);
+}
+
+async function releaseInvocations(
+  ctx: RunLayersContext,
+  node: DagNode,
+  invocationIds: Iterable<string>
+): Promise<void> {
+  for (const id of new Set(invocationIds)) {
     await releaseNodeScratch({
       artifactsDir: ctx.artifactsDir,
       invocationId: id,
@@ -97,16 +131,30 @@ export async function releaseAdmittedScratch(
 }
 
 /**
- * Invocation ids of the unfinished body invocations recorded under loop_group `groupId`
- * in this context: their path is inside the group's, and their loop path enters the group
- * from this context's own.
+ * Invocation ids of the body invocations a prior pass left unfinished under this context's
+ * invocation of loop_group `groupId` (in `iteration` only, when given): their path is
+ * inside the group's, and their loop path is this context's own followed by the group.
  */
-function suspendedDescendants(ctx: RunLayersContext, groupId: string): string[] {
+function unfinishedBodyInvocations(
+  ctx: RunLayersContext,
+  groupId: string,
+  iteration?: number
+): string[] {
   const groupPath = ctx.stepNamePrefix + groupId;
-  const depth = ctx.loopGroupPath.length;
+  const outer = ctx.loopGroupPath;
   const ids: string[] = [];
   for (const { path, invocation } of ctx.unfinishedInvocations?.values() ?? []) {
-    if (path.startsWith(`${groupPath}.`) && invocation.loopPath[depth]?.groupId === groupId) {
+    const frame = invocation.loopPath[outer.length];
+    if (
+      path.startsWith(`${groupPath}.`) &&
+      frame?.groupId === groupId &&
+      (iteration === undefined || frame.iteration === iteration) &&
+      outer.every(
+        (f, i) =>
+          invocation.loopPath[i]?.groupId === f.groupId &&
+          invocation.loopPath[i]?.iteration === f.iteration
+      )
+    ) {
       ids.push(invocation.id);
     }
   }

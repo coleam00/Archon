@@ -50,7 +50,10 @@ import {
   getNodeScratchRoot,
   getRunScratchDir,
 } from '@archon/paths/archon-paths';
+import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 import { nodeInvocationKey } from '../node-record-reader';
+import { newNodeInvocation, startNodeExecution } from '../node-execution';
+import { serializeNodeStateRecord } from '../node-record-serialization';
 import { releaseNodeScratch } from '../run-scratch';
 import type { NodeExecutionMetadata } from '../schemas/node-execution';
 import { createEscalationStore } from './pause-test-utils';
@@ -572,6 +575,136 @@ describe('executeDagWorkflow -- node scratch', () => {
     expect(existsSync(bodyScratch)).toBe(false);
     expect(worktreePaths(repo)).toHaveLength(1);
     expect(existsSync(unrelatedScratch)).toBe(true);
+  });
+
+  // A loop resume moves past the iteration it paused in without walking that iteration
+  // again, so its suspended terminal node never reaches dispatch on the way out.
+  for (const terminal of ['gate', 'wait'] as const) {
+    it(`releases a loop_group body ${terminal} scratch when a resume moves past it, before the next iteration`, async () => {
+      const repo = await initRepo(join(testDir, 'repo'));
+      const runId = `node-scratch-resume-${terminal}`;
+      const seen = join(testDir, 'seen').replace(/\\/g, '/');
+      const groupFor = (probe: string): DagNode =>
+        dagNodeSchema.parse({
+          id: 'grp',
+          loop_group: {
+            max_iterations: 2,
+            until_bash: 'false',
+            nodes: [
+              { id: 'work', bash: probe },
+              terminal === 'gate'
+                ? {
+                    id: 'check',
+                    depends_on: ['work'],
+                    approval: { message: 'Continue?', decisions: [{ id: 'approve' }] },
+                  }
+                : { id: 'check', depends_on: ['work'], wait: { duration_ms: 60_000 } },
+            ],
+          },
+        }) as DagNode;
+      let store = createEscalationStore(runId);
+      const run = (probe: string, options: Partial<Parameters<typeof dagOptions>[0]>) =>
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            platform: createMockPlatform(),
+            cwd: repo,
+            artifactsDir,
+            workflow: { name: `node-scratch-resume-${terminal}`, nodes: [groupFor(probe)] },
+            workflowRun: makeWorkflowRun(runId),
+            ...options,
+          })
+        );
+      await run('true', {});
+      const paused = store.getState();
+      expect(paused.status).toBe('paused');
+      const unfinished = (await foldDagResumeSnapshot(persistedEvents(store), runId))
+        .unfinishedInvocations;
+      if (!unfinished) throw new Error('no unfinished invocations');
+      const bodyKey = nodeInvocationKey('grp.check', [{ groupId: 'grp', iteration: 1 }]);
+      const body = unfinished.get(bodyKey);
+      if (!body) throw new Error('grp.check did not suspend');
+      // Approving a gate records it completed, so only the group is left unfinished; a
+      // settled wait is still unfinished until the resume settles it.
+      if (terminal === 'gate') unfinished.delete(bodyKey);
+      const bodyScratch = getNodeScratchDir(artifactsDir, body.invocation.id);
+      git(repo, 'worktree', 'add', '-q', '--detach', join(bodyScratch, 'wt'), 'HEAD');
+      await writeFile(join(bodyScratch, 'wt', 'bulk'), Buffer.alloc(4 * 1024 * 1024));
+
+      store = createEscalationStore(runId);
+      store.getDagResumeSnapshot.mockImplementation(async () => ({
+        ...(await createMockDeps().store.getDagResumeSnapshot(runId)),
+        unfinishedInvocations: unfinished,
+      }));
+      const metadata =
+        terminal === 'gate'
+          ? paused.metadata
+          : {
+              wait: {
+                ...(paused.metadata.wait as Record<string, unknown>),
+                waitingSince: '2026-08-23T00:00:00.000Z',
+                resumeAt: '2026-08-23T00:01:00.000Z',
+              },
+            };
+      await run(
+        `{ test -e "${bodyScratch.replace(/\\/g, '/')}" && echo kept || echo gone; git worktree list --porcelain | grep -c '^worktree '; } > "${seen}"`,
+        {
+          priorCompletedNodes: new Map(),
+          workflowRun: makeWorkflowRun(runId, { metadata }),
+        }
+      );
+      // Iteration 2 ran, and found the paused iteration's scratch and worktree gone.
+      expect((await readFile(seen, 'utf8')).trim().split('\n')).toEqual(['gone', '1']);
+      expect(worktreePaths(repo)).toHaveLength(1);
+      // The group and its iteration 2 terminal node are suspended again and keep theirs.
+      expect(store.getState().status).toBe('paused');
+      const group = unfinished.get(nodeInvocationKey('grp', []));
+      if (!group) throw new Error('grp did not suspend');
+      expect(existsSync(getNodeScratchDir(artifactsDir, group.invocation.id))).toBe(true);
+    });
+  }
+
+  it('releases body invocations left unfinished in an iteration the resumed loop_group never reaches, when the group ends', async () => {
+    const runId = 'node-scratch-group-end';
+    const group = dagNodeSchema.parse({
+      id: 'grp',
+      loop_group: { max_iterations: 3, until_bash: 'true', nodes: [{ id: 'work', bash: 'true' }] },
+    }) as DagNode;
+    const work = dagNodeSchema.parse({ id: 'work', bash: 'true' });
+    if (group.kind !== 'loop_group' || work.kind !== 'exec') throw new Error('Expected nodes');
+    const started = [
+      startNodeExecution({ runId, path: 'grp', node: group, invocation: newNodeInvocation([]) }),
+      // Left in iteration 3 by a prior pass; this pass completes in iteration 1.
+      startNodeExecution({
+        runId,
+        path: 'grp.work',
+        node: work,
+        invocation: newNodeInvocation([{ groupId: 'grp', iteration: 3 }]),
+      }),
+    ];
+    for (const { invocation } of started) {
+      await mkdir(getNodeScratchDir(artifactsDir, invocation.id), { recursive: true });
+    }
+    const store = createMockDeps().store;
+    store.getDagResumeSnapshot.mockImplementation(() =>
+      foldDagResumeSnapshot(started.map(serializeNodeStateRecord), runId)
+    );
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        artifactsDir,
+        priorCompletedNodes: new Map(),
+        workflow: { name: 'node-scratch-group-end', nodes: [group] },
+        workflowRun: makeWorkflowRun(runId),
+      })
+    );
+    expect(
+      persistedEvents(store).some(
+        event => event.event_type === 'node_completed' && event.step_name === 'grp'
+      )
+    ).toBe(true);
+    expect(await readdir(getNodeScratchRoot(artifactsDir))).toEqual([]);
   });
 
   for (const linked of ['scratch', 'nodes'] as const) {

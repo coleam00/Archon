@@ -41,7 +41,7 @@ import { skipNode } from './skip-node';
 import { dispatchNode } from './dispatch';
 import { nodePackDir } from '../pack-dir';
 import { runWithPackDir } from '../workflow-variables';
-import { releaseAdmittedScratch, runInNodeScratch } from './node-scratch';
+import { releaseAdmittedScratch, releaseInvocationScratch, runInNodeScratch } from './node-scratch';
 import { getStaleCachedDependencies } from './stale-dependencies';
 /**
  * Await thunks one at a time, collecting outcomes in `Promise.allSettled` shape so the
@@ -178,6 +178,8 @@ async function runLayerPhase(
         } catch (error) {
           if (isWorkflowExecutionInterruption(error)) throw error;
           nodeCtx.interactionAdmission?.failed(node.id);
+          // A failed admission settles an invocation a prior pass may have left scratch for.
+          await releaseInvocationScratch(nodeCtx, node, invocation.id);
           return await recordPreExecutionFailure(nodeCtx, node, error);
         } finally {
           peers?.[index].finished();
