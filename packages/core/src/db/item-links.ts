@@ -83,8 +83,12 @@ async function readLink(query: TransactionQuery, linkId: string): Promise<ItemLi
   const result = await query<LinkRow>(`${LINKS_SELECT} WHERE l.id = $1`, [linkId]);
   const row = result.rows[0];
   if (!row) throw new ItemLinkNotFoundError(linkId);
+  return readableLink(row);
+}
+
+function readableLink(row: LinkRow): ItemLink {
   const read = linkRead(row);
-  if ('type' in read) throw new Error(`Link '${linkId}' was written but does not read back`);
+  if ('type' in read) throw new Error(`Link '${row.id}' was written but does not read back`);
   return read;
 }
 
@@ -101,25 +105,31 @@ export async function recordItemLink(
     const toId = await ensureItemInProject(query, input.projectKey, input.toKey);
     if (fromId === toId) throw new ItemLinkSelfError(input.fromKey);
     // The partial unique index decides a race between two records: the loser inserts nothing.
-    const inserted = await query<{ id: string }>(
-      `INSERT INTO remote_agent_item_links
-         (from_item_id, to_item_id, kind, by_declared, by_user_id, via, from_run_id,
-          from_node_path, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT (from_item_id, to_item_id, kind) WHERE ended_at IS NULL DO NOTHING
-       RETURNING id`,
-      [fromId, toId, input.kind, ...actColumns(input)]
-    );
-    const insertedId = inserted.rows[0]?.id;
-    if (insertedId !== undefined) return { link: await readLink(query, insertedId), created: true };
-    const active = await query<{ id: string }>(
-      `SELECT id FROM remote_agent_item_links
-       WHERE from_item_id = $1 AND to_item_id = $2 AND kind = $3 AND ended_at IS NULL`,
-      [fromId, toId, input.kind]
-    );
-    const activeId = active.rows[0]?.id;
-    if (activeId === undefined) throw new Error('The link was neither written nor found active');
-    return { link: await readLink(query, activeId), created: false };
+    // On PostgreSQL another operator can end the active link between the insert that
+    // conflicted with it and the select that looks for it; then the insert is tried again.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const inserted = await query<{ id: string }>(
+        `INSERT INTO remote_agent_item_links
+           (from_item_id, to_item_id, kind, by_declared, by_user_id, via, from_run_id,
+            from_node_path, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (from_item_id, to_item_id, kind) WHERE ended_at IS NULL DO NOTHING
+         RETURNING id`,
+        [fromId, toId, input.kind, ...actColumns(input)]
+      );
+      const insertedId = inserted.rows[0]?.id;
+      if (insertedId !== undefined)
+        return { link: await readLink(query, insertedId), created: true };
+      // One statement, so the row returned is active as of that statement.
+      const active = await query<LinkRow>(
+        `${LINKS_SELECT} WHERE l.from_item_id = $1 AND l.to_item_id = $2 AND l.kind = $3
+           AND l.ended_at IS NULL`,
+        [fromId, toId, input.kind]
+      );
+      const activeRow = active.rows[0];
+      if (activeRow) return { link: readableLink(activeRow), created: false };
+    }
+    throw new Error('The link was neither written nor found active after a retry');
   });
 }
 
