@@ -7,8 +7,9 @@ import { runNodeStateSchema } from './terminal-record';
  * it, plus that invocation's timing and output. `started_at` is when the invocation's
  * first attempt started; `duration_ms` sums every attempt's recorded duration (retries
  * included, the waits between them not), and is absent until the last attempt ends. `output` and `output_truncated` are the
- * stored `node_output` as the event log bounds it at write, present only on a completed
- * node, as `structured_output` is.
+ * stored `node_output` as the event log bounds it at write: a completed node's output, or
+ * the stdout a failed `bash:` or `script:` node recorded. `structured_output` is present
+ * only on a completed node.
  */
 export const loopRoundNodeSchema = runNodeStateSchema.extend({
   started_at: z.string().datetime({ offset: true }).optional(),

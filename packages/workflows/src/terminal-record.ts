@@ -20,6 +20,7 @@ import {
 } from './schemas/workflow-run';
 import { observeArtifactManifest } from './terminal-artifact-manifest';
 import {
+  isExecNodeRecord,
   nodeInvocationKey,
   parseNodeInvocationKey,
   readNodeRecordData,
@@ -38,6 +39,7 @@ import {
   type NodeInvocation,
 } from './schemas/node-execution';
 import type { FanOutOutcome } from './schemas/fan-out-outcome';
+import type { SerializedNodeData } from './node-record-serialization';
 import type { LoopRound, LoopRoundNode } from './schemas/loop-rounds';
 
 export interface TerminalRecordEvent {
@@ -56,6 +58,11 @@ interface NodeEventFold {
   graph: RunGraph | undefined;
   nodes: Map<string, RunNodeState>;
   outputs: Map<string, Record<string, unknown>>;
+  /**
+   * A failed exec node's recorded stdout, kept apart from `outputs`: the terminal return
+   * and node outcomes read only a completed node's output, a loop round reads both.
+   */
+  failedOutputs: Map<string, Pick<SerializedNodeData, 'node_output' | 'node_output_truncated'>>;
   failureOrder: Map<string, number>;
   /** Each key's invocation timing, folded from its attempts; a cache record carries none. */
   timings: Map<string, InvocationTiming>;
@@ -87,8 +94,9 @@ function foldNodeEvents(
   const nodes = new Map<string, RunNodeState>();
   const outputs = new Map<string, Record<string, unknown>>();
   const failureOrder = new Map<string, number>();
+  const failedOutputs: NodeEventFold['failedOutputs'] = new Map();
   const timings = new Map<string, InvocationTiming>();
-  const folded = { graph, nodes, outputs, failureOrder, timings };
+  const folded = { graph, nodes, outputs, failedOutputs, failureOrder, timings };
   if (graph)
     for (const nodeId of graph.node_ids)
       nodes.set(keyOf(nodeId, []), { node_id: nodeId, state: 'pending' });
@@ -124,8 +132,22 @@ function foldTiming(
   timings.set(key, folded);
 }
 
+/** Exec writers record a failed command's stdout; only a loop round reads it. */
+function keepFailedExecOutput(
+  failedOutputs: NodeEventFold['failedOutputs'],
+  key: string,
+  record: ReadNodeRecordEvent
+): void {
+  const { node_output, node_output_truncated } = record.data;
+  if (!isExecNodeRecord(record) || node_output === undefined) return;
+  failedOutputs.set(key, {
+    node_output,
+    ...(node_output_truncated ? { node_output_truncated } : {}),
+  });
+}
+
 function foldNodeRecord(
-  { nodes, outputs, failureOrder, timings }: Omit<NodeEventFold, 'graph'>,
+  { nodes, outputs, failedOutputs, failureOrder, timings }: Omit<NodeEventFold, 'graph'>,
   record: ReadNodeRecordEvent,
   key: string,
   index: number
@@ -134,6 +156,7 @@ function foldNodeRecord(
   // Cache records (replay, reset, invalidation) carry no invocation or timing, and fold
   // under the top-level key, which no loop round reads.
   if (record.metadata) foldTiming(timings, key, record.metadata);
+  failedOutputs.delete(key);
   switch (record.eventType) {
     case 'node_started':
     case 'node_suspended':
@@ -180,6 +203,7 @@ function foldNodeRecord(
         )
       );
       outputs.delete(key);
+      keepFailedExecOutput(failedOutputs, key, record);
       failureOrder.set(key, index);
       break;
     }
@@ -252,7 +276,7 @@ export function buildLoopRounds(
   run: Pick<WorkflowRun, 'id' | 'metadata'>,
   events: readonly TerminalRecordEvent[]
 ): LoopRound[] {
-  const { nodes, outputs, timings } = foldNodeEvents(run, events, nodeInvocationKey);
+  const { nodes, outputs, failedOutputs, timings } = foldNodeEvents(run, events, nodeInvocationKey);
   const rounds = new Map<string, LoopRound>();
   for (const [key, state] of nodes) {
     const { loopPath } = parseNodeInvocationKey(key);
@@ -263,7 +287,9 @@ export function buildLoopRounds(
       round = { loop_group_path: loopPath, nodes: [] };
       rounds.set(roundKey, round);
     }
-    round.nodes.push(loopRoundNode(state, timings.get(key), outputs.get(key)));
+    round.nodes.push(
+      loopRoundNode(state, timings.get(key), outputs.get(key) ?? failedOutputs.get(key))
+    );
   }
   return [...rounds.values()];
 }

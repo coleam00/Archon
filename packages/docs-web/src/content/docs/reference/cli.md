@@ -796,8 +796,8 @@ invocations. Resuming unfinished work keeps its invocation identity.
 outermost first, iterations from 1) and the body nodes it reached, with `state`, `error`,
 `started_at` (the invocation's first attempt), `duration_ms` (every attempt's recorded duration summed,
 so a retry counts, the wait between attempts does not; absent until the last attempt ends),
-and a completed node's `output` (bounded as stored, with
-`output_truncated`) and `structured_output`. A round still running lists the node it is in;
+`output` (bounded as stored, with `output_truncated`): a completed node's output, or the
+stdout a failed `bash:` or `script:` node recorded, and a completed node's `structured_output`. A round still running lists the node it is in;
 nodes it has not reached are absent. A nested loop's rounds are separate entries whose path
 extends the outer round's. The field is absent for a run that ran no loop, and under `--events`.
 The API's `GET /api/workflows/runs/{runId}` serves the same rounds as `run.loop_rounds`.

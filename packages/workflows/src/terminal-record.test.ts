@@ -19,6 +19,8 @@ import {
   type TerminalRecordEvent,
 } from './terminal-record';
 import { fanOutOutcome } from './schemas/fan-out-outcome';
+import { finishNodeExecution, newNodeInvocation, startNodeExecution } from './node-execution';
+import { serializeNodeStateRecord } from './node-record-serialization';
 import {
   type ArtifactManifest,
   RUN_GRAPH_METADATA_KEY,
@@ -646,6 +648,37 @@ const loopRun = {
 };
 
 describe('loop rounds', () => {
+  it("keeps a failed exec node's recorded stdout in its round", () => {
+    const start = (iteration: number) =>
+      startNodeExecution({
+        runId: 'run-1',
+        path: 'group.check',
+        node: { id: 'check', kind: 'exec', runtime: 'sh', script: 'false' },
+        invocation: newNodeInvocation([{ groupId: 'group', iteration }]),
+      });
+    const record = (iteration: number, failed: boolean): TerminalRecordEvent => {
+      const { step_name, event_type, data } = serializeNodeStateRecord(
+        finishNodeExecution(
+          start(iteration),
+          failed ? { status: 'failed', error: 'exit 1', exitCode: 1 } : { status: 'completed' },
+          {
+            durationMs: 5,
+            output: failed
+              ? { text: 'x', persisted: { text: 'lint: 3 errors', truncated: true } }
+              : { text: 'clean' },
+          }
+        )
+      );
+      return { step_name, event_type, data };
+    };
+    const rounds = buildLoopRounds(loopRun, [record(1, true), record(2, false)]);
+    expect(rounds.map(entry => entry.nodes[0])).toMatchObject([
+      { state: 'failed', error: 'exit 1', output: 'lint: 3 errors', output_truncated: true },
+      { state: 'completed', output: 'clean' },
+    ]);
+    expect(rounds[0]?.nodes[0]).not.toHaveProperty('structured_output');
+  });
+
   it('reads each round with its own nodes, durations and outputs', () => {
     const rounds = buildLoopRounds(loopRun, [
       ...round(1, 'done'),
