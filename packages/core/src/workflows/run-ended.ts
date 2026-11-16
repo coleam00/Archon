@@ -32,10 +32,7 @@ import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { getArchonHome } from '@archon/paths';
 
-/**
- * `ARCHON_HOME/triggers`: where run-ended trigger files are read from, and where
- * `archon pack bindings` writes a pack's run-ended bindings.
- */
+/** `ARCHON_HOME/triggers`: where run-ended trigger files are read from. */
 export function getTriggersPath(): string {
   return join(getArchonHome(), 'triggers');
 }

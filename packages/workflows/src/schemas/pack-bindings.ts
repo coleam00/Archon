@@ -3,10 +3,10 @@
  * in its `.pack/pack.yaml`.
  *
  * A declaration starts nothing. `archon pack bindings` turns it into binding files for one
- * repository: the operator registers a timer, fire-only or event file, and a run-ended
- * file is active once it is written to the triggers directory. The declaration holds what the pack
- * knows (the workflow, what starts it, how starts may overlap, its inputs); the
- * operator supplies what only the install knows (the repository, the host, the run-as
+ * repository, written to `--out`. The operator registers every file; a run-ended file is
+ * registered by copying it into the triggers directory, where it is active at once. The
+ * declaration holds what the pack knows (the workflow, what starts it, how starts may
+ * overlap, its inputs); the operator supplies what only the install knows (the repository, the host, the run-as
  * user, the checkout).
  */
 import { z } from 'zod';
