@@ -756,6 +756,9 @@ ALTER TABLE remote_agent_workflow_runs
 -- withdrawal. from_run_id has no foreign key, so run cleanup keeps the ruling.
 CREATE TABLE IF NOT EXISTS remote_agent_item_rulings (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  -- Recording order. Timestamps tie within a millisecond and `id` is random, so rulings
+  -- are ordered by this database-assigned sequence.
+  seq BIGSERIAL NOT NULL UNIQUE,
   item_id UUID NOT NULL REFERENCES remote_agent_items(id),
   withdraws TEXT UNIQUE REFERENCES remote_agent_item_rulings(id),
   text TEXT,

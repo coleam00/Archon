@@ -45,7 +45,7 @@ function actColumns(act: ItemRulingAct): unknown[] {
     act.via,
     act.fromRun?.runId ?? null,
     act.fromRun?.nodePath ?? null,
-    // Written here, to the millisecond, so rulings recorded within one second keep their order.
+    // Written here, to the millisecond: SQLite's default keeps only seconds. Order is `seq`.
     new Date().toISOString(),
   ];
 }
@@ -107,7 +107,7 @@ const RULINGS_SELECT = `SELECT r.*, w.id AS w_id, w.by_declared AS w_by_declared
 
 export async function listItemRulings(itemId: string): Promise<ItemRulingRead[]> {
   const result = await pool.query<RulingRow>(
-    `${RULINGS_SELECT} AND r.item_id = $1 ORDER BY r.created_at, r.id`,
+    `${RULINGS_SELECT} AND r.item_id = $1 ORDER BY r.seq`,
     [itemId]
   );
   return result.rows.map(rulingRead);

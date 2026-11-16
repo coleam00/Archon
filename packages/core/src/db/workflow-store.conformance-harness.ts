@@ -550,12 +550,16 @@ export function describeSqlStatusReadConformance(
       );
       const byCli = { via: 'cli', by: { declared: 'triage-agent' }, fromRun: null };
       // Nothing has named the key: the ruling writes the item, which has no run.
+      const before = Date.now();
       const first = await store.recordItemRuling({
         projectKey,
         key: 'fresh',
         text: 'leave the chat readers for a follow-up',
         ...byCli,
       });
+      const recordedAt = Date.parse(first.at);
+      expect(recordedAt).toBeGreaterThanOrEqual(before);
+      expect(recordedAt).toBeLessThanOrEqual(Date.now());
       expect(first).toMatchObject({
         kind: 'ruling',
         text: 'leave the chat readers for a follow-up',
@@ -599,6 +603,7 @@ export function describeSqlStatusReadConformance(
       // Both rulings stay, oldest first, and the first says it was withdrawn.
       const listed = await store.listItemRulings(item?.item.id ?? '');
       expect(listed).toEqual([withdrawn, second]);
+      expect(listed[0]).toMatchObject({ at: first.at });
       expect(second).toMatchObject({
         by: { userId: 'user-1' },
         fromRun: { runId: 'run-1', nodePath: 'review' },
@@ -613,6 +618,34 @@ export function describeSqlStatusReadConformance(
         withdrawn,
         { type: 'degraded', reason: 'ruling_unreadable', rulingId: second.id },
       ]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('rulings that tie on time keep their recording order', async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      const projectKey = projectKeyForCodebase(
+        { name: 'conformance', default_cwd: '/conformance' },
+        ''
+      );
+      const act = { via: 'cli', by: null, fromRun: null } as const;
+      const first = await store.recordItemRuling({ projectKey, key: 'tie', text: 'one', ...act });
+      const second = await store.recordItemRuling({ projectKey, key: 'tie', text: 'two', ...act });
+      // Same time, and ids that sort against recording order: neither may decide it.
+      await db.query(
+        'UPDATE remote_agent_item_rulings SET created_at = $1, id = $2 WHERE id = $3',
+        [first.at, 'zzz-first', first.id]
+      );
+      await db.query(
+        'UPDATE remote_agent_item_rulings SET created_at = $1, id = $2 WHERE id = $3',
+        [first.at, 'aaa-second', second.id]
+      );
+      const item = await store.getItemRuns(projectKey, 'tie');
+      const listed = await store.listItemRulings(item?.item.id ?? '');
+      expect(listed.map(read => ('text' in read ? read.text : read))).toEqual(['one', 'two']);
     } finally {
       await harness.close();
     }

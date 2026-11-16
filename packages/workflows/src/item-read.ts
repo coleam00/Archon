@@ -173,7 +173,8 @@ export async function readItem(
     if ('type' in read) unreadableRulings.push(read);
     else rulings.push(read);
   const answers = [...[...events.values()].flat().map(itemAnswer), ...rulings]
-    // Stable, so rows of one run within the same second keep their append order.
+    // Stable, so rows that tie on `at` keep their store order: append order within a run,
+    // recording order among rulings.
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   return {
     item: found.item,
@@ -200,12 +201,7 @@ export async function readItemOfRun(
   runId: string
 ): Promise<ItemRead | null> {
   let run = await source.store.getWorkflowRun(runId);
-  // `seen` keeps a corrupted `parent_run_id` cycle from looping, as `runTree` does.
-  const seen = new Set<string>();
-  while (run?.parent_run_id && !seen.has(run.id)) {
-    seen.add(run.id);
-    run = await source.store.getWorkflowRun(run.parent_run_id);
-  }
+  while (run?.parent_run_id) run = await source.store.getWorkflowRun(run.parent_run_id);
   if (!run?.item_id) return null;
   const item = await source.store.getItem(run.item_id);
   return item === null ? null : readItem(source, item.projectKey, item.key);

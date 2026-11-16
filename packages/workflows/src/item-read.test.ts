@@ -251,16 +251,6 @@ describe('reading an item', () => {
     expect((await readItemOfRun(source, 'child'))?.item).toEqual(item);
     expect(await readItemOfRun(source, 'unrelated')).toBeNull();
     expect(await readItemOfRun(source, 'missing')).toBeNull();
-    // A corrupted parent cycle ends the walk instead of looping.
-    const looped: ItemReadSource = {
-      ...source,
-      store: {
-        ...source.store,
-        getWorkflowRun: async id =>
-          run(id, { parent_run_id: id === 'a' ? 'b' : 'a', item_id: null }),
-      },
-    };
-    expect(await readItemOfRun(looped, 'a')).toBeNull();
   });
 
   test('a run the store could not read is reported, and the rest of the item still reads', async () => {

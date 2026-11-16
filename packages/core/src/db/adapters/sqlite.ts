@@ -568,7 +568,9 @@ export class SqliteAdapter implements IDatabase {
 
       -- Rulings on an item, append-only; see migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_item_rulings (
-        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        -- Recording order; timestamps tie and the id is random.
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE DEFAULT (lower(hex(randomblob(16)))),
         item_id TEXT NOT NULL REFERENCES remote_agent_items(id),
         withdraws TEXT UNIQUE REFERENCES remote_agent_item_rulings(id),
         text TEXT,
