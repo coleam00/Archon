@@ -5,11 +5,13 @@
  * withdrawing closes an ask once and settles its set once.
  */
 import { expect, test } from 'bun:test';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import type { ItemAsk } from '@archon/workflows/schemas/item-ask';
+import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { openAskItems } from '@archon/workflows/attention-queue';
 import { readItemOfRun } from '@archon/workflows/item-read';
@@ -676,6 +678,49 @@ export function describeSqlItemAskConformance(makeHarness: () => Promise<Harness
       expect(await receiptsFor(harness, runId)).toEqual([]);
     } finally {
       await removeTempTree(directory);
+      await harness.close();
+    }
+  });
+
+  test('a start that cannot be written rolls the settling close back with it', async () => {
+    const harness = await makeHarness();
+    try {
+      const runId = await completeWithAsks(harness, [ask('A?'), ask('B?')]);
+      const [a, b] = await openRefs(harness);
+      const deps = itemDeps(harness);
+      await answerAttentionItem(deps, a ?? '', { choose: ['keep'] }, operator, 'cli');
+      // A receipt with no delivery id whose id already exists fails its insert.
+      const taken: SourceReceiptAcceptance = {
+        receipt: {
+          id: randomUUID(),
+          sourceInstanceId: 'taken',
+          deliveryId: null,
+          contentDigest: 'digest',
+          receivedAt: new Date().toISOString(),
+          occurredAt: null,
+          sourceActor: null,
+        },
+        outcome: 'unmatched',
+        reason: 'test',
+        bindings: [],
+      };
+      await harness.store.acceptStartReceipt(taken);
+      const itemAsks = await import('./item-asks');
+      await expect(
+        itemAsks.answerItemAsk(
+          {
+            askId: (b ?? '').slice('ask:'.length),
+            answer: { decision: 'keep', text: '' },
+            via: 'cli',
+            by: null,
+            fromRun: null,
+          },
+          () => [taken]
+        )
+      ).rejects.toThrow();
+      expect(await openRefs(harness)).toEqual([b ?? '']);
+      expect(await settledEvents(harness, runId)).toEqual([]);
+    } finally {
       await harness.close();
     }
   });

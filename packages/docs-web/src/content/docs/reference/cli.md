@@ -1468,14 +1468,17 @@ second withdrawal, changes nothing; a different answer to an answered ask, withd
 answered one, or either on an ask a newer run replaced, is refused. The write that closes the
 last open ask of a run's set records `asks_settled` once, and writes the start of each
 [asks-settled binding](/guides/workflow-triggers/#start-a-stage-again-when-its-asks-are-answered)
-that settlement matches; the command then starts it, as the end of a run starts a run-ended
-binding. A binding that matched but could not start is printed with its receipt, and a trigger
-file that cannot be read refuses the close that would settle the set, naming the file.
+that settlement matches; the command then prepares it, as the end of a run prepares a run-ended
+binding, and reports each start by where its preparation stands: prepared, waiting for its
+host's next drain, or not started, with its receipt and how to start it by hand. The answer is
+recorded either way. A trigger file that cannot be read refuses the close that would settle the
+set, naming the file.
 
-`--json` prints `{ ok: true, ref, action, settled?, unchanged?, notStarted? }`: `action` is
-`answer` or `withdraw`, `settled` is true when this write settled the set, `unchanged: true`
-when nothing changed, and `notStarted` lists `{ receiptId, reason }` for each binding the
-settlement matched that could not start. An answer to a run-held item prints `runId`, `cancelled` and `continues`
+`--json` prints `{ ok: true, ref, action, settled?, unchanged?, waiting?, notStarted? }`:
+`action` is `answer` or `withdraw`, `settled` is true when this write settled the set,
+`unchanged: true` when nothing changed, `waiting` lists `{ receiptId, bindingId, hostId }` for
+each start left for its host's drain, and `notStarted` lists `{ receiptId, bindingId, reason }`
+for each binding the settlement matched that could not start. An answer to a run-held item prints `runId`, `cancelled` and `continues`
 instead of `settled`. A refusal exits 1 and prints `{ ok: false, error, message }`, where
 `error` is `unknown` (nothing the caller may answer has the ref), `closed`, `moved`,
 `takes_no_answer`, `already_answered`, `already_withdrawn`, `already_replaced`, `not_an_ask`

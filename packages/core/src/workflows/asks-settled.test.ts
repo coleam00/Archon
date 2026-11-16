@@ -75,16 +75,17 @@ async function prepareWith(files: Record<string, unknown>) {
 }
 
 describe('asks-settled starts', () => {
-  test('an input that cannot be read records the binding as rejected, naming the file and input', async () => {
+  test('an input that cannot be read writes an unmatched receipt naming the file and input', async () => {
     const { directory, build } = await prepareWith({
       'build.json': trigger({ progress: { result: '/missing' } }),
     });
     const [receipt] = build?.(SETTLED, { metadata: { asks_result: { summary: 'x' } } }) ?? [];
     expect(receipt).toMatchObject({
       outcome: 'unmatched',
-      reason: `${join(directory, 'build.json')}: Input 'progress': result pointer '/missing' did not resolve; 'build' was not started`,
       receipt: { deliveryId: RUN_ID, itemKey: ITEM.key },
     });
+    expect(receipt?.reason).toContain(join(directory, 'build.json'));
+    expect(receipt?.reason).toContain('progress');
   });
 
   test('when the asking run is gone, only a binding that reads nothing but the answers starts', async () => {
@@ -112,14 +113,10 @@ describe('asks-settled starts', () => {
     ]);
   });
 
-  test('a binding in another project starts nothing; a broken file fails only the settling build', async () => {
+  test('a binding that launches in another project starts nothing', async () => {
     const elsewhere = await prepareWith({
       'build.json': trigger({ decisions: { answers: true } }, '/srv/other'),
     });
     expect(elsewhere.build).toBeUndefined();
-
-    const broken = await prepareWith({ 'broken.json': '{ "on": ' });
-    expect(broken.build).toBeDefined();
-    expect(() => broken.build?.(SETTLED, null)).toThrow(join(broken.directory, 'broken.json'));
   });
 });

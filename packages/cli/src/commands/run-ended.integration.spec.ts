@@ -636,9 +636,45 @@ describe('an asks-settled binding', () => {
       null,
       { kind: 'asks_settled', runId: runs[0]?.id },
     ]);
-    expect(await fixture.cli(['workflow', 'runs', '--item', 'issue-1'])).toContain(
-      `after the asks of run ${runs[0]?.id.slice(0, 8)} settled`
-    );
+    // The human view names the asking run on the started run's line.
+    const startedLine = (await fixture.cli(['workflow', 'runs', '--item', 'issue-1']))
+      .split('\n')
+      .find(line => line.includes(runs[1]?.id.slice(0, 8) ?? '-'));
+    expect(startedLine).toContain(runs[0]?.id.slice(0, 8));
+  }, 90_000);
+
+  test('an answer whose bound stage cannot be prepared succeeds and reports the stage as not started', async () => {
+    const fixture = await makeFixture('asks-unprepared');
+    fixture.bind('build-after-answers', ASKS_SETTLED, { workflowName: 'build-answers' });
+    await fixture.cli([
+      'workflow',
+      'run',
+      'ask-plan',
+      '--no-worktree',
+      '--item',
+      'issue-1',
+      '--input',
+      'issue=Fix the login page',
+    ]);
+    const { items } = JSON.parse(
+      await fixture.cli(['workflow', 'attention', '--all', '--json'])
+    ) as { items: { ref: string }[] };
+    // The stage the binding names is gone by the time the asks are answered.
+    rmSync(join(fixture.projectRoot, '.archon', 'workflows', 'build-answers.yaml'));
+    await fixture.cli(['workflow', 'answer', '--ref', items[0]?.ref ?? '', '--recommended']);
+    const last = JSON.parse(
+      await fixture.cli([
+        'workflow',
+        'answer',
+        '--ref',
+        items[1]?.ref ?? '',
+        '--recommended',
+        '--json',
+      ])
+    ) as { ok: boolean; settled: boolean; notStarted?: { receiptId: string }[] };
+    expect(last).toMatchObject({ ok: true, settled: true });
+    expect(last.notStarted).toHaveLength(1);
+    expect(fixture.rows<RunRow>(RUNS_SQL).map(run => run.workflow_name)).toEqual(['ask-plan']);
   }, 90_000);
 
   test('trigger check reports a binding on a workflow with no asks, not one that starts its own', async () => {
