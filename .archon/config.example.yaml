@@ -29,7 +29,7 @@
 # unknown key is a hard error rather than a silent drop. Values here beat persistent
 # config and user AI preferences; an explicit `--model` flag then replaces only the
 # binding it names. Sealed at launch, so editing the file mid-run changes nothing.
-# `--config` is rejected with `--resume`, which restores the layer the run started with.
+# A resume takes no `--config`: it restores the layer the run started with.
 #
 # ---------------------------------------------------------------------------
 # Every supported key

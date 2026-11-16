@@ -645,7 +645,7 @@ export function compareStrings(a: string, b: string): number {
 }
 
 /** Oldest pause first; a pause that records no time after every timed one. */
-function compareAge(a: AttentionQueueItem, b: AttentionQueueItem): number {
+export function compareAge(a: AttentionQueueItem, b: AttentionQueueItem): number {
   if (a.pausedAt !== b.pausedAt) {
     if (a.pausedAt === null) return 1;
     if (b.pausedAt === null) return -1;

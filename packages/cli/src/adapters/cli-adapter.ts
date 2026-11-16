@@ -21,8 +21,6 @@ export interface CLIAdapterOptions {
     message: string,
     metadata?: MessageMetadata
   ) => Promise<void>;
-  /** Streaming mode - 'stream' for real-time output, 'batch' for accumulated output */
-  streamingMode?: 'stream' | 'batch';
 }
 
 export class CLIAdapter implements IPlatformAdapter {
@@ -30,11 +28,9 @@ export class CLIAdapter implements IPlatformAdapter {
     messagePersistence: 'core',
     defaultWorkflowDispatch: 'foreground',
   } as const;
-  private readonly streamingMode: 'stream' | 'batch';
   private readonly recordMessage: CLIAdapterOptions['recordMessage'];
 
   constructor(options?: CLIAdapterOptions) {
-    this.streamingMode = options?.streamingMode ?? 'batch';
     this.recordMessage = options?.recordMessage;
   }
 
@@ -63,7 +59,7 @@ export class CLIAdapter implements IPlatformAdapter {
   }
 
   getStreamingMode(): 'stream' | 'batch' {
-    return this.streamingMode;
+    return 'batch';
   }
 
   getPlatformType(): string {

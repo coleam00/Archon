@@ -215,7 +215,7 @@ export async function resumeWorkflowRun(input: WorkflowCommand): Promise<Command
   if (!runId) {
     return {
       success: false,
-      message: `Usage: ${cmd('resume <id>')}\n\nResumes a failed or paused workflow from completed nodes.`,
+      message: `Usage: ${cmd('resume <id>')}\n\nResumes a failed, paused or killed workflow run from completed nodes.`,
     };
   }
   try {

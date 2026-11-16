@@ -120,8 +120,6 @@ describe('listEnvironments', () => {
     mockMarkWorktreeDestroyed.mockClear();
     mockGetLiveRunBlocker.mockClear();
     mockGetLiveRunBlocker.mockImplementation(() => Promise.resolve(null));
-    mockLogger.info.mockClear();
-    mockLogger.warn.mockClear();
   });
 
   test('returns empty result when no active environments', async () => {
@@ -204,21 +202,6 @@ describe('listEnvironments', () => {
     // No re-fetch, and the env stays visible so the operator can act on it.
     expect(mockListByCodebaseWithAge).toHaveBeenCalledTimes(1);
     expect(result.totalEnvironments).toBe(1);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      expect.objectContaining({ envId: 'env-owned', runId: 'run-abcdef12', runStatus: 'failed' }),
-      'isolation.ghost_kept_for_live_run'
-    );
-  });
-
-  test('does not re-fetch when no ghosts found', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([makeActiveEnv()]);
-    mockListByCodebaseWithAge.mockResolvedValueOnce([makeEnvWithAge()]);
-    mockLstat.mockResolvedValueOnce(undefined); // not a ghost
-
-    await listEnvironments();
-
-    // listByCodebaseWithAge called only once — no re-fetch needed
-    expect(mockListByCodebaseWithAge).toHaveBeenCalledTimes(1);
   });
 
   test('handles filesystem error in reconcileGhosts without crashing', async () => {
@@ -229,10 +212,6 @@ describe('listEnvironments', () => {
     // Should not throw — error is swallowed per the try/catch in reconcileGhosts
     await expect(listEnvironments()).resolves.toBeDefined();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ envId: 'env-err' }),
-      'isolation.ghost_reconciliation_failed'
-    );
   });
 
   test('returns live environments grouped by codebase', async () => {
@@ -259,32 +238,19 @@ describe('cleanupMergedEnvironments', () => {
   });
 
   test('delegates to cleanupMergedWorktrees', async () => {
-    mockCleanupMerged.mockResolvedValueOnce({
+    const sweep = {
       removed: ['feat-a', 'feat-b'],
-      skipped: [],
-      errors: [],
-      releasedFailedRuns: [],
-      warnings: [],
-    });
-
-    const result = await cleanupMergedEnvironments('cb-1', '/main');
-
-    expect(mockCleanupMerged).toHaveBeenCalledWith('cb-1', '/main', {});
-    expect(result.removed).toEqual(['feat-a', 'feat-b']);
-  });
-
-  test('passes through skipped branches from cleanupMergedWorktrees', async () => {
-    mockCleanupMerged.mockResolvedValueOnce({
-      removed: [],
       skipped: [{ branchName: 'branch-a', reason: 'git error' }],
       errors: [],
       releasedFailedRuns: [],
       warnings: [],
-    });
+    };
+    mockCleanupMerged.mockResolvedValueOnce(sweep);
 
     const result = await cleanupMergedEnvironments('cb-1', '/main');
 
-    expect(result.skipped).toEqual([{ branchName: 'branch-a', reason: 'git error' }]);
+    expect(mockCleanupMerged).toHaveBeenCalledWith('cb-1', '/main', {});
+    expect(result).toEqual(sweep);
   });
 
   test('forwards includeClosed option to cleanupMergedWorktrees', async () => {

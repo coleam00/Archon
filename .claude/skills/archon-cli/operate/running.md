@@ -94,7 +94,7 @@ project's identity, env, artifacts and logs, and never registers the clone you l
 from. Workflow source and config come from the launch directory. A worktree is cut from
 the registered checkout, so a branch that exists only in your clone is not there; add
 `--no-worktree` to execute in the launch directory instead. It cannot be combined with
-`--folder`, `--base-branch`, `--resume` or `--dry-run`.
+`--folder`, `--base-branch` or `--dry-run`.
 
 Rules:
 

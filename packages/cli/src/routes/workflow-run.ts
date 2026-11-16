@@ -1,6 +1,6 @@
 import { resolve } from 'path';
 import { stat } from 'fs/promises';
-import { rejectConfigOnContinue, RUN_PROJECT_CONFLICT_FLAGS } from '../dispatch-guards';
+import { RUN_PROJECT_CONFLICT_FLAGS } from '../dispatch-guards';
 import { DETACHED_RUN_OWNER_ENV, DETACHED_LAUNCH_TOKEN_ENV } from '../utils/detached-run-control';
 import { matchProjectClaim } from '../utils/project-selector';
 import { fail } from './context';
@@ -38,27 +38,11 @@ function worktreeFlagConflict(values: Record<string, unknown>): string | undefin
   if (noWorktree && values.base !== undefined) {
     return 'Error: --base has no effect with --no-worktree.\nRemove --base or drop --no-worktree.';
   }
-  if (values.resume && branchName !== undefined) {
-    return (
-      'Error: --resume and --branch are mutually exclusive.\n' +
-      '  --resume reuses the existing worktree from the failed run.\n' +
-      '  Remove --branch when using --resume.'
-    );
-  }
   return undefined;
 }
 
-// `--workflow-source` picks the authoring directory. It is fresh-run only:
-// a resume executes the source its run already captured, so accepting a
-// different one here would promise a swap that cannot happen.
+// `--workflow-source` picks the authoring directory of a fresh run.
 function workflowSourceConflict(values: Record<string, unknown>): string | undefined {
-  if (values.resume) {
-    return (
-      'Error: --workflow-source and --resume are mutually exclusive.\n' +
-      '  A resumed run executes the source it captured when it started.\n' +
-      '  Drop --workflow-source, or start a fresh run to pick up new source.'
-    );
-  }
   if (values.container) {
     // A container run executes inside the container, which mounts the folder
     // project and nothing else. The capture lives outside that mount, so a
@@ -164,7 +148,6 @@ function buildRunOptions(
     noWorktree: values['no-worktree'] as boolean | undefined,
     folder: values.folder as boolean | undefined,
     container: values.container as boolean | undefined,
-    resume: values.resume as boolean | undefined,
     quiet: values.quiet as boolean | undefined,
     verbose: values.verbose as boolean | undefined,
     // Stable scope for persist_session across separate CLI invocations. Without
@@ -201,12 +184,6 @@ export async function runWorkflowRun(route: WorkflowRoute): Promise<number> {
     return await fail(json, 'Usage: archon workflow run <name> [message]');
   }
   const userMessage = positionals.slice(3).join(' ') || '';
-  const configOnContinue = rejectConfigOnContinue(
-    values.resume as boolean | undefined,
-    values.config,
-    values['config-from-run']
-  );
-  if (configOnContinue) return await fail(json, configOnContinue);
   const worktreeConflict = worktreeFlagConflict(values);
   if (worktreeConflict) return await fail(json, worktreeConflict);
   const codebaseId = await resolveRunProject(route);

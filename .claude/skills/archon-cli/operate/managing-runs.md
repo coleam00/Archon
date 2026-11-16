@@ -70,7 +70,7 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | End a stalled turn on a running run, keep the run | `archon workflow end-turn <run-id>` |
 | Stop a running run (its live owner first) | `archon workflow cancel <run-id>` |
 | Mark paused/failed/orphaned run cancelled | `archon workflow abandon <run-id>` |
-| Resume failed/paused from completed nodes | `archon workflow resume <run-id>` |
+| Resume a failed, paused or killed `running` run from completed nodes | `archon workflow resume <run-id>` |
 
 ## Answering a decision well
 
@@ -266,8 +266,9 @@ under the run.
   request was recorded, not acted on: follow with `workflow wait <run-id>`. It refuses
   a run that is not `running` or has nothing stalled.
 - **`cancel`** when the whole run should stop.
-- **`resume`** refuses a running run. Use it once the run has failed or paused, for
-  example after an ended turn exhausts its retries.
+- **`resume`** refuses a running run whose owner still answers, which a stalled run's
+  does. Use it once the run has failed or paused, for example after an ended turn
+  exhausts its retries.
 
 A silent turn with no open tool or background work is a different case: its node's
 `idle_timeout` fails it as before, with no request needed.

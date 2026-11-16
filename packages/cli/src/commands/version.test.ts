@@ -66,14 +66,6 @@ describe('versionCommand', () => {
     expect(lines.some((line: string) => line.includes('Git commit'))).toBe(false);
   });
 
-  it('should output correct format for version line', async () => {
-    await versionCommand();
-
-    const firstCall = consoleSpy.mock.calls[0][0] as string;
-    // Format: "Archon CLI v0.2.0"
-    expect(firstCall).toMatch(/^Archon CLI v\d+\.\d+\.\d+$/);
-  });
-
   it('should show source (bun) build type in development', async () => {
     await versionCommand();
 

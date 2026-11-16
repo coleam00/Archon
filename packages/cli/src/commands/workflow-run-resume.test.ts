@@ -1,3 +1,5 @@
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { makeContinuationRun } from '../test-support/workflow-continuation-fixture';
 import {
   mockRunLiveOwnerClose,
   mockStartRunLiveOwner,
@@ -23,6 +25,7 @@ import { workflowRunCommand } from './workflow-run-owned';
 
 describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
   let tempRoot: string;
+  let priorRun: WorkflowRun;
   let consoleSpy: ReturnType<typeof spyOn>;
 
   beforeEach(async () => {
@@ -62,7 +65,6 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
     });
     const conversationDb = await import('@archon/core/db/conversations');
     const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDb = await import('@archon/core/db/workflows');
     const isolationDb = await import('@archon/core/db/isolation-environments');
     (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'conv-resume',
@@ -72,10 +74,11 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
       default_cwd: '/repo/root',
       default_branch: 'main',
     });
-    (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    priorRun = makeContinuationRun({
       id: 'run-dead',
       working_path: tempRoot,
       workflow_name: 'archon-ship',
+      codebase_id: null,
       status,
     });
     (isolationDb.listByCodebase as ReturnType<typeof mock>).mockResolvedValueOnce(isolationEnvs);
@@ -99,6 +102,7 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
       await expect(
         workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'archon-ship', 'go', {
           resume: true,
+          continuationRun: priorRun,
         })
       ).rejects.toThrow(
         /no completed nodes and no interactive-loop state[\s\S]*archon workflow run archon-ship --branch fix\/issue-3124 --supersedes run-dead/
@@ -128,6 +132,7 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
     await expect(
       workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'archon-ship', 'go', {
         resume: true,
+        continuationRun: priorRun,
       })
     ).rejects.toThrow(
       /^Cannot resume: the prior run for 'archon-ship' has no completed nodes and no interactive-loop state\.\nNothing can be skipped, so start a fresh run instead:\n  archon workflow run archon-ship --supersedes run-dead$/
@@ -146,6 +151,7 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
     await expect(
       workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'archon-ship', 'go', {
         resume: true,
+        continuationRun: priorRun,
       })
     ).rejects.toThrow(
       /^Cannot resume workflow 'archon-ship' now: Workflow run 'run-dead' cannot resume while resource owner 'holder-1' has priority\. It stays paused;/
@@ -163,6 +169,7 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
     await expect(
       workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'archon-ship', 'go', {
         resume: true,
+        continuationRun: priorRun,
       })
     ).rejects.toThrow(
       /no completed nodes and no interactive-loop state[\s\S]*archon workflow abandon run-dead[\s\S]*archon workflow run archon-ship --branch fix\/issue-3124 --supersedes run-dead/
@@ -196,7 +203,7 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
           '/repo/root',
           'archon-ship',
           'go',
-          { resume: true }
+          { resume: true, continuationRun: priorRun }
         );
         void command.then(() => {
           finished = true;
@@ -235,6 +242,7 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
 
     await workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'archon-ship', 'go', {
       resume: true,
+      continuationRun: priorRun,
     });
 
     expect(executeWorkflow).toHaveBeenCalledTimes(1);

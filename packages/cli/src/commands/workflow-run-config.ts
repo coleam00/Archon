@@ -6,7 +6,6 @@ import {
 } from '@archon/core/config';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
-import { RESUME_RUN_CONFIG_CONFLICT } from '../dispatch-guards';
 import { resolveRunIdArg, type WorkflowRunOptions } from './workflow-shared';
 
 /**
@@ -25,13 +24,8 @@ export async function resolveLaunchRunConfig(
       ? options.configPath
       : join(cwd, options.configPath)
     : undefined;
-  if (isContinuation && options.configFromRun) {
-    throw new Error(
-      '--resume and --config-from-run are mutually exclusive. A resumed run keeps its original run config.'
-    );
-  }
-  if (isContinuation && (configPath || options.detachedRunConfig)) {
-    throw new Error(RESUME_RUN_CONFIG_CONFLICT);
+  if (isContinuation && (configPath || options.configFromRun || options.detachedRunConfig)) {
+    throw new Error('A continued run keeps its original run config; it takes no new one.');
   }
   if (configPath && options.configFromRun) {
     throw new Error('--config and --config-from-run are mutually exclusive.');

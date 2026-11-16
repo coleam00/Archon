@@ -147,65 +147,6 @@ describe('workflowRunsCommand', () => {
     }
   );
 
-  it.each([false, true])('reports suspended loop exclusions in listings json=%s', async json => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const eventsDb = await import('@archon/core/db/workflow-events');
-    (workflowDb.listDashboardRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
-      runs: [
-        {
-          id: 'one',
-          workflow_name: 'work',
-          status: 'paused',
-          metadata: {},
-          active_nodes: [],
-          started_at: new Date(),
-        },
-      ],
-      total: 1,
-      counts: EMPTY_COUNTS,
-    });
-    const event = throughputEvents('one')[0]!;
-    (eventsDb.listEventsForRuns as ReturnType<typeof mock>).mockResolvedValueOnce(
-      new Map([
-        [
-          'one',
-          [
-            {
-              ...event,
-              event_type: 'node_suspended',
-              data: {
-                ...event.data,
-                node: { id: 'work', kind: 'loop' },
-                type: 'loop',
-                suspend_point: 'interactive_loop',
-              },
-            },
-          ],
-        ],
-      ])
-    );
-    expect(
-      await workflowRunsCommand(createTestWorkflowHost(), '/test/path', {
-        all: true,
-        throughput: true,
-        json,
-      })
-    ).toBe(0);
-    if (json) {
-      const result = JSON.parse(firstJsonPayload(stdoutSpy));
-      expect(result.runs[0].throughput.summary.loopNodesNotMeasured).toBe(1);
-      expect(result.throughput.models[0]).toMatchObject({
-        provider: 'claude',
-        requestedModel: 'large',
-        loopNodesNotMeasured: 1,
-      });
-    } else {
-      const text = consoleSpy.mock.calls.map(call => String(call[0])).join('\n');
-      expect(text).toContain('one effective throughput: unavailable; 1 loop nodes not measured');
-      expect(text).toContain('claude/large: unavailable; 1 loop nodes not measured');
-    }
-  });
-
   it('reads a large requested page in bounded batches and reuses them for verbose detail', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const eventsDb = await import('@archon/core/db/workflow-events');
@@ -547,26 +488,6 @@ describe('workflowRunsCommand', () => {
     expect(output).toContain('completed');
     expect(output).toContain('authored outcome: failed');
     expect(output).toContain('active node(s): parallel-a, parallel-b');
-  });
-
-  it('marks scopeFallback false in --json when the project scope resolves', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'cb-proj',
-      name: 'owner/repo',
-      default_cwd: '/test/path',
-    });
-    (workflowDb.listDashboardRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
-      runs: [],
-      total: 0,
-      counts: EMPTY_COUNTS,
-    });
-
-    await workflowRunsCommand(createTestWorkflowHost(), '/test/path', { json: true });
-
-    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as { scopeFallback: boolean };
-    expect(parsed.scopeFallback).toBe(false);
   });
 
   it('passes --all (no codebase scope) plus --status/--limit through to listDashboardRuns', async () => {

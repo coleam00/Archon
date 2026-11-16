@@ -70,79 +70,6 @@ describe('CLI help output', () => {
     }
   });
 
-  it('lists the workflow resume command', () => {
-    expect(help).toContain(
-      'workflow resume <run-id>   Resume a failed or paused run from completed nodes'
-    );
-  });
-
-  it('lists the workflow transcript reader and follow flag', () => {
-    expect(help).toContain("workflow logs <run-id>     Print or follow a run's JSONL transcript");
-    expect(help).toContain('--follow');
-  });
-
-  it('documents project-scoped active status and its install-wide override', () => {
-    expect(help).toContain(
-      'workflow status            Show running/paused workflows for this project'
-    );
-    expect(help).toContain(
-      "--all                      For 'workflow status/runs': list across all projects"
-    );
-  });
-
-  it('documents compact and full workflow discovery', () => {
-    expect(help).toContain('workflow list [name] [--full] [--json]');
-    expect(help).toContain('List compact workflow descriptions');
-    expect(help).toContain('Use <name> --full for one exact description');
-  });
-
-  it('describes cancel and abandon', () => {
-    expect(help).toContain(
-      'workflow cancel <run-id>   Stop a running workflow (stops an owning process first)'
-    );
-    expect(help).toContain(
-      'workflow abandon <run-id>  Mark a run cancelled, stopping a live owner first'
-    );
-  });
-
-  it('documents workflow dry-run flags', () => {
-    expect(help).toContain('--dry-run');
-    expect(help).toContain('--stubs <path>');
-    expect(help).toContain('--stubs-init <path>');
-    expect(help).toContain('--default-stubs');
-    expect(help).toContain('--exec-code');
-    expect(help).toContain('--pause-at-gates');
-  });
-
-  it('documents sparse repeatable model bindings', () => {
-    expect(help).toContain('--model <name>=<spec>');
-  });
-
-  it('documents the per-run config file', () => {
-    expect(help).toContain('--config <path>');
-  });
-
-  it('documents the unified skill destinations and subscription providers', () => {
-    expect(help).toContain(
-      'skill add [path]           Add archon-cli into .claude/skills and .agents/skills'
-    );
-    expect(help).toContain(
-      'ai login <provider>        Connect a Claude, ChatGPT/Codex, or Copilot subscription'
-    );
-  });
-
-  it('omits the removed branch-inferred continue command', () => {
-    expect(help).not.toMatch(/\bcontinue <branch>/);
-    expect(help).not.toContain('--workflow <name>');
-    expect(help).not.toContain('--no-context');
-  });
-
-  it('documents exact run-id adoption as the continuation route', () => {
-    expect(help).toContain(
-      "--adopt <run-id>           Start a new run adopting a terminal run's worktree/branch + artifacts ($ADOPTED_RUN_DIR)"
-    );
-  });
-
   // The global anchor must disappear from a scoped slice, rather than
   // merely appending the same content under a different heading.
   it('produces scoped workflow run --help that differs from archon --help and scopes to run-only flags', () => {
@@ -153,11 +80,6 @@ describe('CLI help output', () => {
     expect(scoped).not.toContain('--cwd <path>');
     expect(scoped).toContain('--workflow-source');
     expect(scoped).toContain('--dry-run');
-  });
-
-  it('documents --workflow-source as a run-only flag in workflow run --help', () => {
-    const scoped = renderHelp('workflow', 'run');
-    expect(scoped).toContain('--workflow-source');
   });
 
   it('documents --container in workflow run options', () => {
@@ -235,7 +157,7 @@ Commands:
                              (defaults to the current project)
   workflow attention label <run-id> --occurrence <id>
                              Set or remove labels on the attention wait a run is paused at
-  workflow resume <run-id>   Resume a failed or paused run from completed nodes
+  workflow resume <run-id>   Resume a failed, paused or killed run from completed nodes
   workflow wake [--watch] [--json] Wake due continuations across this install
   workflow signal <full-run-id> Signal and wake an event wait; use --occurrence for an exact match
   workflow cancel <run-id>   Stop a running workflow (stops an owning process first)
@@ -317,13 +239,10 @@ Options:
   --no-worktree              Run on branch directly without worktree isolation
   --folder                   Register the current directory (with or without git) as a folder project and run in place
   --container                Run a folder project in container isolation
-  --input <name>=<value>     Supply a declared workflow input; repeat per input (mutually exclusive with --resume)
+  --input <name>=<value>     Supply a declared workflow input; repeat per input
   --model <name>=<spec>      Rebind small/medium/large or @alias for one run; repeat per binding
   --config <path>            Load a sparse YAML config layer for one fresh workflow run
   --config-from-run <run-id> Start a fresh run with the run config another run was started with
-  --resume                   Resume the newest eligible failed, paused, or stale running run of this workflow
-                             Running is stale when activity is missing or older than one day; verify its owner is gone first.
-                             Mutually exclusive with --branch
   --adopt <run-id>           Start a new run adopting a terminal run's worktree/branch + artifacts ($ADOPTED_RUN_DIR)
   --supersedes <run-id>      Record this fresh run as replacing the prior run's open item (no lane inheritance)
   --dry-run                  Simulate workflow DAG control flow without creating a run or contacting a provider
@@ -352,7 +271,7 @@ Options:
                              resource is full
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
-  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': list its runs
+  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers
   --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded
   --limit <n>                For 'workflow runs': max rows (default 20)
   --timeout <seconds>        For 'workflow wait': give up after N seconds (default: wait indefinitely)

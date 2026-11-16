@@ -75,7 +75,6 @@ const {
   clearWorkflowWaitContext,
   listWorkflowEventSignalCandidates,
   getWorkflowRun,
-  findResumableRun,
   findResumableRunByParentConversation,
   cancelResumableRunsForConversation,
   resolveApprovalGate,
@@ -318,13 +317,9 @@ describe('gate approve staging — real SQLite end-to-end (#2075)', () => {
       approveWorkflow('gate-1', 'again', { kind: 'operator' }, { via: 'cli' })
     ).rejects.toThrow('already approved and is awaiting resume');
 
-    // Both resumable pickups find the staged run: the orchestrator's
-    // parent-conversation query and the CLI's working-path query
-    // (approve --json → later `run --resume` contract).
+    // The orchestrator's parent-conversation pickup finds the staged run.
     const byParent = await findResumableRunByParentConversation('wf-gate', 'conv-1', 'cb-1');
     expect(byParent?.id).toBe('gate-1');
-    const byPath = await findResumableRun('wf-gate', '/repo/wt');
-    expect(byPath?.id).toBe('gate-1');
 
     // Resume CAS flips it to running; a concurrent second resume loses the race.
     const resumed = await resumeWorkflowRun('gate-1');

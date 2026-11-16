@@ -181,7 +181,7 @@ function createMockStore(): IWorkflowStore {
     deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() => {
       throw new Error('Unexpected deleteWorkflowNodeSessions');
     }),
-    listItemRuns: mock<IWorkflowStore['listItemRuns']>(async () => []),
+    getItemRuns: mock<IWorkflowStore['getItemRuns']>(async () => null),
     getItem: mock<IWorkflowStore['getItem']>(async () => null),
     findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
       throw new Error('Not used by this test');
@@ -239,7 +239,6 @@ function createMockStore(): IWorkflowStore {
     findChildRuns: mock(() => Promise.resolve([])),
     getRunAncestry: mock(() => Promise.resolve([])),
     getActiveWorkflowRunByPath: mock(() => Promise.resolve(null)),
-    findResumableRun: mock(() => Promise.resolve(null)),
     resumeWorkflowRun: mock(() =>
       Promise.resolve({
         origin: { conversationId: 'conv-mock' },

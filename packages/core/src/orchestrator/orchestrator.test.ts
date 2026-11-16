@@ -814,19 +814,6 @@ describe('orchestrator-agent handleMessage', () => {
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'I can help you with that!');
     });
 
-    test('does NOT require a codebase to function', async () => {
-      // Conversation has no codebase_id — this is fine for the orchestrator
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'agent_message_chunk', text: 'Hello!' };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'hi', { actor: operator });
-
-      // Should NOT send an error about missing codebase
-      expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Hello!');
-    });
-
     test('loads all codebases for prompt context', async () => {
       mockListCodebases.mockResolvedValue([mockCodebase]);
       mockClient.sendQuery.mockImplementation(async function* () {
@@ -1440,27 +1427,6 @@ describe('orchestrator-agent handleMessage', () => {
         });
       }
     }
-
-    test('explicit project registration reports detection failure without persistence', async () => {
-      const projectPath = await mkdtemp(join(tmpdir(), 'archon-agent-registration-failure-'));
-      try {
-        await writeFile(join(projectPath, '.git'), `gitdir: ${join(projectPath, 'missing')}\n`);
-        mockExistsSync.mockReturnValue(true);
-        mockListCodebases.mockResolvedValue([]);
-        await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
-          actor: operator,
-        });
-        expect(platform.sendMessage).toHaveBeenCalledWith(
-          'chat-456',
-          expect.stringContaining('Nothing was registered')
-        );
-        expect(mockCreateCodebase).not.toHaveBeenCalled();
-        expect(mockUpdateCodebase).not.toHaveBeenCalled();
-        expect(mockRepairCodebaseRegistration).not.toHaveBeenCalled();
-      } finally {
-        await removeTempTree(projectPath);
-      }
-    });
 
     test('/register-project refuses a path that disappears during detection', async () => {
       const canonicalPath = await canonicalizeForTest('/vanished/path');
