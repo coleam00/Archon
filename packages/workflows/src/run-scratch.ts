@@ -4,8 +4,8 @@
  *
  * `releaseNodeScratch` removes one invocation's `$NODE_SCRATCH_DIR` once that invocation
  * has completed, failed or been skipped; the layer walker calls it, so the invocation's
- * own processes have ended. A resumed run first releases the scratch of every invocation
- * that ended while it was paused (`releaseFinishedNodeScratch`). Run-end release below
+ * own processes have ended, and also when a resumed run skips or replays an invocation
+ * that a prior pass left suspended. Run-end release below
  * stays the backstop for an invocation that never got there (interrupted, or its
  * process died).
  *
@@ -164,45 +164,6 @@ export async function releaseNodeScratch({
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
     getLog().warn({ ...logContext, err: error, path: scratchDir }, 'node_scratch.remove_failed');
-  }
-}
-
-/**
- * On resume, release the scratch of every invocation that is not still unfinished: a gate
- * completed by approval while the run was paused, or any invocation a prior pass ended
- * without releasing. `unfinished` holds the invocation ids the resume reuses, whose
- * scratch stays. Never throws.
- */
-export async function releaseFinishedNodeScratch({
-  artifactsDir,
-  unfinished,
-  repoPath,
-  container,
-  logContext,
-}: {
-  artifactsDir: string;
-  unfinished: ReadonlySet<string>;
-  repoPath: string;
-  container: boolean;
-  logContext: Record<string, unknown>;
-}): Promise<void> {
-  if (!(await nodeScratchRootIsDirectory(artifactsDir, logContext))) return;
-  let entries: string[];
-  try {
-    entries = await readdir(getNodeScratchRoot(artifactsDir));
-  } catch (error) {
-    warnFilesystem(error, getNodeScratchRoot(artifactsDir), logContext);
-    return;
-  }
-  for (const invocationId of entries) {
-    if (unfinished.has(invocationId)) continue;
-    await releaseNodeScratch({
-      artifactsDir,
-      invocationId,
-      repoPath,
-      container,
-      logContext: { ...logContext, invocationId },
-    });
   }
 }
 

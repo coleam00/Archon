@@ -95,7 +95,7 @@ layout below. Existing projects keep their names and storage.
   node added under scratch are removed from that repository first, so no registration
   outlives its files. A node invocation's own scratch, `.archon/scratch/nodes/<invocation-id>/`
   (`$NODE_SCRATCH_DIR`), is removed the same way, worktrees first, as soon as that invocation
-  completes, fails or is skipped; one that is suspended keeps it until it resumes and ends, and one answered while the run was paused loses it when the run resumes.
+  completes, fails or is skipped; one that is suspended keeps it until it resumes and ends, and one the resumed run skips or replays as completed (a gate answered while the run was paused) loses it then.
   Tagged cache directories anywhere beneath `$ARTIFACTS_DIR` are removed
   at that same release point. A container run's scratch and tagged caches are removed when
   its container is. A run whose nodes Archon cannot confirm stopped (its owner ran on another

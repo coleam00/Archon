@@ -41,7 +41,7 @@ import { skipNode } from './skip-node';
 import { dispatchNode } from './dispatch';
 import { nodePackDir } from '../pack-dir';
 import { runWithPackDir } from '../workflow-variables';
-import { runInNodeScratch } from './node-scratch';
+import { releaseAdmittedScratch, runInNodeScratch } from './node-scratch';
 import { getStaleCachedDependencies } from './stale-dependencies';
 /**
  * Await thunks one at a time, collecting outcomes in `Promise.allSettled` shape so the
@@ -155,8 +155,18 @@ async function runLayerPhase(
           nodeInvocation: invocation,
         };
         try {
+          const admitted = await admitNode(nodeCtx, node);
+          if (admitted !== undefined) {
+            await releaseAdmittedScratch(
+              nodeCtx,
+              node,
+              invocation.id,
+              admitted,
+              ctx.priorCompletedNodes
+            );
+          }
           const result =
-            (await admitNode(nodeCtx, node)) ??
+            admitted ??
             (await runInNodeScratch(nodeCtx, node, invocation.id, async () =>
               runWithPackDir(
                 await nodePackDir(nodeCtx.workflowSourceRoots, nodeCtx.workflowPack, node),

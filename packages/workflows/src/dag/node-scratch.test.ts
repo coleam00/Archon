@@ -207,15 +207,96 @@ describe('executeDagWorkflow -- node scratch', () => {
     expect(existsSync(join(nodes, invocationId, 'rework'))).toBe(true);
 
     // Resumed after approval recorded the gate completed: its scratch is gone before a
-    // dependent runs.
+    // dependent runs, and scratch the workflow keeps under the same parent is not.
+    await mkdir(join(nodes, 'shared'));
+    await writeFile(join(nodes, 'shared', 'marker'), 'kept');
     store = createEscalationStore(runId);
-    await run({ priorCompletedNodes: new Map([['check', { output: 'approve' }]]) }, [
+    await run({ priorCompletedNodes: new Map([['check', { output: 'approve', execution }]]) }, [
       gate(),
-      exec('after', `ls "${nodes}" > "$ARTIFACTS_DIR/after.txt"`, ['check']),
+      exec(
+        'after',
+        `cat "${nodes}/shared/marker" > "$ARTIFACTS_DIR/marker.txt"; ls "${nodes}" > "$ARTIFACTS_DIR/after.txt"`,
+        ['check']
+      ),
     ]);
+    expect(await readFile(join(artifactsDir, 'marker.txt'), 'utf8')).toBe('kept');
     const seen = (await readFile(join(artifactsDir, 'after.txt'), 'utf8')).trim().split('\n');
-    expect(seen).toHaveLength(1);
+    // `shared` and the running dependent's own directory.
+    expect(seen).toHaveLength(2);
+    expect(seen).toContain('shared');
     expect(seen).not.toContain(invocationId);
+  });
+
+  it('releases a suspended gate scratch, worktree included, when a resume skips the gate', async () => {
+    const repo = await initRepo(join(testDir, 'repo'));
+    const runId = 'node-scratch-gate-skip';
+    const decision = join(testDir, 'decision');
+    await writeFile(decision, 'go');
+    const nodesFor = (): DagNode[] => [
+      exec('prod', `cat "${decision}"`),
+      { ...gate(), when: "$prod.output == 'go'", depends_on: ['prod'] } as DagNode,
+    ];
+    let store = createEscalationStore(runId);
+    const run = (options: Partial<Parameters<typeof dagOptions>[0]>) =>
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: repo,
+          artifactsDir,
+          workflow: { name: 'node-scratch-gate-skip', nodes: nodesFor() },
+          workflowRun: makeWorkflowRun(runId),
+          ...options,
+        })
+      );
+    await run({});
+    expect(store.getState().status).toBe('paused');
+    const execution = persistedEvents(store).find(
+      event => event.event_type === 'node_suspended' && event.step_name === 'check'
+    )?.data as unknown as NodeExecutionMetadata;
+    const gateScratch = join(getNodeScratchRoot(artifactsDir), execution.invocation.id);
+    git(repo, 'worktree', 'add', '-q', '--detach', join(gateScratch, 'wt'), 'HEAD');
+    await writeFile(join(gateScratch, 'wt', 'bulk'), Buffer.alloc(4 * 1024 * 1024));
+
+    // The producer re-runs on resume and turns the gate's condition false.
+    await writeFile(decision, 'stop');
+    store = createEscalationStore(runId);
+    store.getDagResumeSnapshot.mockImplementation(async () => ({
+      ...(await createMockDeps().store.getDagResumeSnapshot(runId)),
+      unfinishedInvocations: new Map([[nodeInvocationKey('check', []), execution]]),
+    }));
+    await run({ priorCompletedNodes: new Map() });
+    expect(
+      persistedEvents(store).some(
+        event => event.event_type === 'node_skipped' && event.step_name === 'check'
+      )
+    ).toBe(true);
+    expect(existsSync(gateScratch)).toBe(false);
+    expect(worktreePaths(repo)).toHaveLength(1);
+  });
+
+  it('releases the scratch of a node whose dispatch throws', async () => {
+    const store = createMockDeps().store;
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        artifactsDir,
+        // No base branch: substituting $BASE_BRANCH throws inside the node's dispatch.
+        baseBranch: '',
+        workflow: {
+          name: 'node-scratch-dispatch-throws',
+          nodes: [exec('work', 'echo $BASE_BRANCH')],
+        },
+        workflowRun: makeWorkflowRun('node-scratch-dispatch-throws'),
+      })
+    );
+    expect(
+      persistedEvents(store).some(
+        event => event.event_type === 'node_failed' && event.step_name === 'work'
+      )
+    ).toBe(true);
+    expect(await readdir(getNodeScratchRoot(artifactsDir))).toEqual([]);
   });
 
   it('deregisters only the ending node worktrees, not a running sibling', async () => {

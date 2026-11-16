@@ -8,7 +8,6 @@
  * The run's outcome is written only by the completion write there.
  */
 
-import { releaseFinishedNodeScratch } from './run-scratch';
 import { createBoundaryErrorHistory } from './dag/skip-node';
 import { createProviderLimitDeadlineResolver } from './executor-shared';
 import { serializeRunUsage } from './schemas/run-usage';
@@ -453,19 +452,6 @@ async function createRunContext(
       : undefined;
   const unfinishedInvocations =
     priorCompletedNodes === undefined ? undefined : resumeSnapshot?.unfinishedInvocations;
-  if (priorCompletedNodes !== undefined) {
-    // A resumed run starts without the scratch of invocations that ended while it was
-    // paused (a gate answered by approval); the ones it resumes keep theirs.
-    await releaseFinishedNodeScratch({
-      artifactsDir,
-      unfinished: new Set(
-        [...(unfinishedInvocations?.values() ?? [])].map(execution => execution.invocation.id)
-      ),
-      repoPath: cwd,
-      container: execContext.kind === 'container',
-      logContext: { workflowRunId: workflowRun.id },
-    });
-  }
   const runBudget =
     workflow.budget !== undefined && resumeSnapshot !== undefined
       ? createRunBudgetLedger(workflow.budget, resumeSnapshot.budget)

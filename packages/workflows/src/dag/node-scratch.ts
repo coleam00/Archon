@@ -8,6 +8,7 @@ import { isWorkflowExecutionInterruption } from '../execution-interruption';
 import { nodeScratchRootIsDirectory, releaseNodeScratch } from '../run-scratch';
 import { runWithNodeScratch } from '../workflow-variables';
 import type { DagNode } from '../schemas';
+import type { PersistedNodeOutput } from '../store';
 import type { LayerNodeResult, RunLayersContext } from './run-context';
 
 /**
@@ -56,5 +57,33 @@ export async function runInNodeScratch(
         logContext: { workflowRunId: ctx.workflowRun.id, nodeId: node.id, invocationId },
       });
     }
+  }
+}
+
+/**
+ * Release the scratch an admission-settled node leaves behind. Admission dispatches
+ * nothing, but on resume it can settle an invocation a prior pass suspended: skipped by
+ * its condition or trigger rule (the reused `invocationId`), or replayed as the success an
+ * approval recorded while the run was paused (the replayed completion's invocation).
+ * Each is released by id, so scratch a workflow keeps elsewhere under the run's scratch is
+ * never touched. A directory that was never made costs one `lstat`.
+ */
+export async function releaseAdmittedScratch(
+  ctx: RunLayersContext,
+  node: DagNode,
+  invocationId: string,
+  result: LayerNodeResult,
+  priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput> | undefined
+): Promise<void> {
+  if (result.output.state === 'running') return;
+  const replayed = priorCompletedNodes?.get(node.id)?.execution?.invocation.id;
+  for (const id of new Set([invocationId, ...(replayed === undefined ? [] : [replayed])])) {
+    await releaseNodeScratch({
+      artifactsDir: ctx.artifactsDir,
+      invocationId: id,
+      repoPath: ctx.cwd,
+      container: ctx.execContext.kind === 'container',
+      logContext: { workflowRunId: ctx.workflowRun.id, nodeId: node.id, invocationId: id },
+    });
   }
 }
