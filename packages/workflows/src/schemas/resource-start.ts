@@ -256,6 +256,47 @@ export const sourceReceiptInputSchema = z
   .strict();
 export type SourceReceiptInput = z.infer<typeof sourceReceiptInputSchema>;
 
+/**
+ * A checkout one run hands the next: `branch` at `commit`, kept in the estate of run
+ * `runId`. That is the ended run, or, when the ended run worked on a copy, the run the
+ * copy was taken from, so a check's end hands on the build's branch and not its own.
+ */
+export const checkoutHandoffSchema = z
+  .object({
+    runId: z.string().min(1),
+    branch: z.string().min(1),
+    commit: z.string().regex(/^[0-9a-f]{40,64}$/, 'Expected a full commit id'),
+  })
+  .strict();
+export type CheckoutHandoff = z.infer<typeof checkoutHandoffSchema>;
+
+/**
+ * Run metadata key of a run started on a hand-off, and the lane it got: `continue` works
+ * on the hand-off's branch (a stage that mutates its checkout), `copy` works in a checkout
+ * of its own cut at the hand-off's commit (a stage with `mutates_checkout: false`).
+ */
+export const CHECKOUT_HANDOFF_METADATA_KEY = 'checkout_handoff';
+export const checkoutHandoffRunMetadataSchema = checkoutHandoffSchema
+  .extend({ lane: z.enum(['continue', 'copy']) })
+  .strict();
+export type CheckoutHandoffRunMetadata = z.infer<typeof checkoutHandoffRunMetadataSchema>;
+
+/**
+ * The hand-off a run was started on, or undefined when it was not. A value that does not
+ * parse throws: reading it as no hand-off would start the run somewhere it was not given.
+ */
+export function readCheckoutHandoff(run: {
+  id: string;
+  metadata: Readonly<Record<string, unknown>> | null | undefined;
+}): CheckoutHandoffRunMetadata | undefined {
+  const value = run.metadata?.[CHECKOUT_HANDOFF_METADATA_KEY];
+  if (value === undefined) return undefined;
+  const parsed = checkoutHandoffRunMetadataSchema.safeParse(value);
+  if (!parsed.success)
+    throw new Error(`Run '${run.id}' has an invalid ${CHECKOUT_HANDOFF_METADATA_KEY}`);
+  return parsed.data;
+}
+
 export const resourceStartBindingIntentSchema = z
   .object({
     bindingId: z.string().min(1),
@@ -296,6 +337,14 @@ export const resourceStartBindingIntentSchema = z
      * strictly; see `storableIntent` in core's start-receipt-writes.
      */
     eventInputs: z.record(z.string(), jsonValueSchema).optional(),
+    /**
+     * The checkout a run-ended binding with `checkout: "ended-run"` hands the started run,
+     * recorded when the ended run completed. Preparation decides the lane from it, not from
+     * `launch.isolation`, which names the branch only for older binaries. Operator configs
+     * omit this field. The SQL store never writes it into the `intent` column; see
+     * `storableIntent` in core's start-receipt-writes.
+     */
+    checkoutFrom: checkoutHandoffSchema.optional(),
   })
   .strict();
 export type ResourceStartBindingIntent = z.infer<typeof resourceStartBindingIntentSchema>;
@@ -387,6 +436,11 @@ export const runEndedTriggerSchema = z
     workflowName: z.string().min(1),
     outcome: z.string(),
     inputs: z.record(z.string().min(1), runEndedInputSourceSchema).optional(),
+    /**
+     * `ended-run`: the started run works in the checkout the ended run left, on its branch
+     * at the commit it ended on, or is refused naming why.
+     */
+    checkout: z.literal('ended-run').optional(),
   })
   .strict();
 export type RunEndedTrigger = z.infer<typeof runEndedTriggerSchema>;
@@ -401,7 +455,7 @@ export const triggerConfigSchema = z
   .object({
     version: z.literal(1),
     sourceInstanceId: z.string().min(1),
-    binding: resourceStartBindingIntentSchema.omit({ eventInputs: true }),
+    binding: resourceStartBindingIntentSchema.omit({ eventInputs: true, checkoutFrom: true }),
     schedule: z
       .object({ intervalSeconds: z.number().int().positive(), runAtLoad: z.boolean() })
       .strict()
@@ -412,5 +466,16 @@ export const triggerConfigSchema = z
   .refine(config => config.schedule === undefined || config.on === undefined, {
     message: 'A trigger has either a schedule or on.runEnded, not both',
     path: ['on'],
-  });
+  })
+  // The engine picks the lane of a start on the ended run's checkout; a fixed one here
+  // would contradict it.
+  .refine(
+    config =>
+      config.on?.runEnded.checkout === undefined ||
+      config.binding.launch.isolation.kind === 'default',
+    {
+      message: 'With on.runEnded.checkout, binding.launch.isolation must be { "kind": "default" }',
+      path: ['binding', 'launch', 'isolation'],
+    }
+  );
 export type TriggerConfig = z.infer<typeof triggerConfigSchema>;

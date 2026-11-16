@@ -457,11 +457,15 @@ function widenResourceSlotHolders(
   }).immediate();
 }
 
-// Names of event-derived inputs live beside the binding intent, not in it: older
-// binaries parse `intent` strictly and would refuse an extra key.
+// Names of event-derived inputs and a checkout hand-off live beside the binding intent,
+// not in it: older binaries parse `intent` strictly and would refuse an extra key.
 function addReceiptBindingColumns(db: Database): void {
-  if (!columnNames(db, 'remote_agent_start_receipt_bindings').has('event_input_names')) {
+  const columns = columnNames(db, 'remote_agent_start_receipt_bindings');
+  if (!columns.has('event_input_names')) {
     db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN event_input_names TEXT');
+  }
+  if (!columns.has('checkout_from')) {
+    db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN checkout_from TEXT');
   }
 }
 

@@ -595,7 +595,7 @@ describe('durable resource starts', () => {
     ).toHaveLength(2);
   });
 
-  test('a binding with event inputs stays readable by the v0.11.1 intent schema', async () => {
+  test('a binding with event inputs and a checkout hand-off stays readable by the v0.11.1 intent schema', async () => {
     // The keys and strictness of v0.11.1's resourceStartBindingIntentSchema, which parses
     // the `intent` column. A shipped reader, so it is frozen here, not derived from today's.
     const shippedIntentSchema = z
@@ -620,6 +620,7 @@ describe('durable resource starts', () => {
       })
       .strict();
     const receiptId = 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd';
+    const handoff = { runId: 'build-run', branch: 'archon/build-1', commit: 'a'.repeat(40) };
     await acceptStartReceipt({
       receipt: {
         id: receiptId,
@@ -644,34 +645,42 @@ describe('durable resource starts', () => {
             cwd: '/tmp/test',
             workflowName: 'test',
             inputs: { mode: 'nightly', count: 0 },
-            isolation: { kind: 'in-place' },
+            isolation: { kind: 'worktree', branch: 'archon/build-1' },
           },
           eventInputs: { count: 42 },
+          checkoutFrom: handoff,
         },
       ],
     });
 
     const raw = new Database(join(root, 'archon.db'), { readonly: true });
-    let stored: { intent: string; event_input_names: string | null } | null;
+    type StoredBinding = {
+      intent: string;
+      event_input_names: string | null;
+      checkout_from: string | null;
+    };
+    let stored: StoredBinding | null;
     try {
       stored = raw
-        .query<{ intent: string; event_input_names: string | null }, SQLQueryBindings[]>(
-          'SELECT intent, event_input_names FROM remote_agent_start_receipt_bindings WHERE receipt_id = ?'
+        .query<StoredBinding, SQLQueryBindings[]>(
+          'SELECT intent, event_input_names, checkout_from FROM remote_agent_start_receipt_bindings WHERE receipt_id = ?'
         )
         .get(receiptId);
     } finally {
       raw.close();
     }
-    // An older binary sees the merged inputs it always passed through.
-    expect(shippedIntentSchema.parse(JSON.parse(stored?.intent ?? 'null')).launch.inputs).toEqual({
-      mode: 'nightly',
-      count: 42,
-    });
+    // An older binary sees the merged inputs it always passed through, and the hand-off's
+    // branch but not the hand-off.
+    const shipped = shippedIntentSchema.parse(JSON.parse(stored?.intent ?? 'null'));
+    expect(shipped.launch.inputs).toEqual({ mode: 'nightly', count: 42 });
+    expect(shipped.launch.isolation).toEqual({ kind: 'worktree', branch: 'archon/build-1' });
     expect(stored?.event_input_names).toBe('["count"]');
+    expect(JSON.parse(stored?.checkout_from ?? 'null')).toEqual(handoff);
     // This version reads the event inputs back apart from the literals.
     const restored = (await getStartReceipt(receiptId))?.bindings[0]?.intent;
     expect(restored?.launch.inputs).toEqual({ mode: 'nightly' });
     expect(restored?.eventInputs).toEqual({ count: 42 });
+    expect(restored?.checkoutFrom).toEqual(handoff);
   });
 
   test('preparation completion and admission share one commit', async () => {
