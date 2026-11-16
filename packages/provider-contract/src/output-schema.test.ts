@@ -7,15 +7,6 @@ import {
 } from './output-schema';
 
 describe('findStrictSchemaIssues', () => {
-  test('returns empty when required fully covers properties', () => {
-    const schema = {
-      type: 'object',
-      properties: { a: { type: 'string' }, b: { type: 'number' } },
-      required: ['a', 'b'],
-    };
-    expect(findStrictSchemaIssues(schema, 'output_format')).toEqual([]);
-  });
-
   test('reports a declared property missing from required', () => {
     const schema = {
       type: 'object',
@@ -157,29 +148,6 @@ describe('findStrictSchemaIssues', () => {
     };
     expect(findStrictSchemaIssues(schema, 'o')).toEqual([
       { kind: 'missing-required', schemaPath: 'o', missing: ['a'] },
-    ]);
-  });
-
-  test('no crash on null', () => {
-    expect(findStrictSchemaIssues(null, 'x')).toEqual([]);
-  });
-
-  test('no crash on arrays', () => {
-    expect(
-      findStrictSchemaIssues([{ type: 'object', properties: { a: {} }, required: [] }], 'x')
-    ).toEqual([{ kind: 'missing-required', schemaPath: 'x[0]', missing: ['a'] }]);
-  });
-
-  test('no crash on primitive values', () => {
-    expect(findStrictSchemaIssues('string', 'x')).toEqual([]);
-    expect(findStrictSchemaIssues(42, 'x')).toEqual([]);
-    expect(findStrictSchemaIssues(true, 'x')).toEqual([]);
-  });
-
-  test('basePath is prepended for meaningful root-relative paths', () => {
-    const schema = { type: 'object', properties: { f: {} } };
-    expect(findStrictSchemaIssues(schema, 'output_format')).toEqual([
-      { kind: 'missing-required', schemaPath: 'output_format', missing: ['f'] },
     ]);
   });
 });

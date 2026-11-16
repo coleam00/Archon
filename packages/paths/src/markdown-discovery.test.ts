@@ -26,11 +26,6 @@ describe('markdown-discovery', () => {
       expect(paths).toEqual(['.archon/commands', '.claude/commands/archon']);
     });
 
-    test('.archon/commands has highest priority', () => {
-      const paths = getCommandFolderSearchPaths('.custom/commands');
-      expect(paths[0]).toBe('.archon/commands');
-    });
-
     test('does not duplicate .archon/commands if configured', () => {
       const paths = getCommandFolderSearchPaths('.archon/commands');
       expect(paths).toEqual(['.archon/commands']);

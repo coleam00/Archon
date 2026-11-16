@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Ctrl-C on a foreground `archon workflow run` records why the run stopped, and the run
  * still resumes (#3479).

@@ -112,6 +112,8 @@ layout below. Existing projects keep their names and storage.
   artifacts path, relative cache path and `estimatedFreedBytes`: allocated blocks counted
   once per inode within that subtree. This is an estimate, not an exact free-space delta
   (hard links outside the subtree, shared storage and compression can affect reclamation).
+  On Windows, NTFS can report no allocation for recently written files, so the estimate
+  there can be 0 for a cache that held data.
   A failed measurement is logged and reports a null estimate if removal succeeds; failed
   removals are logged without changing the run's outcome.
   `archon workflow cleanup` deletes old database run records, not these directories.

@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
+import type { StoredItemAsk } from './schemas/item-ask';
+import type { ItemLink } from './schemas/item-link';
 import type { ItemRuling } from './schemas/item-ruling';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { WorkflowItem, WorkflowRun } from './schemas/workflow-run';
@@ -144,6 +146,22 @@ const rulings: ItemRuling[] = [
   },
 ];
 
+const other: WorkflowItem = { id: 'other-row', projectKey: 'acme/web', key: 'issue-3' };
+const whole: WorkflowItem = { id: 'whole-row', projectKey: 'acme/web', key: 'order-1' };
+const linkAct = { at: '2026-11-01T09:00:00.000Z', via: 'cli', by: null, fromRun: null } as const;
+const links: ItemLink[] = [
+  { id: 'link-out', kind: 'depends_on', from: item, to: other, ...linkAct, ended: null },
+  { id: 'link-in', kind: 'duplicate_of', from: other, to: item, ...linkAct, ended: null },
+  {
+    id: 'link-ended',
+    kind: 'part_of',
+    from: item,
+    to: whole,
+    ...linkAct,
+    ended: { ...linkAct, at: '2026-11-01T09:30:00.000Z', by: { declared: 'alice' } },
+  },
+];
+
 const source: ItemReadSource = {
   branchOf: async () => null,
   store: {
@@ -158,7 +176,9 @@ const source: ItemReadSource = {
     getWorkflowRunForAttention: async id => runs.get(id) ?? null,
     getCodebase: async () => null,
     getItem: async id => (id === item.id ? item : null),
+    listItemAsks: async () => [],
     listItemRulings: async id => (id === item.id ? rulings : []),
+    listItemLinks: async id => (id === item.id ? links : []),
     getResourceStartRequest: async () => null,
     getStartReceipt: async id =>
       id === SECOND_RECEIPT
@@ -180,6 +200,67 @@ const source: ItemReadSource = {
 };
 
 describe('reading an item', () => {
+  test('a set with an unreadable ask row does not read as settled; a readable set does, with its run gone', async () => {
+    const act = { via: 'cli', by: null, fromRun: null } as const;
+    const stored = (
+      id: string,
+      runId: string,
+      at: string,
+      closed: 'answered' | 'withdrawn'
+    ): StoredItemAsk => ({
+      id,
+      itemId: item.id,
+      runId,
+      workflowName: 'deliver',
+      position: 0,
+      ask: {
+        question: `Ask ${id}?`,
+        context: 'Context.',
+        options: [
+          { id: 'keep', does: 'Keep it.', cost: 'None.' },
+          { id: 'drop', does: 'Drop it.', cost: 'None.' },
+        ],
+        recommendation: { option: 'keep', why: 'Cheaper.' },
+        artifacts: [],
+      },
+      openedAt: '2026-11-01T12:00:00.000Z',
+      closed:
+        closed === 'answered'
+          ? { as: 'answered', answer: { decision: 'keep', text: '' }, act: { ...act, at } }
+          : { as: 'withdrawn', act: { ...act, at } },
+    });
+    const unreadable = { type: 'degraded', reason: 'run_unreadable', runId: 'open-set' } as const;
+    const withAsks: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        // 'settled-set' has no run row: its run was deleted, and its asks stay on the item.
+        listItemAsks: async () => [
+          stored('a1', 'open-set', '2026-11-01T12:10:00.000Z', 'answered'),
+          unreadable,
+          stored('b1', 'settled-set', '2026-11-01T12:20:00.000Z', 'answered'),
+          stored('b2', 'settled-set', '2026-11-01T12:30:00.000Z', 'withdrawn'),
+        ],
+      },
+    };
+    const read = await readItem(withAsks, item.projectKey, item.key);
+    const asks = read?.answers.filter(
+      answer => answer.kind === 'ask' || answer.kind === 'asks_settled'
+    );
+    expect(asks?.map(answer => [answer.kind, answer.runId])).toEqual([
+      ['ask', 'open-set'],
+      ['ask', 'settled-set'],
+      ['ask', 'settled-set'],
+      ['asks_settled', 'settled-set'],
+    ]);
+    expect(asks?.at(-1)).toMatchObject({
+      at: '2026-11-01T12:30:00.000Z',
+      answered: 1,
+      withdrawn: 1,
+    });
+    expect(read?.degraded).toEqual([unreadable]);
+  });
+
   test('lists its own runs, and the questions and answers of their whole tree, oldest first', async () => {
     const read = await readItem(source, item.projectKey, item.key);
     expect(read?.item).toEqual(item);
@@ -263,15 +344,44 @@ describe('reading an item', () => {
     expect(await readItem(source, item.projectKey, 'issue-8')).toBeNull();
     const empty: ItemReadSource = {
       ...source,
-      store: { ...source.store, getItemRuns: async () => ({ item, runs: [], descendantIds: [] }) },
+      store: {
+        ...source.store,
+        getItemRuns: async () => ({ item, runs: [], descendantIds: [] }),
+        listItemLinks: async () => [],
+      },
     };
     expect(await readItem(empty, item.projectKey, item.key)).toEqual({
       item,
       runs: [],
       questions: [],
       answers: rulings,
+      links: [],
       degraded: [],
     });
+  });
+
+  test('links read from this item: outgoing to what it points at, incoming from what points at it', async () => {
+    const read = await readItem(source, item.projectKey, item.key);
+    expect(read?.links).toEqual([
+      { id: 'link-out', kind: 'depends_on', direction: 'outgoing', other, ...linkAct, ended: null },
+      {
+        id: 'link-in',
+        kind: 'duplicate_of',
+        direction: 'incoming',
+        other,
+        ...linkAct,
+        ended: null,
+      },
+      // An ended link stays in the read with who ended it and when.
+      {
+        id: 'link-ended',
+        kind: 'part_of',
+        direction: 'outgoing',
+        other: whole,
+        ...linkAct,
+        ended: { ...linkAct, at: '2026-11-01T09:30:00.000Z', by: { declared: 'alice' } },
+      },
+    ]);
   });
 
   test('a run reads the item of its root, and a run with no item reads null', async () => {
@@ -307,6 +417,9 @@ describe('reading an item', () => {
         listItemRulings: async () => [
           { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'lost-ruling' },
         ],
+        listItemLinks: async () => [
+          { type: 'degraded', reason: 'link_unreadable', linkId: 'lost-link' },
+        ],
       },
     };
     const read = await readItem(broken, item.projectKey, item.key);
@@ -322,6 +435,7 @@ describe('reading an item', () => {
       { ...unreadable, runId: 'lost-root' },
       { ...unreadable, runId: 'lost-child' },
       { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'lost-ruling' },
+      { type: 'degraded', reason: 'link_unreadable', linkId: 'lost-link' },
     ]);
   });
 });

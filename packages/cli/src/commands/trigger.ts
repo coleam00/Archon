@@ -3,7 +3,7 @@ import { toPersistedMessageMetadata } from '@archon/core/types';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import { getArchonHome } from '@archon/paths';
 import {
@@ -11,7 +11,11 @@ import {
   ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
-import { readRunEndedBindings, runEndedTriggerCheck } from '@archon/core/workflows/run-ended';
+import {
+  getTriggersPath,
+  readRunEndedBindings,
+  runEndedTriggerCheck,
+} from '@archon/core/workflows/run-ended';
 import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
 import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
 import {
@@ -251,6 +255,12 @@ async function triggerFire(
   }
   assertItemOptions(options);
   const config = await loadFireConfig(options.config);
+  // A fire has no ended run to take the checkout from; starting the stage anyway would
+  // cut it from the base branch, which is the one place this binding must never run.
+  if (config.on?.runEnded.checkout !== undefined)
+    throw new Error(
+      `${options.config} takes its checkout from the run that ended (on.runEnded.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on a run's checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <run-id> --item <key>, naming the run that holds the branch: after a read-only check, the run in the check's metadata.checkout_handoff.runId (archon workflow get <check-run-id> --json), not the check.`
+    );
   const sourceActor = await requestingSourceActor(host, env);
   // A redelivery keeps the binding snapshot of its first acceptance, so today's users
   // must not turn a recorded delivery into a failure; the store answers replay or
@@ -543,11 +553,6 @@ async function installTimer(
   });
 }
 
-/** The directory run-ended bindings are read from; `trigger check` lists the same files. */
-export function triggersDirectory(): string {
-  return join(getArchonHome(), 'triggers');
-}
-
 /**
  * List every run-ended binding that is active (each `on.runEnded` file in the triggers
  * directory) and check it against the workflows of the project it launches in: the
@@ -559,7 +564,7 @@ export function triggersDirectory(): string {
  */
 async function checkTriggers(host: WorkflowHost): Promise<void> {
   const checked = [];
-  const bindings = await readRunEndedBindings(triggersDirectory());
+  const bindings = await readRunEndedBindings(getTriggersPath());
   // The file store has no items, so a run-ended binding can never start anything there.
   if (host.deps.credentialStore === 'files' && bindings.length > 0)
     throw new FileStoreUnsupportedError(
@@ -581,7 +586,7 @@ async function checkTriggers(host: WorkflowHost): Promise<void> {
       problems: problems[index],
     });
   }
-  await writeJsonLine({ directory: triggersDirectory(), runEnded: checked });
+  await writeJsonLine({ directory: getTriggersPath(), runEnded: checked });
   const broken = checked.filter(entry => entry.problems.length > 0).length;
   if (broken > 0)
     throw new Error(`${String(broken)} run-ended binding(s) have problems; see "problems" above.`);

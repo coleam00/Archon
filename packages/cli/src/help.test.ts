@@ -152,16 +152,23 @@ Commands:
   workflow get <run-id>      Show detail for a single run (any status)
   workflow artifacts <run-id> [path] List a run's artifact files, or print one
   workflow logs <run-id>     Print or follow a run's JSONL transcript
-  workflow wait <run-id>     Block until the run ends or needs attention
-  workflow attention [<run-id>] List, count or stream the attention queue, or read the item one run stands for
+  workflow wait <run-id> | --item <key>
+                             Block until the run ends or needs attention
+                             With --item: until any live run on the item does; names the run
+  workflow attention [<run-id>|ask:<id>]
+                             List, count or stream the attention queue, or read the item one run or ask stands for
                              (defaults to the current project)
   workflow attention label <run-id> --occurrence <id>
                              Set or remove labels on the attention wait a run is paused at
   workflow resume <run-id>   Resume a failed, paused or killed run from completed nodes
   workflow wake [--watch] [--json] Wake due continuations across this install
   workflow signal <full-run-id> Signal and wake an event wait; use --occurrence for an exact match
-  workflow cancel <run-id>   Stop a running workflow (stops an owning process first)
-  workflow abandon <run-id>  Mark a run cancelled, stopping a live owner first
+  workflow cancel <run-id> | --item <key>
+                             Stop a running workflow (stops an owning process first)
+                             With --item: the item's running run; refuses when several are
+  workflow abandon <run-id> | --item <key>
+                             Mark a run cancelled, stopping a live owner first
+                             With --item: the item's pending, running or paused run; refuses when several are
   workflow end-turn <run-id> Record a request to end stalled tools or reported work
   workflow respond <run-id> <decision> [text]
                              Resolve a paused gate with any of its declared decisions
@@ -173,6 +180,9 @@ Commands:
   workflow rule --item <key> -- <text>
                              Record a ruling on an item of this project: a decision made without a question.
                              Every later read of the item shows it with the answers; prints the ruling's id
+  workflow link --item <key> --kind <kind> --to <key>
+                             Record a link from one item of this project to another: depends_on, part_of or
+                             duplicate_of, read from --item to --to. Recording it again leaves one link; prints the link's id
   workflow notice <text>     Inside a workflow node: say what the run did, for whoever watches attention
                              with --notices. Never pauses the run and cannot be answered
   workflow event emit        Emit a workflow event into a run
@@ -269,14 +279,14 @@ Options:
   --occurrence <id>          For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still
                              paused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer
                              and attention label)
-  --as <name>                For 'workflow approve/reject/respond/answer/rule': the name the answerer declares for itself,
-                             recorded with an attention wait's answer or a ruling as a claim (never checked; refused at a gate)
+  --as <name>                For 'workflow approve/reject/respond/answer/rule/link': the name the answerer declares for itself,
+                             recorded with an attention wait's answer, a ruling or a link as a claim (never checked; refused at a gate)
   --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)
   --no-wait                  For 'workflow run': refuse, naming the resource, instead of waiting when the workflow's
                              resource is full
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
-  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on
+  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on
   --no-item                  For 'trigger fire': start the run on no item instead of inheriting the firing run's item
   --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded
   --limit <n>                For 'workflow runs': max rows (default 20)
@@ -311,6 +321,7 @@ Examples:
   archon workflow wait <run-id> --json
   archon workflow resume <run-id>
   archon workflow cancel <run-id>
+  archon workflow cancel --item issue-42
   archon workflow runs --open
   archon workflow run archon-review --adopt <run-id> "Review the changes"
   archon skill add

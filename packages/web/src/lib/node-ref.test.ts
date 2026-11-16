@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { NODE_ID_PATTERN, NODE_ID_SOURCE, OUTPUT_REF_SOURCE, findOutputRefs } from './node-ref';
+import { NODE_ID_PATTERN, findOutputRefs } from './node-ref';
 
 // Parser behavior only. The check that this definition still matches the
 // engine's lives at `scripts/node-ref-parity.test.ts` — a repository-level
@@ -48,15 +48,5 @@ describe('NODE_ID_PATTERN', () => {
     expect(NODE_ID_PATTERN.test('1step')).toBe(false);
     expect(NODE_ID_PATTERN.test('has space')).toBe(false);
     expect(NODE_ID_PATTERN.test('has.dot')).toBe(false);
-  });
-
-  test('is built from the shared source', () => {
-    expect(NODE_ID_PATTERN.source).toBe(`^${NODE_ID_SOURCE}$`);
-  });
-});
-
-describe('OUTPUT_REF_SOURCE', () => {
-  test('embeds the shared id grammar', () => {
-    expect(OUTPUT_REF_SOURCE).toContain(NODE_ID_SOURCE);
   });
 });

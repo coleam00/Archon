@@ -46,7 +46,7 @@ function verifySignature(request: WebhookSourceRequest, secret: Buffer): boolean
 }
 
 const bindingSchema = resourceStartBindingIntentSchema
-  .omit({ bindingRevision: true, eventInputs: true })
+  .omit({ bindingRevision: true, eventInputs: true, checkoutFrom: true })
   .extend({
     inputMapping: z.record(
       z.string().min(1),

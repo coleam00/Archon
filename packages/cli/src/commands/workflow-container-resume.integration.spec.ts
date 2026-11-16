@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

@@ -3,7 +3,6 @@ import type {
   QueuedResourceStartInspection,
 } from '@archon/workflows/resource-start-store';
 import { createRunWorktreeSetupExecutor } from './worktree-setup';
-import type { WorktreeSetupExecutor } from '@archon/isolation';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import {
   prepareRunAiConfiguration,
@@ -26,10 +25,7 @@ import {
  * fence, and recovery stay behind the supplied store; nothing here declares an owner dead.
  */
 import { randomUUID } from 'node:crypto';
-import type { OwnedWorktree } from '@archon/workflows/schemas/workflow-run';
 import { resolve } from 'node:path';
-import { toBranchName, toRepoPath } from '@archon/git';
-import { getIsolationProvider, recordWorktreeAdoption } from '@archon/isolation';
 import { createLogger, canonicalizeProjectPath } from '@archon/paths';
 import type { WorkflowEngineSubmitInput } from '@archon/workflows/engine-port';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
@@ -51,6 +47,8 @@ import {
   RESOURCE_START_METADATA_KEY,
   readResourceStartReceiptId,
   ADMISSION_CHECKOUT_GUARD_METADATA_KEY,
+  CHECKOUT_HANDOFF_METADATA_KEY,
+  type CheckoutHandoffRunMetadata,
   type PreparedWorkflowLaunch,
   type ResourceStartBindingIntent,
   type ResourceStartDisposition,
@@ -75,11 +73,10 @@ import { loadWorkflowRunConfigFile, unsealWorkflowRunConfig } from '../config/ru
 import type { Codebase } from '../schemas/codebase';
 import type { WorkflowHost } from './host-store';
 import { registerRepository } from '../handlers/clone';
-import { ensureIsolationConfigured } from '../orchestrator/dispatch/isolation-resolver';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
-import { createRegisteredWorktree, type RegisteredWorktreeInput } from './registered-worktree';
+import { executionLane, handoffIsolation } from './resource-start-lanes';
 
 const log = createLogger('resource-start-host');
 
@@ -230,13 +227,15 @@ function bindingRunMetadata(
   sourceRecord: JsonValue,
   origin: ResourceStartRunMetadata,
   inputs: Record<string, JsonValue>,
-  preparedAi: PreparedRunAiConfiguration
+  preparedAi: PreparedRunAiConfiguration,
+  handoff: CheckoutHandoffRunMetadata | undefined
 ): Record<string, JsonValue> {
   return {
     [RUN_AI_CONFIGURATION_METADATA_KEY]: preparedAi.aiConfigurationSnapshot,
     [WORKFLOW_SOURCE_METADATA_KEY]: sourceRecord,
     [RESOURCE_START_METADATA_KEY]: { ...origin },
     [ADMISSION_CHECKOUT_GUARD_METADATA_KEY]: workflow.mutates_checkout !== false,
+    ...(handoff ? { [CHECKOUT_HANDOFF_METADATA_KEY]: { ...handoff } } : {}),
     ...authoredInputsMetadata(inputs),
     ...(preparedAi.runConfigMetadata
       ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: preparedAi.runConfigMetadata }
@@ -272,7 +271,15 @@ async function prepareBinding(
     const inputs = resolveBindingInputs(intent, workflow);
 
     const codebase = await findOrRegisterCodebase(host, cwd);
-    const isolation = resolveBindingIsolation(intent.launch.isolation, workflow, codebase);
+    let isolation: PreparedWorkflowLaunch['execution']['isolation'];
+    let handoff: CheckoutHandoffRunMetadata | undefined;
+    if (intent.checkoutFrom) {
+      const chosen = handoffIsolation(intent.checkoutFrom, workflow, codebase);
+      isolation = chosen.isolation;
+      handoff = { ...intent.checkoutFrom, lane: chosen.lane };
+    } else {
+      isolation = resolveBindingIsolation(intent.launch.isolation, workflow, codebase);
+    }
 
     source = await finalizeWorkflowSource(host.deps, source, { cwd, codebaseId: codebase.id });
     owner.hold(source);
@@ -301,7 +308,8 @@ async function prepareBinding(
           preparedWorkflowSourceRecord(source),
           origin,
           inputs,
-          preparedAi
+          preparedAi,
+          handoff
         ),
         ...(isolation.kind === 'in-place' ? { working_path: cwd } : {}),
       },
@@ -530,89 +538,6 @@ function queuedDrainResources(
   return [...new Set(queued.flatMap(request => ('error' in request ? [] : [request.resource])))];
 }
 
-type WorktreeLaneSpec = Extract<
-  PreparedWorkflowLaunch['execution']['isolation'],
-  { kind: 'worktree' }
->;
-
-interface WorktreeLane {
-  cwd: string;
-  envId: string;
-  cutFromCommit?: string;
-  ownedWorktree?: OwnedWorktree;
-}
-
-/** An explicit branch names one reusable checkout, so repeated starts share it. */
-async function adoptBranchWorktree(
-  host: WorkflowHost,
-  lane: WorktreeLaneSpec,
-  codebase: Codebase
-): Promise<WorktreeLane | undefined> {
-  if (!lane.branch) return undefined;
-  const existing = await host.records.isolation.findActiveByWorkflow(
-    codebase.id,
-    'task',
-    lane.branch
-  );
-  if (!existing || !(await getIsolationProvider().healthCheck(existing.working_path)))
-    return undefined;
-  await recordWorktreeAdoption(host.records.isolation, existing, codebase.default_cwd);
-  return { cwd: existing.working_path, envId: existing.id };
-}
-
-function worktreeLaneRequest(
-  lane: WorktreeLaneSpec,
-  codebase: Codebase,
-  identifier: string
-): RegisteredWorktreeInput['request'] {
-  const fromBranch = lane.fromBranch ? toBranchName(lane.fromBranch) : undefined;
-  const defaultBranch = codebase.default_branch?.trim();
-  return {
-    workflowType: 'task',
-    identifier: lane.branch ?? identifier,
-    taskBranch:
-      lane.branch || fromBranch
-        ? {
-            kind: 'new',
-            ...(lane.branch ? { branch: toBranchName(lane.branch) } : {}),
-            ...(fromBranch ? { fromBranch } : {}),
-          }
-        : undefined,
-    baseBranch: defaultBranch ? toBranchName(defaultBranch) : undefined,
-    baseOverride: lane.baseOverride ? toBranchName(lane.baseOverride) : undefined,
-    codebaseId: codebase.id,
-    codebaseName: codebase.name,
-    canonicalRepoPath: toRepoPath(codebase.default_cwd),
-    description: `Resource start: ${identifier}`,
-  };
-}
-
-async function worktreeLane(
-  host: WorkflowHost,
-  lane: WorktreeLaneSpec,
-  codebase: Codebase,
-  identifier: string,
-  platformType: string,
-  userId: string | undefined,
-  setupExecutor: WorktreeSetupExecutor
-): Promise<WorktreeLane> {
-  ensureIsolationConfigured();
-  const adopted = await adoptBranchWorktree(host, lane, codebase);
-  if (adopted) return adopted;
-  const created = await createRegisteredWorktree(host.records.isolation, {
-    request: worktreeLaneRequest(lane, codebase, identifier),
-    setupExecutor,
-    createdByPlatform: platformType,
-    ...(userId ? { createdByUserId: userId } : {}),
-  });
-  return {
-    cwd: created.env.workingPath,
-    envId: created.envId,
-    ...(created.ownedWorktree ? { ownedWorktree: created.ownedWorktree } : {}),
-    ...(created.cutFromCommit !== undefined ? { cutFromCommit: created.cutFromCommit } : {}),
-  };
-}
-
 export interface StartAdmittedResourceStartInput {
   requestId: string;
   hostId: string;
@@ -728,23 +653,14 @@ async function prepareAdmittedResourceSubmission(
   );
   await assertRunCredentials(deps, preparedAiConfiguration, { cwd: launch.execution.cwd });
   const lane = launch.execution.isolation;
-  const execution =
-    lane.kind === 'worktree'
-      ? await worktreeLane(
-          host,
-          lane,
-          codebase,
-          `${run.workflow_name}-${run.id.slice(0, 8)}`,
-          platform.getPlatformType(),
-          run.user_id ?? undefined,
-          createRunWorktreeSetupExecutor(host.deps, run, preparedAiConfiguration.config)
-        )
-      : {
-          cwd: launch.execution.cwd,
-          envId: undefined,
-          cutFromCommit: undefined,
-          ownedWorktree: undefined,
-        };
+  const execution = await executionLane(host, {
+    run,
+    lane,
+    codebase,
+    cwd: launch.execution.cwd,
+    platformType: platform.getPlatformType(),
+    setupExecutor: createRunWorktreeSetupExecutor(host.deps, run, preparedAiConfiguration.config),
+  });
   if (run.conversation_id)
     await host.records.conversations.updateConversation(run.conversation_id, {
       cwd: execution.cwd,

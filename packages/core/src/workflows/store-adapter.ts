@@ -18,7 +18,9 @@ import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import type { MergedConfig } from '../config/config-types';
 import * as itemsDb from '../db/items';
+import * as itemLinksDb from '../db/item-links';
 import * as itemRulingsDb from '../db/item-rulings';
+import * as itemAsksDb from '../db/item-asks';
 import * as workflowDb from '../db/workflows';
 import * as resourceStarts from '../db/resource-starts';
 import { toHydratedTimestamp } from '../db/timestamps';
@@ -31,13 +33,20 @@ import {
   upsertWorkflowRunNodeSession,
 } from '../db/workflow-run-node-sessions';
 import * as codebaseDb from '../db/codebases';
+import * as isolationEnvironmentsDb from '../db/isolation-environments';
 import type { IIsolationStore } from '@archon/isolation';
 import * as envVarDb from '../db/env-vars';
 import { getAgentProvider } from '../services/provider-admission';
 import type { WorktreeOwnershipReaders } from '../services/cleanup/run-worktree';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
-import { createLogger, getArchonHome } from '@archon/paths';
-import { createRunEndedPreflight, createRunEndedStarts, launchProjectKey } from './run-ended';
+import { createLogger } from '@archon/paths';
+import {
+  createRunEndedPreflight,
+  createRunEndedStarts,
+  getTriggersPath,
+  launchProjectKey,
+} from './run-ended';
+import { createEndedCheckout } from './ended-checkout';
 import { registeredProjectKeyForPath } from '../services/codebase-checkout-resolver';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
 import { createGitHubAppAuthProvider } from '../github-auth/auth';
@@ -145,6 +154,14 @@ export function createWorkflowStore(): IWorkflowStore {
     listItemRulings: itemRulingsDb.listItemRulings,
     recordItemRuling: itemRulingsDb.recordItemRuling,
     withdrawItemRuling: itemRulingsDb.withdrawItemRuling,
+    listItemLinks: itemLinksDb.listItemLinks,
+    recordItemLink: itemLinksDb.recordItemLink,
+    endItemLink: itemLinksDb.endItemLink,
+    listOpenItemAsks: itemAsksDb.listOpenItemAsks,
+    listItemAsks: itemAsksDb.listItemAsks,
+    getItemAsk: itemAsksDb.getItemAsk,
+    answerItemAsk: itemAsksDb.answerItemAsk,
+    withdrawItemAsk: itemAsksDb.withdrawItemAsk,
     findAdoptingRuns: workflowDb.findAdoptingRuns,
     deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,
     getWorkflowEventHead: async () => sqlCursor(await workflowEventDb.getWorkflowEventHead()),
@@ -319,14 +336,20 @@ export function createWorkflowDeps(
 } {
   const provider = registeredGitHubAppAuthProvider;
   const runEnded = {
-    triggersDirectory: () => join(getArchonHome(), 'triggers'),
+    triggersDirectory: () => getTriggersPath(),
     getItem: (id: string) => store.getItem(id),
     projectKeyOf: launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb)),
   };
   return {
     store,
     credentialStore,
-    runEndedStarts: createRunEndedStarts(runEnded),
+    runEndedStarts: createRunEndedStarts({
+      ...runEnded,
+      // Only the SQL store records items, so only its runs reach this.
+      endedCheckout: createEndedCheckout({
+        findEnvironmentByPath: isolationEnvironmentsDb.findLatestByCodebaseAndWorkingPath,
+      }),
+    }),
     checkRunEndedBindings: createRunEndedPreflight({
       ...runEnded,
       loadConfig: loadMergedConfig,
