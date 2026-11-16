@@ -137,7 +137,7 @@ export function createWorkflowStore(): IWorkflowStore {
     deleteWorkflowNodeSessions: workflowNodeSessionDb.deleteWorkflowNodeSessions,
     listWorkflowRuns: workflowDb.listDashboardRuns,
     findOpenWorkRuns: workflowDb.findOpenWorkRuns,
-    listItemRuns: itemsDb.listItemRuns,
+    getItemRuns: itemsDb.getItemRuns,
     getItem: itemsDb.getItem,
     findAdoptingRuns: workflowDb.findAdoptingRuns,
     deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,

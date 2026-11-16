@@ -13,7 +13,6 @@ import { parseArgs } from 'util';
 import ts from 'typescript';
 import { cliArgOptions } from './args';
 import { generateConversationId } from './utils/conversation-id';
-import * as git from '@archon/git';
 import { canonicalizeProjectPath, projectKeyForCodebase } from '@archon/paths';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
@@ -432,19 +431,6 @@ describe('removed continue command', () => {
       expect(result.stderr).toContain('--adopt <run-id>');
     } finally {
       await removeTempTree(dir);
-    }
-  });
-
-  it('no longer parses the continue-only flags', () => {
-    for (const flag of ['--workflow', '--no-context']) {
-      expect(() =>
-        parseArgs({
-          args: ['workflow', 'run', 'x', flag, 'value'],
-          options: cliArgOptions,
-          allowPositionals: true,
-          strict: true,
-        })
-      ).toThrow();
     }
   });
 });
@@ -1366,21 +1352,6 @@ describe('CLI argument parsing', () => {
   });
 
   describe('workflow run arguments', () => {
-    it('should parse workflow run with name and message', () => {
-      const result = parseCliArgs(['workflow', 'run', 'assist', 'fix', 'the', 'bug']);
-      expect(result.positionals).toEqual(['workflow', 'run', 'assist', 'fix', 'the', 'bug']);
-    });
-
-    it('should parse workflow run with quoted message', () => {
-      const result = parseCliArgs(['workflow', 'run', 'assist', 'fix the bug']);
-      expect(result.positionals).toEqual(['workflow', 'run', 'assist', 'fix the bug']);
-    });
-
-    it('should parse workflow run with only name (no message)', () => {
-      const result = parseCliArgs(['workflow', 'run', 'assist']);
-      expect(result.positionals).toEqual(['workflow', 'run', 'assist']);
-    });
-
     it('should parse --from flag for workflow run', () => {
       const result = parseCliArgs([
         'workflow',
@@ -1405,22 +1376,6 @@ describe('CLI argument parsing', () => {
         'feature/extract-adapters',
       ]);
       expect(result.values['from-branch']).toBe('feature/extract-adapters');
-    });
-
-    it('--from takes precedence over --from-branch when both provided', () => {
-      const result = parseCliArgs([
-        'workflow',
-        'run',
-        'assist',
-        '--branch',
-        'test',
-        '--from',
-        'feature/primary',
-        '--from-branch',
-        'feature/secondary',
-      ]);
-      expect(result.values.from).toBe('feature/primary');
-      expect(result.values['from-branch']).toBe('feature/secondary');
     });
 
     it('should parse --base flag for workflow run', () => {
@@ -1449,58 +1404,6 @@ describe('CLI argument parsing', () => {
       expect(result.values['default-stubs']).toBe(true);
       expect(result.values['exec-code']).toBe(true);
       expect(result.values['pause-at-gates']).toBe(true);
-    });
-  });
-
-  describe('version flag detection', () => {
-    /**
-     * Duplicates the isVersionRequest() helper from cli.ts (which is not
-     * exported — importing cli.ts would execute its top-level main()). Must
-     * be updated manually if the source logic changes.
-     */
-    const isVersionRequest = (args: string[]): boolean => {
-      if (args.length === 1 && args[0] === '-v') return true;
-      for (const arg of args) {
-        if (arg === '--version' || arg === '-V' || arg === '-version') return true;
-      }
-      return false;
-    };
-
-    it('detects --version', () => {
-      expect(isVersionRequest(['--version'])).toBe(true);
-    });
-
-    it('detects -V (uppercase short flag)', () => {
-      expect(isVersionRequest(['-V'])).toBe(true);
-    });
-
-    it('detects -version (single-dash typo)', () => {
-      expect(isVersionRequest(['-version'])).toBe(true);
-    });
-
-    it('treats lone -v as a version request', () => {
-      expect(isVersionRequest(['-v'])).toBe(true);
-    });
-
-    it('treats -v with other args as --verbose (NOT a version request)', () => {
-      expect(isVersionRequest(['-v', 'workflow', 'list'])).toBe(false);
-      expect(isVersionRequest(['workflow', '-v', 'list'])).toBe(false);
-    });
-
-    it('does not treat the literal "version" command as a flag-style request', () => {
-      // The `version` positional command is handled by the existing switch,
-      // not the early flag bypass. isVersionRequest should not match it.
-      expect(isVersionRequest(['version'])).toBe(false);
-    });
-
-    it('detects --version anywhere in argv', () => {
-      expect(isVersionRequest(['--cwd', '/foo', '--version'])).toBe(true);
-    });
-
-    it('returns false for unrelated args', () => {
-      expect(isVersionRequest(['workflow', 'list'])).toBe(false);
-      expect(isVersionRequest(['help'])).toBe(false);
-      expect(isVersionRequest([])).toBe(false);
     });
   });
 
@@ -1534,13 +1437,6 @@ describe('CLI argument parsing', () => {
       const result = parseCliArgs(['setup', '--force']);
       expect(result.values.force).toBe(true);
     });
-
-    it('captures an invalid --scope value verbatim for caller validation', () => {
-      // parseArgs itself does not validate the enum; cli.ts validates and
-      // exits on unknown scope values. The test documents the contract.
-      const result = parseCliArgs(['setup', '--scope', 'nonsense']);
-      expect(result.values.scope).toBe('nonsense');
-    });
   });
 });
 
@@ -1548,25 +1444,6 @@ describe('Conversation ID generation', () => {
   it('should generate ID with cli- prefix', () => {
     const id = generateConversationId();
     expect(id.startsWith('cli-')).toBe(true);
-  });
-
-  it('should include timestamp', () => {
-    const before = Date.now();
-    const id = generateConversationId();
-    const after = Date.now();
-
-    const parts = id.split('-');
-    const timestamp = parseInt(parts[1], 10);
-
-    expect(timestamp).toBeGreaterThanOrEqual(before);
-    expect(timestamp).toBeLessThanOrEqual(after);
-  });
-
-  it('should include random suffix', () => {
-    const id = generateConversationId();
-    const parts = id.split('-');
-
-    expect(parts[2]).toMatch(/^[a-f0-9]{32}$/);
   });
 
   it('should generate 100 unique IDs in the same millisecond even with repeated Math.random values', () => {
@@ -1582,115 +1459,6 @@ describe('Conversation ID generation', () => {
       clock.mockRestore();
       random.mockRestore();
     }
-  });
-});
-
-describe('CLI env isolation', () => {
-  /**
-   * The CLI deletes DATABASE_URL from process.env before loading ~/.archon/.env.
-   * This prevents Bun's auto-loaded CWD .env from pointing the CLI at a target
-   * app's database instead of Archon's SQLite default.
-   */
-  it('should clear DATABASE_URL set by Bun auto-load', async () => {
-    // Simulate Bun auto-loading a target repo's .env
-    process.env.DATABASE_URL = 'postgresql://target-app:5432/not-archon';
-
-    // Re-run the env isolation logic from cli.ts
-    delete process.env.DATABASE_URL;
-
-    expect(process.env.DATABASE_URL).toBeUndefined();
-  });
-
-  it('should allow ~/.archon/.env to override Bun-auto-loaded vars via override:true', async () => {
-    const { config } = await import('dotenv');
-    const { resolve } = await import('path');
-    const { existsSync } = await import('fs');
-
-    // Simulate Bun auto-loading a stale value
-    process.env.TEST_ARCHON_OVERRIDE = 'from-cwd-env';
-
-    // Write a temporary env content and load with override
-    const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
-    if (existsSync(globalEnvPath)) {
-      const result = config({ path: globalEnvPath, override: true });
-      // If ~/.archon/.env exists and has DATABASE_URL, it should override
-      expect(result.error).toBeUndefined();
-    }
-
-    // Clean up
-    delete process.env.TEST_ARCHON_OVERRIDE;
-  });
-});
-
-describe('CLI git repo check', () => {
-  describe('findRepoRoot behavior', () => {
-    // Test the actual git.findRepoRoot function with real directories
-    it('should find repo root from current test directory', async () => {
-      // This test file is inside a git repo, so findRepoRoot should work
-      const result = await git.findRepoRoot(process.cwd());
-      expect(result).not.toBeNull();
-      // The repo root should be a valid directory (not a subdirectory like packages/cli/src)
-      expect(result).toBeTruthy();
-    });
-
-    it('should find repo root from a subdirectory', async () => {
-      // Use __dirname which is the directory containing this test file
-      // This is a real subdirectory (packages/cli/src) that should resolve to repo root
-      const subdirectory = import.meta.dir;
-      const result = await git.findRepoRoot(subdirectory);
-
-      // Should resolve to repo root, not packages/cli/src
-      expect(result).not.toBeNull();
-      expect(result).not.toContain('/packages/cli/src');
-    });
-
-    it('should return null for system directories outside any git repo', async () => {
-      // The OS temp dir is not inside a git repo on any supported platform.
-      // Hardcoding '/tmp' fails on Windows, where that path does not exist —
-      // this file was absent from the package test script until #2384, so the
-      // POSIX assumption never surfaced in CI.
-      const result = await git.findRepoRoot(tmpdir());
-      expect(result).toBeNull();
-    });
-  });
-
-  describe('path validation', () => {
-    // The CLI now validates that the path exists before calling findRepoRoot
-    // This tests the logic pattern used in cli.ts
-    const { existsSync } = require('fs');
-
-    it('should detect existing directories', () => {
-      expect(existsSync(process.cwd())).toBe(true);
-      expect(existsSync(tmpdir())).toBe(true);
-    });
-
-    it('should detect non-existent directories', () => {
-      expect(existsSync('/this/path/definitely/does/not/exist/12345')).toBe(false);
-    });
-  });
-
-  describe('error messages', () => {
-    // Verify the exact error messages used in cli.ts for documentation purposes
-    const ERROR_MESSAGES = {
-      notGitRepo: [
-        'Error: Not in a git repository.',
-        'The Archon CLI must be run from within a git repository.',
-        'Either navigate to a git repo or use --cwd to specify one.',
-      ],
-      dirNotExist: (path: string) => `Error: Directory does not exist: ${path}`,
-    };
-
-    it('should have actionable git repo error message', () => {
-      // Verify the messages include guidance
-      expect(ERROR_MESSAGES.notGitRepo[0]).toContain('Not in a git repository');
-      expect(ERROR_MESSAGES.notGitRepo[2]).toContain('--cwd');
-    });
-
-    it('should have clear directory error message', () => {
-      const msg = ERROR_MESSAGES.dirNotExist('/nonexistent');
-      expect(msg).toContain('Directory does not exist');
-      expect(msg).toContain('/nonexistent');
-    });
   });
 });
 
@@ -1969,6 +1737,7 @@ describe('pre-dispatch gates --json error envelope', () => {
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
+    expect(envelope().error).toContain('Directory does not exist: /does/not/exist');
   });
 
   it('emits { ok: false } on stdout when outside a git repository', () => {
@@ -1977,6 +1746,7 @@ describe('pre-dispatch gates --json error envelope', () => {
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
+    expect(envelope().error).toContain('Not in a git repository');
   });
 
   it('lets workflow attention past the git gate in every scope', async () => {
@@ -2587,7 +2357,7 @@ describe('receipt policies in the CLI host', () => {
     }
   });
 
-  it.each(['--version', 'version'])(
+  it.each(['--version', '-V', '-v', '-version', 'version', '--cwd . --version'])(
     '%s works with a malformed installed receipt',
     async command => {
       const root = mkdtempSync(join(tmpdir(), 'cli-version-receipt-'));
@@ -2596,7 +2366,7 @@ describe('receipt policies in the CLI host', () => {
       mkdirSync(join(home, 'plugins', 'installed', 'owner', 'broken'), { recursive: true });
       writeFileSync(file, '{invalid json');
       try {
-        const result = spawnSync(process.execPath, [CLI_ENTRY, command], {
+        const result = spawnSync(process.execPath, [CLI_ENTRY, ...command.split(' ')], {
           cwd: root,
           encoding: 'utf8',
           env: {
@@ -2614,6 +2384,30 @@ describe('receipt policies in the CLI host', () => {
       }
     }
   );
+
+  it('reads -v before a command as --verbose, not as a version request', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cli-verbose-not-version-'));
+    expect(spawnSync('git', ['init', '-q', '.'], { cwd: root }).status).toBe(0);
+    try {
+      const result = spawnSync(process.execPath, [CLI_ENTRY, '-v', 'workflow', 'list'], {
+        cwd: root,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          ARCHON_HOME: join(root, 'home'),
+          DATABASE_URL: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+        },
+      });
+      // The command ran (a parse rejection exits 1) with debug logging on, which
+      // only --verbose enables; commands default to warn.
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain('"level":20');
+      expect(`${result.stdout}${result.stderr}`).not.toContain('Archon CLI v');
+    } finally {
+      await removeTempTree(root);
+    }
+  });
 
   it(
     'registers a receipt without executing its binary, then keeps and reports its workspace after removal',

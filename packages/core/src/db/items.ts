@@ -1,5 +1,6 @@
 /** Items: the durable thing runs are about. A row holds a key, its project and nothing else. */
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
+import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import {
   assertItemKey,
   ContinuedItemProjectError,
@@ -9,6 +10,7 @@ import {
 import { pool } from './connection';
 import type { TransactionQuery } from './resource-slots';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
+import { getLog } from './workflow-run-shared';
 
 /**
  * The item `key` names in a codebase's project, written on first use; naming it again is
@@ -73,15 +75,68 @@ export async function continuedItem(
   return item.id;
 }
 
-/** Every run of one item in a project, in the order they started. */
-export async function listItemRuns(projectKey: string, itemKey: string): Promise<WorkflowRun[]> {
-  const result = await pool.query<WorkflowRunRow>(
-    `SELECT r.*, CAST(r.origin AS TEXT) AS origin FROM remote_agent_workflow_runs r
-       JOIN remote_agent_items i ON i.id = r.item_id
-      WHERE i.project_key = $1 AND i.key = $2 ORDER BY r.started_at, r.id`,
+/**
+ * The item `itemKey` names in a project and its runs, in the order they started; null when
+ * the project has no item under that key. A named item may have no run yet.
+ */
+export async function getItemRuns(
+  projectKey: string,
+  itemKey: string
+): Promise<{
+  item: WorkflowItem;
+  runs: AttentionRead<WorkflowRun>[];
+  descendantIds: string[];
+} | null> {
+  const found = await pool.query<{ id: string; project_key: string; key: string }>(
+    'SELECT id, project_key, key FROM remote_agent_items WHERE project_key = $1 AND key = $2',
     [projectKey, itemKey]
   );
-  return result.rows.map(normalizeWorkflowRun);
+  const row = found.rows[0];
+  if (!row) return null;
+  const result = await pool.query<WorkflowRunRow>(
+    `SELECT r.*, CAST(r.origin AS TEXT) AS origin FROM remote_agent_workflow_runs r
+      WHERE r.item_id = $1 ORDER BY r.started_at, r.id`,
+    [row.id]
+  );
+  const runs = result.rows.map((run): AttentionRead<WorkflowRun> => {
+    try {
+      return normalizeWorkflowRun(run);
+    } catch {
+      // Parser errors can quote stored data, including message text.
+      getLog().error({ workflowRunId: run.id }, 'item_run_normalization_failed');
+      return { type: 'degraded', reason: 'run_unreadable', runId: run.id };
+    }
+  });
+  return {
+    item: { id: row.id, projectKey: row.project_key, key: row.key },
+    runs,
+    descendantIds: await descendantRunIds(result.rows.map(run => run.id)),
+  };
+}
+
+/**
+ * Every run below `roots` by `parent_run_id`, reading ids only. Unbounded, unlike
+ * `gatherDescendantRunIds`: a fan-out has no limit on its children, and a cut-off walk
+ * would report an item with an open question as having none. `seen` keeps a corrupted
+ * `parent_run_id` cycle from looping.
+ */
+async function descendantRunIds(roots: readonly string[]): Promise<string[]> {
+  const seen = new Set(roots);
+  const found: string[] = [];
+  const queue = [...roots];
+  for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+    const children = await pool.query<{ id: string }>(
+      'SELECT id FROM remote_agent_workflow_runs WHERE parent_run_id = $1 ORDER BY started_at, id',
+      [id]
+    );
+    for (const child of children.rows)
+      if (!seen.has(child.id)) {
+        seen.add(child.id);
+        found.push(child.id);
+        queue.push(child.id);
+      }
+  }
+  return found;
 }
 
 export async function getItem(id: string): Promise<WorkflowItem | null> {

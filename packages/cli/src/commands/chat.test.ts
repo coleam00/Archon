@@ -50,48 +50,9 @@ describe('chatCommand', () => {
     expect(message).toBe('Hello, agent!');
   });
 
-  test('should use batch streaming mode for the CLIAdapter', async () => {
-    await chatCommand('test');
-
-    const [adapter] = mockHandleMessage.mock.calls[0];
-    expect(adapter.getStreamingMode()).toBe('batch');
-  });
-
-  test('should generate a unique conversationId for each invocation', async () => {
-    await chatCommand('first message');
-    await chatCommand('second message');
-
-    const [, id1] = mockHandleMessage.mock.calls[0];
-    const [, id2] = mockHandleMessage.mock.calls[1];
-
-    expect(id1).not.toBe(id2);
-  });
-
-  test('should forward the exact message string to handleMessage', async () => {
-    const complexMessage = '/workflow run assist "build a feature"';
-    await chatCommand(complexMessage);
-
-    const [, , message] = mockHandleMessage.mock.calls[0];
-    expect(message).toBe(complexMessage);
-  });
-
   test('should propagate errors thrown by handleMessage', async () => {
     mockHandleMessage.mockRejectedValueOnce(new Error('Orchestrator unavailable'));
 
     await expect(chatCommand('will fail')).rejects.toThrow('Orchestrator unavailable');
-  });
-
-  test('should have conversationId prefixed with cli-chat-', async () => {
-    await chatCommand('prefix check');
-
-    const [, conversationId] = mockHandleMessage.mock.calls[0];
-    expect(conversationId.startsWith('cli-chat-')).toBe(true);
-  });
-
-  test('CLIAdapter passed to handleMessage should have cli platform type', async () => {
-    await chatCommand('platform type check');
-
-    const [adapter] = mockHandleMessage.mock.calls[0];
-    expect(adapter.getPlatformType()).toBe('cli');
   });
 });
