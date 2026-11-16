@@ -1980,7 +1980,7 @@ declare module 'archon:script' {
       readonly id: string;
       readonly workflow: string;
       readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
-      readonly outcome: 'succeeded' | 'failed' | null;
+      readonly outcome: string | null;
       readonly startedAt: string;
       readonly completedAt: string | null;
     }>;
