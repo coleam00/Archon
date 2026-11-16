@@ -1371,6 +1371,12 @@ describe('WorktreeProvider against real git', () => {
     expect(failure.message).toContain(`based on ${oldBase.slice(0, 12)}`);
     // HEAD names the repository's HEAD, as on creation, not the worktree's own.
     expect((await typedFailure(provider.create(reuseRequest('HEAD')))).kind).toBe('branch_exists');
+    const emptyTree = (await git(repoPath, 'hash-object', '-t', 'tree', '/dev/null')).trim();
+    const orphan = (await git(repoPath, 'commit-tree', emptyTree, '-m', 'unrelated')).trim();
+    await git(repoPath, 'branch', 'unrelated', orphan);
+    const unrelated = await typedFailure(provider.create(reuseRequest('unrelated')));
+    expect(unrelated.kind).toBe('branch_exists');
+    expect(unrelated.message).toContain('shares no history with --from');
     expect(await git(target, 'rev-parse', 'HEAD')).toBe(head);
     expect((await git(target, 'branch', '--show-current')).trim()).toBe('factory/x');
     expect(await git(target, 'status', '--porcelain')).toBe(status);

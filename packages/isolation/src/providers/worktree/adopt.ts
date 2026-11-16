@@ -7,6 +7,7 @@ import {
   addSafeDirectory,
   execFileAsync,
   findWorktreeByBranch,
+  GitFailure,
   getCurrentBranchStrict,
   isAncestorOf,
   listWorktrees,
@@ -119,18 +120,33 @@ export async function refuseUnappliedStartPoint(
   const fromCommit = stdout.trim();
   if (await isAncestorOf(worktreePath, fromCommit)) return;
 
-  const base = await execFileAsync('git', ['-C', worktreePath, 'merge-base', 'HEAD', fromCommit], {
-    timeout: 10000,
-  });
+  const base = await mergeBase(worktreePath, fromCommit);
   throw new IsolationFailure(
     'branch_exists',
     `Branch "${branch}" already has a worktree at ${worktreePath}, ` +
-      `based on ${base.stdout.trim().slice(0, 12)}. ` +
+      (base ? `based on ${base.slice(0, 12)}. ` : 'which shares no history with --from. ') +
       `--from ${fromBranch} (${fromCommit.slice(0, 12)}) is not in its history, ` +
       'so the run would start from a different base. Choose a different --branch, ' +
       'omit --from to continue in this worktree, or remove the worktree and delete the ' +
       `branch to start fresh from ${fromBranch}.`
   );
+}
+
+/** The commit where the worktree's HEAD and `commit` meet, or null when they share no history. */
+async function mergeBase(worktreePath: WorktreePath, commit: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', worktreePath, 'merge-base', 'HEAD', commit],
+      {
+        timeout: 10000,
+      }
+    );
+    return stdout.trim();
+  } catch (error) {
+    if (error instanceof GitFailure && error.code === 1) return null;
+    throw error;
+  }
 }
 
 export async function findRegisteredWorktree(
