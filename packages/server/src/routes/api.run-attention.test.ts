@@ -22,6 +22,7 @@ import { describe, test, expect } from 'bun:test';
 import { itemReadSchema } from '@archon/workflows/item-read';
 import {
   ItemRulingNotFoundError,
+  ItemRulingOutsideProjectError,
   ItemRulingWithdrawnError,
   itemRulingSchema,
   type ItemRuling,
@@ -446,6 +447,23 @@ describe('rulings on an item over HTTP', () => {
       throw new ItemRulingWithdrawnError('ruling-1');
     });
     expect((await post('/api/items/rulings/ruling-1/withdraw', {})).status).toBe(409);
+  });
+
+  test('a withdrawal that names a project passes it on, and a ruling outside it is 400', async () => {
+    mockWithdrawItemRuling.mockImplementationOnce(async () => {
+      throw new ItemRulingOutsideProjectError('ruling-1', 'scratch');
+    });
+    const refused = await post('/api/items/rulings/ruling-1/withdraw', { project });
+    expect(refused.status).toBe(400);
+    expect(((await refused.json()) as { error: string }).error).toContain('outside project');
+    expect(mockWithdrawItemRuling.mock.calls.at(-1)?.[0]).toMatchObject({
+      rulingId: 'ruling-1',
+      projectKey: expect.any(String),
+    });
+    // Without a project the withdrawal is not scoped.
+    mockWithdrawItemRuling.mockImplementationOnce(async () => ruling());
+    await post('/api/items/rulings/ruling-1/withdraw', {});
+    expect(mockWithdrawItemRuling.mock.calls.at(-1)?.[0]).not.toHaveProperty('projectKey');
   });
 
   test('reading the item shows its rulings', async () => {

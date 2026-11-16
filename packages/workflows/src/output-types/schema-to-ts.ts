@@ -72,7 +72,8 @@ const SHAPELESS_KEYWORDS = new Set([
   'uniqueItems',
   'minProperties',
   'maxProperties',
-  // Narrows an object's keys, which its type already states as strings.
+  // Narrows an object's keys, which its type already states as strings. Its subschema is
+  // still converted, so its refusals hold and its enum is recorded (at `<path>{}`).
   'propertyNames',
 ]);
 
@@ -86,9 +87,11 @@ function isRecord(value: unknown): value is SchemaObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** `[]` (an array's items) and `{}` (an object's keys) attach to the path without a dot. */
 function childPath(path: string, segment: string): string {
-  if (path === SCHEMA_ROOT) return segment.startsWith('[') ? `${SCHEMA_ROOT}${segment}` : segment;
-  return segment.startsWith('[') ? `${path}${segment}` : `${path}.${segment}`;
+  const attached = segment.startsWith('[') || segment.startsWith('{');
+  if (path === SCHEMA_ROOT) return attached ? `${SCHEMA_ROOT}${segment}` : segment;
+  return attached ? `${path}${segment}` : `${path}.${segment}`;
 }
 
 /** A single-quoted TypeScript string literal. */
@@ -313,6 +316,9 @@ function convert(schema: unknown, path: string, enums: Enums): string {
   // beside them can only restate or remove values, and ajv enforces that. The rest of the
   // schema is still converted, so its refusals and its enums hold beside a literal.
   const values = admittedValues(schema, path, enums);
+  if (Object.hasOwn(schema, 'propertyNames')) {
+    convert(schema.propertyNames, childPath(path, '{}'), enums);
+  }
   const typed = convertTyped(schema, path, enums);
   return values === undefined ? typed : union(values.map(literal));
 }

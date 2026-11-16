@@ -52,6 +52,19 @@ export class ItemRulingNotFoundError extends Error {
   }
 }
 
+/** The ruling belongs to an item outside the project the withdrawal was scoped to. */
+export class ItemRulingOutsideProjectError extends Error {
+  constructor(
+    readonly rulingId: string,
+    readonly projectKey: string
+  ) {
+    super(
+      `Ruling '${rulingId}' is on an item outside project ${projectKey}; it was not withdrawn.`
+    );
+    this.name = 'ItemRulingOutsideProjectError';
+  }
+}
+
 /** The ruling was already withdrawn; a withdrawal happens once. */
 export class ItemRulingWithdrawnError extends Error {
   constructor(readonly rulingId: string) {

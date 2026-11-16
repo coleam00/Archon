@@ -58,11 +58,12 @@ export async function recordItemRuling(
   return store.recordItemRuling({ ...target, ...(await rulingAct(store, actor, via)) });
 }
 
+/** `projectKey` scopes the withdrawal: a ruling on another project's item is refused. */
 export async function withdrawItemRuling(
   store: RulingStore,
-  rulingId: string,
+  target: { rulingId: string; projectKey?: string },
   actor: RunActor,
   via: RecordSurface
 ): Promise<ItemRuling> {
-  return store.withdrawItemRuling({ rulingId, ...(await rulingAct(store, actor, via)) });
+  return store.withdrawItemRuling({ ...target, ...(await rulingAct(store, actor, via)) });
 }

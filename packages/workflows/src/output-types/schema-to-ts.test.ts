@@ -46,6 +46,24 @@ describe('convertOutputSchema', () => {
     ).toBe(convertOutputSchema({ type: 'object', additionalProperties: { type: 'string' } }).type);
   });
 
+  test('an enum of keys under propertyNames is recorded at the object path with {}', () => {
+    const { type, enums } = convertOutputSchema({
+      type: 'object',
+      properties: {
+        scores: {
+          type: 'object',
+          propertyNames: { enum: ['low', 'high'] },
+          additionalProperties: { type: 'string', enum: ['a', 'b'] },
+        },
+      },
+    });
+    expect(type).toContain("Readonly<Record<string, 'a' | 'b'>>");
+    expect([...enums]).toEqual([
+      ['scores{}', ['low', 'high']],
+      ['scores.*', ['a', 'b']],
+    ]);
+  });
+
   test('a type list is a union, and a nullable object keeps its properties', () => {
     expect(convertOutputSchema({ type: ['string', 'null'] }).type).toBe('string | null');
     expect(

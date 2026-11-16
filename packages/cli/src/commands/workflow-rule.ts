@@ -9,6 +9,7 @@ import { recordItemRuling, withdrawItemRuling } from '@archon/core/operations/it
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import {
   ItemRulingNotFoundError,
+  ItemRulingOutsideProjectError,
   ItemRulingWithdrawnError,
   type ItemRuling,
 } from '@archon/workflows/schemas/item-ruling';
@@ -31,12 +32,21 @@ async function rule(
   env: NodeJS.ProcessEnv
 ): Promise<ItemRuling> {
   const actor = cliActor(request.as, env);
+  const selected = await inheritedWorkflowCodebase(host);
+  // A withdrawal names its ruling by id. Under a selected project it must be that
+  // project's; without one it is not scoped, as a full run id is not.
   if ('withdraw' in request)
-    return withdrawItemRuling(host.deps.store, request.withdraw, actor, 'cli');
+    return withdrawItemRuling(
+      host.deps.store,
+      {
+        rulingId: request.withdraw,
+        ...(selected ? { projectKey: projectRefForCodebase(selected).key } : {}),
+      },
+      actor,
+      'cli'
+    );
   // The project comes from the checkout, the same way `workflow runs --item` finds it.
-  const codebase =
-    (await inheritedWorkflowCodebase(host)) ??
-    (await findCodebaseForCheckoutPath(cwd, host.records.codebases));
+  const codebase = selected ?? (await findCodebaseForCheckoutPath(cwd, host.records.codebases));
   if (!codebase) throw new Error('--item names an item in one registered project.');
   return recordItemRuling(
     host.deps.store,
@@ -50,6 +60,7 @@ async function rule(
 function refusalCode(error: unknown): string | undefined {
   if (error instanceof ItemRulingNotFoundError) return 'not_found';
   if (error instanceof ItemRulingWithdrawnError) return 'already_withdrawn';
+  if (error instanceof ItemRulingOutsideProjectError) return 'outside_project';
   return undefined;
 }
 

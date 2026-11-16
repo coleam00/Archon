@@ -22,6 +22,7 @@ import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import { readItem } from '@archon/workflows/item-read';
 import {
   ItemRulingNotFoundError,
+  ItemRulingOutsideProjectError,
   ItemRulingWithdrawnError,
 } from '@archon/workflows/schemas/item-ruling';
 import type { Context } from 'hono';
@@ -92,7 +93,7 @@ const withdrawRulingRoute = createRoute({
       content: { 'application/json': { schema: itemRulingResponseSchema } },
       description: 'The ruling, now withdrawn',
     },
-    400: jsonError('Bad request'),
+    400: jsonError('Bad request, an unknown project, or a ruling outside the named project'),
     403: jsonError('Only the operator or an admin may withdraw a ruling'),
     404: jsonError('No ruling with that id'),
     409: jsonError('The ruling was already withdrawn'),
@@ -114,6 +115,21 @@ async function rulingActor(c: Context, as: string | undefined): Promise<RunActor
     : requester;
 }
 
+/**
+ * The key of the project a request names, or the resolver's refusal (no such project, an
+ * ambiguous name), which is the caller's 400. Reading the codebases can still throw, a 500.
+ */
+async function projectKeyOf(spec: string): Promise<{ key: string } | { refusal: string }> {
+  const codebases = await codebaseDb.listCodebases();
+  try {
+    return {
+      key: (await resolveAttentionProject({ listCodebases: async () => codebases }, spec)).key,
+    };
+  } catch (refusal) {
+    return { refusal: (refusal as Error).message };
+  }
+}
+
 export function registerItemRoutes(app: OpenAPIHono): void {
   const registerOpenApiRoute = openApiRouteRegistrar(app);
   const source = attentionQueueSource(createWorkflowStore(), createWorkflowHostStore().isolation);
@@ -121,17 +137,9 @@ export function registerItemRoutes(app: OpenAPIHono): void {
   registerOpenApiRoute(getItemRoute, async c => {
     const query = getValidatedQuery(c, itemReadQuerySchema);
     try {
-      // Read the codebases here so a database failure is a 500. Only the resolver's own
-      // refusals (no such project, an ambiguous name) are the caller's 400.
-      const codebases = await codebaseDb.listCodebases();
-      let projectKey: string;
-      try {
-        projectKey = (
-          await resolveAttentionProject({ listCodebases: async () => codebases }, query.project)
-        ).key;
-      } catch (refusal) {
-        return apiError(c, 400, (refusal as Error).message);
-      }
+      const project = await projectKeyOf(query.project);
+      if ('refusal' in project) return apiError(c, 400, project.refusal);
+      const projectKey = project.key;
       const read = await readItem(source, projectKey, query.key);
       if (read === null) return apiError(c, 404, `No item '${query.key}' in project ${projectKey}`);
       return c.json(read);
@@ -145,18 +153,11 @@ export function registerItemRoutes(app: OpenAPIHono): void {
     const body = getValidatedBody(c, recordItemRulingBodySchema);
     try {
       const actor = await rulingActor(c, body.as);
-      const codebases = await codebaseDb.listCodebases();
-      let projectKey: string;
-      try {
-        projectKey = (
-          await resolveAttentionProject({ listCodebases: async () => codebases }, body.project)
-        ).key;
-      } catch (refusal) {
-        return apiError(c, 400, (refusal as Error).message);
-      }
+      const project = await projectKeyOf(body.project);
+      if ('refusal' in project) return apiError(c, 400, project.refusal);
       const ruling = await recordItemRuling(
         source.store,
-        { projectKey, key: body.key, text: body.text },
+        { projectKey: project.key, key: body.key, text: body.text },
         actor,
         'api'
       );
@@ -174,8 +175,16 @@ export function registerItemRoutes(app: OpenAPIHono): void {
     const body = getValidatedBody(c, withdrawItemRulingBodySchema);
     try {
       const actor = await rulingActor(c, body.as);
-      return c.json(await withdrawItemRuling(source.store, rulingId, actor, 'api'), 200);
+      let projectKey: string | undefined;
+      if (body.project !== undefined) {
+        const project = await projectKeyOf(body.project);
+        if ('refusal' in project) return apiError(c, 400, project.refusal);
+        projectKey = project.key;
+      }
+      const target = projectKey === undefined ? { rulingId } : { rulingId, projectKey };
+      return c.json(await withdrawItemRuling(source.store, target, actor, 'api'), 200);
     } catch (error) {
+      if (error instanceof ItemRulingOutsideProjectError) return apiError(c, 400, error.message);
       if (error instanceof ItemRulingForbiddenError) return apiError(c, 403, error.message);
       if (error instanceof ItemRulingNotFoundError) return apiError(c, 404, error.message);
       if (error instanceof ItemRulingWithdrawnError) return apiError(c, 409, error.message);

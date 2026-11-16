@@ -1299,15 +1299,16 @@ archon workflow rule --withdraw <ruling-id>
 | Flag | Effect |
 | --- | --- |
 | `--item <key>` | The item the ruling is on, in the project the working directory belongs to, as [`runs --item`](#workflow-runs) finds it. A key nothing has named yet is written as a new item, as a start would write it |
-| `--withdraw <ruling-id>` | Withdraw a ruling instead. The ruling stays in the item read with `withdrawn` set; a ruling is withdrawn once |
+| `--withdraw <ruling-id>` | Withdraw a ruling instead. The ruling stays in the item read with `withdrawn` set; a ruling is withdrawn once. Under [`--chat-project-id`](#global-options) the ruling must be on an item of the selected project; without it the id alone names the ruling, in any project |
 | `--as <name>` | The name you declare for yourself, recorded as a claim nothing checks |
 | `--json` | Print the ruling as the item read lists it, or `{ ok: false, error }` |
 
 The text goes after `--`, and must not be blank. Called from inside a workflow node, the
 ruling records the node's run and node as `fromRun`, read from the node's environment. The
 command prints the ruling's id. It exits 1 for blank text, for a directory with no
-registered project, for a ruling id that names no ruling (`error: "not_found"`) and for
-one already withdrawn (`error: "already_withdrawn"`). Rulings need the database store.
+registered project, for a ruling id that names no ruling (`error: "not_found"`), for one
+already withdrawn (`error: "already_withdrawn"`), and under `--chat-project-id` for one on
+another project's item (`error: "outside_project"`), which stays as it was. Rulings need the database store.
 `POST /api/items/rulings` and `POST /api/items/rulings/{rulingId}/withdraw` do the same over
 HTTP; see the [API reference](/reference/api/).
 
@@ -2510,7 +2511,7 @@ These flags apply to every command. Command-specific flags are described under t
 | `--help`, `-h` | Show help, scoped to the command and subcommand you name |
 | `--version`, `-V` | Show version information (`-v` also works when it is the only argument) |
 
-`--chat-project-id <registered-project-id>` scopes every run lookup to that project, for example `archon workflow get <run-id> --chat-project-id <id> --json`. Copilot and OpenCode chat receive it in their CLI instructions. Every full ID or prefix must match exactly one run in the project before the command reads or changes it, and launches and continuations must belong to it; use `/setproject` to change projects. Run lists, status, open work and attention list, count and watch use the project, subject to each command's directory check, and reject `--all` or an attention `--project` naming another project. An empty or unregistered scope fails instead of falling back to install-wide queries. The scope comes only from the argument, so the working directory and Archon env files cannot change, clear or supply it; `ARCHON_WORKFLOW_CODEBASE_ID` no longer selects a project. Without the argument, full run IDs keep their install-wide operator behavior and short prefixes resolve from the current project. It scopes run lookup, not process permissions.
+`--chat-project-id <registered-project-id>` scopes every run lookup to that project, for example `archon workflow get <run-id> --chat-project-id <id> --json`. Copilot and OpenCode chat receive it in their CLI instructions. Every full ID or prefix must match exactly one run in the project before the command reads or changes it, and launches and continuations must belong to it; use `/setproject` to change projects. Run lists, status, open work and attention list, count and watch use the project, subject to each command's directory check, and reject `--all` or an attention `--project` naming another project. `workflow rule` records on the selected project's items, and `--withdraw` refuses a ruling on another project's item. An empty or unregistered scope fails instead of falling back to install-wide queries. The scope comes only from the argument, so the working directory and Archon env files cannot change, clear or supply it; `ARCHON_WORKFLOW_CODEBASE_ID` no longer selects a project. Without the argument, full run IDs keep their install-wide operator behavior and short prefixes resolve from the current project. It scopes run lookup, not process permissions.
 
 ### Logs
 

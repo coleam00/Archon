@@ -2230,7 +2230,7 @@ export interface paths {
             'application/json': components['schemas']['ItemRuling'];
           };
         };
-        /** @description Bad request */
+        /** @description Bad request, an unknown project, or a ruling outside the named project */
         400: {
           headers: {
             [name: string]: unknown;
@@ -7775,6 +7775,7 @@ export interface components {
       as?: string;
     };
     WithdrawItemRulingBody: {
+      project?: string;
       as?: string;
     };
     AttentionStreamLine: (

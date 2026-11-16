@@ -8,6 +8,7 @@ import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import {
   ItemRulingNotFoundError,
+  ItemRulingOutsideProjectError,
   ItemRulingWithdrawnError,
 } from '@archon/workflows/schemas/item-ruling';
 import { dashboardRunsResultSchema } from '@archon/workflows/schemas/workflow-run-listing';
@@ -579,8 +580,13 @@ export function describeSqlStatusReadConformance(
         fromRun: { runId: 'run-1', nodePath: 'review' },
       });
 
+      // A withdrawal scoped to another project is refused and changes nothing.
+      await expect(
+        store.withdrawItemRuling({ rulingId: first.id, projectKey: 'other/project', ...byCli })
+      ).rejects.toBeInstanceOf(ItemRulingOutsideProjectError);
       const withdrawn = await store.withdrawItemRuling({
         rulingId: first.id,
+        projectKey,
         via: 'api',
         by: null,
         fromRun: null,

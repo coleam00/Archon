@@ -5,6 +5,7 @@
  */
 import {
   ItemRulingNotFoundError,
+  ItemRulingOutsideProjectError,
   ItemRulingWithdrawnError,
   itemRulingSchema,
   type ItemRuling,
@@ -142,16 +143,20 @@ export async function recordItemRuling(
   });
 }
 
+/** With `projectKey`, a ruling on an item of another project is refused and not withdrawn. */
 export async function withdrawItemRuling(
-  input: { rulingId: string } & ItemRulingAct
+  input: { rulingId: string; projectKey?: string } & ItemRulingAct
 ): Promise<ItemRuling> {
   return getDatabase().withTransaction(async query => {
-    const found = await query<{ item_id: string; withdraws: string | null }>(
-      'SELECT item_id, withdraws FROM remote_agent_item_rulings WHERE id = $1',
+    const found = await query<{ item_id: string; withdraws: string | null; project_key: string }>(
+      `SELECT r.item_id, r.withdraws, i.project_key FROM remote_agent_item_rulings r
+       JOIN remote_agent_items i ON i.id = r.item_id WHERE r.id = $1`,
       [input.rulingId]
     );
     const ruling = found.rows[0];
     if (!ruling || ruling.withdraws !== null) throw new ItemRulingNotFoundError(input.rulingId);
+    if (input.projectKey !== undefined && ruling.project_key !== input.projectKey)
+      throw new ItemRulingOutsideProjectError(input.rulingId, input.projectKey);
     // UNIQUE(withdraws) decides a race between two withdrawals: the loser inserts nothing.
     const inserted = await query(
       `INSERT INTO remote_agent_item_rulings (${INSERT_COLUMNS})

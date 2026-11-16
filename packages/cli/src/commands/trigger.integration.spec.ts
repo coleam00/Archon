@@ -470,6 +470,36 @@ describe('trigger CLI durable execution', () => {
       itemReadSchema.parse(await readJson(['workflow', 'runs', '--item', 'item-new', '--json']))
         .answers
     ).toEqual([withdrawn]);
+    // Under a selected project, a ruling on another project's item is not withdrawn.
+    const scratch = new Database(database);
+    let codebaseId: string;
+    try {
+      scratch.run(
+        "INSERT INTO remote_agent_items (project_key, key) VALUES ('other/project', 'x')"
+      );
+      scratch.run(
+        `INSERT INTO remote_agent_item_rulings (id, item_id, text, via)
+         SELECT 'foreign-ruling', id, 'not yours', 'cli' FROM remote_agent_items WHERE key = 'x'`
+      );
+      codebaseId =
+        scratch.query<{ id: string }, []>('SELECT id FROM remote_agent_codebases').get()?.id ?? '';
+    } finally {
+      scratch.close();
+    }
+    const scoped = ['workflow', 'rule', '--withdraw', 'foreign-ruling', '--json'];
+    const outside = await invoke([...scoped, '--chat-project-id', codebaseId], false);
+    expect(outside.exitCode).toBe(1);
+    expect(JSON.parse(outside.stdout)).toMatchObject({ ok: false, error: 'outside_project' });
+    expect(
+      (
+        await invoke(
+          ['workflow', 'rule', '--withdraw', 'foreign-ruling', '--chat-project-id', codebaseId],
+          false
+        )
+      ).stderr
+    ).toContain('outside project');
+    // Without a selected project, a withdrawal by id is not scoped.
+    expect(itemRulingSchema.parse(await readJson(scoped)).withdrawn).not.toBeNull();
 
     // A continuation stays on the item of the run it continues; `--item` still wins, and
     // continuing a run with no item gives none. `--adopt` writes the same

@@ -451,9 +451,12 @@ export const recordItemRulingBodySchema = z
   })
   .openapi('RecordItemRulingBody');
 
-/** POST /api/items/rulings/{rulingId}/withdraw body. */
+/**
+ * POST /api/items/rulings/{rulingId}/withdraw body. With `project`, a ruling on another
+ * project's item is refused; without it the id alone names the ruling.
+ */
 export const withdrawItemRulingBodySchema = z
-  .object({ as: declaredAnswererNameSchema.optional() })
+  .object({ project: z.string().min(1).optional(), as: declaredAnswererNameSchema.optional() })
   .openapi('WithdrawItemRulingBody');
 
 /** A ruling as recorded on its item, withdrawn or not. */

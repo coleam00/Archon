@@ -226,7 +226,7 @@ export interface IWorkflowStore
    * `ItemRulingWithdrawnError` for one already withdrawn.
    */
   withdrawItemRuling(
-    input: { rulingId: string } & ItemRulingAct
+    input: { rulingId: string; projectKey?: string } & ItemRulingAct
   ): Promise<import('./schemas/item-ruling').ItemRuling>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */
