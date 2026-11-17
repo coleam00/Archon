@@ -436,6 +436,30 @@ test('an unknown write outcome is retried; a refused write is not retried before
   expect(await shownRows(missing)).toEqual([]);
 });
 
+test('a pass that fails after posting reports what it posted', async () => {
+  const fake = fakeForge();
+  // The run is deleted once its status is posted, so recording the write fails the pass.
+  const forge: ItemTrackerForge = {
+    ...fake.forge,
+    upsertComment: async request => {
+      const response = await fake.forge.upsertComment(request);
+      await getDatabase().query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [run]);
+      return response;
+    },
+  };
+  const tracker = await activeTracker(forge);
+  const run = await startRun('issue-7', 'plan');
+  expect(await tracker.scan()).toEqual([
+    {
+      project: PROJECT,
+      outcome: 'failed',
+      error: expect.any(String),
+      posted: [{ item: 'issue-7', marker: ITEM_STATUS_MARKER }],
+      notPosted: [],
+    },
+  ]);
+});
+
 test('cost and token counts are written only when usage is turned on', async () => {
   const usage = { total_cost_usd: 1.5, total_tokens_in: 1200, total_tokens_out: 300 };
   for (const includeUsage of [false, true]) {

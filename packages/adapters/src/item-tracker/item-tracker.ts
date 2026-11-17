@@ -134,8 +134,8 @@ export type TrackerPassReport = { project: string } & (
   /** Another process runs the project's pass; it was asked for one more when requested. */
   | { outcome: 'held'; heldBy: ProcessOwner; since: string }
   | ({ outcome: 'misconfigured' } & TrackerProblem)
-  /** The pass threw; what it owed stays owed. */
-  | { outcome: 'failed'; error: string }
+  /** The pass threw after writing what it lists; what it did not write stays owed. */
+  | ({ outcome: 'failed'; error: string } & PassWrites)
 );
 
 type Tracked = {
@@ -144,7 +144,7 @@ type Tracked = {
 } & ({ state: 'active'; repo: RepoRef } | { state: 'misconfigured'; problem: TrackerProblem });
 
 /** The writes of one pass over one project. */
-interface PassWrites {
+export interface PassWrites {
   posted: TrackerWrite[];
   notPosted: TrackerMissedWrite[];
 }
@@ -258,6 +258,7 @@ export class ItemTracker {
       return { project, outcome: 'misconfigured', ...tracked.problem };
     const { destination } = tracked;
     let claimed = false;
+    const writes: PassWrites = { posted: [], notPosted: [] };
     try {
       const claim = await claimTrackerPass(destination, this.owner, request);
       if (!claim.claimed) {
@@ -268,7 +269,6 @@ export class ItemTracker {
         return { project, outcome: 'held', heldBy: claim.heldBy, since: claim.since };
       }
       claimed = true;
-      const writes: PassWrites = { posted: [], notPosted: [] };
       do await this.scanProject(tracked, tracked.repo, writes);
       while ((await finishTrackerPass(destination, this.owner)) === 'again');
       return { project, outcome: 'scanned', ...writes };
@@ -282,6 +282,7 @@ export class ItemTracker {
         project,
         outcome: 'failed',
         error: err instanceof Error ? err.message : String(err),
+        ...writes,
       };
     }
   }

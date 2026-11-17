@@ -41,7 +41,13 @@ test('tracker sync exits 1 when a tracked project could not be scanned at all', 
     outcome: 'misconfigured',
     errorKind: 'unsupported_op',
   };
-  const failed: TrackerPassReport = { project: 'acme/down', outcome: 'failed', error: 'db' };
+  const failed: TrackerPassReport = {
+    project: 'acme/down',
+    outcome: 'failed',
+    error: 'db',
+    posted: [],
+    notPosted: [],
+  };
   for (const report of [misconfigured, failed])
     expect(await sync([scanned, report])).toEqual({
       code: 1,

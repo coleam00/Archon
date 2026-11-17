@@ -207,6 +207,7 @@ export async function runTrigger({
   subcommand,
   positionals,
   values,
+  forgeTrustedEnv,
 }: CliRouteContext): Promise<number> {
   const { triggerCommand, spawnAdmitted } = await loadRoute(() => import('../commands/trigger'), {
     database: await usesDatabaseStore(),
@@ -215,7 +216,7 @@ export async function runTrigger({
   // A `trigger execute` process serves the host it runs for, so the run it ends admits
   // that host's next start.
   const host = await createCliWorkflowHost(
-    true,
+    { forgeTrustedEnv },
     cliOwnTriggerHost(
       subcommand === 'execute' && typeof values.host === 'string' ? values.host : undefined
     )

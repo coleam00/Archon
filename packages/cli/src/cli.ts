@@ -54,7 +54,7 @@ import { writeJsonLine } from './utils/stdout';
 import { escapeRunJobIfRequested } from './utils/run-job-escape';
 import { rejectConfigOutsideRun } from './dispatch-guards';
 import { resolveCliExitCode } from './utils/workflow-exit-code';
-import { syncTrackerIfOwed } from './utils/tracker-exit';
+import { trackerExit } from './utils/tracker-exit';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 installPipeSafeConsole();
 
@@ -287,7 +287,7 @@ async function runParsedCommand({ values, positionals }: ParsedCliArgs): Promise
   } finally {
     if (showUpdateNotice) printUpdateNotice();
     // Before the database closes: a run this process changed may owe its item's tracker.
-    await syncTrackerIfOwed(forgeTrustedEnv);
+    await trackerExit.syncIfOwed(forgeTrustedEnv);
     // Flush queued telemetry events before the CLI process exits.
     // Short-lived CLI commands lose buffered events if shutdown() is skipped.
     await shutdownTelemetry();

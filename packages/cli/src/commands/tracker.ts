@@ -6,32 +6,33 @@ import {
   hostItemTrackerForge,
   ItemTracker,
   itemTrackerDestinationId,
+  type PassWrites,
   type TrackerPassReport,
 } from '@archon/adapters/item-tracker/item-tracker';
-import type { ItemTrackerConfig } from '@archon/core/config/config-types';
 import { loadConfig } from '@archon/core/config/config-loader';
 import { releaseTrackerPass } from '@archon/core/db/item-tracker';
 import { writeStdout } from '../utils/stdout';
 
-/**
- * One pass over every tracked project, asking a project's holder for one more when another
- * process holds it, because this process does not come back.
- */
-export async function syncTrackedProjects(
-  config: ItemTrackerConfig,
+/** The configured tracker, activated; undefined when the config tracks no project. */
+export async function activateConfiguredTracker(
   forgeTrustedEnv: NodeJS.ProcessEnv
-): Promise<TrackerPassReport[]> {
-  const tracker = new ItemTracker(config, hostItemTrackerForge(forgeTrustedEnv));
+): Promise<ItemTracker | undefined> {
+  const { itemTracker } = await loadConfig();
+  if (!itemTracker) return undefined;
+  const tracker = new ItemTracker(itemTracker, hostItemTrackerForge(forgeTrustedEnv));
   await tracker.activate();
-  return tracker.scan({ request: true });
+  return tracker;
 }
 
-/** `tracker sync`'s pass; undefined when the config tracks no project. */
+/**
+ * `tracker sync`'s pass over every tracked project, asking a project's holder for one more
+ * when another process holds it, because this process does not come back. Undefined when
+ * the config tracks no project.
+ */
 export async function syncConfiguredProjects(
   forgeTrustedEnv: NodeJS.ProcessEnv
 ): Promise<TrackerPassReport[] | undefined> {
-  const { itemTracker } = await loadConfig();
-  return itemTracker && syncTrackedProjects(itemTracker, forgeTrustedEnv);
+  return (await activateConfiguredTracker(forgeTrustedEnv))?.scan({ request: true });
 }
 
 /**
@@ -60,13 +61,7 @@ function reportLines(report: TrackerPassReport): string {
   const { project } = report;
   switch (report.outcome) {
     case 'scanned':
-      return [
-        `${project}: posted ${String(report.posted.length)}, not posted ${String(report.notPosted.length)}\n`,
-        ...report.notPosted.map(
-          missed =>
-            `  ${missed.item}: ${missed.errorKind}${missed.retried ? ', the next pass retries it' : ''}\n`
-        ),
-      ].join('');
+      return writeLines(`${project}:`, report);
     case 'held':
       return (
         `${project}: held by ${report.heldBy.host}:${String(report.heldBy.pid)} since ${report.since}; ` +
@@ -75,8 +70,18 @@ function reportLines(report: TrackerPassReport): string {
     case 'misconfigured':
       return `${project}: misconfigured (${[report.errorKind, ...(report.unsupported ?? [])].join(': ')})\n`;
     case 'failed':
-      return `${project}: failed: ${report.error}\n`;
+      return writeLines(`${project}: failed: ${report.error};`, report);
   }
+}
+
+function writeLines(head: string, { posted, notPosted }: PassWrites): string {
+  return [
+    `${head} posted ${String(posted.length)}, not posted ${String(notPosted.length)}\n`,
+    ...notPosted.map(
+      missed =>
+        `  ${missed.item}: ${missed.errorKind}${missed.retried ? ', the next pass retries it' : ''}\n`
+    ),
+  ].join('');
 }
 
 /**

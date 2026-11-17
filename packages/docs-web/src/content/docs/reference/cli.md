@@ -2703,7 +2703,7 @@ archon tracker release <project> [--json]
 - `scanned`: `posted` lists each comment written as `{ item, marker }`, and `notPosted` each one the forge did not take as `{ item, marker, errorKind, retried }`. `retried` is true when the next pass tries the write again. What was not posted stays owed.
 - `held`: another process is running the project's pass. `heldBy` (`host`, `pid`, `instance`) and `since` name it. It was asked to run one more pass, which shows what this one would have.
 - `misconfigured`: the project's forge plugin check failed. `errorKind` names why, and `unsupported` the operations the plugin lacks.
-- `failed`: the pass threw; `error` carries the message. What it owed stays owed.
+- `failed`: the pass threw; `error` carries the message, and `posted` and `notPosted` what it wrote before it threw. What it did not write stays owed.
 
 It exits 1 only when a project could not be scanned at all (`misconfigured` or `failed`), and then `ok` is false. A `held` project is not a failure.
 

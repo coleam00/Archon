@@ -4,7 +4,7 @@ import { loadStoreSelection } from '@archon/core/config/store-selection';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
-import { markTrackerPassOwed } from './tracker-exit';
+import { trackerExit } from './tracker-exit';
 
 /**
  * The trigger host this process serves, if any: the `--host` a `trigger execute` process
@@ -15,12 +15,17 @@ export function cliOwnTriggerHost(executeHost?: string): string | undefined {
   return executeHost ?? (process.env.ARCHON_TRIGGER_HOST?.trim() || undefined);
 }
 
+/** A host that executes workflows: it can start, resume or pause runs. */
+export interface CliWorkflowExecution {
+  forgeTrustedEnv: NodeJS.ProcessEnv;
+}
+
 export async function createCliWorkflowHost(
-  executesWorkflow = false,
+  execution?: CliWorkflowExecution,
   ownTriggerHost = cliOwnTriggerHost()
 ): Promise<WorkflowHost> {
-  // A host that executes workflows can start, resume or pause runs.
-  if (executesWorkflow) markTrackerPassOwed();
+  const executesWorkflow = execution !== undefined;
+  if (execution) await trackerExit.prepare(execution.forgeTrustedEnv);
   // Set once the host exists: what a run's end starts runs through the whole host.
   let host: WorkflowHost | undefined;
   const wrapStore = async <S extends IWorkflowStore>(store: S): Promise<S> => {
@@ -80,7 +85,7 @@ async function afterRunEnded(
   });
   return async (runId, caused) => {
     // Called for every run end this process wrote, from any host it built.
-    markTrackerPassOwed();
+    trackerExit.markOwed();
     const host = getHost();
     if (!host) return;
     createLogger('cli.run-end-drain').debug(

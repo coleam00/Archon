@@ -7,44 +7,76 @@
  */
 import { createLogger } from '@archon/paths';
 
-let owed = false;
-
-export function markTrackerPassOwed(): void {
-  owed = true;
+/** An activated tracker, as the exit pass uses it. */
+export interface ExitTracker {
+  scan(options: { request: boolean }): Promise<unknown>;
 }
 
-type TrackerSync = (forgeTrustedEnv: NodeJS.ProcessEnv) => Promise<unknown>;
+/** Activate the configured tracker; undefined when nothing is tracked. */
+export type ActivateTracker = (
+  forgeTrustedEnv: NodeJS.ProcessEnv
+) => Promise<ExitTracker | undefined>;
 
-/**
- * Run the owed pass. It never fails the command: a failure is logged, and what the pass
- * did not write stays owed in the tracker's ledger for the next pass. Items live only in
- * the SQL stores, so a file-store install has nothing to track.
- */
-export async function syncTrackerIfOwed(
-  forgeTrustedEnv: NodeJS.ProcessEnv,
-  sync: TrackerSync = syncWhenConfigured
-): Promise<void> {
-  if (!owed) return;
-  owed = false;
-  try {
-    await sync(forgeTrustedEnv);
-  } catch (err) {
-    createLogger('cli.item-tracker').error({ err }, 'item_tracker.exit_pass_failed');
-  }
+export interface TrackerExit {
+  /**
+   * Before this process can start, resume or pause a run: activate the tracker and owe a
+   * pass at exit. A project's first activation records everything already on its items as
+   * shown, so activating after the run would hide that run for good.
+   */
+  prepare(forgeTrustedEnv: NodeJS.ProcessEnv): Promise<void>;
+  /** This process ended a run on a host that did not prepare. */
+  markOwed(): void;
+  /**
+   * Run the owed pass. It never fails the command: a failure is logged, and what the pass
+   * did not write stays owed in the tracker's ledger for the next pass.
+   */
+  syncIfOwed(forgeTrustedEnv: NodeJS.ProcessEnv): Promise<void>;
 }
 
-async function syncWhenConfigured(forgeTrustedEnv: NodeJS.ProcessEnv): Promise<void> {
-  const { usesDatabaseStore, markDatabaseRouteLoaded, registerProviders } = await import(
-    '../routes/route-loader'
-  );
-  if (!(await usesDatabaseStore())) return;
-  // The config names its default provider, which loading it checks against the registry.
-  await registerProviders();
-  const { loadConfig } = await import('@archon/core/config/config-loader');
-  const { itemTracker } = await loadConfig();
-  if (!itemTracker) return;
-  // The pass opens the database; the command's cleanup closes it.
+export function createTrackerExit(activate: ActivateTracker = activateWhenConfigured): TrackerExit {
+  const log = () => createLogger('cli.item-tracker');
+  let owed = false;
+  let prepared: Promise<ExitTracker | undefined> | undefined;
+  // A failed activation is not retried at exit: that later activation is the one that
+  // would hide the run.
+  const activateLogged = (env: NodeJS.ProcessEnv): Promise<ExitTracker | undefined> =>
+    activate(env).catch((err: unknown) => {
+      log().error({ err }, 'item_tracker.activation_failed');
+      return undefined;
+    });
+  return {
+    async prepare(forgeTrustedEnv) {
+      owed = true;
+      prepared ??= activateLogged(forgeTrustedEnv);
+      await prepared;
+    },
+    markOwed() {
+      owed = true;
+    },
+    async syncIfOwed(forgeTrustedEnv) {
+      if (!owed) return;
+      owed = false;
+      const tracker = await (prepared ?? activateLogged(forgeTrustedEnv));
+      try {
+        await tracker?.scan({ request: true });
+      } catch (err) {
+        log().error({ err }, 'item_tracker.exit_pass_failed');
+      }
+    },
+  };
+}
+
+/** This process's tracker pass. */
+export const trackerExit = createTrackerExit();
+
+/** Items live only in the SQL stores, so a file-store install has nothing to track. */
+async function activateWhenConfigured(
+  forgeTrustedEnv: NodeJS.ProcessEnv
+): Promise<ExitTracker | undefined> {
+  const { usesDatabaseStore, markDatabaseRouteLoaded } = await import('../routes/route-loader');
+  if (!(await usesDatabaseStore())) return undefined;
+  // The tracker opens the database; the command's cleanup closes it.
   markDatabaseRouteLoaded();
-  const { syncTrackedProjects } = await import('../commands/tracker');
-  await syncTrackedProjects(itemTracker, forgeTrustedEnv);
+  const { activateConfiguredTracker } = await import('../commands/tracker');
+  return activateConfiguredTracker(forgeTrustedEnv);
 }
