@@ -405,8 +405,10 @@ function receiptIdOfLaunch(launch: PreparedWorkflowLaunch | undefined): string |
 }
 
 /**
- * Prepare a page of this host's pending bindings, or all of `receiptIds` page by page (a
- * page is read again until it brings nothing untried), and start each one admitted now.
+ * Prepare every pending binding of this host, or of `receiptIds` only, and start each one
+ * admitted now. Each read lists from the oldest binding, one page further than the last,
+ * until a read is not cut by its limit; a binding is tried once per call, so one that
+ * stays pending (a retryable failure, another process's claim) cannot stall the pass.
  * Failures are collected, not thrown; a failed binding is not retried here.
  */
 async function preparePendingBindings(
@@ -418,16 +420,26 @@ async function preparePendingBindings(
   const tried = new Set<string>();
   const key = (binding: PendingStartBindingInspection) =>
     'document' in binding ? binding.document : `${binding.receiptId}\n${binding.bindingId}`;
-  for (let offset = 0; offset < (receiptIds?.length ?? 1); ) {
-    const page = receiptIds?.slice(offset, offset + PAGE);
-    const query = { hostId: host.hostId, receiptIds: page, limit: PAGE };
-    const listed = await host.deps.store.listPendingStartBindings(query);
-    const fresh = listed.filter(binding => !tried.has(key(binding)));
-    for (const binding of fresh) {
-      tried.add(key(binding));
-      await preparePendingBinding(host, failures, binding);
+  // Receipt ids go to the store in chunks, so one query never binds more than a page of them.
+  const chunks = receiptIds
+    ? Array.from({ length: Math.ceil(receiptIds.length / PAGE) }, (_, index) =>
+        receiptIds.slice(index * PAGE, (index + 1) * PAGE)
+      )
+    : [undefined];
+  for (const chunk of chunks) {
+    for (let limit = PAGE; ; limit += PAGE) {
+      const listed = await host.deps.store.listPendingStartBindings({
+        hostId: host.hostId,
+        receiptIds: chunk,
+        limit,
+      });
+      for (const binding of listed.filter(entry => !tried.has(key(entry)))) {
+        tried.add(key(binding));
+        await preparePendingBinding(host, failures, binding);
+      }
+      // The limit counts bindings, not the damaged receipts reported beside them.
+      if (listed.filter(entry => !('document' in entry)).length < limit) break;
     }
-    if (!page || listed.length < PAGE || fresh.length === 0) offset += PAGE;
   }
 }
 
@@ -491,7 +503,7 @@ export async function startReceiptBindings(
 
 /**
  * One host pass: admit this host's queued requests while their slots have capacity, then
- * prepare a page of its pending receipt bindings, handing each admitted start to the host.
+ * prepare all its pending receipt bindings, handing each admitted start to the host.
  * Queued requests go first because a new start yields to an older runnable request of its
  * host (`resourceStartBlocker`): after an install hold, a held `overlap: skip` binding
  * would otherwise be dropped behind requests the hold left undrained. A damaged receipt is

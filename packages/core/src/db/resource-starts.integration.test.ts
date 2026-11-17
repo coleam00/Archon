@@ -1779,21 +1779,20 @@ for (const damagedLaunch of ['{', '{}', 'mismatched-id']) {
   });
 }
 
-test('a run end prepares every start it caused, past one page of receipts and one page of bindings', async () => {
-  const { createSqlWorkflowHost } = await import('../workflows/sql-host');
-  const { startReceiptBindings, ResourceStartDrainError } = await import(
-    '../workflows/resource-start-host'
-  );
-  const host = createSqlWorkflowHost();
-  // 101 receipts, so their ids span two pages; the first has 101 bindings, so the first
-  // page of ids holds more pending bindings than one read returns.
+/**
+ * 201 pending bindings on 'host': 101 receipts, so their ids span two pages, and the first
+ * has 101 bindings, so the first page of ids holds more pending bindings than one read
+ * returns. Their run-as user does not exist: preparation ends at its first step, which
+ * keeps them cheap and still takes each binding out of pending.
+ */
+async function acceptPagesOfPendingBindings(
+  host: ReturnType<typeof import('../workflows/sql-host').createSqlWorkflowHost>
+): Promise<string[]> {
   const receiptIds = Array.from({ length: 101 }, () => crypto.randomUUID());
   const binding = (index: number) => ({
     bindingId: `binding-${String(index)}`,
     bindingRevision: null,
     hostId: 'host',
-    // No such user: preparation ends at its first step, which keeps 201 of them cheap
-    // and still takes each binding out of pending.
     runAsUserId: '99999999-9999-4999-8999-999999999999',
     resource: 'pool',
     overlap: 'skip' as const,
@@ -1821,12 +1820,11 @@ test('a run end prepares every start it caused, past one page of receipts and on
         ...Array.from({ length: index === 0 ? 100 : 0 }, (_, more) => binding(more + 1)),
       ],
     });
+  return receiptIds;
+}
 
-  const error = await startReceiptBindings(
-    { ...host, hostId: 'host', startAdmitted: async () => {} },
-    new Set(receiptIds)
-  ).catch((caught: unknown) => caught);
-
+async function expectAllBindingsPrepared(error: unknown): Promise<void> {
+  const { ResourceStartDrainError } = await import('../workflows/resource-start-host');
   if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
   expect(error.failures).toHaveLength(201);
   expect(
@@ -1836,6 +1834,36 @@ test('a run end prepares every start it caused, past one page of receipts and on
       )
     ).rows
   ).toEqual([{ status: 'rejected', count: 201 }]);
+}
+
+test('a run end prepares every start it caused, past one page of receipts and one page of bindings', async () => {
+  const { createSqlWorkflowHost } = await import('../workflows/sql-host');
+  const { startReceiptBindings } = await import('../workflows/resource-start-host');
+  const host = createSqlWorkflowHost();
+  const receiptIds = await acceptPagesOfPendingBindings(host);
+
+  await expectAllBindingsPrepared(
+    await startReceiptBindings(
+      { ...host, hostId: 'host', startAdmitted: async () => {} },
+      new Set(receiptIds)
+    ).catch((caught: unknown) => caught)
+  );
+});
+
+// A hold lift drains each host once; a CLI-only host has no later pass to pick up the rest.
+test('a host pass prepares every pending binding of its host, past one page', async () => {
+  const { createSqlWorkflowHost } = await import('../workflows/sql-host');
+  const { drainResourceStartHost } = await import('../workflows/resource-start-host');
+  const host = createSqlWorkflowHost();
+  await acceptPagesOfPendingBindings(host);
+
+  await expectAllBindingsPrepared(
+    await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async () => {},
+    }).catch((caught: unknown) => caught)
+  );
 });
 
 for (const phase of ['admission', 'drain'] as const) {
