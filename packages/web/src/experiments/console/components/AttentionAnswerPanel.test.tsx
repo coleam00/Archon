@@ -92,6 +92,13 @@ test("the reserved 'other' option cannot be chosen without text", () => {
   expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>Use main<\/button>/);
 });
 
+test('a message wait cannot be answered while its text is blank', () => {
+  const html = renderToStaticMarkup(
+    <AttentionAnswerPanel run={run} attention={{ ...attention, form: 'message', options: [] }} />
+  );
+  expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Answer<\/button>/);
+});
+
 test('the recommendation and what each option does are shown before the choices', () => {
   const recommended = {
     ...attention,
