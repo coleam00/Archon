@@ -261,6 +261,7 @@ export function isolationStatusReadTests(
     async status => {
       const db = getDb();
       const { getLiveRunOwningEnv } = await import('./isolation-environments');
+      const { getEnvUse } = await import('./isolation-env-users');
       const { getRunByIsolationEnvId, WorkflowStatusReadError } = await import(
         './workflow-run-reads'
       );
@@ -278,6 +279,8 @@ export function isolationStatusReadTests(
         () => getLiveRunOwningEnv(env.id, { kind: 'settled' }),
         () => getLiveRunOwningEnv(env.id, { kind: 'stale', staleDays: 7 }),
         () => getRunByIsolationEnvId(env.id),
+        () => getEnvUse(env.id),
+        () => getEnvUse(env.id, { kind: 'settled' }),
       ]) {
         const result = read();
         await expect(result).rejects.toBeInstanceOf(WorkflowStatusReadError);

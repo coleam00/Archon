@@ -227,7 +227,10 @@ export async function getEnvUse(envId: string, release?: FailedRunRelease): Prom
   );
   const row = result.rows[0];
   const run = (id: string | null | undefined, status: string | null | undefined) =>
-    id && status ? { id: String(id), status: readWorkflowRunStatus(String(id), status) } : null;
+    // A row is present by its id alone: an empty or unknown status throws, never reads as no owner.
+    id === null || id === undefined
+      ? null
+      : { id: String(id), status: readWorkflowRunStatus(String(id), status ?? '') };
   return {
     owner: run(row?.owner_id, row?.owner_status),
     releasedOwner: run(row?.released_id, row?.released_status),
