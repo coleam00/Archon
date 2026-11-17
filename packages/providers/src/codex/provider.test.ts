@@ -1003,6 +1003,52 @@ describe('CodexProvider', () => {
       expect(tokens).toMatchObject([{ input: 120, output: 12 }]);
     });
 
+    test('a v1 subagent on a later turn when the parent completes holds the node open', async () => {
+      const tokens = (await tokensOf([
+        itemCompleted(collabSpawn('completed', ['child-thread'])),
+        otherTurn('started'),
+        otherTurn('completed'),
+        otherTurn('started', 'child-thread', 'child-turn-2'),
+        tokenUsage({ input: 100, output: 10 }),
+        turnCompleted('completed'),
+        tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn-2', 'child-thread'),
+        otherTurn('completed', 'child-thread', 'child-turn-2'),
+      ])) as { input: number }[];
+      expect(tokens.reduce((sum, t) => sum + t.input, 0)).toBe(140);
+    });
+
+    test('a v2 subagent keeps the usage its thread reported before its activity named it', async () => {
+      const tokens = await tokensOf([
+        tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn', 'child-thread'),
+        itemStarted(subAgentActivity('started')),
+        itemCompleted(subAgentActivity('completed')),
+        tokenUsage({ input: 100, output: 10 }),
+        turnCompleted('completed'),
+      ]);
+      expect(tokens).toMatchObject([{ input: 140, output: 14 }]);
+    });
+
+    test('a v2 subagent adopts the v1 and v2 spawns it made before its activity named it', async () => {
+      const childItem = (item: ThreadItem): ServerNotification =>
+        itemCompleted(item, 'child-thread', 'child-turn');
+      const tokens = await tokensOf([
+        childItem({
+          ...collabSpawn('completed', ['v1-grandchild']),
+          senderThreadId: 'child-thread',
+        }),
+        childItem(subAgentActivity('started', 'v2-grandchild')),
+        tokenUsage({ input: 20, output: 2 }, undefined, 'g1-turn', 'v1-grandchild'),
+        otherTurn('started', 'v1-grandchild', 'g1-turn'),
+        otherTurn('completed', 'v1-grandchild', 'g1-turn'),
+        tokenUsage({ input: 30, output: 3 }, undefined, 'g2-turn', 'v2-grandchild'),
+        itemStarted(subAgentActivity('started')),
+        itemCompleted(subAgentActivity('completed')),
+        tokenUsage({ input: 100, output: 10 }),
+        turnCompleted('completed'),
+      ]);
+      expect(tokens).toMatchObject([{ input: 150, output: 15 }]);
+    });
+
     test('a v2 subagent’s own turns do not hold the node open', async () => {
       const tokens = await tokensOf([
         itemStarted(subAgentActivity('started')),
