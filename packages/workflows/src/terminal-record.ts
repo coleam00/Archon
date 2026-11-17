@@ -198,6 +198,7 @@ function foldNodeRecord(
             node_id: nodeId,
             state: 'failed',
             ...(typeof data.error === 'string' ? { error: data.error } : {}),
+            ...(data.failure_kind !== undefined ? { failure_kind: data.failure_kind } : {}),
           },
           data.fan_out_outcome
         )

@@ -19,7 +19,8 @@ export const stepRetryConfigSchema = z.object({
   /**
    * Which failures trigger a retry, as a ladder. Default: 'transient', the transient,
    * rate-limit and capacity classes. 'schema_unmet' adds a final output that did not meet
-   * its schema. 'all' adds `unknown` too. Fatal failures are never retried.
+   * its schema; it targets that class without retrying `unknown`, not that class only.
+   * 'all' adds `unknown` too. Fatal failures are never retried.
    */
   on_error: z.enum(['transient', 'schema_unmet', 'all']).optional(),
 });

@@ -9042,6 +9042,21 @@ export interface components {
             state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
             error?: string;
             /** @enum {string} */
+            failure_kind?:
+              | 'fatal'
+              | 'transient'
+              | 'unknown'
+              | 'rate_limited'
+              | 'overloaded'
+              | 'timeout'
+              | 'exec_failed'
+              | 'output_contract'
+              | 'schema_unmet'
+              | 'max_iterations'
+              | 'child_failed'
+              | 'cancelled'
+              | 'config';
+            /** @enum {string} */
             reason?:
               | 'prior_success'
               | 'when_condition'
@@ -9230,6 +9245,21 @@ export interface components {
           state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
           error?: string;
           /** @enum {string} */
+          failure_kind?:
+            | 'fatal'
+            | 'transient'
+            | 'unknown'
+            | 'rate_limited'
+            | 'overloaded'
+            | 'timeout'
+            | 'exec_failed'
+            | 'output_contract'
+            | 'schema_unmet'
+            | 'max_iterations'
+            | 'child_failed'
+            | 'cancelled'
+            | 'config';
+          /** @enum {string} */
           reason?:
             | 'prior_success'
             | 'when_condition'
@@ -9344,6 +9374,21 @@ export interface components {
             /** @enum {string} */
             state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
             error?: string;
+            /** @enum {string} */
+            failure_kind?:
+              | 'fatal'
+              | 'transient'
+              | 'unknown'
+              | 'rate_limited'
+              | 'overloaded'
+              | 'timeout'
+              | 'exec_failed'
+              | 'output_contract'
+              | 'schema_unmet'
+              | 'max_iterations'
+              | 'child_failed'
+              | 'cancelled'
+              | 'config';
             /** @enum {string} */
             reason?:
               | 'prior_success'

@@ -2328,18 +2328,35 @@ describe('workflowGetCommand', () => {
         finishNodeExecution(
           start(iteration),
           text === undefined
-            ? { status: 'failed', error: 'check failed' }
+            ? { status: 'failed', error: 'check failed', failureKind: 'exec_failed' }
             : { status: 'completed' },
           { durationMs: iteration * 1000, ...(text === undefined ? {} : { output: { text } }) }
         )
       );
     const longVerdict = `${'v'.repeat(200)}${'w'.repeat(50)}`;
+    // A top-level node whose output missed its schema, for the Nodes block.
+    const judgeFailed = finishNodeExecution(
+      startNodeExecution({
+        runId: 'run-loop',
+        path: 'judge',
+        node: { id: 'judge', kind: 'agent', source: { kind: 'inline', prompt: 'judge' } },
+        invocation: newNodeInvocation(),
+      }),
+      { status: 'failed', error: 'output missed its schema', failureKind: 'schema_unmet' },
+      { durationMs: 5 }
+    );
     // Rounds 1-3 ended (completed, completed, failed); round 4 is still in `check`.
     const events = [
       roundRow(1, longVerdict),
       roundRow(2, 'second verdict'),
       roundRow(3),
       row(4, start(4)),
+      {
+        ...serializeNodeStateRecord(judgeFailed),
+        id: 'judge-failed',
+        step_index: null,
+        created_at: new Date().toISOString(),
+      },
     ];
     const workflowDb = await import('@archon/core/db/workflows');
     const eventsDb = await import('@archon/core/db/workflow-events');
@@ -2389,6 +2406,10 @@ describe('workflowGetCommand', () => {
     // A round's output is the same capped preview the Nodes block prints.
     expect(rounds.some(line => line.includes(`${'v'.repeat(200)}...`))).toBe(true);
     expect(rounds.some(line => line.includes(`${'v'.repeat(200)}w`))).toBe(false);
+    // A failed node names its recorded kind, the value a `retry.on_error` policy targets.
+    expect(rounds).toContain('          Error:  (exec_failed) check failed');
+    const nodesBlock = calls.slice(calls.indexOf('  Nodes:'), calls.indexOf('  Rounds:'));
+    expect(nodesBlock).toContain('        Error:  (schema_unmet) output missed its schema');
   });
 
   it('reads attribution and observed duration from a terminal row without a start-row join', async () => {

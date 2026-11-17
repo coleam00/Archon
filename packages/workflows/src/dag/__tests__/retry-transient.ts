@@ -725,7 +725,7 @@ export function registerTransientTests() {
       }
     );
 
-    it('on_error: schema_unmet keeps transient retries and does not retry unknown', async () => {
+    it('on_error: schema_unmet is a ladder step: transient still retries, unknown does not', async () => {
       const transient = await attemptsForTypedFailure(
         { class: 'transient', evidence: 'stream reset' },
         undefined,

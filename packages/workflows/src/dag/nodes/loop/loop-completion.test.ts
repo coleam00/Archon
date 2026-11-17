@@ -4,7 +4,11 @@ import { mkdir, writeFile, readFile, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { sessionPreview, type SendQueryOptions } from '@archon/provider-contract';
+import {
+  sessionPreview,
+  type MessageChunk,
+  type SendQueryOptions,
+} from '@archon/provider-contract';
 import { nodeExecutionMetadataSchema } from '../../../schemas/node-execution';
 import {
   createMockStore,
@@ -666,26 +670,40 @@ describe('loop node completion channels', () => {
     expect(recorded?.data?.failure_kind).toBe('schema_unmet');
   });
 
-  it.each([
-    ['engine validation', { done: 'true' }],
-    ['the provider', undefined],
-  ] as const)(
+  it.each<[string, MessageChunk[]]>([
+    [
+      'a payload engine validation rejects',
+      [{ type: 'result', sessionId: 's1', structuredOutput: { done: 'true' } }],
+    ],
+    [
+      'no payload at all',
+      [
+        { type: 'agent_message_chunk', text: 'Done, the task is finished.' },
+        { type: 'result', sessionId: 's1' },
+      ],
+    ],
+    [
+      'the provider reporting schema_unmet',
+      [
+        {
+          type: 'result',
+          isError: true,
+          failure: { class: 'schema_unmet', evidence: 'error_max_structured_output_retries' },
+        },
+      ],
+    ],
+  ])(
     'retries an iteration whose output missed its schema (%s) only under on_error: schema_unmet',
-    async (_source, invalidPayload) => {
-      const firstAttempt = invalidPayload
-        ? { type: 'result', sessionId: 's1', structuredOutput: invalidPayload }
-        : {
-            type: 'result',
-            isError: true,
-            failure: { class: 'schema_unmet', evidence: 'error_max_structured_output_retries' },
-          };
+    async (_source, firstAttempt) => {
       const runLoop = async (onError: 'transient' | 'schema_unmet') => {
         let calls = 0;
         mockSendQueryDag.mockImplementation(async function* () {
           calls++;
-          yield calls === 1
-            ? firstAttempt
-            : { type: 'result', sessionId: 's2', structuredOutput: { done: true } };
+          if (calls === 1) {
+            yield* firstAttempt;
+            return;
+          }
+          yield { type: 'result', sessionId: 's2', structuredOutput: { done: true } };
         });
         const store = createMockStore();
         await executeDagWorkflow(
@@ -724,6 +742,10 @@ describe('loop node completion channels', () => {
       const transientOnly = await runLoop('transient');
       expect(transientOnly.calls).toBe(1);
       expect(transientOnly.store.failWorkflowRun).toHaveBeenCalled();
+      const recorded = persistedEvents(transientOnly.store).find(
+        event => event.event_type === 'node_failed'
+      );
+      expect(recorded?.data?.failure_kind).toBe('schema_unmet');
     }
   );
 
