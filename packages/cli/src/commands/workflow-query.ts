@@ -14,6 +14,8 @@ import {
 import { readItem, readItemOfRun } from '@archon/workflows/item-read';
 import { itemReadLines } from './workflow-item-text';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
+import { describeInstallHold } from '@archon/workflows/schemas/resource-start';
+import { heldStartLine, readHeldStarts } from './workflow-held-starts';
 import { resolveDryRunEnvironment } from './workflow-dry-run';
 import { createCliWorkflowHost } from '../utils/workflow-host';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
@@ -348,6 +350,7 @@ export async function workflowStatusCommand(
   }
 
   const scopeFallback = !opts.all && !codebase;
+  const { hold, heldStarts } = await readHeldStarts(host, codebase?.id);
 
   if (opts.json) {
     if (!opts.verbose) {
@@ -358,6 +361,8 @@ export async function workflowStatusCommand(
           notice: notices.get(run.id) ?? null,
         })),
         scopeFallback,
+        hold,
+        heldStarts,
       });
       return;
     }
@@ -366,12 +371,23 @@ export async function workflowStatusCommand(
     await writeJsonLine({
       runs: runsOutput.map(run => ({ ...run, notice: notices.get(run.id) ?? null })),
       scopeFallback,
+      hold,
+      heldStarts,
     });
     return;
   }
 
   if (scopeFallback) {
     console.log('(not a registered project — showing all runs)');
+  }
+
+  if (hold) {
+    console.log(
+      `New runs are held on this install (${describeInstallHold(hold)}). Running runs continue; lift with: archon hold lift`
+    );
+    console.log(`\nHeld starts (${String(heldStarts.length)}):`);
+    if (heldStarts.length === 0) console.log('  none');
+    for (const start of heldStarts) console.log(heldStartLine(start));
   }
 
   if (runs.length === 0) {

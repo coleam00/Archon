@@ -1,4 +1,5 @@
 import type {
+  HeldPreparation,
   PendingStartBindingInspection,
   QueuedResourceStartInspection,
 } from '@archon/workflows/resource-start-store';
@@ -243,16 +244,19 @@ function bindingRunMetadata(
   };
 }
 
+type PreparationResult = ResourceStartDisposition | HeldPreparation;
+
 /**
  * Freeze one binding's workflow source, inputs and run configuration, then commit it to
- * admission. The capture is kept only when admission keeps a promise to run it.
+ * admission. The capture is kept only when admission keeps a promise to run it: a start
+ * the install hold turned back is prepared again, from a fresh capture, after the lift.
  */
 async function prepareBinding(
   host: WorkflowHost,
   intent: ResourceStartBindingIntent,
   identity: BindingIdentity,
   runConfig: Awaited<ReturnType<typeof loadWorkflowRunConfigFile>> | undefined
-): Promise<ResourceStartDisposition> {
+): Promise<PreparationResult> {
   const cwd = await canonicalizeProjectPath(intent.launch.cwd);
   const sourceRoot = resolve(intent.launch.discoveryCwd ?? cwd);
 
@@ -322,7 +326,7 @@ async function prepareBinding(
       ...(workflow.resource === undefined ? {} : { resource: workflow.resource }),
     });
     if (!disposition) throw new Error('Preparation ownership changed before durable acceptance.');
-    if (disposition.status !== 'skipped') owner.adopt();
+    if (disposition.status === 'admitted' || disposition.status === 'queued') owner.adopt();
     return disposition;
   });
 }
@@ -331,7 +335,7 @@ async function prepareClaimedBinding(
   host: WorkflowHost,
   intent: ResourceStartBindingIntent,
   identity: BindingIdentity
-): Promise<ResourceStartDisposition> {
+): Promise<PreparationResult> {
   let stage: PreparationStage = 'run_as_user';
   try {
     if (!(await host.records.users.getUserById(intent.runAsUserId))) {
@@ -437,7 +441,7 @@ async function preparePendingBinding(
   const { receiptId, bindingId } = binding;
   const identity = { receiptId, bindingId, ownerId: randomUUID() };
   if (!(await host.deps.store.claimStartBindingPreparation(identity))) return;
-  let disposition: ResourceStartDisposition;
+  let disposition: PreparationResult;
   try {
     disposition = await prepareClaimedBinding(host, binding.intent, identity);
   } catch (error) {
@@ -461,6 +465,17 @@ async function startAdmittedRequest(
 }
 
 /**
+ * Whether the install hold is set. A host pass then prepares and drains nothing: its
+ * bindings stay pending and its requests queued until the lift.
+ */
+async function heldPass(host: ResourceStartHost): Promise<boolean> {
+  const hold = await host.deps.store.getInstallHold();
+  // Debug, not info: a server takes a pass every few seconds for as long as the hold lasts.
+  if (hold) log.debug({ hostId: host.hostId, setAt: hold.setAt }, 'resource_start.held');
+  return hold !== null;
+}
+
+/**
  * Prepare every binding of `receiptIds` on this host and start those admitted now, leaving
  * the host's other work to its own drain: what an ending process does for the starts it caused.
  */
@@ -468,23 +483,26 @@ export async function startReceiptBindings(
   host: ResourceStartHost,
   receiptIds: ReadonlySet<string>
 ): Promise<void> {
+  if (await heldPass(host)) return;
   const failures: ResourceStartDrainFailure[] = [];
   await preparePendingBindings(host, failures, [...receiptIds]);
   if (failures.length > 0) throw new ResourceStartDrainError(failures);
 }
 
 /**
- * One host pass: prepare a page of this host's pending receipt bindings, then admit its
- * queued requests while their slots have capacity, handing each admitted one to the host.
- * A damaged receipt is reported after the pass. Safe to run concurrently with other hosts
- * and processes: the store claims preparation and admission atomically.
+ * One host pass: admit this host's queued requests while their slots have capacity, then
+ * prepare a page of its pending receipt bindings, handing each admitted start to the host.
+ * Queued requests go first because a new start yields to an older runnable request of its
+ * host (`resourceStartBlocker`): after an install hold, a held `overlap: skip` binding
+ * would otherwise be dropped behind requests the hold left undrained. A damaged receipt is
+ * reported after the pass. Safe to run concurrently with other hosts and processes: the
+ * store claims preparation and admission atomically.
  */
 export async function drainResourceStartHost(host: ResourceStartHost): Promise<void> {
+  if (await heldPass(host)) return;
   const failures: ResourceStartDrainFailure[] = [];
   const start = (requestId: string, receiptId?: string): Promise<void> =>
     startAdmittedRequest(host, failures, requestId, receiptId);
-
-  await preparePendingBindings(host, failures);
 
   const queued = await host.deps.store.listQueuedResourceStartsForHost(host.hostId);
   const drain = async (resource: string): Promise<void> => {
@@ -516,6 +534,8 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
     }
   };
   for (const resource of queuedDrainResources(queued, failures)) await drain(resource);
+
+  await preparePendingBindings(host, failures);
 
   if (failures.length > 0) {
     throw new ResourceStartDrainError(failures);

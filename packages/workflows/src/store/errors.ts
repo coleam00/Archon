@@ -1,4 +1,5 @@
 import type { ResourceBlocker } from '../resource-start-store';
+import { describeInstallHold, type InstallHold } from '../schemas/resource-start';
 
 /** Only a zero-row pause CAS produces this error; storage failures must propagate. */
 export class WorkflowRunPauseConflictError extends Error {
@@ -66,5 +67,17 @@ export class WorkflowItemHeldError extends Error {
   ) {
     super(`Item '${itemKey}' is held by run ${holderRunId} of workflow '${workflow}'.`);
     this.name = 'WorkflowItemHeldError';
+  }
+}
+
+/**
+ * The install hold is set, so admission admits no new run. Thrown by `admitPendingRun` and
+ * by `claimPendingWorkflowRun` for a top-level run nothing admitted; nothing was written.
+ * A hand start that gets it waits and asks again, or is refused under `--no-wait`.
+ */
+export class InstallHeldError extends Error {
+  constructor(public readonly hold: InstallHold) {
+    super(`New runs are held on this install (${describeInstallHold(hold)}).`);
+    this.name = 'InstallHeldError';
   }
 }

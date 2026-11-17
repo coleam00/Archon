@@ -57,6 +57,7 @@ import {
 } from './schemas/workflow-run';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import {
+  installHoldSchema,
   queuedItemStartSchema,
   type QueuedItemStart,
   readResourceStartReceiptId,
@@ -162,6 +163,20 @@ export const itemSkippedStartSchema = z.object({
 export type ItemSkippedStart = z.infer<typeof itemSkippedStartSchema>;
 
 /**
+ * A start on the item that the install hold keeps from admission: a trigger's binding,
+ * not yet prepared, so it has no request or run. After the lift it is prepared and
+ * admitted, queued or skipped by its binding's `overlap`. `workflow` is null when the
+ * stored binding does not read.
+ */
+export const itemHeldStartSchema = z.object({
+  receiptId: z.string(),
+  bindingId: z.string(),
+  workflow: z.string().nullable(),
+  receivedAt: z.string(),
+});
+export type ItemHeldStart = z.infer<typeof itemHeldStartSchema>;
+
+/**
  * Where an answer was recorded. A field the event row does not carry is null, so an older
  * row still reads as an answer with its run, node and time.
  */
@@ -257,6 +272,8 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * whole run tree, because a question is often asked inside a child; each names the run
  * that holds it. `queued` are the item's starts still waiting, which have no run yet;
  * `archon trigger withdraw <requestId>` withdraws one. `skipped` are its refused starts.
+ * `hold` is the install hold while it is set, else null; `held` are the item's starts it
+ * keeps that are not yet `queued`, empty while no hold is set.
  * `degraded` names each part that could not be read: one of the item's own runs, a paused
  * run the queue could not read (`run_unreadable`, by `runId`), a ruling
  * (`ruling_unreadable`, by `rulingId`), a link (`link_unreadable`, by `linkId`), or the
@@ -269,6 +286,8 @@ export const itemReadSchema = z.object({
   runs: z.array(itemRunSchema),
   queued: z.array(itemQueuedStartSchema),
   skipped: z.array(itemSkippedStartSchema),
+  hold: installHoldSchema.nullable(),
+  held: z.array(itemHeldStartSchema),
   questions: z.array(attentionQueueItemSchema),
   answers: z.array(itemAnswerSchema),
   links: z.array(itemReadLinkSchema),
@@ -298,6 +317,8 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'getResourceStartRequest'
       | 'listQueuedItemStarts'
       | 'listSkippedItemStarts'
+      | 'getInstallHold'
+      | 'listHeldItemStarts'
     >;
 }
 
@@ -642,6 +663,7 @@ export async function assembleItemRead(
       resource: start.resource,
       heldBehind: (await holds.skippedHeldBehind(start)) ?? null,
     });
+  const hold = await source.store.getInstallHold();
   return {
     item: found.item,
     runs: await Promise.all(
@@ -657,6 +679,8 @@ export async function assembleItemRead(
     ),
     queued,
     skipped,
+    hold,
+    held: hold ? await source.store.listHeldItemStarts(found.item.id) : [],
     questions,
     answers,
     links: facts.links,

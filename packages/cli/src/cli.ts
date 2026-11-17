@@ -392,6 +392,7 @@ const NO_GIT_COMMANDS = [
   'state',
   'metrics',
   'trigger',
+  'hold',
   'version',
   'help',
   'setup',
@@ -485,6 +486,8 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
       return await routes.runMetrics(ctx);
     case 'trigger':
       return await routes.runTrigger(ctx);
+    case 'hold':
+      return await routes.runHold(ctx);
     case 'version':
       return await routes.runVersion();
     case 'help':

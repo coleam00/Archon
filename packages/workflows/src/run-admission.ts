@@ -30,13 +30,13 @@ import type { CheckoutSharedEventData } from './schemas/workflow-event';
 import { ContinuedItemProjectError, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { refusePendingStart } from './start-refusal';
-import { holdWorkflowResource, itemHold, waitForTurn } from './resource-hold';
+import { holdWorkflowResource, installHold, itemHold, waitForTurn } from './resource-hold';
 import {
   refuseResultInputsWithoutItem,
   resolveResultInputs,
   unsuppliedResultInputs,
 } from './run-result';
-import { WorkflowItemHeldError } from './store/errors';
+import { InstallHeldError, WorkflowItemHeldError } from './store/errors';
 import { workflowPathPriorityTime } from './workflow-path-lock';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -290,7 +290,8 @@ async function refuseRunBeforeClaim(
 /**
  * Take the workflow's resource slot, win execution ownership of a pending row, then sample
  * the checkout the run starts from. While another run of the workflow holds the run's item,
- * the claim waits for it like a full resource, or is refused under `noWait`.
+ * or the install hold is set, the claim waits for it like a full resource, or is refused
+ * under `noWait`.
  */
 async function claimPendingRun(
   deps: WorkflowDeps,
@@ -333,6 +334,7 @@ async function claimPendingRun(
       } catch (error) {
         if (error instanceof WorkflowItemHeldError)
           return { held: itemHold(error.itemKey, error.holderRunId, error.workflow) };
+        if (error instanceof InstallHeldError) return { held: installHold(error.hold) };
         claim.error = error;
       }
       return { done: undefined };

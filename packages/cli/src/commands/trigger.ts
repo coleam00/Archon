@@ -29,8 +29,10 @@ import {
   awaitingExecution,
   SourceReceiptDigestConflictError,
   type AwaitingExecution,
+  type StartBindingInspection,
 } from '@archon/workflows/resource-start-store';
 import {
+  describeInstallHold,
   mappedItemKey,
   resourceStartBindingIntentSchema,
   RUN_SOURCE_ACTOR,
@@ -92,7 +94,7 @@ async function assertKnownRunAsUser(host: WorkflowHost, config: TriggerConfig): 
  * the text is redacted with the same policy as subprocess output before it is shown.
  * Flattens the nested `AggregateError`s the drain builds, which carry no reason of their own.
  */
-function drainFailureReasons(errors: readonly unknown[]): string {
+export function drainFailureReasons(errors: readonly unknown[]): string {
   const messages = (error: unknown): string[] =>
     error instanceof AggregateError
       ? error.errors.flatMap(messages)
@@ -104,7 +106,7 @@ function drainFailureReasons(errors: readonly unknown[]): string {
     .join('; ');
 }
 
-function drainHost(
+export function drainHost(
   host: WorkflowHost,
   hostId: string,
   dispatch: (requestId: string, hostId: string) => Promise<void>
@@ -128,7 +130,7 @@ type TriggerOptions = {
   noItem?: boolean;
 };
 
-type TriggerDispatch = (requestId: string, hostId: string) => Promise<void>;
+export type TriggerDispatch = (requestId: string, hostId: string) => Promise<void>;
 
 async function triggerWhoami(host: WorkflowHost): Promise<void> {
   const cliId = resolveCliUserId();
@@ -143,26 +145,40 @@ async function triggerWhoami(host: WorkflowHost): Promise<void> {
  * Each receipt, with `awaitingExecution`: its starts that are admitted but whose run no
  * executor has claimed. One stays there when the process that admitted it died before it
  * spawned the executor; `archon trigger execute <requestId> --host <hostId>` runs it once.
+ * `hold` is the install hold when the receipt has a start it keeps (a binding not yet
+ * prepared, or a queued request), else null.
  */
 async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise<void> {
   const receipts = await host.deps.store.listStartReceipts(
     options.limit === undefined ? undefined : Number(options.limit)
   );
+  const hold = await host.deps.store.getInstallHold();
   await writeJsonLine(
     await Promise.all(
-      receipts.map(async receipt => ({
-        ...receipt,
-        awaitingExecution: await receiptAwaitingExecution(host, receipt.id),
-      }))
+      receipts.map(async receipt => {
+        const bindings = (await host.deps.store.getStartReceipt(receipt.id))?.bindings ?? [];
+        return {
+          ...receipt,
+          awaitingExecution: await receiptAwaitingExecution(host, bindings),
+          hold: hold && bindings.some(heldBinding) ? hold : null,
+        };
+      })
     )
+  );
+}
+
+function heldBinding(binding: StartBindingInspection): boolean {
+  return (
+    binding.status === 'pending' ||
+    binding.status === 'failed' ||
+    binding.requestStatus === 'queued'
   );
 }
 
 async function receiptAwaitingExecution(
   host: WorkflowHost,
-  receiptId: string
+  bindings: readonly StartBindingInspection[]
 ): Promise<AwaitingExecution[]> {
-  const bindings = (await host.deps.store.getStartReceipt(receiptId))?.bindings ?? [];
   const awaiting: AwaitingExecution[] = [];
   for (const binding of bindings) {
     if (binding.requestStatus !== 'admitted' || !binding.disposition) continue;
@@ -343,7 +359,20 @@ async function triggerFire(
       throw error;
     });
   await drainReceipt(host, receipt.receiptId, dispatch);
-  await writeJsonLine(await host.deps.store.getStartReceipt(receipt.receiptId));
+  await writeFiredReceipt(host, receipt.receiptId);
+}
+
+/** The fired receipt, with the install hold when it keeps one of the receipt's starts. */
+async function writeFiredReceipt(host: WorkflowHost, receiptId: string): Promise<void> {
+  const retained = await host.deps.store.getStartReceipt(receiptId);
+  const hold = await host.deps.store.getInstallHold();
+  // A replayed delivery admitted before the hold has nothing held.
+  const held = hold && retained?.bindings.some(heldBinding) ? hold : null;
+  if (held)
+    process.stderr.write(
+      `New runs are held on this install (${describeInstallHold(held)}); this start waits until the hold is lifted.\n`
+    );
+  await writeJsonLine(retained && { ...retained, hold: held });
 }
 
 async function drainReceipt(

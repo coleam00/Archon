@@ -726,6 +726,28 @@ An included workflow runs inside its parent's run and takes no slot of its own. 
 
 A hand start of a workflow that declares a resource waits for its item the same way. While another run of the workflow holds the item, the slot is not given to it even when one is free, and it prints `Waiting for item '<key>'` instead of the resource.
 
+## Hold all new starts on an install
+
+To stop new work from starting without cancelling anything, for maintenance, a restart, a full disk, a spending limit or a machine you need for something else, set the install hold:
+
+```bash
+archon hold set    # nothing new starts
+archon hold lift   # start what was held
+```
+
+The hold is a fact of the install's database: every process that uses it sees it, it survives restarts, and only `archon hold lift` removes it. While it is set, no new run is admitted from any source, and nothing that would have started is lost:
+
+- **Timers, `trigger fire`, webhooks and polls.** The receipt is recorded as usual, but its binding is not prepared. It stays pending, so no source is captured and no request is admitted, queued or skipped.
+- **Run-ended and asks-settled hand-offs.** A run that ends while the hold is set finishes normally and writes the start it owes; that start stays pending like a fired one. The same holds for a settlement of asks.
+- **Queued requests.** Requests already waiting for capacity, their item or their checkout keep their places and are not admitted.
+- **Hand starts** (`archon workflow run`, chat, Web or API). The start creates its `pending` run and waits in its own process, printing `Waiting for the install hold`, then starts after the lift. `--no-wait` refuses it instead. A waiting start dies with its process, as one waiting for a full resource does.
+
+Runs already running or paused are not touched: they finish, pause at their gates and waits, resume and take answers as usual. A run admitted before the hold, and a `workflow:` child of a running run, still start.
+
+`archon workflow status`, `archon trigger list`, the `trigger fire` output and `archon workflow runs --item <key>` say that the hold is set, who set it and when, and which starts it keeps; with `--json` they carry `hold` and the held starts ([CLI reference](/reference/cli/#hold)).
+
+`archon hold lift` drains each host that has held starts. Held bindings are prepared in the order they arrived, with the workflow source and run configuration as they are at the lift, and then admitted, queued or skipped by their `overlap` as at any other time. An `overlap: skip` start is therefore skipped only if capacity, its item or its checkout blocks it after the lift, never because of the hold. Requests that were already queued go first, so the held starts do not jump them. Each start is admitted at most once. A frequent timer on an `overlap: queue` binding builds up one start per tick during a long hold; withdraw the ones you do not want with `archon trigger withdraw` after they queue. Every process on the install must run a version that knows the hold: an older one does not read it.
+
 ## Configure GitHub event starts
 
 Every webhook route (`/webhooks/github`, `/webhooks/gitea`, and `/webhooks/sources/:sourceInstanceId`) accepts bodies up to **32 MiB (33,554,432 bytes)**, inclusive. A larger body receives HTTP **413** before its signature is checked, including a streamed delivery without `Content-Length`. Archon stops reading at the limit and creates no receipt or workflow start. Other API routes do not have this limit.

@@ -10,10 +10,12 @@ import {
 } from '@archon/workflows/resource-start-store';
 import {
   preparedWorkflowLaunchSchema,
+  type InstallHold,
   type PreparedWorkflowLaunch,
 } from '@archon/workflows/schemas/resource-start';
 import { itemHolder, itemHolders, type ItemRunRow } from '@archon/workflows/item-hold';
-import { WorkflowItemHeldError } from '@archon/workflows/store';
+import { InstallHeldError, WorkflowItemHeldError } from '@archon/workflows/store';
+import { toHydratedTimestamp } from './timestamps';
 /**
  * Keyed resource slots: a durable counting lock with typed holders.
  *
@@ -134,6 +136,45 @@ export async function heldItemRefusal(
   return holder === undefined
     ? undefined
     : new WorkflowItemHeldError(runId, holder, run.workflow_name, run.key);
+}
+
+// One hold per install. The key leaves room for a scoped hold without a table change.
+export const INSTALL_HOLD_ID = 'install';
+
+interface InstallHoldRow {
+  set_by: string;
+  set_at: string | Date;
+}
+
+export async function readInstallHold(query: TransactionQuery): Promise<InstallHold | null> {
+  const row = (
+    await query<InstallHoldRow>(
+      'SELECT set_by, set_at FROM remote_agent_install_hold WHERE id = $1',
+      [INSTALL_HOLD_ID]
+    )
+  ).rows[0];
+  return row ? { setBy: row.set_by, setAt: toHydratedTimestamp(row.set_at).toISOString() } : null;
+}
+
+/**
+ * The refusal for claiming pending run `runId` while the hold is set, when nothing admitted
+ * the run: a top-level run with no start request. A run admitted before the hold, and a
+ * child of a running parent, are not new work and are never held.
+ */
+export async function installHoldRefusal(
+  query: TransactionQuery,
+  runId: string
+): Promise<InstallHeldError | undefined> {
+  const unadmitted = await query(
+    `SELECT 1 FROM remote_agent_workflow_runs w
+      WHERE w.id = $1 AND w.status = 'pending' AND w.parent_run_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = w.id)`,
+    [runId]
+  );
+  if (unadmitted.rows.length === 0) return undefined;
+  await lockAdmission(query);
+  const hold = await readInstallHold(query);
+  return hold ? new InstallHeldError(hold) : undefined;
 }
 
 /**
