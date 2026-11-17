@@ -114,9 +114,23 @@ export async function observeReturnsCheckout(
   if (held?.nodeId !== nodeId || ctx.stepNamePrefix !== '' || output.state !== 'completed') return;
   held.observed = [...(mayRun ?? [])].some(id => id !== nodeId)
     ? { concurrent: true }
-    : await observeCheckout(ctx.cwd, ctx.execContext);
+    : await observeReturns(ctx.cwd, ctx.execContext);
 }
 
+/**
+ * The mark is read before the sample here and after it at completion, so the two marks
+ * bracket both samples: a move between this sample and its mark cannot hide inside the
+ * window the marks compare.
+ */
+async function observeReturns(
+  cwd: string,
+  execContext: ExecutionContext
+): Promise<{ sample: CheckoutSample; mark: string | null }> {
+  const mark = await readCheckoutMark(cwd, execContext);
+  return { sample: await sampleCheckout(cwd, execContext), mark };
+}
+
+/** The completion observation: sample, then mark, closing the window `observeReturns` opened. */
 async function observeCheckout(
   cwd: string,
   execContext: ExecutionContext

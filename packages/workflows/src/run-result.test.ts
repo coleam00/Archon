@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, realpathSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { readCheckoutMark } from './checkout-mark';
+import { REPOSITORY_SELECTORS } from './checkout-observation';
 import {
   latestResultsOnItem,
   observeReturnsCheckout,
@@ -80,10 +81,10 @@ test('a reader whose checkout is at no commit reads no result, even from a run t
 const trackTempRoot = trackTempRoots();
 const host = { kind: 'host' } as const;
 
+// The production reader's own selector list: an inherited one would point the test's
+// commits at another repository while the reader reads this one.
 const gitEnv = Object.fromEntries(
-  Object.entries(process.env).filter(
-    ([key]) => !['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE'].includes(key)
-  )
+  Object.entries(process.env).filter(([key]) => !REPOSITORY_SELECTORS.has(key))
 );
 
 /** A scratch repository with commit X. */
@@ -191,5 +192,48 @@ test('a result holds at no commit when its branch keeps no log, before or after 
   for (const mutatesCheckout of [false, true]) {
     const { held } = await resultAfterExcursion(mutatesCheckout, 'unlogged-branch');
     expect(held).toEqual({ held: false, reason: 'unobserved' });
+  }
+});
+
+test('a result holds at no commit when its checkout moved and came back while the returns node was observed', async () => {
+  const { cwd, git } = scratchRepo();
+  const x = git('rev-parse', 'HEAD');
+  git('commit', '-q', '--allow-empty', '-m', 'Y');
+  const y = git('rev-parse', 'HEAD');
+  git('checkout', '-q', '--detach', x);
+  // A git on PATH that, once, moves the checkout X→Y→X right after `git status` answered
+  // for the returns sample: inside the observation, between its sample and its mark.
+  const realGit = Bun.which('git');
+  const bin = trackTempRoot(realpathSync(mkdtempSync(join(tmpdir(), 'archon-git-wrapper-'))));
+  const trigger = join(bin, 'trigger');
+  writeFileSync(
+    join(bin, 'git'),
+    `#!/bin/sh
+case " $* " in *" status "*) if [ -e '${trigger}' ]; then rm -f '${trigger}'; '${realGit}' "$@"; s=$?; '${realGit}' checkout -q --detach ${y}; '${realGit}' checkout -q --detach ${x}; exit $s; fi;; esac
+exec '${realGit}' "$@"
+`,
+    { mode: 0o755 }
+  );
+  const run = {
+    cwd,
+    execContext: host,
+    returnsCheckout: { nodeId: 'judge' } satisfies ReturnsCheckout,
+    workflow: { mutates_checkout: undefined },
+    workflowRun: { checkout_baseline: null },
+  };
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path ?? ''}`;
+  try {
+    writeFileSync(trigger, '');
+    await observeReturnsCheckout(
+      { ...run, stepNamePrefix: '' },
+      'judge',
+      { state: 'completed' },
+      undefined
+    );
+    expect(existsSync(trigger)).toBe(false);
+    expect(await sampleResultCommit(run, 'run-1')).toEqual({ held: false, reason: 'moved' });
+  } finally {
+    process.env.PATH = path;
   }
 });

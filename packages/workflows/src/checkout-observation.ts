@@ -42,7 +42,7 @@ interface GitResult {
   stdout: Buffer;
 }
 
-const REPOSITORY_SELECTORS = new Set([
+export const REPOSITORY_SELECTORS: ReadonlySet<string> = new Set([
   'GIT_DIR',
   'GIT_WORK_TREE',
   'GIT_INDEX_FILE',
