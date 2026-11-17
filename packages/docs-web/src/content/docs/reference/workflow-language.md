@@ -1799,6 +1799,13 @@ inputs:
     count;
   - a later node of the run moved the checkout to another commit after the `returns:` node
     completed, so the result is not taken to be about a commit it never judged;
+  - another node of the same layer ran beside the `returns:` node. It may have moved the
+    checkout while the `returns:` node judged, and the engine cannot tell that commit from one
+    the node made itself. A sibling skipped by its `when:`, or a layer that runs one node at a
+    time, does not count. Give a commit-bound `returns:` node its own layer;
+  - the workflow declares `mutates_checkout: false` and the commit is not the one the run
+    started on. Such a run takes no path lock, so another run can commit in its checkout while
+    it judges; it never commits itself, so any other commit came from elsewhere;
   - the run is outside a git repository, on a commit-less branch, or on a backend the engine
     cannot read from (a container);
   - no `returns:` node completed in the pass that completed the run: none is declared, or a
@@ -1835,13 +1842,13 @@ nodes:
       import { emit, item } from 'archon:script';
       const approval = JSON.parse(process.env.INPUTS_APPROVAL ?? 'null');
       if (approval === null) {
-        // Say where the latest review holds, and do not merge.
+        // Say where the latest review holds, whatever it returned, and do not merge.
         const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
         const reviews = (item()?.runs ?? []).filter(
           run => run.workflow === 'review' && run.status === 'completed'
         );
         const at = reviews.at(-1)?.resultCommit ?? 'no commit';
-        emit({ merge: null, message: `approved at ${at}, the change is now at ${head}` });
+        emit({ merge: null, message: `the latest review holds at ${at}, the change is now at ${head}` });
       } else if (approval.result.verdict !== 'approve') {
         emit({ merge: null, message: `review at ${approval.commit} returned ${approval.result.verdict}` });
       } else {

@@ -76,16 +76,22 @@ export function resultCommitFromSample(sample: CheckoutSample): ResultCommit {
   }
 }
 
-/** The top-level `returns:` node, and the checkout sampled when it completed. */
+/**
+ * The top-level `returns:` node, and what was observed when it completed: the checkout,
+ * or that it ran beside other nodes, so the checkout it ended on may not be its own.
+ */
 export interface ReturnsCheckout {
   nodeId: string;
-  sample?: CheckoutSample;
+  observed?: { sample: CheckoutSample } | { concurrent: true };
 }
 
 /**
  * Sample the checkout the moment the top-level `returns:` node completes: the checkout its
  * result was given at. A node of a loop body or fan-out instance (a non-empty step prefix)
- * is never the run's `returns:` node.
+ * is never the run's `returns:` node, and a node replayed from an earlier pass is never
+ * sampled: its checkout then is not observed. When another node of its concurrent phase
+ * was `dispatched` too, it is not sampled either: that sibling may have moved the checkout
+ * while it judged, and the engine cannot tell that commit from one the node made itself.
  */
 export async function observeReturnsCheckout(
   ctx: {
@@ -95,11 +101,14 @@ export async function observeReturnsCheckout(
     execContext: ExecutionContext;
   },
   nodeId: string,
-  output: { state: string }
+  output: { state: string },
+  dispatched: ReadonlySet<string> | undefined
 ): Promise<void> {
   const held = ctx.returnsCheckout;
   if (held?.nodeId !== nodeId || ctx.stepNamePrefix !== '' || output.state !== 'completed') return;
-  held.sample = await sampleCheckout(ctx.cwd, ctx.execContext);
+  held.observed = [...(dispatched ?? [])].some(id => id !== nodeId)
+    ? { concurrent: true }
+    : { sample: await sampleCheckout(ctx.cwd, ctx.execContext) };
 }
 
 /**
@@ -110,14 +119,22 @@ export async function observeReturnsCheckout(
  * never throws; a checkout it cannot read holds at no commit.
  */
 export async function sampleResultCommit(
-  run: { cwd: string; execContext: ExecutionContext; returnsCheckout?: ReturnsCheckout },
+  run: {
+    cwd: string;
+    execContext: ExecutionContext;
+    returnsCheckout?: ReturnsCheckout;
+    workflow: Pick<ResolvedWorkflow, 'mutates_checkout'>;
+    workflowRun: Pick<WorkflowRun, 'checkout_baseline'>;
+  },
   workflowRunId: string
 ): Promise<ResultCommit> {
-  const resultCommit = await heldThroughCompletion(
+  const given = await heldThroughCompletion(
     run.cwd,
     run.execContext,
-    run.returnsCheckout?.sample
+    run.returnsCheckout?.observed
   );
+  const resultCommit =
+    run.workflow.mutates_checkout === false ? heldSinceStart(given, run.workflowRun) : given;
   if (!resultCommit.held)
     getLog().info(
       { workflowRunId, reason: resultCommit.reason },
@@ -126,13 +143,29 @@ export async function sampleResultCommit(
   return resultCommit;
 }
 
+/**
+ * A run that declares `mutates_checkout: false` holds no path lock, so another run can
+ * commit in its checkout while it judges. It never commits itself, so its result holds only
+ * at the commit it started on: any other commit came from elsewhere.
+ */
+function heldSinceStart(
+  given: ResultCommit,
+  run: Pick<WorkflowRun, 'checkout_baseline'>
+): ResultCommit {
+  if (!given.held) return given;
+  const start = run.checkout_baseline;
+  if (start?.kind !== 'git') return { held: false, reason: 'unobserved' };
+  return start.commit === given.commit ? given : { held: false, reason: 'moved' };
+}
+
 async function heldThroughCompletion(
   cwd: string,
   execContext: ExecutionContext,
-  atReturns: CheckoutSample | undefined
+  atReturns: ReturnsCheckout['observed']
 ): Promise<ResultCommit> {
   if (atReturns === undefined) return { held: false, reason: 'unobserved' };
-  const given = resultCommitFromSample(atReturns);
+  if ('concurrent' in atReturns) return { held: false, reason: 'concurrent' };
+  const given = resultCommitFromSample(atReturns.sample);
   if (!given.held) return given;
   const end = resultCommitFromSample(await sampleCheckout(cwd, execContext));
   if (!end.held) return end;
