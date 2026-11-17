@@ -195,6 +195,9 @@ function createMockStore(): IWorkflowStore {
     withdrawItemRuling: mock<IWorkflowStore['withdrawItemRuling']>(async () => {
       throw new Error('Not used by this test');
     }),
+    listItemsInWindow: mock<IWorkflowStore['listItemsInWindow']>(async () => []),
+    getItemMerge: mock<IWorkflowStore['getItemMerge']>(async () => null),
+    recordItemMerge: mock<IWorkflowStore['recordItemMerge']>(async () => null),
     listItemLinks: mock<IWorkflowStore['listItemLinks']>(async () => []),
     recordItemLink: mock<IWorkflowStore['recordItemLink']>(async () => {
       throw new Error('Not used by this test');
