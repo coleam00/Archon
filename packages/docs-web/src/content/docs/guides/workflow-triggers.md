@@ -611,14 +611,16 @@ The start is refused, naming why:
 
 `archon trigger check`, and the check a run gets before it starts, report a binding whose asking or started workflow pins `worktree.enabled: false`. `archon trigger fire` refuses a file with `checkout`, because a fire has no asking run.
 
-To start a refused stage by hand, pass what the binding would have passed. `--adopt` carries the asking run's checkout, not its answers or inputs, and a stage started without its answers runs without the decisions. Read the answers from `archon workflow runs --item <key> --json` (the `answers` entries of kind `ask` whose `runId` is the asking run) and the asking run's inputs from `archon workflow get <run-id> --json`, then give each input the binding maps with `--input`:
+To start a refused stage by hand, adopt the run that holds the checkout, not necessarily the asking run. It is `metadata.asks_checkout.handoff.runId` in `archon workflow get <asking-run-id> --json`: the asking run itself, or, for an asking stage with `mutates_checkout: false`, the run whose checkout it was given. The read-only stage's own copy is throwaway, and adopting it is refused once it is cleaned up, as for [a read-only check](#work-in-the-checkout-the-ended-run-left). When the answer that settled the set prints the stage as not started, it names that run in the command it prints.
+
+Pass what the binding would have passed, too. `--adopt` carries the checkout, not the answers or inputs, and a stage started without its answers runs without the decisions. Read the answers from `archon workflow runs --item <key> --json` (the `answers` entries of kind `ask` whose `runId` is the asking run) and the asking run's inputs from `archon workflow get <asking-run-id> --json`, then give each input the binding maps with `--input`:
 
 ```bash
-archon workflow run build --adopt <asking-run-id> --item <key> \
+archon workflow run build --adopt <holder-run-id> --item <key> \
   --input decisions="$(cat decisions.json)" --input plan="<the asking run's plan>"
 ```
 
-When the worktree or branch is gone, or the branch moved, run the asking workflow again on the item instead: adoption continues the branch as it is now and does not check the commit.
+When `asks_checkout` records a refusal or nothing, or the worktree or branch is gone, or the branch moved, run the asking workflow again on the item instead: adoption continues the branch as it is now and does not check the commit.
 
 ### Who prepares the start
 
