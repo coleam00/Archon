@@ -1041,12 +1041,46 @@ describe('CodexProvider', () => {
         otherTurn('started', 'v1-grandchild', 'g1-turn'),
         otherTurn('completed', 'v1-grandchild', 'g1-turn'),
         tokenUsage({ input: 30, output: 3 }, undefined, 'g2-turn', 'v2-grandchild'),
+        childItem(subAgentActivity('completed', 'v2-grandchild')),
         itemStarted(subAgentActivity('started')),
         itemCompleted(subAgentActivity('completed')),
         tokenUsage({ input: 100, output: 10 }),
         turnCompleted('completed'),
       ]);
       expect(tokens).toMatchObject([{ input: 150, output: 15 }]);
+    });
+
+    // The grandchild outlives its ancestors; its start reaches Archon after or before its parent's.
+    test('a v2 grandchild counts its later usage whether its start precedes its parent', async () => {
+      const childItem = (item: ThreadItem): ServerNotification =>
+        itemCompleted(item, 'child-thread', 'child-turn');
+      const grandchildStart = [
+        childItem(subAgentActivity('started', 'grandchild')),
+        tokenUsage({ input: 20, output: 2 }, undefined, 'g-turn', 'grandchild'),
+      ];
+      const child = [itemStarted(subAgentActivity('started'))];
+      const rest = [
+        itemCompleted(subAgentActivity('completed')),
+        tokenUsage({ input: 100, output: 10 }),
+        turnCompleted('completed'),
+        tokenUsage({ input: 50, output: 5 }, { input: 30, output: 3 }, 'g-turn', 'grandchild'),
+        childItem(subAgentActivity('completed', 'grandchild')),
+      ];
+      const sums: number[][] = [];
+      for (const order of [
+        [...child, ...grandchildStart, ...rest],
+        [...grandchildStart, ...child, ...rest],
+      ]) {
+        const tokens = (await tokensOf(order)) as { input: number; output: number }[];
+        sums.push([
+          tokens.reduce((sum, t) => sum + t.input, 0),
+          tokens.reduce((sum, t) => sum + t.output, 0),
+        ]);
+      }
+      expect(sums).toEqual([
+        [150, 15],
+        [150, 15],
+      ]);
     });
 
     test('a v2 subagent’s own turns do not hold the node open', async () => {

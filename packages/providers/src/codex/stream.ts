@@ -401,21 +401,33 @@ export async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageC
 }
 
 /**
- * Another thread's turns and usage, and the v1 spawns it made, kept from its first notification.
- * One thread's notifications arrive in order; across threads Codex gives no order.
+ * Another thread's turns, kept from its first notification, and its items and usage, held until
+ * a spawn makes it a subagent and then observed in order. One thread's notifications arrive in
+ * order; across threads Codex gives no order.
  */
 interface OtherThread {
   readonly runningTurns: Set<string>;
   turnCompleted: boolean;
-  usageSpan: UsageSpan | undefined;
-  /** Threads it spawned, by Codex's v1 tool or by v2 (`v1: false`). */
-  readonly spawned: { threadId: string; v1: boolean }[];
+  readonly held: HeldNotification[];
+}
+
+type HeldNotification = Extract<
+  ServerNotification,
+  { method: 'item/started' | 'item/completed' | 'thread/tokenUsage/updated' }
+>;
+
+/** Holds a notification from a thread that is neither the parent nor a known subagent. */
+function heldForLater(ids: TurnIds, observation: TurnObservation, n: HeldNotification): boolean {
+  const { threadId } = n.params;
+  if (threadId === ids.threadId || observation.agentThreads.has(threadId)) return false;
+  otherThreadOf(observation, threadId).held.push(n);
+  return true;
 }
 
 function otherThreadOf(observation: TurnObservation, threadId: string): OtherThread {
   let thread = observation.otherThreads.get(threadId);
   if (!thread) {
-    thread = { runningTurns: new Set(), turnCompleted: false, usageSpan: undefined, spawned: [] };
+    thread = { runningTurns: new Set(), turnCompleted: false, held: [] };
     observation.otherThreads.set(threadId, thread);
   }
   return thread;
@@ -569,6 +581,7 @@ async function* observeNotification(
       return;
 
     case 'thread/tokenUsage/updated':
+      if (heldForLater(ids, observation, notification)) return;
       observeTokenUsage(request, ids, observation, notification.params);
       return;
 
@@ -578,6 +591,7 @@ async function* observeNotification(
 
     case 'item/started':
     case 'item/completed':
+      if (heldForLater(ids, observation, notification)) return;
       yield* observeItem(
         ids,
         observation,
@@ -635,11 +649,14 @@ function observeTokenUsage(
     observation.usageSpan = extendedSpan(observation.usageSpan, params.tokenUsage);
     return;
   }
-  if (!observation.agentThreads.has(params.threadId)) {
-    const thread = otherThreadOf(observation, params.threadId);
-    thread.usageSpan = extendedSpan(thread.usageSpan, params.tokenUsage);
-    return;
-  }
+  observeSubagentUsage(observation, params);
+}
+
+function observeSubagentUsage(
+  observation: TurnObservation,
+  params: NotificationParams<'thread/tokenUsage/updated'>
+): void {
+  if (!observation.agentThreads.has(params.threadId)) return;
   const span = observation.agentUsageSpans.get(params.threadId);
   observation.agentUsageSpans.set(params.threadId, extendedSpan(span, params.tokenUsage));
 }
@@ -680,15 +697,15 @@ function* observeItem(
   completed: boolean
 ): Generator<MessageChunk> {
   const parentItem = itemThreadId === ids.threadId && itemTurnId === ids.turnId;
-  observeSpawn(ids, observation, item, completed, { itemThreadId, itemTurnId });
   if (!parentItem && !observation.agentThreads.has(itemThreadId)) return;
+  yield* observeV1Spawn(ids, observation, item, completed);
   // Unified exec is a process lifecycle, not a foreground tool call: its end may
   // arrive after the result, which closes foreground tool calls in the contract.
   if (
     item.type === 'subAgentActivity' ||
     (item.type === 'commandExecution' && item.source === 'unifiedExecStartup')
   ) {
-    yield* observeBackgroundItem(observation, item, completed, itemThreadId);
+    yield* observeBackgroundItem(ids, observation, item, completed, itemThreadId);
     return;
   }
   if (!parentItem) return;
@@ -703,55 +720,37 @@ function* observeItem(
   }
 }
 
-/**
- * Codex's v1 spawn tool reports no `subAgentActivity`; its completed item names the thread.
- * A spawn by a thread not yet known as a subagent, by either tool, waits until it is one. A v2
- * spawn by a known thread is registered with its live task in `observeBackgroundItem`.
- */
-function observeSpawn(
+/** Codex's v1 spawn tool reports no `subAgentActivity`; its completed item names the thread. */
+function* observeV1Spawn(
   ids: TurnIds,
   observation: TurnObservation,
   item: ThreadItem,
-  completed: boolean,
-  { itemThreadId: sender, itemTurnId }: { itemThreadId: string; itemTurnId: string }
-): void {
-  const spawn = spawnOf(item, completed);
-  if (!spawn) return;
-  const fromParent = sender === ids.threadId;
-  // The parent thread's items from another turn are not this turn's.
-  if (fromParent && itemTurnId !== ids.turnId) return;
-  const known = fromParent || observation.agentThreads.has(sender);
-  if (!known) {
-    const { spawned } = otherThreadOf(observation, sender);
-    for (const threadId of spawn.threadIds) spawned.push({ threadId, v1: spawn.v1 });
-  } else if (spawn.v1) {
-    for (const threadId of spawn.threadIds) registerSubagent(observation, threadId, true);
+  completed: boolean
+): Generator<MessageChunk> {
+  if (!completed || item.type !== 'collabAgentToolCall' || item.tool !== 'spawnAgent') return;
+  for (const threadId of item.receiverThreadIds) {
+    yield* registerSubagent(ids, observation, threadId, true);
   }
 }
 
-function spawnOf(
-  item: ThreadItem,
-  completed: boolean
-): { threadIds: string[]; v1: boolean } | undefined {
-  if (item.type === 'subAgentActivity' && item.kind === 'started')
-    return { threadIds: [item.agentThreadId], v1: false };
-  if (completed && item.type === 'collabAgentToolCall' && item.tool === 'spawnAgent')
-    return { threadIds: item.receiverThreadIds, v1: true };
-  return undefined;
-}
-
-/** A subagent's span starts at the first usage its thread reported, even before this. */
-function registerSubagent(observation: TurnObservation, threadId: string, v1: boolean): void {
+/** Makes a thread a subagent, then observes what it reported before, in its own order. */
+function* registerSubagent(
+  ids: TurnIds,
+  observation: TurnObservation,
+  threadId: string,
+  v1: boolean
+): Generator<MessageChunk> {
   if (observation.agentThreads.has(threadId)) return;
   observation.agentThreads.add(threadId);
   if (v1) observation.v1Threads.add(threadId);
-  const thread = observation.otherThreads.get(threadId);
-  if (thread?.usageSpan) observation.agentUsageSpans.set(threadId, thread.usageSpan);
-  for (const child of thread?.spawned ?? [])
-    registerSubagent(observation, child.threadId, child.v1);
+  for (const held of observation.otherThreads.get(threadId)?.held.splice(0) ?? []) {
+    if (held.method === 'thread/tokenUsage/updated') observeSubagentUsage(observation, held.params);
+    else yield* observeItem(ids, observation, held.params, held.method === 'item/completed');
+  }
 }
 
 function* observeBackgroundItem(
+  ids: TurnIds,
   observation: TurnObservation,
   item: ThreadItem,
   completed: boolean,
@@ -762,8 +761,13 @@ function* observeBackgroundItem(
   if (event.status === 'started') {
     if (observation.liveTasks.has(event.taskId)) return;
     observation.liveTasks.add(event.taskId);
-    if (item.type === 'subAgentActivity') registerSubagent(observation, item.agentThreadId, false);
-  } else if (!observation.liveTasks.delete(event.taskId)) return;
+    yield event;
+    if (item.type === 'subAgentActivity') {
+      yield* registerSubagent(ids, observation, item.agentThreadId, false);
+    }
+    return;
+  }
+  if (!observation.liveTasks.delete(event.taskId)) return;
   yield event;
 }
 
