@@ -405,6 +405,7 @@ export const mockLabelAttentionWait = mock<
 >(async () => ({ labeled: false }));
 
 mock.module('@archon/core/db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   listWorkflowRuns: mockListWorkflowRuns,

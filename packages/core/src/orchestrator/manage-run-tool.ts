@@ -14,6 +14,7 @@ import {
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import { attentionLabelKeySchema, attentionLabelsSchema } from '@archon/workflows/schemas/dag-node';
+import { describeOperatorPause, operatorPause } from '@archon/workflows/schemas/operator-pause';
 import { z } from 'zod';
 import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import type { RunAttention, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -377,6 +378,12 @@ function formatRunAttention(run: WorkflowRun): string[] {
 }
 
 function formatRunGate(run: WorkflowRun): string[] {
+  // Any gate beside an operator pause is history.
+  const pause = operatorPause(run);
+  if (pause !== null) {
+    const resume = pause.state === 'paused' ? '; resume with action=resume' : '';
+    return [`${describeOperatorPause(pause)}${resume}`];
+  }
   const parts: string[] = [];
   const rawApproval = run.metadata.approval;
   if (

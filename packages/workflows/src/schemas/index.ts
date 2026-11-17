@@ -355,6 +355,7 @@ export {
 export {
   OPERATOR_PAUSE_METADATA_KEY,
   operatorPause,
+  describeOperatorPause,
   operatorPauseRecordSchema,
   operatorPauseSchema,
   readOperatorPauseRecord,

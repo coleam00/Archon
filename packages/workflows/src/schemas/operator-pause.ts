@@ -58,3 +58,12 @@ export function operatorPause(run: Pick<WorkflowRun, 'status' | 'metadata'>): Op
     return { state: 'paused', requested: record.requested, pausedAt: record.pausedAt };
   return null;
 }
+
+/** One line for a surface that describes the run: who asked, through what, and when. */
+export function describeOperatorPause(pause: OperatorPause): string {
+  const { by, via, at } = pause.requested;
+  const who = by === null ? via : `${'declared' in by ? by.declared : by.userId} via ${via}`;
+  return pause.state === 'paused'
+    ? `paused by an operator (${who}) at ${pause.pausedAt ?? at}`
+    : `pause requested by an operator (${who}) at ${at}; takes effect when the running nodes finish`;
+}

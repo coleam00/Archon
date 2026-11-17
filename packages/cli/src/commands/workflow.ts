@@ -41,6 +41,7 @@ export {
   workflowAnswerCommand,
   workflowApproveCommand,
   workflowCancelCommand,
+  workflowPauseCommand,
   workflowRejectCommand,
   workflowRespondCommand,
   workflowResumeCommand,

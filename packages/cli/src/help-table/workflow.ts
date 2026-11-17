@@ -150,6 +150,13 @@ export const workflowHelp: HelpGroup = {
     },
     {
       command: 'workflow',
+      subcommand: 'pause',
+      spec: 'workflow pause <run-id>',
+      description:
+        "Pause a running run once the nodes running now finish; it keeps its slot and item\nResume it with 'workflow resume'",
+    },
+    {
+      command: 'workflow',
       subcommand: 'resume',
       spec: 'workflow resume <run-id>',
       description: 'Resume a failed, paused or killed run from completed nodes',

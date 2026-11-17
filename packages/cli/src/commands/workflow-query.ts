@@ -31,6 +31,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
+import { operatorPause } from '@archon/workflows/schemas/operator-pause';
 import {
   loadWorkflows,
   projectWorkflowDescription,
@@ -737,12 +738,21 @@ async function listRecentRuns(
     const activeNodes =
       run.active_nodes.length > 0 ? ` · active node(s): ${run.active_nodes.join(', ')}` : '';
     console.log(
-      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow_name}${activeNodes}${authoredOutcome(run)}  (${formatAge(run.started_at)})`
+      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow_name}${activeNodes}${operatorPauseMark(run)}${authoredOutcome(run)}  (${formatAge(run.started_at)})`
     );
   }
   printModelThroughput(report?.throughput);
   console.log('');
   return 0;
+}
+
+function operatorPauseMark(run: Pick<WorkflowRun, 'status' | 'metadata'>): string {
+  const state = operatorPause(run)?.state;
+  return state === 'paused'
+    ? ' · paused by an operator'
+    : state === 'requested'
+      ? ' · pause requested'
+      : '';
 }
 
 function authoredOutcome(

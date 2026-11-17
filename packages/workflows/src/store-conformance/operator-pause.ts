@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import { continuablePauseCursor, executionClaim, type IWorkflowStore } from '../store';
-import { operatorPause, type OperatorPauseRecord } from '../schemas';
+import { operatorPause, readOperatorPauseRecord, type OperatorPauseRecord } from '../schemas';
 import { approval, types } from './fixtures';
 
 const request: OperatorPauseRecord = {
@@ -78,7 +78,7 @@ export function describeOperatorPauseConformance(getStore: () => IWorkflowStore)
 
       const resumed = await store.resumeWorkflowRun(run.id);
       expect(resumed.status).toBe('running');
-      expect(resumed.metadata.operator_pause).toBeUndefined();
+      expect(readOperatorPauseRecord(resumed.metadata)).toBeUndefined();
       expect(await types(store, run.id)).toContain('workflow_unpaused');
     });
   });

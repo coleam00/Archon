@@ -45,6 +45,7 @@ export function runStatusLabel(run: Run): string {
     if (stopReason?.reason !== 'process_terminated') return statusLabel.failed;
     return stopReason.signal === undefined ? 'Interrupted' : `Interrupted (${stopReason.signal})`;
   }
+  if (run.status === 'paused' && run.operatorPause?.state === 'paused') return 'Paused by operator';
   if (run.status !== 'paused' || run.wait == null) return statusLabel[run.status];
   if (run.wait.kind === 'attention') return 'Waiting for action';
   if (run.wait.kind === 'quota') return 'Waiting for provider limit';
@@ -54,6 +55,7 @@ export function runStatusLabel(run: Run): string {
 // A stalled tool call outranks the owner state: it is the one the operator can act on.
 function runningStatusLabel(run: Run): string {
   if (run.toolCallAttention?.length) return 'Running · tool call needs attention';
+  if (run.operatorPause?.state === 'requested') return 'Running · pause requested';
   if (run.ownerObservation === 'unreachable') return 'Running · owner not answering';
   if (run.ownerObservation === 'unknown') return 'Running · owner unknown';
   return statusLabel.running;

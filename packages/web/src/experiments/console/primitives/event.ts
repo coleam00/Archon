@@ -404,6 +404,7 @@ const EVENT_MAPPERS = new Map<string, EventMapper>([
       readString(data, 'error') ? 'Workflow resumed (prior error cleared)' : 'Workflow resumed'
     ),
   ],
+  ['operator_paused', workflowLifecycle(() => 'Paused by an operator')],
   ['container_created', containerEvent('Container created')],
   ['container_stopped', containerEvent('Container stopped (paused)')],
   ['container_resumed', containerEvent('Container resumed')],

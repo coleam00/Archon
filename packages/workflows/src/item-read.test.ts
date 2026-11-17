@@ -289,6 +289,7 @@ describe('reading an item', () => {
         awaitingExecution: null,
         spend: { usd: 0.42, inputTokens: 1200, outputTokens: 300 },
         heldBehind: null,
+        operatorPause: null,
         hasResult: false,
       },
       {
@@ -302,6 +303,7 @@ describe('reading an item', () => {
         awaitingExecution: null,
         spend: { usd: null, inputTokens: null, outputTokens: null },
         heldBehind: null,
+        operatorPause: null,
         hasResult: false,
       },
     ]);

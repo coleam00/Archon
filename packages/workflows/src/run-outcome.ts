@@ -218,6 +218,7 @@ async function pausedResult(
     paused: true,
     workflowRunId: paused.id,
     ...(waitCursor ? { waitCursor } : {}),
+    ...(isOperatorPaused(paused) ? { byOperator: true as const } : {}),
   };
 }
 

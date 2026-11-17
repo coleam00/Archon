@@ -13,6 +13,7 @@ import type {
   ItemRun,
   ItemSkippedStart,
 } from '@archon/workflows/item-read';
+import { describeOperatorPause } from '@archon/workflows/schemas/operator-pause';
 import { answererText, attentionItemLines } from './workflow-attention-text';
 
 /** A recorded time to the minute, or the stored text when it does not parse. */
@@ -102,6 +103,7 @@ function runLines(run: ItemRun): string[] {
     `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow}${outcome}  ${minute(run.startedAt)}${ended}${causeText(run.cause)}`,
   ];
   if (run.hasResult) lines.push(`            result: archon workflow get ${run.id} --json`);
+  if (run.operatorPause) lines.push(`            ${describeOperatorPause(run.operatorPause)}`);
   const waiting = run.awaitingExecution;
   if (waiting)
     lines.push(

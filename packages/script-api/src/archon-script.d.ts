@@ -2078,6 +2078,23 @@ declare module 'archon:script' {
         readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
         readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
       } | null;
+      readonly operatorPause: {
+        readonly state: 'requested' | 'paused';
+        readonly requested: {
+          readonly at: string;
+          readonly via: string;
+          readonly by: {
+            readonly declared: string;
+          } | {
+            readonly userId: string;
+          } | null;
+          readonly fromRun: {
+            readonly runId: string;
+            readonly nodePath: string;
+          } | null;
+        };
+        readonly pausedAt: string | null;
+      } | null;
       readonly hasResult: boolean;
     }>;
     readonly queued: ReadonlyArray<{
@@ -2518,6 +2535,23 @@ declare module 'archon:script' {
           readonly workflow: string;
           readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
           readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
+        } | null;
+        readonly operatorPause: {
+          readonly state: 'requested' | 'paused';
+          readonly requested: {
+            readonly at: string;
+            readonly via: string;
+            readonly by: {
+              readonly declared: string;
+            } | {
+              readonly userId: string;
+            } | null;
+            readonly fromRun: {
+              readonly runId: string;
+              readonly nodePath: string;
+            } | null;
+          };
+          readonly pausedAt: string | null;
         } | null;
         readonly hasResult: boolean;
       }>;
