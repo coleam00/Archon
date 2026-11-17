@@ -294,8 +294,11 @@ interface TurnObservation {
   readonly agentThreads: Set<string>;
   /** Threads spawned by Codex's v1 tool, which reports no subagent lifecycle of its own. */
   readonly v1Threads: Set<string>;
-  /** The thread of each turn another thread has started and not completed, by turn key. */
-  readonly otherTurns: Map<string, string>;
+  /**
+   * What other threads reported before a v1 spawn could name them: Codex starts a v1 child,
+   * and delivers its thread's notifications, before the parent's spawn item completes.
+   */
+  readonly otherThreads: Map<string, OtherThread>;
   pendingFailure: ResultChunk | undefined;
   /** What the turn's result reported, so a later result carries only what followed. */
   reported: Pick<ResultChunk, 'tokens' | 'structuredOutput'> | undefined;
@@ -370,7 +373,7 @@ export async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageC
     liveTasks: new Set(),
     agentThreads: new Set(),
     v1Threads: new Set(),
-    otherTurns: new Map(),
+    otherThreads: new Map(),
     pendingFailure: undefined,
     reported: undefined,
     errors: [],
@@ -398,13 +401,36 @@ export async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageC
 }
 
 /**
+ * Another thread's turns and usage, and the v1 spawns it made, kept from its first notification.
+ * One thread's notifications arrive in order; across threads Codex gives no order.
+ */
+interface OtherThread {
+  readonly runningTurns: Set<string>;
+  turnCompleted: boolean;
+  usageSpan: UsageSpan | undefined;
+  readonly spawned: string[];
+}
+
+function otherThreadOf(observation: TurnObservation, threadId: string): OtherThread {
+  let thread = observation.otherThreads.get(threadId);
+  if (!thread) {
+    thread = { runningTurns: new Set(), turnCompleted: false, usageSpan: undefined, spawned: [] };
+    observation.otherThreads.set(threadId, thread);
+  }
+  return thread;
+}
+
+/**
  * A v2 subagent is live until its `subAgentActivity` completes. A v1 subagent has no such
- * signal; one is live while a turn on its thread runs, which its own `turn/completed` ends.
+ * signal. A v1 spawn submits the child's first input, so a v1 subagent is live until a turn
+ * on its thread has completed, and again while a later one runs.
  */
 function hasLiveWork(observation: TurnObservation): boolean {
   if (observation.liveTasks.size > 0) return true;
-  for (const threadId of observation.otherTurns.values())
-    if (observation.v1Threads.has(threadId)) return true;
+  for (const threadId of observation.v1Threads) {
+    const thread = observation.otherThreads.get(threadId);
+    if (!thread?.turnCompleted || thread.runningTurns.size > 0) return true;
+  }
   return false;
 }
 
@@ -569,11 +595,18 @@ async function* observeNotification(
 
     case 'turn/started':
       if (notification.params.threadId !== ids.threadId)
-        observation.otherTurns.set(turnKeyOf(notification.params), notification.params.threadId);
+        otherThreadOf(observation, notification.params.threadId).runningTurns.add(
+          notification.params.turn.id
+        );
       return;
 
     case 'turn/completed':
-      observation.otherTurns.delete(turnKeyOf(notification.params));
+      if (notification.params.threadId !== ids.threadId) {
+        const thread = otherThreadOf(observation, notification.params.threadId);
+        thread.runningTurns.delete(notification.params.turn.id);
+        thread.turnCompleted = true;
+        return;
+      }
       yield* observeTurnCompleted(request, ids, observation, notification.params);
       return;
 
@@ -601,7 +634,11 @@ function observeTokenUsage(
     observation.usageSpan = extendedSpan(observation.usageSpan, params.tokenUsage);
     return;
   }
-  if (!observation.agentThreads.has(params.threadId)) return;
+  if (!observation.agentThreads.has(params.threadId)) {
+    const thread = otherThreadOf(observation, params.threadId);
+    thread.usageSpan = extendedSpan(thread.usageSpan, params.tokenUsage);
+    return;
+  }
   const span = observation.agentUsageSpans.get(params.threadId);
   observation.agentUsageSpans.set(params.threadId, extendedSpan(span, params.tokenUsage));
 }
@@ -642,6 +679,8 @@ function* observeItem(
   completed: boolean
 ): Generator<MessageChunk> {
   const parentItem = itemThreadId === ids.threadId && itemTurnId === ids.turnId;
+  if (completed && (parentItem || itemThreadId !== ids.threadId))
+    observeV1Spawn(observation, item, parentItem ? undefined : itemThreadId);
   if (!parentItem && !observation.agentThreads.has(itemThreadId)) return;
   // Unified exec is a process lifecycle, not a foreground tool call: its end may
   // arrive after the result, which closes foreground tool calls in the contract.
@@ -652,7 +691,6 @@ function* observeItem(
     yield* observeBackgroundItem(observation, item, completed, itemThreadId);
     return;
   }
-  if (completed) registerV1Spawn(observation, item);
   if (!parentItem) return;
   if (isToolItem(item)) {
     yield* observeToolItem(observation, item, completed);
@@ -665,17 +703,29 @@ function* observeItem(
   }
 }
 
-/** Codex's v1 spawn tool reports no `subAgentActivity`; its completed item names the thread. */
-function registerV1Spawn(observation: TurnObservation, item: ThreadItem): void {
+/**
+ * Codex's v1 spawn tool reports no `subAgentActivity`; its completed item names the thread.
+ * A spawn by a thread not yet known as a subagent (`sender`) waits until that thread is one.
+ */
+function observeV1Spawn(
+  observation: TurnObservation,
+  item: ThreadItem,
+  sender: string | undefined
+): void {
   if (item.type !== 'collabAgentToolCall' || item.tool !== 'spawnAgent') return;
-  for (const threadId of item.receiverThreadIds) {
-    observation.agentThreads.add(threadId);
-    observation.v1Threads.add(threadId);
-  }
+  if (sender === undefined || observation.agentThreads.has(sender)) {
+    for (const threadId of item.receiverThreadIds) registerV1Thread(observation, threadId);
+  } else otherThreadOf(observation, sender).spawned.push(...item.receiverThreadIds);
 }
 
-function turnKeyOf({ threadId, turn }: NotificationParams<'turn/started'>): string {
-  return JSON.stringify([threadId, turn.id]);
+/** A v1 subagent's span starts at the first usage its thread reported, even before this. */
+function registerV1Thread(observation: TurnObservation, threadId: string): void {
+  if (observation.agentThreads.has(threadId)) return;
+  observation.agentThreads.add(threadId);
+  observation.v1Threads.add(threadId);
+  const thread = observation.otherThreads.get(threadId);
+  if (thread?.usageSpan) observation.agentUsageSpans.set(threadId, thread.usageSpan);
+  for (const child of thread?.spawned ?? []) registerV1Thread(observation, child);
 }
 
 function* observeBackgroundItem(

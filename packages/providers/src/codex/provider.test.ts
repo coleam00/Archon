@@ -915,38 +915,103 @@ describe('CodexProvider', () => {
       expect(chunks.filter(c => c.type === 'warning')).toEqual([]);
     });
 
+    /** A turn on another thread: `started`, or `completed` with its own `turn/completed`. */
+    function otherTurn(
+      status: 'started' | 'completed',
+      threadId = 'child-thread',
+      turnId = 'child-turn'
+    ): ServerNotification {
+      if (status === 'completed') return turnCompleted('completed', null, turnId, threadId);
+      const running = turnCompleted('inProgress', null, turnId, threadId);
+      if (running.method !== 'turn/completed') throw new Error('unreachable');
+      return { method: 'turn/started', params: running.params };
+    }
+
+    async function tokensOf(notifications: ServerNotification[]): Promise<unknown[]> {
+      const chunks = await streamOf({ notifications, completion: null });
+      return chunks.flatMap(c => (c.type === 'result' ? [c.tokens] : []));
+    }
+
     test('a thread spawned through Codex’s v1 tool counts like a v2 subagent', async () => {
       const chunks = await streamOf({
         notifications: [
           itemStarted(collabSpawn('inProgress')),
           itemCompleted(collabSpawn('completed', ['child-thread'])),
+          otherTurn('started'),
           tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn', 'child-thread'),
+          otherTurn('completed'),
           tokenUsage({ input: 100, output: 10 }),
         ],
       });
       expect(resultOf(chunks).tokens).toMatchObject({ input: 140, output: 14 });
     });
 
-    test('a v1 subagent’s running turn keeps the node observed after the parent completes', async () => {
-      const childStart = turnCompleted('inProgress', null, 'child-turn', 'child-thread');
-      const chunks = await streamOf({
-        notifications: [
-          { ...childStart, method: 'turn/started' } as ServerNotification,
-          itemCompleted(collabSpawn('completed', ['child-thread'])),
-          tokenUsage({ input: 100, output: 10 }),
-          turnCompleted('completed'),
-          tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn', 'child-thread'),
-          turnCompleted('completed', null, 'child-turn', 'child-thread'),
-        ],
-        completion: null,
-      });
-      const results = chunks.filter(
-        (c): c is Extract<MessageChunk, { type: 'result' }> => c.type === 'result'
-      );
-      expect(results.map(r => r.tokens)).toMatchObject([
-        { input: 100, output: 10 },
-        { input: 40, output: 4 },
+    // Codex orders one thread's notifications but not one thread's against another's.
+    test('a v1 subagent counts whichever thread Codex delivers first', async () => {
+      const parent = [tokenUsage({ input: 100, output: 10 }), turnCompleted('completed')];
+      const child = [
+        otherTurn('started'),
+        tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn', 'child-thread'),
+        otherTurn('completed'),
+      ];
+      const spawn = itemCompleted(collabSpawn('completed', ['child-thread']));
+      for (const order of [
+        [spawn, ...parent, ...child],
+        [spawn, child[0], ...parent, ...child.slice(1)],
+        [...child, spawn, ...parent],
+      ]) {
+        const tokens = (await tokensOf(order)) as { input: number; output: number }[];
+        expect(tokens.reduce((sum, t) => sum + t.input, 0)).toBe(140);
+        expect(tokens.reduce((sum, t) => sum + t.output, 0)).toBe(14);
+      }
+    });
+
+    test('a v1 subagent keeps the usage its thread reported before the spawn named it', async () => {
+      const tokens = await tokensOf([
+        otherTurn('started'),
+        tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn', 'child-thread'),
+        itemCompleted(collabSpawn('completed', ['child-thread'])),
+        tokenUsage(
+          { input: 70, output: 7 },
+          { input: 30, output: 3 },
+          'child-turn',
+          'child-thread'
+        ),
+        otherTurn('completed'),
+        tokenUsage({ input: 100, output: 10 }),
+        turnCompleted('completed'),
       ]);
+      expect(tokens).toMatchObject([{ input: 170, output: 17 }]);
+    });
+
+    test('a v1 spawn by a subagent the parent has not yet named counts once it is named', async () => {
+      const tokens = await tokensOf([
+        itemCompleted(
+          { ...collabSpawn('completed', ['grandchild']), senderThreadId: 'child-thread' },
+          'child-thread',
+          'child-turn'
+        ),
+        otherTurn('started', 'grandchild', 'grandchild-turn'),
+        tokenUsage({ input: 20, output: 2 }, undefined, 'grandchild-turn', 'grandchild'),
+        otherTurn('completed', 'grandchild', 'grandchild-turn'),
+        itemCompleted(collabSpawn('completed', ['child-thread'])),
+        otherTurn('started'),
+        otherTurn('completed'),
+        tokenUsage({ input: 100, output: 10 }),
+        turnCompleted('completed'),
+      ]);
+      expect(tokens).toMatchObject([{ input: 120, output: 12 }]);
+    });
+
+    test('a v2 subagent’s own turns do not hold the node open', async () => {
+      const tokens = await tokensOf([
+        itemStarted(subAgentActivity('started')),
+        otherTurn('started'),
+        itemCompleted(subAgentActivity('completed')),
+        tokenUsage({ input: 100, output: 10 }),
+        turnCompleted('completed'),
+      ]);
+      expect(tokens).toMatchObject([{ input: 100, output: 10 }]);
     });
 
     test('a later result carries the usage subagents report after the first, and repeats its output', async () => {
