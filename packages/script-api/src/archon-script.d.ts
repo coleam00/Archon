@@ -2054,6 +2054,14 @@ declare module 'archon:script' {
         readonly hostId: string;
       } | null;
     }>;
+    readonly queued: ReadonlyArray<{
+      readonly requestId: string;
+      readonly workflow: string | null;
+      readonly resource: string;
+      readonly hostId: string;
+      readonly queuedAt: string;
+      readonly ahead: number;
+    }>;
     readonly questions: ReadonlyArray<{
       readonly kind: 'attention';
       readonly ref: string;

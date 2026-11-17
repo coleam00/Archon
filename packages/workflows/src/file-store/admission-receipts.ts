@@ -160,6 +160,8 @@ export function createReceiptOperations(
             id,
             sourceInstanceId,
             deliveryId,
+            // The file store refuses a receipt that names an item.
+            itemKey: null,
             outcome,
             reason,
             receivedAt,

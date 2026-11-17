@@ -125,6 +125,9 @@ function createMockStore(): IWorkflowStore {
     listQueuedResourceStartsForHost: mock<IWorkflowStore['listQueuedResourceStartsForHost']>(() => {
       throw new Error('Unexpected listQueuedResourceStartsForHost');
     }),
+    listQueuedItemStarts: mock<IWorkflowStore['listQueuedItemStarts']>(() => {
+      throw new Error('Unexpected listQueuedItemStarts');
+    }),
     withdrawQueuedResourceStart: mock<IWorkflowStore['withdrawQueuedResourceStart']>(() => {
       throw new Error('Unexpected withdrawQueuedResourceStart');
     }),
