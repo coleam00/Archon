@@ -148,6 +148,9 @@ export async function runIterationAttempts(
   const needsFreshSession = run.node.loop.fresh_context || i === 1;
   const resumeSessionId = needsFreshSession ? undefined : state.sessionId;
   const retry: IterationRetry = { attempt: 0, sawRateLimit: false };
+  // A same-session correction outlives a transient retry: the retry resends the
+  // correction into the thread that holds the iteration's work, not the task again.
+  const correction = newCorrection();
   for (; ; retry.attempt++) {
     if (retry.attempt > 0) {
       const status = await ctx.deps.store
@@ -169,6 +172,7 @@ export async function runIterationAttempts(
     const outcome = await runReaskAttempts(run, state, i, iterationStart, {
       resumeSessionId,
       retry,
+      correction,
     });
     if (outcome.kind !== 'retry') return outcome;
   }
@@ -179,16 +183,20 @@ async function runReaskAttempts(
   state: LoopState,
   i: number,
   iterationStart: number,
-  iteration: { resumeSessionId: string | undefined; retry: IterationRetry }
+  iteration: {
+    resumeSessionId: string | undefined;
+    retry: IterationRetry;
+    correction: Correction;
+  }
 ): Promise<IterationReply | AttemptVerdict> {
   const { retry } = iteration;
+  const sameSession = run.capabilities.structuredOutputCorrection === 'same-session';
   // A failed attempt's session is not the one the iteration completed in. A reask
-  // keeps the session the iteration's own prompt reported.
-  const thread: { sessionId: string | undefined } = { sessionId: undefined };
-  const reask: Reask = { attempt: 0, errors: [] };
+  // keeps the session the iteration's own prompt reported. A transient retry starts
+  // over from the task, except in a same-session correction, which it continues.
+  const { thread, reask } = sameSession ? iteration.correction : newCorrection();
   const wantsStructured = run.resolvedOptions?.outputFormat !== undefined;
   const maxReasks = structuredOutputMaxReasks(run.capabilities, wantsStructured);
-  const sameSession = run.capabilities.structuredOutputCorrection === 'same-session';
   const reply = (attempt: StreamedAttempt, payload: unknown): IterationReply => ({
     kind: 'reply',
     fullOutput: attempt.fullOutput,
@@ -225,6 +233,16 @@ async function runReaskAttempts(
     reask.attempt++;
     reask.errors = verdict.errors;
   }
+}
+
+/** Where an iteration's structured-output correction stands: its thread and its reask count. */
+interface Correction {
+  thread: { sessionId: string | undefined };
+  reask: Reask;
+}
+
+function newCorrection(): Correction {
+  return { thread: { sessionId: undefined }, reask: { attempt: 0, errors: [] } };
 }
 
 function newAttempt(run: LoopRun): StreamedAttempt {
