@@ -1,6 +1,19 @@
 import { expect } from 'bun:test';
-import type { AttentionAnswerWrite, GateResolutionEvent, IWorkflowStore } from '../store';
+import type {
+  AttentionAnswerWrite,
+  GateResolutionEvent,
+  IWorkflowStore,
+  RunOwnerLease,
+} from '../store';
 import type { ApprovalContext, WorkflowWaitContext, WorkflowRun } from '../schemas/workflow-run';
+
+/**
+ * A live-owner lease for tests that drive a store directly. The one test-side cast: only
+ * core's `startRunLiveOwner` mints a real one, and the store reads nothing but these two.
+ */
+export function testRunOwnerLease(runId: string, { held = true } = {}): RunOwnerLease {
+  return { runId, isHeld: () => held } as RunOwnerLease;
+}
 
 // Host records referenced by the port's inputs must exist in relational targets.
 export const CONFORMANCE_CODEBASE_ID = '00000000-0000-4000-8000-000000003643';

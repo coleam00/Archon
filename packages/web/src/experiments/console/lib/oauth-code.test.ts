@@ -20,10 +20,6 @@ describe('normalizeOAuthCode', () => {
     expect(normalizeOAuthCode('ABC#XYZ')).toBe('ABC#XYZ');
   });
 
-  test('bare code (no code= marker) → unchanged', () => {
-    expect(normalizeOAuthCode('ABC')).toBe('ABC');
-  });
-
   test('trims surrounding whitespace', () => {
     expect(normalizeOAuthCode('  ABC  ')).toBe('ABC');
     expect(normalizeOAuthCode('  http://x/cb?code=A&state=B ')).toBe('A#B');

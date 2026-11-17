@@ -400,6 +400,10 @@ When `--branch` is provided:
    `taskBranch: { kind: 'existing', branch }`, which checks out that exact local branch
    without creating a child branch or syncing it to a remote.
 
+A `--detach` launch runs steps 1 to 4, including the `--from` refusal, in the parent before it
+forks (`reusedBranchWorktree` in `workflow-branch-reuse.ts`), so the caller gets the refusal as the result. The child runs them
+again against the live checkout.
+
 Worktrees stored at: `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch-slug>/`
 
 **Code:** `provisionWorktree` in `packages/cli/src/commands/workflow-run-launch.ts`

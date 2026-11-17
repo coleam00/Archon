@@ -166,6 +166,12 @@ const sqliteMigrations: readonly Migration[] = [
     failureEvent: 'db.sqlite_migration_state_revisions_columns_failed',
     apply: addStateRevisionColumns,
   },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_node_session_model_column_failed',
+    apply: addNodeSessionModelColumn,
+  },
   { kind: 'required', scope: 'schema', apply: alignEventArchiveColumns },
 ];
 
@@ -451,11 +457,19 @@ function widenResourceSlotHolders(
   }).immediate();
 }
 
-// Names of event-derived inputs live beside the binding intent, not in it: older
-// binaries parse `intent` strictly and would refuse an extra key.
+// Names of event-derived inputs, a checkout hand-off and a binding's own item key live
+// beside the binding intent, not in it: older binaries parse `intent` strictly and would
+// refuse an extra key.
 function addReceiptBindingColumns(db: Database): void {
-  if (!columnNames(db, 'remote_agent_start_receipt_bindings').has('event_input_names')) {
+  const columns = columnNames(db, 'remote_agent_start_receipt_bindings');
+  if (!columns.has('event_input_names')) {
     db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN event_input_names TEXT');
+  }
+  if (!columns.has('checkout_from')) {
+    db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN checkout_from TEXT');
+  }
+  if (!columns.has('item_key')) {
+    db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN item_key TEXT');
   }
 }
 
@@ -494,6 +508,13 @@ function addStateRevisionColumns(db: Database): void {
   for (const column of ['writer_via', 'lease_run_id', 'lease_node_path', 'lease_taken_at'])
     if (!cols.has(column))
       db.run(`ALTER TABLE remote_agent_state_revisions ADD COLUMN ${column} TEXT`);
+}
+
+// The model a persisted node session ran on (#5711); see migrations/000_combined.sql.
+function addNodeSessionModelColumn(db: Database): void {
+  if (!columnNames(db, 'remote_agent_workflow_node_sessions').has('model')) {
+    db.run('ALTER TABLE remote_agent_workflow_node_sessions ADD COLUMN model TEXT');
+  }
 }
 
 // The archive trigger copies an event row by position, and CREATE TABLE AS ran

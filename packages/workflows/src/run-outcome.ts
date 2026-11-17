@@ -318,7 +318,7 @@ async function recordFailedStatus(
 ): Promise<void> {
   const emitter = getWorkflowEventEmitter();
   try {
-    const { failed } = await requireTerminalStatusWrite(
+    const { failed, failureKind } = await requireTerminalStatusWrite(
       deps.store.failWorkflowRun(workflowRunId, err.message, { exitReason: 'unhandled_error' }),
       {
         workflowRunId,
@@ -332,6 +332,7 @@ async function recordFailedStatus(
         runId: workflowRunId,
         workflowName: workflow.name,
         error: err.message,
+        ...(failureKind !== undefined ? { failureKind } : {}),
       });
     }
   } catch (writeError) {

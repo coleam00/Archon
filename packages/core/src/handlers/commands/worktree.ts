@@ -13,7 +13,7 @@ import * as sessionDb from '../../db/sessions';
 import * as isolationEnvDb from '../../db/isolation-environments';
 import { cleanupStaleWorktrees } from '../../services/cleanup-service';
 import { cleanupMergedWorktrees } from '../../services/cleanup/merged-sweep';
-import { getLiveRunBlocker } from '../../services/cleanup/run-lock';
+import { getUseBlocker } from '../../services/cleanup/run-lock';
 import { ensureIsolationConfigured } from '../../orchestrator/dispatch/isolation-resolver';
 import { createRegisteredWorktree } from '../../workflows/registered-worktree';
 import { safeDeactivateSession } from '../../state/session-transitions';
@@ -243,12 +243,13 @@ async function removeWorktree(
   }
 
   try {
-    const liveRun = await getLiveRunBlocker(isolationEnvId);
-    if (liveRun) {
-      return {
-        success: false,
-        message: `Worktree kept: ${liveRun.display}. Resume or abandon the run before removing the worktree.`,
-      };
+    const inUse = await getUseBlocker(isolationEnvId);
+    if (inUse) {
+      const action =
+        inUse.reason === 'live_run'
+          ? 'Resume or abandon the run before removing the worktree.'
+          : 'It is released once that start has run, or has been withdrawn or refused.';
+      return { success: false, message: `Worktree kept: ${inUse.display}. ${action}` };
     }
 
     // Use isolation provider for removal (pass the working path, not UUID)

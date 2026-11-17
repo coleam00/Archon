@@ -119,11 +119,16 @@ function createMockStore(): IWorkflowStore {
     listPendingStartBindings: mock<IWorkflowStore['listPendingStartBindings']>(() => {
       throw new Error('Unexpected listPendingStartBindings');
     }),
+    listSkippedItemStarts: mock<IWorkflowStore['listSkippedItemStarts']>(async () => []),
+    listWaitedItemHolders: mock<IWorkflowStore['listWaitedItemHolders']>(async () => []),
     getResourceStartRequest: mock<IWorkflowStore['getResourceStartRequest']>(() => {
       throw new Error('Unexpected getResourceStartRequest');
     }),
     listQueuedResourceStartsForHost: mock<IWorkflowStore['listQueuedResourceStartsForHost']>(() => {
       throw new Error('Unexpected listQueuedResourceStartsForHost');
+    }),
+    listQueuedItemStarts: mock<IWorkflowStore['listQueuedItemStarts']>(() => {
+      throw new Error('Unexpected listQueuedItemStarts');
     }),
     withdrawQueuedResourceStart: mock<IWorkflowStore['withdrawQueuedResourceStart']>(() => {
       throw new Error('Unexpected withdrawQueuedResourceStart');
@@ -188,6 +193,22 @@ function createMockStore(): IWorkflowStore {
       throw new Error('Not used by this test');
     }),
     withdrawItemRuling: mock<IWorkflowStore['withdrawItemRuling']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    listItemLinks: mock<IWorkflowStore['listItemLinks']>(async () => []),
+    recordItemLink: mock<IWorkflowStore['recordItemLink']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    endItemLink: mock<IWorkflowStore['endItemLink']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    listOpenItemAsks: mock<IWorkflowStore['listOpenItemAsks']>(async () => []),
+    listItemAsks: mock<IWorkflowStore['listItemAsks']>(async () => []),
+    getItemAsk: mock<IWorkflowStore['getItemAsk']>(async () => null),
+    answerItemAsk: mock<IWorkflowStore['answerItemAsk']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    withdrawItemAsk: mock<IWorkflowStore['withdrawItemAsk']>(async () => {
       throw new Error('Not used by this test');
     }),
     findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {

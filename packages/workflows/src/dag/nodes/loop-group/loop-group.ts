@@ -7,7 +7,7 @@ import { type NodeExecutionRecord } from '../../../schemas/node-execution';
 import { NodeEventWriteError, recordNodeState } from '../../../node-event-write';
 import type { DagNode, LoopGroupNode, NodeOutput } from '../../../schemas';
 import { nodeInvocationKey } from '../../../node-record-reader';
-import { resolvedBodyNodes } from '../../../graph-plan';
+import { loopBodyStepNamePrefix, resolvedBodyNodes } from '../../../graph-plan';
 import { type ModelAliasPreset, type TierName } from '../../../model-validation';
 import { getLog } from '../../log';
 import { RunSourceUnreadableError } from '../../node-source';
@@ -29,6 +29,7 @@ import {
 } from './resume';
 import { completeLoopGroup, runLoopGroupIteration } from './iteration';
 import { findInterruptedIteration, restorePreviousIteration } from './previous-iteration';
+import { releasePausedIterationScratch } from '../../node-scratch';
 
 /**
  * Execute a loop-group node — runs a multi-node sub-DAG body repeatedly until a
@@ -176,6 +177,16 @@ function runningGroupOutput(
   };
 }
 
+function releasePausedIteration({ ctx, node, resume }: LoopGroupRun): Promise<void> {
+  return releasePausedIterationScratch(
+    ctx,
+    node,
+    resume.resumeIteration,
+    // The legacy interactive gate's execution is the group's own, which is still running.
+    resume.isEscalatedGateResume ? resume.loopGateMeta?.execution?.invocation.id : undefined
+  );
+}
+
 async function executeLoopGroupBody(
   ctx: RunLayersContext,
   node: LoopGroupNode,
@@ -196,7 +207,7 @@ async function executeLoopGroupBody(
     node,
     bodyNodes,
     stepName,
-    bodyStepNamePrefix: `${stepName}.`,
+    bodyStepNamePrefix: loopBodyStepNamePrefix(stepName),
     directBodyIds: new Set(bodyNodes.map(n => n.id)),
     msgContext,
     execution,
@@ -217,11 +228,17 @@ async function executeLoopGroupBody(
   const { resume } = run;
 
   const finalized = await finalizeGroupOnBareApprove(run);
-  if (finalized !== undefined) return finalized;
+  if (finalized !== undefined) {
+    await releasePausedIteration(run);
+    return finalized;
+  }
   if (resume.isEscalatedWaitResume) {
     const waiting = await resumeTerminalWait(run);
     if (waiting !== undefined) return waiting;
   }
+  // A loop resume never walks the iteration it paused in again, so the invocations that
+  // iteration left suspended are settled here rather than at dispatch.
+  if (resume.isLoopResume) await releasePausedIteration(run);
   const loopPrevOutputs = resume.isLoopResume
     ? restoreLoopPrevOutputs(run)
     : await restoreInterruptedPrev(run);
@@ -300,7 +317,7 @@ async function readInterruptedIteration(
       ctx,
       node,
       bodyNodes,
-      bodyStepNamePrefix: `${stepName}.`,
+      bodyStepNamePrefix: loopBodyStepNamePrefix(stepName),
     },
     unfinished.invocation.id
   );

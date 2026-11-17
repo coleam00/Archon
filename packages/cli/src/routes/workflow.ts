@@ -216,12 +216,36 @@ export async function runWorkflowLogs(route: WorkflowRoute): Promise<number> {
   );
 }
 
+/**
+ * The target of `wait`, `cancel` or `abandon`: one run id, or `--item <key>`. A usage
+ * error is returned as its message.
+ */
+function runOrItemTarget(
+  { positionals, values }: WorkflowRoute,
+  verb: 'wait' | 'cancel' | 'abandon'
+): { runId: string } | { item: string; allRuns: boolean } | { usage: string } {
+  const runId = positionals[2];
+  const item = values.item as string | undefined;
+  const allRuns = values['all-runs'] === true;
+  const usage =
+    verb === 'wait'
+      ? 'Usage: archon workflow wait <run-id> | --item <key> [--json] [--timeout <seconds>]'
+      : `Usage: archon workflow ${verb} <run-id> | --item <key> [--all-runs]`;
+  if (verb === 'wait' && positionals[3] !== undefined) return { usage };
+  if (runId !== undefined && item !== undefined)
+    return { usage: `Error: Pass a run id or --item <key>, not both.\n${usage}` };
+  if (allRuns && verb === 'wait')
+    return { usage: 'Error: --all-runs applies to cancel and abandon.' };
+  if (allRuns && item === undefined)
+    return { usage: `Error: --all-runs applies with --item.\n${usage}` };
+  if (item !== undefined) return { item, allRuns };
+  return runId === undefined ? { usage } : { runId };
+}
+
 export async function runWorkflowWait(route: WorkflowRoute): Promise<number> {
-  const { positionals, values, json, effectiveCwd } = route;
-  const waitRunId = positionals[2];
-  if (!waitRunId || positionals[3] !== undefined) {
-    return await fail(json, 'Usage: archon workflow wait <run-id> [--json] [--timeout <seconds>]');
-  }
+  const { values, json, effectiveCwd } = route;
+  const target = runOrItemTarget(route, 'wait');
+  if ('usage' in target) return await fail(json, target.usage);
   const rawTimeout = values.timeout as string | undefined;
   let timeoutSeconds: number | undefined;
   if (rawTimeout !== undefined) {
@@ -234,9 +258,14 @@ export async function runWorkflowWait(route: WorkflowRoute): Promise<number> {
     }
   }
   // The wait's own exit code (3 for a deadline) has to reach the shell.
+  if ('item' in target)
+    return await route.commands.workflowWaitItemCommand(route.host, target.item, effectiveCwd, {
+      json,
+      timeoutSeconds,
+    });
   return await route.commands.workflowWaitCommand(
     route.host,
-    waitRunId,
+    target.runId,
     json,
     effectiveCwd,
     timeoutSeconds
@@ -281,13 +310,18 @@ export async function runWorkflowResume(route: WorkflowRoute): Promise<number> {
 }
 
 export async function runWorkflowAbandon(route: WorkflowRoute): Promise<number> {
-  const abandonRunId = route.positionals[2];
-  if (!abandonRunId) {
-    return await fail(route.json, 'Usage: archon workflow abandon <run-id>');
-  }
+  const target = runOrItemTarget(route, 'abandon');
+  if ('usage' in target) return await fail(route.json, target.usage);
+  if ('item' in target)
+    return await route.commands.workflowAbandonItemCommand(
+      route.host,
+      target.item,
+      route.effectiveCwd,
+      { json: route.json, allRuns: target.allRuns }
+    );
   return await route.commands.workflowAbandonCommand(
     route.host,
-    abandonRunId,
+    target.runId,
     route.json,
     route.effectiveCwd
   );
@@ -303,13 +337,18 @@ export async function runWorkflowEndTurn(route: WorkflowRoute): Promise<number> 
 }
 
 export async function runWorkflowCancel(route: WorkflowRoute): Promise<number> {
-  const cancelRunId = route.positionals[2];
-  if (!cancelRunId) {
-    return await fail(route.json, 'Usage: archon workflow cancel <run-id>');
-  }
+  const target = runOrItemTarget(route, 'cancel');
+  if ('usage' in target) return await fail(route.json, target.usage);
+  if ('item' in target)
+    return await route.commands.workflowCancelItemCommand(
+      route.host,
+      target.item,
+      route.effectiveCwd,
+      { json: route.json, allRuns: target.allRuns }
+    );
   return await route.commands.workflowCancelCommand(
     route.host,
-    cancelRunId,
+    target.runId,
     route.json,
     route.effectiveCwd
   );
@@ -412,6 +451,9 @@ export async function runWorkflowRespond(route: WorkflowRoute): Promise<number> 
 
 export async function runWorkflowAnswer(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, effectiveCwd } = route;
+  const ref = values.ref as string | undefined;
+  const withdraw = values.withdraw as string | undefined;
+  if (ref !== undefined || withdraw !== undefined) return await runWorkflowAnswerByRef(route);
   const answerRunId = positionals[2];
   const answerOccurrence = values.occurrence as string | undefined;
   const choose = (values.choose as string[] | undefined) ?? [];
@@ -439,13 +481,35 @@ export async function runWorkflowAnswer(route: WorkflowRoute): Promise<number> {
   );
 }
 
+/** `workflow answer --ref <ref>` or `--withdraw <ref>`: an item named by its queue ref. */
+async function runWorkflowAnswerByRef(route: WorkflowRoute): Promise<number> {
+  const { positionals, values, json, commands } = route;
+  const ref = values.ref as string | undefined;
+  const withdraw = values.withdraw as string | undefined;
+  const choose = (values.choose as string[] | undefined) ?? [];
+  const recommended = values.recommended === true;
+  const text = values.text as string | undefined;
+  const as = values.as as string | undefined;
+  const extra = positionals[2] !== undefined || values.occurrence !== undefined;
+  const request =
+    withdraw !== undefined && ref === undefined && choose.length === 0 && !recommended && !extra
+      ? text === undefined
+        ? { withdraw, as }
+        : undefined
+      : ref !== undefined && withdraw === undefined && !extra && !(recommended && choose.length > 0)
+        ? { ref, selection: recommended ? { recommended: true as const } : { choose }, text, as }
+        : undefined;
+  if (request === undefined) return await fail(json, commands.WORKFLOW_ANSWER_REF_USAGE);
+  return await commands.workflowAnswerRefCommand(route.host, request, json);
+}
+
 export async function runWorkflowAttention(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, effectiveCwd } = route;
   if (positionals[2] === 'label') return await runWorkflowAttentionLabel(route);
   if (positionals[3] !== undefined) {
     return await fail(
       json,
-      'Usage: archon workflow attention [<run-id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key>|answerer [--since <40m|24h|7d|2w|ISO>]] [--notices --since <40m|24h|7d|2w|ISO>] [--watch [--notices | --protocol [--after <cursor>]]] [--json]'
+      'Usage: archon workflow attention [<run-id>|ask:<id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key>|answerer [--since <40m|24h|7d|2w|ISO>]] [--notices --since <40m|24h|7d|2w|ISO>] [--watch [--notices | --protocol [--after <cursor>]]] [--json]'
     );
   }
   return await route.commands.workflowAttentionCommand(route.host, effectiveCwd, positionals[2], {
@@ -558,6 +622,25 @@ export async function runWorkflowRule(route: WorkflowRoute): Promise<number> {
   return await commands.workflowRuleCommand(route.host, effectiveCwd, request, json);
 }
 
+export async function runWorkflowLink(route: WorkflowRoute): Promise<number> {
+  const { positionals, values, json, commands, effectiveCwd } = route;
+  const item = values.item as string | undefined;
+  const kind = values.kind as string | undefined;
+  const to = values.to as string | undefined;
+  const end = values.end as string | undefined;
+  const as = values.as as string | undefined;
+  if (positionals[2] !== undefined) return await fail(json, commands.WORKFLOW_LINK_USAGE);
+  // Exactly one of the two forms: a link to record, or the id of one to end.
+  const request =
+    end !== undefined && item === undefined && kind === undefined && to === undefined
+      ? { end, as }
+      : end === undefined && item !== undefined && kind !== undefined && to !== undefined
+        ? { item, kind, to, as }
+        : undefined;
+  if (request === undefined) return await fail(json, commands.WORKFLOW_LINK_USAGE);
+  return await commands.workflowLinkCommand(route.host, effectiveCwd, request, json);
+}
+
 const EVENT_EMIT_USAGE = 'Usage: archon workflow event emit --run-id <run-id> --type <event-type>';
 
 export async function runWorkflowEvent(route: WorkflowRoute): Promise<number> {
@@ -612,6 +695,6 @@ export async function runUnknownWorkflowSubcommand({
       : `Unknown workflow subcommand: ${subcommand}`;
   return await fail(
     json,
-    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, cleanup, reset-sessions, event, notice, wake, signal`
+    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, link, cleanup, reset-sessions, event, notice, wake, signal`
   );
 }

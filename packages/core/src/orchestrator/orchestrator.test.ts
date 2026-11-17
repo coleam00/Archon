@@ -1,5 +1,6 @@
 // @archon-test-isolated
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 import type { RunActor } from '../operations/run-authorization';
 import type { ProviderRegistry } from '@archon/provider-contract';
 mock.module('../workflows/branch-launch-source', () => ({
@@ -417,17 +418,18 @@ mock.module('./dispatch/background', () => ({
 
 // The real live owner opens a socket and a lock file keyed by the run id, and every dispatch
 // here shares 'prepared-run-id'. On Windows that socket is a machine-global named pipe.
-const mockRunLiveOwner: RunLiveOwnerModule.RunLiveOwner = {
+const mockRunLiveOwner = (runId: string): RunLiveOwnerModule.RunLiveOwner => ({
+  lease: testRunOwnerLease(runId),
   close: () => Promise.resolve(),
   isStopRequested: () => false,
   registerTerminationPreparation: () => () => undefined,
-};
+});
 const realRunLiveOwner = { ...(await import('../services/run-live-owner')) };
 mock.module('../services/run-live-owner', () => ({
   ...realRunLiveOwner,
-  startRunLiveOwner: mock(() => Promise.resolve(mockRunLiveOwner)),
+  startRunLiveOwner: mock((runId: string) => Promise.resolve(mockRunLiveOwner(runId))),
   withRunLiveOwner: mock<typeof RunLiveOwnerModule.withRunLiveOwner>(
-    async (_runId, _options, body) => body(mockRunLiveOwner)
+    async (runId, _options, body) => body(mockRunLiveOwner(runId))
   ),
 }));
 
@@ -560,16 +562,16 @@ mock.module('../services/title-generator', () => ({
   generateAndSetTitle: mockGenerateAndSetTitle,
 }));
 
-// Workflow DB mock — dispatchOrchestratorWorkflow now consults findResumableRunByParentConversation
+// Workflow DB mock — dispatchOrchestratorWorkflow now consults listResumableRunsByParentConversation
 // for all platforms (not just web), so this module must be stubbed even when these tests don't
 // exercise the resume path. The default null return keeps execution on the "fresh run" branch.
 mock.module('../db/workflows', () => ({
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   getWorkflowRunForAttention: mock(async () => null),
-  findResumableRunByParentConversation: mock<
-    typeof WorkflowDb.findResumableRunByParentConversation
-  >(() => Promise.resolve(null)),
+  listResumableRunsByParentConversation: mock<
+    typeof WorkflowDb.listResumableRunsByParentConversation
+  >(() => Promise.resolve([])),
   getPausedWorkflowRun: mock<typeof WorkflowDb.getPausedWorkflowRun>(() => Promise.resolve(null)),
   updateWorkflowRun: mock<typeof WorkflowDb.updateWorkflowRun>(() => Promise.resolve()),
 }));

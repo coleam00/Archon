@@ -45,7 +45,8 @@ export async function createCliWorkflowHost(
 }
 
 /**
- * After a run this process ended: start the starts its completion wrote, each on the host
+ * After a run this process ended, or a set of asks this process settled: start the starts
+ * its completion or settlement wrote, each on the host
  * its binding names, as `trigger fire` starts its receipt; then, when this process serves
  * a trigger host, drain that host so queued work takes the slot the run released. A
  * process that serves no host leaves every other start on a host's queue to that host.

@@ -248,9 +248,12 @@ export function createInMemoryWorkflowStore(
     listStartReceipts: admit(admission.listStartReceipts.bind(admission)),
     listPendingStartBindings: admit(admission.listPendingStartBindings.bind(admission)),
     getResourceStartRequest: admit(admission.getResourceStartRequest.bind(admission)),
+    listSkippedItemStarts: admit(admission.listSkippedItemStarts.bind(admission)),
+    listWaitedItemHolders: admit(admission.listWaitedItemHolders.bind(admission)),
     listQueuedResourceStartsForHost: admit(
       admission.listQueuedResourceStartsForHost.bind(admission)
     ),
+    listQueuedItemStarts: admit(admission.listQueuedItemStarts.bind(admission)),
     withdrawQueuedResourceStart: admit(admission.withdrawQueuedResourceStart.bind(admission)),
     claimStartBindingPreparation: admit(admission.claimStartBindingPreparation.bind(admission)),
     completeStartBindingPreparation: admit(
@@ -399,6 +402,14 @@ export function createInMemoryWorkflowStore(
     listItemRulings: unsupported,
     recordItemRuling: unsupported,
     withdrawItemRuling: unsupported,
+    listItemLinks: unsupported,
+    recordItemLink: unsupported,
+    endItemLink: unsupported,
+    listOpenItemAsks: async () => [],
+    listItemAsks: async () => [],
+    getItemAsk: async () => null,
+    answerItemAsk: unsupported,
+    withdrawItemAsk: unsupported,
     listWorkflowRuns: options => write(view => view.listWorkflowRuns(options)),
     listDueWorkflowContinuations: (now, limit) =>
       write(view => view.listDueWorkflowContinuations(now, limit)),

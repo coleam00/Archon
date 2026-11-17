@@ -52,7 +52,8 @@ const AXES: readonly { key: keyof ProviderCapabilities; label: string }[] = [
   { key: 'sessionResume', label: 'Session resume' },
   {
     key: 'sessionFork',
-    label: 'Immutable session fork (`context.resume`, cross-run `persist_session`)',
+    label:
+      'Immutable session fork (`context.resume`, cross-run `persist_session` and `context: same`)',
   },
   { key: 'mcp', label: 'MCP servers (`mcp:`)' },
   { key: 'hooks', label: 'Hooks (`hooks:`)' },
@@ -61,6 +62,10 @@ const AXES: readonly { key: keyof ProviderCapabilities; label: string }[] = [
   { key: 'agents', label: 'Inline sub-agents (`agents:`)' },
   { key: 'toolRestrictions', label: 'Tool restrictions (`allowed_tools`/`denied_tools`)' },
   { key: 'structuredOutput', label: 'Structured output (`output_format`)' },
+  {
+    key: 'structuredOutputCorrection',
+    label: 'Structured-output correction (Archon asks again on a schema miss)',
+  },
   { key: 'envInjection', label: 'Env injection (`env:`)' },
   { key: 'costControl', label: 'Spend limit (`maxBudgetUsd`)' },
   { key: 'costReporting', label: 'Cost reporting (`costUsd`)' },
@@ -132,6 +137,13 @@ export function renderCell(caps: ProviderCapabilities, key: keyof ProviderCapabi
     if (tier === 'enforced') return '**enforced**';
     if (tier === 'best-effort') return 'best-effort';
     return '❌';
+  }
+  // Omission is a declared "Archon does not ask again", not an unknown reporting channel.
+  if (key === 'structuredOutputCorrection') {
+    const mode = caps.structuredOutputCorrection;
+    if (mode === 'same-session') return 'same session';
+    if (mode === 'fresh-session') return 'fresh session';
+    return '—';
   }
   // sessionFork predates reporting declarations and explicitly defines omission as unsupported.
   if (caps[key] === undefined && key !== 'sessionFork') return 'Unknown';
@@ -259,9 +271,14 @@ function buildMarkdown(providers: ProviderRegistration[], caveats: ResolvedCavea
     'Background work: `reported` waits for runtime-reported task endings; `none` means verified absent;',
     '`unobserved` means background work may exist without an observable lifecycle. A process',
     'backgrounded inside a foreground shell command (`cmd &`) is invisible to every provider.',
-    'Codex observes subagents through `subAgentActivity` notifications and unified-exec processes',
+    'Codex observes subagents through `subAgentActivity` notifications (v2 multi-agent tools) or,',
+    'for its v1 `spawn_agent`, the turns of the spawned thread, and unified-exec processes',
     'through `commandExecution` items with source `unifiedExecStartup`. Idle thread status is',
-    'not evidence that this work has ended. See [Streaming event mapping](/contributing/adding-a-community-provider/#streaming-event-mapping)',
+    'not evidence that this work has ended. A v1 `send_input` that starts a turn on an idle',
+    'subagent holds nothing: Codex reports no delivered-input signal, so that turn counts only',
+    'if it starts before observation ends, which is when the parent turn has completed and no',
+    'other subagent work holds the node open.',
+    'See [Streaming event mapping](/contributing/adding-a-community-provider/#streaming-event-mapping)',
     'for the background-start admission and observation cutoff rules.',
     '',
     '## Providers',
@@ -282,8 +299,12 @@ function buildMarkdown(providers: ProviderRegistration[], caveats: ResolvedCavea
     '- **✅¹ (superscript)** — supported, but with semantics that differ from the headline',
     '  meaning of the axis — see [Caveats](#caveats).',
     '- **Structured output** — `enforced` (the SDK/backend grammar-constrains decoding),',
-    '  `best-effort` (the model is asked for the schema, then validated + re-asked up to 3×),',
-    '  or ❌ (unsupported). See [AI Assistants → Structured output guarantees](/getting-started/ai-assistants/#structured-output-guarantees).',
+    '  `best-effort` (the model is asked for the schema, then validated), or ❌ (unsupported).',
+    '- **Structured-output correction** — whether Archon asks again, up to 3×, when an answer',
+    '  is missing or fails its schema: `same session` continues the thread the answer ended in,',
+    '  so the agent keeps its work; `fresh session` re-runs the prompt plus the errors in a',
+    '  throwaway session; — means Archon does not ask again (Claude retries inside its SDK).',
+    '  See [AI Assistants → Structured output guarantees](/getting-started/ai-assistants/#structured-output-guarantees).',
     '- **In-process native tools** — the provider can register Archon `NativeTool`s for a',
     "  turn. It gates auto-injection of Archon's `invoke_workflow`, `register_project` and",
     '  `attention` tools into every chat, and of `manage_run` into project-scoped chat. Providers without it',

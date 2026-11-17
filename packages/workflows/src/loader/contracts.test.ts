@@ -4,6 +4,9 @@ import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { describe, it, expect } from 'bun:test';
 import { isAgentNode, isExecNode, workflowDefinitionSchema, type DagNode } from '../schemas';
 import { parseWorkflow as parseWorkflowWithProviders, type ParseResult } from '../loader';
+import { resolveWorkflow } from '../graph-plan';
+import { itemAsksJsonSchema } from '../schemas/item-ask';
+import { validateWorkflowResultContract } from './contracts';
 
 // Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
 clearRegistry();
@@ -296,7 +299,7 @@ nodes:
     ['a blank outcome', 'returns: { node: result, outcome: "   " }'],
     ['a non-string outcome', 'returns: { node: result, outcome: { field: green } }'],
     ['no node', 'returns: { outcome: green }'],
-    ['an unknown key', 'returns: { node: result, asks: asks }'],
+    ['an unknown key', 'returns: { node: result, noticed: noticed }'],
   ])('refuses returns with %s instead of silently dropping it', (_label, declaration) => {
     const { workflow, error } = parseOutcomeWorkflow(declaration);
 
@@ -435,6 +438,109 @@ nodes:
     expect(error?.error).toContain('loop_group');
     expect(error?.error).toContain('raw text');
     expect(error?.error).toContain('collector node');
+  });
+});
+
+describe('workflow result contract: returns.asks', () => {
+  const parseAsks = (
+    declaration: string,
+    node = `
+  - id: decide
+    prompt: decide
+    output_format:
+      type: object
+      properties:
+        summary: { type: string }`
+  ): ParseResult =>
+    parseWorkflow(
+      `
+name: leaves-asks
+description: leaves decisions for an operator
+${declaration}
+nodes:${node}
+`,
+      'leaves-asks.yaml'
+    );
+
+  it('loads a declared asks property, which the engine adds to the returns node when resolved', () => {
+    const { workflow, error } = parseAsks('returns: { node: decide, asks: asks }');
+    expect(error).toBeNull();
+    expect(workflow?.result).toEqual({ asks: 'asks' });
+    if (workflow === null) throw new Error('Expected the workflow to load');
+    const resolved = resolveWorkflow(workflow);
+    const node = resolved.nodes.find(candidate => candidate.id === 'decide');
+    expect(node?.output_format?.properties).toEqual({
+      summary: { type: 'string' },
+      asks: itemAsksJsonSchema(),
+    });
+    // The resolved workflow passes the contract again, as dispatch checks it.
+    expect(validateWorkflowResultContract(resolved)).toBeNull();
+    // The loaded definition is left as authored.
+    const authored = workflow.nodes[0];
+    const authoredFormat = authored && 'output_format' in authored ? authored.output_format : {};
+    expect(Object.keys(authoredFormat?.properties ?? {})).toEqual(['summary']);
+  });
+
+  it('refuses a property the author declared under the asks name', () => {
+    const { workflow, error } = parseAsks(
+      'returns: { node: decide, asks: asks }',
+      `
+  - id: decide
+    prompt: decide
+    output_format:
+      type: object
+      properties:
+        asks: { type: array }`
+    );
+    expect(workflow).toBeNull();
+    expect(error?.error).toContain("returns.asks: 'asks' on node 'decide'");
+    expect(error?.error).toContain('the engine defines this property');
+  });
+
+  it('refuses a returns node with no output_format', () => {
+    const { error } = parseAsks(
+      'returns: { node: decide, asks: asks }',
+      `
+  - id: decide
+    prompt: decide`
+    );
+    expect(error?.error).toContain("returns.asks: 'asks' selects node 'decide'");
+    expect(error?.error).toContain('no output_format');
+  });
+
+  it('refuses asks naming the outcome property', () => {
+    const { error } = parseAsks(
+      'returns: { node: decide, outcome: green, asks: green }',
+      `
+  - id: decide
+    prompt: decide
+    output_format:
+      type: object
+      properties:
+        green: { type: boolean }
+      required: [green]`
+    );
+    expect(error?.error).toContain(
+      "returns.asks: 'green' names the same property as returns.outcome"
+    );
+  });
+
+  it('refuses a loop_group returns node, as returns.outcome does', () => {
+    const { error } = parseAsks(
+      'returns: { node: group, asks: asks }',
+      `
+  - id: group
+    output_format:
+      type: object
+      properties: {}
+    loop_group:
+      until: DONE
+      max_iterations: 2
+      nodes:
+        - id: author
+          prompt: author a result`
+    );
+    expect(error?.error).toContain("returns.asks: 'asks' cannot select loop_group node 'group'");
   });
 });
 

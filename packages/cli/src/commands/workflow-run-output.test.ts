@@ -700,7 +700,12 @@ describe('workflowRunCommand — progress rendering', () => {
       text: 'not a tool line',
     });
     runNode(OWNED_RUN, 'build', { status: 'completed' }, 90_000);
-    runNode(CHILD_RUN, 'build', { status: 'failed', error: 'timeout exceeded' }, 1_000);
+    runNode(
+      CHILD_RUN,
+      'build',
+      { status: 'failed', error: 'output missed its schema', failureKind: 'schema_unmet' },
+      1_000
+    );
     commitTestEvent({
       workflow_run_id: 'unrelated-run-id',
       event_type: 'node_started',
@@ -772,7 +777,7 @@ describe('workflowRunCommand — progress rendering', () => {
     '[build] Started',
     '[build] Completed (1m30s)',
     '[build] Started',
-    '[build] Failed: timeout exceeded',
+    '[build] Failed (schema_unmet): output missed its schema',
     '[deploy] Skipped (condition: $plan.output == deploy)',
     '[plan-cmd] Skipped (prior_success)',
     '[review] Completed (500ms)',

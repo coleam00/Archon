@@ -17,8 +17,10 @@ import {
   EXECUTION_CLAIM_METADATA_KEY,
   FAN_OUT_CANCEL_REASONS,
   WorkflowNotResumableError,
+  WorkflowItemHeldError,
   WorkflowResourceBusyError,
   pauseCursorMatches,
+  requireOwnerlessLease,
   resumeCursorMatches,
   type PauseCursor,
   type ResumeClaimCursor,
@@ -26,6 +28,7 @@ import {
 import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import {
   addResourceSlotHolder,
+  heldItemRefusal,
   lockResourceSlot,
   lockResourceSlotForAdmission,
   removeResourceSlotHolder,
@@ -37,25 +40,19 @@ import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normal
 import { getLog, normalizeMetadata } from './workflow-run-shared';
 
 /**
- * Find a resumable (failed/paused) run for a workflow scoped to (parent conversation, codebase).
- * Used by the orchestrator (all platforms) to detect approved runs that need foreground resume
- * on the prior run's worktree. Codebase scope prevents cross-project resume on persistent
- * chat conversation IDs (Telegram chat_id, Slack thread, etc.).
+ * List every resumable (failed/paused) run of a workflow scoped to (parent conversation,
+ * codebase). The orchestrator (all platforms) continues one only when it is the single run a
+ * chat message could continue; with more than one it continues none and lists them. Codebase
+ * scope prevents cross-project resume on persistent chat conversation IDs (Telegram chat_id,
+ * Slack thread, etc.).
  *
- * Ordering is status-first, then recency WITHIN a status — not bare recency. The two statuses
- * are not interchangeable candidates for the caller: a `paused` run is an open gate that is
- * legitimately waiting and gets hydrated and resumed, while a `failed` one is deliberately gated
- * behind an explicit user prompt first (#1549). Ordering purely by `started_at` therefore lets a
- * newer failure shadow an older open gate, and approving that gate resumes nothing.
- *
- * Contrast with getActiveWorkflowRunByPath, which sorts the opposite way (older-wins) —
- * it answers "who took the path lock first", a different question.
+ * The order (paused first, then newest within a status) only orders that listing.
  */
-export async function findResumableRunByParentConversation(
+export async function listResumableRunsByParentConversation(
   workflowName: string,
   parentConversationId: string,
   codebaseId: string
-): Promise<WorkflowRun | null> {
+): Promise<WorkflowRun[]> {
   try {
     const result = await pool.query<WorkflowRunRow>(
       `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
@@ -63,24 +60,23 @@ export async function findResumableRunByParentConversation(
          AND parent_conversation_id = $2
          AND codebase_id = $3
          AND status IN ('failed', 'paused')
-       ORDER BY CASE WHEN status = 'paused' THEN 0 ELSE 1 END, started_at DESC
-       LIMIT 1`,
+       ORDER BY CASE WHEN status = 'paused' THEN 0 ELSE 1 END, started_at DESC`,
       [workflowName, parentConversationId, codebaseId]
     );
-    const row = result.rows[0];
-    return row ? normalizeWorkflowRun(row) : null;
+    return result.rows.map(normalizeWorkflowRun);
   } catch (error) {
     const err = error as Error;
     getLog().error(
       { err, workflowName, parentConversationId, codebaseId },
-      'db.workflow_run_find_resumable_by_parent_failed'
+      'db.workflow_run_list_resumable_by_parent_failed'
     );
-    throw new Error(`Failed to find resumable run by parent conversation: ${err.message}`);
+    throw new Error(`Failed to list resumable runs by parent conversation: ${err.message}`);
   }
 }
 
 type PriorRunRow = Pick<WorkflowRunRow, 'status' | 'metadata'> & {
   resource_key?: string | null;
+  item_id?: string | null;
 };
 
 /** Pin the run row (and its admitted resource request, if any) for the resume transaction. */
@@ -92,7 +88,7 @@ async function lockPriorRun(query: TransactionQuery, id: string): Promise<PriorR
     await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
   }
   const priorRows = await query<PriorRunRow>(
-    `SELECT w.status, w.metadata, q.resource_key
+    `SELECT w.status, w.metadata, q.resource_key, w.item_id
        FROM remote_agent_workflow_runs w
        LEFT JOIN remote_agent_resource_start_requests q
          ON q.id = w.id AND q.status = 'admitted'
@@ -245,14 +241,21 @@ export async function resumeWorkflowRun(
   id: string,
   cursor?: ResumeClaimCursor
 ): Promise<WorkflowRun> {
+  requireOwnerlessLease(id, cursor);
   let updateResult:
     | { rowCount: 0 }
-    | { busy: WorkflowResourceBusyError }
+    | { busy: WorkflowResourceBusyError | WorkflowItemHeldError }
     | { admitted: WorkflowRun };
   try {
     updateResult = await getDatabase().withTransaction(async query => {
       const prior = await lockPriorRun(query, id);
       if (!prior || !priorMatchesCursor(prior, cursor)) return { rowCount: 0 };
+      // A paused or running run still holds its item; a failed one gave it up.
+      const held =
+        prior.status === 'failed' && prior.item_id != null
+          ? await heldItemRefusal(query, id, ['failed'])
+          : undefined;
+      if (held) return { busy: held };
       const busy = await claimResourceSlot(query, id, prior, cursor);
       if (busy) return { busy };
       const admitted = await casResumeRun(query, id, prior, cursor);

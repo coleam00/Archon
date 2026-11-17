@@ -1,5 +1,9 @@
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
+import {
+  CHECKOUT_HANDOFF_METADATA_KEY,
+  checkoutHandoffRunMetadataSchema,
+} from '@archon/workflows/schemas/resource-start';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
@@ -43,7 +47,7 @@ import type { WorktreeOwnershipReaders } from '../services/cleanup/run-worktree'
 import { createWorkflowOperations } from '../operations/workflow-operations';
 import { requestDetachedRunStop } from '../services/run-owner-stop';
 import { runOwnerLossWatch } from '../services/run-attention-watch';
-import { attentionQueueSource } from '../operations/attention-queue';
+import { attentionQueueSource, watchSource } from '../operations/attention-queue';
 import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-live-owner';
 
 const worktreeReferenceSchema = ownedWorktreeSchema.pick({ envId: true }).loose();
@@ -366,6 +370,19 @@ export async function createFileWorkflowHost(
     getLiveRunOwningEnv: async (id, _release, excludeRunId) => {
       const env = await records.isolation.getById(id);
       const runs = await listRuns(root);
+      const ownsEnv = (row: (typeof runs)[number]): boolean =>
+        row.metadata[ISOLATION_ENV_ID_METADATA_KEY] === id ||
+        worktreeReferenceSchema.safeParse(row.metadata.owned_worktree).data?.envId === id ||
+        (row.codebase_id === env?.codebase_id && row.working_path === env?.working_path);
+      // As in the database reader: a run started on a hand-off from a run that owns the
+      // environment owns it too, before its lane records an environment of its own.
+      const handedOwner = (row: (typeof runs)[number]): boolean => {
+        const from = checkoutHandoffRunMetadataSchema.safeParse(
+          row.metadata[CHECKOUT_HANDOFF_METADATA_KEY]
+        ).data?.runId;
+        const source = from === undefined ? undefined : runs.find(run => run.id === from);
+        return source !== undefined && ownsEnv(source);
+      };
       return (
         runs
           .sort((a, b) => b.started_at.getTime() - a.started_at.getTime())
@@ -374,9 +391,7 @@ export async function createFileWorkflowHost(
               row.id !== excludeRunId &&
               (!isTerminalRunStatus(row.status) ||
                 RESUMABLE_WORKFLOW_STATUSES.includes(row.status)) &&
-              (row.metadata[ISOLATION_ENV_ID_METADATA_KEY] === id ||
-                worktreeReferenceSchema.safeParse(row.metadata.owned_worktree).data?.envId === id ||
-                (row.codebase_id === env?.codebase_id && row.working_path === env?.working_path))
+              (ownsEnv(row) || handedOwner(row))
           ) ?? null
       );
     },
@@ -393,7 +408,7 @@ export async function createFileWorkflowHost(
     records,
     deps,
     engine: new InProcessWorkflowEngine(deps, {
-      branchOf: attentionQueueSource(store, records.isolation).branchOf,
+      ...watchSource(attentionQueueSource(store, records.isolation)),
       ownerLoss: runOwnerLossWatch(store),
     }),
     operations: createWorkflowOperations({

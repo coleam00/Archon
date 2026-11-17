@@ -33,13 +33,15 @@ Archon shows the deprecation notice only to someone who uses one of them, at mos
 
 ## Structured output guarantees
 
-When a node sets `output_format`, the parsed output is validated against the schema before downstream nodes see it. A node that produces no schema-valid output fails. How hard the provider works to produce valid output depends on its tier, which `GET /api/providers` reports as `capabilities.structuredOutput`:
+When a node sets `output_format`, the parsed output is validated against the schema before downstream nodes see it. A node that produces no schema-valid output fails. A correction never uses up a loop iteration, its usage counts in the node's usage, and an answer cut off by a timeout or an abort is not asked again. How hard the provider works to produce valid output depends on its tier, which `GET /api/providers` reports as `capabilities.structuredOutput`. Whether Archon asks again after a miss is a separate fact, reported as `capabilities.structuredOutputCorrection`:
 
 | Provider | Tier | How it works | On a validation miss |
 |---|---|---|---|
-| Claude, Codex, OpenCode | enforced | The SDK constrains decoding to the schema. | The node fails. A refusal or `max_tokens` truncation can still bypass the constraint, which is why the output is validated anyway. |
-| Pi | best-effort | The schema, which must have `type: object` at its root, becomes the parameters of a `structured_output` tool the prompt asks the model to call. Pi validates each call and returns errors to the model in the same session; after 3 invalid calls the turn ends without output. A model that answers in text instead has JSON extracted from the reply, never from its thinking. The tool call cannot be forced, so the tier stays best-effort. | The executor asks again with the schema errors, up to 3 times, then fails the node. |
-| Copilot | best-effort | The schema is appended to the prompt. JSON is extracted from the reply and repaired (trailing commas, single quotes, truncated tails). | The executor asks again with the schema errors, up to 3 times, then fails the node. |
+| Claude | enforced | The SDK constrains decoding to the schema. A refusal or `max_tokens` truncation can still bypass the constraint, which is why the output is validated anyway. | The Claude SDK retries an invalid answer itself; if it gives up, the node fails. |
+| Codex | enforced | The turn's output schema constrains decoding. The output is validated anyway, for the same reason. | The executor asks the same Codex thread to correct it with the schema errors, up to 3 times, then fails the node. The correction sends only the errors, and the agent's work in the thread is kept. |
+| OpenCode | enforced | The SDK constrains decoding to the schema. The output is validated anyway, for the same reason. | The node fails. |
+| Pi | best-effort | The schema, which must have `type: object` at its root, becomes the parameters of a `structured_output` tool the prompt asks the model to call. Pi validates each call and returns errors to the model in the same session; after 3 invalid calls the turn ends without output. A model that answers in text instead has JSON extracted from the reply, never from its thinking. The tool call cannot be forced, so the tier stays best-effort. | The executor asks again in a fresh session with the original prompt and the schema errors, up to 3 times, then fails the node. |
+| Copilot | best-effort | The schema is appended to the prompt. JSON is extracted from the reply and repaired (trailing commas, single quotes, truncated tails). | The executor asks again in a fresh session with the original prompt and the schema errors, up to 3 times, then fails the node. |
 
 See [Workflow language → `output_format`](/reference/workflow-language/#output_format-for-structured-json) for field access.
 
@@ -224,10 +226,10 @@ assistants:
       plan: { interactive: true, extensionFlags: { plan: true } }
     env:                                # set in process.env for extensions; shell env wins
       PLANNOTATOR_REMOTE: "1"
-    maxConcurrent: 2                    # cap on concurrent Pi prompts in this process
+    maxConcurrent: 2                    # install-wide cap on concurrent Pi attempts; read from ~/.archon/config.yaml
 ```
 
-`env` and `maxConcurrent` apply to the whole process, so a per-run `--config` layer refuses them. Use codebase env vars, not `assistants.pi.env`, for secrets that vary per project.
+`env` applies to the whole process, and `maxConcurrent` is an install-wide cap enforced by [provider admission](/reference/configuration/#provider-concurrency-caps); a per-run `--config` layer refuses both. Use codebase env vars, not `assistants.pi.env`, for secrets that vary per project.
 
 Model references can nest slashes, as in `openrouter/qwen/qwen3-coder`. Archon reads Pi's model catalog from `~/.pi/agent/models-store.json`, or `$PI_CODING_AGENT_DIR/models-store.json` when that variable is set. If a model is newer than your catalog, run `pi update --models` and retry. Archon never refreshes the catalog itself and never substitutes another model when a lookup fails.
 

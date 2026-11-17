@@ -34,11 +34,12 @@ import {
   type WorkflowRun,
   type WorkflowRunOrigin,
 } from '@archon/workflows/schemas/workflow-run';
-import { observeTerminalArtifacts } from '@archon/workflows/terminal-record';
+import { firstFailedNodeState, observeTerminalArtifacts } from '@archon/workflows/terminal-record';
+import type { NodeFailureKind } from '@archon/workflows/schemas/node-execution';
 import type { IDatabase } from './adapters/types';
 import { getDatabase, getDialect } from './connection';
 import { lockConversationOwnership } from './conversation-ownership';
-import type { TransactionQuery } from './resource-slots';
+import { heldItemRefusal, type TransactionQuery } from './resource-slots';
 import { continuedItem, ensureItem } from './items';
 import { insertWorkflowEvent } from './workflow-events';
 import { assertPublicConversation, ensureWorkflowOriginAnchor } from './workflow-origin-anchor';
@@ -51,6 +52,7 @@ import {
 } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 import { insertStartReceipt } from './start-receipt-writes';
+import { openItemAsksForCompletedRun } from './item-asks';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
 
@@ -204,6 +206,8 @@ export async function claimPendingWorkflowRun(
   workingPath?: string
 ): Promise<WorkflowRun | null> {
   return getDatabase().withTransaction(async query => {
+    const held = await heldItemRefusal(query, id, ['pending']);
+    if (held) throw held;
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs
           SET status = 'running', last_activity_at = ${getDialect().now()},
@@ -252,7 +256,7 @@ export async function claimPendingWorkflowRun(
  * instead of continuing a stale run.
  *
  * The status set is exactly what the two resume lookups can return —
- * findResumableRunByParentConversation ('failed'/'paused') and
+ * listResumableRunsByParentConversation ('failed'/'paused') and
  * getPausedWorkflowRun ('paused'). `pending` and `running` are deliberately NOT
  * matched: neither lookup can ever return them, so leaving them alone cannot
  * cause the stale continuation this exists to prevent, while cancelling them
@@ -382,6 +386,8 @@ export async function completeWorkflowRun(
         );
         // The starts this end causes commit with it, and only when this write won.
         for (const receipt of result?.startReceipts ?? []) await insertStartReceipt(query, receipt);
+        // The asks it leaves open with it too, replacing its workflow's open set on the item.
+        if (result?.asks !== undefined) await openItemAsksForCompletedRun(query, id, result.asks);
       }
       return update;
     });
@@ -415,7 +421,7 @@ export async function failWorkflowRun(
   id: string,
   error: string,
   options: NonNullable<Parameters<IWorkflowStore['failWorkflowRun']>[2]> = {}
-): Promise<{ failed: boolean }> {
+): ReturnType<IWorkflowStore['failWorkflowRun']> {
   const { exitReason, signal, pendingLaunchToken, expectedExecutionClaim, pendingOnly } = options;
   const dialect = getDialect();
   // Both keys belong to ONE failure: the stop reason is written wholesale below, and a
@@ -441,6 +447,7 @@ export async function failWorkflowRun(
             : `= $${pendingLaunchToken !== undefined ? 4 : 3}`
         }`;
   let result: Awaited<ReturnType<IDatabase['query']>>;
+  let failureKind: NodeFailureKind | undefined;
   try {
     const artifacts = await observeRunTerminalArtifacts(id);
     result = await getDatabase().withTransaction(async query => {
@@ -470,7 +477,7 @@ export async function failWorkflowRun(
         ]
       );
       if ((update.rowCount ?? 0) > 0) {
-        await insertTerminalWorkflowEvent(
+        const record = await insertTerminalWorkflowEvent(
           query,
           {
             workflow_run_id: id,
@@ -479,6 +486,7 @@ export async function failWorkflowRun(
           },
           artifacts
         );
+        failureKind = firstFailedNodeState(record)?.failure_kind;
       }
       return update;
     });
@@ -496,7 +504,7 @@ export async function failWorkflowRun(
     throw new Error(`Workflow run not found or not in pending/running state (id: ${id})`);
   }
   await reportRunTerminal(id);
-  return { failed: true };
+  return { failed: true, ...(failureKind !== undefined ? { failureKind } : {}) };
 }
 
 export async function cancelWorkflowRun(

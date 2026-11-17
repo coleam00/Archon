@@ -683,7 +683,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
             );
             const message =
               flag === 'config'
-                ? 'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
+                ? 'Error: --config can only be used with workflow run, trigger fire, trigger schedule, or pack bindings.'
                 : 'Error: --config-from-run can only be used with workflow run.';
             expect(result.status, result.stderr).toBe(1);
             if (json) {
@@ -707,6 +707,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
     for (const subcommand of ['fire', 'schedule']) {
       expect(rejectConfigOutsideRun('trigger', subcommand, 'config.yaml')).toBeUndefined();
     }
+    expect(rejectConfigOutsideRun('pack', 'bindings', 'run.yaml')).toBeUndefined();
   });
 
   it('parses one local path', () => {
@@ -732,7 +733,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
     // Pure pre-dispatch argv guard — no I/O, so asserted in-process.
     const message = rejectConfigOutsideRun('chat', undefined, './does-not-exist.yaml');
     expect(message).toBe(
-      'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
+      'Error: --config can only be used with workflow run, trigger fire, trigger schedule, or pack bindings.'
     );
   });
 
@@ -887,7 +888,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
       // of through a full interpreter startup.
       const message = rejectConfigOutsideRun(args[0], args[1], './config.minimax.yaml');
       expect(message).toBe(
-        'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
+        'Error: --config can only be used with workflow run, trigger fire, trigger schedule, or pack bindings.'
       );
     });
   }

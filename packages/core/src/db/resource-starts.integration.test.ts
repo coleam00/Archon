@@ -595,7 +595,7 @@ describe('durable resource starts', () => {
     ).toHaveLength(2);
   });
 
-  test('a binding with event inputs stays readable by the v0.11.1 intent schema', async () => {
+  test('a binding with event inputs and a checkout hand-off stays readable by the v0.11.1 intent schema', async () => {
     // The keys and strictness of v0.11.1's resourceStartBindingIntentSchema, which parses
     // the `intent` column. A shipped reader, so it is frozen here, not derived from today's.
     const shippedIntentSchema = z
@@ -620,6 +620,7 @@ describe('durable resource starts', () => {
       })
       .strict();
     const receiptId = 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd';
+    const handoff = { runId: 'build-run', branch: 'archon/build-1', commit: 'a'.repeat(40) };
     await acceptStartReceipt({
       receipt: {
         id: receiptId,
@@ -644,34 +645,42 @@ describe('durable resource starts', () => {
             cwd: '/tmp/test',
             workflowName: 'test',
             inputs: { mode: 'nightly', count: 0 },
-            isolation: { kind: 'in-place' },
+            isolation: { kind: 'worktree', branch: 'archon/build-1' },
           },
           eventInputs: { count: 42 },
+          checkoutFrom: handoff,
         },
       ],
     });
 
     const raw = new Database(join(root, 'archon.db'), { readonly: true });
-    let stored: { intent: string; event_input_names: string | null } | null;
+    type StoredBinding = {
+      intent: string;
+      event_input_names: string | null;
+      checkout_from: string | null;
+    };
+    let stored: StoredBinding | null;
     try {
       stored = raw
-        .query<{ intent: string; event_input_names: string | null }, SQLQueryBindings[]>(
-          'SELECT intent, event_input_names FROM remote_agent_start_receipt_bindings WHERE receipt_id = ?'
+        .query<StoredBinding, SQLQueryBindings[]>(
+          'SELECT intent, event_input_names, checkout_from FROM remote_agent_start_receipt_bindings WHERE receipt_id = ?'
         )
         .get(receiptId);
     } finally {
       raw.close();
     }
-    // An older binary sees the merged inputs it always passed through.
-    expect(shippedIntentSchema.parse(JSON.parse(stored?.intent ?? 'null')).launch.inputs).toEqual({
-      mode: 'nightly',
-      count: 42,
-    });
+    // An older binary sees the merged inputs it always passed through, and the hand-off's
+    // branch but not the hand-off.
+    const shipped = shippedIntentSchema.parse(JSON.parse(stored?.intent ?? 'null'));
+    expect(shipped.launch.inputs).toEqual({ mode: 'nightly', count: 42 });
+    expect(shipped.launch.isolation).toEqual({ kind: 'worktree', branch: 'archon/build-1' });
     expect(stored?.event_input_names).toBe('["count"]');
+    expect(JSON.parse(stored?.checkout_from ?? 'null')).toEqual(handoff);
     // This version reads the event inputs back apart from the literals.
     const restored = (await getStartReceipt(receiptId))?.bindings[0]?.intent;
     expect(restored?.launch.inputs).toEqual({ mode: 'nightly' });
     expect(restored?.eventInputs).toEqual({ count: 42 });
+    expect(restored?.checkoutFrom).toEqual(handoff);
   });
 
   test('preparation completion and admission share one commit', async () => {
@@ -1769,6 +1778,65 @@ for (const damagedLaunch of ['{', '{}', 'mismatched-id']) {
     expect(await host.deps.store.getWorkflowRun(queued[0]!)).toBeNull();
   });
 }
+
+test('a run end prepares every start it caused, past one page of receipts and one page of bindings', async () => {
+  const { createSqlWorkflowHost } = await import('../workflows/sql-host');
+  const { startReceiptBindings, ResourceStartDrainError } = await import(
+    '../workflows/resource-start-host'
+  );
+  const host = createSqlWorkflowHost();
+  // 101 receipts, so their ids span two pages; the first has 101 bindings, so the first
+  // page of ids holds more pending bindings than one read returns.
+  const receiptIds = Array.from({ length: 101 }, () => crypto.randomUUID());
+  const binding = (index: number) => ({
+    bindingId: `binding-${String(index)}`,
+    bindingRevision: null,
+    hostId: 'host',
+    // No such user: preparation ends at its first step, which keeps 201 of them cheap
+    // and still takes each binding out of pending.
+    runAsUserId: '99999999-9999-4999-8999-999999999999',
+    resource: 'pool',
+    overlap: 'skip' as const,
+    launch: {
+      cwd: '/tmp/test',
+      workflowName: 'test',
+      inputs: {},
+      isolation: { kind: 'in-place' as const },
+    },
+  });
+  for (const [index, receiptId] of receiptIds.entries())
+    await host.deps.store.acceptStartReceipt({
+      receipt: {
+        id: receiptId,
+        sourceInstanceId: `caused-${String(index)}`,
+        deliveryId: null,
+        contentDigest: 'digest',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched',
+      bindings: [
+        binding(0),
+        ...Array.from({ length: index === 0 ? 100 : 0 }, (_, more) => binding(more + 1)),
+      ],
+    });
+
+  const error = await startReceiptBindings(
+    { ...host, hostId: 'host', startAdmitted: async () => {} },
+    new Set(receiptIds)
+  ).catch((caught: unknown) => caught);
+
+  if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
+  expect(error.failures).toHaveLength(201);
+  expect(
+    (
+      await getDatabase().query(
+        'SELECT preparation_status AS status, COUNT(*) AS count FROM remote_agent_start_receipt_bindings GROUP BY preparation_status'
+      )
+    ).rows
+  ).toEqual([{ status: 'rejected', count: 201 }]);
+});
 
 for (const phase of ['admission', 'drain'] as const) {
   for (const guarded of [false, true]) {

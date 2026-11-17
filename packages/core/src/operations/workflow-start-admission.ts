@@ -1,7 +1,7 @@
 import * as codebaseDb from '../db/codebases';
 import { startWorkflow } from '../handlers/command-handler';
 import { judgeSignatureGates } from '../orchestrator/dispatch/gates';
-import { readContinuation } from '../orchestrator/dispatch/request';
+import { dispatchAnswersContinuation, readContinuation } from '../orchestrator/dispatch/request';
 import type { Conversation } from '../types';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
 import type { RunActor } from './run-authorization';
@@ -30,7 +30,8 @@ export interface WorkflowStart {
  * definition only the dispatch can reach, so it answers them on the conversation as before:
  * one that adopts a run, whose branch can carry its own workflow; one whose conversation
  * sits in a worktree, which runs the workflow of the canonical repository; and one that
- * continues a paused run, which runs the definition frozen on that run.
+ * continues a paused run, which runs the definition frozen on that run. A start with more than
+ * one run it could continue is left to the dispatch too, which lists them.
  *
  * A conversation with no project resolves workflows as the dispatch does for it, and has no
  * run to continue.
@@ -61,12 +62,8 @@ export async function workflowStartRefusal(start: WorkflowStart): Promise<string
   if (request?.kind !== 'start') return command.message;
 
   if (conversation && codebase) {
-    const { willContinueExistingRun } = await readContinuation(
-      { conversation, codebase },
-      request,
-      request.definition
-    );
-    if (willContinueExistingRun) return undefined;
+    const read = await readContinuation({ conversation, codebase }, request, request.definition);
+    if (dispatchAnswersContinuation(read)) return undefined;
   }
   const verdict = await judgeSignatureGates(
     {

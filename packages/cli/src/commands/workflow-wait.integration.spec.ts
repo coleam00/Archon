@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * `archon workflow wait <run-id>` against a REAL detached run, in a second process.
  *

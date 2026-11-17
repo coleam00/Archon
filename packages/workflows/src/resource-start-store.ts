@@ -9,6 +9,7 @@ import {
 import type { z } from 'zod';
 import type {
   PreparedWorkflowLaunch,
+  QueuedItemStart,
   ResourceStartBindingIntent,
   ResourceStartDisposition,
   ResourceStartIntent,
@@ -27,6 +28,8 @@ import {
 } from './schemas/workflow-run';
 import type { WorkflowResource } from './schemas/resource-name';
 import type { ResumeClaimCursor, ResumeRefusal } from './store';
+import { itemHolder, itemHoldKey } from './item-hold';
+import type { AttentionRead } from './schemas/attention-degraded';
 
 export function skippedFireNotice(
   receipt: Pick<SourceReceiptInput, 'deliveryId' | 'sourceActor'>,
@@ -153,6 +156,19 @@ export interface ResourceStartRequestInspection {
   blocker: Extract<ResourceStartDisposition, { status: 'queued' }>['blocker'] | null;
   blockerRunStatus: WorkflowRunStatus | null;
   launch: PreparedWorkflowLaunch;
+}
+
+/**
+ * A refused (`skipped`) start request as the item read lists it, with the run it recorded
+ * as its blocker. It reads no joined run status and parses no full launch: a row this
+ * binary cannot read in full must not fail the read of the item. `workflow` is null when
+ * the stored launch does not read.
+ */
+export interface SkippedItemStart {
+  requestId: string;
+  workflow: string | null;
+  resource: string;
+  blockerRunId: string | null;
 }
 
 /** An admitted start whose run has not begun, and the host whose executor runs it. */
@@ -306,6 +322,8 @@ export interface QueuedStart {
   id: string;
   hostId: string;
   launch: PreparedWorkflowLaunch;
+  /** The item the start names; null for a start on no item. */
+  itemId: string | null;
 }
 
 /**
@@ -327,6 +345,23 @@ export interface ResourceSlotOccupancy {
   /** Oldest foreign holder whose missing or corrupt launch and absent path hide its checkout. */
   unknownForeignCheckoutHolder?: string;
   reusableCheckouts: readonly ReusableCheckout[];
+  /**
+   * Every item a live run holds for its workflow, across all resources (`itemHolders`): two
+   * starts of one workflow on one item can name different resources.
+   */
+  heldItems: ReadonlyMap<string, string>;
+}
+
+/** The run that holds the start's item for its workflow, other than the start's own run. */
+function queuedItemHolder(
+  held: ReadonlyMap<string, string>,
+  start: Pick<QueuedStart, 'launch' | 'itemId'>
+): string | undefined {
+  return itemHolder(held, {
+    runId: start.launch.run.id,
+    workflow: start.launch.run.workflow_name,
+    itemId: start.itemId,
+  });
 }
 
 function checkoutHolder(
@@ -367,12 +402,16 @@ function validQueuedStarts(slot: ResourceSlotOccupancy): QueuedStart[] {
 }
 
 /**
- * The queued requests that could run now, oldest first. A request whose checkout a live
- * run holds keeps its place and is passed over until the checkout frees, so FIFO holds
- * per checkout and the slot goes to the next request that can run.
+ * The queued requests that could run now, oldest first. A request whose checkout or item a
+ * live run holds keeps its place and is passed over until that frees, so FIFO holds per
+ * checkout and per item, and the slot goes to the next request that can run.
  */
 function runnableQueue(slot: ResourceSlotOccupancy): QueuedStart[] {
-  return validQueuedStarts(slot).filter(start => checkoutHolder(slot, start.launch) === undefined);
+  return validQueuedStarts(slot).filter(
+    start =>
+      checkoutHolder(slot, start.launch) === undefined &&
+      queuedItemHolder(slot.heldItems, start) === undefined
+  );
 }
 
 /**
@@ -384,14 +423,23 @@ function runnableQueue(slot: ResourceSlotOccupancy): QueuedStart[] {
  * its place and takes the next free slot when its host drains. So a hand start (which no
  * queued request shares a host with) takes any free slot, and on a busy resource can
  * delay queued work.
+ *
+ * A live run of the same workflow on the start's item blocks it whatever the capacity or
+ * queue: one item is worked by one run of a workflow at a time. The blocker is that run, so a reader
+ * tells an item hold from a capacity hold by the blocker run's workflow and item.
  */
 export function resourceStartBlocker(
   slot: ResourceSlotOccupancy,
   launch: PreparedWorkflowLaunch,
-  hostId: string
+  hostId: string,
+  itemId: string | null
 ): ResourceBlocker | null {
   readAdmissionCheckoutGuard(launch);
   if (slot.queueError) throw slot.queueError;
+  // The item check comes first: a refused (skipped) start records this blocker, and the
+  // item read names the holder only when it is the run on the same item.
+  const itemRun = queuedItemHolder(slot.heldItems, { launch, itemId });
+  if (itemRun !== undefined) return { kind: 'run', id: itemRun };
   const older = runnableQueue(slot).find(start => start.hostId === hostId);
   if (older) return { kind: 'request', id: older.id };
   const holder = checkoutHolder(slot, launch);
@@ -405,20 +453,24 @@ export function resourceStartBlocker(
 /**
  * The queued requests a drain by `hostId` admits now, in order. A request of another
  * host is passed over: it waits only for its own host's drain and blocks no other host
- * (see `resourceStartBlocker`). A request admitted here holds its checkout for the rest
- * of the drain.
+ * (see `resourceStartBlocker`). A request admitted here holds its checkout and its item
+ * for the rest of the drain.
  */
 export function drainableStarts(slot: ResourceSlotOccupancy, hostId: string): QueuedStart[] {
   const free = slot.capacity - slot.holders.length - slot.waiters.length;
   const held = new Map(slot.heldCheckouts);
+  const heldItems = new Map(slot.heldItems);
   const admitted: QueuedStart[] = [];
   for (const start of validQueuedStarts(slot)) {
     if (admitted.length >= free) break;
     if (checkoutHolder({ ...slot, heldCheckouts: held }, start.launch) !== undefined) continue;
+    if (queuedItemHolder(heldItems, start) !== undefined) continue;
     if (start.hostId !== hostId) continue;
     admitted.push(start);
     for (const checkout of checkoutKeys(start.launch, undefined, slot.reusableCheckouts))
       held.set(checkout, start.id);
+    if (start.itemId !== null)
+      heldItems.set(itemHoldKey(start.launch.run.workflow_name, start.itemId), start.id);
   }
   return admitted;
 }
@@ -523,7 +575,7 @@ export interface IResourceStartStore {
   ): Promise<
     Pick<
       StartReceiptInspection,
-      'id' | 'sourceInstanceId' | 'deliveryId' | 'outcome' | 'reason' | 'receivedAt'
+      'id' | 'sourceInstanceId' | 'deliveryId' | 'itemKey' | 'outcome' | 'reason' | 'receivedAt'
     >[]
   >;
   /**
@@ -537,7 +589,20 @@ export interface IResourceStartStore {
     receiptIds?: readonly string[];
   }): Promise<PendingStartBindingInspection[]>;
   getResourceStartRequest(id: string): Promise<ResourceStartRequestInspection | null>;
+  /**
+   * The start requests on item `itemId` that were refused (`skipped`), oldest first. A
+   * store without items returns none.
+   */
+  listSkippedItemStarts(itemId: string): Promise<SkippedItemStart[]>;
+  /**
+   * The runs that hold their item (`holdsItem`) while a later start of their workflow on
+   * it waits: a queued start request, or a pending hand start that holds nothing. A holder
+   * the store cannot read is reported `run_unreadable`. A store without items returns none.
+   */
+  listWaitedItemHolders(): Promise<AttentionRead<WorkflowRun>[]>;
   listQueuedResourceStartsForHost(hostId: string): Promise<QueuedResourceStartInspection[]>;
+  /** The starts on item `itemId` whose status is `queued`, in queue order. */
+  listQueuedItemStarts(itemId: string): Promise<QueuedItemStart[]>;
   withdrawQueuedResourceStart(id: string): Promise<PreparedWorkflowLaunch | null>;
   claimStartBindingPreparation(input: {
     receiptId: string;

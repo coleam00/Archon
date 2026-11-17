@@ -101,9 +101,7 @@ const mockRemoveEnvironment = mock<typeof RemoveEnvironment.removeEnvironment>((
 const mockCleanupContainerEnvironments = mock<typeof CleanupService.cleanupContainerEnvironments>(
   () => Promise.resolve({ removed: [], skipped: [], errors: [] })
 );
-const mockGetLiveRunBlocker = mock<typeof CleanupRunLock.getLiveRunBlocker>(() =>
-  Promise.resolve(null)
-);
+const mockGetUseBlocker = mock<typeof CleanupRunLock.getUseBlocker>(() => Promise.resolve(null));
 const mockListContainerEnvironments = mock<typeof CleanupContainers.listContainerEnvironments>(() =>
   Promise.resolve([])
 );
@@ -135,7 +133,8 @@ mock.module('@archon/core/services/cleanup/remove-environment', () => ({
 }));
 mock.module('@archon/core/services/cleanup/run-lock', () => ({
   getCleanupRunLock: mockGetCleanupRunLock,
-  getLiveRunBlocker: mockGetLiveRunBlocker,
+  getUseBlocker: mockGetUseBlocker,
+  useBlockerLogFields: () => ({}),
   toUnpushedLock: mock(),
   countUnpushedCommits: mock(),
   readLiveRemoteTips: mock(),
@@ -355,8 +354,8 @@ describe('isolationCompleteCommand', () => {
     mockWorktreeExists.mockReset().mockResolvedValue(true);
     mockHasUncommittedChanges.mockReset();
     mockHasUncommittedChanges.mockResolvedValue(false);
-    mockGetLiveRunBlocker.mockReset();
-    mockGetLiveRunBlocker.mockResolvedValue(null);
+    mockGetUseBlocker.mockReset();
+    mockGetUseBlocker.mockResolvedValue(null);
     mockExecFileAsync.mockReset();
     // Default: gh returns empty PR array and git reports no unpushed commits.
     mockExecFileAsync.mockImplementation((cmd: string) =>
@@ -704,13 +703,13 @@ describe('isolationCompleteCommand', () => {
   // environment is the failed run's resume handle; removeEnvironment is what would
   // delete its worktree and its local and remote branch.
   it('refuses a clean, pushed environment a failed run can still resume', async () => {
-    mockGetLiveRunBlocker.mockResolvedValueOnce(liveRunBlocker('failed'));
+    mockGetUseBlocker.mockResolvedValueOnce(liveRunBlocker('failed'));
 
     await expect(
       isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true })
     ).rejects.toThrow('Failed to complete');
 
-    expect(mockGetLiveRunBlocker).toHaveBeenCalledWith('env-123');
+    expect(mockGetUseBlocker).toHaveBeenCalledWith('env-123');
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
     expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ run run-live is failed');
@@ -719,7 +718,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('refuses when the owning-run lookup fails', async () => {
-    mockGetLiveRunBlocker.mockRejectedValueOnce(new Error('database is locked'));
+    mockGetUseBlocker.mockRejectedValueOnce(new Error('database is locked'));
 
     await expect(
       isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true })
@@ -1047,7 +1046,7 @@ describe('isolationCompleteCommand', () => {
   it('reports all blockers in safety-check order when multiple checks fail', async () => {
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
     mockGetUniqueCommitCount.mockResolvedValueOnce(2);
-    mockGetLiveRunBlocker.mockResolvedValueOnce(liveRunBlocker('running'));
+    mockGetUseBlocker.mockResolvedValueOnce(liveRunBlocker('running'));
     mockExecFileAsync.mockImplementation((cmd: string) => {
       if (cmd === 'gh') {
         return Promise.resolve({
@@ -1135,7 +1134,7 @@ describe('isolationCompleteCommand', () => {
     const env = makeEnvironment({ branch_name: 'dirty-branch' });
     mockListActive.mockResolvedValueOnce([env]);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
-    mockGetLiveRunBlocker.mockResolvedValueOnce(liveRunBlocker('failed'));
+    mockGetUseBlocker.mockResolvedValueOnce(liveRunBlocker('failed'));
     mockRemoveEnvironment.mockResolvedValueOnce({
       worktreeRemoved: true,
       branchDeleted: true,
@@ -1146,7 +1145,7 @@ describe('isolationCompleteCommand', () => {
 
     // All safety checks should NOT be called when force is true
     expect(mockHasUncommittedChanges).not.toHaveBeenCalled();
-    expect(mockGetLiveRunBlocker).not.toHaveBeenCalled();
+    expect(mockGetUseBlocker).not.toHaveBeenCalled();
     expect(mockExecFileAsync).not.toHaveBeenCalled();
     expect(mockRemoveEnvironment).toHaveBeenCalledWith(expect.objectContaining({ id: 'env-123' }), {
       force: true,
@@ -1360,8 +1359,8 @@ describe('isolationCleanupCommand', () => {
     mockFindStaleEnvironments.mockResolvedValue([]);
     mockGetCleanupRunLock.mockReset();
     mockGetCleanupRunLock.mockResolvedValue({ kind: 'free' });
-    mockGetLiveRunBlocker.mockReset();
-    mockGetLiveRunBlocker.mockResolvedValue(null);
+    mockGetUseBlocker.mockReset();
+    mockGetUseBlocker.mockResolvedValue(null);
     mockDestroyWorktree.mockReset().mockResolvedValue({
       worktreeRemoved: true,
       directoryClean: true,

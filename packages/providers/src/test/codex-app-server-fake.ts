@@ -721,12 +721,13 @@ function breakdownOf(usage: Usage): TokenUsageBreakdown {
 export function tokenUsage(
   total: Usage,
   last: Usage = total,
-  turnId = TURN_ID
+  turnId = TURN_ID,
+  threadId = THREAD_ID
 ): ServerNotification {
   return {
     method: 'thread/tokenUsage/updated',
     params: {
-      threadId: THREAD_ID,
+      threadId,
       turnId,
       tokenUsage: { total: breakdownOf(total), last: breakdownOf(last), modelContextWindow: null },
     },

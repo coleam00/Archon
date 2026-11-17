@@ -265,6 +265,13 @@ function validInputSpecs(
       );
       continue;
     }
+    if (
+      parsed.data.result_of !== undefined &&
+      (parsed.data.required === true || parsed.data.default !== undefined)
+    ) {
+      getLog().warn({ filename, name }, 'contradictory_workflow_input_result_of_ignored');
+      continue;
+    }
     valid[name] = parsed.data;
   }
   return valid;
@@ -300,11 +307,12 @@ export interface ParsedReturns {
 const returnsObjectSchema = z.strictObject({
   node: z.string().trim().min(1),
   outcome: z.string().trim().min(1).optional(),
+  asks: z.string().trim().min(1).optional(),
 });
 
 /**
  * Parse optional returns: the node id whose output IS this workflow's result (#2470),
- * as `returns: <id>` or `returns: { node: <id>, outcome: <field> }`. Every part the
+ * as `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field> }`. Every part the
  * engine reads from that output is a key of the object form, never a sibling field and
  * never inferred from a name. An unknown key is refused rather than dropped: dropping
  * one would silently ignore a declared contract. A present but invalid value is refused
@@ -329,16 +337,20 @@ export function parseReturns(
   if (!parsed.success) {
     getLog().debug({ filename, value: raw }, 'invalid_workflow_returns_value_rejected');
     return {
-      error: `Invalid 'returns': expected the non-empty id of a top-level node whose output is this workflow's result, or { node: <id>, outcome: <field> } (${z.prettifyError(parsed.error)})`,
+      error: `Invalid 'returns': expected the non-empty id of a top-level node whose output is this workflow's result, or { node: <id>, outcome?: <field>, asks?: <field> } (${z.prettifyError(parsed.error)})`,
     };
   }
-  const { node, outcome } = parsed.data;
+  const { node, outcome, asks } = parsed.data;
   if (!dagNodes.some(n => n.id === node)) {
     return {
       error: `Workflow declares returns: '${node}' but no top-level node has that id`,
     };
   }
-  return { value: { node, result: outcome === undefined ? undefined : { outcome } } };
+  const result = {
+    ...(outcome === undefined ? {} : { outcome }),
+    ...(asks === undefined ? {} : { asks }),
+  };
+  return { value: { node, result: Object.keys(result).length === 0 ? undefined : result } };
 }
 
 /** `resource: build` or `resource: { name: build, capacity: 3 }`, as one shape. */

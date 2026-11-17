@@ -71,7 +71,7 @@ describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', (
       markWorktreeDestroyed,
       withWorktreeRegistration,
     } = await import('./isolation-environments'));
-  });
+  }, 120000);
 
   afterAll(async () => {
     if (db) await db.close();
@@ -79,7 +79,7 @@ describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', (
       await admin.query(`DROP DATABASE IF EXISTS "${SCRATCH_DB}" WITH (FORCE)`);
       await admin.end();
     }
-  });
+  }, 120000);
 
   // isolation_environments.codebase_id is NOT NULL with an enforced FK — one
   // parent per env keeps each test's fixtures independent.

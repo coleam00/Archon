@@ -12,6 +12,12 @@ import {
 } from '@archon/core/operations/attention-queue';
 import { RunActionForbiddenError } from '@archon/core/operations/run-authorization';
 import {
+  answerAttentionItem,
+  withdrawAttentionItem,
+  type AttentionItemAnswerResult,
+} from '@archon/core/operations/attention-items';
+import {
+  AttentionAnswerInvalidError,
   StaleGateAnswerError,
   assertLabelable,
   type WorkflowOperations,
@@ -42,7 +48,10 @@ import {
 } from './api-route-kit';
 import { toApiDashboardWorkflowRun } from './api-serializers';
 import {
+  answerAttentionItemBodySchema,
+  attentionItemActionResponseSchema,
   attentionQueueCountsResponseSchema,
+  withdrawAttentionItemBodySchema,
   attentionQueueItemResponseSchema,
   attentionQueueQuerySchema,
   attentionStreamLineResponseSchema,
@@ -106,6 +115,46 @@ const labelRunAttentionRoute = createRoute({
     403: jsonError('Run action forbidden'),
     404: jsonError('Not found'),
     409: jsonError('The write names an occurrence the run is no longer paused at'),
+    500: jsonError('Server error'),
+  },
+});
+
+const answerAttentionItemRoute = createRoute({
+  method: 'post',
+  path: '/api/attention/answer',
+  tags: ['Workflows'],
+  summary: 'Answer an attention queue item by its ref',
+  request: {
+    body: { content: { 'application/json': { schema: answerAttentionItemBodySchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: attentionItemActionResponseSchema } },
+      description: 'Answered, or the item already had this answer',
+    },
+    400: jsonError('Bad request: the answer does not fit the item'),
+    404: jsonError('Nothing the caller may answer has this ref'),
+    409: jsonError('The item is closed, moved, takes no answer, or was answered differently'),
+    500: jsonError('Server error'),
+  },
+});
+
+const withdrawAttentionItemRoute = createRoute({
+  method: 'post',
+  path: '/api/attention/withdraw',
+  tags: ['Workflows'],
+  summary: 'Withdraw an ask a completed run left, by its ref',
+  request: {
+    body: { content: { 'application/json': { schema: withdrawAttentionItemBodySchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: attentionItemActionResponseSchema } },
+      description: 'Withdrawn, or already withdrawn',
+    },
+    400: jsonError('The ref names an item a paused run holds, which is answered, not withdrawn'),
+    404: jsonError('Nothing the caller may withdraw has this ref'),
+    409: jsonError('The ask was already answered or replaced'),
     500: jsonError('Server error'),
   },
 });
@@ -254,9 +303,60 @@ export function registerAttentionStreamRoute(
   });
 }
 
+type AttentionItemReply =
+  | { body: z.infer<typeof attentionItemActionResponseSchema> }
+  | { status: 400 | 404 | 409; error: string };
+
+/** The HTTP reply to an answer by ref. */
+function answerReply(ref: string, result: AttentionItemAnswerResult): AttentionItemReply {
+  const base = { ref, action: 'answer' as const };
+  switch (result.kind) {
+    case 'ask_answered':
+      return { body: { ...base, unchanged: false, settled: result.settled } };
+    case 'unchanged':
+      return { body: { ...base, unchanged: true } };
+    case 'answered':
+      return {
+        body: {
+          ...base,
+          unchanged: false,
+          runId: result.item.run.id,
+          continues: result.continues,
+          cancelled: result.cancelled,
+        },
+      };
+    case 'unknown':
+      return { status: 404, error: `Nothing you may answer has ref '${ref}'` };
+    case 'none':
+      return { status: 409, error: `Item '${ref}' is no longer open` };
+    case 'moved':
+      return {
+        status: 409,
+        error: `Item '${ref}' is over; its run now holds '${result.item.ref}'`,
+      };
+    case 'takes_no_answer':
+      return { status: 409, error: `Item '${ref}' takes no answer` };
+    case 'refused':
+      return result.reason === 'already_answered'
+        ? { status: 409, error: `Item '${ref}' was already answered differently` }
+        : { status: 400, error: result.reason };
+  }
+}
+
+/** The status a refused answer maps to, or undefined for a failure of the server's own. */
+function answerRefusal(error: unknown): { status: 400 | 404 | 409; error: string } | undefined {
+  if (error instanceof RunActionForbiddenError) return { status: 404, error: error.message };
+  if (error instanceof StaleGateAnswerError) return { status: 409, error: error.message };
+  if (error instanceof AttentionAnswerInvalidError) return { status: 400, error: error.message };
+  return undefined;
+}
+
 export function registerRunAttentionRoutes(
   app: OpenAPIHono,
-  operations: Pick<WorkflowOperations, 'assertRunActionAllowed' | 'labelAttentionWait'>
+  operations: Pick<
+    WorkflowOperations,
+    'assertRunActionAllowed' | 'labelAttentionWait' | 'answerWorkflow' | 'respondToWorkflow'
+  >
 ): void {
   const registerOpenApiRoute = openApiRouteRegistrar(app);
   const { assertRunActionAllowed, labelAttentionWait } = operations;
@@ -301,6 +401,57 @@ export function registerRunAttentionRoutes(
     } catch (error) {
       getLog().error({ err: error }, 'list_runs_needing_attention_failed');
       return apiError(c, 500, 'Failed to list runs needing attention');
+    }
+  });
+
+  const items = { queue: attentionQueue, operations };
+
+  // POST /api/attention/answer - Answer the item a ref names, through the one answer
+  // operation every surface uses. An ask a completed run left has no run to name.
+  registerOpenApiRoute(answerAttentionItemRoute, async c => {
+    const body = getValidatedBody(c, answerAttentionItemBodySchema);
+    try {
+      const actor = await resolveRunActor(c);
+      const text = body.text === undefined ? {} : { text: body.text };
+      const answer =
+        body.recommended === true
+          ? { recommended: true as const, ...text }
+          : { choose: body.choose ?? [], ...text };
+      const reply = answerReply(
+        body.ref,
+        await answerAttentionItem(items, body.ref, answer, actor, 'api')
+      );
+      return 'body' in reply ? c.json(reply.body, 200) : apiError(c, reply.status, reply.error);
+    } catch (error) {
+      const refusal = answerRefusal(error);
+      if (refusal !== undefined) return apiError(c, refusal.status, refusal.error);
+      getLog().error({ err: error }, 'api.attention_answer_failed');
+      return apiError(c, 500, 'Failed to answer the attention item');
+    }
+  });
+
+  // POST /api/attention/withdraw - Withdraw an ask a completed run left; it closes unanswered.
+  registerOpenApiRoute(withdrawAttentionItemRoute, async c => {
+    const body = getValidatedBody(c, withdrawAttentionItemBodySchema);
+    try {
+      const actor = await resolveRunActor(c);
+      const result = await withdrawAttentionItem(items, body.ref, actor, 'api');
+      const base = { ref: body.ref, action: 'withdraw' as const };
+      switch (result.kind) {
+        case 'withdrawn':
+          return c.json({ ...base, unchanged: false, settled: result.settled }, 200);
+        case 'unchanged':
+          return c.json({ ...base, unchanged: true }, 200);
+        case 'unknown':
+          return apiError(c, 404, `Nothing you may withdraw has ref '${body.ref}'`);
+        case 'not_an_ask':
+          return apiError(c, 400, `Item '${body.ref}' is held by a paused run; answer it instead`);
+        case 'refused':
+          return apiError(c, 409, `Item '${body.ref}' was already ${result.closedAs}`);
+      }
+    } catch (error) {
+      getLog().error({ err: error }, 'api.attention_withdraw_failed');
+      return apiError(c, 500, 'Failed to withdraw the attention item');
     }
   });
 

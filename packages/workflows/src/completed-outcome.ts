@@ -6,6 +6,7 @@
 import type { DagNode, IncludeDirective, NodeOutput, RunCompletedOutcome } from './schemas';
 import type { WorkflowDefinition } from './schemas/workflow';
 import { outputRefText, resolveNodeOutputField } from './output-ref';
+import { workflowRunOutcomeSchema } from './schemas/run-status';
 
 /** The two forms an outcome property may take: a boolean, or a string with an `enum`. */
 export type OutcomeForm =
@@ -53,6 +54,14 @@ export function declaredOutcome(
   return { field, form: values === undefined ? { kind: 'boolean' } : { kind: 'enum', values } };
 }
 
+/**
+ * The values a run of this form can complete with: the enum's values, or the boolean
+ * form's names. The one list a binding on an outcome is read against.
+ */
+export function outcomeValues(form: OutcomeForm): readonly string[] {
+  return form.kind === 'enum' ? form.values : workflowRunOutcomeSchema.options;
+}
+
 /** The outcome a value read from the declared field gives, or why it gives none. */
 export function outcomeFromValue(
   form: OutcomeForm,
@@ -60,7 +69,12 @@ export function outcomeFromValue(
 ): RunCompletedOutcome | { readonly invalid: string } {
   if (form.kind === 'boolean') {
     return typeof value === 'boolean'
-      ? { kind: 'boolean', value: value ? 'succeeded' : 'failed' }
+      ? {
+          kind: 'boolean',
+          value: value
+            ? workflowRunOutcomeSchema.enum.succeeded
+            : workflowRunOutcomeSchema.enum.failed,
+        }
       : { invalid: 'is not a boolean' };
   }
   return typeof value === 'string' && form.values.includes(value)

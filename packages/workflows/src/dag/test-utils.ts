@@ -184,25 +184,21 @@ export function createMockStore(): MockWorkflowStore {
     readWorkflowEventsAfter: mock<IWorkflowStore['readWorkflowEventsAfter']>(() => {
       throw new Error('Unexpected event feed read');
     }),
-    getStateDocument: mock<IWorkflowStore['getStateDocument']>(() => {
-      throw new Error('Unexpected getStateDocument');
-    }),
+    getStateDocument: mock<IWorkflowStore['getStateDocument']>(unexpected('getStateDocument')),
     putStateDocument: mock<IWorkflowStore['putStateDocument']>(unexpectedWrite),
     patchStateDocument: mock<IWorkflowStore['patchStateDocument']>(unexpectedWrite),
     deleteStateDocument: mock<IWorkflowStore['deleteStateDocument']>(unexpectedWrite),
     claimStateDocument: mock<IWorkflowStore['claimStateDocument']>(unexpectedWrite),
-    listStateRevisions: mock<IWorkflowStore['listStateRevisions']>(() => {
-      throw new Error('Unexpected listStateRevisions');
-    }),
-    listStateDocuments: mock<IWorkflowStore['listStateDocuments']>(() => {
-      throw new Error('Unexpected listStateDocuments');
-    }),
-    getStateDocuments: mock<IWorkflowStore['getStateDocuments']>(() => {
-      throw new Error('Unexpected getStateDocuments');
-    }),
-    pruneStateRevisions: mock<IWorkflowStore['pruneStateRevisions']>(() => {
-      throw new Error('Unexpected pruneStateRevisions');
-    }),
+    listStateRevisions: mock<IWorkflowStore['listStateRevisions']>(
+      unexpected('listStateRevisions')
+    ),
+    listStateDocuments: mock<IWorkflowStore['listStateDocuments']>(
+      unexpected('listStateDocuments')
+    ),
+    getStateDocuments: mock<IWorkflowStore['getStateDocuments']>(unexpected('getStateDocuments')),
+    pruneStateRevisions: mock<IWorkflowStore['pruneStateRevisions']>(
+      unexpected('pruneStateRevisions')
+    ),
     setToolCallAttention: mock<IWorkflowStore['setToolCallAttention']>(async () => true),
     admitResourceStart: mock<IWorkflowStore['admitResourceStart']>(
       unexpected('admitResourceStart')
@@ -227,6 +223,11 @@ export function createMockStore(): MockWorkflowStore {
     ),
     listQueuedResourceStartsForHost: mock<IWorkflowStore['listQueuedResourceStartsForHost']>(
       unexpected('listQueuedResourceStartsForHost')
+    ),
+    listSkippedItemStarts: mock<IWorkflowStore['listSkippedItemStarts']>(async () => []),
+    listWaitedItemHolders: mock<IWorkflowStore['listWaitedItemHolders']>(async () => []),
+    listQueuedItemStarts: mock<IWorkflowStore['listQueuedItemStarts']>(
+      unexpected('listQueuedItemStarts')
     ),
     withdrawQueuedResourceStart: mock<IWorkflowStore['withdrawQueuedResourceStart']>(
       unexpected('withdrawQueuedResourceStart')
@@ -294,6 +295,14 @@ export function createMockStore(): MockWorkflowStore {
     listItemRulings: notUsed(),
     recordItemRuling: notUsed(),
     withdrawItemRuling: notUsed(),
+    listItemLinks: notUsed(),
+    recordItemLink: notUsed(),
+    endItemLink: notUsed(),
+    listOpenItemAsks: notUsed(),
+    listItemAsks: notUsed(),
+    getItemAsk: notUsed(),
+    answerItemAsk: notUsed(),
+    withdrawItemAsk: notUsed(),
     findAdoptingRuns: notUsed(),
     deleteOldWorkflowRuns: notUsed(),
     listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async runId => runEvents(runId)),
@@ -613,13 +622,28 @@ afterEach(() => {
   ownedGroupSpy = undefined;
 });
 
-/** The `docker` calls that dispatch node work, leaving out the checkout observation's probe. */
-export function nodeDockerCalls(
-  calls: Parameters<typeof git.execFileAsync>[]
-): Parameters<typeof git.execFileAsync>[] {
-  return calls.filter(
-    ([command, args]) => command === 'docker' && args.at(-1) !== CONTAINER_MARKER_PROBE
-  );
+type ExecCall = Parameters<typeof git.execFileAsync>;
+
+/**
+ * Whether a call is engine housekeeping around a node, not its work: the checkout
+ * observation's container probe, or node scratch release's `git -C <repo> worktree`
+ * (on the host, or in the container through `docker exec`).
+ */
+export function isEngineHousekeepingCall([command, args]: ExecCall): boolean {
+  if (command === 'docker' && args.at(-1) === CONTAINER_MARKER_PROBE) return true;
+  const gitArgs =
+    command === 'git' ? args : command === 'docker' ? args.slice(args.indexOf('git') + 1) : [];
+  return gitArgs[0] === '-C' && gitArgs[2] === 'worktree';
+}
+
+/** The subprocess calls that dispatch node work, leaving out engine housekeeping. */
+export function nodeExecCalls(calls: ExecCall[]): ExecCall[] {
+  return calls.filter(call => !isEngineHousekeepingCall(call));
+}
+
+/** The `docker` calls that dispatch node work, leaving out engine housekeeping. */
+export function nodeDockerCalls(calls: ExecCall[]): ExecCall[] {
+  return nodeExecCalls(calls).filter(([command]) => command === 'docker');
 }
 
 /**

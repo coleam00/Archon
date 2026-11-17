@@ -17,6 +17,7 @@
     "@archon/adapters": "workspace:*",
     "@archon/chat-contract": "workspace:*",
     "@archon/core": "workspace:*",
+    "@archon/forge": "workspace:*",
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",
     "@archon/provider-contract": "workspace:*",
@@ -87,6 +88,9 @@
     ],
     [
       "src/routes/api.metrics.test.ts"
+    ],
+    [
+      "src/routes/api.packs.test.ts"
     ],
     [
       "src/routes/api.config.project.test.ts"
@@ -207,6 +211,9 @@
     ],
     [
       "src/services/attention-router.integration.test.ts"
+    ],
+    [
+      "src/services/item-tracker.integration.test.ts"
     ],
     [
       "src/chat-host/attention-destination.test.ts"

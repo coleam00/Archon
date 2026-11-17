@@ -404,8 +404,9 @@ export class CodexProvider implements IAgentProvider {
    * On a model listed in `toolFreeStructuredOutputModels`, a call with an output schema is
    * two turns on one thread: the tool turn without the schema, then, on a second process
    * that resumes the thread with Archon's and the model catalog's tools off, a turn with the
-   * schema. The tool turn's success result is held back; the final turn's result is the
-   * call's only one.
+   * schema. The tool turn's success result is held back and its usage goes on the final turn's
+   * first result. A later result, from subagents still running at that turn's end, carries only
+   * the usage they reported since.
    */
   async *sendQuery(
     prompt: string,
@@ -652,10 +653,14 @@ async function* reportedTurn(
   for await (const chunk of closeOpenToolCalls(stream, { resultEndsTurn: true })) {
     if (chunk.type === 'result') {
       if (turn.holdsSuccess && !chunk.failure) {
-        call.toolTurnResult = chunk;
+        // A turn's later result adds the usage its subagents reported after its first.
+        call.toolTurnResult = withToolTurnOf(chunk, call.toolTurnResult);
         continue;
       }
       withToolTurnOf(chunk, call.toolTurnResult);
+      // The first result carries the tool turn's tokens; a later one, which a final turn whose
+      // subagents outlive its first result reports, carries only the usage reported since.
+      if (call.toolTurnResult) call.toolTurnResult = { ...call.toolTurnResult, tokens: undefined };
       reportResult(chunk, turn.abortSignal, turn.catalogId);
       call.resultReported = true;
     }

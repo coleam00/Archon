@@ -18,7 +18,7 @@ import {
 } from '@archon/core/operations/workflow-operations';
 import * as archonPaths from '@archon/paths';
 import { createLogger } from '@archon/paths';
-import type { ResumeClaimCursor } from '@archon/workflows/store';
+import type { ResumeRequestCursor } from '@archon/workflows/store';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import {
   ContinuedItemProjectError,
@@ -98,7 +98,7 @@ export interface WorkflowRunOptions {
    * Every resume passes it; `resume` without it is refused, never live discovery.
    */
   continuationRun?: WorkflowRun;
-  continuationCursor?: ResumeClaimCursor;
+  continuationCursor?: ResumeRequestCursor;
   quiet?: boolean;
   verbose?: boolean;
   /** Platform conversation ID (e.g. `cli-{ts}-{rand}`), NOT a DB UUID. */
@@ -261,7 +261,7 @@ export async function resolveRunTranscriptPath(
  * spelling, so the command is written here, where `archon workflow …` is what the operator
  * can actually type.
  */
-function cliRefusalText(error: unknown): string {
+export function cliRefusalText(error: unknown): string {
   return workflowOperationErrorMessage(error, CLI_WORKFLOW_SURFACE);
 }
 
@@ -299,7 +299,12 @@ export function withItemHint(error: unknown): unknown {
 }
 
 export function printJsonWriteError(runId: string, action: string, error: unknown): Promise<void> {
-  return writeJsonLine({ ok: false, runId, action, error: cliRefusalText(error) });
+  return writeJsonLine(jsonWriteError(runId, action, error));
+}
+
+/** The `{ ok: false }` value a write command reports for a run it could not act on. */
+export function jsonWriteError(runId: string, action: string, error: unknown) {
+  return { ok: false, runId, action, error: cliRefusalText(error) } as const;
 }
 
 export async function inheritedWorkflowCodebase(host: WorkflowHost, all?: boolean) {

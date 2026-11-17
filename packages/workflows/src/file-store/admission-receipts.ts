@@ -74,7 +74,11 @@ export function createReceiptOperations(
     acceptStartReceipt: input =>
       write(async tx => {
         sourceReceiptAcceptanceSchema.parse(input);
-        if (input.receipt.itemKey !== undefined) throw new FileStoreUnsupportedError('items');
+        if (
+          input.receipt.itemKey !== undefined ||
+          input.bindings.some(binding => binding.itemKey !== undefined)
+        )
+          throw new FileStoreUnsupportedError('items');
         const deliveryPath =
           input.receipt.deliveryId === null
             ? null
@@ -160,6 +164,8 @@ export function createReceiptOperations(
             id,
             sourceInstanceId,
             deliveryId,
+            // The file store refuses a receipt that names an item.
+            itemKey: null,
             outcome,
             reason,
             receivedAt,

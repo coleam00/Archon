@@ -43,7 +43,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--workflow-source <path>',
     description:
-      'Read the workflow, its commands and scripts from this directory\ninstead of --cwd (which stays the workspace the run acts on)',
+      'Read the workflow, its commands and scripts from this checkout root\n(<path>/.archon/workflows) instead of --cwd (which stays the workspace the run acts on)',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
@@ -181,13 +181,14 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--as <name>',
     description:
-      "For 'workflow approve/reject/respond/answer/rule': the name the answerer declares for itself,\nrecorded with an attention wait's answer or a ruling as a claim (never checked; refused at a gate)",
+      "For 'workflow approve/reject/respond/answer/rule/link': the name the answerer declares for itself,\nrecorded with an attention wait's answer, a ruling or a link as a claim (never checked; refused at a gate)",
     owners: [
       { command: 'workflow', subcommand: 'approve' },
       { command: 'workflow', subcommand: 'reject' },
       { command: 'workflow', subcommand: 'respond' },
       { command: 'workflow', subcommand: 'answer' },
       { command: 'workflow', subcommand: 'rule' },
+      { command: 'workflow', subcommand: 'link' },
     ],
   },
   {
@@ -205,7 +206,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--no-wait',
     description:
-      "For 'workflow run': refuse, naming the resource, instead of waiting when the workflow's\nresource is full",
+      "For 'workflow run': refuse instead of waiting, naming the resource when the workflow's\nresource is full, or the holding run when another run of the workflow on the same --item\nis not terminal (with or without a resource:)",
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
@@ -224,13 +225,23 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--item <key>',
     description:
-      "The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on",
+      "The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on",
     owners: [
       { command: 'workflow', subcommand: 'run' },
       { command: 'workflow', subcommand: 'runs' },
       { command: 'workflow', subcommand: 'rule' },
+      { command: 'workflow', subcommand: 'link' },
+      { command: 'workflow', subcommand: 'wait' },
+      { command: 'workflow', subcommand: 'cancel' },
+      { command: 'workflow', subcommand: 'abandon' },
       { command: 'trigger', subcommand: 'fire' },
     ],
+  },
+  {
+    spec: '--no-item',
+    description:
+      "For 'trigger fire': start the run on no item instead of inheriting the firing run's item",
+    owners: [{ command: 'trigger', subcommand: 'fire' }],
   },
   {
     spec: '--open',

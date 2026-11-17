@@ -148,7 +148,7 @@ export function assertDeclaredDecision(
  * Handles both interactive_loop and standard approval gate paths.
  * The run STAYS 'paused' — the resolution is recorded on the approval context
  * (`metadata.approval.resolved`, #2075) and the resume machinery already picks
- * up paused runs (findResumableRunByParentConversation, `resumeWorkflow`).
+ * up paused runs (listResumableRunsByParentConversation, `resumeWorkflow`).
  * Does NOT auto-resume — callers decide whether to execute.
  */
 export async function approveWorkflow(
