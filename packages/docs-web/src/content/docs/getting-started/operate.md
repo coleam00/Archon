@@ -46,8 +46,11 @@ Each item names the run, its workflow, its project, how long it has waited, the 
 | `awaiting_response` | An approval gate | `approve`, `reject` or `respond` |
 | `usage_limit` | A node hit a provider usage limit, or a rate limit that outlasted its retries | Nothing. It retries at `resetAt`. `resume` tries sooner |
 | `unreadable` | A paused run Archon cannot describe | Inspect it, then resume or abandon it |
+| `owner_lost` | A run whose owner process on this host is gone while it holds its [item](/reference/cli/#items), with a later start of its workflow on that item waiting behind it | `archon workflow resume <run-id>` or `archon workflow abandon <run-id>`. Archon never ends it by itself |
 
 A `usage_limit` wait retries from the node that hit the limit, at the provider's reset time or a 5 to 15 minute backoff, and pauses again if the limit is still there. With `workflows.autoResumeOnQuotaReset: false`, or for a container run, the run fails instead of waiting.
+
+An `owner_lost` item carries `item` and `observedStatus`, the run's stored status (`running`, or `paused` for a parent whose sub-run lost its owner), which is unchanged. The list observes owners on this host only, so a holder owned on another host is not listed; `archon workflow runs --item <key>` shows its owner as `unknown`.
 
 An `unreadable` item carries `reason` and `detail`. A container paused with reason `source_release_not_continued` could not read its frozen source on this host. Resume it by hand on a host that can.
 
@@ -260,7 +263,7 @@ With explicit chat scope (`--chat-project-id <id>`), CLI list, count and watch u
 }
 ```
 
-- **`kind`** is one of the four kinds above. A `usage_limit` item carries `resetAt`, and its `run` has a `node` and no `occurrence`. An `unreadable` item carries `reason` and `detail`; it also covers these structural failures in a parent's sub-run tree: a sub-run with no row, or a tree that revisits a run or exceeds 500 runs.
+- **`kind`** is one of the five kinds above. A `usage_limit` item carries `resetAt`, and its `run` has a `node` and no `occurrence`. An `unreadable` item carries `reason` and `detail`; it also covers these structural failures in a parent's sub-run tree: a sub-run with no row, or a tree that revisits a run or exceeds 500 runs.
 - **`ref`** is the item's identity: it names this item and no other, and changes when the run moves to another pause. Treat it as opaque.
 - **`run`** is the paused run that holds the item: its `id`, `workflow` and the fields below. Every item a workflow pauses for has one. The field is optional on an `attention` item, so read it as `item.run?.id`: an item that no paused run holds has no `run`, and its `ref` is all that names it.
 - **`item`** is `{ id, projectKey, key }` when the run was started for an item (`--item`), and absent otherwise.

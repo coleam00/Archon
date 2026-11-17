@@ -30,7 +30,8 @@ import type { CheckoutSharedEventData } from './schemas/workflow-event';
 import { ContinuedItemProjectError, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { refusePendingStart } from './start-refusal';
-import { holdWorkflowResource } from './resource-hold';
+import { holdWorkflowResource, itemHold, waitForTurn } from './resource-hold';
+import { WorkflowItemHeldError } from './store/errors';
 import { workflowPathPriorityTime } from './workflow-path-lock';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -238,7 +239,8 @@ async function refuseRunBeforeClaim(
 
 /**
  * Take the workflow's resource slot, win execution ownership of a pending row, then sample
- * the checkout the run starts from.
+ * the checkout the run starts from. While another run of the workflow holds the run's item,
+ * the claim waits for it like a full resource, or is refused under `noWait`.
  */
 async function claimPendingRun(
   deps: WorkflowDeps,
@@ -268,10 +270,27 @@ async function claimPendingRun(
     noWait === true
   );
   if (refused) return { stopped: true, result: refused };
-  let claimed: WorkflowRun | null;
-  try {
-    claimed = await deps.store.claimPendingWorkflowRun(workflowRun.id, cwd);
-  } catch (error) {
+  const claim: { run?: WorkflowRun | null; error?: unknown } = {};
+  const itemRefused = await waitForTurn({
+    deps,
+    platform,
+    conversationId,
+    workflowRun,
+    noWait: noWait === true,
+    attempt: async () => {
+      try {
+        claim.run = await deps.store.claimPendingWorkflowRun(workflowRun.id, cwd);
+      } catch (error) {
+        if (error instanceof WorkflowItemHeldError)
+          return { held: itemHold(error.itemKey, error.holderRunId, error.workflow) };
+        claim.error = error;
+      }
+      return { done: undefined };
+    },
+  });
+  if (itemRefused) return { stopped: true, result: itemRefused };
+  if ('error' in claim) {
+    const error = claim.error;
     getLog().error({ err: error, workflowRunId: workflowRun.id }, 'workflow.pending_claim_failed');
     // A lost connection may hide a committed claim. Do not release ownership or
     // write a terminal state when this process cannot confirm the transition.
@@ -289,6 +308,7 @@ async function claimPendingRun(
       },
     };
   }
+  const claimed = claim.run;
   if (!claimed) {
     getLog().warn({ workflowRunId: workflowRun.id }, 'workflow.pending_claim_lost');
     return {

@@ -13,9 +13,11 @@ import {
 } from '@archon/core/workflows/resource-start-host';
 import {
   getTriggersPath,
-  readRunEndedBindings,
+  readOnBindings,
   runEndedTriggerCheck,
+  type OnBinding,
 } from '@archon/core/workflows/run-ended';
+import { asksSettledTriggerCheck } from '@archon/core/workflows/asks-settled';
 import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
 import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
 import {
@@ -283,7 +285,7 @@ async function triggerFire(
   const config = await loadFireConfig(options.config);
   // A fire has no ended run to take the checkout from; starting the stage anyway would
   // cut it from the base branch, which is the one place this binding must never run.
-  if (config.on?.runEnded.checkout !== undefined)
+  if (config.on?.runEnded?.checkout !== undefined)
     throw new Error(
       `${options.config} takes its checkout from the run that ended (on.runEnded.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on a run's checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <run-id> --item <key>, naming the run that holds the branch: after a read-only check, the run in the check's metadata.checkout_handoff.runId (archon workflow get <check-run-id> --json), not the check.`
     );
@@ -584,42 +586,51 @@ async function installTimer(
 }
 
 /**
- * List every run-ended binding that is active (each `on.runEnded` file in the triggers
- * directory) and check it against the workflows of the project it launches in: the
- * ended workflow declares the outcome and every input the binding reads from it, and
- * the started workflow exists and declares every input the binding maps. A run on an
- * item whose end could fire such a binding is refused before it starts, by the same check.
- * It also reports what a run is not refused for: a `launch.cwd` that does not exist, a
- * binding that starts the workflow that ended, and two files that start the same stage.
+ * List every binding with `on` that is active (each `on.runEnded` and `on.asksSettled`
+ * file in the triggers directory) and check it against the workflows of the project it
+ * launches in. For a run-ended binding, the ended workflow declares the outcome and every
+ * input the binding reads from it; for an asks-settled binding, the asking workflow
+ * declares `returns.asks` and every input the binding reads. The started workflow exists
+ * and declares every input the binding maps. A run on an item whose end or asks could fire
+ * such a binding is refused before it starts, by the same check. It also reports what a
+ * run is not refused for: a `launch.cwd` that does not exist, a run-ended binding that
+ * starts the workflow that ended, and two files that start the same stage.
  */
 async function checkTriggers(host: WorkflowHost): Promise<void> {
-  const checked = [];
-  const bindings = await readRunEndedBindings(getTriggersPath());
-  // The file store has no items, so a run-ended binding can never start anything there.
+  const bindings = await readOnBindings(getTriggersPath());
+  // The file store has no items, so a binding with `on` can never start anything there.
   if (host.deps.credentialStore === 'files' && bindings.length > 0)
     throw new FileStoreUnsupportedError(
-      `Run-ended triggers (${bindings.map(entry => entry.file).join(', ')})`
+      `Run-ended and asks-settled triggers (${bindings.map(entry => entry.file).join(', ')})`
     );
-  const problems = await runEndedTriggerCheck(bindings, {
+  const deps = {
     ...host.deps,
-    projectKeyOf: cwd => registeredProjectKeyForPath(cwd, host.records.codebases),
+    projectKeyOf: (cwd: string) => registeredProjectKeyForPath(cwd, host.records.codebases),
+  };
+  const runEnded = bindings.filter(entry => 'runEnded' in entry);
+  const asksSettled = bindings.filter(entry => 'asksSettled' in entry);
+  const runEndedProblems = await runEndedTriggerCheck(runEnded, deps);
+  const asksSettledProblems = await asksSettledTriggerCheck(asksSettled, deps);
+  const listed = (entry: OnBinding, problems: string[] | undefined) => ({
+    file: entry.file,
+    sourceInstanceId: entry.sourceInstanceId,
+    bindingId: entry.binding.bindingId,
+    hostId: entry.binding.hostId,
+    ...('runEnded' in entry ? { runEnded: entry.runEnded } : { asksSettled: entry.asksSettled }),
+    workflowName: entry.binding.launch.workflowName,
+    cwd: entry.binding.launch.cwd,
+    problems: problems ?? [],
   });
-  for (const [index, entry] of bindings.entries()) {
-    checked.push({
-      file: entry.file,
-      sourceInstanceId: entry.sourceInstanceId,
-      bindingId: entry.binding.bindingId,
-      hostId: entry.binding.hostId,
-      runEnded: entry.runEnded,
-      workflowName: entry.binding.launch.workflowName,
-      cwd: entry.binding.launch.cwd,
-      problems: problems[index],
-    });
-  }
-  await writeJsonLine({ directory: getTriggersPath(), runEnded: checked });
-  const broken = checked.filter(entry => entry.problems.length > 0).length;
+  const checked = {
+    runEnded: runEnded.map((entry, index) => listed(entry, runEndedProblems[index])),
+    asksSettled: asksSettled.map((entry, index) => listed(entry, asksSettledProblems[index])),
+  };
+  await writeJsonLine({ directory: getTriggersPath(), ...checked });
+  const broken = [...checked.runEnded, ...checked.asksSettled].filter(
+    entry => entry.problems.length > 0
+  ).length;
   if (broken > 0)
-    throw new Error(`${String(broken)} run-ended binding(s) have problems; see "problems" above.`);
+    throw new Error(`${String(broken)} trigger binding(s) have problems; see "problems" above.`);
 }
 
 async function addTrigger(args: string[]): Promise<void> {

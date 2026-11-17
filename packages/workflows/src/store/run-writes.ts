@@ -185,4 +185,6 @@ export interface WorkflowCancellationEventDetails {
   reason?: string;
   /** Categorical cause, reported to telemetry; `reason` is free text and never is. */
   cancel_reason?: RunCancelReason;
+  /** A start refused because this run held its item (`holdsItem`), so item reads can name it. */
+  held_by_run_id?: string;
 }

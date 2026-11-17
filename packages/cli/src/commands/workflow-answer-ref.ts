@@ -13,6 +13,8 @@ import {
 import { attentionQueueSource } from '@archon/core/operations/attention-queue';
 import type { AttentionAnswerRequest } from '@archon/core/operations/workflow-operations';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
+import type { IWorkflowStore } from '@archon/workflows/store';
 import { cliActor } from '../utils/calling-node';
 import { writeJsonLine } from '../utils/stdout';
 
@@ -33,14 +35,99 @@ type Outcome =
   | { ok: true; text: string; json: object }
   | { ok: false; error: string; code: string };
 
-function answered(ref: string, result: AttentionItemAnswerResult): Outcome {
+type SettledStarts = { text: string; json: object };
+const NO_STARTS: SettledStarts = { text: '', json: {} };
+
+/**
+ * What a settling close says about the starts it caused, read back from each receipt after
+ * this process tried to start them: a matched receipt is only a start that was written, so
+ * each binding is reported by where its preparation stands. A binding that matched but
+ * could not start is printed with its receipt and how to start the stage by hand.
+ */
+async function settledStarts(
+  receipts: readonly SourceReceiptAcceptance[],
+  store: Pick<IWorkflowStore, 'getStartReceipt'>
+): Promise<SettledStarts> {
+  const itemKey = receipts.find(accepted => accepted.receipt.itemKey)?.receipt.itemKey ?? '<key>';
+  const states = (await Promise.all(receipts.map(accepted => startStates(accepted, store)))).flat();
+  const prepared = states.filter(state => state.kind === 'prepared');
+  const waiting = states.flatMap(state =>
+    state.kind === 'waiting'
+      ? [{ receiptId: state.receiptId, bindingId: state.bindingId, hostId: state.hostId }]
+      : []
+  );
+  const notStarted = states.flatMap(state =>
+    state.kind === 'not_started'
+      ? [{ receiptId: state.receiptId, bindingId: state.bindingId, reason: state.reason }]
+      : []
+  );
+  const lines = [
+    ...(prepared.length > 0
+      ? [
+          ` It prepared ${String(prepared.length)} bound stage start(s) on the item; archon workflow runs --item ${itemKey} shows them.`,
+        ]
+      : []),
+    ...waiting.map(
+      ({ receiptId, hostId }) =>
+        `\nA bound stage waits for the next drain of host '${hostId ?? '<host>'}' (archon trigger drain --host ${hostId ?? '<host>'}); receipt ${receiptId} records it.`
+    ),
+    ...notStarted.map(
+      ({ receiptId, reason }) =>
+        `\n\u26a0\ufe0f The next stage was not started: ${reason}. Receipt ${receiptId} records it (archon trigger inspect ${receiptId}). Fix the trigger, then start the stage with archon trigger fire --config <trigger file> --item ${itemKey} --inputs <file>, where the file holds the inputs the binding should have passed: the answers as archon workflow runs --item ${itemKey} --json lists them, and the asking run's inputs and result.`
+    ),
+  ];
+  return {
+    text: lines.join(''),
+    json: {
+      ...(waiting.length > 0 ? { waiting } : {}),
+      ...(notStarted.length > 0 ? { notStarted } : {}),
+    },
+  };
+}
+
+type StartState =
+  | { kind: 'prepared' }
+  | { kind: 'waiting'; receiptId: string; bindingId: string; hostId: string | null }
+  | { kind: 'not_started'; receiptId: string; bindingId: string | null; reason: string };
+
+/** Where each binding of one receipt stands, read back from the store. */
+async function startStates(
+  accepted: SourceReceiptAcceptance,
+  store: Pick<IWorkflowStore, 'getStartReceipt'>
+): Promise<StartState[]> {
+  const receiptId = accepted.receipt.id;
+  if (accepted.outcome !== 'matched')
+    return [
+      {
+        kind: 'not_started',
+        receiptId,
+        bindingId: null,
+        reason: accepted.reason ?? 'its binding was rejected',
+      },
+    ];
+  const inspected = await store.getStartReceipt(receiptId);
+  return (inspected?.bindings ?? []).map((binding): StartState => {
+    if (binding.status === 'complete') return { kind: 'prepared' };
+    if (binding.status === 'pending' || binding.status === 'preparing')
+      return { kind: 'waiting', receiptId, bindingId: binding.bindingId, hostId: binding.hostId };
+    return {
+      kind: 'not_started',
+      receiptId,
+      bindingId: binding.bindingId,
+      reason: binding.error ?? `its preparation is ${binding.status}`,
+    };
+  });
+}
+
+function answered(ref: string, result: AttentionItemAnswerResult, starts: SettledStarts): Outcome {
   switch (result.kind) {
-    case 'ask_answered':
+    case 'ask_answered': {
       return {
         ok: true,
-        text: `Answered ${ref}.${result.settled ? ' That was the last open ask of its set; the set is settled.' : ''}`,
-        json: { ok: true, ref, action: 'answer', settled: result.settled },
+        text: `Answered ${ref}.${result.settled ? ' That was the last open ask of its set; the set is settled.' : ''}${starts.text}`,
+        json: { ok: true, ref, action: 'answer', settled: result.settled, ...starts.json },
       };
+    }
     case 'answered':
       return {
         ok: true,
@@ -86,14 +173,19 @@ function answered(ref: string, result: AttentionItemAnswerResult): Outcome {
   }
 }
 
-function withdrawn(ref: string, result: AttentionItemWithdrawResult): Outcome {
+function withdrawn(
+  ref: string,
+  result: AttentionItemWithdrawResult,
+  starts: SettledStarts
+): Outcome {
   switch (result.kind) {
-    case 'withdrawn':
+    case 'withdrawn': {
       return {
         ok: true,
-        text: `Withdrew ${ref}.${result.settled ? ' That was the last open ask of its set; the set is settled.' : ''}`,
-        json: { ok: true, ref, action: 'withdraw', settled: result.settled },
+        text: `Withdrew ${ref}.${result.settled ? ' That was the last open ask of its set; the set is settled.' : ''}${starts.text}`,
+        json: { ok: true, ref, action: 'withdraw', settled: result.settled, ...starts.json },
       };
+    }
     case 'unchanged':
       return {
         ok: true,
@@ -117,6 +209,34 @@ function withdrawn(ref: string, result: AttentionItemWithdrawResult): Outcome {
   }
 }
 
+/**
+ * The starts a close's settlement caused, as they stand once this process tried them. The
+ * close has committed by now, so a failure to read them back is reported beside the
+ * recorded answer, naming the receipts, and never turns the command into a failure.
+ */
+export async function startsOf(
+  caused: readonly SourceReceiptAcceptance[],
+  store: Pick<IWorkflowStore, 'getStartReceipt'>
+): Promise<SettledStarts> {
+  if (caused.length === 0) return NO_STARTS;
+  try {
+    return await settledStarts(caused, store);
+  } catch (error) {
+    const receiptIds = caused.map(accepted => accepted.receipt.id);
+    const message = (error as Error).message;
+    return {
+      text: `\n\u26a0\ufe0f The settlement recorded ${String(receiptIds.length)} bound stage start(s), but where they stand could not be read: ${message}. archon trigger inspect <receipt> shows each: ${receiptIds.join(', ')}.`,
+      json: { startsUnread: { receiptIds, error: message } },
+    };
+  }
+}
+
+function causedBy(
+  result: AttentionItemAnswerResult | AttentionItemWithdrawResult
+): readonly SourceReceiptAcceptance[] {
+  return result.kind === 'ask_answered' || result.kind === 'withdrawn' ? result.startReceipts : [];
+}
+
 export async function workflowAnswerRefCommand(
   host: WorkflowHost,
   request: WorkflowAnswerRefRequest,
@@ -131,19 +251,19 @@ export async function workflowAnswerRefCommand(
   let outcome: Outcome;
   try {
     if ('withdraw' in request) {
+      const result = await withdrawAttentionItem(deps, request.withdraw, actor, 'cli');
       outcome = withdrawn(
         request.withdraw,
-        await withdrawAttentionItem(deps, request.withdraw, actor, 'cli')
+        result,
+        await startsOf(causedBy(result), host.deps.store)
       );
     } else {
       const answer: AttentionAnswerRequest = {
         ...request.selection,
         ...(request.text === undefined ? {} : { text: request.text }),
       };
-      outcome = answered(
-        request.ref,
-        await answerAttentionItem(deps, request.ref, answer, actor, 'cli')
-      );
+      const result = await answerAttentionItem(deps, request.ref, answer, actor, 'cli');
+      outcome = answered(request.ref, result, await startsOf(causedBy(result), host.deps.store));
     }
   } catch (error) {
     outcome = { ok: false, code: 'error', error: (error as Error).message };

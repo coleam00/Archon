@@ -446,14 +446,19 @@ mock.module('@archon/core/db/items', () => ({
   ensureItemInProject: unusedItemWrite,
   continuedItem: unusedItemWrite,
 }));
-// The item read lists the item's queued starts; without this it queries a real database.
+// The item read lists the item's queued and skipped starts; without these it queries a
+// real database.
 const realResourceStarts = { ...(await import('@archon/core/db/resource-starts')) };
 export const mockListQueuedItemStarts = mock<
   typeof import('@archon/core/db/resource-starts')['listQueuedItemStarts']
 >(async () => []);
+export const mockListSkippedItemStarts = mock<
+  typeof import('@archon/core/db/resource-starts')['listSkippedItemStarts']
+>(async () => []);
 mock.module('@archon/core/db/resource-starts', () => ({
   ...realResourceStarts,
   listQueuedItemStarts: mockListQueuedItemStarts,
+  listSkippedItemStarts: mockListSkippedItemStarts,
 }));
 type ItemRulingsDb = typeof import('@archon/core/db/item-rulings');
 export const mockListItemRulings = mock<ItemRulingsDb['listItemRulings']>(async () => []);

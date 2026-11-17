@@ -14,6 +14,7 @@ const read: ItemRead = {
       completedAt: '2026-11-01T09:30:00.000Z',
       cause: null,
       awaitingExecution: null,
+      heldBehind: null,
     },
   ],
   queued: [
@@ -24,8 +25,10 @@ const read: ItemRead = {
       hostId: 'host',
       queuedAt: '2026-11-01T09:35:00.000Z',
       ahead: 12,
+      heldBehind: null,
     },
   ],
+  skipped: [],
   questions: [
     {
       kind: 'awaiting_response',
@@ -166,9 +169,46 @@ test('an item read prints its runs, open questions and answers', () => {
   expect(text).toContain('1 ruling(s) on this item could not be read: ruling-lost');
 });
 
+test('a start held behind a run whose owner is gone prints both actions on that run', () => {
+  const holder = 'a1b2c3d4-0000-4000-8000-000000000001';
+  const heldBehind = {
+    runId: holder,
+    workflow: 'deliver',
+    status: 'running',
+    owner: 'unreachable',
+  } as const;
+  const text = itemReadLines({
+    ...read,
+    // No run carries the holder, so only the start's own line can name it.
+    runs: [],
+    queued: [{ ...read.queued[0]!, requestId: 'req-queued', workflow: 'deliver', heldBehind }],
+  }).join('\n');
+  expect(text).toContain('req-queued');
+  expect(text).toContain(`waits behind run ${holder.slice(0, 8)}`);
+  expect(text).toContain(`archon workflow resume ${holder}`);
+  expect(text).toContain(`archon workflow abandon ${holder}`);
+});
+
+test('a start refused for a held item keeps naming the run that held it', () => {
+  const holder = 'a1b2c3d4-0000-4000-8000-000000000001';
+  const text = itemReadLines({
+    ...read,
+    runs: [
+      {
+        ...read.runs[0]!,
+        id: 'run-refused',
+        status: 'cancelled',
+        outcome: null,
+        heldBehind: { runId: holder, workflow: 'deliver', status: 'completed', owner: null },
+      },
+    ],
+  }).join('\n');
+  expect(text).toContain(`refused, held by run ${holder.slice(0, 8)}`);
+});
+
 test('an item read prints a start waiting for capacity with the id that withdraws it', () => {
   const lines = itemReadLines(read);
-  const section = lines.slice(lines.indexOf('Waiting for capacity:') + 1, lines.indexOf('Links:'));
+  const section = lines.slice(lines.indexOf('Waiting to start:') + 1, lines.indexOf('Links:'));
   expect(section).toHaveLength(2);
   expect(section[0]).toContain('b6f1c2d4-0000-4000-8000-000000000001');
   expect(section[0]).toContain('build');
@@ -180,7 +220,7 @@ test('an item read prints a start waiting for capacity with the id that withdraw
   });
   expect(next.find(line => line.includes('b6f1c2d4'))).toContain('on host host');
   const empty = itemReadLines({ ...read, queued: [] });
-  expect(empty[empty.indexOf('Waiting for capacity:') + 1]).toBe('  none');
+  expect(empty[empty.indexOf('Waiting to start:') + 1]).toBe('  none');
 });
 
 test('an item read prints each link with the other item, kind and direction', () => {
