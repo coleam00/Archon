@@ -68,7 +68,8 @@ export interface WorkflowResumeInput extends WorkflowEngineCallBase {
   legacyWorkflow?: ResolvedWorkflow;
   /**
    * The continuation occurrence a host claims, or the `ownerless` cursor of a running run
-   * `resumeWorkflow` checked (`checkedResumeCursor`).
+   * `resumeWorkflow` checked (`checkedResumeCursor`), carrying the live-owner lease the
+   * caller opened for it (`leasedResumeCursor`).
    */
   cursor?: ResumeClaimCursor;
   options?: WorkflowResumeOptions;

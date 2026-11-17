@@ -32,7 +32,7 @@ import {
 } from '@archon/core/workflows/sql-host';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import { createLogger } from '@archon/paths';
-import { checkedResumeCursor, type ResumeClaimCursor } from '@archon/workflows/store';
+import { checkedResumeCursor, type ResumeRequestCursor } from '@archon/workflows/store';
 import {
   workflowResumeTargetForRun,
   resumeWorkflowRunFromServer,
@@ -118,7 +118,7 @@ export function registerChatInbound(
     runId: string,
     actor: ChatActor,
     action: ChatRunAction['action'],
-    cursor?: ResumeClaimCursor
+    cursor?: ResumeRequestCursor
   ): Promise<{ resumed: boolean; waitingForCapacity?: true }> => {
     try {
       const run = await workflowDb.getWorkflowRun(runId);

@@ -17,6 +17,16 @@ const read: ItemRead = {
       hasResult: true,
     },
   ],
+  queued: [
+    {
+      requestId: 'b6f1c2d4-0000-4000-8000-000000000001',
+      workflow: 'review',
+      resource: 'build',
+      hostId: 'host',
+      queuedAt: '2026-11-01T09:35:00.000Z',
+      ahead: 12,
+    },
+  ],
   questions: [
     {
       kind: 'awaiting_response',
@@ -156,6 +166,23 @@ test('an item read prints its runs, open questions and answers', () => {
   expect(lines[ruling]).toContain('by operator-agent (self-declared)');
   expect(lines[ruling]).toContain('(withdrawn 2026-11-01T10:05Z)');
   expect(text).toContain('1 ruling(s) on this item could not be read: ruling-lost');
+});
+
+test('an item read prints a start waiting for capacity with the id that withdraws it', () => {
+  const lines = itemReadLines(read);
+  const section = lines.slice(lines.indexOf('Waiting for capacity:') + 1, lines.indexOf('Links:'));
+  expect(section).toHaveLength(2);
+  expect(section[0]).toContain('b6f1c2d4-0000-4000-8000-000000000001');
+  expect(section[0]).toContain('build');
+  expect(section[0]).toContain('12 ahead on host host');
+  // The host that must drain the start shows when it is next, too.
+  const next = itemReadLines({
+    ...read,
+    queued: read.queued.map(start => ({ ...start, ahead: 0 })),
+  });
+  expect(next.find(line => line.includes('b6f1c2d4'))).toContain('on host host');
+  const empty = itemReadLines({ ...read, queued: [] });
+  expect(empty[empty.indexOf('Waiting for capacity:') + 1]).toBe('  none');
 });
 
 test('an item read prints each link with the other item, kind and direction', () => {

@@ -135,6 +135,7 @@ export {
   inputEnvKey,
   bindingDirectiveSchema,
   isBindingDirective,
+  isBindingDirectiveShape,
   isTypedOutputsDirective,
 } from './node-bindings';
 export {

@@ -33,6 +33,7 @@ import {
   upsertWorkflowRunNodeSession,
 } from '../db/workflow-run-node-sessions';
 import * as codebaseDb from '../db/codebases';
+import * as isolationEnvironmentsDb from '../db/isolation-environments';
 import type { IIsolationStore } from '@archon/isolation';
 import * as envVarDb from '../db/env-vars';
 import { getAgentProvider } from '../services/provider-admission';
@@ -45,6 +46,7 @@ import {
   getTriggersPath,
   launchProjectKey,
 } from './run-ended';
+import { createEndedCheckout } from './ended-checkout';
 import { registeredProjectKeyForPath } from '../services/codebase-checkout-resolver';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
 import { createGitHubAppAuthProvider } from '../github-auth/auth';
@@ -136,6 +138,7 @@ export function createWorkflowStore(): IWorkflowStore {
     listPendingStartBindings: resourceStarts.listPendingStartBindings,
     getResourceStartRequest: resourceStarts.getResourceStartRequest,
     listQueuedResourceStartsForHost: resourceStarts.listQueuedResourceStartsForHost,
+    listQueuedItemStarts: resourceStarts.listQueuedItemStarts,
     withdrawQueuedResourceStart: resourceStarts.withdrawQueuedResourceStart,
     claimStartBindingPreparation: resourceStarts.claimStartBindingPreparation,
     completeStartBindingPreparation: resourceStarts.completeStartBindingPreparation,
@@ -341,7 +344,13 @@ export function createWorkflowDeps(
   return {
     store,
     credentialStore,
-    runEndedStarts: createRunEndedStarts(runEnded),
+    runEndedStarts: createRunEndedStarts({
+      ...runEnded,
+      // Only the SQL store records items, so only its runs reach this.
+      endedCheckout: createEndedCheckout({
+        findEnvironmentByPath: isolationEnvironmentsDb.findLatestByCodebaseAndWorkingPath,
+      }),
+    }),
     checkRunEndedBindings: createRunEndedPreflight({
       ...runEnded,
       loadConfig: loadMergedConfig,

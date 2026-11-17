@@ -2,7 +2,8 @@
  * The read of one item (`workflow runs --item`): its runs, the questions open in them, the
  * answers recorded in them with the rulings recorded on the item, each oldest first, and
  * the links from and to it.
- * Where the item stands is left to the reader; this computes no position and stores nothing.
+ * Its starts still waiting for capacity are listed too, with the queue order recorded for
+ * them. Where the item stands is left to the reader; this computes no stage and stores nothing.
  */
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
@@ -46,7 +47,12 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import type { WorkflowEventRow } from './schemas/workflow-event';
-import { readResourceStartReceiptId, startCause, startCauseSchema } from './schemas/resource-start';
+import {
+  queuedItemStartSchema,
+  readResourceStartReceiptId,
+  startCause,
+  startCauseSchema,
+} from './schemas/resource-start';
 import type { IWorkflowStore } from './store';
 import { awaitingExecution } from './resource-start-store';
 import { readCompletedRunResult } from './run-result';
@@ -109,7 +115,9 @@ const answerFields = {
  * of that run's set closed, with how many were answered and withdrawn: `answered: 0` means
  * nothing was. Both read from the item's ask rows, not from run events, so they stay on the
  * item after the run that left the asks is deleted; `runId` names that run, `node` and
- * `occurrence` are null. A set that a newer one replaced before it closed never settles.
+ * `occurrence` are null. A set that a newer one replaced before it closed never settles. A
+ * set with an ask row that cannot be read does not settle in the read either; `degraded`
+ * names its run.
  */
 export const itemAnswerSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -171,7 +179,8 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * An item and what is recorded about it. `runs` are the item's own readable runs; a
  * `workflow:` child is left to `workflow get` on its parent. `questions` and `answers` come from the
  * whole run tree, because a question is often asked inside a child; each names the run
- * that holds it. `degraded` names each part that could not be read: one of the item's own
+ * that holds it. `queued` are the item's starts still waiting for capacity, which have no run
+ * yet; `archon trigger withdraw <requestId>` withdraws one. `degraded` names each part that could not be read: one of the item's own
  * runs, a paused run the queue could not read (`run_unreadable`, by `runId`), a ruling
  * (`ruling_unreadable`, by `rulingId`), or a link (`link_unreadable`, by `linkId`). The rest
  * still reads.
@@ -179,6 +188,7 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
 export const itemReadSchema = z.object({
   item: workflowItemSchema,
   runs: z.array(itemRunSchema),
+  queued: z.array(queuedItemStartSchema),
   questions: z.array(attentionQueueItemSchema),
   answers: z.array(itemAnswerSchema),
   links: z.array(itemReadLinkSchema),
@@ -203,6 +213,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'listItemAsks'
       | 'getStartReceipt'
       | 'getResourceStartRequest'
+      | 'listQueuedItemStarts'
     >;
 }
 
@@ -328,15 +339,17 @@ function askAnswer({ id, runId, ask, closed }: StoredItemAsk): ItemAnswer | null
 
 /**
  * The answers and settled sets the item's asks hold: one entry per answered or withdrawn
- * ask, and one `asks_settled` per set whose asks all closed that way, at its last close.
+ * ask, and one `asks_settled` per set whose asks all closed that way and all read, at its
+ * last close. `unreadable` names the sets with a row that could not be read: any of those
+ * rows may be an open ask, so the read cannot say the set settled.
  */
-function askAnswers(asks: readonly StoredItemAsk[]): ItemAnswer[] {
+function askAnswers(asks: readonly StoredItemAsk[], unreadable: ReadonlySet<string>): ItemAnswer[] {
   const sets = new Map<string, StoredItemAsk[]>();
   for (const ask of asks) sets.set(ask.runId, [...(sets.get(ask.runId) ?? []), ask]);
   return [...sets].flatMap(([runId, set]) => {
     const closes = set.map(askAnswer).filter(answer => answer?.kind === 'ask');
     const [first] = closes;
-    if (first === undefined || closes.length < set.length) return closes;
+    if (first === undefined || closes.length < set.length || unreadable.has(runId)) return closes;
     const answered = closes.filter(close => !close.withdrawn).length;
     const settled: ItemAnswer = {
       kind: 'asks_settled',
@@ -361,6 +374,11 @@ export async function readItem(
   projectKey: string,
   key: string
 ): Promise<ItemRead | null> {
+  const resolved = await readItemRuns(source.store, projectKey, key);
+  if (resolved === null) return null;
+  // Queued starts first, then the runs: a start admitted between the two reads then shows
+  // in both (its run id is its request id), and is listed once as a run, never in neither.
+  const waiting = await source.store.listQueuedItemStarts(resolved.item.id);
   const found = await readItemRuns(source.store, projectKey, key);
   if (found === null) return null;
   const own = { values: found.runs, degraded: found.degraded };
@@ -398,7 +416,7 @@ export async function readItem(
   const answers = [
     ...[...events.values()].flat().map(itemAnswer),
     ...rulings,
-    ...askAnswers(asks.values),
+    ...askAnswers(asks.values, new Set(asks.degraded.map(report => report.runId))),
   ]
     // Stable, so rows that tie on `at` keep their store order: append order within a run,
     // recording order among rulings, and a set's last answer before its settle.
@@ -406,6 +424,7 @@ export async function readItem(
   return {
     item: found.item,
     runs: await Promise.all(own.values.map(run => itemRun(source, run, terminalEvents))),
+    queued: waiting.filter(start => !tree.has(start.requestId)),
     questions,
     answers,
     links,

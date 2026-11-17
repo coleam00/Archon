@@ -15,6 +15,7 @@ import {
   mockGetItem,
   mockListOpenItemAsks,
   mockAnswerItemAsk,
+  mockAnswerAttentionWait,
   mockWithdrawItemAsk,
   mockGetUserById,
   makeUser,
@@ -300,7 +301,8 @@ describe('reading an item over HTTP', () => {
   };
 
   test('reads a known item by project and key, with its question and answers', async () => {
-    mockGetItemRuns.mockImplementationOnce(async (projectKey, key) =>
+    // The read resolves the item twice: once for its queued starts, then for its runs.
+    mockGetItemRuns.mockImplementation(async (projectKey, key) =>
       projectKey === item.projectKey && key === item.key
         ? { item, runs: [asking], descendantIds: [] }
         : null
@@ -327,16 +329,23 @@ describe('reading an item over HTTP', () => {
           ])
         )
     );
-    const { app } = makeApp();
-    const response = await app.request(
-      `/api/items?project=${encodeURIComponent(item.projectKey)}&key=${encodeURIComponent(item.key)}`
-    );
-    expect(response.status).toBe(200);
-    const read = itemReadSchema.parse(await response.json());
-    expect(read.item).toEqual(item);
-    expect(read.runs.map(run => [run.id, run.status])).toEqual([['run-item', 'paused']]);
-    expect(read.questions.map(question => question.run?.id)).toEqual(['run-item']);
-    expect(read.answers).toMatchObject([{ kind: 'gate', runId: 'run-item', decision: 'approved' }]);
+    try {
+      const { app } = makeApp();
+      const response = await app.request(
+        `/api/items?project=${encodeURIComponent(item.projectKey)}&key=${encodeURIComponent(item.key)}`
+      );
+      expect(response.status).toBe(200);
+      const read = itemReadSchema.parse(await response.json());
+      expect(read.item).toEqual(item);
+      expect(read.runs.map(run => [run.id, run.status])).toEqual([['run-item', 'paused']]);
+      expect(read.questions.map(question => question.run?.id)).toEqual(['run-item']);
+      expect(read.answers).toMatchObject([
+        { kind: 'gate', runId: 'run-item', decision: 'approved' },
+      ]);
+      expect(read.queued).toEqual([]);
+    } finally {
+      mockGetItemRuns.mockImplementation(async () => null);
+    }
   });
 
   test('an unknown key is 404 and a missing parameter is 400', async () => {
@@ -474,13 +483,17 @@ describe('rulings on an item over HTTP', () => {
 
   test('reading the item shows its rulings', async () => {
     const item = { id: 'item-row', projectKey: project, key: 'issues/8' };
-    mockGetItemRuns.mockImplementationOnce(async () => ({ item, runs: [], descendantIds: [] }));
+    mockGetItemRuns.mockImplementation(async () => ({ item, runs: [], descendantIds: [] }));
     mockListItemRulings.mockImplementationOnce(async () => [ruling()]);
     mockListAttentionQueueRows.mockImplementationOnce(async () => []);
-    const response = await makeApp().app.request(
-      `/api/items?project=${encodeURIComponent(project)}&key=issues%2F8`
-    );
-    expect(itemReadSchema.parse(await response.json()).answers).toEqual([ruling()]);
+    try {
+      const response = await makeApp().app.request(
+        `/api/items?project=${encodeURIComponent(project)}&key=issues%2F8`
+      );
+      expect(itemReadSchema.parse(await response.json()).answers).toEqual([ruling()]);
+    } finally {
+      mockGetItemRuns.mockImplementation(async () => null);
+    }
   });
 });
 
@@ -616,5 +629,64 @@ describe('asks answered and withdrawn by ref over HTTP', () => {
     withAsk(null);
     expect((await post('/api/attention/withdraw', { ref: 'ask:missing' })).status).toBe(404);
     expect((await post('/api/attention/withdraw', { ref: `${left.id}:pause-1` })).status).toBe(400);
+  });
+});
+
+describe("answers to a paused run's attention wait by ref over HTTP", () => {
+  const pausedAt = (fields: Partial<WorkflowAttentionWaitContext>): WorkflowRun => ({
+    ...MOCK_RUNNING_RUN,
+    status: 'paused',
+    metadata: {
+      wait: {
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: '2026-11-16T10:00:00.000Z',
+        message: 'Merge it?',
+        pauseId: 'pause-1',
+        form: 'select',
+        options: [{ id: 'merge' }],
+        ...fields,
+      },
+    },
+  });
+  const answer = async (run: WorkflowRun, body: object) => {
+    mockGetWorkflowRun.mockImplementation(async id => (id === run.id ? run : null));
+    const response = await makeApp().app.request('/api/attention/answer', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ref: `${run.id}:pause-1`, ...body }),
+    });
+    return { status: response.status, body: await response.text() };
+  };
+
+  test('an answer the wait does not declare is 400 and is not recorded', async () => {
+    const calls = mockAnswerAttentionWait.mock.calls.length;
+    try {
+      const undeclared = await answer(pausedAt({}), { choose: ['nope'] });
+      expect(undeclared.status).toBe(400);
+      expect(undeclared.body).toContain('nope');
+      expect((await answer(pausedAt({ other: true }), { choose: ['other'] })).status).toBe(400);
+      expect(
+        (await answer(pausedAt({ form: 'message', options: [] }), { choose: ['merge'] })).status
+      ).toBe(400);
+      expect((await answer(pausedAt({}), { recommended: true })).status).toBe(400);
+      expect(mockAnswerAttentionWait.mock.calls.length).toBe(calls);
+    } finally {
+      mockGetWorkflowRun.mockReset();
+    }
+  });
+
+  test("a store failure while recording a valid answer is the server's 500", async () => {
+    mockAnswerAttentionWait.mockImplementationOnce(async () => {
+      throw new Error('db down');
+    });
+    try {
+      const failed = await answer(pausedAt({}), { choose: ['merge'] });
+      expect(failed.status).toBe(500);
+      expect(failed.body).not.toContain('db down');
+    } finally {
+      mockGetWorkflowRun.mockReset();
+    }
   });
 });

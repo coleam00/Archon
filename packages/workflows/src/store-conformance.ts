@@ -1,5 +1,9 @@
 export { resourceStartFixtures } from './resource-start-conformance';
-export { CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID } from './store-conformance/fixtures';
+export {
+  CONFORMANCE_CODEBASE_ID,
+  CONFORMANCE_CONVERSATION_ID,
+  testRunOwnerLease,
+} from './store-conformance/fixtures';
 export {
   assertWorkflowClaimRace,
   assertWorkflowEventFeedRace,

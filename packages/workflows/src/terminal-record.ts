@@ -20,6 +20,7 @@ import {
 } from './schemas/workflow-run';
 import { observeArtifactManifest } from './terminal-artifact-manifest';
 import {
+  isExecNodeRecord,
   nodeInvocationKey,
   parseNodeInvocationKey,
   readNodeRecordData,
@@ -33,10 +34,13 @@ import {
 } from './schemas/node-outcomes';
 import {
   nodeFailureKindSchema,
+  type NodeExecutionMetadata,
   type NodeFailureKind,
   type NodeInvocation,
 } from './schemas/node-execution';
 import type { FanOutOutcome } from './schemas/fan-out-outcome';
+import type { SerializedNodeData } from './node-record-serialization';
+import type { LoopRound, LoopRoundNode } from './schemas/loop-rounds';
 
 export interface TerminalRecordEvent {
   event_type: string;
@@ -54,7 +58,25 @@ interface NodeEventFold {
   graph: RunGraph | undefined;
   nodes: Map<string, RunNodeState>;
   outputs: Map<string, Record<string, unknown>>;
+  /**
+   * A failed exec node's recorded stdout, kept apart from `outputs`: the terminal return
+   * and node outcomes read only a completed node's output, a loop round reads both.
+   */
+  failedOutputs: Map<string, Pick<SerializedNodeData, 'node_output' | 'node_output_truncated'>>;
   failureOrder: Map<string, number>;
+  /** Each key's invocation timing, folded from its attempts; a cache record carries none. */
+  timings: Map<string, InvocationTiming>;
+}
+
+/**
+ * An invocation's timing across its attempts: when its first attempt started, and each
+ * attempt's latest recorded duration by attempt id (undefined while that attempt runs).
+ * An attempt's start and its end are two records of one attempt, so keying by attempt id
+ * counts each attempt once.
+ */
+interface InvocationTiming {
+  startedAt: string;
+  attempts: Map<string, number | undefined>;
 }
 
 /**
@@ -72,7 +94,9 @@ function foldNodeEvents(
   const nodes = new Map<string, RunNodeState>();
   const outputs = new Map<string, Record<string, unknown>>();
   const failureOrder = new Map<string, number>();
-  const folded = { graph, nodes, outputs, failureOrder };
+  const failedOutputs: NodeEventFold['failedOutputs'] = new Map();
+  const timings = new Map<string, InvocationTiming>();
+  const folded = { graph, nodes, outputs, failedOutputs, failureOrder, timings };
   if (graph)
     for (const nodeId of graph.node_ids)
       nodes.set(keyOf(nodeId, []), { node_id: nodeId, state: 'pending' });
@@ -98,13 +122,41 @@ function foldNodeEvents(
   return folded;
 }
 
+function foldTiming(
+  timings: Map<string, InvocationTiming>,
+  key: string,
+  { invocation, attempt, timing }: NodeExecutionMetadata
+): void {
+  const folded = timings.get(key) ?? { startedAt: invocation.startedAt, attempts: new Map() };
+  folded.attempts.set(attempt.id, timing.durationMs);
+  timings.set(key, folded);
+}
+
+/** Exec writers record a failed command's stdout; only a loop round reads it. */
+function keepFailedExecOutput(
+  failedOutputs: NodeEventFold['failedOutputs'],
+  key: string,
+  record: ReadNodeRecordEvent
+): void {
+  const { node_output, node_output_truncated } = record.data;
+  if (!isExecNodeRecord(record) || node_output === undefined) return;
+  failedOutputs.set(key, {
+    node_output,
+    ...(node_output_truncated ? { node_output_truncated } : {}),
+  });
+}
+
 function foldNodeRecord(
-  { nodes, outputs, failureOrder }: Omit<NodeEventFold, 'graph'>,
+  { nodes, outputs, failedOutputs, failureOrder, timings }: Omit<NodeEventFold, 'graph'>,
   record: ReadNodeRecordEvent,
   key: string,
   index: number
 ): void {
   const nodeId = record.path;
+  // Cache records (replay, reset, invalidation) carry no invocation or timing, and fold
+  // under the top-level key, which no loop round reads.
+  if (record.metadata) foldTiming(timings, key, record.metadata);
+  failedOutputs.delete(key);
   switch (record.eventType) {
     case 'node_started':
     case 'node_suspended':
@@ -151,6 +203,7 @@ function foldNodeRecord(
         )
       );
       outputs.delete(key);
+      keepFailedExecOutput(failedOutputs, key, record);
       failureOrder.set(key, index);
       break;
     }
@@ -212,6 +265,51 @@ export function buildNodeOutcomes(
     first_failed_node: firstFailed === undefined ? null : parseNodeInvocationKey(firstFailed).path,
     nodes: outcomes,
   });
+}
+
+/**
+ * Each round of each `loop_group` the run has entered, in the order each round first
+ * appeared, with the body node invocations it recorded. A running round lists the nodes
+ * it has reached; one it has not reached yet is absent. Empty when the run ran no loop.
+ */
+export function buildLoopRounds(
+  run: Pick<WorkflowRun, 'id' | 'metadata'>,
+  events: readonly TerminalRecordEvent[]
+): LoopRound[] {
+  const { nodes, outputs, failedOutputs, timings } = foldNodeEvents(run, events, nodeInvocationKey);
+  const rounds = new Map<string, LoopRound>();
+  for (const [key, state] of nodes) {
+    const { loopPath } = parseNodeInvocationKey(key);
+    if (loopPath.length === 0) continue;
+    const roundKey = JSON.stringify(loopPath);
+    let round = rounds.get(roundKey);
+    if (!round) {
+      round = { loop_group_path: loopPath, nodes: [] };
+      rounds.set(roundKey, round);
+    }
+    round.nodes.push(
+      loopRoundNode(state, timings.get(key), outputs.get(key) ?? failedOutputs.get(key))
+    );
+  }
+  return [...rounds.values()];
+}
+
+function loopRoundNode(
+  state: RunNodeState,
+  timing: InvocationTiming | undefined,
+  data: Record<string, unknown> | undefined
+): LoopRoundNode {
+  const entry: LoopRoundNode = { ...state };
+  if (timing) entry.started_at = timing.startedAt;
+  const durations = timing ? [...timing.attempts.values()] : [];
+  // Only once every attempt has ended: a running retry has no duration yet.
+  if (durations.length > 0 && durations.every(ms => ms !== undefined))
+    entry.duration_ms = durations.reduce((total, ms) => total + ms, 0);
+  if (!data) return entry;
+  if (typeof data.node_output === 'string') entry.output = data.node_output;
+  if (data.node_output_truncated === true) entry.output_truncated = true;
+  if (Object.hasOwn(data, 'structured_output')) entry.structured_output = data.structured_output;
+  return entry;
 }
 
 /**

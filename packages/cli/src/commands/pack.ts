@@ -1,4 +1,6 @@
 /**
+ * `archon pack graph <pack>`: the pack's stage graph in this install (`readPackGraph`).
+ *
  * `archon pack bindings <pack>`: write the trigger bindings a pack recommends as files for
  * one repository.
  *
@@ -23,8 +25,12 @@ import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github/s
 import { loadConfig } from '@archon/core/config/config-loader';
 import { loadWorkflowRunConfigFile } from '@archon/core/config/run-config';
 import { loadStoreSelection } from '@archon/core/config/store-selection';
+import * as codebaseDb from '@archon/core/db/codebases';
+import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
+import { readPackGraph } from '@archon/core/workflows/pack-graph';
 import {
   getTriggersPath,
+  launchProjectKey,
   type RunEndedBinding,
   runEndedTriggerCheck,
 } from '@archon/core/workflows/run-ended';
@@ -36,7 +42,12 @@ import {
   type PackBindingInput,
   type PackBindingKind,
 } from '@archon/workflows/schemas/pack-bindings';
-import type { WorkflowSource } from '@archon/workflows/schemas/workflow';
+import {
+  nearestPackBindings,
+  type PackGraph,
+  packWorkflowName,
+  packWorkflows,
+} from '@archon/workflows/pack-graph';
 import { writeJsonLine } from '../utils/stdout';
 import {
   triggerConfigSchema,
@@ -260,29 +271,9 @@ interface DeclaredPack {
   workflowNames: readonly string[];
 }
 
-/** Nearest scope first. A `Record` so a new workflow source cannot be left unranked. */
-const SCOPE_RANK: Readonly<Record<WorkflowSource, number>> = {
-  project: 0,
-  global: 1,
-  bundled: 2,
-  installed: 3,
-};
-
 async function findPack(cwd: string, packKey: string): Promise<DeclaredPack> {
-  const discovered = await loadWorkflows(cwd);
-  const workflows = discovered.workflows.filter(entry => entry.workflow.pack?.key === packKey);
-  if (workflows.length === 0) {
-    // An invalid declaration fails every workflow of its pack, so the reason is here.
-    const errors = [...new Set(discovered.errors.map(e => `  ${e.filename}: ${e.error}`))];
-    throw new Error(
-      [`No workflow pack '${packKey}' was found from ${cwd}.`, ...errors.slice(0, 20)].join('\n')
-    );
-  }
-  // Pack folders of one name in several scopes are one pack to a run, and the nearest
-  // scope's file wins there; the nearest declaration wins here.
-  const bindings = workflows
-    .flatMap(({ workflow: { pack } }) => (pack?.bindings !== undefined ? [pack] : []))
-    .sort((a, b) => SCOPE_RANK[a.source] - SCOPE_RANK[b.source])[0]?.bindings;
+  const workflows = packWorkflows(await loadWorkflows(cwd), packKey, cwd);
+  const bindings = nearestPackBindings(workflows);
   if (bindings === undefined)
     throw new Error(`Pack '${packKey}' declares no bindings in its .pack/pack.yaml.`);
   return {
@@ -306,7 +297,7 @@ function selectIds(pack: DeclaredPack, only: string | undefined): string[] {
 
 /** An installed pack's workflow is named `owner/plugin:<name>`; a binding must use that name. */
 function workflowNameFor(pack: DeclaredPack, id: string, declared: string): string {
-  const name = pack.workflowNames.find(n => n === declared || n.endsWith(`:${declared}`));
+  const name = packWorkflowName(pack.workflowNames, declared);
   if (name === undefined)
     throw new Error(
       `Binding '${id}' names workflow '${declared}', which pack '${pack.key}' does not provide.`
@@ -323,14 +314,14 @@ function nextSteps(generated: readonly Generated[], target: Target): string[] {
   const lines: string[] = [];
   const ended = generated.filter(g => g.kind === 'run_ended');
   if (ended.length > 0) {
-    const triggers = shellQuote(getTriggersPath());
     lines.push(
       '',
-      'Run-ended bindings. Copy each into the triggers directory, where it is active at once: it starts its workflow when a run on an item ends with its outcome. Then list and check them with `archon trigger check`; deleting a copy turns it off:',
-      `  mkdir -p ${triggers}`
+      'Run-ended bindings. Add each to the triggers directory, where it is active at once: it starts its workflow when a run on an item ends with its outcome. Then list and check them with `archon trigger check`; deleting one from the triggers directory turns it off:'
     );
     for (const item of ended)
-      lines.push(`  cp ${shellQuote(item.path)} ${triggers}/  # outcome '${item.outcome ?? ''}'`);
+      lines.push(
+        `  archon trigger add ${shellQuote(item.path)}  # outcome '${item.outcome ?? ''}'`
+      );
   }
   const timers = generated.filter(g => g.kind === 'timer');
   const events = generated.filter(g => g.kind === 'event');
@@ -501,12 +492,72 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
   );
 }
 
+const GRAPH_USAGE =
+  'Usage: archon pack graph <pack> [--cwd <checkout>] [--workflow-source <dir>] [--json]';
+
+function arrowText(arrow: PackGraph['arrows'][number]): string {
+  const problems = arrow.active ? arrow.installed.problems : [];
+  const state = !arrow.active
+    ? 'declared, inactive'
+    : problems.length > 0
+      ? `active, refused: ${problems.join('; ')}`
+      : 'active';
+  const declared = arrow.declared?.problems ?? [];
+  const note = declared.length > 0 ? ` (binding ${declared.join('; ')})` : '';
+  return `  ${arrow.from.stage}:${arrow.from.outcome} -> ${arrow.to} [${state}]${note}`;
+}
+
+/** The graph as plain lines; `--json` prints the read itself, which is the contract. */
+function graphText(graph: PackGraph): string {
+  const lines = [`Pack '${graph.pack}': ${String(graph.stages.length)} stage(s)`];
+  for (const stage of graph.stages) {
+    const values = stage.outcome?.values.map(v => v.value).join(', ');
+    lines.push(`  ${stage.name}${values === undefined ? ' (no outcome)' : `: ${values}`}`);
+  }
+  lines.push('', `Arrows: ${String(graph.arrows.length)}`);
+  for (const arrow of graph.arrows) lines.push(arrowText(arrow));
+  const nothing = graph.stages.flatMap(stage =>
+    (stage.outcome?.values ?? [])
+      .filter(v => v.startsNothing)
+      .map(v => `  ${stage.name}:${v.value}${stage.asks ? '' : ' (no asks: ends in silence)'}`)
+  );
+  if (nothing.length > 0) lines.push('', 'Outcomes that start nothing:', ...nothing);
+  if (graph.discoveryErrors.length > 0)
+    lines.push(
+      '',
+      'Workflows that failed to load (a stage among them is missing above):',
+      ...graph.discoveryErrors.map(e => `  ${e.filename}: ${e.error}`)
+    );
+  return lines.join('\n');
+}
+
+async function packGraph(packKey: string, options: PackBindingsOptions): Promise<void> {
+  const graph = await readPackGraph(
+    resolve(options.cwd),
+    packKey,
+    {
+      loadConfig,
+      providers: providerRegistry,
+      triggersDirectory: getTriggersPath,
+      projectKeyOf: launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb)),
+    },
+    options.workflowSource === undefined ? {} : { workflowSource: resolve(options.workflowSource) }
+  );
+  if (options.json) await writeJsonLine(graph);
+  else console.log(graphText(graph));
+}
+
 export async function packCommand(
   subcommand: string | undefined,
   args: readonly string[],
   options: PackBindingsOptions
 ): Promise<void> {
   const [packKey] = args;
+  if (subcommand === 'graph') {
+    if (!packKey || args.length !== 1) throw new Error(GRAPH_USAGE);
+    await packGraph(packKey, options);
+    return;
+  }
   if (subcommand !== 'bindings' || !packKey || args.length !== 1) throw new Error(USAGE);
   await packBindings(packKey, options);
 }
