@@ -7,6 +7,8 @@
  *
  * The deployment owns these files. They are read from the install's home only, never
  * from a repository, and fresh at every completion, so removing a file turns it off.
+ * The same files hold asks-settled bindings (`asks-settled.ts`); this module reads both
+ * forms and builds the receipt either form writes.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -19,9 +21,12 @@ import {
   RUN_ENDED_SOURCE_ACTOR,
   sourceReceiptAcceptanceSchema,
   triggerConfigSchema,
+  type AsksSettledInputSource,
+  type AsksSettledTrigger,
   type ResourceStartBindingIntent,
   type RunEndedTrigger,
   type SourceReceiptAcceptance,
+  type SourceReceiptInput,
   type TriggerConfig,
 } from '@archon/workflows/schemas/resource-start';
 import type { WorkflowItem, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -49,21 +54,32 @@ export class TriggerFileError extends Error {
   }
 }
 
-/** A trigger file whose binding the end of a run starts. */
-export interface RunEndedBinding {
+/** A trigger file with `on`: what every form shares. */
+interface OnBindingFile {
   file: string;
   sourceInstanceId: string;
   binding: TriggerConfig['binding'];
+}
+
+/** A trigger file whose binding the end of a run starts. */
+export interface RunEndedBinding extends OnBindingFile {
   runEnded: RunEndedTrigger;
 }
 
+/** A trigger file whose binding the settling of a run's asks starts (see `asks-settled`). */
+export interface AsksSettledBinding extends OnBindingFile {
+  asksSettled: AsksSettledTrigger;
+}
+
+export type OnBinding = RunEndedBinding | AsksSettledBinding;
+
 /**
- * Every run-ended binding in `directory`, in file-name order. A file without `on` is a
- * schedule or fire-only binding and is not read further. A file that is not JSON, or
+ * Every trigger file in `directory` with `on`, in file-name order. A file without `on` is
+ * a schedule or fire-only binding and is not read further. A file that is not JSON, or
  * whose `on` is invalid, throws naming the file: whether it was meant to start a stage
- * cannot be known, so the completion that reads it must not guess.
+ * cannot be known, so the write that reads it must not guess.
  */
-export async function readRunEndedBindings(directory: string): Promise<RunEndedBinding[]> {
+export async function readOnBindings(directory: string): Promise<OnBinding[]> {
   let names: string[];
   try {
     names = (await readdir(directory)).filter(name => name.endsWith('.json')).sort();
@@ -71,17 +87,17 @@ export async function readRunEndedBindings(directory: string): Promise<RunEndedB
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
   }
-  const bindings: RunEndedBinding[] = [];
+  const bindings: OnBinding[] = [];
   const bySource = new Map<string, string>();
   for (const name of names) {
-    const binding = await readRunEndedFile(join(directory, name));
+    const binding = await readOnFile(join(directory, name));
     if (!binding) continue;
-    // The ended run's id is every receipt's delivery id, so two files with one source
-    // would collide on it and the second start would replay as the first.
+    // Both forms take the run's id as every receipt's delivery id, so two files with one
+    // source would collide on it and the second start would replay as the first.
     const other = bySource.get(binding.sourceInstanceId);
     if (other)
       throw new TriggerFileError(
-        `Trigger files ${other} and ${binding.file} share sourceInstanceId '${binding.sourceInstanceId}'; each run-ended binding needs its own`
+        `Trigger files ${other} and ${binding.file} share sourceInstanceId '${binding.sourceInstanceId}'; each run-ended or asks-settled binding needs its own`
       );
     bySource.set(binding.sourceInstanceId, binding.file);
     bindings.push(binding);
@@ -89,8 +105,18 @@ export async function readRunEndedBindings(directory: string): Promise<RunEndedB
   return bindings;
 }
 
-/** One trigger file as a run-ended binding, or undefined when it has no `on`. */
-async function readRunEndedFile(file: string): Promise<RunEndedBinding | undefined> {
+/** Every run-ended binding in `directory`; any broken `on` file throws (see `readOnBindings`). */
+export async function readRunEndedBindings(directory: string): Promise<RunEndedBinding[]> {
+  return (await readOnBindings(directory)).filter(binding => 'runEnded' in binding);
+}
+
+/** Every asks-settled binding in `directory`; any broken `on` file throws. */
+export async function readAsksSettledBindings(directory: string): Promise<AsksSettledBinding[]> {
+  return (await readOnBindings(directory)).filter(binding => 'asksSettled' in binding);
+}
+
+/** One trigger file as a binding with `on`, or undefined when it has none. */
+async function readOnFile(file: string): Promise<OnBinding | undefined> {
   let value: unknown;
   try {
     value = JSON.parse(await readFile(file, 'utf8')) as unknown;
@@ -114,7 +140,12 @@ async function readRunEndedFile(file: string): Promise<RunEndedBinding | undefin
     throw new TriggerFileError(
       `Trigger file ${file} is invalid: binding.launch.cwd must be absolute`
     );
-  return { file, sourceInstanceId, binding, runEnded: on.runEnded };
+  // The schema holds exactly one of the two.
+  if (on.runEnded) return { file, sourceInstanceId, binding, runEnded: on.runEnded };
+  if (on.asksSettled) return { file, sourceInstanceId, binding, asksSettled: on.asksSettled };
+  throw new TriggerFileError(
+    `Trigger file ${file} is invalid: on has neither runEnded nor asksSettled`
+  );
 }
 
 /**
@@ -140,27 +171,48 @@ export function runEndedBindingProblems(
   return problems;
 }
 
-/** The target inputs a binding maps from the ended run, or the first that did not resolve. */
-function mappedInputs(
-  runEnded: RunEndedTrigger,
-  ended: RunEndedFacts
+/**
+ * What a binding's inputs read from: the run's own inputs and result, and for an
+ * asks-settled binding the settled answers. `gone` names why the run's inputs and result
+ * cannot be read (its row was deleted), so a binding that reads them starts nothing.
+ */
+export type MappedSources =
+  | {
+      inputs: Readonly<Record<string, JsonValue>>;
+      result: JsonValue | undefined;
+      answers?: JsonValue;
+    }
+  | { gone: string; answers?: JsonValue };
+
+/** The target inputs a binding maps, or the first that did not resolve. */
+export function mappedInputs(
+  sources: Readonly<Record<string, AsksSettledInputSource>> | undefined,
+  from: MappedSources
 ): { inputs: Record<string, JsonValue> } | { missing: string } {
   const inputs: Record<string, JsonValue> = {};
-  for (const [target, source] of Object.entries(runEnded.inputs ?? {})) {
-    if ('input' in source) {
-      // A declared input the run was not given passes nothing; the target's own
-      // declaration decides at preparation whether that start can run.
-      const value = ended.inputs[source.input];
-      if (value !== undefined) inputs[target] = value;
-      continue;
-    }
-    const value =
-      ended.result === undefined ? undefined : resolveJsonPointer(ended.result, source.result);
-    if (value === undefined)
-      return { missing: `Input '${target}': result pointer '${source.result}' did not resolve` };
-    inputs[target] = value;
+  for (const [target, source] of Object.entries(sources ?? {})) {
+    const value = mappedValue(source, from);
+    if (typeof value === 'string') return { missing: `Input '${target}': ${value}` };
+    // A declared input the run was not given passes nothing; the target's own
+    // declaration decides at preparation whether that start can run.
+    if (value.value !== undefined) inputs[target] = value.value;
   }
   return { inputs };
+}
+
+/** One source's value, possibly nothing, or why it cannot be read. */
+function mappedValue(
+  source: AsksSettledInputSource,
+  from: MappedSources
+): { value: JsonValue | undefined } | string {
+  // `{answers}` parses only in an asks-settled binding, which always passes them.
+  if ('answers' in source)
+    return from.answers === undefined ? 'there are no answers to read' : { value: from.answers };
+  if ('gone' in from) return from.gone;
+  if ('input' in source) return { value: from.inputs[source.input] };
+  const value =
+    from.result === undefined ? undefined : resolveJsonPointer(from.result, source.result);
+  return value === undefined ? `result pointer '${source.result}' did not resolve` : { value };
 }
 
 export interface RunEndedStartsDependencies {
@@ -211,16 +263,25 @@ export function createRunEndedStarts(
       if (candidate.runEnded.outcome !== ended.outcome.value) continue;
       if (candidate.runEnded.checkout !== undefined) checkout ??= dependencies.endedCheckout(run);
       receipts.push(
-        receiptFor(
+        bindingReceipt(
           candidate,
-          ended,
-          item,
+          { deliveryId: run.id, sourceActor: runEndedActor(ended), itemKey: item.key },
+          mappedInputs(candidate.runEnded.inputs, ended),
           candidate.runEnded.checkout === undefined ? undefined : await checkout,
           dependencies.now?.() ?? new Date()
         )
       );
     }
     return receipts;
+  };
+}
+
+/** The source actor of a start a run's end caused: the run, and its outcome when it has one. */
+function runEndedActor(ended: RunEndedFacts): NonNullable<SourceReceiptInput['sourceActor']> {
+  return {
+    source: RUN_ENDED_SOURCE_ACTOR,
+    id: ended.run.id,
+    ...(ended.outcome.value === '' ? {} : { display: ended.outcome.value }),
   };
 }
 
@@ -238,7 +299,7 @@ export function launchProjectKey(
 
 /** The project a binding launches in; a failure to resolve it names the file. */
 export async function bindingProjectKey(
-  candidate: RunEndedBinding,
+  candidate: OnBindingFile,
   dependencies: Pick<RunEndedStartsDependencies, 'projectKeyOf'>
 ): Promise<string | null> {
   try {
@@ -251,14 +312,23 @@ export async function bindingProjectKey(
   }
 }
 
-function receiptFor(
-  candidate: RunEndedBinding,
-  ended: RunEndedFacts,
-  item: WorkflowItem,
+/**
+ * The receipt one matched binding writes: matched with the mapped inputs as event inputs,
+ * or unmatched naming the input that did not resolve or the checkout that was refused.
+ * Keyed by the binding's source and `deliveryId` (the run the start is about), so a replay
+ * never starts it twice. `checkout` is read only for a run-ended `checkout: "ended-run"`.
+ */
+export function bindingReceipt(
+  candidate: OnBindingFile,
+  delivery: {
+    deliveryId: string;
+    sourceActor: NonNullable<SourceReceiptInput['sourceActor']>;
+    itemKey: string;
+  },
+  mapped: { inputs: Record<string, JsonValue> } | { missing: string },
   checkout: EndedCheckout | undefined,
   now: Date
 ): SourceReceiptAcceptance {
-  const mapped = mappedInputs(candidate.runEnded, ended);
   const inputs = 'inputs' in mapped ? mapped.inputs : {};
   const refused =
     'missing' in mapped
@@ -275,18 +345,14 @@ function receiptFor(
   const receipt = {
     id: randomUUID(),
     sourceInstanceId: candidate.sourceInstanceId,
-    deliveryId: ended.run.id,
+    deliveryId: delivery.deliveryId,
     contentDigest: createHash('sha256')
       .update(JSON.stringify(handoff && refused === undefined ? [content, handoff] : content))
       .digest('hex'),
     receivedAt: now.toISOString(),
     occurredAt: null,
-    sourceActor: {
-      source: RUN_ENDED_SOURCE_ACTOR,
-      id: ended.run.id,
-      ...(ended.outcome.value === '' ? {} : { display: ended.outcome.value }),
-    },
-    itemKey: item.key,
+    sourceActor: delivery.sourceActor,
+    itemKey: delivery.itemKey,
   };
   if (refused !== undefined)
     return sourceReceiptAcceptanceSchema.parse({
@@ -324,7 +390,7 @@ function receiptFor(
 }
 
 /** The input names a workflow declares: its own `inputs:` and its pack's settings. */
-function declaredInputNames(workflow: Pick<ResolvedWorkflow, 'inputs' | 'pack'>): string[] {
+export function declaredInputNames(workflow: Pick<ResolvedWorkflow, 'inputs' | 'pack'>): string[] {
   return [...Object.keys(workflow.inputs ?? {}), ...Object.keys(workflow.pack?.settings ?? {})];
 }
 
@@ -366,19 +432,28 @@ export async function runEndedBindingCheck(
       `workflow '${ended.name}' runs in place (worktree.enabled: false), so it leaves no checkout for checkout: ended-run`
     );
   const target = resolveWorkflowName(binding.launch.workflowName, workflows);
-  if (!target) {
-    problems.push(`workflow '${binding.launch.workflowName}' is not in this project`);
-    return problems;
-  }
-  if (runEnded.checkout !== undefined && target.worktree?.enabled === false)
+  if (runEnded.checkout !== undefined && target?.worktree?.enabled === false)
     problems.push(
       `workflow '${target.name}' runs in place (worktree.enabled: false), so it cannot take the ended run's checkout`
     );
-  const declared = declaredInputNames(target);
-  for (const name of Object.keys(runEnded.inputs ?? {}))
-    if (!declared.includes(name))
-      problems.push(`workflow '${target.name}' does not declare input '${name}'`);
+  problems.push(
+    ...startedWorkflowProblems(binding.launch.workflowName, runEnded.inputs, workflows)
+  );
   return problems;
+}
+
+/** The started workflow exists and declares every input a binding maps into it. */
+export function startedWorkflowProblems(
+  workflowName: string,
+  inputs: Readonly<Record<string, unknown>> | undefined,
+  workflows: readonly ResolvedWorkflow[]
+): string[] {
+  const target = resolveWorkflowName(workflowName, workflows);
+  if (!target) return [`workflow '${workflowName}' is not in this project`];
+  const declared = declaredInputNames(target);
+  return Object.keys(inputs ?? {})
+    .filter(name => !declared.includes(name))
+    .map(name => `workflow '${target.name}' does not declare input '${name}'`);
 }
 
 /**

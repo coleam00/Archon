@@ -38,7 +38,7 @@ import { observeTerminalArtifacts } from '@archon/workflows/terminal-record';
 import type { IDatabase } from './adapters/types';
 import { getDatabase, getDialect } from './connection';
 import { lockConversationOwnership } from './conversation-ownership';
-import type { TransactionQuery } from './resource-slots';
+import { heldItemRefusal, type TransactionQuery } from './resource-slots';
 import { continuedItem, ensureItem } from './items';
 import { insertWorkflowEvent } from './workflow-events';
 import { assertPublicConversation, ensureWorkflowOriginAnchor } from './workflow-origin-anchor';
@@ -205,6 +205,8 @@ export async function claimPendingWorkflowRun(
   workingPath?: string
 ): Promise<WorkflowRun | null> {
   return getDatabase().withTransaction(async query => {
+    const held = await heldItemRefusal(query, id, ['pending']);
+    if (held) throw held;
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs
           SET status = 'running', last_activity_at = ${getDialect().now()},

@@ -375,7 +375,8 @@ describe('trigger CLI durable execution', () => {
       () => fixture.requests().find(request => request.status === 'queued'),
       'the follow-up start to queue'
     );
-    // While it waits, the item read lists it as queued, next for the slot the first run holds.
+    // While it waits, the item read lists it as queued, next for the slot the first run holds
+    // and behind that run, which works the item for the same workflow.
     const queued = itemReadSchema.parse(
       JSON.parse((await invoke(['workflow', 'runs', '--item', 'item-1', '--json'])).stdout)
     );
@@ -387,6 +388,7 @@ describe('trigger CLI durable execution', () => {
         hostId: fixture.hostId,
         queuedAt: expect.any(String),
         ahead: 0,
+        heldBehind: expect.objectContaining({ runId: runs()[0]?.id, workflow: 'item-proof' }),
       },
     ]);
     // Every receipt shows the item it named; the follow-up inherited the first's.

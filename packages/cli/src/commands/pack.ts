@@ -254,8 +254,10 @@ function assertLoadable(
           bindings: [document],
         });
   if (result.success) {
-    if (!('on' in result.data) || result.data.on === undefined) return undefined;
+    if (!('on' in result.data)) return undefined;
+    // A pack writes only run-ended files.
     const { sourceInstanceId, binding, on } = result.data;
+    if (on?.runEnded === undefined) return undefined;
     return { file: path, sourceInstanceId, binding, runEnded: on.runEnded };
   }
   const reader = kind === 'event' ? 'GitHub source plugin binding' : 'trigger file';

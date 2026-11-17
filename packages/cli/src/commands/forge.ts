@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { getArchonConfigPath, getArchonHome } from '@archon/paths/archon-paths';
-import { BUNDLED_IS_BINARY, getPluginsPath } from '@archon/paths';
-import { getSourceGithubForgeEntry } from '@archon/paths/source-tree-paths';
+import { getPluginsPath } from '@archon/paths';
 import { discoverPlugins, type PluginDiscovery, type SourcePlugin } from '@archon/forge/discovery';
+import { readForgeConfig, sourceForgePlugins } from '@archon/forge/host-plugins';
 import { checkForgeAccess, dispatchForge, type ForgeOperationAudit } from '@archon/forge/dispatch';
 import { type ForgePluginConfig, forgePluginConfigSchema } from '@archon/forge/plugin-config';
 import {
@@ -22,21 +22,6 @@ import {
 import { z } from '@hono/zod-openapi';
 import { writeJsonLine } from '../utils/stdout';
 
-async function readForgeConfig(configPath: string): Promise<unknown> {
-  let source: string;
-  try {
-    source = await readFile(configPath, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
-    throw error;
-  }
-  const config: unknown = Bun.YAML.parse(source);
-  if (config === null) return {};
-  if (typeof config !== 'object' || Array.isArray(config))
-    throw new Error('Archon config must be an object');
-  return 'forge' in config ? config.forge : {};
-}
-
 async function persistAudit(audit: ForgeOperationAudit, runId: string): Promise<void> {
   const { persistWorkflowEvent } = await import('@archon/core/db/workflow-events');
   const { closeDatabase } = await import('@archon/core/db/connection');
@@ -49,22 +34,6 @@ async function persistAudit(audit: ForgeOperationAudit, runId: string): Promise<
   } finally {
     await closeDatabase();
   }
-}
-
-/**
- * Release binaries carry no forge plugin and load only installed executables. Source
- * checkouts and Docker run the GitHub plugin from this checkout, as they run the
- * maintained providers, so the plugin is never older than the host that calls it.
- */
-export function sourceForgePlugins(isBinary: boolean = BUNDLED_IS_BINARY): SourcePlugin[] {
-  if (isBinary) return [];
-  return [
-    {
-      name: 'github',
-      command: process.execPath,
-      args: ['--no-env-file', getSourceGithubForgeEntry()],
-    },
-  ];
 }
 
 interface ForgeCommandOptions {

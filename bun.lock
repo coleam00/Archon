@@ -239,6 +239,7 @@
         "@archon/adapters": "workspace:*",
         "@archon/chat-contract": "workspace:*",
         "@archon/core": "workspace:*",
+        "@archon/forge": "workspace:*",
         "@archon/git": "workspace:*",
         "@archon/paths": "workspace:*",
         "@archon/provider-contract": "workspace:*",

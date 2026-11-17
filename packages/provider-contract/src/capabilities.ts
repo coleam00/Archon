@@ -53,11 +53,22 @@ export const providerCapabilitiesSchema = z.object({
    *    OpenCode). The request path is native; Archon still validates post-parse
    *    as a net for the refusal / `max_tokens`-truncation edges.
    *  - `'best-effort'` — prompt-augmentation + repair + post-parse validate (Pi,
-   *    Copilot). No backend grammar; on a validation miss the executor re-asks up
-   *    to 3× (prompt + schema errors), then fails the node.
+   *    Copilot). No backend grammar.
    *  - `false`         — the provider cannot produce structured output at all.
+   * Whether a miss is corrected is a separate fact: `structuredOutputCorrection`.
    */
   structuredOutput: z.union([z.literal('enforced'), z.literal('best-effort'), z.literal(false)]),
+  /**
+   * Whether Archon asks again, up to 3×, when a node's structured output is missing or
+   * fails its schema, and in which session. Omitted: Archon does not ask again; either
+   * the provider corrects itself (Claude's SDK retries internally) or the first miss
+   * fails the node.
+   *  - `'fresh-session'` — the correction runs in a throwaway session with the original
+   *    prompt plus the errors; the invalid turn never enters the node's thread (Pi, Copilot).
+   *  - `'same-session'`  — the correction continues the session the failed answer ended
+   *    in with only the errors, so the agent's work in that session is kept (Codex).
+   */
+  structuredOutputCorrection: z.enum(['fresh-session', 'same-session']).optional(),
   /**
    * Whether the provider enforces OpenAI Structured Outputs strict-mode's
    * required-coverage rule: every key declared in `properties` MUST also

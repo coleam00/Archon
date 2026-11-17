@@ -100,8 +100,8 @@ describe('executor capability ownership', () => {
       expect(factory).not.toHaveBeenCalled();
     });
 
-    for (const structuredOutput of ['best-effort', 'enforced'] as const) {
-      it(`uses the descriptor's ${structuredOutput} reask policy in a ${kind} node`, async () => {
+    for (const correction of ['fresh-session', undefined] as const) {
+      it(`uses the descriptor's ${correction ?? 'no'} correction policy in a ${kind} node`, async () => {
         let calls = 0;
         const sendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
           async function* () {
@@ -117,7 +117,7 @@ describe('executor capability ownership', () => {
         const store = createMockStore();
         const providers = withProviderCapabilities(mockProviderRegistry, 'claude', {
           ...mockClaudeCapabilities(),
-          structuredOutput,
+          structuredOutputCorrection: correction,
         });
         const deps = createMockDeps(store, providers);
         const factory = mock<WorkflowDeps['getAgentProvider']>(() => ({
@@ -165,12 +165,10 @@ describe('executor capability ownership', () => {
           })
         );
         expect(factory).toHaveBeenCalledTimes(1);
-        expect(sendQuery).toHaveBeenCalledTimes(structuredOutput === 'best-effort' ? 2 : 1);
+        expect(sendQuery).toHaveBeenCalledTimes(correction ? 2 : 1);
         expect(
           persistedEvents(store).some(
-            event =>
-              event.event_type ===
-              (structuredOutput === 'best-effort' ? 'node_completed' : 'node_failed')
+            event => event.event_type === (correction ? 'node_completed' : 'node_failed')
           )
         ).toBe(true);
       });

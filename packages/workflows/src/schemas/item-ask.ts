@@ -11,6 +11,7 @@
 import { z } from 'zod';
 import { artifactPointerSchema } from './artifact-pointer';
 import { type ItemAct, itemActFields } from './item-act';
+import type { SourceReceiptAcceptance } from './resource-start';
 import { attentionAnswerSchema } from './run-wait';
 import {
   attentionOptionSchema,
@@ -213,8 +214,17 @@ export type ItemAskActInput = ItemAct;
 export type ItemAskCloseResult =
   /** No ask has this id. */
   | { kind: 'not_found' }
-  /** This write closed it; `settled` when it closed the last open ask of its set. */
-  | { kind: 'closed'; ask: StoredItemAsk; settled: boolean }
+  /**
+   * This write closed it; `settled` when it closed the last open ask of its set.
+   * `startReceipts` are the starts that settlement caused (asks-settled bindings), written
+   * in the same transaction; empty when the close did not settle the set.
+   */
+  | {
+      kind: 'closed';
+      ask: StoredItemAsk;
+      settled: boolean;
+      startReceipts: readonly SourceReceiptAcceptance[];
+    }
   /** It was already closed the same way: nothing changed. */
   | { kind: 'unchanged'; ask: StoredItemAsk }
   /** It was already closed another way, which stands. */
