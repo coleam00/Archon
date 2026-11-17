@@ -503,7 +503,7 @@ export function describeSqlStatusReadConformance(
   test("a binding's own item key puts only that binding's start on the item", async () => {
     const harness = await makeHarness();
     try {
-      const { store } = harness;
+      const { db, store } = harness;
       const { launch } = resourceStartFixtures(
         CONFORMANCE_CODEBASE_ID,
         CONFORMANCE_CONVERSATION_ID
@@ -554,6 +554,11 @@ export function describeSqlStatusReadConformance(
         return [await itemOf(`mapped-${receiptId}`), await itemOf(`plain-${receiptId}`)];
       };
       const [first, unmapped] = await deliver();
+      // The first run must end, or it holds the item and the second start is refused.
+      await db.query(
+        "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE item_id = $1",
+        [first]
+      );
       const [second] = await deliver();
       expect(first).not.toBeNull();
       expect(second).toBe(first);

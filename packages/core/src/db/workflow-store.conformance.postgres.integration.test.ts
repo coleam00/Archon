@@ -338,11 +338,16 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
           codebase_id: CONFORMANCE_CODEBASE_ID,
           item_key: 'issue-1',
         });
-        await store.claimPendingWorkflowRun(run.id);
         return run.id;
       };
       const first = await start();
       const second = await start();
+      await store.claimPendingWorkflowRun(first);
+      // The claim refuses a second run of `plan` on the item while the first holds it, so the
+      // overlap is written directly: an older binary, which has no item hold, can leave it.
+      await db.query("UPDATE remote_agent_workflow_runs SET status = 'running' WHERE id = $1", [
+        second,
+      ]);
       const itemRow = await db.query<{ item_id: string }>(
         'SELECT item_id FROM remote_agent_workflow_runs WHERE id = $1',
         [first]
@@ -683,6 +688,78 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
           ])
         ).rows
       ).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+  test('a claim or hand admission waits for an admission in flight on the same item', async () => {
+    const harness = await makeHarness();
+    const { store, db } = harness;
+    try {
+      const pending = async (item: string): Promise<string> =>
+        (
+          await store.createWorkflowRun({
+            id: randomUUID(),
+            workflow_name: 'build',
+            codebase_id: CONFORMANCE_CODEBASE_ID,
+            user_message: '',
+            item_key: item,
+          })
+        ).id;
+      // Another admission holds the lock and makes `holder` hold the item, then commits
+      // once `attempt` is waiting on that lock. An implementation that skips the lock never
+      // waits on it, and the test fails here instead of racing the commit.
+      const racedBy = async <T>(holder: string, attempt: () => Promise<T>): Promise<T> => {
+        let raced: Promise<T> | undefined;
+        await db.withTransaction(async query => {
+          await query('SELECT pg_advisory_xact_lock(1797)');
+          await query("UPDATE remote_agent_workflow_runs SET status = 'running' WHERE id = $1", [
+            holder,
+          ]);
+          raced = attempt();
+          raced.catch(() => undefined);
+          for (let tries = 0; ; tries++) {
+            const waiting = await query<{ count: string | number }>(
+              `SELECT COUNT(*) AS count FROM pg_locks
+                WHERE locktype = 'advisory' AND classid = 0 AND objid = 1797 AND NOT granted`
+            );
+            if (Number(waiting.rows[0]?.count) > 0) break;
+            if (tries > 200) throw new Error('attempt never waited on the admission lock');
+            await Bun.sleep(10);
+          }
+        });
+        if (!raced) throw new Error('attempt did not start');
+        return raced;
+      };
+      const [holder, claim] = [await pending('issue-1'), await pending('issue-1')];
+      await expect(
+        racedBy(holder, () => store.claimPendingWorkflowRun(claim))
+      ).rejects.toMatchObject({ name: 'WorkflowItemHeldError', holderRunId: holder });
+
+      const [slotHolder, admit] = [await pending('issue-2'), await pending('issue-2')];
+      expect(
+        await racedBy(slotHolder, () =>
+          store.admitPendingRun({
+            resource: 'builds',
+            capacity: 5,
+            launch: {
+              version: 2,
+              run: {
+                id: admit,
+                workflow_name: 'build',
+                codebase_id: CONFORMANCE_CODEBASE_ID,
+                user_message: '',
+                metadata: {},
+              },
+              execution: {
+                cwd: '/conformance',
+                conversationId: 'c',
+                isolation: { kind: 'in-place' },
+              },
+            },
+          })
+        )
+      ).toEqual({ kind: 'run', id: slotHolder });
     } finally {
       await harness.close();
     }

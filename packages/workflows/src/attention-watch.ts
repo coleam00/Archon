@@ -189,7 +189,13 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
     at: z.string(),
     ...workflowNoticeDataSchema.shape,
   }),
-  z.object({ type: z.literal('owner_lost'), ...lineBase, observedStatus: workflowRunStatusSchema }),
+  z.object({
+    type: z.literal('owner_lost'),
+    ...lineBase,
+    observedStatus: workflowRunStatusSchema,
+    /** The key of the item the run holds (`holdsItem`), so starts on it wait; null for none. */
+    item: z.string().nullable().optional(),
+  }),
   z.object({ type: z.literal('ready'), cursor: cursorSchema }),
   /** Sent only after a read that reached the head, so a stream that cannot read stops sending them. */
   z.object({ type: z.literal('bookmark'), cursor: cursorSchema }),
@@ -273,6 +279,20 @@ function itemContext(item: AttentionQueueItem): RunContext {
     workflow: item.run?.workflow ?? askedIn?.workflow ?? null,
     parentRunId: item.run?.parentRunId ?? null,
   };
+}
+
+/** The key of `run`'s item; null for none, or when unreadable so the line still goes out. */
+async function itemKeyOf(store: AttentionWatchStore, run: WorkflowRun): Promise<string | null> {
+  if (run.item_id === null) return null;
+  try {
+    return (await store.getItem(run.item_id))?.key ?? null;
+  } catch (error) {
+    getLog().warn(
+      { err: error as Error, runId: run.id },
+      'workflow.attention_watch_item_read_failed'
+    );
+    return null;
+  }
 }
 
 /** How a line names an item that closed. */
@@ -393,6 +413,7 @@ export async function watchAttentionQueue(
           if (signal.aborted) return;
         }
       }
+      const item = result === null ? null : await itemKeyOf(store, run);
       if (waiters.get(runId)?.controller !== controller || signal.aborted) return;
       waiters.delete(runId);
       if (result === null) return;
@@ -404,6 +425,7 @@ export async function watchAttentionQueue(
         runId,
         ...runContext(run),
         observedStatus: result.observedStatus,
+        item,
       });
     })();
   };
