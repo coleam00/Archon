@@ -73,6 +73,10 @@ const keyClassifications = {
     kind: 'unavailable',
     reason: 'attention notice routes are install-scoped and have no per-run consumer',
   },
+  itemTracker: {
+    kind: 'unavailable',
+    reason: 'the item tracker is install-scoped and has no per-run consumer',
+  },
   concurrency: {
     kind: 'unavailable',
     reason: 'conversation concurrency is process-scoped and has no per-run consumer',
