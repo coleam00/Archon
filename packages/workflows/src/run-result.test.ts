@@ -1,9 +1,10 @@
-import { expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { expect, spyOn, test } from 'bun:test';
+import { mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { readCheckoutMark } from './checkout-mark';
+import * as checkout from './checkout-observation';
 import { REPOSITORY_SELECTORS } from './checkout-observation';
 import {
   latestResultsOnItem,
@@ -201,19 +202,6 @@ test('a result holds at no commit when its checkout moved and came back while th
   git('commit', '-q', '--allow-empty', '-m', 'Y');
   const y = git('rev-parse', 'HEAD');
   git('checkout', '-q', '--detach', x);
-  // A git on PATH that, once, moves the checkout X→Y→X right after `git status` answered
-  // for the returns sample: inside the observation, between its sample and its mark.
-  const realGit = Bun.which('git');
-  const bin = trackTempRoot(realpathSync(mkdtempSync(join(tmpdir(), 'archon-git-wrapper-'))));
-  const trigger = join(bin, 'trigger');
-  writeFileSync(
-    join(bin, 'git'),
-    `#!/bin/sh
-case " $* " in *" status "*) if [ -e '${trigger}' ]; then rm -f '${trigger}'; '${realGit}' "$@"; s=$?; '${realGit}' checkout -q --detach ${y}; '${realGit}' checkout -q --detach ${x}; exit $s; fi;; esac
-exec '${realGit}' "$@"
-`,
-    { mode: 0o755 }
-  );
   const run = {
     cwd,
     execContext: host,
@@ -221,19 +209,25 @@ exec '${realGit}' "$@"
     workflow: { mutates_checkout: undefined },
     workflowRun: { checkout_baseline: null },
   };
-  const path = process.env.PATH;
-  process.env.PATH = `${bin}:${path ?? ''}`;
+  // Once, another process moves the checkout X→Y→X right after the returns sample answered:
+  // inside the observation, after its sample, where a mark read after the sample would
+  // already include the move and so hide it.
+  const realSample = checkout.sampleCheckout;
+  const sampler = spyOn(checkout, 'sampleCheckout').mockImplementationOnce(async (...args) => {
+    const sample = await realSample(...args);
+    git('checkout', '-q', '--detach', y);
+    git('checkout', '-q', '--detach', x);
+    return sample;
+  });
   try {
-    writeFileSync(trigger, '');
     await observeReturnsCheckout(
       { ...run, stepNamePrefix: '' },
       'judge',
       { state: 'completed' },
       undefined
     );
-    expect(existsSync(trigger)).toBe(false);
     expect(await sampleResultCommit(run, 'run-1')).toEqual({ held: false, reason: 'moved' });
   } finally {
-    process.env.PATH = path;
+    sampler.mockRestore();
   }
 });
