@@ -1,5 +1,15 @@
 import { expect, test } from 'bun:test';
-import { latestResultsOnItem } from './run-result';
+import { mkdtempSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { readCheckoutMark } from './checkout-observation';
+import {
+  latestResultsOnItem,
+  observeReturnsCheckout,
+  sampleResultCommit,
+  type ReturnsCheckout,
+} from './run-result';
 import type { WorkflowItem, WorkflowRun } from './schemas/workflow-run';
 
 const item: WorkflowItem = { id: 'item-row', projectKey: 'acme/web', key: 'issue-7' };
@@ -65,4 +75,99 @@ test('a reader whose checkout is at no commit reads no result, even from a run t
     result: { kind: 'none', reason: "this run's checkout is at no commit" },
     latest: { runId: 'older-build', holdsAt: undefined },
   });
+});
+
+const trackTempRoot = trackTempRoots();
+const host = { kind: 'host' } as const;
+
+const gitEnv = Object.fromEntries(
+  Object.entries(process.env).filter(
+    ([key]) => !['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE'].includes(key)
+  )
+);
+
+/** A scratch repository with commit X. */
+function scratchRepo(): { cwd: string; git: (...args: string[]) => string } {
+  const cwd = trackTempRoot(realpathSync(mkdtempSync(join(tmpdir(), 'archon-result-commit-'))));
+  const git = (...args: string[]): string => {
+    const run = Bun.spawnSync(
+      [
+        'git',
+        '-c',
+        'user.name=t',
+        '-c',
+        'user.email=t@example.com',
+        '-c',
+        'commit.gpgsign=false',
+        '-c',
+        'core.hooksPath=/dev/null',
+        ...args,
+      ],
+      // An inherited GIT_DIR would point every command at another repository.
+      { cwd, env: gitEnv }
+    );
+    if (run.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${run.stderr.toString()}`);
+    return run.stdout.toString().trim();
+  };
+  git('init', '-q');
+  git('commit', '-q', '--allow-empty', '-m', 'X');
+  return { cwd, git };
+}
+
+/**
+ * Another process moves the checkout from X to Y while the run judges, then back to X
+ * before the returns node completes: every commit sample reads X.
+ */
+async function resultAfterExcursion(mutatesCheckout: boolean, excursion: boolean) {
+  const { cwd, git } = scratchRepo();
+  const x = git('rev-parse', 'HEAD');
+  git('commit', '-q', '--allow-empty', '-m', 'Y');
+  const y = git('rev-parse', 'HEAD');
+  git('checkout', '-q', '--detach', x);
+  const returnsCheckout: ReturnsCheckout = {
+    nodeId: 'judge',
+    ...(mutatesCheckout ? {} : { startMark: await readCheckoutMark(cwd, host) }),
+  };
+  const run = {
+    cwd,
+    execContext: host,
+    returnsCheckout,
+    workflow: { mutates_checkout: mutatesCheckout ? undefined : false },
+    workflowRun: {
+      checkout_baseline: {
+        kind: 'git' as const,
+        sampledAt: new Date().toISOString(),
+        commit: x,
+        tree: null,
+        worktree: { status: 'clean' as const },
+      },
+    },
+  };
+  const ctx = { ...run, stepNamePrefix: '' };
+  const moveAway = (): void => {
+    if (!excursion) return;
+    git('checkout', '-q', '--detach', y);
+    git('checkout', '-q', '--detach', x);
+  };
+  // A run that takes no path lock is exposed from its start; one that takes the lock is
+  // exposed only to a writer that ignores it, after its returns node.
+  if (!mutatesCheckout) moveAway();
+  await observeReturnsCheckout(ctx, 'judge', { state: 'completed' }, undefined);
+  if (mutatesCheckout) moveAway();
+  return { x, held: await sampleResultCommit(run, 'run-1') };
+}
+
+test('a run that takes no path lock holds at no commit when its checkout moved and came back', async () => {
+  const { held } = await resultAfterExcursion(false, true);
+  expect(held).toEqual({ held: false, reason: 'moved' });
+});
+
+test('a run that takes no path lock holds at its commit when nothing moved', async () => {
+  const { x, held } = await resultAfterExcursion(false, false);
+  expect(held).toEqual({ held: true, commit: x });
+});
+
+test('a run holds at no commit when its checkout moved and came back after its returns node', async () => {
+  const { held } = await resultAfterExcursion(true, true);
+  expect(held).toEqual({ held: false, reason: 'moved' });
 });

@@ -9,7 +9,7 @@ import { jsonValueSchema, type JsonValue } from './output-ref';
 import { safeSendMessage, sendCriticalMessage } from './platform-messages';
 import type { RunPhase } from './executor-shared';
 import type { ExecutionContext } from '@archon/provider-contract';
-import { sampleCheckout, type CheckoutSample } from './checkout-observation';
+import { readCheckoutMark, sampleCheckout, type CheckoutSample } from './checkout-observation';
 import type {
   ResolvedWorkflow,
   WorkflowExecutionResult,
@@ -77,12 +77,16 @@ export function resultCommitFromSample(sample: CheckoutSample): ResultCommit {
 }
 
 /**
- * The top-level `returns:` node, and what was observed when it completed: the checkout,
- * or that it ran beside other nodes, so the checkout it ended on may not be its own.
+ * The top-level `returns:` node, and what was observed when it completed: the checkout and
+ * its mark, or that it ran beside other nodes, so the checkout it ended on may not be its
+ * own. `startMark` is the checkout's mark when a run that takes no path lock began its
+ * first pass: unset for a run that takes the lock, and on a resume, whose earlier pass
+ * judged in a window no mark covers.
  */
 export interface ReturnsCheckout {
   nodeId: string;
-  observed?: { sample: CheckoutSample } | { concurrent: true };
+  startMark?: string | null;
+  observed?: { sample: CheckoutSample; mark: string | null } | { concurrent: true };
 }
 
 /**
@@ -109,14 +113,26 @@ export async function observeReturnsCheckout(
   if (held?.nodeId !== nodeId || ctx.stepNamePrefix !== '' || output.state !== 'completed') return;
   held.observed = [...(mayRun ?? [])].some(id => id !== nodeId)
     ? { concurrent: true }
-    : { sample: await sampleCheckout(ctx.cwd, ctx.execContext) };
+    : await observeCheckout(ctx.cwd, ctx.execContext);
+}
+
+async function observeCheckout(
+  cwd: string,
+  execContext: ExecutionContext
+): Promise<{ sample: CheckoutSample; mark: string | null }> {
+  return {
+    sample: await sampleCheckout(cwd, execContext),
+    mark: await readCheckoutMark(cwd, execContext),
+  };
 }
 
 /**
  * The commit a completing run's result holds at: the clean checkout its `returns:` node
- * completed on, only when the run completes on that same clean checkout. A node that
+ * completed on, only when nothing moved HEAD from then until the run completed. A node that
  * commits after the `returns:` node moves the checkout off the commit the result was given
- * at, so the result holds at no commit rather than at one it never judged. `sampleCheckout`
+ * at, so the result holds at no commit rather than at one it never judged. A run that takes
+ * no path lock must also show HEAD never moved since its first pass began: another run may
+ * move its checkout to another commit and back while it judges (#5769). `sampleCheckout`
  * never throws; a checkout it cannot read holds at no commit.
  */
 export async function sampleResultCommit(
@@ -129,13 +145,12 @@ export async function sampleResultCommit(
   },
   workflowRunId: string
 ): Promise<ResultCommit> {
-  const given = await heldThroughCompletion(
-    run.cwd,
-    run.execContext,
-    run.returnsCheckout?.observed
-  );
+  const end = await observeCheckout(run.cwd, run.execContext);
+  const given = heldThroughCompletion(run.returnsCheckout?.observed, end);
   const resultCommit =
-    run.workflow.mutates_checkout === false ? heldSinceStart(given, run.workflowRun) : given;
+    run.workflow.mutates_checkout === false
+      ? heldSinceStart(given, run.workflowRun, run.returnsCheckout?.startMark, end.mark)
+      : given;
   if (!resultCommit.held)
     getLog().info(
       { workflowRunId, reason: resultCommit.reason },
@@ -146,31 +161,39 @@ export async function sampleResultCommit(
 
 /**
  * A run that declares `mutates_checkout: false` holds no path lock, so another run can
- * commit in its checkout while it judges. It never commits itself, so its result holds only
- * at the commit it started on: any other commit came from elsewhere.
+ * move its checkout while it judges. It never commits itself, so its result holds only at
+ * the commit it started on, and only when HEAD never moved since its first pass began: a
+ * move to another commit and back leaves the commit samples equal but changes the mark.
  */
 function heldSinceStart(
   given: ResultCommit,
-  run: Pick<WorkflowRun, 'checkout_baseline'>
+  run: Pick<WorkflowRun, 'checkout_baseline'>,
+  startMark: string | null | undefined,
+  endMark: string | null
 ): ResultCommit {
   if (!given.held) return given;
   const start = run.checkout_baseline;
-  if (start?.kind !== 'git') return { held: false, reason: 'unobserved' };
-  return start.commit === given.commit ? given : { held: false, reason: 'moved' };
+  if (start?.kind !== 'git' || startMark == null || endMark === null)
+    return { held: false, reason: 'unobserved' };
+  return start.commit === given.commit && startMark === endMark
+    ? given
+    : { held: false, reason: 'moved' };
 }
 
-async function heldThroughCompletion(
-  cwd: string,
-  execContext: ExecutionContext,
-  atReturns: ReturnsCheckout['observed']
-): Promise<ResultCommit> {
+function heldThroughCompletion(
+  atReturns: ReturnsCheckout['observed'],
+  end: { sample: CheckoutSample; mark: string | null }
+): ResultCommit {
   if (atReturns === undefined) return { held: false, reason: 'unobserved' };
   if ('concurrent' in atReturns) return { held: false, reason: 'concurrent' };
   const given = resultCommitFromSample(atReturns.sample);
   if (!given.held) return given;
-  const end = resultCommitFromSample(await sampleCheckout(cwd, execContext));
-  if (!end.held) return end;
-  return end.commit === given.commit ? given : { held: false, reason: 'moved' };
+  const ended = resultCommitFromSample(end.sample);
+  if (!ended.held) return ended;
+  if (atReturns.mark === null || end.mark === null) return { held: false, reason: 'unobserved' };
+  return ended.commit === given.commit && atReturns.mark === end.mark
+    ? given
+    : { held: false, reason: 'moved' };
 }
 
 /** The commit a run's result holds at, or null: never any other commit in its place. */

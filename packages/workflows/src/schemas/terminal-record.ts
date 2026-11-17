@@ -48,12 +48,13 @@ export const RESULT_COMMIT_METADATA_KEY = 'result_commit';
  * its `returns:` node completed, only when the checkout was clean at that commit then and
  * still is when the run completes. A result that holds at no commit says why: `dirty` (a
  * tracked change or an untracked file), `not_git`, `unavailable` (the engine could not read
- * the checkout, or its backend), `unborn` (no commit yet), `moved` (the checkout moved to
- * another commit after the `returns:` node completed, or a run that takes no path lock is
- * not on the commit it started on), `concurrent` (the `returns:` node ran,
+ * the checkout, or its backend), `unborn` (no commit yet), `moved` (HEAD moved after the
+ * `returns:` node completed, even to another commit and back, or a run that takes no path
+ * lock is not on the commit it started on or saw HEAD move since its first pass began), `concurrent` (the `returns:` node ran,
  * or could have run, beside other nodes, which may have moved the checkout while it judged), `unobserved` (no
  * `returns:` node completed in the pass that completed the run: none is declared, or a
- * resume replayed it; or a run that takes no path lock has no git start commit recorded).
+ * resume replayed it; HEAD keeps no reflog to show it did not move; or a run that takes no
+ * path lock has no git start commit or start mark recorded, as on a resume).
  */
 export const resultCommitSchema = z.discriminatedUnion('held', [
   z.object({ held: z.literal(true), commit: gitObjectIdSchema }),

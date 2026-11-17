@@ -44,6 +44,8 @@ import { runLayers } from './dag/run-layers';
 import { publishContainerPause, type ContainerPauseReceipt } from './dag/pause';
 import { restoreRunState, type RestoredRunState } from './dag/resume-state';
 import { failRun, finishRun, skipIfStatusChanged } from './dag/run-terminal';
+import { readCheckoutMark } from './checkout-observation';
+import type { ReturnsCheckout } from './run-result';
 import {
   announceContainerRun,
   suspendContainerForPause,
@@ -409,6 +411,24 @@ async function preflightRun(
  * the raw node ids. Fields stay explicit because spreading options would also copy
  * executor-only state into this context without an excess-property check.
  */
+/**
+ * The run's `returns:` node to observe. A run that takes no path lock marks its checkout
+ * as its first pass begins, so completion can show nothing moved HEAD while it judged.
+ */
+async function returnsCheckout(
+  {
+    workflow,
+    cwd,
+    priorCompletedNodes,
+  }: Pick<ExecuteDagWorkflowOptions, 'workflow' | 'cwd' | 'priorCompletedNodes'>,
+  execContext: ExecutionContext
+): Promise<ReturnsCheckout | undefined> {
+  if (workflow.returns === undefined) return undefined;
+  if (workflow.mutates_checkout !== false || (priorCompletedNodes?.size ?? 0) > 0)
+    return { nodeId: workflow.returns };
+  return { nodeId: workflow.returns, startMark: await readCheckoutMark(cwd, execContext) };
+}
+
 async function createRunContext(
   options: ExecuteDagWorkflowOptions,
   execContext: ExecutionContext,
@@ -519,7 +539,7 @@ async function createRunContext(
     totalTokens: priorUsage?.tokens,
     totalTokensUnknown: priorUsage?.tokensUnknown,
     stepNamePrefix: '',
-    returnsCheckout: workflow.returns === undefined ? undefined : { nodeId: workflow.returns },
+    returnsCheckout: await returnsCheckout(options, execContext),
     loopGroupPath: [],
     loopBodyScopes: [],
   };

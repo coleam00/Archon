@@ -1797,16 +1797,21 @@ inputs:
   - the checkout had an uncommitted or untracked change at either point. A validation that
     passed with an uncommitted file present did not pass at the commit. Ignored files do not
     count;
-  - a later node of the run moved the checkout to another commit after the `returns:` node
-    completed, so the result is not taken to be about a commit it never judged;
+  - anything moved HEAD after the `returns:` node completed, even to another commit and back,
+    so the result is not taken to be about a commit it never judged. The engine sees a move in
+    the reflog of HEAD and of its branch; a checkout whose HEAD keeps no reflog
+    (`core.logAllRefUpdates` off) cannot show it did not move, so its results hold at no
+    commit;
   - another node of the same layer ran, or could still start, beside the `returns:` node. It
     may have moved the checkout while the `returns:` node judged, and the engine cannot tell
     that commit from one the node made itself. A sibling already skipped by its `when:` or
     replayed by a resume, or a layer that runs one node at a time, does not count. Give a
     commit-bound `returns:` node its own layer;
   - the workflow declares `mutates_checkout: false` and the commit is not the one the run
-    started on. Such a run takes no path lock, so another run can commit in its checkout while
-    it judges; it never commits itself, so any other commit came from elsewhere;
+    started on, or anything moved HEAD since its first pass began, even to another commit and
+    back. Such a run takes no path lock, so another run can move its checkout while it judges;
+    it never commits itself, so any move came from elsewhere. A resumed run of such a workflow
+    whose earlier pass completed a node holds at no commit: no mark covers that pass;
   - the run is outside a git repository, on a commit-less branch, or on a backend the engine
     cannot read from (a container);
   - no `returns:` node completed in the pass that completed the run: none is declared, or a
