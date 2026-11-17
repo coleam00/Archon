@@ -14,6 +14,7 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   agents: false,
   toolRestrictions: false,
   structuredOutput: 'enforced', // turn outputSchema grammar-constrains decoding
+  structuredOutputCorrection: 'same-session', // thread/resume keeps the node's work; outputSchema rides every turn
   requiresAllPropertiesRequired: true, // OpenAI strict-mode: every key in properties must appear in required
   envInjection: true,
   costControl: false,

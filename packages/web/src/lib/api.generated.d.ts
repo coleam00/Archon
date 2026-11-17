@@ -9865,6 +9865,8 @@ export interface components {
         [key: string]: string;
       };
       structuredOutput: 'enforced' | 'best-effort' | false;
+      /** @enum {string} */
+      structuredOutputCorrection?: 'fresh-session' | 'same-session';
       requiresAllPropertiesRequired: boolean;
       envInjection: boolean;
       costControl: boolean;

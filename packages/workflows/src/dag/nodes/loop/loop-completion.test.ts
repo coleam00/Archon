@@ -797,6 +797,67 @@ describe('loop node completion channels', () => {
     expect(completed.length).toBe(1);
   });
 
+  it("corrects a same-session provider in the iteration's own thread, within the iteration", async () => {
+    mockSendQueryDag.mockImplementationOnce(async function* () {
+      yield { type: 'result', sessionId: 'thread-1', structuredOutput: { done: 'yes' } };
+      yield { type: 'settled', reason: 'turn_complete' };
+    });
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        sessionId: 'thread-1',
+        resumed: true,
+        structuredOutput: { done: true },
+      };
+      yield { type: 'settled', reason: 'turn_complete' };
+    });
+
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'dag-loop-codex-correction',
+          nodes: [
+            {
+              id: 'my-loop',
+              provider: 'codex',
+              output_format: {
+                type: 'object',
+                properties: { done: { type: 'boolean' } },
+                required: ['done'],
+              },
+              kind: 'loop',
+              loop: {
+                fresh_context: false,
+                prompt: 'implement the plan',
+                max_iterations: 4,
+                until_field: 'done',
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('loop-codex-correction'),
+        workflowProvider: 'codex',
+        config: { ...minimalConfig, assistant: 'codex' },
+      })
+    );
+
+    const calls = mockSendQueryDag.mock.calls;
+    expect(calls.length).toBe(2);
+    const [correctionPrompt, , correctionSession, correctionOptions] = calls[1]!;
+    expect(correctionSession).toBe('thread-1');
+    expect((correctionOptions as SendQueryOptions).forkSession).toBe(false);
+    expect(correctionPrompt).toContain('--- CORRECTION ---');
+    expect(correctionPrompt).not.toContain('implement the plan');
+    const rows = persistedEvents(store);
+    expect(rows.filter(row => row.event_type === 'loop_iteration_started')).toHaveLength(1);
+    expect(
+      rows.filter(row => row.event_type === 'node_completed').map(row => row.data?.session_id)
+    ).toEqual(['thread-1']);
+  });
+
   it('keeps threading the loop session across a mid-loop re-ask', async () => {
     // A reask runs in a throwaway session by design. Adopting it as the loop's
     // thread would silently discard every earlier iteration while
