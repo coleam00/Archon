@@ -1530,24 +1530,38 @@ describe('workflow-events', () => {
     });
 
     test('an unreadable persisted calls list keeps the totals and marks the breakdown partial', async () => {
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([
-          {
-            step_name: 'review',
-            event_type: 'node_completed',
-            data: {
-              node_output: 'kept',
-              tokens: { input: 10, output: 5, calls: [{ input: 'x' }] },
-            },
-          },
-        ])
-      );
-      const snapshot = await getDagResumeSnapshot('run-invalid-calls');
-      expect(snapshot.tokens).toEqual({ input: 10, output: 5, callsPartial: true });
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ callsType: 'array' }),
-        'db.workflow_dag_node_calls_invalid_ignored'
-      );
+      const tokens = { input: 10, output: 5, calls: [{ input: 'x' }] };
+      const current = {
+        node: { id: 'review', kind: 'exec', runtime: 'sh' },
+        invocation: { id: 'inv', startedAt: '2026-09-22T10:00:00Z', loopPath: [] },
+        attempt: { id: 'att', startedAt: '2026-09-22T10:00:00Z' },
+        binding: {},
+        timing: { startedAt: '2026-09-22T10:00:00Z' },
+        spend: {
+          tokens: { source: 'provider', value: tokens },
+          costUsd: { source: 'unavailable', reason: 'not_applicable' },
+          stopReason: { source: 'unavailable', reason: 'not_applicable' },
+          numTurns: { source: 'unavailable', reason: 'not_applicable' },
+        },
+        accounting: 'node',
+      };
+      // A legacy flat row and a row carrying current execution metadata.
+      for (const data of [
+        { node_output: 'kept', tokens },
+        { ...current, node_output: 'kept', tokens },
+      ]) {
+        mockLogger.warn.mockClear();
+        mockQuery.mockResolvedValueOnce(
+          createQueryResult([{ step_name: 'review', event_type: 'node_completed', data }])
+        );
+        const snapshot = await getDagResumeSnapshot('run-invalid-calls');
+        expect(snapshot.completedNodeOutputs.get('review')?.output).toBe('kept');
+        expect(snapshot.tokens).toEqual({ input: 10, output: 5, callsPartial: true });
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.anything(),
+          'workflow.node_record_calls_invalid_ignored'
+        );
+      }
     });
 
     test('returns an empty snapshot when no events exist', async () => {

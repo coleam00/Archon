@@ -904,6 +904,61 @@ describe('interactive loop node', () => {
     expect(completed[0][0].data).not.toHaveProperty('tokens');
   });
 
+  it('resumes a gate whose saved execution holds unreadable calls, keeping totals partial', async () => {
+    const node: DagNode = {
+      id: 'refine',
+      kind: 'loop',
+      loop: {
+        fresh_context: false,
+        prompt: 'Refine.',
+        until: 'APPROVED',
+        max_iterations: 10,
+        interactive: true,
+        gate_message: 'Review.',
+      },
+    };
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'Pass one. <promise>APPROVED</promise>' };
+      yield {
+        type: 'result',
+        sessionId: 'calls-sid',
+        tokens: { input: 3, output: 4, calls: [{ input: 3, output: 4 }] },
+      };
+    });
+    const pausing = createMockDeps();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: pausing,
+        cwd: testDir,
+        workflow: { name: 'gate-invalid-calls', nodes: [node] },
+        workflowRun: makeWorkflowRun('gate-invalid-calls-run'),
+      })
+    );
+    const saved = pausing.store.pauseWorkflowRun.mock.calls[0]?.[1];
+    const execution = saved?.execution as
+      | { spend: { tokens: { source: string; value: Record<string, unknown> } } }
+      | undefined;
+    if (execution?.spend.tokens.source !== 'provider') throw new Error('expected gate spend');
+    execution.spend.tokens.value.calls = 'not-a-list';
+
+    const resuming = createMockDeps();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: resuming,
+        cwd: testDir,
+        workflow: { name: 'gate-invalid-calls', nodes: [node] },
+        workflowRun: makeWorkflowRun('gate-invalid-calls-run', {
+          metadata: { approval: saved, loop_user_input: 'Approved', loop_feedback_given: false },
+        }),
+      })
+    );
+    const completed = resuming.store.createWorkflowEvent.mock.calls.filter(
+      ([event]) => event.event_type === 'node_completed' && event.step_name === 'refine'
+    );
+    expect(completed.length).toBe(1);
+    expect(completed[0]?.[0].data?.tokens).toEqual({ input: 3, output: 4, callsPartial: true });
+  });
+
   it('warns and marks the breakdown partial when persisted gate calls are unreadable', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'should never run' };

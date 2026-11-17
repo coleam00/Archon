@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { createLogger } from '@archon/paths';
+import { modelCallUsageSchema } from '@archon/provider-contract';
 import { NODE_STATE_EVENT_TYPES } from './store';
 import {
   nodeExecutionMetadataSchema,
@@ -49,6 +51,72 @@ const metadataKeys = Object.keys(nodeExecutionMetadataPayloadSchema.shape);
 const requiredMetadataKeys = Object.entries(nodeExecutionMetadataPayloadSchema.shape)
   .filter(([, schema]) => !schema.isOptional())
   .map(([key]) => key);
+
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  return (cachedLog ??= createLogger('workflow.node-record-reader'));
+}
+
+const callsSchema = modelCallUsageSchema.array();
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** Token usage with an unreadable `calls` list replaced by `callsPartial`; else unchanged. */
+function withReadableCalls(tokens: unknown): { tokens: unknown; dropped: boolean } {
+  if (
+    !isObject(tokens) ||
+    tokens.calls === undefined ||
+    callsSchema.safeParse(tokens.calls).success
+  )
+    return { tokens, dropped: false };
+  const { calls: _unreadable, ...rest } = tokens;
+  return { tokens: { ...rest, callsPartial: true }, dropped: true };
+}
+
+/** An execution spend whose provider tokens went through {@link withReadableCalls}. */
+function spendWithReadableCalls(spend: unknown): { spend: unknown; dropped: boolean } {
+  if (!isObject(spend) || !isObject(spend.tokens) || spend.tokens.source !== 'provider')
+    return { spend, dropped: false };
+  const { tokens, dropped } = withReadableCalls(spend.tokens.value);
+  return dropped
+    ? { spend: { ...spend, tokens: { ...spend.tokens, value: tokens } }, dropped }
+    : { spend, dropped };
+}
+
+/**
+ * Request evidence (`calls`) is optional: one that cannot be read must not fail the record
+ * carrying it, or block a resume. It is dropped and the breakdown marked partial, as an
+ * unreadable cache axis is dropped, before the record's own fields are validated strictly.
+ * The list can be large, so the warning names where it was, not what it held.
+ */
+export function readableRequestEvidence<T>(
+  raw: T,
+  keys: { tokens?: string[]; spend?: string[] },
+  context: Record<string, unknown>
+): T {
+  if (!isObject(raw)) return raw;
+  const fields: string[] = [];
+  const result: Record<string, unknown> = { ...raw };
+  for (const key of keys.tokens ?? []) {
+    const { tokens, dropped } = withReadableCalls(raw[key]);
+    if (dropped) {
+      result[key] = tokens;
+      fields.push(key);
+    }
+  }
+  for (const key of keys.spend ?? []) {
+    const { spend, dropped } = spendWithReadableCalls(raw[key]);
+    if (dropped) {
+      result[key] = spend;
+      fields.push(key);
+    }
+  }
+  if (fields.length === 0) return raw;
+  getLog().warn({ ...context, fields }, 'workflow.node_record_calls_invalid_ignored');
+  return result as T;
+}
+
+const recordUsageKeys = { tokens: ['tokens'], spend: ['spend', 'loopBaseline'] };
 
 export function readNodeRecordData(value: unknown): Record<string, unknown> {
   return eventDataSchema.parse(typeof value === 'string' ? JSON.parse(value) : (value ?? {}));
@@ -124,7 +192,10 @@ export function readNodeRecordEvent(
 ): ReadNodeRecordEvent | undefined {
   if (!envelope.step_name || !eventTypes.has(envelope.event_type)) return undefined;
   const eventType = envelope.event_type as SerializedNodeEvent['event_type'];
-  const raw = readNodeRecordData(envelope.data);
+  const raw = readableRequestEvidence(readNodeRecordData(envelope.data), recordUsageKeys, {
+    runId: envelope.workflow_run_id,
+    path: envelope.step_name,
+  });
   const data = projectSerializedData(raw);
   const isExecutionEvent = executionEventTypes.has(eventType);
   const hasMetadata = isExecutionEvent && metadataKeys.some(key => Object.hasOwn(raw, key));
@@ -181,7 +252,10 @@ export function readDeferredNodeUsageEvent(envelope: NodeRecordEventEnvelope):
   | undefined {
   if (!envelope.step_name || envelope.event_type !== DEFERRED_NODE_USAGE_EVENT_TYPE)
     return undefined;
-  const raw = readNodeRecordData(envelope.data);
+  const raw = readableRequestEvidence(readNodeRecordData(envelope.data), recordUsageKeys, {
+    runId: envelope.workflow_run_id,
+    path: envelope.step_name,
+  });
   const data = serializedDeferredNodeUsageDataSchema.parse(projectSerializedData(raw));
   return {
     path: envelope.step_name,

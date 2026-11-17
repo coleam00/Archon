@@ -20,7 +20,7 @@ import type {
   LoopGateRunMetadata,
   WorkflowRun,
 } from '../../../schemas';
-import { nodeInvocationKey } from '../../../node-record-reader';
+import { nodeInvocationKey, readableRequestEvidence } from '../../../node-record-reader';
 import { isApprovalContext } from '../../../schemas';
 import { createAttemptEventSequence } from '../../../provider-events';
 import {
@@ -490,7 +490,15 @@ function readLoopGate(
       ? savedApproval
       : undefined;
   let savedExecution =
-    gate?.execution === undefined ? undefined : nodeExecutionMetadataSchema.parse(gate.execution);
+    gate?.execution === undefined
+      ? undefined
+      : nodeExecutionMetadataSchema.parse(
+          readableRequestEvidence(
+            gate.execution,
+            { spend: ['spend'] },
+            { runId: workflowRun.id, path: node.id }
+          )
+        );
   if (
     savedExecution !== undefined &&
     nodeInvocationKey(savedExecution.path, savedExecution.invocation.loopPath) !==
