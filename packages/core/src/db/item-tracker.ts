@@ -9,12 +9,26 @@
  * A status row names the end it showed rather than relying on its place in the ledger: a
  * row recorded after a resume that committed while its write was in flight still names
  * the end before that resume, so the run stays owed until its current state is shown.
+ *
+ * The ledger is the only record of what was shown. Each destination also has one row in
+ * `remote_agent_item_tracker_destinations`: it exists once the destination's activation
+ * baseline is committed, and it names the process running the destination's pass. The
+ * tracker runs in the server and in CLI processes, and one pass per destination at a time
+ * keeps two of them from posting a comment twice or editing the status out of order.
  */
+import {
+  currentProcessOwner,
+  isOwnerProvablyGone,
+  isSameOwner,
+  parseProcessOwner,
+  ProcessOwnerRecordError,
+  type ProcessOwner,
+} from '@archon/paths/process-owner';
 import { RUN_ENDED_SOURCE_ACTOR } from '@archon/workflows/schemas/resource-start';
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import type { IDatabase } from './adapters/types';
-import { getDialect, pool } from './connection';
-import { insertWorkflowEvent } from './workflow-events';
+import { getDatabase, getDialect, pool } from './connection';
+import { hasAnyAttentionNotice, insertWorkflowEvent } from './workflow-events';
 
 export type TrackerStatus = 'started' | 'terminal';
 export const TRACKER_RESULT_KEY = 'result';
@@ -249,4 +263,191 @@ export async function recordTrackerBaseline(
       event_type: 'attention_notice_sent',
       data: { destination, key: row.key, baseline: true },
     });
+}
+
+/**
+ * Activate `destination` once: record its row and, unless the ledger already has rows for
+ * it (a destination a binary from before the row turned on), its baseline, in one
+ * transaction. The primary key settles two processes activating at once, so only one
+ * baselines. `openPauses` reads the pauses to baseline; it runs only when the destination
+ * has no row yet.
+ */
+export async function activateTrackerDestination(
+  projectKey: string,
+  destination: string,
+  openPauses: () => Promise<readonly TrackerRow[]>
+): Promise<void> {
+  const existing = await pool.query(
+    'SELECT 1 FROM remote_agent_item_tracker_destinations WHERE destination = $1',
+    [destination]
+  );
+  if (existing.rows.length > 0) return;
+  const pauses = await openPauses();
+  await getDatabase().withTransaction(async query => {
+    const inserted = await query(
+      `INSERT INTO remote_agent_item_tracker_destinations (destination) VALUES ($1)
+         ON CONFLICT (destination) DO NOTHING RETURNING destination`,
+      [destination]
+    );
+    if (inserted.rows.length > 0 && !(await hasAnyAttentionNotice(destination, query)))
+      await recordTrackerBaseline(projectKey, destination, query, pauses);
+  });
+}
+
+export type TrackerPassClaim =
+  | { claimed: true }
+  | { claimed: false; heldBy: ProcessOwner; since: string };
+
+interface TrackerPassRow {
+  /** The process running the pass and when it took it; absent when no pass runs. */
+  holder?: { owner: ProcessOwner; since: string };
+  /** Another process asked the holder for one more pass. */
+  requested: boolean;
+}
+
+const passHolderSource = (destination: string): string =>
+  `remote_agent_item_tracker_destinations(${destination})`;
+
+/**
+ * Lock the destination's row for the rest of the transaction and read its pass holder;
+ * undefined when the destination has not been activated.
+ */
+async function lockTrackerPass(
+  query: IDatabase['query'],
+  destination: string
+): Promise<TrackerPassRow | undefined> {
+  // A no-op write takes SQLite's writer lock and PostgreSQL's row lock before the read.
+  await query(
+    'UPDATE remote_agent_item_tracker_destinations SET destination = destination WHERE destination = $1',
+    [destination]
+  );
+  const result = await query<{
+    pass_owner_host: string | null;
+    pass_owner_pid: number | null;
+    pass_owner_instance: string | null;
+    pass_started_at: string | Date | null;
+    pass_requested: number | string;
+  }>(
+    `SELECT pass_owner_host, pass_owner_pid, pass_owner_instance, pass_started_at, pass_requested
+       FROM remote_agent_item_tracker_destinations WHERE destination = $1`,
+    [destination]
+  );
+  const row = result.rows[0];
+  if (!row) return undefined;
+  const requested = Number(row.pass_requested) === 1;
+  if (
+    row.pass_owner_host === null &&
+    row.pass_owner_pid === null &&
+    row.pass_owner_instance === null
+  )
+    return { requested };
+  const owner = parseProcessOwner(
+    { host: row.pass_owner_host, pid: row.pass_owner_pid, instance: row.pass_owner_instance },
+    passHolderSource(destination)
+  );
+  const since = row.pass_started_at;
+  return {
+    holder: { owner, since: since instanceof Date ? since.toISOString() : String(since) },
+    requested,
+  };
+}
+
+async function clearTrackerPass(query: IDatabase['query'], destination: string): Promise<void> {
+  await query(
+    `UPDATE remote_agent_item_tracker_destinations
+        SET pass_owner_host = NULL, pass_owner_pid = NULL, pass_owner_instance = NULL,
+            pass_started_at = NULL
+      WHERE destination = $1`,
+    [destination]
+  );
+}
+
+/**
+ * Take `destination`'s pass for `owner` when no live process holds it. A holder is taken
+ * over only when this host proves it gone. When the pass is held and `request` is set, the
+ * holder is asked to run one more pass before it lets go, so what this caller saw changed
+ * is shown even though the caller does not come back.
+ */
+export async function claimTrackerPass(
+  destination: string,
+  owner: ProcessOwner,
+  request: boolean
+): Promise<TrackerPassClaim> {
+  return getDatabase().withTransaction(async query => {
+    const row = await lockTrackerPass(query, destination);
+    if (!row) throw new Error(`Item tracker destination ${destination} has not been activated`);
+    const { holder } = row;
+    if (holder && !isSameOwner(holder.owner, owner) && !isOwnerProvablyGone(holder.owner)) {
+      if (request)
+        await query(
+          'UPDATE remote_agent_item_tracker_destinations SET pass_requested = 1 WHERE destination = $1',
+          [destination]
+        );
+      return { claimed: false, heldBy: holder.owner, since: holder.since };
+    }
+    await query(
+      `UPDATE remote_agent_item_tracker_destinations
+          SET pass_owner_host = $2, pass_owner_pid = $3, pass_owner_instance = $4,
+              pass_started_at = $5, pass_requested = 0
+        WHERE destination = $1`,
+      [destination, owner.host, owner.pid, owner.instance, new Date().toISOString()]
+    );
+    return { claimed: true };
+  });
+}
+
+/**
+ * End `owner`'s pass: `again` when another process asked for one more pass meanwhile (the
+ * request is consumed and the pass stays held), otherwise the pass is let go.
+ */
+export async function finishTrackerPass(
+  destination: string,
+  owner: ProcessOwner
+): Promise<'again' | 'released'> {
+  return getDatabase().withTransaction(async query => {
+    const row = await lockTrackerPass(query, destination);
+    if (!row?.holder || !isSameOwner(row.holder.owner, owner)) return 'released';
+    if (row.requested) {
+      await query(
+        'UPDATE remote_agent_item_tracker_destinations SET pass_requested = 0 WHERE destination = $1',
+        [destination]
+      );
+      return 'again';
+    }
+    await clearTrackerPass(query, destination);
+    return 'released';
+  });
+}
+
+/** Let go of `owner`'s pass after it failed; a request for one more pass stays for the next. */
+export async function abandonTrackerPass(destination: string, owner: ProcessOwner): Promise<void> {
+  await getDatabase().withTransaction(async query => {
+    const holder = (await lockTrackerPass(query, destination))?.holder;
+    if (holder && isSameOwner(holder.owner, owner)) await clearTrackerPass(query, destination);
+  });
+}
+
+/**
+ * Explicit operator release of `destination`'s pass, for a holder this host cannot prove
+ * gone, such as one on another host. Refuses a same-host holder that is still running. A
+ * holder whose record does not parse has no owner to probe, so the release stands.
+ */
+export async function releaseTrackerPass(
+  destination: string
+): Promise<'released' | 'not_held' | 'owner_running'> {
+  return getDatabase().withTransaction(async query => {
+    let holder: TrackerPassRow['holder'];
+    try {
+      holder = (await lockTrackerPass(query, destination))?.holder;
+    } catch (error) {
+      if (!(error instanceof ProcessOwnerRecordError)) throw error;
+      await clearTrackerPass(query, destination);
+      return 'released';
+    }
+    if (!holder) return 'not_held';
+    if (holder.owner.host === currentProcessOwner.host && !isOwnerProvablyGone(holder.owner))
+      return 'owner_running';
+    await clearTrackerPass(query, destination);
+    return 'released';
+  });
 }

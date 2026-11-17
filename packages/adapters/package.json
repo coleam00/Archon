@@ -115,6 +115,9 @@
     ],
     [
       "src/sources/standard-webhooks/"
+    ],
+    [
+      "src/item-tracker/item-tracker.integration.test.ts"
     ]
   ]
 }
