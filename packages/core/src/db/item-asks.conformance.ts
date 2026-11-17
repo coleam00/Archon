@@ -6,6 +6,7 @@
  */
 import { expect, test } from 'bun:test';
 import type { ItemAsk } from '@archon/workflows/schemas/item-ask';
+import type { IWorkflowStore } from '@archon/workflows/store';
 import { openAskItems } from '@archon/workflows/attention-queue';
 import { readItemOfRun } from '@archon/workflows/item-read';
 import { watchAttentionQueue, type AttentionStreamLine } from '@archon/workflows/attention-watch';
@@ -16,9 +17,9 @@ import { attentionQueueSource, watchSource } from '../operations/attention-queue
 import type { RunActor } from '../operations/run-authorization';
 import type { IDatabase } from './adapters/types';
 
-type Harness = WorkflowStoreHarness & { db: IDatabase };
+export type Harness = WorkflowStoreHarness & { db: IDatabase };
 
-function ask(question: string): ItemAsk {
+export function ask(question: string): ItemAsk {
   return {
     question,
     context: 'The plan can go two ways.',
@@ -31,14 +32,14 @@ function ask(question: string): ItemAsk {
   };
 }
 
-const operator = { kind: 'operator', declared: 'maintainer' } satisfies RunActor;
+export const operator = { kind: 'operator', declared: 'maintainer' } satisfies RunActor;
 const notUsed = async (): Promise<never> => {
   throw new Error('not used for an ask');
 };
 
-function itemDeps(harness: Harness) {
+export function itemDeps(harness: Harness, store: IWorkflowStore = harness.store) {
   return {
-    queue: attentionQueueSource(harness.store, {
+    queue: attentionQueueSource(store, {
       findLatestByCodebaseAndWorkingPath: async () => null,
     }),
     operations: {
@@ -50,7 +51,7 @@ function itemDeps(harness: Harness) {
 }
 
 /** Complete a run of `workflow` on `item` that leaves `asks`. */
-async function completeWithAsks(
+export async function completeWithAsks(
   harness: Harness,
   asks: readonly ItemAsk[],
   options: { item?: string; workflow?: string } = {}
@@ -66,12 +67,12 @@ async function completeWithAsks(
   return run.id;
 }
 
-async function openRefs(harness: Harness): Promise<string[]> {
+export async function openRefs(harness: Harness): Promise<string[]> {
   const items = await openAskItems(harness.store);
   return items.flatMap(item => ('ref' in item ? [item.ref] : []));
 }
 
-async function settledEvents(harness: Harness, runId: string) {
+export async function settledEvents(harness: Harness, runId: string) {
   const events = await harness.store.listWorkflowEvents(runId);
   return events.filter(event => event.event_type === 'asks_settled').map(event => event.data);
 }

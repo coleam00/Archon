@@ -318,7 +318,7 @@ archon trigger fire --config ~/.archon/triggers/build-after-plan.json --item <ke
 
 A run on an item is refused before it starts, naming the file, when a run-ended binding its end could fire in its project is broken: the started workflow does not exist or does not declare an input the binding maps, the ended workflow does not declare the binding's outcome or an input it reads, or, for a binding with [`checkout: "ended-run"`](#work-in-the-checkout-the-ended-run-left), either workflow pins `worktree.enabled: false`. The run is cancelled before its first node, so a binding that names a missing stage is found before the stage feeding it does any work. With `--detach`, the refusal is the command's result and the run is cancelled before the child starts. `archon trigger check` reports these problems, and also a `launch.cwd` that does not exist, a binding that starts the workflow that ended, and two files that start the same stage, which no run is refused for.
 
-A file can change while a run is running. The ended run fails instead of completing, naming the file, when a file in the directory is not JSON or has an invalid `on`, when two run-ended files share a `sourceInstanceId`, or when a binding for the ended workflow in its project names an outcome that workflow cannot complete with or reads an input it does not declare. A run never completes without the hand-off it owes. Fix the file, then run `archon workflow resume <run-id>`; the resumed run completes and writes the start.
+A file can change while a run is running. The ended run fails instead of completing, naming the file, when a file in the directory is not JSON or has an invalid `on`, when two files with `on` share a `sourceInstanceId`, or when a binding for the ended workflow in its project names an outcome that workflow cannot complete with or reads an input it does not declare. A run never completes without the hand-off it owes. Fix the file, then run `archon workflow resume <run-id>`; the resumed run completes and writes the start.
 
 The start is written in the same database transaction that completes the run, so it exists exactly when the end does. A run completes once, so its end causes each start once. Right after the commit, the CLI process that ended the run prepares the starts its own completion wrote, each on the host its binding names, and spawns each admitted run's executor, as `trigger fire` does for its receipt. A hand `archon workflow run` needs no trigger host for the next stage to start.
 
@@ -333,7 +333,7 @@ If the process dies after the commit, what is left depends on how far it got:
 
 While a start waits it has no run yet. `archon workflow runs --item <key>` lists it under the item's starts waiting to start (`queued` in `--json`), with its request id, resource and how many queued starts of that resource and host are ahead of it, or, with none ahead, that it is next for a free slot, and the host that drains it; `archon trigger withdraw <request-id>` withdraws it. A queued start that waits behind another run of its workflow on the item names that run ([below](#one-run-of-a-workflow-per-item)). A start its binding's `overlap: skip` refused is listed under the item's refused starts (`skipped` in `--json`).
 
-`archon workflow runs --item <key> --json` lists the item's runs in the order they started, each with an `awaitingExecution` (above, `null` unless its start is admitted and not yet running), a `heldBehind` (`null` unless it is a start waiting behind another run of its workflow on the item) and a `cause`: `{"kind": "run_ended", "runId", "sourceInstanceId"}` for a start a run's end caused, where `sourceInstanceId` is the trigger file's, `{"kind": "run_fired", "runId", "node"}` for one a node fired, `{"kind": "receipt", "receiptId", "sourceInstanceId"}` for any other trigger, or `null` for a start by hand. The receipt records the ended run as its `sourceActor` (`{"source": "archon-run-ended", "id": <run id>, "display": <outcome>}`) and uses the ended run's ID as its delivery ID. Start times on SQLite have one-second resolution; runs that start in the same second are listed in the order they were written.
+`archon workflow runs --item <key> --json` lists the item's runs in the order they started, each with an `awaitingExecution` (above, `null` unless its start is admitted and not yet running), a `heldBehind` (`null` unless it is a start waiting behind another run of its workflow on the item) and a `cause`: `{"kind": "run_ended", "runId", "sourceInstanceId"}` for a start a run's end caused, where `sourceInstanceId` is the trigger file's, `{"kind": "asks_settled", "runId"}` for one the settling of a run's asks caused ([below](#start-a-stage-again-when-its-asks-are-answered)), `{"kind": "run_fired", "runId", "node"}` for one a node fired, `{"kind": "receipt", "receiptId", "sourceInstanceId"}` for any other trigger, or `null` for a start by hand. The receipt records the ended run as its `sourceActor` (`{"source": "archon-run-ended", "id": <run id>, "display": <outcome>}`) and uses the ended run's ID as its delivery ID. Start times on SQLite have one-second resolution; runs that start in the same second are listed in the order they were written.
 
 Run-ended bindings need the database store, as items do. With `store: files`, `archon trigger check` refuses any run-ended file, and such a file never fires: the file store refuses every run on an item, and a run with no item causes nothing.
 
@@ -478,6 +478,82 @@ A start never falls back to a fresh checkout of the base branch. It is refused i
 A worktree separates checkouts; it is not a sandbox. A check with `mutates_checkout: false` is not on the build's branch, but nothing stops its commands from writing to the repository. The commit check above is what refuses a build on a branch something else moved.
 
 An older Archon binary that prepares one of these starts reads only the branch in `launch.isolation`: it runs the stage on that branch with no commit check and no read-only copy, or fails when it cannot check the branch out. It never uses the base branch.
+
+## Start a stage again when its asks are answered
+
+A stage can end with [asks](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) instead of guessing: the run completes, its questions open on the item, and an operator answers them. A trigger file with `on.asksSettled` starts its binding on the same item once every ask that run left is answered or withdrawn, with the answers as an input. Nothing is held open while the questions wait. The start belongs to the host the trigger file names, as a run-ended start does. It is prepared at once when the last answer is recorded by `archon workflow answer` or by a server that serves that host, and otherwise at that host's next drain ([below](#who-prepares-the-start)). Preparing a start is not running it: admission then runs it, queues it, or under `overlap: skip` skips it, as for any binding start ([capacity and overlap](#choose-a-resource-capacity-and-overlap-policy), [one run of a workflow per item](#one-run-of-a-workflow-per-item)).
+
+A stage that ends in an ask and starts again with the answer takes two files in `~/.archon/triggers/`. `build-after-plan.json` starts `build` when `plan` ends, as [above](#start-a-stage-when-a-run-on-an-item-ends). `build-after-answers.json` starts `build` again when the asks a `build` run left are answered:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "build-after-answers",
+  "binding": {
+    "bindingId": "build",
+    "bindingRevision": null,
+    "hostId": "alice-macbook",
+    "runAsUserId": "2a568f73-e217-40ca-b17d-a784d19fd43a",
+    "resource": "build",
+    "overlap": "queue",
+    "launch": {
+      "cwd": "/Users/alice/Projects/widgets",
+      "workflowName": "build",
+      "inputs": {},
+      "isolation": { "kind": "default" }
+    }
+  },
+  "on": {
+    "asksSettled": {
+      "workflowName": "build",
+      "settled": "answered",
+      "inputs": {
+        "decisions": { "answers": true },
+        "plan": { "input": "plan" },
+        "issue": { "input": "issue" },
+        "progress": { "result": "/summary" }
+      }
+    }
+  }
+}
+```
+
+`build` declares `returns: { node, asks }` and the inputs `plan`, `issue`, `decisions` and `progress`, none of them required: the start after `plan` passes `plan` and `issue`, and the start after the answers passes the same `plan` and `issue` again, with `decisions` and `progress`. A run that leaves asks completes; when the last of them is answered, the next `build` starts on the item with the answers as decisions already made. A run that leaves no asks settles nothing, so the loop ends there. Each file has its own `sourceInstanceId`.
+
+A binding starts once for a set of asks that meets all of these:
+
+- Every ask the run left is answered or withdrawn. Answering the first of two starts nothing; answering the second starts the stage. A set replaced by a later run of the same workflow on the item before it settled can no longer settle, so it starts nothing.
+- The run that left the asks is a run of `workflowName`.
+- `settled` matches how the set settled: `answered` when at least one ask was answered, so a set with some asks withdrawn counts as answered; `withdrawn` when every ask was withdrawn; `any` for either.
+- The binding's `launch.cwd` is in the item's project, as for a run-ended binding.
+
+`inputs` maps each input of the started workflow to data from the set and the run that left it, and nothing else:
+
+- `{ "answers": true }` passes the settled set as a list, in the order the run left the asks. Each entry is `{ question, closedAs, answer, option, by, via, at }`: `closedAs` is `answered` or `withdrawn`; `answer` is the stored answer (`decision` and `text`), or `null` for a withdrawn ask; `option` is the chosen option's `id` and what it `does`, or `null`; `by`, `via` and `at` say who closed it, through which surface and when.
+- `{ "result": "<JSON Pointer>" }` reads the result the run completed with, the output of its `returns:` node, which the run keeps on its record for this.
+- `{ "input": "<name>" }` passes one of that run's own inputs.
+
+The values are resolved when the set settles and frozen into the start's receipt. A pointer that names nothing, or a run whose record is gone when a binding reads its result or inputs, writes the receipt as `unmatched` with the reason and starts nothing. The command that recorded the answer prints it with the `archon trigger inspect` command for the receipt, and so it does for a binding whose preparation failed, for example because the stage it names is gone. The receipt is the settlement's one hand-off, so fixing the file does not start the owed stage, and `trigger fire` does not rebuild the settlement's inputs. Fix the file, then start the stage by hand with the inputs the binding should have passed, written to a JSON file: the answers as `archon workflow runs --item <key> --json` lists them, and the asking run's inputs and result.
+
+```bash
+archon trigger fire --config ~/.archon/triggers/build-after-answers.json --item <key> --inputs inputs.json
+```
+
+The start is written in the same database transaction that records the settlement, so it exists exactly when the settlement does, and a set settles once, so answering the last ask twice starts the stage once. The files are read at every close of an ask. A file that is not JSON or has an invalid `on`, or two files with `on` that share a `sourceInstanceId`, refuses the close that would settle a set, naming the file, and nothing is recorded; fix the file and answer again. A run on an item is refused before it starts when an asks-settled binding for its workflow in its project names a missing stage or an input either workflow does not declare, so a broken binding is found before the asking stage does any work.
+
+Answering is not starting. Who may answer or withdraw an ask is unchanged: the rule of the run that left it. The started run acts as the binding's `runAsUserId`, as any binding start does, so an operator who may answer and may not start work still only answers.
+
+`archon workflow runs --item <key>` shows the started run's `cause` as `{"kind": "asks_settled", "runId"}`, naming the run whose asks they were. The receipt records that run as its `sourceActor` (`{"source": "archon-asks-settled", "id": <run id>, "display": "answered" | "withdrawn"}`) and uses its ID as the delivery ID. `archon trigger check` lists asks-settled bindings under `asksSettled` and reports one whose asking workflow declares no `returns.asks`.
+
+Asks-settled bindings need the database store, as asks do. A [`wait: attention`](/reference/workflow-language/) node is unchanged: it pauses its own run and resumes it with the answer, and starts nothing.
+
+### Who prepares the start
+
+The start is always written with the settlement, whichever surface recorded the last answer. Preparing it belongs to the host the trigger file's `hostId` names, as for a run-ended binding, so when the start is prepared depends on which process recorded that answer. Preparing it hands it to admission, which runs it at once only when its resource has a free slot and no other run of its workflow holds the item. Otherwise it waits in its host's queue under `overlap: queue`, or is recorded skipped under `overlap: skip`. The asking run is already complete when its set settles, so a binding that starts the asking workflow again is never held behind that run.
+
+- **`archon workflow answer --ref` or `--withdraw`.** Right after the commit, the CLI process prepares the starts its settlement wrote, each on the host its binding names, and spawns the executor of each one admission admits, as the end of a hand `workflow run` does for a run-ended binding. It drains a host's other queued work only when it serves that host. No trigger host needs to be running.
+- **The server: the Web UI, the API or chat.** The server runs work only for the host its `ARCHON_TRIGGER_HOST` names. A start on that host is prepared on its loop, within about five seconds. A start on any other host, or on any host when the server sets no `ARCHON_TRIGGER_HOST`, waits as a pending binding to be prepared at that host's next drain: a run ending there, a `trigger fire`, `archon trigger drain --host <hostId>` or the loop of a server that serves it. The server never prepares a start for a host it does not serve. If you answer through the server, name the server's host in the binding, or run that host's drain.
+- **A process that dies after the commit.** If it died before the start was admitted, the start waits as a pending binding until its host's next drain, which prepares it exactly once and admits, queues or skips it like any other start. If it died after admission and before spawning the executor, the run exists as `pending` and no drain retries it; run it once with `archon trigger execute <request-id> --host <hostId>`, as [for a run-ended start](#start-a-stage-when-a-run-on-an-item-ends).
 
 ## Choose a resource, capacity, and overlap policy
 

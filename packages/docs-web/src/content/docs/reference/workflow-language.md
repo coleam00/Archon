@@ -2258,8 +2258,9 @@ What the engine does with them:
   the settled set, and `archon workflow runs --item` still reads them.
 - **A set settles once.** When every ask a run left is answered or withdrawn, the engine records
   `asks_settled` on that run once, with how many were `answered` and `withdrawn`; `answered: 0`
-  means every ask was withdrawn. Settling records a fact and starts nothing: no trigger binds to
-  it yet.
+  means every ask was withdrawn. A trigger file with `on.asksSettled` can start a stage on the
+  item when that happens, with the answers as its input: see [start a stage again when its asks
+  are answered](/guides/workflow-triggers/#start-a-stage-again-when-its-asks-are-answered).
 
 ### Deterministic checks and run outcomes
 

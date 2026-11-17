@@ -16,6 +16,7 @@ import {
   describeSqlStatusReadConformance,
 } from './workflow-store.conformance-harness';
 import { describeItemLinkConformance } from './item-links.conformance-harness';
+import { describeSqlItemAskStartConformance } from './item-ask-starts.conformance';
 import { describeSqlItemAskConformance } from './item-asks.conformance';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
 import { getSchemaSQL } from './bundled-schema';
@@ -320,6 +321,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   describeSqlStatusReadConformance(makeHarness);
   describeItemLinkConformance(makeHarness);
   describeSqlItemAskConformance(makeHarness);
+  describeSqlItemAskStartConformance(makeHarness);
   test('two completions of one workflow on one item that overlap leave one open set: the later one', async () => {
     const harness = await makeHarness();
     // Holding the item row FOR UPDATE parks each completion at its ask insert, whose

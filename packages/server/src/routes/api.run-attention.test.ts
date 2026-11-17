@@ -569,6 +569,7 @@ describe('asks answered and withdrawn by ref over HTTP', () => {
       kind: 'closed',
       ask: answered,
       settled: true,
+      startReceipts: [],
     }));
     const response = await post('/api/attention/answer', { ref: 'ask:a1', recommended: true });
     expect(response.status).toBe(200);
@@ -616,6 +617,7 @@ describe('asks answered and withdrawn by ref over HTTP', () => {
         },
       },
       settled: false,
+      startReceipts: [],
     }));
     const withdrawn = await post('/api/attention/withdraw', { ref: 'ask:a1' });
     expect(withdrawn.status).toBe(200);
