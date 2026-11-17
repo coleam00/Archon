@@ -166,6 +166,7 @@ describe('convertOutputSchema', () => {
     expect(convertOutputSchema({ description: 'anything' }).type).toBe('unknown');
     expect(convertOutputSchema(true).type).toBe('unknown');
     expect(convertOutputSchema(false).type).toBe('never');
+    expect(convertOutputSchema({ not: {} }).type).toBe('never');
   });
 
   test.each([

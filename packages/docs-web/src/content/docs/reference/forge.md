@@ -106,7 +106,9 @@ A host released before these kinds reads them as `invalid_response`, and reports
 archon forge check --json --data '{"host":"github.com","operations":["pr.view","pr.create","pr.merge"]}'
 ```
 
-`check` answers three questions for one host without running a forge operation: which plugin serves the host, whether it advertises every name in `operations`, and whether its credential resolves. `operations` takes operation names and any other capability a plugin advertises, such as `resolve:subject`. A workflow runs it in its first node, so a missing plugin or token refuses before any agent runs instead of at the first write.
+`check` answers three questions for one forge without running a forge operation: which plugin serves it, whether it advertises every name in `operations`, and whether its credential resolves. Name the forge by `host`, or by a git `remote` URL instead: the plugin is then selected exactly as a `resolve` of that remote selects it, and the result's `host` is the claim that selected it. A remote that names no forge host, such as a local path, answers `no_plugin_for_host` without echoing the URL. `operations` takes operation names and any other capability a plugin advertises, such as `resolve:subject`.
+
+The engine runs this check itself when a run of a pack that declares [forge needs](/reference/workflow-language/#pack-forge-needs) starts, so a missing plugin, capability or token refuses before a worktree or any agent. A workflow outside such a pack can still run it in its first node.
 
 On success it exits 0 and the result names the plugin and, when the plugin needs a credential, the source it was found in, never the token:
 
@@ -134,6 +136,8 @@ Otherwise it exits 1 with the first reason that applies, in this order:
 | `unsupported_op` | The plugin lacks at least one named operation; `unsupported` lists every one it lacks |
 | `no_credential` | The plugin's credential environment is unset or empty |
 | `process_failed` | Plugin discovery failed, or `gh auth token` failed for a GitHub host |
+
+A `no_plugin_for_host`, `unsupported_op` or `no_credential` failure carries `remedy`, the operator's next step. For the last two it is the plugin's own text when its metadata states one under `remedies`, and otherwise forge's generic step (`archon plugin update`, or the credential variables the plugin reads).
 
 The credential is resolved the way an operation resolves it, so for GitHub the check may run `gh auth token`. It does not contact the forge: a credential that resolves can still be expired or lack access to a repository, which the first operation reports.
 
@@ -204,7 +208,7 @@ The GitHub plugin has a log only for a GitHub Actions check run, whose check-run
 
 The host resolves `GH_TOKEN`, then `GITHUB_TOKEN`, then the `gh` CLI login for the target host. The dispatcher passes the selected token to the child as `ARCHON_FORGE_TOKEN`. Tokens never belong in command arguments, JSON requests or remote URLs.
 
-Inside a workflow (`WORKFLOW_ID` is set), a `GH_TOKEN`, `GITHUB_TOKEN` or `COPILOT_GITHUB_TOKEN` the command inherits is the run's credential. Neither `~/.archon/.env` nor the repository's `.archon/.env` replaces it, and an empty value (a credential the run withholds) stays empty. When the run sets no value, or a project `.env` names the key so startup strips it, those files supply the credential as they do outside a workflow.
+Inside a workflow (`WORKFLOW_ID` is set), and in the start-time forge check of a pack that declares `forge:`, a `GH_TOKEN`, `GITHUB_TOKEN` or `COPILOT_GITHUB_TOKEN` the command inherits is the run's credential. Neither `~/.archon/.env` nor the repository's `.archon/.env` replaces it, and an empty value (a credential the run withholds) stays empty. When the run sets no value, or a project `.env` names the key so startup strips it, those files supply the credential as they do outside a workflow.
 
 Checks identify the evaluated revision and each check-run or commit-status unit. GitHub enumeration includes current check runs and the latest status for each context. The plugin preserves distinct runs with the same name. It does not use GitHub's aggregate status as evidence that checks exist.
 
@@ -274,7 +278,7 @@ The authoritative Zod schemas and derived TypeScript types are exported by `@arc
 
 It also exports `runForgeMutationConformance` for write fixtures. Pass the plugin operation function, its metadata, and cases naming the request and the outcome the fixture sets up. The kit validates the response schema, correlation, qualified target, the applied result against the request that asked for it, and that the reported outcome is the expected one.
 
-The host invokes `PLUGIN metadata` before any operation. Metadata declares integer protocol version 1, plugin name/version, forge family, static hosts, capabilities (the operations it supports, plus capability tokens such as `pr.view:any-state` that are not operation names), enforced mutation conditions and credential environment names. Protocol incompatibility and unsupported operations fail before operation execution.
+The host invokes `PLUGIN metadata` before any operation. Metadata declares integer protocol version 1, plugin name/version, forge family, static hosts, capabilities (the operations it supports, plus capability tokens such as `pr.view:any-state` that are not operation names), enforced mutation conditions, credential environment names and, optionally, `remedies`: the operator's next step for an `unsupported_op` or `no_credential` refusal from `forge check`, as text. Protocol incompatibility and unsupported operations fail before operation execution.
 
 For an operation, the host invokes `PLUGIN op OPERATION` — `resolve`, `checks.state`, `checks.commit`, `checks.logs`, `workitem.view`, `workitem.comments`, `workitem.list`, `workitem.search`, `workitem.create`, `workitem.labels.set`, `workitem.label.add`, `workitem.label.remove`, `workitem.comment.upsert`, `workitem.close`, `repo.labels.list`, `repo.label.ensure`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft`, `pr.merge`, `checks.rerun`, `pr.reviews`, `pr.threads`, `pr.merge-state`, `pr.files`, `repo.file`, `pr.thread.reply`, `pr.thread.resolve`, `pr.review.submit`, `workitem.edit-body` or `comment.upsert` — sends one JSON request on stdin and expects one JSON response on stdout. Write explicit UTF-8 bytes. Diagnostics go to stderr. Exit 0 carries a success response; exit 1 carries a structured operation error. Other exits, malformed JSON and mismatched operation/target identity are process or protocol failures.
 
@@ -286,7 +290,7 @@ On Windows, discovered executables must have an `.exe` extension. `.cmd` and `.b
 
 ## Workflow host integration and audit
 
-The CLI sets `ARCHON_CLI_COMMAND` at startup to a JSON argv array for the install's CLI: the compiled CLI executable, or the Bun runtime and CLI source entry in a source checkout. A source server also publishes the source CLI command. A compiled server launched by `archon serve` requires and preserves the launching CLI's value instead of publishing its own executable. Runs launched from the CLI, the Web UI or a chat or forge adapter therefore see the same CLI command. Bundled scripts append command arguments without shell parsing. An SDK host must supply its own argv array. A container execution does not receive the variable, because a host binary path is not assumed to exist in a container.
+The CLI sets `ARCHON_CLI_COMMAND` at startup to a JSON argv array for the install's CLI: the compiled CLI executable, or the Bun runtime and CLI source entry in a source checkout. A source server also publishes the source CLI command. A compiled server launched by `archon serve` requires and preserves the launching CLI's value instead of publishing its own executable. Runs launched from the CLI, the Web UI or a chat or forge adapter therefore see the same CLI command. Bundled scripts append command arguments without shell parsing. An SDK host must supply its own argv array. A container execution does not receive the variable, because a host binary path is not assumed to exist in a container; a run of a pack that declares forge needs is therefore refused at start when it would execute in a container.
 
 When `WORKFLOW_ID` is present, the CLI persists an `integration_operation` event through its database host. The forge payload retains operation correlation, qualified target, plugin identity/version, result, the number of read retries and duration. Audit records keep identity and content digests only: the title and body a view operation returned, and each review, thread and conversation comment body, are replaced by a digest and a byte count, so authored content never lands in the run's durable event log. The engine does not interpret the forge payload. The CLI reports persistence failure separately from the operation's observed outcome.
 

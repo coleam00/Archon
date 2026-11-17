@@ -692,12 +692,10 @@ describe('trigger CLI durable execution', () => {
       writeFileSync(path, JSON.stringify(value));
       return path;
     };
-    const fire = (path: string) =>
-      `'${process.execPath}' '${fixture.cliPath}' trigger fire --config '${mappedConfig}' --inputs '${path}'`;
-    const refusal = join(root, 'refused');
-    // From a run on item-1: an input without the field, the mapped field, and --item.
+    // From a run on item-1, only the mapped field: the one case that needs a fired-from
+    // run. Every other case is fired here, so the wait below covers one nested CLI start.
     fixture.writeWorkflow(
-      `${fire(inputs('none', { other: 1 }))} > '${refusal}' 2>&1; echo "exit $?" >> '${refusal}'; ${fire(inputs('seven', { number: 7 }))} || exit 1; ${fire(inputs('eight', { number: 8 }))} --item named || exit 1`
+      `'${process.execPath}' '${fixture.cliPath}' trigger fire --config '${mappedConfig}' --inputs '${inputs('seven', { number: 7 })}' || exit 1`
     );
     const database = join(fixture.archonHome, 'archon.db');
     const runs = () =>
@@ -715,30 +713,36 @@ describe('trigger CLI durable execution', () => {
             : undefined,
         `${String(count)} completed runs`
       );
-    const invoke = (args: string[]) =>
-      runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, args);
+    const fire = (inputsPath: string, extra: string[] = [], expectSuccess = true) =>
+      runCli(
+        fixture.cliPath,
+        fixture.projectRoot,
+        fixture.archonHome,
+        ['trigger', 'fire', '--config', mappedConfig, '--inputs', inputsPath, ...extra],
+        expectSuccess
+      );
 
-    await invoke(['trigger', 'fire', '--config', join(root, 'trigger.json'), '--item', 'item-1']);
-    await settled(3);
+    await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
+      'trigger',
+      'fire',
+      '--config',
+      join(root, 'trigger.json'),
+      '--item',
+      'item-1',
+    ]);
+    await settled(2);
     // Fired by an operator, on no item: the same mapped item.
-    await invoke([
-      'trigger',
-      'fire',
-      '--config',
-      mappedConfig,
-      '--inputs',
-      join(root, 'seven.json'),
-    ]);
-    // --no-item wins over the mapping.
-    await invoke([
-      'trigger',
-      'fire',
-      '--config',
-      mappedConfig,
-      '--inputs',
-      join(root, 'seven.json'),
-      '--no-item',
-    ]);
+    await fire(join(root, 'seven.json'));
+    // --no-item and --item win over the mapping.
+    await fire(join(root, 'seven.json'), ['--no-item']);
+    await fire(inputs('eight', { number: 8 }), ['--item', 'named']);
+    // An input without the field is refused.
+    const refused = await fire(inputs('none', { other: 1 }), [], false);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain(
+      "Binding 'mapped-proof' names its item from the fire's --inputs"
+    );
+    expect(refused.stderr).toContain("field 'number' is missing");
     expect((await settled(5)).map(run => [run.workflow_name, run.item])).toEqual([
       ['item-map-proof', 'item-1'],
       ['mapped-proof', null],
@@ -746,10 +750,6 @@ describe('trigger CLI durable execution', () => {
       ['mapped-proof', 'issue-7'],
       ['mapped-proof', 'named'],
     ]);
-    const refused = readFileSync(refusal, 'utf8');
-    expect(refused).toContain("Binding 'mapped-proof' names its item from the fire's --inputs");
-    expect(refused).toContain("field 'number' is missing");
-    expect(refused).toContain('exit 1');
     // The refusal recorded nothing: one receipt per start.
     expect(
       readRows<{ count: number }>(

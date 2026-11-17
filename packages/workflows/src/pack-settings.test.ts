@@ -98,6 +98,27 @@ describe('parsePackDeclaration', () => {
   });
 });
 
+describe('parsePackDeclaration forge', () => {
+  it('reads the capability tokens the pack calls', () => {
+    expect(
+      parsePackDeclaration(
+        'forge:\n  operations: [pr.view, resolve:subject]\n',
+        'p/.pack/pack.yaml'
+      )
+    ).toEqual({ forge: { operations: ['pr.view', 'resolve:subject'] } });
+  });
+
+  it.each([
+    ['forge:\n  operations: []\n', "'forge' is invalid at 'operations'"],
+    ['forge:\n  operations: [pr.view, 3]\n', "'forge' is invalid at 'operations.1'"],
+    ['forge:\n  operations: [pr.view]\n  host: github.com\n', "'forge' is invalid"],
+    ['forge: [pr.view]\n', "'forge' must be a mapping"],
+  ])('refuses %p, naming the file', (yaml, reason) => {
+    expect(() => parsePackDeclaration(yaml, 'p/.pack/pack.yaml')).toThrow(reason);
+    expect(() => parsePackDeclaration(yaml, 'p/.pack/pack.yaml')).toThrow('p/.pack/pack.yaml');
+  });
+});
+
 describe('parsePackDeclaration bindings', () => {
   const timer = (extra = ''): string =>
     `  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n    schedule: { interval_seconds: 60 }\n${extra}`;
