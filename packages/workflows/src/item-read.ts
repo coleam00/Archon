@@ -529,6 +529,28 @@ export async function readItemQueue(source: ItemReadSource): Promise<ItemQueueRe
   return splitAttentionRead(await listAttentionQueue({ ...source, ownerLost: undefined }));
 }
 
+/** The facts recorded on the item itself: its rulings, its links and its merge. */
+async function readItemFacts(source: ItemReadSource, itemId: string) {
+  const rulings: ItemRuling[] = [];
+  const unreadableRulings: ItemRulingDegraded[] = [];
+  for (const read of await source.store.listItemRulings(itemId))
+    if ('type' in read) unreadableRulings.push(read);
+    else rulings.push(read);
+  const links: ItemReadLink[] = [];
+  const unreadableLinks: ItemLinkDegraded[] = [];
+  for (const read of await source.store.listItemLinks(itemId))
+    if ('type' in read) unreadableLinks.push(read);
+    else links.push(readLink(itemId, read));
+  const merge = await source.store.getItemMerge(itemId);
+  const unreadableMerge: ItemMergeDegraded[] = merge !== null && 'type' in merge ? [merge] : [];
+  return {
+    rulings,
+    links,
+    merged: merge !== null && !('type' in merge) ? merge : null,
+    degraded: [...unreadableRulings, ...unreadableMerge, ...unreadableLinks],
+  };
+}
+
 /**
  * Build the read of an item against one read of the attention queue, so a reader of many
  * items reads the queue once. Null when the item has gone from the store.
@@ -552,28 +574,19 @@ export async function assembleItemRead(
   const { values, degraded } = queue;
   // An ask no run holds belongs to the item it was left on.
   const questions = values
-    .filter(item => (isHeldByRun(item) ? tree.has(item.run.id) : item.item?.id === found.item.id))
+    .filter(question =>
+      isHeldByRun(question) ? tree.has(question.run.id) : question.item?.id === found.item.id
+    )
     .sort(compareAge);
   const events =
     tree.size === 0
       ? new Map<string, WorkflowEventRow[]>()
       : await source.store.listEventsForRuns([...tree], ['wait_answered', 'approval_received']);
-  const rulings: ItemRuling[] = [];
-  const unreadableRulings: ItemRulingDegraded[] = [];
-  for (const read of await source.store.listItemRulings(found.item.id))
-    if ('type' in read) unreadableRulings.push(read);
-    else rulings.push(read);
-  const merge = await source.store.getItemMerge(found.item.id);
-  const unreadableMerge: ItemMergeDegraded[] = merge !== null && 'type' in merge ? [merge] : [];
-  const links: ItemReadLink[] = [];
-  const unreadableLinks: ItemLinkDegraded[] = [];
-  for (const read of await source.store.listItemLinks(found.item.id))
-    if ('type' in read) unreadableLinks.push(read);
-    else links.push(readLink(found.item.id, read));
+  const facts = await readItemFacts(source, found.item.id);
   const asks = splitAttentionRead(await source.store.listItemAsks(found.item.id));
   const answers = [
     ...[...events.values()].flat().map(itemAnswer),
-    ...rulings,
+    ...facts.rulings,
     ...askAnswers(asks.values, new Set(asks.degraded.map(report => report.runId))),
   ]
     // Stable, so rows that tie on `at` keep their store order: append order within a run,
@@ -602,8 +615,8 @@ export async function assembleItemRead(
     skipped,
     questions,
     answers,
-    links,
-    merged: merge !== null && !('type' in merge) ? merge : null,
+    links: facts.links,
+    merged: facts.merged,
     // A paused item run the store could not read is in both reports, and an unreadable
     // open ask in the queue's and the item's; list each run once.
     degraded: [
@@ -612,9 +625,7 @@ export async function assembleItemRead(
         ...degraded.filter(report => tree.has(report.runId)),
         ...asks.degraded,
       ]),
-      ...unreadableRulings,
-      ...unreadableMerge,
-      ...unreadableLinks,
+      ...facts.degraded,
     ],
   };
 }
