@@ -210,7 +210,7 @@ Commands:
                              test a workflow script outside a run: bun --preload <file> script.ts
   isolation list             List all active worktrees/environments
   isolation cleanup [days]   Remove eligible worktrees by inactivity, containers by creation age (default: 7 days)
-  isolation cleanup --merged Remove worktrees covered by Git integration or a merged PR
+  isolation cleanup --merged [--json] Remove worktrees covered by Git integration or a merged PR
   isolation cleanup schedule install|remove|status
                              Manage the macOS timer that runs the merged cleanup
   complete <branch> [...]    Remove worktree and local branch; retain remote branch
