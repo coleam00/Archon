@@ -216,7 +216,11 @@ function sumPromptUsage(
         ...(cacheRead !== undefined ? { cacheRead } : {}),
         ...(cacheWrite !== undefined ? { cacheWrite } : {}),
         ...(message.provider ? { provider: message.provider } : {}),
-        ...(message.model ? { model: message.model } : {}),
+        // The served model, as resolvedModel reports it; `model` is what was requested,
+        // possibly an alias, and pricing by it would price the wrong model.
+        ...(typeof message.responseModel === 'string' && message.responseModel.length > 0
+          ? { model: message.responseModel }
+          : {}),
         ...(message.responseId ? { responseId: message.responseId } : {}),
       };
     });

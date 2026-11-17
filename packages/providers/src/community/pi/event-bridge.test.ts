@@ -210,6 +210,8 @@ describe('buildResultChunk', () => {
       },
     ]);
     expect(chunk).toMatchObject({ type: 'result', resolvedModel: { id: 'claude-opus-5' } });
+    if (chunk.type !== 'result') throw new Error('expected result');
+    expect(chunk.tokens?.calls?.[0]?.model).toBe('claude-opus-5');
   });
 
   test('omits resolvedModel when Pi does not report a responseModel', () => {
@@ -217,6 +219,8 @@ describe('buildResultChunk', () => {
       { role: 'assistant', model: 'large', usage, stopReason: 'stop', content: [] },
     ]);
     expect(chunk).not.toHaveProperty('resolvedModel');
+    if (chunk.type !== 'result') throw new Error('expected result');
+    expect(chunk.tokens?.calls?.[0]).not.toHaveProperty('model');
   });
 
   test('flags isError for stopReason=error and surfaces errorMessage', () => {
@@ -1104,7 +1108,8 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
     const make = (id: string, input: number, output: number) => ({
       ...assistant({ input, output, cacheRead: 20, cacheWrite: 5, cost: 0 }, 'stop'),
       provider: 'foundry',
-      model: 'gpt-6.1-sol',
+      model: 'large',
+      responseModel: 'gpt-6.1-sol',
       responseId: id,
     });
     const result = buildResultChunk([make('one', 200_000, 10), make('two', 400_000, 30)]);

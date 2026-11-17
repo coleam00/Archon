@@ -89,12 +89,11 @@ function spendWithReadableCalls(spend: unknown): { spend: unknown; dropped: bool
  * unreadable cache axis is dropped, before the record's own fields are validated strictly.
  * The list can be large, so the warning names where it was, not what it held.
  */
-export function readableRequestEvidence<T>(
-  raw: T,
+export function readableRequestEvidence(
+  raw: Record<string, unknown>,
   keys: { tokens?: string[]; spend?: string[] },
   context: Record<string, unknown>
-): T {
-  if (!isObject(raw)) return raw;
+): Record<string, unknown> {
   const fields: string[] = [];
   const result: Record<string, unknown> = { ...raw };
   for (const key of keys.tokens ?? []) {
@@ -113,7 +112,7 @@ export function readableRequestEvidence<T>(
   }
   if (fields.length === 0) return raw;
   getLog().warn({ ...context, fields }, 'workflow.node_record_calls_invalid_ignored');
-  return result as T;
+  return result;
 }
 
 const recordUsageKeys = { tokens: ['tokens'], spend: ['spend', 'loopBaseline'] };
