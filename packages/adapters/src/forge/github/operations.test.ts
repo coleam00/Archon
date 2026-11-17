@@ -98,6 +98,10 @@ describe('GitHub outbound producer', () => {
       ],
       mutationConditions: { 'pr.merge': ['head'] },
       token_env: ['GH_TOKEN', 'GITHUB_TOKEN'],
+      remedies: {
+        unsupported_op: expect.stringContaining('archon plugin update'),
+        no_credential: expect.stringContaining('archon auth github'),
+      },
     });
   });
 

@@ -2527,8 +2527,8 @@ same input again. Every workflow of the pack reads them as `$INPUTS.<name>` and
 `INPUTS_<UPPER_SNAKE>`, exactly like its own inputs. A flat workflow has no pack and no settings.
 
 The pack declares them in `<pack>/.pack/pack.yaml`, a top-level `inputs:` block in the same
-shape as a workflow's, plus a `type`. The file holds only `inputs:` and
-[`bindings:`](#pack-bindings):
+shape as a workflow's, plus a `type`. The file holds only `inputs:`,
+[`bindings:`](#pack-bindings) and [`forge:`](#pack-forge-needs):
 
 ```yaml
 # .archon/workflows/review-kit/.pack/pack.yaml
@@ -2743,6 +2743,45 @@ An event binding's `field` is a source plugin event field, checked when the bind
 generated; a fire-only binding's is a key of the fire's `--inputs`. A timer binding with
 `item:` is refused at load, since a tick is about no item, and so is a run-ended binding with
 `item:`, since its start is on the ended run's item.
+
+### Pack forge needs
+
+A pack whose workflows call the forge names the capabilities they call, once, in a top-level
+`forge:` block of the same `<pack>/.pack/pack.yaml`:
+
+```yaml
+# .archon/workflows/review-kit/.pack/pack.yaml
+forge:
+  operations: [pr.view, pr.create, comment.upsert, resolve:subject]
+```
+
+Each entry is a capability a [forge plugin](/reference/forge/) advertises: an operation name,
+or a finer token such as `resolve:subject`. The list must not be empty; any other key under
+`forge:` is refused, and an invalid block fails every workflow of the pack, naming the file.
+
+Every fresh run of a workflow of the pack is checked when it starts, before a worktree, a
+queue slot or any node: started by hand, from chat or the Web UI, by a trigger binding (before
+admission, so a refused binding takes no slot), or as a `workflow:` sub-run, which is checked
+against its own pack. An `include:`d block takes nothing from its pack. A resumed or approved
+run is not checked again. The engine asks
+[`archon forge check`](/reference/forge/#check-forge-access-before-a-run-spends) for each
+remote of the project's checkout, with the run's GitHub credential; the run starts when one
+remote names a forge whose plugin advertises every listed capability and whose credential
+resolves. No forge operation runs. Otherwise the run is refused with a typed reason per remote
+and the plugin's remedy:
+
+| Reason | Meaning |
+| --- | --- |
+| `no_plugin_for_host` | No installed or configured plugin claims the remote's host |
+| `unsupported_op` | The plugin lacks a listed capability; the refusal names each one |
+| `no_credential` | The plugin's credential is unset or empty |
+| `no_forge_remote` | The checkout has no git remote, or the project is not a git repository |
+| `no_forge_path` | The run executes in a container, or the host publishes no `ARCHON_CLI_COMMAND` |
+| `check_failed` | The check could not answer, for example plugin discovery failed |
+
+A pack that declares no `forge:` block is not checked.
+[`archon validate workflows`](/reference/cli/#validate-workflows-name) warns about a listed
+capability no installed plugin advertises.
 
 ## Launching a Separate Governed Run with `workflow:`
 

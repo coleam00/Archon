@@ -61,7 +61,7 @@ function parseGithubRepoUrl(url: string): { owner: string; repo: string } | null
   return { owner, repo };
 }
 
-type WorkflowGithubDeps = Pick<
+export type WorkflowGithubDeps = Pick<
   WorkflowDeps,
   'githubApp' | 'isPerUserGitHubEnabled' | 'getUserGithubToken' | 'getUserGithubAuthor'
 > & { store: Pick<WorkflowDeps['store'], 'getCodebase'> };

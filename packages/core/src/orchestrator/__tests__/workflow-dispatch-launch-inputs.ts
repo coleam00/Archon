@@ -399,6 +399,31 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     }
   });
 
+  test('foreground forge refusal stops before isolation or execution, reading the registered checkout', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const refusal = new forgeAccess.ForgeRequirementError('test-workflow', 'factory', [
+      { reason: 'no_forge_remote', message: 'the checkout has no git remote' },
+    ]);
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockRejectedValue(refusal);
+    const platform = makeForegroundPlatform();
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeDispatchConversation({ cwd: '/worktrees/conv' }))
+    );
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
+    try {
+      await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
+      expect(assertForge.mock.calls[0]?.[3]).toMatchObject({ cwd: '/repos/test-repo' });
+      expect(platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n')).toContain(
+        '(no_forge_remote)'
+      );
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    } finally {
+      assertForge.mockRestore();
+    }
+  });
+
   test('threads context.workflowModelOverrides into a fresh foreground run', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
