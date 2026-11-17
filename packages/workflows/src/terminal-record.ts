@@ -1,6 +1,9 @@
 import { getRunArtifactsDirForRoot, resolveRunStorageRoot } from '@archon/paths/archon-paths';
 import {
   type ArtifactManifest,
+  RESULT_COMMIT_METADATA_KEY,
+  resultCommitSchema,
+  type ResultCommit,
   RUN_GRAPH_METADATA_KEY,
   runGraphSchema,
   terminalRecordSchema,
@@ -338,6 +341,17 @@ function readWorktreeDisposition(
   }
 }
 
+/**
+ * The executor samples a completed run's checkout and stores where its result holds in run
+ * metadata before the terminal write. Only a completed run has a result. A malformed value
+ * throws: it is engine-written, so it is damage, not "no commit".
+ */
+function readResultCommit(run: Pick<WorkflowRun, 'status' | 'metadata'>): ResultCommit | undefined {
+  if (run.status !== 'completed') return undefined;
+  const value = run.metadata?.[RESULT_COMMIT_METADATA_KEY];
+  return value === undefined ? undefined : resultCommitSchema.parse(value);
+}
+
 function selectRecordedReturn({ graph, nodes, outputs }: NodeEventFold): TerminalRecord['returns'] {
   const selected = graph?.returns;
   if (selected === undefined) {
@@ -432,6 +446,7 @@ export function buildTerminalRecord(input: {
   const folded = foldNodeEvents(run, events);
   const { nodes, failureOrder } = folded;
   const worktreeDisposition = readWorktreeDisposition(run);
+  const resultCommit = readResultCommit(run);
   return terminalRecordSchema.parse({
     run_id: run.id,
     status: terminalStatusSchema.parse(run.status),
@@ -443,6 +458,7 @@ export function buildTerminalRecord(input: {
     returns: selectRecordedReturn(folded),
     artifacts,
     ...(worktreeDisposition ? { worktree_disposition: worktreeDisposition } : {}),
+    ...(resultCommit ? { result_commit: resultCommit } : {}),
   });
 }
 

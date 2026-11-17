@@ -5971,6 +5971,8 @@ export interface components {
           default?: unknown;
           description?: string;
           result_of?: string;
+          /** @enum {string} */
+          at?: 'checkout';
         };
       };
       returns?: string;
@@ -7960,6 +7962,7 @@ export interface components {
           owner: 'reachable' | 'unreachable' | 'unknown' | null;
         } | null;
         hasResult: boolean;
+        resultCommit: string | null;
       }[];
       queued: {
         requestId: string;
@@ -8518,6 +8521,7 @@ export interface components {
             owner: 'reachable' | 'unreachable' | 'unknown' | null;
           } | null;
           hasResult: boolean;
+          resultCommit: string | null;
         }[];
         queued: {
           requestId: string;
@@ -9922,6 +9926,18 @@ export interface components {
                   | 'published_branch'
                   | 'check_failed';
                 detail?: string;
+              };
+          result_commit?:
+            | {
+                /** @enum {boolean} */
+                held: true;
+                commit: string;
+              }
+            | {
+                /** @enum {boolean} */
+                held: false;
+                /** @enum {string} */
+                reason: 'dirty' | 'not_git' | 'unavailable' | 'unborn';
               };
         } | null;
         /** @description The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. A loop body node holds its latest round. */

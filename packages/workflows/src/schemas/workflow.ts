@@ -162,6 +162,12 @@ export const workflowInputSpecSchema = z.object({
    * Resolved once when the run starts; a run on no item is refused.
    */
   result_of: z.string().min(1).optional(),
+  /**
+   * With `result_of`: read the latest completed run of that workflow on the item whose
+   * result holds at the commit this run's checkout started on, or `null`. Never the latest
+   * run in its place (#5769).
+   */
+  at: z.literal('checkout').optional(),
 });
 
 export type WorkflowInputSpec = z.infer<typeof workflowInputSpecSchema>;

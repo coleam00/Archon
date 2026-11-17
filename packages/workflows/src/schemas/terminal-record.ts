@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { gitObjectIdSchema } from './checkout-observation';
 import { fanOutOutcomeSchema } from './fan-out-outcome';
 import { nodeArtifactSchema } from './node-artifact';
 import { nodeFailureKindSchema } from './node-execution';
@@ -39,6 +40,23 @@ export const worktreeDispositionSchema = z.discriminatedUnion('disposition', [
   }),
 ]);
 export type WorktreeDisposition = z.infer<typeof worktreeDispositionSchema>;
+
+/** Run metadata key where a completed run's result commit waits for the record. */
+export const RESULT_COMMIT_METADATA_KEY = 'result_commit';
+/**
+ * The commit a completed run's result holds at (#5769): the commit its checkout was on when
+ * it completed, only when that checkout was a clean git checkout. A result that holds at no
+ * commit says why: `dirty` (a tracked change or an untracked file), `not_git`, `unavailable`
+ * (the engine could not read the checkout, or its backend), `unborn` (no commit yet).
+ */
+export const resultCommitSchema = z.discriminatedUnion('held', [
+  z.object({ held: z.literal(true), commit: gitObjectIdSchema }),
+  z.object({
+    held: z.literal(false),
+    reason: z.enum(['dirty', 'not_git', 'unavailable', 'unborn']),
+  }),
+]);
+export type ResultCommit = z.infer<typeof resultCommitSchema>;
 
 export const artifactManifestSchema = z.object({
   root: z.string().nullable(),
@@ -116,5 +134,10 @@ export const terminalRecordSchema = z.object({
    * run, only when that worktree is on the run's own generated branch.
    */
   worktree_disposition: worktreeDispositionSchema.optional(),
+  /**
+   * Present only on a completed run recorded since #5769. Absent means the result holds at
+   * no commit: a reader never takes another commit in its place.
+   */
+  result_commit: resultCommitSchema.optional(),
 });
 export type TerminalRecord = z.infer<typeof terminalRecordSchema>;

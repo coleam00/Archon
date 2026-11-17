@@ -71,7 +71,8 @@ import {
 } from './resource-start-store';
 import { itemHolder, itemHolders } from './item-hold';
 import { runOwnerObservationSchema } from './schemas/workflow-run-listing';
-import { readCompletedRunResult } from './run-result';
+import { readCompletedRunResult, resultCommitOf } from './run-result';
+import { getTerminalRecord } from './terminal-record';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -134,6 +135,12 @@ export const itemRunSchema = z.object({
    * detail API.
    */
   hasResult: z.boolean(),
+  /**
+   * The commit the run's result holds at, which an `at: checkout` input matches: the clean
+   * git checkout the run completed on. Null when the run has not completed, completed at no
+   * clean commit, or was recorded before results held at commits.
+   */
+  resultCommit: z.string().nullable(),
 });
 export type ItemRun = z.infer<typeof itemRunSchema>;
 
@@ -301,13 +308,20 @@ export interface ItemReadSource extends AttentionQueueSource {
     >;
 }
 
-function hasResult(run: WorkflowRun, events: readonly WorkflowEventRow[]): boolean {
+function readResult(
+  run: WorkflowRun,
+  events: readonly WorkflowEventRow[]
+): Pick<ItemRun, 'hasResult' | 'resultCommit'> {
   try {
-    return readCompletedRunResult(run, events).kind === 'result';
+    return {
+      hasResult: readCompletedRunResult(run, events).kind === 'result',
+      resultCommit:
+        run.status === 'completed' ? resultCommitOf(getTerminalRecord(run.status, events)) : null,
+    };
   } catch (error) {
     // One unreadable record must not fail the whole item read.
     getLog().warn({ err: error, workflowRunId: run.id }, 'item_read.terminal_record_unreadable');
-    return false;
+    return { hasResult: false, resultCommit: null };
   }
 }
 
@@ -347,7 +361,7 @@ async function itemRun(
       outputTokens: usage.tokens?.output ?? null,
     },
     heldBehind,
-    hasResult: hasResult(run, terminalEvents.get(run.id) ?? []),
+    ...readResult(run, terminalEvents.get(run.id) ?? []),
   };
 }
 

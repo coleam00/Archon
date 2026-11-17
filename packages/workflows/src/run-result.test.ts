@@ -44,7 +44,7 @@ test('an unreadable item run fails the read instead of yielding an older run as 
       },
     },
     item,
-    ['build']
+    new Map([['build', { workflow: 'build' }]])
   );
   await expect(read).rejects.toThrow('item runs lost-run did not read');
   expect(eventsRead).toBe(false);

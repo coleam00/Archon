@@ -101,7 +101,10 @@ function runLines(run: ItemRun): string[] {
   const lines = [
     `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow}${outcome}  ${minute(run.startedAt)}${ended}${causeText(run.cause)}`,
   ];
-  if (run.hasResult) lines.push(`            result: archon workflow get ${run.id} --json`);
+  if (run.hasResult)
+    lines.push(
+      `            result: archon workflow get ${run.id} --json${run.resultCommit ? `, holds at ${run.resultCommit.slice(0, 12)}` : ''}`
+    );
   const waiting = run.awaitingExecution;
   if (waiting)
     lines.push(
