@@ -45,6 +45,8 @@ import { OperatorPauseBoundary } from './dag/operator-pause-boundary';
 import { publishContainerPause, type ContainerPauseReceipt } from './dag/pause';
 import { restoreRunState, type RestoredRunState } from './dag/resume-state';
 import { failRun, finishRun, skipIfStatusChanged } from './dag/run-terminal';
+import { readCheckoutMark } from './checkout-mark';
+import type { ReturnsCheckout } from './run-result';
 import {
   announceContainerRun,
   suspendContainerForPause,
@@ -445,6 +447,24 @@ async function preflightRun(
 }
 
 /**
+ * The run's `returns:` node to observe. A run that takes no path lock marks its checkout
+ * as its first pass begins, so completion can show nothing moved HEAD while it judged.
+ */
+async function returnsCheckout(
+  {
+    workflow,
+    cwd,
+    priorCompletedNodes,
+  }: Pick<ExecuteDagWorkflowOptions, 'workflow' | 'cwd' | 'priorCompletedNodes'>,
+  execContext: ExecutionContext
+): Promise<ReturnsCheckout | undefined> {
+  if (workflow.returns === undefined) return undefined;
+  if (workflow.mutates_checkout !== false || (priorCompletedNodes?.size ?? 0) > 0)
+    return { nodeId: workflow.returns };
+  return { nodeId: workflow.returns, startMark: await readCheckoutMark(cwd, execContext) };
+}
+
+/**
  * The context the layers run in, seeded with what earlier passes left: restored node
  * outputs and sessions, prior usage, unfinished invocations and the run budget's ledger.
  *
@@ -564,6 +584,7 @@ async function createRunContext(
     totalTokens: priorUsage?.tokens,
     totalTokensUnknown: priorUsage?.tokensUnknown,
     stepNamePrefix: '',
+    returnsCheckout: await returnsCheckout(options, execContext),
     loopGroupPath: [],
     loopBodyScopes: [],
   };

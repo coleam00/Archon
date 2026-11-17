@@ -18,6 +18,7 @@ import { metricsHelp } from './help-table/metrics';
 import { operatorHelp } from './help-table/operator';
 import { orderedFlags } from './help-table/options';
 import { stateHelp } from './help-table/state';
+import { trackerHelp } from './help-table/tracker';
 import type { ExampleHelp, FlagHelp, FlagOwner, HelpEntry, HelpGroup } from './help-table/types';
 import { workflowHelp } from './help-table/workflow';
 import { worktreeHelp } from './help-table/worktree';
@@ -25,6 +26,7 @@ import { worktreeHelp } from './help-table/worktree';
 const HELP_GROUPS: readonly HelpGroup[] = [
   stateHelp,
   metricsHelp,
+  trackerHelp,
   forgeHelp,
   operatorHelp,
   workflowHelp,

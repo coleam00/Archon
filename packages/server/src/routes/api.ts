@@ -16,7 +16,7 @@ import type { WebAdapter } from '../adapters/web';
 import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
 import { isApiGateEnabled } from '../auth';
 import type { AttentionRouter } from '../services/attention-router';
-import type { ItemTracker } from '../services/item-tracker';
+import type { ItemTracker } from '@archon/adapters/item-tracker/item-tracker';
 import type { WebPushDestination } from '../services/web-push';
 import { createOrchestratorDispatch } from './api-message-dispatch';
 import { requireWebUser, resolveAuthContext } from './api-request-auth';

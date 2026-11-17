@@ -1773,7 +1773,100 @@ When a run starts, after any wait for its [resource](/guides/workflow-triggers/#
   `null`.
 
 `archon workflow runs --item <key>` shows, for each run, `hasResult`: whether a reader would
-get a value from it.
+get a value from it, and `resultCommit`: the commit its result holds at.
+
+### The result that holds at this run's commit
+
+A result is true for one commit: a review approved the change as it was, not as it is after a
+later push. The engine records the commit each completed run's result holds at. Add
+`at: checkout` to a `result_of` input to read only a result that holds at the commit this
+run's checkout started on:
+
+```yaml
+inputs:
+  approval:
+    result_of: review
+    at: checkout    # the latest completed `review` whose result holds at this run's commit
+```
+
+- A run's result holds at commit C when its checkout was clean at C when its `returns:` node
+  completed, and still is when the run completes. A build whose `returns:` node commits holds
+  at the commit it made; a review that does not change its checkout holds at the commit it was
+  given.
+- A result holds at no commit when:
+  - the checkout had an uncommitted or untracked change at either point. A validation that
+    passed with an uncommitted file present did not pass at the commit. Ignored files do not
+    count;
+  - anything moved HEAD after the `returns:` node completed, even to another commit and back,
+    so the result is not taken to be about a commit it never judged. The engine sees a move in
+    the reflog of HEAD and of its branch; a checkout whose HEAD, or the branch it is
+    on, keeps no reflog (`core.logAllRefUpdates` off when it was created) cannot show it did
+    not move, so its results hold at no
+    commit;
+  - another node of the same layer ran, or could still start, beside the `returns:` node. It
+    may have moved the checkout while the `returns:` node judged, and the engine cannot tell
+    that commit from one the node made itself. A sibling already skipped by its `when:` or
+    replayed by a resume, or a layer that runs one node at a time, does not count. Give a
+    commit-bound `returns:` node its own layer;
+  - the workflow declares `mutates_checkout: false` and the commit is not the one the run
+    started on, or anything moved HEAD since its first pass began, even to another commit and
+    back. Such a run takes no path lock, so another run can move its checkout while it judges;
+    it never commits itself, so any move came from elsewhere. A resumed run of such a workflow
+    whose earlier pass completed a node holds at no commit: no mark covers that pass;
+  - the run is outside a git repository, on a commit-less branch, or on a backend the engine
+    cannot read from (a container);
+  - no `returns:` node completed in the pass that completed the run: none is declared, or a
+    resume reused the one a failed pass completed;
+  - the run completed before results were recorded at commits.
+- The value is `{ commit, result }`: `commit` is the commit the result holds at, and `result`
+  is what that run returned. It is the latest completed run of the workflow on the item whose
+  result holds at that commit, or `null`. It is never the latest run in its place: when the
+  change has moved to a commit no run of the workflow holds at, the value is `null`, and the
+  start message names the latest run of that workflow and the commit it holds at.
+- The commit is read from this run's starting checkout. A dirty checkout still reads at its
+  HEAD commit, because a land merges commits, not worktree changes. A checkout at no commit
+  reads `null`.
+- `at:` without `result_of:` is contradictory, and the input is dropped at load with a
+  warning. A dry run previews the input as `null`, as it does any unsupplied `result_of`.
+
+A result at a commit is not an approval by itself: it is whatever the stage returned there,
+and the reading node judges it. A land stage runs on the change's own checkout, for example
+started on the build's branch with
+[`checkout: ended-run`](/guides/workflow-triggers/#work-in-the-checkout-the-ended-run-left).
+It merges `approval.commit`, not its HEAD when it acts, and only when the verdict approves:
+
+```yaml
+name: land
+description: Merge the commit the review approved.
+inputs:
+  approval: { result_of: review, at: checkout }
+returns: decide
+nodes:
+  - id: decide
+    runtime: bun
+    script: |
+      import { execFileSync } from 'node:child_process';
+      import { emit, item } from 'archon:script';
+      const approval = JSON.parse(process.env.INPUTS_APPROVAL ?? 'null');
+      if (approval === null) {
+        // Say where the latest review holds, whatever it returned, and do not merge.
+        const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+        // Runs read in start order; the latest review is the one that completed last.
+        const reviews = (item()?.runs ?? [])
+          .filter(run => run.workflow === 'review' && run.status === 'completed')
+          .sort((a, b) => String(a.completedAt).localeCompare(String(b.completedAt)));
+        const at = reviews.at(-1)?.resultCommit ?? 'no commit';
+        emit({ merge: null, message: `the latest review holds at ${at}, the change is now at ${head}` });
+      } else if (approval.result.verdict !== 'approve') {
+        emit({ merge: null, message: `review at ${approval.commit} returned ${approval.result.verdict}` });
+      } else {
+        // Merge exactly this commit; a forge merge given this SHA refuses if the remote moved.
+        emit({ merge: approval.commit, message: null });
+      }
+```
+
+`item().runs[].resultCommit` and `archon workflow runs --item <key> --json` show the commit
+each run's result holds at, so a node that got `null` can say why.
 
 ## Reading a project's items over a window
 
@@ -2219,11 +2312,14 @@ nodes:
     depends_on: [synthesize]
 ```
 
-- **`inputs:`**: a map of input name → `{ required?, default?, description?, result_of? }`. `required: true`
+- **`inputs:`**: a map of input name → `{ required?, default?, description?, result_of?, at? }`. `required: true`
   and `default:` are mutually exclusive (a required input has no default; declaring both drops
   the key at load with a warning). `result_of: <workflow>` fills an unsupplied input with what
   the latest completed run of that workflow on the run's item returned, and excludes both
-  (see [Reading an earlier run's result](#reading-an-earlier-runs-result)). Values come from `with:` on the `include:`/`workflow:` node
+  (see [Reading an earlier run's result](#reading-an-earlier-runs-result)). `at: checkout`
+  narrows `result_of` to the latest run whose result holds at this run's commit, read as
+  `{ commit, result }` (see [The result
+  that holds at this run's commit](#the-result-that-holds-at-this-runs-commit)). Values come from `with:` on the `include:`/`workflow:` node
   that references this workflow, or, for a direct run, from `--input name=value` on the CLI or
   the run form in the web console (see [Running a workflow that declares
   inputs](#running-a-workflow-that-declares-inputs)). Whichever channel supplies them, the same

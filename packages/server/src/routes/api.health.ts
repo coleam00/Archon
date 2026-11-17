@@ -11,7 +11,7 @@ import {
 import { readStoreId } from '@archon/paths/server-discovery';
 import * as workflowDb from '@archon/core/db/workflows';
 import { PUSH_DESTINATION_STATES, type AttentionRouter } from '../services/attention-router';
-import type { ItemTracker } from '../services/item-tracker';
+import type { ItemTracker } from '@archon/adapters/item-tracker/item-tracker';
 import { appVersion } from '../app-version';
 import { getLog, openApiRouteRegistrar } from './api-route-kit';
 import {

@@ -291,6 +291,7 @@ describe('reading an item', () => {
         heldBehind: null,
         operatorPause: null,
         hasResult: false,
+        resultCommit: null,
       },
       {
         id: 'second',
@@ -305,6 +306,7 @@ describe('reading an item', () => {
         heldBehind: null,
         operatorPause: null,
         hasResult: false,
+        resultCommit: null,
       },
     ]);
     // The children's questions are the item's, under their own run ids, oldest first; the

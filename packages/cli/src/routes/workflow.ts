@@ -15,7 +15,7 @@ export type WorkflowRoute = CliRouteContext & { commands: WorkflowCommands; host
 
 /** `workflow wake|signal`, routed before the project gate. */
 export async function runWorkflowContinuation(
-  { positionals, values }: CliRouteContext,
+  { positionals, values, forgeTrustedEnv }: CliRouteContext,
   subcommand: 'wake' | 'signal'
 ): Promise<number> {
   // `workflow wake schedule` installs an OS timer and never opens the store or a provider.
@@ -27,7 +27,7 @@ export async function runWorkflowContinuation(
   if (wakeSchedule) return await workflowWakeScheduleCommand(positionals.slice(2), values);
   const { createCliWorkflowHost } = await import('../utils/workflow-host');
   return await workflowContinuationCommand(
-    await createCliWorkflowHost(true),
+    await createCliWorkflowHost({ forgeTrustedEnv }),
     subcommand,
     positionals.slice(2),
     values
@@ -108,7 +108,9 @@ export async function prepareWorkflowRoute(ctx: CliRouteContext): Promise<Workfl
   // execute a workflow initialize it first. A misconfigured App fails here,
   // before any run row exists; query commands stay usable without it.
   const executesWorkflow = subcommand === 'run' || isContinueSubcommand(subcommand);
-  const host = await createCliWorkflowHost(executesWorkflow);
+  const host = await createCliWorkflowHost(
+    executesWorkflow ? { forgeTrustedEnv: ctx.forgeTrustedEnv } : undefined
+  );
   return { ...ctx, commands, host };
 }
 

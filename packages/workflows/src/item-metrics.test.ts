@@ -17,6 +17,7 @@ function run(workflow: string, startedAt: string, outcome: string | null = null)
     heldBehind: null,
     operatorPause: null,
     hasResult: false,
+    resultCommit: null,
   };
 }
 
