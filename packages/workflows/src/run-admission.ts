@@ -21,13 +21,12 @@ import {
   EXECUTION_OWNER_METADATA_KEY,
   RUN_DISPATCH_METADATA_KEY,
   SUBRUN_METADATA_KEYS,
-  describeOperatorPause,
-  operatorPause,
   pendingWorkflowWaitDeadline,
   readSubrunMetadata,
   runAttention,
   runInputsMetadata,
 } from './schemas';
+import { describeOperatorPause, operatorPause } from './schemas/operator-pause';
 import type { CheckoutSharedEventData } from './schemas/workflow-event';
 import { ContinuedItemProjectError, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
@@ -711,18 +710,15 @@ function pausedCheckoutState(
   duration: string,
   shortId: string
 ): { stateLine: string; actionLines: string } {
-  // An operator pause asks nothing; any gate or wait still on the row is history.
-  const pause = operatorPause(activeWorkflow);
-  if (pause !== null)
-    return {
-      stateLine: `${describeOperatorPause(pause)} (run \`${shortId}\`)`,
-      actionLines: `• Resume it: \`${formatRunCommand(platform, 'resume', shortId)}\`\n`,
-    };
-  let stateLine: string;
-  let actionLines: string;
+  let stateLine: string, actionLines: string;
   const attention = runAttention(activeWorkflow);
   const wait = pendingWorkflowWaitDeadline(activeWorkflow);
-  if (attention?.kind === 'attention') {
+  const pause = operatorPause(activeWorkflow);
+  if (pause !== null) {
+    // An operator pause asks nothing; a gate or wait left on the row is history.
+    stateLine = `${describeOperatorPause(pause)} (run \`${shortId}\`)`;
+    actionLines = `• Resume it: \`${formatRunCommand(platform, 'resume', shortId)}\`\n`;
+  } else if (attention?.kind === 'attention') {
     stateLine = `paused, needs attention (${duration} since phase began, run \`${shortId}\`)`;
     actionLines = `• Answer it: ${attention.message}\n${attentionAnswerLines(platform, attention)
       .map(line => `• ${line}\n`)
