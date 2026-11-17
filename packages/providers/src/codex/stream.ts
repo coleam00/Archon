@@ -679,8 +679,7 @@ function* observeItem(
   completed: boolean
 ): Generator<MessageChunk> {
   const parentItem = itemThreadId === ids.threadId && itemTurnId === ids.turnId;
-  if (completed && (parentItem || itemThreadId !== ids.threadId))
-    observeV1Spawn(observation, item, parentItem ? undefined : itemThreadId);
+  if (completed) observeV1Spawn(ids, observation, item, { itemThreadId, itemTurnId });
   if (!parentItem && !observation.agentThreads.has(itemThreadId)) return;
   // Unified exec is a process lifecycle, not a foreground tool call: its end may
   // arrive after the result, which closes foreground tool calls in the contract.
@@ -705,15 +704,19 @@ function* observeItem(
 
 /**
  * Codex's v1 spawn tool reports no `subAgentActivity`; its completed item names the thread.
- * A spawn by a thread not yet known as a subagent (`sender`) waits until that thread is one.
+ * A spawn by a thread not yet known as a subagent waits until that thread is one.
  */
 function observeV1Spawn(
+  ids: TurnIds,
   observation: TurnObservation,
   item: ThreadItem,
-  sender: string | undefined
+  { itemThreadId: sender, itemTurnId }: { itemThreadId: string; itemTurnId: string }
 ): void {
   if (item.type !== 'collabAgentToolCall' || item.tool !== 'spawnAgent') return;
-  if (sender === undefined || observation.agentThreads.has(sender)) {
+  const fromParent = sender === ids.threadId;
+  // The parent thread's items from another turn are not this turn's.
+  if (fromParent && itemTurnId !== ids.turnId) return;
+  if (fromParent || observation.agentThreads.has(sender)) {
     for (const threadId of item.receiverThreadIds) registerV1Thread(observation, threadId);
   } else otherThreadOf(observation, sender).spawned.push(...item.receiverThreadIds);
 }
