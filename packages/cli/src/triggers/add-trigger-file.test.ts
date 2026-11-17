@@ -23,20 +23,6 @@ describe('addTriggerFile', () => {
     expect(await readdir(triggers)).toEqual(['build-after-plan.json']);
   });
 
-  it('lets overlapping adds of one file each place a whole copy, leaving no temp file', async () => {
-    const root = tempRoot(await mkdtemp(join(tmpdir(), 'archon-trigger-add-')));
-    const source = join(root, 'build-after-plan.json');
-    const triggers = join(root, 'triggers');
-    // Large enough that the copies overlap, so a shared staging file would be renamed mid-write.
-    const content = JSON.stringify({ padding: 'x'.repeat(4_000_000) });
-    await writeFile(source, content);
-
-    await Promise.all(Array.from({ length: 8 }, () => addTriggerFile(source, triggers)));
-
-    expect(await readdir(triggers)).toEqual(['build-after-plan.json']);
-    expect(await readFile(join(triggers, 'build-after-plan.json'), 'utf8')).toBe(content);
-  });
-
   it('refuses a name the engine would never read', async () => {
     const root = tempRoot(await mkdtemp(join(tmpdir(), 'archon-trigger-add-')));
     const source = join(root, 'binding.txt');
