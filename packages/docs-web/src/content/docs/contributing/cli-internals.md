@@ -84,7 +84,7 @@ packages/cli/
 
 **Code:** `packages/cli/src/cli.ts`
 
-Repository env normally overrides home env. The CLI preserves the user-scope `GH_CONFIG_DIR` (including its absence), so repository env cannot redirect the stored gh login. Inside a workflow, inherited GitHub identity values take precedence over both env files, including empty values that disable host credentials. See [forge plugin configuration](/reference/forge/#plugin-configuration).
+Repository env normally overrides home env. The CLI preserves the user-scope `GH_CONFIG_DIR` (including its absence), so repository env cannot redirect the stored gh login. Inside a workflow, and in the start-time forge check of a pack that declares `forge:` (the check spawns the CLI with `ARCHON_RUN_GITHUB_IDENTITY=1`), inherited GitHub identity values take precedence over both env files, including empty values that disable host credentials. See [forge plugin configuration](/reference/forge/#plugin-configuration).
 
 **Project resolution:**
 

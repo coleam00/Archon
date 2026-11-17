@@ -306,6 +306,7 @@
       "name": "@archon/workflows",
       "version": "0.14.0",
       "dependencies": {
+        "@archon/forge": "workspace:*",
         "@archon/git": "workspace:*",
         "@archon/paths": "workspace:*",
         "@archon/plugin-manifest": "workspace:*",

@@ -80,7 +80,13 @@ type Upsert = Parameters<ItemTrackerForge['upsertComment']>[0];
  * does: a new marker posts a comment, a known one edits it. `failNext` answers the next
  * write with a failure instead.
  */
-function fakeForge(check: ForgeAccessCheck = { ok: true, plugin: { name: 'fake', version: '1' } }) {
+function fakeForge(
+  check: ForgeAccessCheck = {
+    ok: true,
+    host: 'github.com',
+    plugin: { name: 'fake', version: '1' },
+  }
+) {
   const comments = new Map<string, { body: string; posts: number; edits: number }>();
   const calls: Upsert[] = [];
   const checks: string[] = [];

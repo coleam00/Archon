@@ -1499,12 +1499,21 @@ declare module 'archon:script' {
         readonly hosts: ReadonlyArray<string>;
         readonly capabilities: ReadonlyArray<string>;
         readonly token_env: ReadonlyArray<string>;
+        readonly remedies?: {
+          readonly unsupported_op?: string;
+          readonly no_credential?: string;
+        };
       };
     };
     'check': {
       readonly request: {
-        readonly host: string;
         readonly operations: ReadonlyArray<string>;
+        readonly host: string;
+        readonly remote?: never;
+      } | {
+        readonly operations: ReadonlyArray<string>;
+        readonly remote: string;
+        readonly host?: never;
       };
       readonly result: {
         readonly host: string;
@@ -1523,7 +1532,7 @@ declare module 'archon:script' {
     readonly operationId: string;
     readonly ok: false;
     readonly error: {
-      readonly kind: 'unavailable' | 'rate_limited' | 'unsupported_op' | 'conflict' | 'authorization' | 'no_plugin_for_host' | 'no_credential' | 'not_found' | 'forge_error' | 'invalid_request' | 'invalid_response' | 'duplicate_host' | 'process_failed' | 'timeout';
+      readonly kind: 'unavailable' | 'rate_limited' | 'no_plugin_for_host' | 'unsupported_op' | 'no_credential' | 'conflict' | 'authorization' | 'not_found' | 'forge_error' | 'invalid_request' | 'invalid_response' | 'duplicate_host' | 'process_failed' | 'timeout';
       readonly message: string;
       readonly status?: number;
       readonly exitCode?: number | null;
@@ -1784,6 +1793,7 @@ declare module 'archon:script' {
     };
     readonly credentialSource?: string;
     readonly unsupported?: ReadonlyArray<string>;
+    readonly remedy?: string;
   };
 
   /** A document's lease; `live` says whether its run still owns it. */

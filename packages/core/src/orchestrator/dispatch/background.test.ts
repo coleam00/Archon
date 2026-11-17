@@ -594,6 +594,28 @@ describe('dispatchBackgroundWorkflow', () => {
     }
   });
 
+  test('forge refusal reads the registered checkout and prevents worker isolation and engine submission', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const refusal = new forgeAccess.ForgeRequirementError('forge-run', 'factory', [
+      { reason: 'no_forge_remote', message: 'the checkout has no git remote' },
+    ]);
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockRejectedValue(refusal);
+    try {
+      await expect(
+        dispatchBackgroundWorkflow(
+          makeRoutingCtx(),
+          makeTestResolvedWorkflow({ name: 'forge-run', nodes: [{ id: 'one', prompt: 'work' }] })
+        )
+      ).rejects.toBe(refusal);
+      expect(assertForge.mock.calls[0]?.[3]).toMatchObject({ cwd: '/workspace/test-repo' });
+      expect(mockResolve).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    } finally {
+      assertForge.mockRestore();
+    }
+  });
+
   for (const structured of [false, true]) {
     for (const fails of [false, true]) {
       test(`new adapter background lifecycle, structured=${structured}, fails=${fails}`, async () => {
