@@ -500,6 +500,69 @@ export function describeSqlStatusReadConformance(
     }
   });
 
+  test("a binding's own item key puts only that binding's start on the item", async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const { launch } = resourceStartFixtures(
+        CONFORMANCE_CODEBASE_ID,
+        CONFORMANCE_CONVERSATION_ID
+      );
+      const binding = (bindingId: string, itemKey?: string) => ({
+        bindingId,
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: 'operator',
+        resource: bindingId,
+        overlap: 'skip' as const,
+        launch: {
+          cwd: '/c',
+          workflowName: 'item',
+          inputs: {},
+          isolation: { kind: 'in-place' as const },
+        },
+        ...(itemKey === undefined ? {} : { itemKey }),
+      });
+      // Two deliveries about one subject, each also matching a binding that maps no item.
+      const deliver = async () => {
+        const receiptId = randomUUID();
+        await store.acceptStartReceipt({
+          receipt: {
+            id: receiptId,
+            sourceInstanceId: 'source',
+            deliveryId: null,
+            contentDigest: receiptId,
+            receivedAt: new Date().toISOString(),
+            occurredAt: null,
+            sourceActor: null,
+          },
+          outcome: 'matched',
+          bindings: [binding(`mapped-${receiptId}`, 'issue-7'), binding(`plain-${receiptId}`)],
+        });
+        const itemOf = async (bindingId: string) => {
+          const identity = { receiptId, bindingId, ownerId: 'owner' };
+          await store.claimStartBindingPreparation(identity);
+          const started = await store.completeStartBindingPreparation({
+            ...identity,
+            launch: launch(),
+          });
+          if (started?.status !== 'admitted') throw new Error('Expected the start to be admitted');
+          return (await store.getWorkflowRun(started.runId))?.item_id ?? null;
+        };
+        const inspected = await store.getStartReceipt(receiptId);
+        expect(inspected?.bindings.map(b => b.intent?.itemKey)).toEqual(['issue-7', undefined]);
+        return [await itemOf(`mapped-${receiptId}`), await itemOf(`plain-${receiptId}`)];
+      };
+      const [first, unmapped] = await deliver();
+      const [second] = await deliver();
+      expect(first).not.toBeNull();
+      expect(second).toBe(first);
+      expect(unmapped).toBeNull();
+    } finally {
+      await harness.close();
+    }
+  });
+
   test("an item's queued starts count only the same resource and host starts queued ahead of them", async () => {
     const harness = await makeHarness();
     try {

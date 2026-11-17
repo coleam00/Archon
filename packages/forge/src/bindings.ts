@@ -179,6 +179,14 @@ const fieldsByKind = {
   ]),
 } as const;
 
+/** Whether events of `kind` can carry `field`, so a binding may read it. */
+export function isForgeEventFieldAvailable(
+  kind: keyof typeof fieldsByKind,
+  field: ForgeEventField
+): boolean {
+  return fieldsByKind[kind].has(field);
+}
+
 export const forgeEventSelectorSchema = rawForgeEventSelectorSchema.superRefine((selector, ctx) => {
   if (selector.kind === 'check.changed' && selector.subject !== undefined) {
     ctx.addIssue({
@@ -322,7 +330,11 @@ const FIELD_READERS: Readonly<Record<ForgeEventField, FieldReader>> = {
   'check.result': fieldOf('check.changed', event => event.result),
 };
 
-function fieldValue(event: ForgeEvent, field: ForgeEventField): ForgeFieldValue | undefined {
+/** The field's value on `event`, or undefined when the event does not carry it. */
+export function readForgeEventField(
+  event: ForgeEvent,
+  field: ForgeEventField
+): ForgeFieldValue | undefined {
   return FIELD_READERS[field](event);
 }
 
@@ -342,7 +354,7 @@ export function matchForgeEvent(selector: ForgeEventSelector, event: ForgeEvent)
   )
     return false;
   return (selector.predicates ?? []).every(predicate => {
-    const value = fieldValue(event, predicate.field);
+    const value = readForgeEventField(event, predicate.field);
     return predicate.equals !== undefined
       ? value === predicate.equals
       : predicate.in?.some(candidate => candidate === value) === true;
@@ -363,7 +375,7 @@ export function mapForgeInputs<T>(
       inputs[name] = binding.value;
       continue;
     }
-    const value = fieldValue(event, binding.field);
+    const value = readForgeEventField(event, binding.field);
     if (value === undefined)
       return {
         ok: false,

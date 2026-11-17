@@ -25,6 +25,7 @@ import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { registerFolder, registerRepository } from '@archon/core';
 import { updateCodebase, findCodebaseByDefaultCwd } from '@archon/core/db/codebases';
 import { getStartReceipt, hasStartReceiptForDelivery } from '@archon/core/db/resource-starts';
+import { getItem, getItemRuns } from '@archon/core/db/items';
 import { claimPendingWorkflowRun } from '@archon/core/db/workflows';
 import {
   drainResourceStartHost,
@@ -100,7 +101,12 @@ interface Fixture {
   app: OpenAPIHono;
   engine: ReturnType<typeof recordingEngine>;
   host: ReturnType<typeof createServerResourceStartHost>;
-  deliver: (delivery: string, overlap: 'skip' | 'queue') => Promise<Response>;
+  /** `binding` stands for what a real plugin evaluates onto the binding it starts. */
+  deliver: (
+    delivery: string,
+    overlap: 'skip' | 'queue',
+    binding?: Record<string, unknown>
+  ) => Promise<Response>;
 }
 
 async function fixture(
@@ -173,7 +179,7 @@ async function fixture(
               sourceActor: null,
             },
             outcome: 'matched',
-            bindings: [{ ...config.binding, overlap: body.overlap }],
+            bindings: [{ ...config.binding, overlap: body.overlap, ...body.binding }],
           },
         };
       },
@@ -227,10 +233,10 @@ async function fixture(
     app,
     engine,
     host,
-    deliver: async (delivery, overlap) =>
+    deliver: async (delivery, overlap, binding) =>
       await app.request('/webhooks/sources/events', {
         method: 'POST',
-        body: JSON.stringify({ delivery, overlap }),
+        body: JSON.stringify({ delivery, overlap, binding }),
       }),
   };
 }
@@ -376,6 +382,18 @@ describe('server resource-start host', () => {
       bindingId: 'hosted',
     });
     await until(() => (engine.claimed.includes(runId ?? '') ? true : undefined));
+  });
+
+  test('a delivery whose binding names an item starts a run listed on that item', async () => {
+    const { deliver, engine } = await fixture();
+    expect((await deliver('opened', 'queue', { itemKey: 'issue-7' })).status).toBe(200);
+    const run = (await until(() => engine.submitted[0])).options?.preCreatedRun;
+    if (!run) throw new Error('Expected a pre-created run');
+    const item = await getItem(run.item_id ?? '');
+    expect(item?.key).toBe('issue-7');
+    const listed = await getItemRuns(item?.projectKey ?? '', 'issue-7');
+    expect(listed?.runs.map(row => ('id' in row ? row.id : row))).toEqual([run.id]);
+    await until(() => engine.claimed[0]);
   });
 
   test.each(['folder', 'repo'] as const)(
