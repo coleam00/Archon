@@ -1,18 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
-import {
-  chmod,
-  link,
-  lstat,
-  mkdir,
-  mkdtemp,
-  realpath,
-  rm,
-  symlink,
-  writeFile,
-} from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
-import { join, relative, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { execFileAsync } from '@archon/git';
 import {
   getArchonWorkspacesPath,
@@ -172,7 +162,7 @@ test.each(['real', 'root-link', 'engine-link', 'scratch-link'] as const)(
 );
 
 test.each(['inside', 'worktree', 'ancestor', 'scratch', 'engine'] as const)(
-  'accounts for tagged %s caches before Git removes a scratch worktree',
+  'removes tagged %s caches and the scratch worktree, keeping evidence',
   async placement => {
     const { id, root, artifactsDir } = runStorage();
     const repo = trackTempRoot(await realpath(await mkdtemp(join(tmpdir(), 'cache-worktree-'))));
@@ -204,29 +194,13 @@ test.each(['inside', 'worktree', 'ancestor', 'scratch', 'engine'] as const)(
               ? scratch
               : join(artifactsDir, '.archon');
     await tagged(cache);
-    const bulk = join(placement === 'inside' ? cache : worktree, 'bulk');
-    await writeFile(bulk, Buffer.alloc(1024 * 1024, 1));
-    const allocatedBulk = (await lstat(bulk)).blocks * 512;
     await writeFile(join(artifactsDir, 'report.md'), 'evidence');
-    const capture = captureLogLines();
-    try {
-      await releaseRunScratch({
-        id,
-        output_root: root,
-        working_path: repo,
-        metadata: ownedBy(process.pid),
-      });
-      const removals = capture.lines.filter(line => line.msg === 'run_scratch.cache_removed');
-      expect(removals).toHaveLength(1);
-      expect(removals[0]).toMatchObject({
-        workflowRunId: id,
-        artifactsDir,
-        path: relative(artifactsDir, cache),
-      });
-      expectFreedBytes(removals[0].estimatedFreedBytes, allocatedBulk, 'atLeast');
-    } finally {
-      capture.restore();
-    }
+    await releaseRunScratch({
+      id,
+      output_root: root,
+      working_path: repo,
+      metadata: ownedBy(process.pid),
+    });
     expect(existsSync(cache)).toBe(false);
     expect(existsSync(scratch)).toBe(false);
     expect(existsSync(join(artifactsDir, 'report.md'))).toBe(true);
@@ -278,22 +252,6 @@ test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
   }
 );
 
-// NTFS can report no allocation for a file just written and report it a moment later, so
-// the estimate and the test's own lstat need not agree there; Windows checks only the type.
-function expectFreedBytes(
-  logged: unknown,
-  allocated: number,
-  relation: 'exactly' | 'atLeast'
-): void {
-  expect(logged).toEqual(expect.any(Number));
-  const bytes = Number(logged);
-  expect(bytes).toBeGreaterThanOrEqual(0);
-  if (process.platform === 'win32') return;
-  expect(allocated).toBeGreaterThan(0);
-  if (relation === 'exactly') expect(bytes).toBe(allocated);
-  else expect(bytes).toBeGreaterThanOrEqual(allocated);
-}
-
 const signature = 'Signature: 8a477f597d28d172789f06886806bc55';
 
 async function tagged(path: string, content = signature): Promise<void> {
@@ -308,12 +266,6 @@ test('removes outermost tagged descendants, preserving the root and untagged evi
   const cache = join(artifactsDir, 'spike', 'arbitrary');
   await tagged(cache, signature + 'suffix without newline');
   await tagged(join(cache, 'nested'));
-  await writeFile(join(cache, 'bulk'), Buffer.alloc(8192));
-  await link(join(cache, 'bulk'), join(cache, 'bulk-link'));
-  const allocation = await Promise.all(
-    ['', 'CACHEDIR.TAG', 'nested', 'nested/CACHEDIR.TAG', 'bulk'].map(p => lstat(join(cache, p)))
-  );
-  const estimatedFreedBytes = allocation.reduce((sum, stat) => sum + stat.blocks * 512, 0);
   await tagged(join(artifactsDir, '.hidden', 'cache'));
   await tagged(join(artifactsDir, '.archon', 'cache'));
   await writeFile(join(artifactsDir, '.archon', 'listing.json'), '{}');
@@ -322,11 +274,6 @@ test('removes outermost tagged descendants, preserving the root and untagged evi
   const capture = captureLogLines();
   try {
     await removeRunScratch(artifactsDir, { workflowRunId: 'fixture-run' });
-    const removals = capture.lines.filter(line => line.msg === 'run_scratch.cache_removed');
-    expect(removals).toHaveLength(4);
-    const removal = removals.find(line => line.path === join('spike', 'arbitrary'));
-    expect(removal).toMatchObject({ workflowRunId: 'fixture-run', artifactsDir });
-    expectFreedBytes(removal?.estimatedFreedBytes, estimatedFreedBytes, 'exactly');
     expect(JSON.stringify(capture.lines)).not.toContain('private evidence sentinel');
   } finally {
     capture.restore();

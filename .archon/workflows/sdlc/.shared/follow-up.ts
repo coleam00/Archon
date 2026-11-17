@@ -24,7 +24,8 @@ function disposition(stdout: string): Record<string, unknown> | undefined {
 /**
  * Fire `binding` (an absolute timer-binding config path) with `inputs` as its event
  * inputs, keyed by `deliveryId`, which must be built from values a retry repeats.
- * `later` says what starts `what` when this fire does not. Returns how `what`
+ * `later` says what starts `what` when this fire does not. `item` is the engine item the
+ * started run is on; a queue pass over many issues is on none. Returns how `what`
  * proceeds, for the run's summary.
  */
 export function followUp(
@@ -32,7 +33,8 @@ export function followUp(
   deliveryId: string,
   inputs: Record<string, string>,
   what: string,
-  later = 'the next queue run picks it up'
+  later = 'the next queue run picks it up',
+  item: string | null = null
 ): string {
   if (binding === '') return `no follow-up binding is set, so the next queue run picks up ${what}`;
   // Stable key order: the receipt digest covers the inputs as written.
@@ -41,8 +43,10 @@ export function followUp(
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `${deliveryId.replace(/[^A-Za-z0-9._-]/g, '_')}.json`);
   writeFileSync(file, JSON.stringify(sorted));
+  // Always said: a fire from a run on an item would otherwise put its start on that item.
+  const onItem = item === null ? ['--no-item'] : ['--item', item];
   const result = Bun.spawnSync(
-    [...archonCommand(), 'trigger', 'fire', '--config', binding, '--delivery-id', deliveryId, '--inputs', file],
+    [...archonCommand(), 'trigger', 'fire', '--config', binding, '--delivery-id', deliveryId, '--inputs', file, ...onItem],
     { env: process.env, stdout: 'pipe', stderr: 'pipe' }
   );
   const admitted = result.exitCode === 0 ? disposition(result.stdout.toString()) : undefined;
@@ -59,9 +63,9 @@ export function followUp(
 
 /**
  * Start a build-queue pickup now through the operator's build-queue binding, for an
- * item intake just routed. The fire names no item: the binding names the repository,
- * and a pickup takes the waiting item that sorts first under the binding's own
- * `orders_only`, which a named item would pass.
+ * item intake just routed. The fire names no issue and is on no item: the binding names
+ * the repository, and a pickup takes the waiting issue that sorts first under the
+ * binding's own `orders_only`, which a named issue would pass.
  */
 export function nextPickup(binding: string, key: string): string {
   return followUp(binding, `build-pickup:${key}`, {}, 'a build-queue run');

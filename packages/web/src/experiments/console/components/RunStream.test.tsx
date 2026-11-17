@@ -138,6 +138,7 @@ describe('RunStream tool rendering', () => {
     tokens: null,
     output: null,
     error: null,
+    failureKind: null,
   };
   const message: Message = {
     id: 'm1',

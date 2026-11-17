@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ts from 'typescript';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { ForgeError, forge, HostCommandError, item, notice, state, trigger } from './module';
+import { ForgeError, forge, HostCommandError, item, items, notice, state, trigger } from './module';
 import { scriptApiDeclaration } from './text';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-script-api-')));
@@ -51,6 +51,9 @@ if (command === 'forge') {
   if (runId === 'on-item') answer({ item: { key: 'issue-7' }, answers: [{ kind: 'ruling' }] });
   else if (runId === 'no-item') answer({ ok: false, error: 'not_found', run: runId }, 1);
   else answer({ ok: false, error: 'database locked' }, 1);
+} else if (command === 'workflow' && sub === 'items') {
+  if (args.includes('broken')) answer({ ok: false, error: 'after is not a cursor this read returned' }, 1);
+  else answer({ window: { since: 'a', until: 'b' }, items: [], next: null, args: args.slice(2) });
 } else if (command === 'trigger') {
   const inputs = readFileSync(args[args.indexOf('--inputs') + 1]!, 'utf8');
   answer({ id: 'receipt-1', args: args.slice(2, 6), bindings: [{ disposition: { status: 'admitted', requestId: 'q', runId: inputs } }] });
@@ -160,6 +163,23 @@ test("item reads this run's item, null when the run is on none, and a host failu
   const failure = thrownBy(() => item());
   expect(failure).toBeInstanceOf(HostCommandError);
   expect((failure as Error).message).toContain('database locked');
+});
+
+test('items hands its query to the host command and returns the page it printed', () => {
+  expect(items({ since: '7d', limit: 50 })).toEqual({
+    window: { since: 'a', until: 'b' },
+    items: [],
+    next: null,
+    args: ['--json', '--since', '7d', '--limit', '50'],
+  } as never);
+  expect((items({ after: 'cursor' }) as unknown as { args: string[] }).args).toEqual([
+    '--json',
+    '--after',
+    'cursor',
+  ]);
+  const failure = thrownBy(() => items({ after: 'broken' }));
+  expect(failure).toBeInstanceOf(HostCommandError);
+  expect((failure as Error).message).toContain('not a cursor');
 });
 
 test('the declaration alone type-checks a script against the forge and state contracts', () => {

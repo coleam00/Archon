@@ -47,7 +47,7 @@ Workflows live in `.archon/workflows/` relative to the working directory:
 
 The two directories form a fixed package boundary: `.archon/workflows/<pack>/<workflow>/`. A packaged workflow contains exactly one YAML definition; a bare `command:` reference resolves only from its own `commands/` directory, and a named `script:` reference from its own `scripts/` directory, then from the pack's [shared scripts](/guides/script-nodes/#share-a-script-between-workflows-of-a-pack) in `<pack>/.shared/scripts/`. Neither falls back to another pack or scope. Included workflows retain their own resource folder, so two workflows may reuse names such as `review.md` without collisions.
 
-Scripts from different workflows in one pack can import modules from `<pack>/.shared/`. That directory is reserved for modules, `.md` documents, the pack's `metric-views.json` and its shared scripts in `.shared/scripts/`; it holds no workflow definitions. A node reads a document the pack ships through [`$PACK_DIR`](/reference/variables/#pack_dir-the-workflows-own-pack), for example `$PACK_DIR/.shared/policy/triage.md`. Bun and Python use the same pack-relative layout in source checkouts and binary builds. See [Share code within a pack](/guides/script-nodes/#share-code-within-a-pack) for import examples.
+Scripts from different workflows in one pack can import modules from `<pack>/.shared/`. That directory is reserved for modules, `.md` documents, the pack's `metric-views.json` and [`item-metrics.json`](/guides/metrics/#item-metrics-a-pack-declares), and its shared scripts in `.shared/scripts/`; it holds no workflow definitions. A node reads a document the pack ships through [`$PACK_DIR`](/reference/variables/#pack_dir-the-workflows-own-pack), for example `$PACK_DIR/.shared/policy/triage.md`. Bun and Python use the same pack-relative layout in source checkouts and binary builds. See [Share code within a pack](/guides/script-nodes/#share-code-within-a-pack) for import examples.
 
 The same tree works under `~/.archon/workflows/` for home-scoped workflows. Existing flat `.archon/workflows/foo.yaml`, one-level grouped YAML, shared `.archon/commands/`, and shared `.archon/scripts/` remain supported for compatibility.
 
@@ -867,7 +867,7 @@ YAML declares the engine-visible coordination condition; computation stays in a 
 
 **Deterministic nodes** (`bash:`, `script:`) do **not** auto-retry: they run exactly once unless you add an explicit `retry:` block. This keeps side-effectful scripts (deploys, `gh` mutations, external CLIs) from being silently re-run on a transient-looking failure; opt in per node when re-running is safe. `loop_group:` does not accept `retry:`; configure retries on its body nodes.
 
-A `loop:` policy retries the failed iteration, without advancing `max_iterations` or replaying earlier iterations. Its retry budget resets after each successful iteration. Without a declaration, it keeps the same defaults as other AI nodes. Loops accept only omitted `on_error` or `transient`; `on_error: all` is rejected, so unknown and fatal failures and output-contract failures never gain retries.
+A `loop:` policy retries the failed iteration, without advancing `max_iterations` or replaying earlier iterations. Its retry budget resets after each successful iteration. Without a declaration, it keeps the same defaults as other AI nodes. Loops accept omitted `on_error`, `transient` or `schema_unmet`; `on_error: all` is rejected, so unknown, fatal and output-contract failures never gain retries. With `on_error: schema_unmet`, an iteration whose output did not meet its schema runs again, and transient failures still retry as under `transient`; unknown failures are not retried.
 
 To enable or customise retry, add a `retry:` block:
 
@@ -885,6 +885,13 @@ nodes:
     retry:
       max_attempts: 4       # 4 retries = 5 total attempts
       on_error: all         # Retry even non-transient errors (use with caution)
+
+  - id: check
+    prompt: "Check the change and report a verdict"
+    output_format: { type: object, properties: { verdict: { type: string } }, required: [verdict] }
+    retry:
+      max_attempts: 1
+      on_error: schema_unmet  # Also retry a final output that did not meet its schema
 
   - id: iterate
     retry:
@@ -911,16 +918,17 @@ nodes:
 |-------|------|--------------------|-------------|-------------|
 | `max_attempts` | number | `2` | 1–5 | Number of retry attempts (not including the initial attempt). `1` = one retry (2 total attempts). No default on `bash:`/`script:`: omitting `retry:` means a single attempt |
 | `delay_ms` | number | `3000` | 0–60000 on loops; 1000–60000 otherwise | Base delay in ms before the first retry. Doubles each attempt (exponential backoff) |
-| `on_error` | `'transient'` \| `'all'` | `'transient'` | | Which errors trigger a retry. Loops accept only `'transient'` or omission. `'transient'` = transient, rate-limited and capacity failures and timeouts only. `'all'` = also unknown failures, including any non-zero `bash:`/`script:` exit (FATAL failures such as auth, config errors and cancellation are never retried regardless) |
+| `on_error` | `'transient'` \| `'schema_unmet'` \| `'all'` | `'transient'` | | Which errors trigger a retry; each value retries everything the one before it does. Loops accept `'transient'`, `'schema_unmet'` or omission. `'transient'` = transient, rate-limited and capacity failures and timeouts only. `'schema_unmet'` = also a final output that did not meet its `output_format` schema, without retrying unknown failures; it keeps the transient retries and does not mean "only this class". `'all'` = also unknown failures, including any non-zero `bash:`/`script:` exit (FATAL failures such as auth, config errors and cancellation are never retried regardless) |
 
 ### Error Classification
 
-Archon sorts a failed attempt into one of three buckets before deciding whether to retry. The bucket comes from the kind of failure Archon recorded, never from the error message. For a provider error, the provider picks the bucket through the typed failure class it reports on its result, taken from its SDK's structured signals (error codes, HTTP status fields, typed exceptions), never from the error text:
+Archon sorts a failed attempt into one of four buckets before deciding whether to retry. The bucket comes from the kind of failure Archon recorded, never from the error message. For a provider error, the provider picks the bucket through the typed failure class it reports on its result, taken from its SDK's structured signals (error codes, HTTP status fields, typed exceptions), never from the error text:
 
 | Bucket | Provider failure classes | Retried by default? |
 |--------|--------------------------|---------------------|
 | **FATAL** | `auth`, `quota_exhausted`, `budget_exceeded`, `misconfigured` | Never (even with `on_error: all`) |
 | **TRANSIENT** | `transient`, `rate_limited`, `overloaded` (rate limits and capacity get longer retry budgets) | Yes |
+| **SCHEMA_UNMET** | `schema_unmet`: the provider's own structured-output attempts ended without output meeting the schema | No (unless `on_error: schema_unmet` or `all`) |
 | **UNKNOWN** | `unknown` | No (unless `on_error: all`) |
 
 A `quota_exhausted` failure is never retried in the same window, but when the provider reports when the limit resets, the run [waits until that reset](/reference/configuration/#workflow-attention-and-continuation-settings) instead of failing.
@@ -935,13 +943,13 @@ Claude's typed `overloaded` code and Codex's `serverOverloaded` map to `overload
 
 Every built-in provider reports a typed class:
 
-- **Claude** reports every class, from its SDK's error codes, HTTP status, process-exit fields and the reason Claude Code gives when it refuses to start. A sign-in the organization rejects is `auth`. A configuration problem is `misconfigured`: an invalid proxy URL, a CLI below the minimum version, invalid managed settings, a provider the managed settings disallow, an unusable temp or working directory, a missing shell tool, bypass permissions as root, an unknown model, a Claude Code executable that is missing or cannot launch, an unreadable MCP config file, a declared MCP server that cannot connect, a declared skill Claude cannot reach, a named plugin that is not installed or that Claude Code cannot list, or a session whose loaded plugins do not match the node's `plugins:`.
+- **Claude** reports every class, from its SDK's error codes, result subtypes, HTTP status, process-exit fields and the reason Claude Code gives when it refuses to start. A sign-in the organization rejects is `auth`. A configuration problem is `misconfigured`: an invalid proxy URL, a CLI below the minimum version, invalid managed settings, a provider the managed settings disallow, an unusable temp or working directory, a missing shell tool, bypass permissions as root, an unknown model, a Claude Code executable that is missing or cannot launch, an unreadable MCP config file, a declared MCP server that cannot connect, a declared skill Claude cannot reach, a named plugin that is not installed or that Claude Code cannot list, or a session whose loaded plugins do not match the node's `plugins:`. Claude reports `schema_unmet` when its SDK gives up on structured output (result subtype `error_max_structured_output_retries`).
 - **Codex** reports a failed turn from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with `resetAt` when Codex reports a full window), `rate_limited`, `overloaded` for capacity exhaustion, `transient` for a dropped connection or a Codex process that exits mid-turn, and `budget_exceeded` for Codex's session budget. It reports `misconfigured` when its binary cannot be found or run (a bad `CODEX_BIN_PATH` or `codexBinaryPath`, no binary in a compiled install, a file that is not executable or built for another architecture), when the Codex process exits before answering anything (a binary without `app-server`, or one that rejects a flag; its stderr is the evidence), or when its MCP config file cannot be read. A workflow node is also `misconfigured` when a declared MCP server cannot connect, when a named plugin is not installed, when its `mcp:` file reuses a server name from the Codex config, or when Codex reports a live MCP server the node did not declare. Every other failure is `unknown`, including a thread that can no longer be resumed.
 - **Pi** reports `misconfigured` when a node has no model, the model ref is malformed, or the model is not in Pi's catalog, and `auth` when it has no credentials for the model's provider. A failed Pi turn reaches Archon only as a stop reason and message text, so those failures are `unknown`. That includes a used-up usage limit: a Pi run that hits one fails instead of waiting for the reset.
 - **OpenCode** reports `auth` (the SDK's `ProviderAuthError`, or HTTP 401/403) and `rate_limited` (HTTP 429). Every other OpenCode failure is `unknown`.
 - **Copilot** reports `misconfigured` when its MCP config file cannot be read. Its SDK exposes every other failure only as a message string, so those are `unknown`.
 
-Set `on_error: all` on a node that should retry `unknown` failures.
+Set `on_error: schema_unmet` on a node that should retry a final output that did not meet its schema, and `on_error: all` on one that should also retry `unknown` failures.
 
 #### Failures the engine detects
 
@@ -952,7 +960,7 @@ Archon puts a failure it detects itself in a bucket by its kind:
 | A timeout: an AI node's `idle_timeout`, or a `bash:`/`script:` node's `timeout` | TRANSIENT | Yes. Each retry of a hung AI node can wait another full `idle_timeout` |
 | An AI provider stream that ends without any output | TRANSIENT | Yes |
 | A `bash:`/`script:` node that exits non-zero or cannot start | UNKNOWN | No (unless `on_error: all`). What the script printed does not matter |
-| An AI node's structured output that fails its `output_format` after reasks | UNKNOWN | No (unless `on_error: all`) |
+| An AI node's or `loop:` iteration's structured output that fails its `output_format` after reasks, or no schema-valid structured output at all | SCHEMA_UNMET | No (unless `on_error: schema_unmet` or `all`) |
 | A `bash:`/`script:` node's stdout that fails its `output_format` | no bucket | Never |
 | A config error: a missing command file, a bad input reference, an `output_format` that cannot compile | FATAL | Never |
 | A cancelled node | FATAL | Never |
@@ -1766,6 +1774,35 @@ When a run starts, after any wait for its [resource](/guides/workflow-triggers/#
 
 `archon workflow runs --item <key>` shows, for each run, `hasResult`: whether a reader would
 get a value from it.
+
+## Reading a project's items over a window
+
+`items()` reads the items of the run's project that had a run started in a window, each as
+`item()` reads one, with all of its runs. It is [`archon workflow items`](/reference/cli/#workflow-items),
+and returns `{ window, items, next }`. A page holds at most 100 items, but each item is read
+whole, so a page has no byte bound: emit what the node computes from the pages, not the pages
+themselves. Pass `next` back as `after` to read the following page:
+
+```yaml
+nodes:
+  - id: merged
+    runtime: bun
+    script: |
+      import { emit, items } from 'archon:script';
+      let page = items({ since: '30d', limit: 100 });
+      const keys = [];
+      for (;;) {
+        keys.push(...page.items.filter(read => read.merged !== null).map(read => read.item.key));
+        if (page.next === null) break;
+        page = items({ after: page.next, limit: 100 });
+      }
+      emit({ keys });
+```
+
+`since` and `until` take [`archon metrics`](/reference/cli/#metrics-name) syntax and default to
+the last 30 days; `after` is passed alone. A figure over the items, such as a merge rate, needs
+no script: a pack [declares it as data](/guides/metrics/#item-metrics-a-pack-declares) and
+`archon metrics --project` evaluates it. Like `item()`, it runs on the host.
 
 ## Durable state documents
 

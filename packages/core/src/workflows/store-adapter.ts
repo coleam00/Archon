@@ -20,6 +20,7 @@ import type { MergedConfig } from '../config/config-types';
 import * as itemsDb from '../db/items';
 import * as itemLinksDb from '../db/item-links';
 import * as itemRulingsDb from '../db/item-rulings';
+import * as itemMergesDb from '../db/item-merges';
 import * as itemAsksDb from '../db/item-asks';
 import * as workflowDb from '../db/workflows';
 import * as resourceStarts from '../db/resource-starts';
@@ -179,6 +180,9 @@ export function createWorkflowStore(): IWorkflowStore {
     listItemRulings: itemRulingsDb.listItemRulings,
     recordItemRuling: itemRulingsDb.recordItemRuling,
     withdrawItemRuling: itemRulingsDb.withdrawItemRuling,
+    listItemsInWindow: itemsDb.listItemsInWindow,
+    getItemMerge: itemMergesDb.getItemMerge,
+    recordItemMerge: itemMergesDb.recordItemMerge,
     listItemLinks: itemLinksDb.listItemLinks,
     recordItemLink: itemLinksDb.recordItemLink,
     endItemLink: itemLinksDb.endItemLink,

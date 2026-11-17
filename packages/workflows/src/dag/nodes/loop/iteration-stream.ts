@@ -224,12 +224,17 @@ async function runReaskAttempts(
     // No `output_format` declared: one attempt, nothing to validate.
     if (!wantsStructured) return reply(attempt, undefined);
     // A same-session correction needs the iteration's thread; without one, the miss fails.
-    const verdict = await gateStructuredAttempt(run, state, i, attempt, reask, {
-      maxReasks,
-      hasSessionToCorrect: !sameSession || thread.sessionId !== undefined,
-    });
+    const verdict = await gateStructuredAttempt(
+      run,
+      state,
+      i,
+      attempt,
+      reask,
+      { maxReasks, hasSessionToCorrect: !sameSession || thread.sessionId !== undefined },
+      retry
+    );
     if (verdict.kind === 'accepted') return reply(attempt, verdict.payload);
-    if (verdict.kind === 'failed') return verdict;
+    if (verdict.kind === 'failed' || verdict.kind === 'retry') return verdict;
     reask.attempt++;
     reask.errors = verdict.errors;
   }
