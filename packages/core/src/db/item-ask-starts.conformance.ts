@@ -9,6 +9,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
+import type { ItemAsk } from '@archon/workflows/schemas/item-ask';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import { asksResultMetadata } from '@archon/workflows/schemas/run-metadata';
 import type { IWorkflowStore } from '@archon/workflows/store';
@@ -99,6 +100,41 @@ async function storeWithBindings(
       withdrawItemAsk: async input => itemAsks.withdrawItemAsk(input, await prepare(input.askId)),
     },
   };
+}
+
+/**
+ * Completes a run of `plan` on `issue-1` with `asks`, carrying the input and result every
+ * binding built by `asksSettledFile` reads, so a receipt it writes is matched.
+ */
+async function completePlan(harness: Harness, asks: readonly ItemAsk[]): Promise<string> {
+  const run = await harness.store.createWorkflowRun({
+    workflow_name: 'plan',
+    user_message: '',
+    codebase_id: CONFORMANCE_CODEBASE_ID,
+    item_key: 'issue-1',
+    metadata: { inputs: { issue: 'Fix the login page' } },
+  });
+  await harness.store.claimPendingWorkflowRun(run.id);
+  await harness.store.completeWorkflowRun(
+    run.id,
+    { duration_ms: 1 },
+    asksResultMetadata({ summary: 'half planned' }),
+    { asks }
+  );
+  return run.id;
+}
+
+/** The receipts a run's settlement wrote, with each one's outcome and started workflow. */
+async function startsFor(harness: Harness, runId: string) {
+  const receipts = await Promise.all(
+    (await receiptsFor(harness, runId)).map(listed => harness.store.getStartReceipt(listed.id))
+  );
+  return receipts.map(receipt => ({
+    sourceInstanceId: receipt?.sourceInstanceId,
+    outcome: receipt?.outcome,
+    display: receipt?.sourceActor?.display,
+    workflows: receipt?.bindings.map(binding => binding.intent?.launch.workflowName),
+  }));
 }
 
 async function receiptsFor(harness: Harness, runId: string) {
@@ -269,19 +305,29 @@ export function describeSqlItemAskStartConformance(makeHarness: () => Promise<Ha
     });
     try {
       const deps = itemDeps(harness, store);
-      const withdrawn = await completeWithAsks(harness, [ask('A?'), ask('B?')]);
+      const withdrawn = await completePlan(harness, [ask('A?'), ask('B?')]);
       for (const ref of await openRefs(harness))
         await withdrawAttentionItem(deps, ref, operator, 'cli');
-      expect(
-        (await receiptsFor(harness, withdrawn)).map(receipt => receipt.sourceInstanceId)
-      ).toEqual(['after-withdrawn']);
+      expect(await startsFor(harness, withdrawn)).toEqual([
+        {
+          sourceInstanceId: 'after-withdrawn',
+          outcome: 'matched',
+          display: 'withdrawn',
+          workflows: ['build'],
+        },
+      ]);
 
-      const mixed = await completeWithAsks(harness, [ask('C?'), ask('D?')]);
+      const mixed = await completePlan(harness, [ask('C?'), ask('D?')]);
       const [c, d] = await openRefs(harness);
       await withdrawAttentionItem(deps, c ?? '', operator, 'cli');
       await answerAttentionItem(deps, d ?? '', { choose: ['keep'] }, operator, 'cli');
-      expect((await receiptsFor(harness, mixed)).map(receipt => receipt.sourceInstanceId)).toEqual([
-        'after-answers',
+      expect(await startsFor(harness, mixed)).toEqual([
+        {
+          sourceInstanceId: 'after-answers',
+          outcome: 'matched',
+          display: 'answered',
+          workflows: ['build'],
+        },
       ]);
     } finally {
       await removeTempTree(directory);
@@ -296,10 +342,10 @@ export function describeSqlItemAskStartConformance(makeHarness: () => Promise<Ha
     });
     try {
       const deps = itemDeps(harness, store);
-      const first = await completeWithAsks(harness, [ask('A?'), ask('B?')]);
+      const first = await completePlan(harness, [ask('A?'), ask('B?')]);
       const [a, b] = await openRefs(harness);
       await answerAttentionItem(deps, a ?? '', { choose: ['keep'] }, operator, 'cli');
-      await completeWithAsks(harness, [ask('C?')]);
+      const second = await completePlan(harness, [ask('C?')]);
       expect(
         await answerAttentionItem(deps, b ?? '', { choose: ['keep'] }, operator, 'cli')
       ).toEqual({ kind: 'none' });
@@ -308,6 +354,10 @@ export function describeSqlItemAskStartConformance(makeHarness: () => Promise<Ha
       });
       expect(await receiptsFor(harness, first)).toEqual([]);
       expect(await settledEvents(harness, first)).toEqual([]);
+      // The set that replaced it still starts its binding when it settles.
+      const [c] = await openRefs(harness);
+      await answerAttentionItem(deps, c ?? '', { choose: ['keep'] }, operator, 'cli');
+      expect(await startsFor(harness, second)).toMatchObject([{ outcome: 'matched' }]);
     } finally {
       await removeTempTree(directory);
       await harness.close();
