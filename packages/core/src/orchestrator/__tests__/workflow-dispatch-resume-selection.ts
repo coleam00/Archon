@@ -562,6 +562,37 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
     expect(opts.priorCompletedNodes?.size).toBeGreaterThan(0);
   });
 
+  test('a plain workflow run offers an operator-paused run instead of continuing it', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
+        makeResumableRun({
+          status: 'paused',
+          metadata: {
+            pause_cause: 'operator',
+            operator_pause: {
+              requested: { by: null, via: 'cli', at: '2026-10-05T12:00:00.000Z' },
+              pausedAt: '2026-10-05T12:01:00.000Z',
+            },
+          },
+        }),
+      ])
+    );
+
+    const platform = makeForegroundPlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
+
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('/workflow resume resumable-run-1')
+    );
+  });
+
   test('a plain workflow run does not consume an attention pause', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
