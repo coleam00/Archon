@@ -40,6 +40,7 @@ import { nextRound, withBuild } from '../../.shared/build.ts';
 import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
 import { type QualifiedPr } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
+import { recordItemMerge } from '../../.shared/host.ts';
 import { announce } from '../../.shared/queue.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import {
@@ -60,7 +61,7 @@ import {
 } from '../../.shared/merge.ts';
 import { idleOutcome, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
-import { updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
+import { itemKey, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
   readonly item: QualifiedPr | null;
@@ -126,6 +127,8 @@ interface Outcome {
   readonly status: MergeStatus;
   readonly reason: string;
   readonly head: string;
+  /** The merge commit the forge reported, on a merged outcome. */
+  readonly merge_commit?: string | null;
 }
 
 /** What the merge node reported for one pull request the sweep declared `merge`. */
@@ -138,6 +141,7 @@ function settle(decision: Decision, after: PrFacts, gated: Gated | undefined): O
       status: 'merged',
       reason: `${decision.reason} (merged ${after.merge_commit ?? ''} at ${after.head_revision})`,
       head: after.head_revision,
+      merge_commit: after.merge_commit,
     };
   }
   const head = decision.head;
@@ -218,6 +222,11 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
     return withBuild(recorded, { at, run_id: runId, round: null, entry: returned, status: 'next', brief: decision.brief, release: true });
   });
   if (!written) return false;
+  if (status === 'merged') {
+    // The engine's item metrics read the merge from the item, never from this document.
+    const missed = recordItemMerge(itemKey(item.item.number), item.url, outcome.merge_commit ?? null, at);
+    if (missed !== null) writes.lines.push(`${name}: its merge is not on the engine item (${missed})`);
+  }
   announcePr(item, outcome, String(item.item.number));
   // The claim is released, so the round the fire starts can claim the item.
   if (status === 'returned') writes.lines.push(`${name}: ${nextRound(item.item, runId)}`);
