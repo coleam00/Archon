@@ -21,6 +21,8 @@ import {
   EXECUTION_OWNER_METADATA_KEY,
   RUN_DISPATCH_METADATA_KEY,
   SUBRUN_METADATA_KEYS,
+  describeOperatorPause,
+  operatorPause,
   pendingWorkflowWaitDeadline,
   readSubrunMetadata,
   runAttention,
@@ -702,6 +704,13 @@ function pausedCheckoutState(
   duration: string,
   shortId: string
 ): { stateLine: string; actionLines: string } {
+  // An operator pause asks nothing; any gate or wait still on the row is history.
+  const pause = operatorPause(activeWorkflow);
+  if (pause !== null)
+    return {
+      stateLine: `${describeOperatorPause(pause)} (run \`${shortId}\`)`,
+      actionLines: `• Resume it: \`${formatRunCommand(platform, 'resume', shortId)}\`\n`,
+    };
   let stateLine: string;
   let actionLines: string;
   const attention = runAttention(activeWorkflow);
