@@ -257,14 +257,16 @@ export function readOutcome(
 }
 
 /** The gate or wait the run is paused at; a gate or wait beside an operator pause is history. */
-function readCurrentPause(raw: RawWorkflowRun): Pick<Run, 'approval' | 'wait'> {
-  if (raw.operator_pause?.state === 'paused') return { approval: null, wait: null };
+function readCurrentPause(raw: RawWorkflowRun): Pick<Run, 'approval' | 'wait' | 'gateResolved'> {
+  if (raw.operator_pause?.state === 'paused')
+    return { approval: null, wait: null, gateResolved: null };
   const wait = raw.metadata?.wait;
   const parsedWait: NormalizedWorkflowWait | null =
     wait === undefined ? null : normalizeWorkflowWait(wait);
   return {
     approval: parsedWait === null ? readApproval(raw.metadata?.approval) : null,
     wait: parsedWait,
+    gateResolved: raw.metadata?.approval?.resolved ?? null,
   };
 }
 
@@ -272,7 +274,6 @@ export function toRun(raw: RawWorkflowRun): Run {
   const activeNodes = Array.isArray(raw.active_nodes)
     ? raw.active_nodes.filter(nodeId => typeof nodeId === 'string' && nodeId.length > 0)
     : [];
-  const gateResolved = raw.metadata?.approval?.resolved ?? null;
 
   return {
     ...readRunProvenance(raw),
@@ -294,7 +295,6 @@ export function toRun(raw: RawWorkflowRun): Run {
     lastTool: null,
     toolCallAttention: raw.status === 'running' ? (raw.metadata?.tool_call_attention ?? []) : [],
     ...readCurrentPause(raw),
-    gateResolved,
     stopReason: raw.metadata?.stop_reason ?? null,
   };
 }
