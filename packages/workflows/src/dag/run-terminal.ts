@@ -721,7 +721,7 @@ export async function failRun(
 ): Promise<void> {
   const emitter = getWorkflowEventEmitter();
   try {
-    const { failed } = await requireTerminalStatusWrite(
+    const { failed, failureKind } = await requireTerminalStatusWrite(
       deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason }),
       { workflowRunId: workflowRun.id, site }
     );
@@ -731,6 +731,7 @@ export async function failRun(
         runId: workflowRun.id,
         workflowName,
         error: failMsg,
+        ...(failureKind !== undefined ? { failureKind } : {}),
       });
     }
   } finally {

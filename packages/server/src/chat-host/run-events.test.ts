@@ -277,7 +277,10 @@ async function recordNodeFailure(record: ReturnType<typeof finishNodeExecution>)
 }
 
 /** Fail `run` at node `check` with `failureKind`, as the engine records it. */
-async function failRunAt(runId: string, failureKind: 'schema_unmet' | 'timeout'): Promise<void> {
+async function failRunAt(
+  runId: string,
+  failureKind: 'schema_unmet' | 'timeout'
+): Promise<Awaited<ReturnType<typeof failWorkflowRun>>> {
   await getDatabase().query(
     `UPDATE remote_agent_workflow_runs SET status = 'running' WHERE id = $1`,
     [runId]
@@ -294,7 +297,7 @@ async function failRunAt(runId: string, failureKind: 'schema_unmet' | 'timeout')
       { durationMs: 5 }
     )
   );
-  await failWorkflowRun(runId, 'Node check failed');
+  return failWorkflowRun(runId, 'Node check failed');
 }
 
 function collectingSupervisor(delivered: ChatRunEvent[]): ChatSupervisor {
@@ -323,7 +326,6 @@ test('a failed run keeps the kind of its own failure when routing lags behind a 
     new Map([['fixture-chat', collectingSupervisor(delivered)]]),
     new Map()
   );
-  const reads = spyOn(workflowEventDb, 'listEventsForRuns');
   let release: () => void = () => {};
   const held = new Promise<void>(resolve => {
     release = resolve;
@@ -335,15 +337,16 @@ test('a failed run keeps the kind of its own failure when routing lags behind a 
   });
   try {
     const run = await createRun('fixture-chat');
-    await failRunAt(run.id, 'schema_unmet');
+    const first = await failRunAt(run.id, 'schema_unmet');
+    expect(first).toEqual({ failed: true, failureKind: 'schema_unmet' });
+    // As the engine does: the event carries the kind its own failure write recorded.
     getWorkflowEventEmitter().emit({
       type: 'workflow_failed',
       runId: run.id,
       workflowName: run.workflow_name,
       error: 'Node check failed',
+      failureKind: first.failureKind,
     });
-    // The emitted failure's kind is read at once; routing is still held.
-    await reads.mock.results[0]?.value;
     // The run resumes and fails again, differently, before routing gets to the event.
     await failRunAt(run.id, 'timeout');
     release();
@@ -356,38 +359,6 @@ test('a failed run keeps the kind of its own failure when routing lags behind a 
   } finally {
     release();
     getRun.mockRestore();
-    reads.mockRestore();
-    unsubscribe();
-  }
-});
-
-test('a failed run is still delivered when its failure kind cannot be read', async () => {
-  const delivered: ChatRunEvent[] = [];
-  const unsubscribe = subscribeChatRunEvents(
-    new Map([['fixture-chat', collectingSupervisor(delivered)]]),
-    new Map()
-  );
-  const reads = spyOn(workflowEventDb, 'listEventsForRuns').mockRejectedValueOnce(
-    new Error('database is locked')
-  );
-  try {
-    const run = await createRun('fixture-chat');
-    await failRunAt(run.id, 'schema_unmet');
-    getWorkflowEventEmitter().emit({
-      type: 'workflow_failed',
-      runId: run.id,
-      workflowName: run.workflow_name,
-      error: 'Node check failed',
-    });
-    await waitFor(delivered, 1);
-    expect(delivered[0]).toMatchObject({
-      type: 'terminal',
-      status: 'failed',
-      error: 'Node check failed',
-    });
-    expect(delivered[0]).not.toHaveProperty('failureKind');
-  } finally {
-    reads.mockRestore();
     unsubscribe();
   }
 });
@@ -421,7 +392,7 @@ test('a failed node and its failed run carry the recorded failure kind to the pl
       { durationMs: 5 }
     );
     await recordNodeFailure(failedNode);
-    await failWorkflowRun(run.id, 'Node check failed');
+    const { failureKind } = await failWorkflowRun(run.id, 'Node check failed');
     const emitter = getWorkflowEventEmitter();
     const nodeEvent = serializeNodeEmitter(failedNode);
     if (nodeEvent === undefined) throw new Error('expected a node_failed emitter event');
@@ -431,6 +402,7 @@ test('a failed node and its failed run carry the recorded failure kind to the pl
       runId: run.id,
       workflowName: run.workflow_name,
       error: 'Node check failed',
+      failureKind,
     });
     const deadline = Date.now() + DEFAULT_TEST_TIMEOUT_MS;
     while (delivered.length < 2) {

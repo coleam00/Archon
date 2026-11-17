@@ -483,6 +483,13 @@ export function firstFailedNodeEvent<E extends TerminalRecordEvent>(
   return undefined;
 }
 
+/** The per-node state of a record's `first_failed_node`, when it has one. */
+export function firstFailedNodeState(
+  record: Pick<TerminalRecord, 'first_failed_node' | 'nodes'>
+): TerminalRecord['nodes'][number] | undefined {
+  return record.nodes.find(node => node.node_id === record.first_failed_node);
+}
+
 /** The failure kind a `node_failed` event recorded; undefined when it recorded none. */
 export function recordedFailureKind(event: TerminalRecordEvent): NodeFailureKind | undefined {
   const kind = nodeFailureKindSchema.safeParse(readNodeRecordData(event.data).failure_kind);
@@ -541,7 +548,7 @@ export function failedOutcomeReason(record: TerminalRecord | null): string[] {
  */
 export function terminalReason(record: TerminalRecord | null): string[] {
   if (record?.status !== 'failed') return failedOutcomeReason(record);
-  const failed = record.nodes.find(node => node.node_id === record.first_failed_node);
+  const failed = firstFailedNodeState(record);
   const reason = boundedReason([firstLine(failed?.error ?? record.error ?? '') ?? '']);
   const kind = failed?.failure_kind;
   return kind === undefined

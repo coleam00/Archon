@@ -659,6 +659,24 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
     }
   );
 
+  it('announces the failure kind the failure write recorded', async () => {
+    const store = createMockStore();
+    store.failWorkflowRun = mock(async () => ({
+      failed: true,
+      failureKind: 'schema_unmet' as const,
+    }));
+    const announced: WorkflowEmitterEvent[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
+      if (event.type === 'workflow_failed') announced.push(event);
+    });
+    try {
+      await run(store, createMockPlatform(), [badNode], []);
+    } finally {
+      unsubscribe();
+    }
+    expect(announced).toEqual([expect.objectContaining({ failureKind: 'schema_unmet' })]);
+  });
+
   it.each([false, true])(
     'announces no failure another writer already committed (successful sibling: %s)',
     async successfulSibling => {

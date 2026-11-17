@@ -12,12 +12,6 @@ import {
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
 import * as workflowDb from '@archon/core/db/workflows';
-import * as workflowEventDb from '@archon/core/db/workflow-events';
-import {
-  firstFailedNodeEvent,
-  getTerminalRecord,
-  recordedFailureKind,
-} from '@archon/workflows/terminal-record';
 import * as conversationDb from '@archon/core/db/conversations';
 import { createLogger } from '@archon/paths';
 import type { ChatSupervisor } from './supervisor';
@@ -108,7 +102,14 @@ export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent 
     case 'workflow_completed':
       return { type: 'terminal', runId, status: 'completed' };
     case 'workflow_failed':
-      return { type: 'terminal', runId, status: 'failed', error: event.error };
+      // The kind travels on the event, from the terminal record of this very failure.
+      return {
+        type: 'terminal',
+        runId,
+        status: 'failed',
+        error: event.error,
+        ...(event.failureKind !== undefined ? { failureKind: event.failureKind } : {}),
+      };
     case 'workflow_cancelled':
       return { type: 'terminal', runId, status: 'cancelled', error: event.reason };
     case 'loop_iteration_started':
@@ -134,23 +135,6 @@ function failureKindOf(execution: NodeFailedExecution): { failureKind?: string }
     : {};
 }
 type NodeFailedExecution = Extract<WorkflowEmitterEvent, { type: 'node_failed' }>['execution'];
-
-/**
- * The recorded kind of the node a failed run failed at, read from the stored terminal
- * record and that node's `node_failed` row, never from the run's error text. The engine
- * emits `workflow_failed` only after that failure committed, so a read started at emit
- * time sees this failure's record; a read deferred behind queued routing could see a later
- * failure of the same run after a resume.
- */
-async function terminalFailureKind(runId: string): Promise<{ failureKind?: string }> {
-  const rows =
-    (await workflowEventDb.listEventsForRuns([runId], ['node_failed', 'workflow_failed'])).get(
-      runId
-    ) ?? [];
-  const failed = firstFailedNodeEvent(getTerminalRecord('failed', rows), rows);
-  const kind = failed === undefined ? undefined : recordedFailureKind(failed);
-  return kind === undefined ? {} : { failureKind: kind };
-}
 
 function applyRunDetails(
   run: WorkflowRun,
@@ -202,18 +186,6 @@ export function subscribeChatRunEvents(
     const fail = (): void => {
       log.warn({ eventType: event.type }, 'chat.run_event_failed');
     };
-    // Started now, not in the routing chain: see terminalFailureKind. The kind is display
-    // only, so a failed read still delivers the terminal event, without it.
-    const failureKind =
-      projected.type === 'terminal' && projected.status === 'failed'
-        ? terminalFailureKind(event.runId).catch((error: unknown) => {
-            log.warn(
-              { err: error as Error, runId: event.runId },
-              'chat.run_event_failure_kind_read_failed'
-            );
-            return {};
-          })
-        : undefined;
     routing = routing
       .then(async () => {
         if (stopped) return;
@@ -231,7 +203,6 @@ export function subscribeChatRunEvents(
             ? { ...projected, conversationId: conversation.platform_conversation_id }
             : projected;
         applyRunDetails(run, routed, platform, platforms);
-        if (failureKind !== undefined) Object.assign(routed, await failureKind);
         const delivery = (deliveries.get(platform) ?? Promise.resolve())
           .then(async () => {
             if (!stopped) await plugin.runEvent(routed);
