@@ -152,12 +152,20 @@ function recordedCheckout(
     };
   if (!('handoff' in recorded)) return recorded;
   // Branch recreation would hand on a checkout the asking run no longer has, so a removed
-  // worktree refuses here, where the reason lands on the receipt.
-  if (recorded.worktree !== undefined && !existsSync(recorded.worktree))
-    return {
-      refused: `the worktree run '${runId}' left at '${recorded.worktree}' is gone, so its checkout cannot be handed over; ${again}`,
-    };
-  return { handoff: recorded.handoff };
+  // worktree refuses here, where the reason lands on the receipt. Execution checks again
+  // (`assertAskingWorktree`), for a start that runs later.
+  const gone = askingWorktreeGone(runId, recorded);
+  return gone === undefined ? { handoff: recorded.handoff } : { refused: `${gone}; ${again}` };
+}
+
+/** Why a recorded asks hand-off's worktree can no longer be handed over, or undefined. */
+export function askingWorktreeGone(
+  runId: string,
+  recorded: Extract<AsksCheckout, { handoff: unknown }>
+): string | undefined {
+  return existsSync(recorded.worktree)
+    ? undefined
+    : `the worktree at '${recorded.worktree}' that holds the checkout run '${runId}' left is gone, so it cannot be handed over`;
 }
 
 /**
@@ -166,7 +174,9 @@ function recordedCheckout(
  * else undefined. Read once however many bindings match.
  */
 export function createAsksCheckout(
-  dependencies: Omit<RunEndedStartsDependencies, 'now'>
+  dependencies: Omit<RunEndedStartsDependencies, 'now'> & {
+    getRun: (id: string) => Promise<WorkflowRun | null>;
+  }
 ): (run: WorkflowRun) => Promise<AsksCheckout | undefined> {
   return async run => {
     if (!run.item_id) return undefined;
@@ -180,20 +190,32 @@ export function createAsksCheckout(
     if (!item) throw new Error(`Run '${run.id}' names item '${run.item_id}', which is missing`);
     for (const candidate of candidates)
       if ((await bindingProjectKey(candidate, dependencies)) === item.projectKey)
-        return withWorktree(run, await dependencies.endedCheckout(run));
+        return withWorktree(run, await dependencies.endedCheckout(run), dependencies.getRun);
     return undefined;
   };
 }
 
 /**
- * A hand-off of the run's own branch names the worktree it left, so settling can tell
- * whether that checkout is still there. A run that worked on a copy hands on its source's
- * branch, which no worktree of its own holds.
+ * The hand-off with the worktree that holds it, so settling and execution can tell whether
+ * that checkout is still there: the run's own, or for a run that worked on a copy, the one
+ * its source run left. A source whose worktree is unknown or already gone is refused now.
  */
-function withWorktree(run: WorkflowRun, checkout: EndedCheckout): AsksCheckout {
-  return 'handoff' in checkout && checkout.handoff.runId === run.id && run.working_path
-    ? { handoff: checkout.handoff, worktree: run.working_path }
-    : checkout;
+async function withWorktree(
+  run: WorkflowRun,
+  checkout: EndedCheckout,
+  getRun: (id: string) => Promise<WorkflowRun | null>
+): Promise<AsksCheckout> {
+  if (!('handoff' in checkout)) return checkout;
+  const { handoff } = checkout;
+  const holder = handoff.runId === run.id ? run : await getRun(handoff.runId);
+  const worktree = holder?.working_path;
+  if (!worktree)
+    return {
+      refused: `run '${handoff.runId}', whose checkout run '${run.id}' worked on, has no recorded worktree`,
+    };
+  const recorded = { handoff, worktree };
+  const gone = askingWorktreeGone(run.id, recorded);
+  return gone === undefined ? recorded : { refused: gone };
 }
 
 /**

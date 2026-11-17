@@ -372,14 +372,14 @@ export function readCheckoutHandoff(run: {
 /**
  * Run metadata key of a run that completed leaving asks while an asks-settled binding
  * with `checkout: "asking-run"` matched it: the checkout it left, read at completion, and
- * the worktree it left it in when that worktree is its own. The settling transaction hands
- * it on only while that worktree is still there, so the started run gets the commit the
- * asking run ended on, or is refused naming why.
+ * the worktree that holds it (the run's own, or for a run that worked on a copy, the one
+ * its source left). The settling transaction and the started run's execution each refuse
+ * the hand-off when that worktree is gone, so the checkout is never recreated.
  */
 export const ASKS_CHECKOUT_METADATA_KEY = 'asks_checkout';
 
 export const asksCheckoutSchema = z.union([
-  z.object({ handoff: checkoutHandoffSchema, worktree: z.string().min(1).optional() }).strict(),
+  z.object({ handoff: checkoutHandoffSchema, worktree: z.string().min(1) }).strict(),
   z.object({ refused: z.string().min(1) }).strict(),
 ]);
 export type AsksCheckout = z.infer<typeof asksCheckoutSchema>;

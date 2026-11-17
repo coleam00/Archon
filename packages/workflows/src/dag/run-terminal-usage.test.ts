@@ -1979,11 +1979,12 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
     const recorded = (store: MockWorkflowStore): unknown =>
       (store.completeWorkflowRun.mock.calls[0]?.[2] as Record<string, unknown>).asks_checkout;
     const handoff = { runId: 'asks-run', branch: 'archon/plan', commit: 'b'.repeat(40) };
+    const worktree = '/worktrees/plan';
 
     mockStructuredResult({ summary: 'done', asks: [anAsk] });
     const taken = createMockStore();
-    await run(taken, { asksCheckout: async () => ({ handoff }) });
-    expect(recorded(taken)).toEqual({ handoff });
+    await run(taken, { asksCheckout: async () => ({ handoff, worktree }) });
+    expect(recorded(taken)).toEqual({ handoff, worktree });
 
     // No binding takes it, or the run leaves no asks to settle: nothing is read or recorded.
     const untaken = createMockStore();
@@ -1995,7 +1996,7 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
     await run(noAsks, {
       asksCheckout: async ended => {
         reads.push(ended.id);
-        return { handoff };
+        return { handoff, worktree };
       },
     });
     expect(reads).toEqual([]);

@@ -140,6 +140,7 @@ describe('asks-settled starts', () => {
       const { build } = await prepareWith(takesCheckout);
       const metadata = asksCheckoutMetadata({
         handoff: { runId: RUN_ID, branch: 'archon/plan-1', commit },
+        worktree: tmpdir(),
       });
       expect(build?.(SETTLED, { metadata })).toMatchObject([
         {
@@ -183,6 +184,7 @@ describe('asks-settled starts', () => {
           triggersDirectory: () => directory,
           getItem: async id => (id === ITEM.id ? ITEM : null),
           projectKeyOf: async cwd => (cwd === PROJECT_CWD ? ITEM.projectKey : 'acme/other'),
+          getRun: async () => null,
           endedCheckout: async ended => {
             reads.push(ended.id);
             return { refused: 'read' };

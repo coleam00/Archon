@@ -73,7 +73,7 @@ async function settledStarts(
     ),
     ...notStarted.map(
       ({ receiptId, reason }) =>
-        `\n\u26a0\ufe0f The next stage was not started: ${reason}. Receipt ${receiptId} records it (archon trigger inspect ${receiptId}). Fix the trigger, then start the stage with archon trigger fire --config <trigger file> --item ${itemKey} --inputs <file>, where the file holds the inputs the binding should have passed: the answers as archon workflow runs --item ${itemKey} --json lists them, and the asking run's inputs and result.`
+        `\n\u26a0\ufe0f The next stage was not started: ${reason}. Receipt ${receiptId} records it (archon trigger inspect ${receiptId}). Fix what it names, then start the stage by hand with the inputs the binding should have passed: the answers as archon workflow runs --item ${itemKey} --json lists them, and the asking run's inputs and result. For a binding without checkout, put them in a file and run archon trigger fire --config <trigger file> --item ${itemKey} --inputs <file>. For one that takes the asking run's checkout (on.asksSettled.checkout), which a fire refuses: when that run's worktree or branch is gone or moved, run the asking workflow again on the item; otherwise run archon workflow run <stage> --adopt <asking run id> --item ${itemKey} with an --input <name>=<value> for each input the binding maps, since --adopt carries the checkout and not the answers.`
     ),
   ];
   return {

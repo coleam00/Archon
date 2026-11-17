@@ -11,7 +11,10 @@ import {
   type WorktreeSetupExecutor,
 } from '@archon/isolation';
 import {
+  readAsksCheckout,
   readCheckoutHandoff,
+  readResourceStartReceiptId,
+  startCause,
   type CheckoutHandoff,
   type CheckoutHandoffRunMetadata,
   type PreparedWorkflowLaunch,
@@ -21,6 +24,7 @@ import type { OwnedWorktree, WorkflowRun } from '@archon/workflows/schemas/workf
 import { adoptRegisteredWorktree, resolveWorkflowAdoption } from '../operations/workflow-adoption';
 import { ensureIsolationConfigured } from '../orchestrator/dispatch/isolation-resolver';
 import type { Codebase } from '../schemas/codebase';
+import { askingWorktreeGone } from './asks-settled';
 import type { WorkflowHost } from './host-store';
 import { createRegisteredWorktree, type RegisteredWorktreeInput } from './registered-worktree';
 
@@ -231,6 +235,31 @@ async function continueLane(
   };
 }
 
+/**
+ * A start its asks' answers caused takes the asking run's checkout only while the worktree
+ * that holds it is still there: settling checked it, and a start that runs later checks it
+ * again, so neither lane recreates it from the branch. Other hand-offs may recreate it.
+ */
+async function assertAskingWorktree(
+  host: WorkflowHost,
+  run: Pick<WorkflowRun, 'metadata'>
+): Promise<void> {
+  const receiptId = readResourceStartReceiptId(run.metadata);
+  const receipt = receiptId ? await host.deps.store.getStartReceipt(receiptId) : null;
+  const cause = receipt ? startCause(receipt) : null;
+  if (cause?.kind !== 'asks_settled') return;
+  const asking = await host.deps.store.getWorkflowRun(cause.runId);
+  const recorded = asking ? readAsksCheckout(asking) : undefined;
+  const gone =
+    recorded === undefined || !('handoff' in recorded)
+      ? `run '${cause.runId}', which left the asks, no longer records the checkout it handed on`
+      : askingWorktreeGone(cause.runId, recorded);
+  if (gone !== undefined)
+    throw new Error(
+      `${gone}; its hand-off is refused. Run '${asking?.workflow_name ?? 'the asking workflow'}' again on the item.`
+    );
+}
+
 export interface ExecutionLane {
   cwd: string;
   /** Absent for an in-place run. */
@@ -255,6 +284,7 @@ export async function executionLane(
   const { run, lane, codebase, platformType, setupExecutor } = input;
   const userId = run.user_id ?? undefined;
   const handoff = readCheckoutHandoff(run);
+  if (handoff) await assertAskingWorktree(host, run);
   if (handoff?.lane === 'continue')
     return continueLane(host, handoff, codebase, platformType, userId, setupExecutor);
   if (handoff?.lane === 'copy') await assertBranchAtHandoff(codebase, handoff);

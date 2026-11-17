@@ -574,6 +574,8 @@ The values are resolved when the set settles and frozen into the start's receipt
 archon trigger fire --config ~/.archon/triggers/build-after-answers.json --item <key> --inputs inputs.json
 ```
 
+A binding with `checkout`, which a fire refuses, is recovered [as below](#work-in-the-checkout-the-asking-run-left).
+
 The start is written in the same database transaction that records the settlement, so it exists exactly when the settlement does, and a set settles once, so answering the last ask twice starts the stage once. The files are read at every close of an ask. A file that is not JSON or has an invalid `on`, or two files with `on` that share a `sourceInstanceId`, refuses the close that would settle a set, naming the file, and nothing is recorded; fix the file and answer again. A run on an item is refused before it starts when an asks-settled binding for its workflow in its project names a missing stage or an input either workflow does not declare, so a broken binding is found before the asking stage does any work.
 
 Answering is not starting. Who may answer or withdraw an ask is unchanged: the rule of the run that left it. The started run acts as the binding's `runAsUserId`, as any binding start does, so an operator who may answer and may not start work still only answers.
@@ -599,11 +601,12 @@ By default the started run gets a fresh worktree cut from the base branch. With 
 }
 ```
 
-The branch and commit are read when the asking run completes, not when its asks settle, and kept on that run's record with the worktree it left them in. Completion keeps that worktree, where it would otherwise have removed it: its terminal record says `retained` with reason `in_use`. Nothing else holds it while the asks are open, so `archon isolation cleanup` can still remove it, and then the start is refused. When the last ask closes and the worktree is still there, the branch and commit are handed to the start and shown on its receipt as `checkoutFrom`.
+The branch and commit are read when the asking run completes, not when its asks settle, and kept on that run's record with the worktree that holds them: the run's own, or, for an asking run with `mutates_checkout: false`, the worktree of the run whose checkout it was given. Completion keeps the asking run's own worktree, where it would otherwise have removed it: its terminal record says `retained` with reason `in_use`. Nothing else holds a worktree while the asks are open, so `archon isolation cleanup` can still remove it, and then the start is refused. When the last ask closes and the worktree is still there, the branch and commit are handed to the start and shown on its receipt as `checkoutFrom`. The start checks the worktree again when it runs, so one removed while the start waited for its host or its resource is refused too; unlike `checkout: "ended-run"`, the branch is never checked out again in a new worktree.
 
 The start is refused, naming why:
 
-- **The asking run left no branch** (it ran in place, its worktree was gone or on another branch when it completed), **its worktree is gone by the time the asks settle**, **its record is gone**, or **it recorded no checkout**, because the file gained `checkout` after the run completed or an older Archon ran it. The receipt is `unmatched` with a `reason` that begins `Checkout:`; `archon trigger list` shows it.
+- **The asking run left no branch** (it ran in place, its worktree was gone or on another branch when it completed), **its worktree is gone when the asks settle**, **its record is gone**, or **it recorded no checkout**, because the file gained `checkout` after the run completed or an older Archon ran it. The receipt is `unmatched` with a `reason` that begins `Checkout:`; `archon trigger list` shows it.
+- **The worktree is gone when the start runs.** The started run fails before its first node with `launch_failed`, naming the worktree.
 - **The branch moved after the asking run's commit, or is gone.** This holds for a stage with `mutates_checkout: false` too: its copy is cut only while the branch is still at that commit. The started run fails before its first node with `launch_failed`, and `archon workflow get <run-id>` shows the branch, the commit it is at and the commit the asking run ended on.
 
 `archon trigger check`, and the check a run gets before it starts, report a binding whose asking or started workflow pins `worktree.enabled: false`. `archon trigger fire` refuses a file with `checkout`, because a fire has no asking run.
@@ -615,7 +618,7 @@ archon workflow run build --adopt <asking-run-id> --item <key> \
   --input decisions="$(cat decisions.json)" --input plan="<the asking run's plan>"
 ```
 
-When the branch is gone or moved, run the asking workflow again on the item instead: adoption continues the branch as it is now and does not check the commit.
+When the worktree or branch is gone, or the branch moved, run the asking workflow again on the item instead: adoption continues the branch as it is now and does not check the commit.
 
 ### Who prepares the start
 

@@ -377,7 +377,11 @@ export function createWorkflowDeps(
     store,
     credentialStore,
     runEndedStarts: createRunEndedStarts({ ...onBindings, endedCheckout }),
-    asksCheckout: createAsksCheckout({ ...onBindings, endedCheckout }),
+    asksCheckout: createAsksCheckout({
+      ...onBindings,
+      endedCheckout,
+      getRun: id => store.getWorkflowRun(id),
+    }),
     // A run is refused before it starts for a broken binding its end or its asks could fire.
     checkRunEndedBindings: async run => {
       await runEndedPreflight(run);

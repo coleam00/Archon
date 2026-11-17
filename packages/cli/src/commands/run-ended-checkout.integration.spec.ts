@@ -76,15 +76,15 @@ ${body
 `;
 
 // Commits, publishes, and leaves one ask on its item.
-const ASK_BUILD = `name: ask-build
-description: Add a commit and ask.
-returns: { node: commit, asks: asks }
+/** Leaves one ask; `body` runs first. `ask-build` commits, `ask-look` is read-only. */
+const leavesAsk = (name: string, readOnly: boolean, body: string) => `name: ${name}
+description: Ask.
+${readOnly ? 'mutates_checkout: false\n' : ''}returns: { node: commit, asks: asks }
 nodes:
   - id: commit
     bash: |
       set -e
-      echo asked > asked.txt
-      git add . && git commit -qm "asked" && git push -q origin HEAD
+      ${body}
       printf '%s' '${JSON.stringify({
         summary: 'asked',
         asks: [
@@ -105,6 +105,11 @@ nodes:
       properties: { summary: { type: string } }
       required: [summary]
 `;
+const ASK_BUILD = leavesAsk(
+  'ask-build',
+  false,
+  'echo asked > asked.txt && git add . && git commit -qm "asked" && git push -q origin HEAD'
+);
 
 /** A stage that records the branch and commit it starts on; `carry-on` then adds a commit. */
 const stageAfterAsks = (name: string, readOnly: boolean, then = '') => `name: ${name}
@@ -154,6 +159,7 @@ async function makeFixture(label: string, checkBody: string): Promise<Fixture> {
   );
   writeFileSync(join(workflows, 'pinned.yaml'), PINNED);
   writeFileSync(join(workflows, 'ask-build.yaml'), ASK_BUILD);
+  writeFileSync(join(workflows, 'ask-look.yaml'), leavesAsk('ask-look', true, 'true'));
   writeFileSync(
     join(workflows, 'carry-on.yaml'),
     stageAfterAsks(
@@ -526,9 +532,83 @@ describe('a stage on the checkout the asking run left', () => {
     }[];
     expect(receipts).toHaveLength(1);
     expect(receipts[0]?.outcome).toBe('unmatched');
-    expect(receipts[0]?.reason).toContain(
-      `Checkout: the worktree run '${asking.id}' left at '${worktree}' is gone`
-    );
+    expect(receipts[0]?.reason).toContain(`Checkout: the worktree at '${worktree}'`);
+    expect(receipts[0]?.reason).toContain('is gone');
     expect(runs(fixture).map(run => run.workflow_name)).toEqual(['ask-build']);
   }, 120_000);
+
+  test('a worktree removed after the asks settled refuses the start when its host drains it', async () => {
+    const fixture = await makeFixture('asks-drained', `printf '{"outcome": "pass"}'`);
+    fixture.bindAsks('carry-on-after-answers', 'ask-build', 'carry-on');
+    const asking = await startAskBuild(fixture);
+    await answerElsewhere(fixture);
+    // Settled with the worktree there, so the start was written matched and waits for a drain.
+    fixture.git('worktree', 'remove', '--force', asking.working_path ?? '');
+    await fixture.cli(['trigger', 'drain', '--host', 'factory-host']);
+    const all = await waitForRuns(fixture, 2);
+    expect(all.map(run => [run.workflow_name, run.status])).toEqual([
+      ['ask-build', 'completed'],
+      ['carry-on', 'failed'],
+    ]);
+    expect(String(metadata(all[1]).error)).toContain('is gone');
+    expect(existsSync(asking.working_path ?? '')).toBe(false);
+  }, 120_000);
+
+  test('a read-only asking stage hands on its source checkout only while that worktree is there', async () => {
+    const fixture = await makeFixture('asks-forwarded', `printf '{"outcome": "pass"}'`);
+    fixture.bind('look-after-build', 'build', 'built', 'ask-look');
+    fixture.bindAsks('carry-on-after-answers', 'ask-look', 'carry-on');
+    await startBuild(fixture);
+    const [build, look] = await waitForRuns(fixture, 2);
+    expect(look?.workflow_name).toBe('ask-look');
+    expect(metadata(look).asks_checkout).toMatchObject({
+      handoff: { runId: build?.id },
+      worktree: build?.working_path,
+    });
+    fixture.git('worktree', 'remove', '--force', build?.working_path ?? '');
+
+    await answerTheAsk(fixture);
+    const receipts = JSON.parse((await fixture.cli(['trigger', 'list'])).stdout) as {
+      outcome: string;
+      reason: string | null;
+    }[];
+    expect(receipts.find(receipt => receipt.outcome === 'unmatched')?.reason).toContain(
+      `the worktree at '${build?.working_path}'`
+    );
+    expect(runs(fixture).map(run => run.workflow_name)).toEqual(['build', 'ask-look']);
+  }, 120_000);
 });
+
+/**
+ * Answer the open ask through the store every surface shares, as the server does for an
+ * answer on a host it does not serve: the start is written, and nothing prepares it.
+ */
+async function answerElsewhere(fixture: Fixture): Promise<void> {
+  const listed = await fixture.cli(['workflow', 'attention', '--all', '--json']);
+  const refs = (JSON.parse(listed.stdout) as { items: { ref: string }[] }).items.map(i => i.ref);
+  const answerer = join(fixture.root, 'answer-elsewhere.ts');
+  const core = resolve(import.meta.dir, '..', '..', '..', 'core', 'src');
+  writeFileSync(
+    answerer,
+    `const { createWorkflowStore } = await import(${JSON.stringify(join(core, 'workflows', 'store-adapter.ts'))});
+const { attentionQueueSource } = await import(${JSON.stringify(join(core, 'operations', 'attention-queue.ts'))});
+const { answerAttentionItem } = await import(${JSON.stringify(join(core, 'operations', 'attention-items.ts'))});
+const { closeDatabase } = await import(${JSON.stringify(join(core, 'db', 'connection.ts'))});
+const notUsed = async () => { throw new Error('not used for an ask'); };
+const deps = {
+  queue: attentionQueueSource(createWorkflowStore(), { findLatestByCodebaseAndWorkingPath: async () => null }),
+  operations: { answerWorkflow: notUsed, respondToWorkflow: notUsed, assertRunActionAllowed: async () => undefined },
+};
+for (const ref of process.argv.slice(2))
+  await answerAttentionItem(deps, ref, { recommended: true }, { kind: 'operator', declared: 'reviewer' }, 'api');
+await closeDatabase();
+`
+  );
+  const answered = Bun.spawn([process.execPath, answerer, ...refs], {
+    cwd: fixture.repo,
+    env: { ...process.env, DATABASE_URL: '', ARCHON_HOME: fixture.home },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  if ((await answered.exited) !== 0) throw new Error(await new Response(answered.stderr).text());
+}

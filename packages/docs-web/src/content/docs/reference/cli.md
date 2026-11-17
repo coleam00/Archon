@@ -2134,7 +2134,8 @@ admitted. The skip reason names the start; `archon trigger withdraw <request-id>
 withdraws a queued one. A start that was withdrawn, skipped or refused keeps nothing. A
 run that left asks for a `checkout: "asking-run"` binding keeps its worktree at completion
 (`retained`, `in_use`), but nothing holds it while the asks are open: cleanup may remove
-it, and the start its answers cause is then refused, naming the worktree.
+it, and the start its answers cause is then refused, naming the worktree, whether it is
+removed before the asks settle or before the start runs.
 
 A **failed** run keeps its environment only until its outcome is settled:
 
