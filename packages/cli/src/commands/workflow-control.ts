@@ -252,7 +252,9 @@ export async function workflowPauseCommand(
     'It pauses when the nodes running now finish and starts no node after them. ' +
       'Its checkout, results, resource slot and item stay held.'
   );
-  console.log(`Resume: archon workflow resume ${run.id}`);
+  console.log(
+    `Once \`archon workflow status\` shows it paused, resume it: archon workflow resume ${run.id}`
+  );
   return 0;
 }
 
