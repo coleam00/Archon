@@ -585,6 +585,17 @@ export class SqliteAdapter implements IDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_item_rulings_item_id ON remote_agent_item_rulings(item_id);
 
+      -- An item's merged fact, recorded once; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_merges (
+        item_id TEXT PRIMARY KEY REFERENCES remote_agent_items(id),
+        change TEXT NOT NULL,
+        merge_commit TEXT,
+        merged_at TEXT NOT NULL,
+        via TEXT NOT NULL,
+        from_run_id TEXT,
+        from_node_path TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
       -- Links between items, one row per link, ended not deleted; see migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_item_links (
         -- Recording order; timestamps tie and the id is random.

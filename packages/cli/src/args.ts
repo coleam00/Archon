@@ -120,6 +120,10 @@ export const cliArgOptions: CliArgOptions = {
   'item-of': { type: 'string' },
   // `workflow rule --withdraw <ruling-id>` and `workflow answer --withdraw <ref>`.
   withdraw: { type: 'string' },
+  // `workflow merged --change <ref> --at <ISO> --commit <sha>`: the merge the forge reported.
+  change: { type: 'string' },
+  at: { type: 'string' },
+  commit: { type: 'string' },
   // `workflow link --item <key> --kind <kind> --to <key>`, or `workflow link --end <link-id>`.
   kind: { type: 'string' },
   to: { type: 'string' },

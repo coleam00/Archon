@@ -21,7 +21,10 @@ export const metricsHelp: HelpGroup = {
           spec: '--by-model <node>',
           description: 'Split records by the model that ran this node (not with --compare)',
         },
-        { spec: '--project <id|name|key>', description: 'Only records from this codebase' },
+        {
+          spec: '--project <id|name|key>',
+          description: "Only records from this codebase, and its packs' item metrics",
+        },
       ],
     },
   ],
