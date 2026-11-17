@@ -6,7 +6,13 @@
 import { requireMcpConnections, type McpStatus } from '../mcp/readiness';
 import { BUNDLED_VERSION, createLogger } from '@archon/paths';
 import { sessionPreview, toolCallSchema, truncateToolOutput } from '@archon/provider-contract';
-import type { MessageChunk, ProviderEvent, ResultChunk, TokenUsage } from '../types';
+import {
+  mergeTokenUsage,
+  type MessageChunk,
+  type ProviderEvent,
+  type ResultChunk,
+  type TokenUsage,
+} from '../types';
 import { ClassifiedProviderError, failureResult } from '../shared/failure';
 import type { AppServerConnection, ParamsOf } from './app-server';
 import { withDeliveredCredentialConfig, type CodexLogin, type ThreadParams } from './login';
@@ -188,13 +194,23 @@ function backgroundEventOf(
   return undefined;
 }
 
+/** The first and latest usage snapshots one thread reported while the turn observed it. */
+interface UsageSpan {
+  first: ThreadTokenUsage;
+  end: TokenUsageBreakdown;
+}
+
+function extendedSpan(span: UsageSpan | undefined, usage: ThreadTokenUsage): UsageSpan {
+  return { first: span?.first ?? usage, end: usage.total };
+}
+
 /**
- * The turn's usage: the thread's cumulative total at the end less the total before the
- * turn's first request (`total - last` of the turn's first snapshot), clamped at zero as
- * Codex clamps its own per-turn figure (a context overflow resets the total). Codex reports
+ * A thread's usage over a span: its cumulative total at the end less the total before the
+ * span's first request (`total - last` of the first snapshot), clamped at zero as Codex
+ * clamps its own per-turn figure (a context overflow resets the total). Codex reports
  * reasoning tokens inside `outputTokens`, so they are not added again.
  */
-function turnUsageOf(first: ThreadTokenUsage, end: TokenUsageBreakdown): TokenUsage {
+function spanUsageOf({ first, end }: UsageSpan): TokenUsage {
   const used = (key: keyof TokenUsageBreakdown): number =>
     Math.max(0, end[key] - (first.total[key] - first.last[key]));
   return {
@@ -203,6 +219,14 @@ function turnUsageOf(first: ThreadTokenUsage, end: TokenUsageBreakdown): TokenUs
     cacheRead: used('cachedInputTokens'),
     cacheWrite: used('cacheWriteInputTokens'),
   };
+}
+
+/** The turn's usage: the parent thread's span plus each subagent thread's span. */
+function turnUsageOf(observation: TurnObservation): TokenUsage | undefined {
+  const spans = [observation.usageSpan, ...observation.agentUsageSpans.values()];
+  return mergeTokenUsage(
+    spans.filter((span): span is UsageSpan => span !== undefined).map(spanUsageOf)
+  );
 }
 
 /** A string at `value[key]`, or undefined: responses are read narrowly, not trusted whole. */
@@ -269,6 +293,8 @@ interface TurnObservation {
   readonly liveTasks: Set<string>;
   readonly agentThreads: Set<string>;
   pendingFailure: ResultChunk | undefined;
+  /** What the turn's result reported, so a later result carries only what followed. */
+  reported: Pick<ResultChunk, 'tokens' | 'structuredOutput'> | undefined;
   readonly errors: string[];
   lastAgentMessage: string;
   // `last` is one request and is re-sent unchanged with later snapshots, so the turn's usage
@@ -277,7 +303,13 @@ interface TurnObservation {
   // If that first snapshot is a re-send rather than a request (a local compaction or a
   // usage-limit failure before the first request), a resumed turn over-counts by one earlier
   // request; Codex sends no pre-turn total on this resume path to correct it.
-  usageSpan: { first: ThreadTokenUsage; end: TokenUsageBreakdown } | undefined;
+  usageSpan: UsageSpan | undefined;
+  // Codex reports a subagent's usage on its own thread, so each subagent this turn saw start
+  // gets a span, across all of its turns. A span starts at the thread's first snapshot because
+  // a forked subagent, the default for `spawn_agent`, starts from its parent's running total.
+  // Only a `subAgentActivity` start makes a thread a subagent: one from an earlier turn that
+  // this turn only messages is not counted, nor one from Codex's v1 tools, which report none.
+  readonly agentUsageSpans: Map<string, UsageSpan>;
   rateLimits: RateLimitSnapshot | undefined;
   retries: number;
 }
@@ -335,9 +367,11 @@ export async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageC
     liveTasks: new Set(),
     agentThreads: new Set(),
     pendingFailure: undefined,
+    reported: undefined,
     errors: [],
     lastAgentMessage: '',
     usageSpan: undefined,
+    agentUsageSpans: new Map(),
     rateLimits: undefined,
     retries: 0,
   };
@@ -350,12 +384,39 @@ export async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageC
     // descendant threads are still accepted after parent completion. An empty set ends
     // observation; it does not establish that Codex cannot report another start later.
     if (observation.parentCompleted && observation.liveTasks.size === 0) {
-      if (observation.pendingFailure) yield observation.pendingFailure;
+      yield* remainingResult(ids, observation);
       return;
     }
   }
-  if (observation.pendingFailure) yield observation.pendingFailure;
+  yield* remainingResult(ids, observation);
   throw connection.closedError(await connection.ended, observation.errors);
+}
+
+/**
+ * The result owed once observation ends: the held failure with all of the turn's usage, or a
+ * later result with the usage reported since the sent one. The engine sums the results' tokens
+ * and takes each one's structured output, so the later result repeats it.
+ */
+function* remainingResult(ids: TurnIds, observation: TurnObservation): Generator<ResultChunk> {
+  const usage = turnUsageOf(observation);
+  if (observation.pendingFailure) {
+    if (usage) observation.pendingFailure.tokens = usage;
+    yield observation.pendingFailure;
+    return;
+  }
+  const { reported } = observation;
+  const tokens = reported && usage && usageAfter(reported.tokens, usage);
+  if (!tokens) return;
+  const { structuredOutput } = reported;
+  yield { type: 'result', sessionId: ids.threadId, tokens, structuredOutput };
+}
+
+/** What `usage` holds beyond `reported`, axis by axis, or undefined when nothing grew. */
+function usageAfter(reported: TokenUsage | undefined, usage: TokenUsage): TokenUsage | undefined {
+  const later: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  for (const key of ['input', 'output', 'cacheRead', 'cacheWrite'] as const)
+    later[key] = Math.max(0, (usage[key] ?? 0) - (reported?.[key] ?? 0));
+  return Object.values(later).some(Boolean) ? later : undefined;
 }
 
 /**
@@ -464,19 +525,9 @@ async function* observeNotification(
       observation.rateLimits = notification.params.rateLimits;
       return;
 
-    case 'thread/tokenUsage/updated': {
-      // Usage reported for another turn of the thread is not this turn's.
-      const { params } = notification;
-      if (params.threadId === ids.threadId && params.turnId === ids.turnId) {
-        const contextWindow = params.tokenUsage.modelContextWindow;
-        if (contextWindow !== null) request.onContextWindow(contextWindow);
-        observation.usageSpan = {
-          first: observation.usageSpan?.first ?? params.tokenUsage,
-          end: params.tokenUsage.total,
-        };
-      }
+    case 'thread/tokenUsage/updated':
+      observeTokenUsage(request, ids, observation, notification.params);
       return;
-    }
 
     case 'error':
       yield* observeError(observation, notification.params);
@@ -513,6 +564,25 @@ type NotificationParams<M extends ServerNotification['method']> = Extract<
   ServerNotification,
   { method: M }
 >['params'];
+
+function observeTokenUsage(
+  request: TurnRequest,
+  ids: TurnIds,
+  observation: TurnObservation,
+  params: NotificationParams<'thread/tokenUsage/updated'>
+): void {
+  if (params.threadId === ids.threadId) {
+    // Usage reported for another turn of the thread is not this turn's.
+    if (params.turnId !== ids.turnId) return;
+    const contextWindow = params.tokenUsage.modelContextWindow;
+    if (contextWindow !== null) request.onContextWindow(contextWindow);
+    observation.usageSpan = extendedSpan(observation.usageSpan, params.tokenUsage);
+    return;
+  }
+  if (!observation.agentThreads.has(params.threadId)) return;
+  const span = observation.agentUsageSpans.get(params.threadId);
+  observation.agentUsageSpans.set(params.threadId, extendedSpan(span, params.tokenUsage));
+}
 
 /**
  * `willRetry` errors are Codex reconnecting on its own; the turn's outcome is decided by
@@ -617,16 +687,18 @@ async function* observeTurnCompleted(
     return;
   observation.parentCompleted = true;
   await request.connection.finishToolCalls();
-  const { usageSpan } = observation;
+  const usage = turnUsageOf(observation);
   for (const chunk of completeTurn(turn.status, turn.error, request, {
     threadId: ids.threadId,
-    usage: usageSpan && turnUsageOf(usageSpan.first, usageSpan.end),
+    usage,
     rateLimits: observation.rateLimits,
     lastAgentMessage: observation.lastAgentMessage,
   })) {
     // The executor stops reading on failure results, so live work must drain first.
     if (chunk.type === 'result' && chunk.failure) observation.pendingFailure = chunk;
     else yield chunk;
+    if (chunk.type !== 'result') continue;
+    observation.reported = { tokens: usage, structuredOutput: chunk.structuredOutput };
   }
 }
 

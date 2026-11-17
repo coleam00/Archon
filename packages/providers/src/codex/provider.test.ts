@@ -861,6 +861,108 @@ describe('CodexProvider', () => {
       expect(resultOf(chunks).tokens).toBeUndefined();
     });
 
+    // Codex reports a subagent's usage on the subagent's own thread and turn, as
+    // `codex app-server` 0.166.0 does for a `spawn_agent` child.
+    test('a turn counts the usage of the subagents it spawned, and of no other thread', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          itemStarted(subAgentActivity('started')),
+          itemCompleted(subAgentActivity('started')),
+          tokenUsage({ input: 100, output: 10, cached: 80 }),
+          // A forked subagent: its first total starts from the parent's running total.
+          tokenUsage(
+            { input: 550, output: 25, cached: 440 },
+            { input: 50, output: 5, cached: 40 },
+            'child-turn',
+            'child-thread'
+          ),
+          tokenUsage(
+            { input: 620, output: 29, cached: 500 },
+            { input: 70, output: 4, cached: 60 },
+            'child-turn',
+            'child-thread'
+          ),
+          tokenUsage({ input: 999, output: 999 }, undefined, 'other-turn', 'unrelated-thread'),
+          itemStarted(subAgentActivity('completed')),
+          itemCompleted(subAgentActivity('completed')),
+        ],
+      });
+      expect(resultOf(chunks).tokens).toEqual({
+        input: 100 + 120,
+        output: 10 + 9,
+        cacheRead: 80 + 100,
+        cacheWrite: 0,
+      });
+      expect(chunks.filter(c => c.type === 'warning')).toEqual([]);
+    });
+
+    test('a later result carries the usage subagents report after the first, and repeats its output', async () => {
+      const { provider, server } = providerWith({
+        notifications: [
+          itemStarted(subAgentActivity('started')),
+          itemCompleted(subAgentActivity('started')),
+          tokenUsage({ input: 40, output: 4, cached: 30 }, undefined, TURN_ID, 'child-thread'),
+          tokenUsage({ input: 100, output: 10, cached: 80 }),
+          agentMessage('{"summary":"done"}'),
+          turnCompleted('completed'),
+        ],
+        completion: null,
+      });
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', '/workspace', undefined, {
+        outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+      })) {
+        chunks.push(chunk);
+        if (chunk.type === 'result' && chunks.filter(c => c.type === 'result').length === 1) {
+          const process = server.processes[0];
+          const later = { input: 90, output: 9, cached: 70 };
+          // Codex re-sends an unchanged snapshot; it adds nothing.
+          process.send(tokenUsage(later, undefined, TURN_ID, 'child-thread'));
+          process.send(tokenUsage(later, undefined, TURN_ID, 'child-thread'));
+          process.send(itemStarted(subAgentActivity('completed')));
+          process.send(itemCompleted(subAgentActivity('completed')));
+        }
+      }
+      const results = chunks.filter(
+        (c): c is Extract<MessageChunk, { type: 'result' }> => c.type === 'result'
+      );
+      expect(results.map(({ tokens, structuredOutput }) => ({ tokens, structuredOutput }))).toEqual(
+        [
+          {
+            tokens: { input: 100 + 40, output: 10 + 4, cacheRead: 80 + 30, cacheWrite: 0 },
+            structuredOutput: { summary: 'done' },
+          },
+          {
+            tokens: { input: 90 - 40, output: 9 - 4, cacheRead: 70 - 30, cacheWrite: 0 },
+            structuredOutput: { summary: 'done' },
+          },
+        ]
+      );
+      expect(results[1].sessionId).toBe(results[0].sessionId);
+      expect(chunks.at(-1)).toEqual({ type: 'settled' });
+    });
+
+    test('a failed turn counts the usage its subagents report before its held result', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          itemStarted(subAgentActivity('started')),
+          tokenUsage({ input: 40, output: 4, cached: 30 }, undefined, TURN_ID, 'child-thread'),
+          tokenUsage({ input: 100, output: 10, cached: 80 }),
+          turnCompleted('failed', turnError('other', 'parent failed')),
+          tokenUsage({ input: 90, output: 9, cached: 70 }, undefined, TURN_ID, 'child-thread'),
+          itemCompleted(subAgentActivity('completed')),
+        ],
+        completion: null,
+      });
+      expect(resultOf(chunks).failure).toBeDefined();
+      expect(resultOf(chunks).tokens).toEqual({
+        input: 100 + 90,
+        output: 10 + 9,
+        cacheRead: 80 + 70,
+        cacheWrite: 0,
+      });
+    });
+
     test('initializes, then starts a thread and a turn with Archon’s settings', async () => {
       const { provider, server } = providerWith();
       await run(provider, {
@@ -1585,6 +1687,26 @@ describe('CodexProvider', () => {
         expect(result.tokens).toMatchObject({ input: 150, output: 15 });
         expect(result.resumed).toBeUndefined();
         expect(chunks.at(-1)).toEqual({ type: 'settled' });
+      });
+
+      test('the final result adds the usage the tool turn’s subagents reported after its result', async () => {
+        const { provider } = providerWith(
+          scripted(
+            {
+              notifications: [
+                itemStarted(subAgentActivity('started')),
+                ...(toolTurn.notifications ?? []),
+                turnCompleted('completed'),
+                tokenUsage({ input: 40, output: 4 }, undefined, TURN_ID, 'child-thread'),
+                itemCompleted(subAgentActivity('completed')),
+              ],
+              completion: null,
+            },
+            finalTurn
+          )
+        );
+        const result = resultOf(await run(provider, options('glm-5.3')));
+        expect(result.tokens).toMatchObject({ input: 100 + 40 + 50, output: 10 + 4 + 5 });
       });
 
       test('a failed tool turn is the result, and no final turn runs', async () => {
