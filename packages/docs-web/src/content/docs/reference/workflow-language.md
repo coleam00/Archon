@@ -2562,8 +2562,8 @@ it starts its workflow on an item when a run of `run_ended.workflow`, a workflow
 completes on that item with `run_ended.outcome`. `{ input: <name> }` and
 `{ result: <JSON Pointer> }` inputs read the ended run's inputs and result, as
 `on.runEnded.inputs` does; every other input is written as the start's own input.
-`archon pack bindings` writes one file per outcome, which the operator registers by copying it
-into the triggers directory, and refuses the whole set, writing nothing, when the ended workflow does not
+`archon pack bindings` writes one file per outcome, which the operator registers with
+`archon trigger add`, and refuses the whole set, writing nothing, when the ended workflow does not
 declare the outcome or an input read from it, or the started workflow does not declare an input
 mapped to it. A stage that needs both a clock and a hand-off declares two bindings with the
 same `workflow` and `resource`; they share the resource's slots and overlap policy.

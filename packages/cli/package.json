@@ -234,6 +234,9 @@
       "src/triggers/native-schedule.test.ts"
     ],
     [
+      "src/triggers/add-trigger-file.test.ts"
+    ],
+    [
       "src/commands/workflow-continuations.test.ts"
     ],
     [

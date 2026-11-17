@@ -218,7 +218,7 @@ A binding file without `schedule` is fire-only: no clock starts it. A workflow n
 
 A trigger file with `on.runEnded` starts its binding when a run of a named workflow completes with a named outcome on an [item](/reference/cli/#items). It is how one stage hands an item to the next with no node that fires anything: the hand-off is a file the deployment owns, the engine reads it at the moment a run completes, and the start goes through the same receipt, preparation, admission, capacity, overlap and queue order as any binding start.
 
-Save the file in `ARCHON_HOME/triggers/` (`~/.archon/triggers/` by default), for example `~/.archon/triggers/build-after-plan.json`:
+The file lives in `ARCHON_HOME/triggers/` (`~/.archon/triggers/` by default), for example as `~/.archon/triggers/build-after-plan.json`. Write it somewhere else first, for example as `build-after-plan.json`, and add it with `archon trigger add` as shown below the example, never by saving it there directly:
 
 ```json
 {
@@ -251,7 +251,13 @@ Save the file in `ARCHON_HOME/triggers/` (`~/.archon/triggers/` by default), for
 }
 ```
 
-A workflow pack can declare this hand-off as a [`run_ended:` binding](/reference/workflow-language/#pack-bindings); [`archon pack bindings`](/reference/cli/#pack-bindings) writes it, checked, to its `--out` directory for one repository; copying the file into this directory registers it.
+A workflow pack can declare this hand-off as a [`run_ended:` binding](/reference/workflow-language/#pack-bindings); [`archon pack bindings`](/reference/cli/#pack-bindings) writes it, checked, to its `--out` directory for one repository; `archon trigger add` registers it.
+
+```bash
+archon trigger add build-after-plan.json
+```
+
+`trigger add` copies the file into `ARCHON_HOME/triggers/` under a `.tmp` name and then renames it to its own name, replacing a file of that name. Every process that completes a run reads each `*.json` there, and a file that is not complete JSON fails that run, in any project on the install. The engine reads only names ending in `.json`, so a run that completes during the copy sees the old file or the whole new one, never part of one. To change a registered file, edit a copy elsewhere and add it again; do not edit it in place. `trigger add` does not check what the file says: run `archon trigger check` after it. A file that is completely written but invalid still fails the run that reads it.
 
 Every process that completes a run reads each `*.json` file in that directory that has `on`, at each completion, so a new file applies to the next run that ends and removing it turns the binding off. Archon reads these files only from the install's home, never from a repository. Bindings do not belong in workflow YAML. `archon trigger check` lists every run-ended binding that is active and checks it against the workflows of the project it launches in.
 
@@ -395,7 +401,7 @@ The binding's `launch.isolation` must be `{ "kind": "default" }`; the engine pic
 - A workflow that changes its checkout (the default) continues in the ended run's worktree, on its branch. If that worktree is gone and the branch survives, the branch is checked out again in a new worktree. Admission keys the start by the branch, so it waits for or is skipped behind another run on that branch by its overlap policy, as with an explicit `branch`.
 - A workflow with `mutates_checkout: false` gets a worktree of its own on a new branch cut at the ended run's commit. Checks run beside each other, and none of them is on the build's branch. When such a run ends, a binding with `checkout: "ended-run"` on its outcome hands on the branch and commit it was given, not its own branch.
 
-This loop uses three bindings in `ARCHON_HOME/triggers/`. `check` declares `mutates_checkout: false` and completes with `pass` or `return`:
+This loop uses three bindings in `ARCHON_HOME/triggers/`, each added with `archon trigger add`. `check` declares `mutates_checkout: false` and completes with `pass` or `return`:
 
 ```json
 { "version": 1, "sourceInstanceId": "check-after-build",
