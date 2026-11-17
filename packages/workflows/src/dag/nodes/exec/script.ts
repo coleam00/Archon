@@ -15,7 +15,7 @@ import {
   assertCapturedFilesPresent,
   isSourceReadFailure,
 } from '../../../workflow-source';
-import type { ExecNode } from '../../../schemas';
+import type { DagNode, ExecNode } from '../../../schemas';
 import { writeInvocationListings, type InvocationListings } from '../../../invocation-listings';
 import { bindTypedOutputs, runTypedOutputs } from '../../../typed-output-bindings';
 import { currentAdoptedRunDir, substituteWorkflowVariables } from '../../../workflow-variables';
@@ -176,7 +176,7 @@ async function startScriptExecution(
  */
 function scriptEnvironment(
   ctx: RunLayersContext,
-  node: ExecNode,
+  node: DagNode,
   listings: InvocationListings,
   execution: NodeExecutionRecord
 ): NodeJS.ProcessEnv {
@@ -205,13 +205,34 @@ function scriptEnvironment(
   };
 }
 
+/** Resolve a named script in the run's frozen source and build its node-scoped environment. */
+export async function prepareNamedScript(
+  ctx: RunLayersContext,
+  node: DagNode,
+  scriptName: string,
+  stepName: string,
+  execution: NodeExecutionRecord,
+  listings: InvocationListings
+): Promise<{ invocation: ScriptInvocation; env: NodeJS.ProcessEnv }> {
+  const source = await captureScriptSource(ctx, scriptName, stepName);
+  const lookup = resolveScriptInvocation(
+    ctx,
+    { id: node.id, runtime: 'bun' },
+    scriptName,
+    source.namedScripts
+  );
+  if ('errorMsg' in lookup) throw new Error(lookup.errorMsg);
+  await recheckNamedScriptSource(source, scriptName, stepName);
+  return { invocation: lookup, env: scriptEnvironment(ctx, node, listings, execution) };
+}
+
 /**
  * Named scripts are looked up across repo and home scopes.
  * Precedence: <cwd>/.archon/scripts/ > ~/.archon/scripts/ (repo wins).
  */
 function resolveScriptInvocation(
   ctx: RunLayersContext,
-  node: ExecNode,
+  node: Pick<ExecNode, 'id' | 'runtime'> & Partial<Pick<ExecNode, 'deps'>>,
   finalScript: string,
   namedScripts: ScriptSource['namedScripts']
 ): ScriptInvocation | { errorMsg: string } {

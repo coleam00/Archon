@@ -24,8 +24,15 @@ export function buildArchonMcpServer(nativeTools: NativeTool[]): McpSdkServerCon
         inputSchema: schema as unknown as SdkInput,
         _meta: { 'anthropic/alwaysLoad': true },
       },
-      async (args: unknown) => ({
-        content: [{ type: 'text', text: await spec.handler(schema.parse(args)) }],
+      async (args: unknown, extra: { requestId: string | number }) => ({
+        content: [
+          {
+            type: 'text',
+            text: await spec.handler(schema.parse(args), {
+              providerCallId: String(extra.requestId),
+            }),
+          },
+        ],
       })
     );
   }

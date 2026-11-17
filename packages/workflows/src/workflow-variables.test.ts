@@ -57,6 +57,7 @@ describe('user-controlled runtime variable delivery', () => {
         loopPrevOutput: values.loopPrevOutput ?? '',
         typedArtifactsFile: '/listing.json',
         nodeOutcomesFile: '/outcomes.json',
+        toolCallsFile: '/tool-calls.json',
         nodeExecution: null,
         inputEnvKeys: [],
       });
@@ -107,6 +108,7 @@ describe('user-controlled runtime variable delivery', () => {
         ISSUE_CONTEXT: value('issue'),
         TYPED_ARTIFACTS_FILE: '/listing.json',
         NODE_OUTCOMES_FILE: '/outcomes.json',
+        TOOL_CALLS_FILE: '/tool-calls.json',
         ARCHON_NODE_EXECUTION: '',
         ARCHON_RUN_ENV_KEYS: JSON.stringify([...EXEC_NODE_ENVIRONMENT_NAMES]),
       });

@@ -88,6 +88,7 @@ function providerFields(data: DagNodeFields) {
       'denied_tools',
       'hooks',
       'mcp',
+      'tools',
       'skills',
       'plugins',
       'agents',

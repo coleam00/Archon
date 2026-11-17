@@ -83,6 +83,9 @@ export const WORKFLOW_EVENT_TYPES = [
   // #3569 — one provider event in the engine envelope (`schemas/provider-event.ts`).
   // Read through `IWorkflowStore.listProviderEvents`.
   'provider_event',
+  // Authoritative script-tool transitions. Payloads are artifact references; unlike
+  // provider_event these writes are correctness-critical and propagate storage failures.
+  'workflow_tool_call',
   'ralph_story_started',
   'ralph_story_completed',
   'approval_requested',

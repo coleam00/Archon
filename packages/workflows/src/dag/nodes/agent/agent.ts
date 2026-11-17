@@ -32,6 +32,11 @@ import { bindAgentNode, type AgentBinding } from './agent-binding';
 import { loadAgentPrompt } from './agent-prompt';
 import { createAttemptState, type AgentAttemptState, type AgentPassContext } from './agent-stream';
 import { runUntilStructuredOutputValid } from './agent-reask';
+import {
+  assertScriptToolsSettled,
+  prepareScriptTools,
+  type ScriptToolRuntime,
+} from './script-tools';
 
 export async function executeAgentNode(
   ctx: RunLayersContext,
@@ -92,7 +97,12 @@ export async function executeAgentNode(
   const failAgentNode = async (
     error: string,
     failureKind: NodeFailureKind,
-    extras: { output?: string; providerFailure?: ProviderFailure; providerNotCalled?: boolean } = {}
+    extras: {
+      output?: string;
+      providerFailure?: ProviderFailure;
+      providerNotCalled?: boolean;
+      retryable?: false;
+    } = {}
   ): Promise<NodeExecutionResult> => {
     const result = await recordNodeState(
       { store: deps.store, logDir },
@@ -105,6 +115,7 @@ export async function executeAgentNode(
           ...(extras.providerFailure !== undefined
             ? { providerFailure: extras.providerFailure }
             : {}),
+          retryable: extras.retryable,
         },
         {
           output: { text: extras.output ?? '' },
@@ -144,6 +155,12 @@ export async function executeAgentNode(
     return result;
   }
 
+  const preparedTools = await prepareScriptTools(ctx, node, execution, stepName, listings);
+  if (preparedTools.error !== undefined) {
+    return failAgentNode(preparedTools.error, 'config', { providerNotCalled: true });
+  }
+  const scriptTools = preparedTools.runtime;
+
   // Per-node abort controller, for idle timeout, operator cutoff and cancellation.
   const abortController = new AbortController();
   const pc: AgentPassContext = {
@@ -155,7 +172,14 @@ export async function executeAgentNode(
     nodeMcp,
     aiClient: binding.aiClient,
     nodeOptions,
-    queryOptions: attemptQueryOptions(ctx, binding, nodeOptions, session, abortController),
+    queryOptions: attemptQueryOptions(
+      ctx,
+      binding,
+      nodeOptions,
+      session,
+      abortController,
+      scriptTools?.nativeTools
+    ),
     attemptEvents: createAttemptEventSequence(execution.attempt.id),
     nodeContext,
     streamingMode: platform.getStreamingMode(),
@@ -168,16 +192,20 @@ export async function executeAgentNode(
 
   let result: WorkloadResult;
   try {
-    result = await runWorkload(pc, state, prompt.prompt, session);
+    result = await runWorkload(pc, state, prompt.prompt, session, scriptTools);
   } catch (error) {
     const cancelled = abortController.signal.aborted && !state.cutOff;
-    const failure = attemptFailure(error as Error, cancelled, nodeMcp, node.id);
+    const failure = attemptFailure(error as Error, cancelled, nodeMcp, node.id, scriptTools);
     return failAgentNode(failure.message, failure.kind, {
       providerFailure: failure.providerFailure,
+      retryable: failure.retryable,
     });
   }
   if (result.state === 'failed') {
-    return failAgentNode(result.error, result.failureKind, { output: result.output });
+    return failAgentNode(result.error, result.failureKind, {
+      output: result.output,
+      retryable: result.retryable,
+    });
   }
   const duration = Date.now() - nodeStartTime;
   getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
@@ -237,15 +265,35 @@ interface AttemptSession {
 
 type WorkloadResult =
   | (NodeExecutionResult & { state: 'completed' })
-  | { state: 'failed'; output: string; error: string; failureKind: NodeFailureKind };
+  | {
+      state: 'failed';
+      output: string;
+      error: string;
+      failureKind: NodeFailureKind;
+      retryable?: false;
+    };
 
 /** How a thrown attempt is recorded: a cancellation wins over whatever error the abort caused. */
 function attemptFailure(
   err: Error,
   cancelled: boolean,
   nodeMcp: AgentBinding['nodeMcp'],
-  nodeId: string
-): { message: string; kind: NodeFailureKind; providerFailure?: ProviderFailure } {
+  nodeId: string,
+  scriptTools: ScriptToolRuntime | undefined
+): {
+  message: string;
+  kind: NodeFailureKind;
+  providerFailure?: ProviderFailure;
+  retryable?: false;
+} {
+  const unknownTool = scriptTools?.unknownOutcome();
+  if (unknownTool !== undefined) {
+    return {
+      message: `Script tool '${unknownTool.callId}' has an unknown outcome: ${unknownTool.error}`,
+      kind: 'exec_failed',
+      retryable: false,
+    };
+  }
   if (cancelled) {
     getLog().info({ nodeId }, 'dag_node_cancelled_via_abort');
     return { message: 'Cancelled by user', kind: 'cancelled' };
@@ -255,6 +303,7 @@ function attemptFailure(
     message: nodeMcp.kind === 'missing' ? `${err.message}\n${nodeMcp.diagnostic}` : err.message,
     kind: err instanceof NodeFailure ? err.kind : 'unknown',
     providerFailure: err instanceof NodeFailure ? err.providerFailure : undefined,
+    retryable: err instanceof NodeFailure ? err.retryable : undefined,
   };
 }
 
@@ -263,7 +312,8 @@ function attemptQueryOptions(
   { nodeMcp, execution }: AgentBinding,
   nodeOptions: SendQueryOptions | undefined,
   { resumeSessionId, resumeIntent }: AttemptSession,
-  abortController: AbortController
+  abortController: AbortController,
+  nativeTools: SendQueryOptions['nativeTools']
 ): SendQueryOptions {
   const shouldForkSession = resumeSessionId !== undefined && resumeIntent !== 'owner-continuation';
   return {
@@ -273,6 +323,7 @@ function attemptQueryOptions(
       ? { nodeConfig: { ...nodeOptions?.nodeConfig, mcp: nodeMcp.path } }
       : {}),
     abortSignal: abortController.signal,
+    ...(nativeTools !== undefined ? { nativeTools } : {}),
     ...(resumeIntent === 'owner-continuation'
       ? { forkSession: false }
       : shouldForkSession
@@ -285,7 +336,8 @@ async function runWorkload(
   pc: AgentPassContext,
   state: AgentAttemptState,
   finalPrompt: string,
-  session: AttemptSession
+  session: AttemptSession,
+  scriptTools: ScriptToolRuntime | undefined
 ): Promise<WorkloadResult> {
   const { node, ctx } = pc;
   await runUntilStructuredOutputValid(
@@ -295,6 +347,8 @@ async function runWorkload(
     session.resumeSessionId,
     session.resumeIntent === 'source-fork'
   );
+
+  assertScriptToolsSettled(scriptTools);
 
   const failed = await finishTurnOutput(pc, state);
   if (failed !== undefined) return failed;

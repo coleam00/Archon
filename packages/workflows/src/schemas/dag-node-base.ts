@@ -13,6 +13,7 @@ import {
   nodeMcpSchema,
   piNodeConfigSchema,
   sandboxSettingsSchema,
+  scriptToolsSchema,
 } from './provider-options';
 import { workflowNodeHooksSchema } from './hooks';
 
@@ -81,6 +82,9 @@ export const dagNodeBaseSchema = z.object({
   retry: stepRetryConfigSchema.optional(),
   hooks: workflowNodeHooksSchema.optional(),
   mcp: nodeMcpSchema.optional(),
+  // Named script tools offered through the provider's native-tool channel. The Engine
+  // owns validation, execution and receipts; the declaration grants no ambient capability.
+  tools: scriptToolsSchema.optional(),
   skills: z.array(z.string().min(1, 'each skill must be a non-empty string')).optional(),
   // Exact provider plugin ids (Claude: `name@marketplace`). A workflow node loads
   // only the plugins it names; the provider fails the node when it cannot.

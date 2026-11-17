@@ -12,6 +12,8 @@ import { writeNodeArtifactsListing } from './artifacts-index';
 import type { WorkflowRun } from './schemas/workflow-run';
 import { NODE_STATE_EVENT_TYPES, type IWorkflowStore } from './store';
 import { buildNodeOutcomes } from './terminal-record';
+import { writeToolCallListing } from './tool-calls';
+import { WORKFLOW_TOOL_CALL_EVENT_TYPE } from './schemas/tool-call';
 
 /**
  * Engine-private, beside the typed-artifact listings and inside the run's artifact dir,
@@ -22,6 +24,7 @@ const NODE_OUTCOMES_SUBDIR = join(RUN_ARTIFACTS_ENGINE_SUBDIR, 'node-outcomes');
 export interface InvocationListings {
   typedArtifactsFile: string;
   nodeOutcomesFile: string;
+  toolCallsFile: string;
 }
 
 export interface InvocationListingsSource {
@@ -42,13 +45,18 @@ export async function writeInvocationListings({
 }: InvocationListingsSource): Promise<InvocationListings> {
   const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
   const events =
-    (await deps.store.listEventsForRuns([workflowRun.id], NODE_STATE_EVENT_TYPES)).get(
-      workflowRun.id
-    ) ?? [];
+    (
+      await deps.store.listEventsForRuns(
+        [workflowRun.id],
+        [...NODE_STATE_EVENT_TYPES, WORKFLOW_TOOL_CALL_EVENT_TYPE]
+      )
+    ).get(workflowRun.id) ?? [];
   const nodeOutcomesFile = join(artifactsDir, NODE_OUTCOMES_SUBDIR, `${randomUUID()}.json`);
+  const toolCallsFile = await writeToolCallListing(artifactsDir, workflowRun.id, events);
+  const nodeEvents = events.filter(event => event.event_type !== WORKFLOW_TOOL_CALL_EVENT_TYPE);
   await writeArtifactFile(
     nodeOutcomesFile,
-    JSON.stringify(buildNodeOutcomes(workflowRun, events), null, 2)
+    JSON.stringify(buildNodeOutcomes(workflowRun, nodeEvents), null, 2)
   );
-  return { typedArtifactsFile, nodeOutcomesFile };
+  return { typedArtifactsFile, nodeOutcomesFile, toolCallsFile };
 }

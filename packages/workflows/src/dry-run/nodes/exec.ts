@@ -62,6 +62,7 @@ export async function executeCodeNode(
         // listing to point at.
         typedArtifactsFile: '',
         nodeOutcomesFile: '',
+        toolCallsFile: '',
         nodeExecution: execution ?? null,
         inputEnvKeys: Object.keys(inputEnv),
       }),

@@ -134,7 +134,8 @@ export class NodeFailure extends Error {
     readonly kind: NodeFailureKind,
     message: string,
     /** The provider's typed failure, recorded unchanged on the failed node. */
-    readonly providerFailure?: ProviderFailure
+    readonly providerFailure?: ProviderFailure,
+    readonly retryable?: false
   ) {
     super(message);
   }

@@ -30,6 +30,8 @@ export interface ExecNodeEnvironmentContext {
   typedArtifactsFile: string;
   /** This invocation's node-outcome listing, required for the same reason. */
   nodeOutcomesFile: string;
+  /** This invocation's authoritative script-tool receipt listing. */
+  toolCallsFile: string;
   /**
    * The execution this process belongs to: identity plus the invocation's and this
    * attempt's checkout starts (#3375). Carries manifest pointers and digests, never
@@ -67,6 +69,7 @@ export function buildExecNodeEnvironment(context: ExecNodeEnvironmentContext): N
     // project env and node bindings spread before this bag, so neither can shadow it.
     TYPED_ARTIFACTS_FILE: context.typedArtifactsFile,
     NODE_OUTCOMES_FILE: context.nodeOutcomesFile,
+    TOOL_CALLS_FILE: context.toolCallsFile,
     ARCHON_RUN_ENV_KEYS: '',
     ARCHON_NODE_EXECUTION:
       context.nodeExecution === null ? '' : nodeExecutionEnvValue(context.nodeExecution),
@@ -116,6 +119,7 @@ export const EXEC_NODE_ENVIRONMENT_NAMES: ReadonlySet<string> = new Set(
       rejectionReason: '',
       typedArtifactsFile: '',
       nodeOutcomesFile: '',
+      toolCallsFile: '',
       nodeExecution: null,
       inputEnvKeys: [],
     })

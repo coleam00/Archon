@@ -33,6 +33,7 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'denied_tools',
   'hooks',
   'mcp',
+  'tools',
   'skills',
   'plugins',
   'agents',

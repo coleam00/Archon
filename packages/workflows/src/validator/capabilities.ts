@@ -26,6 +26,8 @@ export function validateProviderCapabilities(
   }
   if (!capabilities) return;
 
+  validateNativeToolCapability(validation, node, provider, capabilities);
+
   if ('hooks' in node && node.hooks && !capabilities.hooks) {
     issues.push({
       level: 'warning',
@@ -62,6 +64,22 @@ export function validateProviderCapabilities(
   } else if (capabilities.knownToolNames !== undefined && capabilities.knownToolNames.length > 0) {
     validateToolNames(validation, node, provider, capabilities);
   }
+}
+
+function validateNativeToolCapability(
+  validation: ResourceValidation,
+  node: DagNode,
+  provider: string | undefined,
+  capabilities: ProviderCapabilities
+): void {
+  if (!('tools' in node) || node.tools === undefined || capabilities.nativeTools) return;
+  validation.issues.push({
+    level: 'error',
+    nodeId: node.id,
+    field: 'tools',
+    message: `Provider '${provider}' cannot offer script-backed native tools`,
+    hint: 'Remove the tools field or switch to a provider whose nativeTools capability is true',
+  });
 }
 
 /**

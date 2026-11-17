@@ -45,6 +45,58 @@ const CASES: { label: string; input: unknown; accept: boolean }[] = [
 ];
 
 describe('native tool input schema conformance', () => {
+  test('Codex, Claude and Pi pass their exact protocol call id to the host handler', async () => {
+    const calls: (string | undefined)[] = [];
+    const tool: NativeTool = {
+      name: 'manage_run',
+      description: 'fixture',
+      inputSchema: SCHEMA,
+      handler: async (_input, context) => {
+        calls.push(context?.providerCallId);
+        return 'ok';
+      },
+    };
+    const codex = buildCodexNativeTools([tool]);
+    await codex.call(
+      {
+        threadId: 't',
+        turnId: 'u',
+        callId: 'codex-call',
+        namespace: null,
+        tool: 'manage_run',
+        arguments: { action: 'list' },
+      },
+      't',
+      'u'
+    );
+    const pi = buildPiNativeToolDefinitions([tool])[0];
+    await Reflect.apply(pi.execute, undefined, ['pi-call', { action: 'list' }]);
+
+    const server = buildArchonMcpServer([tool]);
+    type Transport = Parameters<typeof server.instance.connect>[0];
+    const response = Promise.withResolvers<unknown>();
+    const transport: Transport = {
+      start: async () => {},
+      close: async () => {},
+      send: async message => {
+        if ('id' in message) response.resolve(message);
+      },
+    };
+    await server.instance.connect(transport);
+    try {
+      transport.onmessage?.({
+        jsonrpc: '2.0',
+        id: 'claude-call',
+        method: 'tools/call',
+        params: { name: tool.name, arguments: { action: 'list' } },
+      });
+      await response.promise;
+    } finally {
+      await server.instance.close();
+    }
+    expect(calls).toEqual(['codex-call', 'pi-call', 'claude-call']);
+  });
+
   test('Claude, Pi and Codex accept and reject the same inputs', async () => {
     const zodObject = nativeToolInputParser(SCHEMA);
     const validatePi = new Ajv({ strict: false }).compile(nativeToolInputToTypeBox(SCHEMA));

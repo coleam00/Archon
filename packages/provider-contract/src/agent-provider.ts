@@ -195,12 +195,17 @@ export function defineNativeToolInputSchema<P extends Record<string, NativeToolP
  * schema form. Handlers should return a text result rather than throw; an
  * uncaught throw may surface into the agent loop. (core's `buildManageRunTool` guarantees this with
  * an outer try/catch around its dispatch.)
+ * `context.providerCallId` is the provider protocol's exact invocation id. Existing chat
+ * handlers may ignore it; Engine-backed script tools require it for their durable receipt.
  */
 export interface NativeTool {
   name: string;
   description: string;
   inputSchema: NativeToolInputSchema;
-  handler: (input: Record<string, unknown>) => Promise<string>;
+  handler: (
+    input: Record<string, unknown>,
+    context?: { providerCallId: string }
+  ) => Promise<string>;
 }
 
 /**

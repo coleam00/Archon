@@ -59,7 +59,9 @@ export function buildPiNativeToolDefinitions(nativeTools: NativeTool[]): ToolDef
         content: [
           {
             type: 'text',
-            text: await spec.handler(nativeToolInputParser(spec.inputSchema).parse(params)),
+            text: await spec.handler(nativeToolInputParser(spec.inputSchema).parse(params), {
+              providerCallId: _toolCallId,
+            }),
           },
         ],
         details: undefined,

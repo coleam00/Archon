@@ -103,6 +103,25 @@ export const nodeMcpSchema = z.union([
 
 export type NodeMcp = z.infer<typeof nodeMcpSchema>;
 
+/** A named script an agent may call through the provider-neutral native-tool channel. */
+export const scriptToolSchema = z.strictObject({
+  description: z.string().trim().min(1),
+  input_schema: z.record(z.string(), z.unknown()),
+  output_schema: z.record(z.string(), z.unknown()),
+  script: z.string().trim().min(1),
+  timeout: z.number().positive().finite().optional(),
+});
+
+export const scriptToolsSchema = z
+  .record(z.string(), scriptToolSchema)
+  .refine(
+    tools => Object.keys(tools).every(name => /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name)),
+    'tool names must start with a letter and contain only letters, numbers, underscores or hyphens'
+  )
+  .refine(tools => Object.keys(tools).length > 0, "'tools' must have at least one entry");
+
+export type ScriptToolDeclaration = z.infer<typeof scriptToolSchema>;
+
 export interface McpDeclaration {
   path: string;
   optional: boolean;

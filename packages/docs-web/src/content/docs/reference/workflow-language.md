@@ -126,6 +126,7 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 | `denied_tools` | string[] | unset | Tools to remove from the provider's tool filter, including any `allowed_tools` names. See [Tool Restrictions](#allowed_tools-and-denied_tools-for-tool-restrictions). Supported on Claude, Pi and Copilot |
 | `hooks` | object | unset | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
 | `mcp` | string \| `{ path, optional }` | unset | Path to MCP server config JSON file: checkout first, then the declaring home workflow YAML's directory (its captured copy for captured runs). Other scopes use only the checkout. Claude/Codex/Copilot. Any other provider fails the run before it starts, unless the declaration is `{ path: ..., optional: true }`, which runs the node without the servers when the provider lacks MCP or the file is missing. See [MCP Servers](/guides/mcp-servers/#optional-servers) |
+| `tools` | map | unset | Named script-backed tools for a `command:`/`prompt:` node, with typed input/output and Engine-recorded calls. Supported on Claude, Codex and Pi; other providers refuse the node before model invocation. See [Script-backed agent tools](#script-backed-agent-tools) |
 | `skills` | string[] | unset | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name` instead; a non-empty list on Codex or OpenCode fails the run before it starts. See [Skills](/guides/skills/) |
 | `plugins` | string[] | unset | Exact plugin ids (`name@marketplace`) the node loads; omission/`[]` loads no user-installed plugin. Claude and Codex; any other provider fails the run before it starts. See [Plugins](#plugins) |
 | `agents` | object | unset | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
@@ -1439,6 +1440,68 @@ YAML that selects nothing.
 ## The Artifact Chain
 
 Nodes pass documents to each other as files. Each run gets its own `$ARTIFACTS_DIR` outside the repository; a node writes a file there and a later node reads it. A command that writes an artifact should say where it writes and in what format, and a command that reads one should say where to find it. Values small enough to branch on travel as node output instead; see [`$node_id.output` Substitution](#node_idoutput-substitution) and [Binding values](#binding-values-into-command-and-script-nodes).
+
+### Script-backed agent tools
+
+An agent node can expose a named script as a typed tool. The Provider carries the model's
+call; the Engine validates the input again, executes the script in the node's environment,
+validates stdout as one JSON document, and records the result. Declaring a tool does not
+enable MCP, skills, plugins, extra credentials, network access or write roots.
+
+```yaml
+- id: merge
+  prompt: merge/commands/sweep.md
+  tools:
+    merge_item:
+      description: Merge an item after checking its guard
+      input_schema:
+        type: object
+        properties:
+          item_id: { type: string }
+          confirmed: { type: boolean }
+        required: [item_id, confirmed]
+        additionalProperties: false
+      output_schema:
+        type: object
+        properties:
+          merged: { type: boolean }
+          commit: { type: string }
+        required: [merged, commit]
+        additionalProperties: false
+      script: merge-gate
+      timeout: 60000
+```
+
+Tool input currently supports a flat object of string, string-enum and boolean properties.
+Output uses the Engine's JSON Schema validator. Both schemas are checked before the model
+call; input is checked again before every script start. A named script resolves from the
+same frozen source and runs with the same environment and execution context as a `script:`
+node. It receives the logical input in `ARCHON_TOOL_INPUT` and its Engine call ID in
+`ARCHON_TOOL_CALL_ID`; its stdout must contain only the declared JSON result.
+
+Every call has a `workflow_tool_call` event sequence: `started`, then `completed`, `failed`,
+or `outcome_unknown`. Raw input and output live in private artifacts referenced by the
+receipt rather than in the event. A timeout, cancellation, output overflow or persistence
+failure cannot be reported as success. An unknown outcome fails the agent node as
+non-retryable, and the same Provider call ID cannot execute the script twice.
+
+Later `bash:` and `script:` nodes receive `TOOL_CALLS_FILE`, a JSON listing shaped as
+`{ "runId": "...", "calls": [...] }`. Select a call by `call_id` (or verify its
+`provider_call_id`), check its terminal `status`, then read `output_ref` relative to
+`ARTIFACTS_DIR`:
+
+```ts
+const listing = JSON.parse(await Bun.file(process.env.TOOL_CALLS_FILE!).text());
+const call = listing.calls.find((entry) => entry.call_id === expectedCallId);
+if (call?.status !== 'completed') throw new Error('merge was not recorded');
+const result = JSON.parse(
+  await Bun.file(`${process.env.ARTIFACTS_DIR}/${call.output_ref}`).text()
+);
+```
+
+The listing is an observation written for each invocation. Use `depends_on` to order the
+consumer after the agent. A receipt persistence failure fails closed rather than allowing
+the agent's prose to stand in for a recorded action.
 
 ### Typed Artifacts (`output_type`)
 

@@ -515,7 +515,7 @@ function reportedEffort(
  * the run instead of warning like the other capability axes. An `mcp:` declared
  * `optional: true` names no requirement; `resolveNodeMcp` records its absence.
  */
-export const SCOPED_CAPABILITIES = ['mcp', 'skills', 'plugins'] as const;
+export const SCOPED_CAPABILITIES = ['mcp', 'skills', 'plugins', 'tools'] as const;
 
 export type ScopedCapability = (typeof SCOPED_CAPABILITIES)[number];
 
@@ -528,6 +528,8 @@ export function namesScopedCapability(node: DagNode, capability: ScopedCapabilit
       return 'skills' in node && (node.skills?.length ?? 0) > 0;
     case 'plugins':
       return 'plugins' in node && (node.plugins?.length ?? 0) > 0;
+    case 'tools':
+      return 'tools' in node && Object.keys(node.tools ?? {}).length > 0;
   }
 }
 
@@ -535,7 +537,9 @@ export function unsupportedScopedCapabilities(
   node: DagNode,
   caps: ProviderCapabilities
 ): ScopedCapability[] {
-  return SCOPED_CAPABILITIES.filter(cap => namesScopedCapability(node, cap) && !caps[cap]);
+  return SCOPED_CAPABILITIES.filter(
+    cap => namesScopedCapability(node, cap) && !(cap === 'tools' ? caps.nativeTools : caps[cap])
+  );
 }
 
 export function scopedCapabilityMismatchMessage(
