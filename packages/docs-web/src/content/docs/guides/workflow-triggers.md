@@ -281,6 +281,29 @@ Two events about the same issue start runs on the same item. An event whose fiel
 
 A timer file refuses `item`, since a tick is about no item, and so does a run-ended file, whose start is on the ended run's item. Items need the database store and a [registered project](/reference/cli/#items): on the file store, a start whose binding maps an item is refused before a run starts.
 
+### Require acceptance of exact untrusted text
+
+A GitHub event binding with `trustedText` protects the issue or pull request named by its event. `maintainersPath` is a JSON array of maintainer logins read at the repository's default-branch HEAD; `input` names the workflow input that receives the accepted `{title, body}` snapshot. A missing or invalid policy fails closed. Without this declaration, existing behavior is unchanged.
+
+```json
+"item": { "field": "subject.number", "prefix": "issue-" },
+"trustedText": {
+  "maintainersPath": ".archon/policy/maintainers.json",
+  "input": "trusted_item"
+}
+```
+
+The workflow declares `trusted_item` in `inputs:`, sets `webSearchMode: disabled`, and uses only prompt/wait nodes whose `allowed_tools` are limited to `Read`, `Grep` and `Glob`. Shell/script nodes, MCP, plugins, hooks, inline agents and live web access are refused because they could read the current item directly and bypass the accepted snapshot. Child runs inherit the same snapshot and recheck. A pack needs no script for this gate.
+
+An item from a maintainer runs without an acceptance step. Otherwise preparation records `waiting_acceptance` and starts no provider. A normal label is not proof that a person accepted the current text. The maintainer first reads the exact text and digest, then accepts that digest through the authenticated CLI identity:
+
+```bash
+archon forge workitem.trust --data-file ./trusted-item.json
+archon forge workitem.accept --data-file ./accept-item.json
+```
+
+`trusted-item.json` contains `subject` and `maintainersPath`. `accept-item.json` adds the returned `contentDigest` as `expectedContentDigest`, plus `scope: {codebaseId, itemKey, input}` matching the binding. The accept command verifies the authenticated `/user` identity against the current default-branch policy and stores the accepted snapshot in Core. An installation token that cannot prove a human identity is refused. Acceptance can be reused by later runs until title or body changes. Every admission rechecks current text and policy; a drift returns the item to `waiting_acceptance` without exposing the new text to the run. Unaccepted text is not copied into binding inputs, receipts, events or refusal messages.
+
 ## Start a stage when a run on an item ends
 
 A trigger file with `on.runEnded` starts its binding when a run of a named workflow completes with a named outcome on an [item](/reference/cli/#items). It is how one stage hands an item to the next with no node that fires anything: the hand-off is a file the deployment owns, the engine reads it at the moment a run completes, and the start goes through the same receipt, preparation, admission, capacity, overlap and queue order as any binding start.

@@ -76,6 +76,12 @@ import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { executionLane, handoffIsolation } from './resource-start-lanes';
+import { TrustedTextRefusedError } from './trusted-text';
+import {
+  assertTrustedTextWorkflowSupported,
+  TRUSTED_TEXT_METADATA_KEY,
+  type TrustedTextRunMetadata,
+} from '@archon/workflows/trusted-text';
 
 const log = createLogger('resource-start-host');
 
@@ -227,12 +233,14 @@ function bindingRunMetadata(
   origin: ResourceStartRunMetadata,
   inputs: Record<string, JsonValue>,
   preparedAi: PreparedRunAiConfiguration,
-  handoff: CheckoutHandoffRunMetadata | undefined
+  handoff: CheckoutHandoffRunMetadata | undefined,
+  trustedText?: TrustedTextRunMetadata
 ): Record<string, JsonValue> {
   return {
     [RUN_AI_CONFIGURATION_METADATA_KEY]: preparedAi.aiConfigurationSnapshot,
     [WORKFLOW_SOURCE_METADATA_KEY]: sourceRecord,
     [RESOURCE_START_METADATA_KEY]: { ...origin },
+    ...(trustedText ? { [TRUSTED_TEXT_METADATA_KEY]: trustedText } : {}),
     [ADMISSION_CHECKOUT_GUARD_METADATA_KEY]: workflow.mutates_checkout !== false,
     ...(handoff ? { [CHECKOUT_HANDOFF_METADATA_KEY]: { ...handoff } } : {}),
     ...authoredInputsMetadata(inputs),
@@ -240,6 +248,31 @@ function bindingRunMetadata(
       ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: preparedAi.runConfigMetadata }
       : {}),
   };
+}
+
+async function authorizeTrustedBinding(
+  host: WorkflowHost,
+  intent: ResourceStartBindingIntent,
+  workflow: ResolvedWorkflow,
+  codebase: Codebase,
+  receiptId: string
+): Promise<TrustedTextRunMetadata | undefined> {
+  if (!intent.trustedText) return undefined;
+  if (!host.deps.trustedText) throw new Error('trusted_text_host_unavailable');
+  assertTrustedTextWorkflowSupported(workflow);
+  if (
+    Object.hasOwn(intent.launch.inputs, intent.trustedText.input) ||
+    Object.hasOwn(intent.eventInputs ?? {}, intent.trustedText.input)
+  )
+    throw new Error('trusted_text_input_already_supplied');
+  const receipt = await host.deps.store.getStartReceipt(receiptId);
+  const itemKey = intent.itemKey ?? receipt?.itemKey ?? undefined;
+  if (!itemKey) throw new Error('trusted_text_item_required');
+  await host.deps.trustedText.declare?.(intent.trustedText, {
+    codebaseId: codebase.id,
+    itemKey,
+  });
+  return await host.deps.trustedText.authorize(intent.trustedText, { codebase, itemKey });
 }
 
 /**
@@ -267,9 +300,25 @@ async function prepareBinding(
     );
     await recordSelectedWorkflow(source.anchor.root, workflow.name);
     await assertBindingRequirements(host, intent, workflow);
-    const inputs = resolveBindingInputs(intent, workflow);
-
     const codebase = await findOrRegisterCodebase(host, cwd);
+    const trustedText = await authorizeTrustedBinding(
+      host,
+      intent,
+      workflow,
+      codebase,
+      identity.receiptId
+    );
+    const inputs = {
+      ...resolveBindingInputs(intent, workflow),
+      ...(trustedText && intent.trustedText
+        ? {
+            [intent.trustedText.input]: {
+              title: trustedText.title,
+              body: trustedText.body,
+            },
+          }
+        : {}),
+    };
     let isolation: PreparedWorkflowLaunch['execution']['isolation'];
     let handoff: CheckoutHandoffRunMetadata | undefined;
     if (intent.checkoutFrom) {
@@ -309,7 +358,8 @@ async function prepareBinding(
           origin,
           inputs,
           preparedAi,
-          handoff
+          handoff,
+          trustedText
         ),
         ...(isolation.kind === 'in-place' ? { working_path: cwd } : {}),
       },
@@ -351,7 +401,7 @@ async function prepareClaimedBinding(
       await host.deps.store.failStartBindingPreparation({
         ...identity,
         retryable: false,
-        error: `${stage}_failed`,
+        error: error instanceof TrustedTextRefusedError ? error.reason : `${stage}_failed`,
       });
     } catch (statusError) {
       throw new AggregateError(

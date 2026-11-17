@@ -26,6 +26,7 @@ import {
 } from './workitems';
 import { handleGithubPrThreads } from './review-threads';
 import { handleGithubWorkItemSearch } from './search';
+import { handleGithubWorkItemTrust } from './trust';
 
 export const githubPluginMetadata = {
   protocol: 1,
@@ -40,6 +41,8 @@ export const githubPluginMetadata = {
     'checks.commit',
     'checks.logs',
     'workitem.view',
+    'workitem.trust',
+    'workitem.accept',
     'workitem.comments',
     'workitem.create',
     'workitem.labels.set',
@@ -94,6 +97,8 @@ type ReadHandler<Op extends ReadOp> = (
 
 const readHandlers: { [Op in ReadOp]: ReadHandler<Op> } = {
   'workitem.view': handleGithubWorkItemView,
+  'workitem.trust': handleGithubWorkItemTrust,
+  'workitem.accept': handleGithubWorkItemTrust,
   'workitem.list': handleGithubWorkItemList,
   'workitem.search': handleGithubWorkItemSearch,
   'workitem.comments': handleGithubWorkItemComments,

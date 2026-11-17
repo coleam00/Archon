@@ -8,8 +8,28 @@ import type { IWorkflowEngine } from '@archon/workflows/engine-port';
 import type { WorkflowOperations } from '../operations/workflow-operations';
 import type { MergedConfig } from '../config/config-types';
 import type { WorkflowDeps } from '@archon/workflows/deps';
+import type { TrustedTextRunMetadata } from '@archon/workflows/trusted-text';
 
 export interface IWorkflowHostStore {
+  trustedText?: {
+    declareRequirement(
+      codebaseId: string,
+      itemKey: string,
+      requirement: TrustedTextRunMetadata['requirement']
+    ): Promise<void>;
+    requirementForItem(itemId: string): Promise<TrustedTextRunMetadata['requirement'] | null>;
+    readAccepted(
+      projectKey: string,
+      itemKey: string,
+      requirement: TrustedTextRunMetadata['requirement']
+    ): Promise<TrustedTextRunMetadata | null>;
+    readAcceptedItem(itemId: string): Promise<TrustedTextRunMetadata | null>;
+    writeAccepted(
+      projectKey: string,
+      itemKey: string,
+      snapshot: TrustedTextRunMetadata
+    ): Promise<void>;
+  };
   codebases: {
     getCodebase(id: string): Promise<Codebase | null>;
     findCodebaseByDefaultCwd(cwd: string): Promise<Codebase | null>;

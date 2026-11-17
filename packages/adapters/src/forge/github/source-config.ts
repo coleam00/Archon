@@ -16,14 +16,22 @@ import { jsonValueSchema } from '@archon/workflows/output-ref';
 import {
   itemMappingSchema,
   resourceStartBindingIntentSchema,
+  trustedTextDeclarationSchema,
 } from '@archon/workflows/schemas/resource-start';
 
 export const githubSourceBindingSchema = resourceStartBindingIntentSchema
-  .omit({ bindingRevision: true, eventInputs: true, checkoutFrom: true, itemKey: true })
+  .omit({
+    bindingRevision: true,
+    eventInputs: true,
+    checkoutFrom: true,
+    itemKey: true,
+    trustedText: true,
+  })
   .extend({
     selector: forgeEventSelectorSchema,
     inputMapping: z.record(z.string(), createForgeInputBindingSchema(jsonValueSchema)),
     item: itemMappingSchema.extend({ field: forgeEventFieldSchema }).optional(),
+    trustedText: trustedTextDeclarationSchema.optional(),
   });
 
 export const githubWebhookSourceConfigSchema = z

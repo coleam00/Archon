@@ -45,6 +45,7 @@ interface ForgeCommandOptions {
 
 interface ForgeCommandDependencies {
   dispatch?: typeof dispatchForge;
+  accept?: (request: Extract<ForgeRequest, { op: 'workitem.accept' }>) => Promise<unknown>;
   readConfig?: () => Promise<unknown>;
   sourcePlugins?: readonly SourcePlugin[];
   audit?: typeof persistAudit;
@@ -98,6 +99,16 @@ export async function forgeCommand(
     if (input.op === 'metadata') return await answerMetadata(input, context);
     if (input.op === 'check') return await answerCheck(input, context);
     const result = await dispatchRequest(input, context);
+    if (result.response.ok && result.response.result.op === 'workitem.accept') {
+      const [{ CoreTrustedTextHost }, { createWorkflowHostStore }] = await Promise.all([
+        import('@archon/core/workflows/trusted-text'),
+        import('@archon/core/workflows/sql-host'),
+      ]);
+      if (context.attempt.request?.op !== 'workitem.accept')
+        throw new Error('Acceptance request identity changed');
+      if (context.dependencies.accept) await context.dependencies.accept(context.attempt.request);
+      else await new CoreTrustedTextHost(createWorkflowHostStore()).accept(context.attempt.request);
+    }
     response = result.response;
     const auditFailure = await auditOperation(result.audit, response, context);
     if (auditFailure !== undefined) return auditFailure;

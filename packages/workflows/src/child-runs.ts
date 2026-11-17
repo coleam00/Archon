@@ -31,6 +31,7 @@ import type {
 } from './schemas';
 import { findWorkflowLoadError } from './schemas/workflow';
 import { SUBRUN_METADATA_KEYS, runInputsMetadata } from './schemas';
+import { TRUSTED_TEXT_METADATA_KEY } from './trusted-text';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
@@ -572,7 +573,7 @@ async function createChildRun(launch: ChildLaunch, plan: ChildRunPlan): Promise<
     user_message: args.input,
     working_path: plan.placement.cwd,
     parent_run_id: args.parentRun.id,
-    metadata: childRunMetadata(args, plan),
+    metadata: childRunMetadata(args, plan, args.parentRun.metadata),
   });
   return {
     opts: {
@@ -590,7 +591,8 @@ async function createChildRun(launch: ChildLaunch, plan: ChildRunPlan): Promise<
 
 function childRunMetadata(
   { nodeId, childIndex, itemHash }: RunChildWorkflowArgs,
-  { prepared, inputs, placement }: ChildRunPlan
+  { prepared, inputs, placement }: ChildRunPlan,
+  parentMetadata: Record<string, unknown>
 ): Record<string, unknown> {
   return {
     [RUN_AI_CONFIGURATION_METADATA_KEY]: prepared.aiConfigurationSnapshot,
@@ -606,6 +608,9 @@ function childRunMetadata(
     // applied), stamped at spawn. The child's own run start layers its pack's settings
     // under it and rewrites the row's inputs with the result, which a cold resume reads.
     ...(inputs !== undefined ? runInputsMetadata(inputs) : {}),
+    ...(parentMetadata[TRUSTED_TEXT_METADATA_KEY] !== undefined
+      ? { [TRUSTED_TEXT_METADATA_KEY]: parentMetadata[TRUSTED_TEXT_METADATA_KEY] }
+      : {}),
     ...(placement.isolationEnv ? childIsolationMetadata(placement.isolationEnv) : {}),
   };
 }

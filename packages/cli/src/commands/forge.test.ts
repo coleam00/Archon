@@ -34,6 +34,75 @@ test('local resolve does not discover plugins and emits no-forge JSON', async ()
   });
 });
 
+test('acceptance is persisted from the original digest request, not a caller snapshot', async () => {
+  const repo = { host: 'github.com', path: 'owner/repo' };
+  const subject = { kind: 'issue' as const, ref: { repo, number: 7 } };
+  const scope = { codebaseId: 'codebase', itemKey: 'issue-7', input: 'trusted_item' };
+  const expectedContentDigest = 'a'.repeat(64);
+  const accepted: ForgeRequest[] = [];
+  const response: ForgeResponse = {
+    operationId: 'accept',
+    ok: true,
+    result: {
+      op: 'workitem.accept',
+      value: {
+        subject,
+        title: 'accepted title',
+        body: 'accepted body',
+        contentDigest: expectedContentDigest,
+        author: { host: repo.host, id: '2', login: 'outside' },
+        policy: {
+          maintainersPath: '.archon/maintainers.json',
+          head: 'b'.repeat(40),
+          digest: 'c'.repeat(64),
+          maintainers: ['alice'],
+        },
+        acceptedBy: { host: repo.host, id: '1', login: 'alice' },
+        scope,
+      },
+    },
+  };
+  const code = await forgeCommand(
+    'workitem.accept',
+    {
+      data: JSON.stringify({
+        subject,
+        maintainersPath: '.archon/maintainers.json',
+        expectedContentDigest,
+        scope,
+      }),
+    },
+    {
+      readConfig: async () => ({}),
+      dispatch: async request => ({
+        response: { ...response, operationId: request.operationId },
+        plugin: { name: 'github', version: '1' },
+        audit: {
+          operationId: request.operationId,
+          operation: request.op,
+          target: subject.ref,
+          plugin: { name: 'github', version: '1' },
+          result: forgeAuditResponse({ ...response, operationId: request.operationId }),
+          retries: 0,
+          durationMs: 1,
+        },
+      }),
+      accept: async request => {
+        accepted.push(request);
+      },
+      write: async () => undefined,
+    }
+  );
+  expect(code).toBe(0);
+  expect(accepted[0]).toMatchObject({
+    op: 'workitem.accept',
+    expectedContentDigest,
+    scope,
+  });
+  expect(accepted[0]).not.toHaveProperty('title');
+  expect(accepted[0]).not.toHaveProperty('policy');
+});
+
 test('records qualified target and evaluated revision through the host audit', async () => {
   const observed: unknown[] = [];
   const ref = { repo: { host: 'forge.example', path: 'group/team/repo' }, number: 42 };

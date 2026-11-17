@@ -38,6 +38,7 @@ import {
 } from './run-result';
 import { WorkflowItemHeldError } from './store/errors';
 import { workflowPathPriorityTime } from './workflow-path-lock';
+import { recheckTrustedTextAdmission, requirePreparedTrustedStart } from './trusted-text';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -93,6 +94,8 @@ export async function admitWorkflowRun(
     if (created.stopped) return created;
     workflowRun = created.value;
   }
+
+  await recheckTrustedTextAdmission(deps, workflow, workflowRun);
 
   // A continuation's row already says everything this process adds: the store's resume
   // recorded this process as its owner.
@@ -210,6 +213,7 @@ async function createWorkflowRunRow(
   const { preparedSource, codebaseId, issueContext, adoptedFromRunId, continuationMode } = opts;
   const { prepared, runSource } = dispatch;
   try {
+    await requirePreparedTrustedStart(deps, opts);
     const workflowRun = await deps.store.createWorkflowRun({
       // Reserved by `prepareWorkflowSource` so the row and its already-written source
       // capture share one id; absent for callers that prepared nothing.

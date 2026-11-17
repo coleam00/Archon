@@ -35,7 +35,7 @@ function evaluateBinding(
   const skipped = (status: EvaluatedBinding['status'], reason: string) => ({
     skipped: { bindingId: binding.bindingId, bindingRevision, status, reason },
   });
-  const { selector, inputMapping, item, ...intent } = binding;
+  const { selector, inputMapping, item, trustedText, ...intent } = binding;
   if (!matchForgeEvent(selector, event)) return skipped('unmatched', 'selector_did_not_match');
   const mapped = mapForgeInputs(inputMapping, event);
   if (!mapped.ok) return skipped('rejected', `Input '${mapped.input}': ${mapped.reason}`);
@@ -49,12 +49,34 @@ function evaluateBinding(
   return {
     start: resourceStartBindingIntentSchema.parse({
       ...intent,
+      ...(trustedText
+        ? {
+            trustedText: {
+              ...trustedText,
+              subject: eventSubject(event),
+            },
+          }
+        : {}),
       bindingRevision,
       launch: { ...binding.launch, inputs: { ...binding.launch.inputs, ...literalInputs } },
       eventInputs,
       ...(itemKey ? { itemKey: itemKey.key } : {}),
     }),
   };
+}
+
+function eventSubject(event: ForgeEvent) {
+  switch (event.kind) {
+    case 'issue.lifecycle':
+      return { kind: 'issue' as const, ref: event.issue };
+    case 'pr.lifecycle':
+      return { kind: 'pr' as const, ref: event.pr };
+    case 'label.changed':
+    case 'comment.changed':
+      return event.subject;
+    case 'check.changed':
+      throw new Error('trusted_text_check_event_unsupported');
+  }
 }
 
 function evaluateBindings(

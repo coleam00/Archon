@@ -27,6 +27,7 @@ import {
   readContinuationMode,
   readRunDispatchMetadata,
   readSubrunMetadata,
+  runInputsMetadata,
   type RunDispatchMetadata,
 } from './schemas';
 import type { JsonValue } from './output-ref';
@@ -34,6 +35,11 @@ import { resolveRunStartInputs } from './pack-settings';
 import { isContainerRun, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { executionClaim } from './store';
+import {
+  readTrustedTextMetadata,
+  TRUSTED_TEXT_METADATA_KEY,
+  type TrustedTextRunMetadata,
+} from './trusted-text';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -81,6 +87,7 @@ export async function resolveRunDispatch(
     preCreatedRun !== undefined &&
     (opts.priorCompletedNodes !== undefined || preCreatedRun.status !== 'pending');
   refuseInvalidDispatch(workflow, opts, isContinuation);
+  await authorizePreCreatedTrustedText(deps, preCreatedRun);
   const containerRefusal = await refuseContainerResumeWithoutBackend(
     deps,
     platform,
@@ -161,6 +168,49 @@ export async function resolveRunDispatch(
       startInputs: packs.startInputs,
       docsDir,
     },
+  };
+}
+
+async function authorizeDeclaredItem(
+  deps: WorkflowDeps,
+  run: NonNullable<ExecuteWorkflowOptions['preCreatedRun']>
+): Promise<TrustedTextRunMetadata | undefined> {
+  if (!run.item_id || !deps.trustedText?.requirementForItem) return undefined;
+  const requirement = await deps.trustedText.requirementForItem(run.item_id);
+  if (!requirement) return undefined;
+  if (!deps.trustedText.authorizeItem) throw new Error('trusted_text_authorization_unavailable');
+  return await deps.trustedText.authorizeItem(requirement, run.item_id);
+}
+
+async function authorizePreCreatedTrustedText(
+  deps: WorkflowDeps,
+  run: ExecuteWorkflowOptions['preCreatedRun']
+): Promise<void> {
+  if (!run || readTrustedTextMetadata(run)) return;
+  const trustedText = await authorizeDeclaredItem(deps, run);
+  if (trustedText) stampTrustedText(run, trustedText);
+}
+
+function stampTrustedText(
+  run: NonNullable<ExecuteWorkflowOptions['preCreatedRun']>,
+  trustedText: TrustedTextRunMetadata
+): void {
+  const inputs = readSubrunMetadata(run.metadata).inputs ?? {};
+  if (Object.hasOwn(inputs, trustedText.requirement.input))
+    throw new Error('trusted_text_input_already_supplied');
+  run.metadata = {
+    ...run.metadata,
+    ...runInputsMetadata(
+      {
+        ...inputs,
+        [trustedText.requirement.input]: {
+          title: trustedText.title,
+          body: trustedText.body,
+        },
+      },
+      true
+    ),
+    [TRUSTED_TEXT_METADATA_KEY]: trustedText,
   };
 }
 

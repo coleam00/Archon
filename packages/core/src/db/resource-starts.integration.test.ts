@@ -681,6 +681,55 @@ describe('durable resource starts', () => {
     expect(restored?.launch.inputs).toEqual({ mode: 'nightly' });
     expect(restored?.eventInputs).toEqual({ count: 42 });
     expect(restored?.checkoutFrom).toEqual(handoff);
+
+    const protectedReceipt = 'cececece-cece-4ece-8ece-cececececece';
+    await acceptStartReceipt({
+      receipt: {
+        id: protectedReceipt,
+        sourceInstanceId: 'orders',
+        deliveryId: 'order-2',
+        contentDigest: 'digest-2',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: 'protected',
+          bindingRevision: '1',
+          hostId: 'host',
+          runAsUserId: '22222222-2222-4222-8222-222222222222',
+          resource: 'repo:orders',
+          capacity: 1,
+          overlap: 'queue',
+          launch: {
+            cwd: '/tmp/test',
+            workflowName: 'test',
+            inputs: {},
+            isolation: { kind: 'default' },
+          },
+          trustedText: {
+            subject: {
+              kind: 'issue',
+              ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+            },
+            maintainersPath: '.archon/maintainers.json',
+            input: 'trusted_item',
+          },
+        },
+      ],
+    });
+    const protectedRow = await getDatabase().query<{ intent: string }>(
+      'SELECT intent FROM remote_agent_start_receipt_bindings WHERE receipt_id = $1',
+      [protectedReceipt]
+    );
+    expect(() =>
+      shippedIntentSchema.parse(JSON.parse(protectedRow.rows[0]?.intent ?? 'null'))
+    ).toThrow();
+    expect(
+      (await getStartReceipt(protectedReceipt))?.bindings[0]?.intent?.trustedText
+    ).toBeDefined();
   });
 
   test('preparation completion and admission share one commit', async () => {

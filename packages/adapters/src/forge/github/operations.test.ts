@@ -66,6 +66,8 @@ describe('GitHub outbound producer', () => {
         'checks.commit',
         'checks.logs',
         'workitem.view',
+        'workitem.trust',
+        'workitem.accept',
         'workitem.comments',
         'workitem.create',
         'workitem.labels.set',

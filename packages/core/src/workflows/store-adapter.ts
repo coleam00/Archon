@@ -70,6 +70,7 @@ import {
 } from '../db/user-provider-key-store';
 import { normalizeCredentialVendor } from '@archon/providers';
 import { StoredCredentialDeliveryError } from '@archon/workflows/run-preflight';
+import { CoreTrustedTextHost, createTrustedTextRecords } from './trusted-text';
 
 function hydrateWorkflowEventRow(row: WorkflowEventRow): WorkflowEventRow {
   return { ...row, created_at: toHydratedTimestamp(row.created_at).toISOString() };
@@ -367,6 +368,14 @@ export function createWorkflowDeps(
   const asksSettledPreflight = createAsksSettledPreflight(onBindings);
   return {
     store,
+    ...(credentialStore === 'database'
+      ? {
+          trustedText: new CoreTrustedTextHost({
+            trustedText: createTrustedTextRecords(),
+            codebases: codebaseDb,
+          }),
+        }
+      : {}),
     credentialStore,
     runEndedStarts: createRunEndedStarts({
       ...onBindings,

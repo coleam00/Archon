@@ -111,6 +111,43 @@ async function adapter(triggerConfig: GitHubTriggerConfig, intake: Intake) {
 }
 
 describe('GitHub source plugin', () => {
+  test('binds a trusted-text requirement without copying unaccepted event text', async () => {
+    const recorded = recorder();
+    const github = await adapter(
+      config([
+        binding({
+          bindingId: 'protected',
+          selector: {
+            kind: 'issue.lifecycle',
+            actions: ['opened'],
+            repository: { host: 'github.com', path: 'owner/repo' },
+          },
+          inputMapping: {},
+          item: { field: 'subject.number', prefix: 'issue-' },
+          trustedText: { maintainersPath: '.archon/maintainers.json', input: 'trusted_item' },
+        }),
+      ]),
+      recorded.intake
+    );
+    const secret = 'unaccepted instruction';
+    const payload = JSON.stringify({
+      action: 'opened',
+      repository: { full_name: 'owner/repo' },
+      sender: { id: 9, login: 'outside' },
+      issue: { number: 7, state: 'open', title: secret, body: secret },
+    });
+    await github.receiveWebhook(payload, sign(payload), 'trusted-text', 'issues');
+    expect(recorded.calls[0]?.bindings[0]?.trustedText).toEqual({
+      subject: {
+        kind: 'issue',
+        ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+      },
+      maintainersPath: '.archon/maintainers.json',
+      input: 'trusted_item',
+    });
+    expect(JSON.stringify(recorded.calls[0])).not.toContain(secret);
+  });
+
   test('starts every matching binding in configuration order with its own mapped inputs', async () => {
     const recorded = recorder();
     const github = await adapter(

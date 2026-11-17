@@ -298,6 +298,23 @@ export const itemMappingSchema = z
   .strict();
 export type ItemMapping = z.infer<typeof itemMappingSchema>;
 
+export const trustedTextBindingSchema = z
+  .object({
+    subject: z.object({
+      kind: z.enum(['issue', 'pr']),
+      ref: z.object({
+        repo: z.object({ host: z.string().min(1), path: z.string().min(1) }),
+        number: z.number().int().positive(),
+      }),
+    }),
+    maintainersPath: z.string().min(1),
+    /** The declared workflow input that receives the frozen title/body snapshot. */
+    input: z.string().min(1),
+  })
+  .strict();
+export type TrustedTextBinding = z.infer<typeof trustedTextBindingSchema>;
+export const trustedTextDeclarationSchema = trustedTextBindingSchema.omit({ subject: true });
+
 /**
  * The item key `mapping` makes of the field's value: text as it is, a finite number in
  * decimal. Anything else, a missing or empty value included, is refused with a reason
@@ -409,6 +426,8 @@ export const resourceStartBindingIntentSchema = z
      * `intent` column.
      */
     itemKey: itemKeySchema.optional(),
+    /** Unlike eventInputs, SQL stores this beside the legacy strict intent document. */
+    trustedText: trustedTextBindingSchema.optional(),
     /**
      * The checkout a run-ended binding with `checkout: "ended-run"` hands the started run,
      * recorded when the ended run completed. Preparation decides the lane from it, not from

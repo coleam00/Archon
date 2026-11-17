@@ -49,6 +49,8 @@ archon forge resolve --data '{"remote":"git@github.com:owner/repository.git"}'
 archon forge resolve --data '{"remote":"https://github.com/owner/repository/pull/42","web":true}'
 archon forge checks --data '{"ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":42}}'
 archon forge workitem.view --data '{"ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":31}}'
+archon forge workitem.trust --data-file ./trusted-item.json
+archon forge workitem.accept --data-file ./accept-item.json
 archon forge pr.view --data '{"selector":{"kind":"number","ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":42}}}'
 archon forge workitem.create --data-file ./issue.json
 archon forge workitem.labels.set --data-file ./labels.json
@@ -199,6 +201,8 @@ The GitHub plugin has a log only for a GitHub Actions check run, whose check-run
 `pr.thread.reply` takes `{ref, thread, body}` and posts one reply on that thread; an applied result carries the `thread` and the new `comment` record with its body digest. `pr.thread.resolve` takes `{ref, thread}`; a thread already resolved is applied with `changed: false`. Both refuse, before writing, a thread that does not belong to the pull request `ref`.
 
 `workitem.edit-body` takes `{ref, body}` for an issue and replaces its body; an applied result carries the issue record and the body digest read back. The forge has no conditional body write, so an edit saved between the caller's read and this write is lost. A pull request uses `pr.edit-body`.
+
+`workitem.trust` reads an issue or pull request's exact `title`, `body`, author, `contentDigest`, and the maintainer policy at the current default-branch HEAD. `workitem.accept` additionally takes the digest the person actually reviewed as `expectedContentDigest` and a `{codebaseId, itemKey, input}` scope. The GitHub plugin derives the acceptor from the authenticated `/user` response, never a caller-supplied actor, and refuses stale text or a non-maintainer. Core then stores the accepted snapshot. Audit events retain only identity and content digests. See [Require acceptance of exact untrusted text](/guides/workflow-triggers/#require-acceptance-of-exact-untrusted-text) for the binding contract and protected-node limits.
 
 ## GitHub credentials and check observations
 

@@ -228,6 +228,7 @@ function generate(
             selector: { ...kinded.binding.event, repository: target.repo },
             inputMapping: fields,
             ...(kinded.binding.item ? { item: kinded.binding.item } : {}),
+            ...(kinded.binding.trustedText ? { trustedText: kinded.binding.trustedText } : {}),
           },
         },
       ];

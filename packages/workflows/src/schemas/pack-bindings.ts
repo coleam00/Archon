@@ -17,6 +17,7 @@ import {
   resourceStartOverlapSchema,
   runEndedInputSourceSchema,
   runEndedTriggerSchema,
+  trustedTextDeclarationSchema,
 } from './resource-start';
 
 /** A binding id and a resource name both end up in a file name and a resource key. */
@@ -75,6 +76,7 @@ export const packEventBindingSchema = z
       }),
     /** `field` is one of the source plugin's event fields, checked there like `event`. */
     item: itemMappingSchema.optional(),
+    trustedText: trustedTextDeclarationSchema.optional(),
   })
   .strict();
 

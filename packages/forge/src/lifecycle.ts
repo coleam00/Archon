@@ -21,6 +21,7 @@ import {
 } from './identity';
 
 import { checkSelectionSchema, selectedChecksSchema } from './checks';
+import { trustedTextAcceptanceSchema, trustedTextSchema, trustedTextScopeSchema } from './trust';
 
 const text = z.string().min(1);
 
@@ -44,6 +45,16 @@ const requestBase = z.object({ operationId: text });
 export const workItemViewRequestSchema = requestBase.extend({
   op: z.literal('workitem.view'),
   ref: workItemRefSchema,
+});
+export const workItemTrustRequestSchema = requestBase.extend({
+  op: z.literal('workitem.trust'),
+  subject: forgeSubjectRefSchema,
+  maintainersPath: text,
+});
+export const workItemAcceptRequestSchema = workItemTrustRequestSchema.extend({
+  op: z.literal('workitem.accept'),
+  expectedContentDigest: z.string().regex(/^[0-9a-f]{64}$/),
+  scope: trustedTextScopeSchema,
 });
 /**
  * A pull request by number, or the pull request for a qualified head.
@@ -415,6 +426,8 @@ export const mergeEvidenceSchema = z.object({
 
 export const lifecycleReadRequestSchemas = [
   workItemViewRequestSchema,
+  workItemTrustRequestSchema,
+  workItemAcceptRequestSchema,
   prViewRequestSchema,
   repoLabelsListRequestSchema,
   prReviewsRequestSchema,
@@ -571,6 +584,8 @@ export const lifecycleReadResultSchemas = [
   z.object({ op: prReviewsRequestSchema.shape.op, value: prReviewsSchema }),
   z.object({ op: prThreadsRequestSchema.shape.op, value: prThreadsSchema }),
   z.object({ op: workItemViewRequestSchema.shape.op, value: workItemViewSchema }),
+  z.object({ op: workItemTrustRequestSchema.shape.op, value: trustedTextSchema }),
+  z.object({ op: workItemAcceptRequestSchema.shape.op, value: trustedTextAcceptanceSchema }),
   z.object({ op: prViewRequestSchema.shape.op, value: prViewResultSchema.nullable() }),
   z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
   z.object({ op: workItemListRequestSchema.shape.op, value: workItemListSchema }),

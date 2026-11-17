@@ -3,6 +3,7 @@
   "version": "0.14.0",
   "type": "module",
   "exports": {
+    "./trusted-text": "./src/trusted-text.ts",
     "./schemas/*": "./src/schemas/*.ts",
     "./run-ai-configuration": "./src/run-ai-configuration.ts",
     "./run-preflight": "./src/run-preflight.ts",
