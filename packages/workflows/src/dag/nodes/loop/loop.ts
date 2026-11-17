@@ -87,7 +87,15 @@ function readSignaledTokens(
     !Number.isFinite(output)
   )
     return invalid();
-  const parsedCalls = modelCallUsageSchema.array().safeParse(calls);
+  // Absent `calls` means no breakdown; present but unreadable marks the breakdown partial.
+  const parsedCalls =
+    calls === undefined ? undefined : modelCallUsageSchema.array().safeParse(calls);
+  if (parsedCalls?.success === false) {
+    getLog().warn(
+      { ...context, callsType: Array.isArray(calls) ? 'array' : typeof calls },
+      'dag_loop.signaled_calls_invalid_ignored'
+    );
+  }
   return sumTokenUsage(
     [
       {
@@ -97,8 +105,10 @@ function readSignaledTokens(
         ...(cacheWrite !== undefined ? { cacheWrite: cacheWrite as number } : {}),
         // A loop that paused on incomplete usage must not resume claiming exact totals.
         ...(cachePartial === true ? { cachePartial: true as const } : {}),
-        ...(parsedCalls.success ? { calls: parsedCalls.data } : {}),
-        ...(callsPartial === true ? { callsPartial: true as const } : {}),
+        ...(parsedCalls?.success ? { calls: parsedCalls.data } : {}),
+        ...(callsPartial === true || parsedCalls?.success === false
+          ? { callsPartial: true as const }
+          : {}),
       },
     ],
     context

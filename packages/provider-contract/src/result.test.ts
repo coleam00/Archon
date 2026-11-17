@@ -15,6 +15,14 @@ describe('mergeTokenUsage', () => {
     expect(mixed?.callsPartial).toBe(true);
     expect(mergeTokenUsage([mixed!])?.callsPartial).toBe(true);
   });
+  test('keeps callsPartial when no contribution has calls', () => {
+    const merged = mergeTokenUsage([
+      { input: 5, output: 1, callsPartial: true },
+      { input: 7, output: 2 },
+    ]);
+    expect(merged).toEqual({ input: 12, output: 3, callsPartial: true });
+    expect(mergeTokenUsage([{ input: 5, output: 1 }])).toEqual({ input: 5, output: 1 });
+  });
   test('returns undefined for no contributions', () => {
     expect(mergeTokenUsage([])).toBeUndefined();
   });

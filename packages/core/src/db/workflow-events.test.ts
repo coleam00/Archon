@@ -1529,6 +1529,27 @@ describe('workflow-events', () => {
       );
     });
 
+    test('an unreadable persisted calls list keeps the totals and marks the breakdown partial', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'review',
+            event_type: 'node_completed',
+            data: {
+              node_output: 'kept',
+              tokens: { input: 10, output: 5, calls: [{ input: 'x' }] },
+            },
+          },
+        ])
+      );
+      const snapshot = await getDagResumeSnapshot('run-invalid-calls');
+      expect(snapshot.tokens).toEqual({ input: 10, output: 5, callsPartial: true });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ callsType: 'array' }),
+        'db.workflow_dag_node_calls_invalid_ignored'
+      );
+    });
+
     test('returns an empty snapshot when no events exist', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 

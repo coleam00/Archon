@@ -204,22 +204,22 @@ function sumPromptUsage(
       total: sum(u => u.cost.total),
     },
   });
-  const counters = (usage: Usage): ModelCallUsage => ({
-    input: usage.input + usage.cacheRead + usage.cacheWrite,
-    output: usage.output,
-    cacheRead: usage.cacheRead,
-    cacheWrite: usage.cacheWrite,
-  });
-  totals.calls = [
-    ...assistants
-      .filter(message => !isZero(message.usage))
-      .map(message => ({
-        ...counters(message.usage),
-        provider: message.provider,
-        model: message.model,
+  // Each request's counters come from usageToTokens, the one owner of the gross-input
+  // formula, so the requests of a turn without side calls sum to its totals.
+  totals.calls = assistants
+    .filter(message => !isZero(message.usage))
+    .map((message): ModelCallUsage => {
+      const { input, output, cacheRead, cacheWrite } = usageToTokens(message.usage);
+      return {
+        input,
+        output,
+        ...(cacheRead !== undefined ? { cacheRead } : {}),
+        ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+        ...(message.provider ? { provider: message.provider } : {}),
+        ...(message.model ? { model: message.model } : {}),
         ...(message.responseId ? { responseId: message.responseId } : {}),
-      })),
-  ];
+      };
+    });
   // Compaction usage may itself combine several requests, and does not reliably
   // identify their models. It remains in totals, never masquerades as one call.
   if (sideCalls.length > 0) totals.callsPartial = true;

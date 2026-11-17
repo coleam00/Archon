@@ -195,10 +195,27 @@ function readTokens(runId: string, stepName: string, tokens: unknown): TokenUsag
   // multi-agent node) keeps the resumed run a floor. Anything other than `true`
   // is ignored without a warn: unlike the numeric axes it carries no total.
   if (tokens.cachePartial === true) normalized.cachePartial = true;
-  const calls = modelCallUsageSchema.array().safeParse(tokens.calls);
-  if (calls.success) normalized.calls = calls.data;
   if (tokens.callsPartial === true) normalized.callsPartial = true;
+  if (tokens.calls !== undefined) readCalls(runId, stepName, tokens.calls, normalized);
   return normalized;
+}
+
+/**
+ * Absent `calls` means no breakdown. Present but unreadable means some requests are
+ * unknown, so the node keeps its totals and its breakdown is marked partial. The array
+ * can be large; log its shape, not its contents.
+ */
+function readCalls(runId: string, stepName: string, raw: unknown, normalized: TokenUsage): void {
+  const calls = modelCallUsageSchema.array().safeParse(raw);
+  if (calls.success) {
+    normalized.calls = calls.data;
+    return;
+  }
+  getLog().warn(
+    { runId, stepName, callsType: Array.isArray(raw) ? 'array' : typeof raw },
+    'db.workflow_dag_node_calls_invalid_ignored'
+  );
+  normalized.callsPartial = true;
 }
 
 function readCost(runId: string, stepName: string, costUsd: unknown): number | undefined {

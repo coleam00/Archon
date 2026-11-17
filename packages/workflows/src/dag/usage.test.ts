@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { tokenUsageSchema } from '@archon/provider-contract';
+import { mergeTokenUsage, tokenUsageSchema } from '@archon/provider-contract';
 import { runUsageMismatch, incrementalCallUsage } from './usage';
 
 // Each case is the shape of a historical aggregation defect, or a difference the
@@ -82,13 +82,16 @@ describe('incremental request evidence', () => {
     expect(incrementalCallUsage(total, prior)).toEqual({ calls: [two] });
     expect(incrementalCallUsage(total, total)).toEqual({ calls: [] });
   });
-  it('does not infer a prefix from counters or mismatched response identities', () => {
-    for (const prior of [
-      { input: 100, output: 10 },
-      { input: 100, output: 10, calls: [two] },
-    ]) {
-      expect(incrementalCallUsage(total, prior)).toEqual({ calls: undefined, callsPartial: true });
-    }
+  it('does not infer a prefix from mismatched response identities', () => {
+    const prior = { input: 100, output: 10, calls: [two] };
+    expect(incrementalCallUsage(total, prior)).toEqual({ calls: undefined, callsPartial: true });
+  });
+  it('keeps the later requests, marked partial, when the baseline had no breakdown', () => {
+    // The loop accumulates its total by merging onto the baseline, so build it that way.
+    const baseline = { input: 5, output: 1 };
+    const later = mergeTokenUsage([baseline, { input: 7, output: 1, calls: [two] }]);
+    if (later === undefined) throw new Error('expected merged usage');
+    expect(incrementalCallUsage(later, baseline)).toEqual({ calls: [two], callsPartial: true });
   });
   it('retains incomplete evidence through incremental accounting', () => {
     expect(

@@ -143,7 +143,13 @@ export function incrementalLoopUsage(
   };
 }
 
-/** Subtract only an exact request prefix; aggregate counters cannot identify old calls. */
+/**
+ * Subtract only an exact request prefix; aggregate counters cannot identify old calls.
+ *
+ * A baseline with usage but no `calls` added nothing to the cumulative `calls` (merges
+ * concatenate only reported breakdowns), so every request in the total is new: keep them,
+ * marked partial because the baseline's own requests are unknown.
+ */
 export function incrementalCallUsage(
   total: TokenUsage,
   prior: TokenUsage | undefined
@@ -154,7 +160,7 @@ export function incrementalCallUsage(
   if (previous === undefined) {
     return prior.input === 0 && prior.output === 0
       ? evidence
-      : { calls: undefined, callsPartial: true };
+      : { calls: total.calls, callsPartial: true };
   }
   const keys = modelCallUsageSchema.keyof().options;
   const prefixMatches =

@@ -904,6 +904,69 @@ describe('interactive loop node', () => {
     expect(completed[0][0].data).not.toHaveProperty('tokens');
   });
 
+  it('warns and marks the breakdown partial when persisted gate calls are unreadable', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'should never run' };
+      yield { type: 'result', sessionId: 'never' };
+    });
+
+    const mockDeps = createMockDeps();
+    const workflowRun = makeWorkflowRun('finalize-invalid-calls-run', {
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'refine',
+          iteration: 1,
+          sessionId: 'sig-session-1',
+          message: 'gate',
+          completionSignaled: true,
+          signaledOutput: 'REPORT',
+          signaledTokens: { input: 3, output: 4, calls: 'not-a-list' },
+        },
+        loop_user_input: 'Approved',
+        loop_feedback_given: false,
+      },
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        cwd: testDir,
+        workflow: {
+          name: 'finalize-invalid-calls',
+          nodes: [
+            {
+              id: 'refine',
+              kind: 'loop',
+              loop: {
+                fresh_context: false,
+                prompt: 'Refine.',
+                until: 'APPROVED',
+                max_iterations: 10,
+                interactive: true,
+                gate_message: 'Review.',
+              },
+            },
+          ],
+        },
+        workflowRun,
+      })
+    );
+
+    const warnCalls = mockLogFn.mock.calls.filter(
+      (call: unknown[]) => call[1] === 'dag_loop.signaled_calls_invalid_ignored'
+    );
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]?.[0]).toEqual(
+      expect.objectContaining({ workflowRunId: workflowRun.id, nodeId: 'refine' })
+    );
+    const completed = mockDeps.store.createWorkflowEvent.mock.calls.filter(
+      ([event]) => event.event_type === 'node_completed' && event.step_name === 'refine'
+    );
+    expect(completed.length).toBe(1);
+    expect(completed[0]?.[0].data?.tokens).toEqual({ input: 3, output: 4, callsPartial: true });
+  });
+
   it('a finalize from a metadata-less paused loop gate persists the path contract and its legacy root fields', async () => {
     const mockDeps = createMockDeps();
     await executeDagWorkflow(
