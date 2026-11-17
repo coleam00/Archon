@@ -12,6 +12,12 @@ import {
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
 import * as workflowDb from '@archon/core/db/workflows';
+import * as workflowEventDb from '@archon/core/db/workflow-events';
+import {
+  firstFailedNodeEvent,
+  getTerminalRecord,
+  recordedFailureKind,
+} from '@archon/workflows/terminal-record';
 import * as conversationDb from '@archon/core/db/conversations';
 import { createLogger } from '@archon/paths';
 import type { ChatSupervisor } from './supervisor';
@@ -80,6 +86,7 @@ export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent 
         nodeName: event.nodeName,
         state: 'failed',
         error: event.error,
+        ...failureKindOf(event.execution),
       };
     case 'node_skipped':
       return {
@@ -117,6 +124,29 @@ export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent 
       return exhaustive;
     }
   }
+}
+
+/** The failure kind a node's execution record carries; nothing when it recorded none. */
+function failureKindOf(execution: NodeFailedExecution): { failureKind?: string } {
+  const lifecycle = execution?.lifecycle;
+  return lifecycle?.status === 'failed' && lifecycle.failureKind !== undefined
+    ? { failureKind: lifecycle.failureKind }
+    : {};
+}
+type NodeFailedExecution = Extract<WorkflowEmitterEvent, { type: 'node_failed' }>['execution'];
+
+/**
+ * The recorded kind of the node a failed run failed at, read from the stored terminal
+ * record and that node's `node_failed` row, never from the run's error text.
+ */
+async function terminalFailureKind(runId: string): Promise<{ failureKind?: string }> {
+  const rows =
+    (await workflowEventDb.listEventsForRuns([runId], ['node_failed', 'workflow_failed'])).get(
+      runId
+    ) ?? [];
+  const failed = firstFailedNodeEvent(getTerminalRecord('failed', rows), rows);
+  const kind = failed === undefined ? undefined : recordedFailureKind(failed);
+  return kind === undefined ? {} : { failureKind: kind };
 }
 
 function applyRunDetails(
@@ -186,6 +216,8 @@ export function subscribeChatRunEvents(
             ? { ...projected, conversationId: conversation.platform_conversation_id }
             : projected;
         applyRunDetails(run, routed, platform, platforms);
+        if (routed.type === 'terminal' && routed.status === 'failed')
+          Object.assign(routed, await terminalFailureKind(run.id));
         const delivery = (deliveries.get(platform) ?? Promise.resolve())
           .then(async () => {
             if (!stopped) await plugin.runEvent(routed);

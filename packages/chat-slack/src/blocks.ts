@@ -23,6 +23,8 @@ export interface NodeSnapshot {
   state: NodeState;
   durationMs?: number;
   error?: string;
+  /** The recorded failure kind, the name a `retry.on_error` policy targets. */
+  failureKind?: string;
 }
 
 /**
@@ -41,6 +43,8 @@ export interface RunSnapshot {
   outcome?: ShownOutcome;
   totalCostUsd?: number;
   failureReason?: string;
+  /** The recorded kind of the node a failed run failed at. */
+  failureKind?: string;
   approvalDeliveryFailed?: boolean;
 }
 
@@ -276,7 +280,10 @@ export function buildStatusBlocks(
         n.state === 'completed' && typeof n.durationMs === 'number'
           ? ` · ${formatElapsed(n.durationMs)}`
           : '';
-      const errSuffix = n.state === 'failed' && n.error ? ` — ${truncate(n.error, 120)}` : '';
+      const errSuffix =
+        n.state === 'failed' && n.error
+          ? ` — ${withKind(n.failureKind, truncate(n.error, 120))}`
+          : '';
       return `${glyph} \`${n.nodeName}\`${duration}${errSuffix}`;
     });
     blocks.push({
@@ -353,6 +360,11 @@ function buildStatusHeader(snapshot: RunSnapshot, header: string, elapsed: strin
   };
 }
 
+/** A failure's text led by its recorded kind, when the engine recorded one. */
+function withKind(failureKind: string | undefined, text: string): string {
+  return failureKind === undefined ? text : `(${failureKind}) ${text}`;
+}
+
 function buildStatusFooter(
   snapshot: RunSnapshot,
   terminalStatus: RunTerminalStatus | undefined
@@ -362,7 +374,9 @@ function buildStatusFooter(
     footerParts.push(`total cost: $${snapshot.totalCostUsd.toFixed(4)}`);
   }
   if ((snapshot.status === 'failed' || snapshot.status === 'cancelled') && snapshot.failureReason) {
-    footerParts.push(`reason: ${truncate(snapshot.failureReason, 200)}`);
+    footerParts.push(
+      `reason: ${withKind(snapshot.failureKind, truncate(snapshot.failureReason, 200))}`
+    );
   }
   if (footerParts.length > 0) {
     return {

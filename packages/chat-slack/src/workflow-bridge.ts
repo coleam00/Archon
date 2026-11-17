@@ -149,6 +149,7 @@ export class SlackWorkflowBridge {
       outcome: shownOutcome(event),
       totalCostUsd: event.totalCostUsd,
       failureReason: event.error,
+      failureKind: event.failureKind,
     });
     await closing;
     this.adapter.clearTriggeringMessage(state.conversationId);
@@ -225,7 +226,7 @@ export class SlackWorkflowBridge {
     nodeId: string,
     nodeName: string,
     state: NodeState,
-    extra: { durationMs?: number; error?: string } = {}
+    extra: { durationMs?: number; error?: string; failureKind?: string } = {}
   ): void {
     const run = this.runs.get(runId);
     if (!run) return;
@@ -238,6 +239,7 @@ export class SlackWorkflowBridge {
           ? (extra.durationMs ?? run.nodes.get(nodeId)?.durationMs)
           : extra.durationMs,
       error: extra.error,
+      failureKind: extra.failureKind,
     });
   }
 
@@ -259,7 +261,7 @@ export class SlackWorkflowBridge {
   private async updateStatusMessage(
     state: RunState,
     overlay: Partial<
-      Pick<RunSnapshot, 'status' | 'outcome' | 'totalCostUsd' | 'failureReason'>
+      Pick<RunSnapshot, 'status' | 'outcome' | 'totalCostUsd' | 'failureReason' | 'failureKind'>
     > = {}
   ): Promise<boolean> {
     if (!state.statusMessageTs) return false;
