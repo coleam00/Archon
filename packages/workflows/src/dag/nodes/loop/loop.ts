@@ -1,7 +1,7 @@
 import { observeExecutionSpend } from '../../../node-execution';
 import { isWorkflowExecutionInterruption } from '../../../execution-interruption';
 import { finalizeLoopFromSignal } from '../../loop-completion';
-import { requireProvider } from '@archon/provider-contract';
+import { requireProvider, modelCallUsageSchema } from '@archon/provider-contract';
 import {
   serializeDeferredNodeUsage,
   serializeNodeOutput,
@@ -20,7 +20,7 @@ import type {
   LoopGateRunMetadata,
   WorkflowRun,
 } from '../../../schemas';
-import { nodeInvocationKey } from '../../../node-record-reader';
+import { nodeInvocationKey, readableRequestEvidence } from '../../../node-record-reader';
 import { isApprovalContext } from '../../../schemas';
 import { createAttemptEventSequence } from '../../../provider-events';
 import {
@@ -66,37 +66,53 @@ function readSignaledTokens(
   context: { workflowRunId: string; nodeId: string }
 ): TokenUsage | undefined {
   if (raw === undefined || raw === null) return undefined;
-  if (typeof raw === 'object') {
-    const { input, output, cacheRead, cacheWrite, cachePartial } = raw as {
-      input?: unknown;
-      output?: unknown;
-      cacheRead?: unknown;
-      cacheWrite?: unknown;
-      cachePartial?: unknown;
-    };
-    if (
-      typeof input === 'number' &&
-      typeof output === 'number' &&
-      Number.isFinite(input) &&
-      Number.isFinite(output)
-    ) {
-      return sumTokenUsage(
-        [
-          {
-            input,
-            output,
-            ...(cacheRead !== undefined ? { cacheRead: cacheRead as number } : {}),
-            ...(cacheWrite !== undefined ? { cacheWrite: cacheWrite as number } : {}),
-            // A loop that paused on a floor must not resume claiming an exact total.
-            ...(cachePartial === true ? { cachePartial: true as const } : {}),
-          },
-        ],
-        context
-      );
-    }
+  const invalid = (): undefined => {
+    getLog().warn({ ...context, tokens: raw }, 'dag_loop.signaled_tokens_invalid_ignored');
+    return undefined;
+  };
+  if (typeof raw !== 'object') return invalid();
+  const { input, output, cacheRead, cacheWrite, cachePartial, calls, callsPartial } = raw as {
+    input?: unknown;
+    output?: unknown;
+    cacheRead?: unknown;
+    cacheWrite?: unknown;
+    cachePartial?: unknown;
+    calls?: unknown;
+    callsPartial?: unknown;
+  };
+  if (
+    typeof input !== 'number' ||
+    typeof output !== 'number' ||
+    !Number.isFinite(input) ||
+    !Number.isFinite(output)
+  )
+    return invalid();
+  // Absent `calls` means no breakdown; present but unreadable marks the breakdown partial.
+  const parsedCalls =
+    calls === undefined ? undefined : modelCallUsageSchema.array().safeParse(calls);
+  if (parsedCalls?.success === false) {
+    getLog().warn(
+      { ...context, callsType: Array.isArray(calls) ? 'array' : typeof calls },
+      'dag_loop.signaled_calls_invalid_ignored'
+    );
   }
-  getLog().warn({ ...context, tokens: raw }, 'dag_loop.signaled_tokens_invalid_ignored');
-  return undefined;
+  return sumTokenUsage(
+    [
+      {
+        input,
+        output,
+        ...(cacheRead !== undefined ? { cacheRead: cacheRead as number } : {}),
+        ...(cacheWrite !== undefined ? { cacheWrite: cacheWrite as number } : {}),
+        // A loop that paused on incomplete usage must not resume claiming exact totals.
+        ...(cachePartial === true ? { cachePartial: true as const } : {}),
+        ...(parsedCalls?.success ? { calls: parsedCalls.data } : {}),
+        ...(callsPartial === true || parsedCalls?.success === false
+          ? { callsPartial: true as const }
+          : {}),
+      },
+    ],
+    context
+  );
 }
 
 /** Narrow the cumulative cost stored beside signaledTokens in a loop gate. */
@@ -474,7 +490,15 @@ function readLoopGate(
       ? savedApproval
       : undefined;
   let savedExecution =
-    gate?.execution === undefined ? undefined : nodeExecutionMetadataSchema.parse(gate.execution);
+    gate?.execution === undefined
+      ? undefined
+      : nodeExecutionMetadataSchema.parse(
+          readableRequestEvidence(
+            gate.execution,
+            { spend: ['spend'] },
+            { runId: workflowRun.id, path: node.id }
+          )
+        );
   if (
     savedExecution !== undefined &&
     nodeInvocationKey(savedExecution.path, savedExecution.invocation.loopPath) !==
