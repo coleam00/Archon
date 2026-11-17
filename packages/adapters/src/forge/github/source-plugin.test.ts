@@ -154,6 +154,48 @@ describe('GitHub source plugin', () => {
     expect(recorded.calls[0]?.bindings).toHaveLength(2);
   });
 
+  test('puts only a mapping binding on its item, and refuses one whose item field is absent', async () => {
+    const recorded = recorder();
+    const github = await adapter(
+      config([
+        binding({ bindingId: 'on-item', item: { field: 'check.unit.name', prefix: 'check-' } }),
+        binding({ bindingId: 'no-item' }),
+        binding({ bindingId: 'needs-result', item: { field: 'check.result' } }),
+      ]),
+      recorded.intake
+    );
+    const payload = JSON.stringify(checkRunPayload());
+
+    await github.receiveWebhook(payload, sign(payload), 'delivery-items', 'check_run');
+
+    const [acceptance] = recorded.calls;
+    expect(acceptance?.receipt.itemKey).toBeUndefined();
+    expect(acceptance?.bindings.map(b => [b.bindingId, b.itemKey])).toEqual([
+      ['on-item', 'check-build'],
+      ['no-item', undefined],
+    ]);
+    expect(acceptance?.evaluatedBindings).toEqual([
+      {
+        bindingId: 'needs-result',
+        bindingRevision: expect.any(String),
+        status: 'rejected',
+        reason: "Item: field 'check.result' is missing",
+      },
+    ]);
+  });
+
+  test('refuses an item field the selected event kind does not carry', () => {
+    const parsed = githubWebhookSourceConfigSchema.safeParse({
+      version: 1,
+      webhookSecretEnv: 'ARCHON_SOURCE_PLUGIN_TEST_SECRET',
+      host: 'github.com',
+      bindings: [binding({ item: { field: 'subject.number' } })],
+    });
+    expect(parsed.error?.issues.map(issue => [issue.path.join('.'), issue.message])).toEqual([
+      ['bindings.0.item.field', 'subject.number is unavailable for check.changed'],
+    ]);
+  });
+
   test('authenticates signed delivery and resolves its configured binding', async () => {
     const recorded = recorder();
     const github = await adapter(config(), recorded.intake);

@@ -52,14 +52,15 @@ export async function insertStartReceipt(
   for (const binding of input.bindings) {
     await query(
       `INSERT INTO remote_agent_start_receipt_bindings
-       (receipt_id,binding_id,binding_revision,host_id,intent,event_input_names,checkout_from,preparation_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'pending')`,
+       (receipt_id,binding_id,binding_revision,host_id,intent,event_input_names,checkout_from,item_key,preparation_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending')`,
       [
         input.receipt.id,
         binding.bindingId,
         binding.bindingRevision,
         binding.hostId,
         ...storableIntent(binding),
+        binding.itemKey ?? null,
       ]
     );
   }
@@ -85,13 +86,13 @@ export async function insertStartReceipt(
  * inputs are merged into `launch.inputs` (an older binary passes them through, as it
  * always did) and their names go to `event_input_names`. A checkout hand-off goes to
  * `checkout_from`; `launch.isolation` already names its branch, so an older binary starts
- * the stage on that branch without the commit pin or a read-only copy. `readStoredIntent`
- * reverses it.
+ * the stage on that branch without the commit pin or a read-only copy. The binding's item
+ * key goes to its own `item_key` column. `readStoredIntent` reverses it.
  */
 function storableIntent(
   binding: ResourceStartBindingIntent
 ): [string, string | null, string | null] {
-  const { eventInputs, checkoutFrom, ...intent } = binding;
+  const { eventInputs, checkoutFrom, itemKey: _itemKey, ...intent } = binding;
   const handoff = checkoutFrom ? JSON.stringify(checkoutFrom) : null;
   if (!eventInputs || Object.keys(eventInputs).length === 0)
     return [JSON.stringify(intent), null, handoff];
