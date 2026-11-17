@@ -53,7 +53,7 @@ export const RESULT_COMMIT_METADATA_KEY = 'result_commit';
  * lock is not on the commit it started on or saw HEAD move since its first pass began), `concurrent` (the `returns:` node ran,
  * or could have run, beside other nodes, which may have moved the checkout while it judged), `unobserved` (no
  * `returns:` node completed in the pass that completed the run: none is declared, or a
- * resume replayed it; HEAD keeps no reflog to show it did not move; or a run that takes no
+ * resume replayed it; HEAD or its branch keeps no reflog to show it did not move; or a run that takes no
  * path lock has no git start commit or start mark recorded, as on a resume).
  */
 export const resultCommitSchema = z.discriminatedUnion('held', [

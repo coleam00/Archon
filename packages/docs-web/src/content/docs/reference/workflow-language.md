@@ -1799,8 +1799,9 @@ inputs:
     count;
   - anything moved HEAD after the `returns:` node completed, even to another commit and back,
     so the result is not taken to be about a commit it never judged. The engine sees a move in
-    the reflog of HEAD and of its branch; a checkout whose HEAD keeps no reflog
-    (`core.logAllRefUpdates` off) cannot show it did not move, so its results hold at no
+    the reflog of HEAD and of its branch; a checkout whose HEAD, or the branch it is
+    on, keeps no reflog (`core.logAllRefUpdates` off when it was created) cannot show it did
+    not move, so its results hold at no
     commit;
   - another node of the same layer ran, or could still start, beside the `returns:` node. It
     may have moved the checkout while the `returns:` node judged, and the engine cannot tell

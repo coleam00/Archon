@@ -118,12 +118,22 @@ function scratchRepo(): { cwd: string; git: (...args: string[]) => string } {
  * Another process moves the checkout from X to Y while the run judges, then back to X
  * before the returns node completes: every commit sample reads X.
  */
-async function resultAfterExcursion(mutatesCheckout: boolean, excursion: boolean) {
+async function resultAfterExcursion(
+  mutatesCheckout: boolean,
+  excursion: 'none' | 'detached' | 'unlogged-branch'
+) {
   const { cwd, git } = scratchRepo();
   const x = git('rev-parse', 'HEAD');
   git('commit', '-q', '--allow-empty', '-m', 'Y');
   const y = git('rev-parse', 'HEAD');
   git('checkout', '-q', '--detach', x);
+  if (excursion === 'unlogged-branch') {
+    // HEAD keeps its log; the branch it is on has none.
+    git('config', 'core.logAllRefUpdates', 'false');
+    git('branch', 'judged', x);
+    git('checkout', '-q', 'judged');
+    git('worktree', 'add', '-q', '--detach', trackTempRoot(`${cwd}-other`));
+  }
   const returnsCheckout: ReturnsCheckout = {
     nodeId: 'judge',
     ...(mutatesCheckout ? {} : { startMark: await readCheckoutMark(cwd, host) }),
@@ -145,9 +155,14 @@ async function resultAfterExcursion(mutatesCheckout: boolean, excursion: boolean
   };
   const ctx = { ...run, stepNamePrefix: '' };
   const moveAway = (): void => {
-    if (!excursion) return;
-    git('checkout', '-q', '--detach', y);
-    git('checkout', '-q', '--detach', x);
+    if (excursion === 'detached') {
+      git('checkout', '-q', '--detach', y);
+      git('checkout', '-q', '--detach', x);
+    } else if (excursion === 'unlogged-branch') {
+      // Another worktree moves the branch, which writes this checkout's HEAD log not at all.
+      git('-C', `${cwd}-other`, 'update-ref', 'refs/heads/judged', y);
+      git('-C', `${cwd}-other`, 'update-ref', 'refs/heads/judged', x);
+    }
   };
   // A run that takes no path lock is exposed from its start; one that takes the lock is
   // exposed only to a writer that ignores it, after its returns node.
@@ -158,16 +173,23 @@ async function resultAfterExcursion(mutatesCheckout: boolean, excursion: boolean
 }
 
 test('a run that takes no path lock holds at no commit when its checkout moved and came back', async () => {
-  const { held } = await resultAfterExcursion(false, true);
+  const { held } = await resultAfterExcursion(false, 'detached');
   expect(held).toEqual({ held: false, reason: 'moved' });
 });
 
 test('a run that takes no path lock holds at its commit when nothing moved', async () => {
-  const { x, held } = await resultAfterExcursion(false, false);
+  const { x, held } = await resultAfterExcursion(false, 'none');
   expect(held).toEqual({ held: true, commit: x });
 });
 
 test('a run holds at no commit when its checkout moved and came back after its returns node', async () => {
-  const { held } = await resultAfterExcursion(true, true);
+  const { held } = await resultAfterExcursion(true, 'detached');
   expect(held).toEqual({ held: false, reason: 'moved' });
+});
+
+test('a result holds at no commit when its branch keeps no log, before or after its returns node', async () => {
+  for (const mutatesCheckout of [false, true]) {
+    const { held } = await resultAfterExcursion(mutatesCheckout, 'unlogged-branch');
+    expect(held).toEqual({ held: false, reason: 'unobserved' });
+  }
 });

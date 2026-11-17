@@ -11,8 +11,8 @@ import { hasGitMarker, runGit, text } from './checkout-observation';
  * the branch it is on (a ref update that bypasses HEAD logs only to the branch). Two equal
  * marks mean nothing moved HEAD between them, which two equal commit samples cannot show:
  * a checkout moved to another commit and back reads the same commit twice. Null when the
- * moves cannot be seen: a container backend, a failed read, or a checkout whose HEAD keeps
- * no reflog (`core.logAllRefUpdates` off). A caller treats null as "may have moved".
+ * moves cannot be seen: a container backend, a failed read, or a checkout whose HEAD or
+ * branch keeps no reflog (`core.logAllRefUpdates` off when it was created). A caller treats null as "may have moved".
  */
 export async function readCheckoutMark(
   cwd: string,
@@ -27,7 +27,9 @@ export async function readCheckoutMark(
   if (symbolic.code !== 0 && symbolic.code !== 1) return null;
   const ref = symbolic.code === 0 ? text(symbolic.stdout) : '';
   const branch = ref === '' ? null : await runGit(cwd, ['reflog', 'show', format, ref, '--']);
-  if (branch !== null && branch.code !== 0) return null;
+  // An empty log is no evidence: another worktree can move an unlogged branch, and with
+  // it this checkout, without writing this checkout's HEAD log.
+  if (branch !== null && (branch.code !== 0 || branch.stdout.length === 0)) return null;
   return createHash('sha256')
     .update(head.stdout)
     .update(`\0${ref}\0`)
