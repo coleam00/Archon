@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { makeTestWorkflow } from './test-utils';
-import type { DryRunStubValue } from './dry-run';
-import { dryRunWorkflow, createDryRunStubScaffold } from './dry-run-test-utils';
+import { formatDryRunTrace, type DryRunStubValue } from './dry-run';
+import { dryRunWorkflow, createDryRunStubScaffold, useDryRunFiles } from './dry-run-test-utils';
+
+const { temporaryDirectory } = useDryRunFiles();
 
 describe('dry-run gates and waits', () => {
   test('auto-approves or pauses approval gates', async () => {
@@ -109,6 +113,165 @@ describe('dry-run gates and waits', () => {
       state: 'paused',
       resolvedText: 'Rerun e2e-smoke (fail), then resume this run.',
     });
+  });
+
+  test.each([
+    {
+      name: 'an unoffered recommendation',
+      declaration: {
+        recommendation: '$decide.output.recommendation',
+      },
+      options: [{ id: 'hold' }],
+      expected: "'recommendation' names option 'ship', which the wait does not offer",
+    },
+    {
+      name: 'duplicate option ids',
+      declaration: {},
+      options: [{ id: 'hold' }, { id: 'hold' }],
+      expected: "'hold' is declared more than once",
+    },
+    {
+      name: "an option using the reserved 'other' id",
+      declaration: { other: true },
+      options: [{ id: 'other' }],
+      expected: "option id 'other' is reserved when 'other: true' is set",
+    },
+    {
+      name: 'an empty question',
+      declaration: {},
+      options: [{ id: 'hold' }],
+      expected: "resolved 'attention' to an empty message",
+    },
+  ])(
+    'refuses $name with and without an answer stub',
+    async ({ declaration, options, expected }) => {
+      for (const answered of [false, true]) {
+        const result = await dryRunWorkflow({
+          workflow: makeTestWorkflow({
+            name: 'invalid-attention-ask',
+            nodes: [
+              { id: 'decide', bash: 'unused' },
+              {
+                id: 'ask',
+                depends_on: ['decide'],
+                wait: {
+                  attention: '$decide.output.question',
+                  form: 'select',
+                  options: '$decide.output.options',
+                  ...declaration,
+                },
+              },
+            ],
+          }),
+          stubs: {
+            decide: {
+              question: expected.includes('empty message') ? '' : 'Merge it?',
+              options,
+              recommendation: { option: 'ship', why: 'Not offered.' },
+            },
+            ...(answered ? { ask: { decision: 'hold', text: '' } } : {}),
+          },
+        });
+
+        expect(result.outcome, `answered=${String(answered)}`).toBe('failed');
+        const failure = result.trace.find(entry => entry.state === 'failed');
+        expect(failure, `answered=${String(answered)}`).toMatchObject({
+          nodeId: 'ask',
+          nodeType: 'wait',
+          reason: expect.stringContaining(expected),
+        });
+      }
+    }
+  );
+
+  test('shows the complete resolved ask when it pauses or is answered', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'resolved-attention-ask',
+      nodes: [
+        { id: 'decide', bash: 'unused' },
+        {
+          id: 'ask',
+          depends_on: ['decide'],
+          wait: {
+            attention: '$decide.output.question',
+            form: 'select',
+            options: '$decide.output.options',
+            recommendation: '$decide.output.recommendation',
+            labels: { stage: 'deliver', area: '$decide.output.area' },
+            other: true,
+          },
+        },
+      ],
+    });
+    const decide = {
+      question: 'Merge it?',
+      options: [{ id: 'merge', label: 'Merge' }],
+      recommendation: { option: 'merge', why: 'Review is ready.', confidence: 'high' },
+      area: 'delivery',
+    };
+    const attentionAsk = {
+      form: 'select',
+      options: [
+        { id: 'merge', label: 'Merge' },
+        {
+          id: 'other',
+          label: 'Other',
+          does: 'None of these. The answer text says what to do instead.',
+        },
+      ],
+      recommendation: { option: 'merge', why: 'Review is ready.', confidence: 'high' },
+      labels: { stage: 'deliver', area: 'delivery' },
+      other: true,
+    };
+
+    for (const answered of [false, true]) {
+      const result = await dryRunWorkflow({
+        workflow,
+        stubs: {
+          decide,
+          ...(answered ? { ask: { decision: 'merge', text: 'go' } } : {}),
+        },
+      });
+      expect(result.outcome, `answered=${String(answered)}`).toBe(
+        answered ? 'completed' : 'paused'
+      );
+      expect(result.trace.at(-1), `answered=${String(answered)}`).toMatchObject({
+        nodeId: 'ask',
+        state: answered ? 'stubbed' : 'paused',
+        resolvedText: 'Merge it?',
+        attentionAsk,
+      });
+    }
+    expect(formatDryRunTrace(await dryRunWorkflow({ workflow, stubs: { decide } }))).toContain(
+      '"area":"delivery"'
+    );
+  });
+
+  test('a pure-stub attention wait creates no scratch directory', async () => {
+    const home = temporaryDirectory();
+    const previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = home;
+    try {
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'stub-only-attention',
+          nodes: [
+            {
+              id: 'ask',
+              wait: { attention: 'Merge it?', form: 'select', options: [{ id: 'merge' }] },
+            },
+          ],
+        }),
+        stubs: { ask: { decision: 'merge', text: '' } },
+        execCode: true,
+      });
+
+      expect(result.outcome).toBe('completed');
+      expect(existsSync(join(home, 'temp'))).toBe(false);
+    } finally {
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+    }
   });
 
   test.each([

@@ -1,4 +1,5 @@
-import { resolveAttentionDeclaration, substituteWaitMessage } from '../../dag/references';
+import { resolveAttentionAsk } from '../../dag/attention-ask';
+import { substituteWaitMessage } from '../../dag/references';
 import {
   type AttentionAnswer,
   attentionAnswerSchema,
@@ -11,6 +12,7 @@ import {
   type WaitCondition,
   type WaitNode,
 } from '../../schemas';
+import type { AttentionOption } from '../../schemas/wait-node';
 import { stubFor, type DryRunContext } from '../context';
 import { completedOutput, type DryRunStubValue } from '../stubs';
 
@@ -21,14 +23,9 @@ export function simulateWait(
   iteration?: number
 ): void {
   const condition = waitCondition(node.wait);
-  const resolvedText =
-    condition.kind === 'attention'
-      ? substituteWaitMessage(
-          condition.message,
-          { nodeOutputs: outputs, loopBodyScopes: ctx.loopBodyScopes },
-          ctx.inputs
-        ).trim()
-      : undefined;
+  const attention = resolveSimulatedAttentionAsk(node, outputs, ctx);
+  const resolvedText = attention?.message;
+  const attentionAsk = attention?.trace;
   // An authored stub answers an attention wait, as an answer completes it in a real
   // run. Without one the simulation stops where the run would pause.
   const answer =
@@ -38,7 +35,9 @@ export function simulateWait(
   if (answer !== undefined) {
     const hydrated = completedOutput(
       node,
-      condition.kind === 'attention' ? stubAnswerOutput(node, condition, answer, outputs) : answer
+      condition.kind === 'attention'
+        ? stubAnswerOutput(node, condition, answer, attention?.options)
+        : answer
     );
     outputs.set(node.id, hydrated);
     ctx.trace.push({
@@ -48,6 +47,7 @@ export function simulateWait(
       reason: 'answered by stub',
       resolvedText,
       output: hydrated.output,
+      ...(attentionAsk !== undefined ? { attentionAsk } : {}),
       ...(iteration ? { iteration } : {}),
     });
     return;
@@ -59,9 +59,36 @@ export function simulateWait(
     state: 'paused',
     reason: 'durable wait',
     ...(resolvedText !== undefined ? { resolvedText } : {}),
+    ...(attentionAsk !== undefined ? { attentionAsk } : {}),
     ...(iteration ? { iteration } : {}),
   });
   ctx.halted = 'paused';
+}
+
+function resolveSimulatedAttentionAsk(
+  node: WaitNode,
+  outputs: Map<string, NodeOutput>,
+  ctx: DryRunContext
+) {
+  const condition = waitCondition(node.wait);
+  if (condition.kind !== 'attention') return undefined;
+  const render = (text: string): string =>
+    substituteWaitMessage(
+      text,
+      { nodeOutputs: outputs, loopBodyScopes: ctx.loopBodyScopes },
+      ctx.inputs
+    );
+  const ask = resolveAttentionAsk(node.id, condition, outputs, render);
+  return {
+    ...ask,
+    trace: {
+      form: condition.form,
+      ...(ask.options !== undefined ? { options: ask.options } : {}),
+      ...(ask.recommendation !== undefined ? { recommendation: ask.recommendation } : {}),
+      ...(ask.labels !== undefined ? { labels: ask.labels } : {}),
+      ...(condition.other === true ? { other: true as const } : {}),
+    },
+  };
 }
 
 /**
@@ -74,9 +101,8 @@ function stubAnswerOutput(
   node: DagNode,
   condition: Extract<WaitCondition, { kind: 'attention' }>,
   answer: DryRunStubValue,
-  outputs: ReadonlyMap<string, NodeOutput>
+  options: readonly AttentionOption[] | undefined
 ): DryRunStubValue {
-  const { options } = resolveAttentionDeclaration(node.id, condition, outputs);
   // The output contract already held, so a string stub is one JSON document.
   const raw: unknown = typeof answer === 'string' ? JSON.parse(answer) : answer;
   const { value: stubbed, ...fields } = isPlainRecord(raw) ? raw : {};

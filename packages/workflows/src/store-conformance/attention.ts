@@ -239,6 +239,19 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
       expect(await store.answerAttentionWait(run.id, attentionAnswer('use-main', 'stale'))).toEqual(
         { answered: false }
       );
+      expect(
+        await store.answerAttentionWait(run.id, attentionAnswer('use-main', 'sibling-ask'))
+      ).toEqual({ answered: false });
+      await rejection(store.resumeWorkflowRun(run.id, cursor));
+      expect((await store.getWorkflowRun(run.id))?.metadata.wait).toMatchObject({
+        pauseId: 'ask-1',
+      });
+      expect((await store.getWorkflowRun(run.id))?.metadata.wait).not.toHaveProperty('answer');
+      expect(
+        (await store.listWorkflowEvents(run.id)).filter(
+          event => event.event_type === 'wait_answered'
+        )
+      ).toEqual([]);
 
       const results = await eight(index =>
         store.answerAttentionWait(run.id, attentionAnswer(index === 0 ? 'use-main' : 'use-dev'))

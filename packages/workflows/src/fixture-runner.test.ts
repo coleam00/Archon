@@ -191,6 +191,7 @@ describe('parseFixtureFile', () => {
       reached: ['node-a'],
       inputs: { branch: 'task-123' },
       'resolved-text-contains': { 'node-a': 'task-123' },
+      'wait-labels': { 'node-a': { stage: 'deliver' } },
     };
     expect(parseFixtureFile(Bun.YAML.stringify({ fixture: declaration }), 'x').declaration).toEqual(
       declaration
@@ -788,6 +789,57 @@ describe('runFixtures', () => {
     });
 
     expect(report.passed).toBe(1);
+  });
+
+  it.each([
+    { expected: 'deliver', passes: true },
+    { expected: 'wrong', passes: false },
+  ])('asserts exact resolved wait labels ($passes)', async ({ expected, passes }) => {
+    const { cwd } = writeTempProject({
+      workflowYaml: [
+        'name: test-wf',
+        'description: test',
+        'nodes:',
+        '  - id: decide',
+        '    bash: unused',
+        '  - id: ask',
+        '    depends_on: [decide]',
+        '    wait:',
+        '      attention: Merge it?',
+        '      form: select',
+        '      options: [{ id: merge }]',
+        '      labels:',
+        '        stage: $decide.output.stage',
+        '        area: delivery',
+      ].join('\n'),
+      body: [
+        'fixture:',
+        '  expect: paused',
+        '  wait-labels:',
+        '    ask:',
+        `      stage: ${expected}`,
+        '      area: delivery',
+        'decide:',
+        '  stage: deliver',
+      ].join('\n'),
+    });
+
+    const report = await runFixtures({
+      workflows: workflowsOnDisk(cwd, ['test-wf']),
+      cwd,
+    });
+
+    expect(report.results[0]?.pass).toBe(passes);
+    if (!passes) {
+      expect(report.results[0]?.failureReason).toBe(
+        'expected wait \'ask\' labels to equal {"stage":"wrong","area":"delivery"}'
+      );
+      expect(report.results[0]?.trace).toEqual([
+        expect.objectContaining({ nodeId: 'decide', state: 'stubbed' }),
+        expect.objectContaining({ nodeId: 'ask', state: 'paused' }),
+      ]);
+      expect(JSON.stringify(report.results[0]?.trace)).not.toContain('attentionAsk');
+    }
   });
 
   it('matches a multi-line fragment against a command file checked out with CRLF', async () => {
