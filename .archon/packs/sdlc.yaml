@@ -2,3 +2,8 @@
 settings:
   # A change to the pack itself never merges on the auto lane: a maintainer reads it first.
   protected_paths: ".archon/workflows/**,.archon/commands/**,.archon/scripts/**,.archon/packs/**"
+  # Nothing merges until a maintainer approved the pull request at exactly its head. Under
+  # auto, whether an earlier approval still held after a conflict round was the sweep
+  # agent's reading, and it let a non-merge commit through (pull request 5815). Back to
+  # auto when an approval holds at a commit by an engine rule (issue 5769).
+  merge_lane: manual
