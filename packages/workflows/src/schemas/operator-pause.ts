@@ -24,7 +24,7 @@ const storedActSchema = z
  * `pausedAt`; the executor's running-to-paused transition sets it; any resume clears the
  * whole record, so a request a gate pause overtook ends with that gate's resume.
  */
-export const operatorPauseRecordSchema = z.object({
+const operatorPauseRecordSchema = z.object({
   requested: storedActSchema,
   pausedAt: z.string().datetime().optional(),
 });
