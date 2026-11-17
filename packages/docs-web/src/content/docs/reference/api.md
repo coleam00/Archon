@@ -559,7 +559,8 @@ Process-owner liveness is `owner_observation`, which dashboard runs and the run 
 `archon workflow wait` uses for `owner_lost`: `reachable` when an owner answers,
 `unreachable` when the recorded owner is on the server's host and user and nothing answers,
 and `unknown` when the server cannot observe the owner (another host or user, no recorded
-owner, or no answer in time). It is `null` for a run that is not running. It is never stored
+owner, or no answer in time). It is observed for a running run and for a paused parent
+whose sub-run tree runs in its process, and is `null` for any other run. It is never stored
 and never changes `status`; how long a run has been quiet is not an input. The console shows
 a run whose owner is `unreachable` or `unknown` as not live and offers Abandon for
 `unreachable`.

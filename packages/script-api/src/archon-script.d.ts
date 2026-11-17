@@ -2053,6 +2053,12 @@ declare module 'archon:script' {
         readonly requestId: string;
         readonly hostId: string;
       } | null;
+      readonly heldBehind: {
+        readonly runId: string;
+        readonly workflow: string;
+        readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
+      } | null;
     }>;
     readonly queued: ReadonlyArray<{
       readonly requestId: string;
@@ -2061,6 +2067,23 @@ declare module 'archon:script' {
       readonly hostId: string;
       readonly queuedAt: string;
       readonly ahead: number;
+      readonly heldBehind: {
+        readonly runId: string;
+        readonly workflow: string;
+        readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
+      } | null;
+    }>;
+    readonly skipped: ReadonlyArray<{
+      readonly requestId: string;
+      readonly workflow: string | null;
+      readonly resource: string;
+      readonly heldBehind: {
+        readonly runId: string;
+        readonly workflow: string;
+        readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
+      } | null;
     }>;
     readonly questions: ReadonlyArray<{
       readonly kind: 'attention';
@@ -2224,6 +2247,39 @@ declare module 'archon:script' {
       };
       readonly reason: 'malformed_tool_call_attention' | 'malformed_gate' | 'unrecognized_gate_type' | 'child_pointer_missing' | 'child_run_missing' | 'child_chain_too_deep' | 'source_release_not_continued';
       readonly detail: string;
+    } | {
+      readonly kind: 'owner_lost';
+      readonly ref: string;
+      readonly project: {
+        readonly key: string;
+        readonly codebaseId: string | null;
+        readonly name: string;
+      } | null;
+      readonly item?: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      };
+      readonly revision: number;
+      readonly labels: Readonly<Record<string, string>>;
+      readonly pausedAt: string | null;
+      readonly run: {
+        readonly id: string;
+        readonly workflow: string;
+        readonly parentRunId: string | null;
+        readonly fanOut: {
+          readonly parentRunId: string;
+          readonly nodeId: string;
+          readonly index: number;
+        } | null;
+        readonly context: {
+          readonly artifactsDir: string | null;
+          readonly transcript: string | null;
+          readonly workingPath: string | null;
+          readonly branch: string | null;
+        };
+      };
+      readonly observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
     }>;
     readonly answers: ReadonlyArray<{
       readonly kind: 'attention';

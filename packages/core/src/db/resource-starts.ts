@@ -16,7 +16,9 @@ import type {
   ResourceBlocker,
   ResourceStartRequestInspection,
   QueuedResourceStartInspection,
+  SkippedItemStart,
 } from '@archon/workflows/resource-start-store';
+import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 export { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 export type {
   StartBindingInspection,
@@ -38,9 +40,11 @@ import {
   checkoutHandoffSchema,
 } from '@archon/workflows/schemas/resource-start';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
-import { getDatabase, getDatabaseType, getDialect } from './connection';
+import { getDatabase, getDialect } from './connection';
 import {
   addResourceSlotHolder,
+  liveItemRuns,
+  lockAdmission,
   lockResourceSlot,
   lockResourceSlotForAdmission,
   resourceStartOccupancy,
@@ -49,6 +53,10 @@ import {
 } from './resource-slots';
 import { loadResourceCapacities } from '../config/concurrency-config';
 import { insertWorkflowRun } from './workflows';
+import { getLog } from './workflow-run-shared';
+import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
+import { holdsItem, itemHolder, itemHolders } from '@archon/workflows/item-hold';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { ensureItem } from './items';
 import { WorkflowStatusReadError } from './workflow-run-reads';
 import { insertStartReceipt } from './start-receipt-writes';
@@ -63,12 +71,6 @@ interface RequestRow {
   blocker_run_id: string | null;
   blocker_kind: NonNullable<ResourceStartRequestInspection['blocker']>['kind'] | null;
   launch: unknown;
-}
-
-// Different resource rows can reserve the same checkout. Hold one transaction lock
-// across occupancy and publication; SQLite already serializes writers.
-async function lockCheckoutReservations(query: Query): Promise<void> {
-  if (getDatabaseType() === 'postgresql') await query('SELECT pg_advisory_xact_lock(1797)');
 }
 
 /** Start requests are the run holder's durable FIFO waiters for a resource slot. */
@@ -119,7 +121,7 @@ async function admitResourceStartWithQuery(
   intent: ResourceStartIntent,
   itemId: string | null = null
 ): Promise<ResourceStartDisposition> {
-  await lockCheckoutReservations(query);
+  await lockAdmission(query);
   const { capacity } = await lockResourceSlotForAdmission(query, intent.resource, intent.capacity);
   const existing = await query<RequestRow>(
     'SELECT * FROM remote_agent_resource_start_requests WHERE id = $1',
@@ -131,7 +133,8 @@ async function admitResourceStartWithQuery(
   const blocker = resourceStartBlocker(
     await resourceStartOccupancy(query, intent.resource, capacity),
     launch,
-    intent.hostId
+    intent.hostId,
+    itemId
   );
   const status = blocker && intent.overlap === 'skip' ? 'skipped' : 'queued';
   await query(
@@ -220,7 +223,7 @@ export async function admitPendingRun(input: {
   const launch = preparedWorkflowLaunchSchema.parse(input.launch);
   const id = launch.run.id;
   return getDatabase().withTransaction(async query => {
-    await lockCheckoutReservations(query);
+    await lockAdmission(query);
     // A hand start is checked against its own number and leaves the slot's recorded one.
     await lockResourceSlot(query, input.resource);
     const capacity = (await loadResourceCapacities()).get(input.resource) ?? input.capacity;
@@ -231,16 +234,18 @@ export async function admitPendingRun(input: {
     const request = existing.rows[0];
     if (request?.status === 'admitted') return null;
     if (request) throw new Error(`Run '${id}' already has a ${request.status} resource request`);
-    const run = await query<{ status: string }>(
-      'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+    const run = await query<{ status: string; item_id: string | null }>(
+      'SELECT status, item_id FROM remote_agent_workflow_runs WHERE id = $1',
       [id]
     );
     const status = run.rows[0]?.status;
     if (status !== 'pending') throw new Error(`Run '${id}' is ${status ?? 'missing'}, not pending`);
+    const itemId = run.rows[0]?.item_id;
     const blocker = resourceStartBlocker(
       await resourceStartOccupancy(query, input.resource, capacity),
       launch,
-      DIRECT_START_HOST_ID
+      DIRECT_START_HOST_ID,
+      itemId == null ? null : String(itemId)
     );
     if (blocker) return blocker;
     await query(
@@ -260,7 +265,7 @@ export async function drainResourceStarts(options: {
   hostId: string;
 }): Promise<ResourceStartDisposition[]> {
   return getDatabase().withTransaction(async query => {
-    await lockCheckoutReservations(query);
+    await lockAdmission(query);
     const { capacity } = await lockResourceSlotForAdmission(query, options.resource);
     const slot = await resourceStartOccupancy(query, options.resource, capacity);
     const admitted: ResourceStartDisposition[] = [];
@@ -516,6 +521,79 @@ export async function getResourceStartRequest(
     [id]
   );
   return result.rows[0] ? inspectRequest(result.rows[0]) : null;
+}
+
+export async function listSkippedItemStarts(itemId: string): Promise<SkippedItemStart[]> {
+  const result = await getDatabase().query<{
+    id: string;
+    resource_key: string;
+    blocker_kind: string | null;
+    blocker_run_id: string | null;
+    launch: unknown;
+  }>(
+    `SELECT id, resource_key, blocker_kind, blocker_run_id, launch
+       FROM remote_agent_resource_start_requests
+      WHERE item_id = $1 AND status = 'skipped'
+      ORDER BY queue_position`,
+    [itemId]
+  );
+  return result.rows.map(row => ({
+    requestId: row.id,
+    workflow: storedWorkflowName(row.launch),
+    resource: row.resource_key,
+    blockerRunId: row.blocker_kind === 'run' ? row.blocker_run_id : null,
+  }));
+}
+
+/** Runs by id; a row that cannot be normalized is reported `run_unreadable`. */
+async function readRunsForAttention(ids: readonly string[]): Promise<AttentionRead<WorkflowRun>[]> {
+  const runs: AttentionRead<WorkflowRun>[] = [];
+  for (const id of ids) {
+    const row = (
+      await getDatabase().query<WorkflowRunRow>(
+        'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
+        [id]
+      )
+    ).rows[0];
+    if (row === undefined) continue;
+    try {
+      runs.push(normalizeWorkflowRun(row));
+    } catch {
+      // Parser errors can quote stored data, including message text.
+      getLog().error({ workflowRunId: id }, 'attention_run_normalization_failed');
+      runs.push({ type: 'degraded', reason: 'run_unreadable', runId: id });
+    }
+  }
+  return runs;
+}
+
+export async function listWaitedItemHolders(): Promise<AttentionRead<WorkflowRun>[]> {
+  const db = getDatabase();
+  const runs = await liveItemRuns(db.query.bind(db));
+  const queued = await db.query<{ id: string; item_id: string; launch: unknown }>(
+    `SELECT id, item_id, launch FROM remote_agent_resource_start_requests
+      WHERE status = 'queued' AND item_id IS NOT NULL`
+  );
+  const held = itemHolders(runs);
+  const waiting = [
+    ...runs
+      .filter(run => !holdsItem(run))
+      .map(run => ({ runId: run.id, workflow: run.workflow_name, itemId: run.item_id })),
+    ...queued.rows.flatMap(row => {
+      const launch = preparedWorkflowLaunchSchema.safeParse(parseStoredJson(row.launch));
+      // A damaged request is reported by the trigger reads; it names no workflow here.
+      if (!launch.success) return [];
+      const workflow = launch.data.run.workflow_name;
+      return [{ runId: String(row.id), workflow, itemId: String(row.item_id) }];
+    }),
+  ];
+  const ids = new Set(
+    waiting.flatMap(start => {
+      const holder = itemHolder(held, start);
+      return holder === undefined ? [] : [holder];
+    })
+  );
+  return readRunsForAttention([...ids]);
 }
 
 export async function listQueuedResourceStartsForHost(

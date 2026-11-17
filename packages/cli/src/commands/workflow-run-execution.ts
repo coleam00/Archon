@@ -5,7 +5,11 @@ import {
   type IWorkflowEngine,
   type WorkflowRunSubscription,
 } from '@archon/workflows/engine-port';
-import { leasedResumeCursor, WorkflowResourceBusyError } from '@archon/workflows/store';
+import {
+  leasedResumeCursor,
+  WorkflowItemHeldError,
+  WorkflowResourceBusyError,
+} from '@archon/workflows/store';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import { isTerminalRunStatus, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
@@ -350,8 +354,8 @@ async function resumeRun(
       ...(prepareAdmitted ? { prepareExecution: prepareAdmitted } : {}),
     });
   } catch (error) {
-    // The run is intact; only its resource is busy, so say that and nothing else.
-    if (error instanceof WorkflowResourceBusyError)
+    // The run is intact; only its resource or its item is busy, so say that and nothing else.
+    if (error instanceof WorkflowResourceBusyError || error instanceof WorkflowItemHeldError)
       throw new Error(`Cannot resume workflow '${workflowName}' now: ${error.message}`, {
         cause: error,
       });
