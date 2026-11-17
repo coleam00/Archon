@@ -37,6 +37,7 @@ import { printRequestedBy, type RequestedBy } from '../utils/requested-by';
 import {
   formatFanOutOutcome,
   fetchVerboseEvents,
+  printLoopRounds,
   printVerboseNodes,
 } from './workflow-node-summaries';
 
@@ -483,6 +484,7 @@ export function printRunDetail(
       for (const w of parseWarnings) console.log(`    - ${w}`);
     }
     printVerboseNodes(events);
+    printLoopRounds(run, events);
   }
 }
 

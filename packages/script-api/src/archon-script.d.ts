@@ -2039,6 +2039,7 @@ declare module 'archon:script' {
       readonly cause: {
         readonly kind: 'run_ended';
         readonly runId: string;
+        readonly sourceInstanceId: string;
       } | {
         readonly kind: 'run_fired';
         readonly runId: string;

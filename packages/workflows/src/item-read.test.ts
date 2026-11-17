@@ -283,7 +283,7 @@ describe('reading an item', () => {
         outcome: null,
         startedAt: '2026-11-01T11:00:00.000Z',
         completedAt: null,
-        cause: { kind: 'run_ended', runId: 'first' },
+        cause: { kind: 'run_ended', runId: 'first', sourceInstanceId: 'review-after-deliver' },
         awaitingExecution: null,
       },
     ]);

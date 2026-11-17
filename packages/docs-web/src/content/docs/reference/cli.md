@@ -347,7 +347,7 @@ A real run prints a JSON payload only with `--detach`. Without it, `--json` supp
 
 | Flag | Effect |
 |------|--------|
-| `--workflow-source <path>` | Read the workflow, its commands, and its scripts from this directory instead of `--cwd`. Lets an **uncommitted** workflow in one checkout run against a different checkout, repository, or folder project, with no commit, push, or merge. Fresh runs only: a resumed run executes the source it already captured. See [Running a workflow from another checkout](#running-a-workflow-from-another-checkout). Repo config is not part of the source: the run reads `.archon/config.yaml` from the launch checkout (`--cwd`); see [Where a run reads `.archon/config.yaml`](/reference/configuration/#where-a-run-reads-archonconfigyaml). |
+| `--workflow-source <path>` | Read the workflow, its commands, and its scripts from this checkout root instead of `--cwd`. `<path>` is the directory that contains `.archon/`: Archon reads `<path>/.archon/workflows`, `.archon/commands`, and `.archon/scripts`. For a pack, pass the checkout that holds `.archon/workflows/<pack>`, not the pack folder. The named workflow must be found there, or the run is refused before it starts. Lets an **uncommitted** workflow in one checkout run against a different checkout, repository, or folder project, with no commit, push, or merge. Fresh runs only: a resumed run executes the source it already captured. See [Running a workflow from another checkout](#running-a-workflow-from-another-checkout). Repo config is not part of the source: the run reads `.archon/config.yaml` from the launch checkout (`--cwd`); see [Where a run reads `.archon/config.yaml`](/reference/configuration/#where-a-run-reads-archonconfigyaml). |
 | `--branch`, `-b <name>` | Branch name for the worktree; reuses a healthy active task worktree registered in Archon for the project and branch, or a usable checkout at the configured target path. If another path holds the branch and was not reused, check for a live Archon run before freeing it and retrying. A worktree created for a named branch is never removed when the run ends; `isolation cleanup --merged` removes it |
 | `--from <branch>`, `--from-branch <branch>` | Start point for the new worktree only. An existing worktree whose history lacks it is refused, not reused; see [Where the run executes](#where-the-run-executes). Unlike `--base`, it does not change the PR target. |
 | `--base-branch <name>` | Choose the project base branch on first registration only. Omit to follow the remote default at use time; no prompt. Rejected for folder projects, existing projects, adoption/supersedes, dry runs, and every subcommand other than `workflow run`. A reachable remote must advertise the branch. With `--base`, this flag stores the project choice while `--base` overrides only this dispatch. |
@@ -427,6 +427,8 @@ archon workflow run archon-implement \
   --cwd ~/checkouts/archon-target \
   "implement the plan"
 ```
+
+`--workflow-source` takes a checkout root, the directory that contains `.archon/`. The workflow named on the command line must resolve from that directory's `.archon/workflows` (a pack in `.archon/workflows/<pack>/` counts). If it does not, the run is refused before it starts. The error names the directory searched, and the scope the name would otherwise have resolved from when another scope has it. Archon never silently runs a bundled, global, or installed workflow of the same name in its place. Commands, scripts, and `include:` or `workflow:` children the named workflow uses may still resolve from your home-scoped or bundled source as usual, so a source can override some of a pack's files only if it holds the pack's named workflow. A run that resolves from the source records `project` as its `metadata.dispatch.source`.
 
 Every run freezes its workflow source when it starts, whether or not you pass this flag. That means the source directory's `.archon/workflows`, `.archon/commands`, and `.archon/scripts`, plus your home-scoped `~/.archon/` source and Archon's own bundled defaults. Everything a static `include:` can reach is frozen together, so an included global or bundled workflow cannot change shape under a run either. That freeze is what makes the rest predictable:
 
@@ -702,7 +704,7 @@ Show detail for a single run by ID, regardless of status (unlike `status`, which
 ```bash
 archon workflow get <run-id>
 archon workflow get <run-id> --json
-archon workflow get <run-id> --verbose   # add the per-node summary
+archon workflow get <run-id> --verbose   # add the per-node summary and loop rounds
 archon workflow get <run-id> --json --verbose
 archon workflow get <run-id> --throughput
 archon workflow get <run-id> --throughput --json
@@ -789,6 +791,18 @@ Verbose JSON node summaries include `execution` for newly recorded work. It iden
 invocation, attempt, provider, requested model and any model the provider reported. Inner retries
 share an invocation; each retry has its own attempt. A new loop-group iteration creates new body
 invocations. Resuming unfinished work keeps its invocation identity.
+
+`nodes` holds each loop body node once, with its latest round. For a run that entered a
+`loop_group`, `--verbose` also prints a `Rounds:` block, and `--json --verbose` adds
+`loop_rounds`: one entry per round, in order, each with its `loop_group_path` (frames
+outermost first, iterations from 1) and the body nodes it reached, with `state`, `error`,
+`started_at` (the invocation's first attempt), `duration_ms` (every attempt's recorded duration summed,
+so a retry counts, the wait between attempts does not; absent until the last attempt ends),
+`output` (bounded as stored, with `output_truncated`): a completed node's output, or the
+stdout a failed `bash:` or `script:` node recorded, and a completed node's `structured_output`. A round still running lists the node it is in;
+nodes it has not reached are absent. A nested loop's rounds are separate entries whose path
+extends the outer round's. The field is absent for a run that ran no loop, and under `--events`.
+The API's `GET /api/workflows/runs/{runId}` serves the same rounds as `run.loop_rounds`.
 
 The run's starting checkout appears as `checkout_baseline` in JSON and as the `Start:` line
 in human output. The engine observes it once, right after the run wins its execution claim
@@ -2618,6 +2632,23 @@ A ruling is a decision recorded on the item without a question having been asked
 A link is a directed relation from one item to another: `depends_on`, `part_of` or `duplicate_of` ([`workflow link`](#workflow-link)). Only accepted links are recorded. Both items' reads show it, with its direction. Ending a link keeps the record with who ended it and when. The engine stores and reports links and acts on none of them; what a link means for an item is for a reading node to judge.
 
 Items need the database store and a registered project. With `store: files`, or in a directory with no project, naming an item fails.
+
+### `pack graph`
+
+Show how a pack's stages connect in this install: each stage with the outcomes it can end with and its nodes, and every [run-ended arrow](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends) between them.
+
+```bash
+archon pack graph <pack> [--cwd <checkout>] [--workflow-source <dir>] [--json]
+```
+
+- `<pack>` is discovered from `--cwd` as `pack bindings` discovers it, and the arrows are those of that checkout's project. With `--workflow-source`, the pack is discovered from there instead, as a binding's `launch.discoveryCwd` discovers it; the arrows are still those of `--cwd`'s project.
+- Each active arrow is checked as a run is checked before it starts. A file that check refuses is shown as `[active, refused: <problem>]`: every run of its ended stage on an item is refused until the file is fixed. A file whose `launch.cwd` no longer exists is shown refused too, because the end of a run never starts it.
+- A declared binding that names a workflow which did not load as a stage is shown with that problem after its arrow, and the load error is listed with the other workflows that failed to load.
+- An arrow the pack declares as a [`run_ended:` binding](/reference/workflow-language/#pack-bindings) is `active` when a trigger file in `ARCHON_HOME/triggers/` launches it in this project, and declared and inactive when none does. A trigger file the pack does not declare is an active arrow with `declared: null`.
+- Each outcome value has `startsNothing` when no active arrow without problems leaves it. The text output lists those, and marks the ones whose stage declares no `asks` as ending in silence.
+- `--json` prints the read, the same shape as [`GET /api/packs/{pack}/graph`](/reference/api/#workflows). The guide shows [the shape and how to draw an item's path with it](/guides/workflow-triggers/#see-how-a-packs-stages-connect).
+
+Workflows that failed to load are listed after the graph, because a stage among them is missing from it. An invalid trigger file fails the command, as it fails item runs. With `store: files`, any run-ended file in the triggers directory is refused, as `trigger check` refuses it.
 
 ### `pack bindings`
 

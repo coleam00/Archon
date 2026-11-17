@@ -26,7 +26,7 @@ import {
 } from '@archon/workflows/schemas/resource-start';
 import type { WorkflowItem, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowDeps } from '@archon/workflows/deps';
-import { declaredOutcome } from '@archon/workflows/completed-outcome';
+import { declaredOutcome, outcomeValues } from '@archon/workflows/completed-outcome';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
@@ -36,6 +36,17 @@ import { getArchonHome } from '@archon/paths';
 /** `ARCHON_HOME/triggers`: where run-ended trigger files are read from. */
 export function getTriggersPath(): string {
   return join(getArchonHome(), 'triggers');
+}
+
+/**
+ * A trigger file in the triggers directory cannot be read as a binding. The message names
+ * the file and what is wrong, so a reader can show it to the operator who owns the file.
+ */
+export class TriggerFileError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'TriggerFileError';
+  }
 }
 
 /** A trigger file whose binding the end of a run starts. */
@@ -69,7 +80,7 @@ export async function readRunEndedBindings(directory: string): Promise<RunEndedB
     // would collide on it and the second start would replay as the first.
     const other = bySource.get(binding.sourceInstanceId);
     if (other)
-      throw new Error(
+      throw new TriggerFileError(
         `Trigger files ${other} and ${binding.file} share sourceInstanceId '${binding.sourceInstanceId}'; each run-ended binding needs its own`
       );
     bySource.set(binding.sourceInstanceId, binding.file);
@@ -84,20 +95,25 @@ async function readRunEndedFile(file: string): Promise<RunEndedBinding | undefin
   try {
     value = JSON.parse(await readFile(file, 'utf8')) as unknown;
   } catch (error) {
-    throw new Error(`Trigger file ${file} is not readable JSON: ${(error as Error).message}`, {
-      cause: error,
-    });
+    throw new TriggerFileError(
+      `Trigger file ${file} is not readable JSON: ${(error as Error).message}`,
+      {
+        cause: error,
+      }
+    );
   }
   if (value === null || typeof value !== 'object' || !('on' in value)) return undefined;
   const parsed = triggerConfigSchema.safeParse(value);
   if (!parsed.success)
-    throw new Error(
+    throw new TriggerFileError(
       `Trigger file ${file} is invalid: ${parsed.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`
     );
   const { on, sourceInstanceId, binding } = parsed.data;
   if (!on) return undefined;
   if (!isAbsolute(binding.launch.cwd))
-    throw new Error(`Trigger file ${file} is invalid: binding.launch.cwd must be absolute`);
+    throw new TriggerFileError(
+      `Trigger file ${file} is invalid: binding.launch.cwd must be absolute`
+    );
   return { file, sourceInstanceId, binding, runEnded: on.runEnded };
 }
 
@@ -111,7 +127,7 @@ export function runEndedBindingProblems(
 ): string[] {
   const problems: string[] = [];
   const form = ended.outcomeForm;
-  const values = form.kind === 'enum' ? form.values : ['succeeded', 'failed'];
+  const values = outcomeValues(form);
   if (!values.includes(runEnded.outcome))
     problems.push(
       `outcome '${runEnded.outcome}' is not one '${runEnded.workflowName}' completes with (${values.map(value => `'${value}'`).join(', ')})`
@@ -221,7 +237,7 @@ export function launchProjectKey(
 }
 
 /** The project a binding launches in; a failure to resolve it names the file. */
-async function bindingProjectKey(
+export async function bindingProjectKey(
   candidate: RunEndedBinding,
   dependencies: Pick<RunEndedStartsDependencies, 'projectKeyOf'>
 ): Promise<string | null> {

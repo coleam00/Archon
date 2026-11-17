@@ -143,7 +143,8 @@ export const RUN_ENDED_SOURCE_ACTOR = 'archon-run-ended';
  * that fired, or another source (a schedule, a webhook, an operator's fire).
  */
 export const startCauseSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('run_ended'), runId: z.string() }),
+  /** `sourceInstanceId` is the run-ended arrow that started the run (see `pack-graph`). */
+  z.object({ kind: z.literal('run_ended'), runId: z.string(), sourceInstanceId: z.string() }),
   z.object({ kind: z.literal('run_fired'), runId: z.string(), node: z.string().nullable() }),
   z.object({ kind: z.literal('receipt'), receiptId: z.string(), sourceInstanceId: z.string() }),
 ]);
@@ -155,7 +156,8 @@ export function startCause(receipt: {
   sourceActor: SourceReceiptInput['sourceActor'];
 }): StartCause {
   const actor = receipt.sourceActor;
-  if (actor?.source === RUN_ENDED_SOURCE_ACTOR) return { kind: 'run_ended', runId: actor.id };
+  if (actor?.source === RUN_ENDED_SOURCE_ACTOR)
+    return { kind: 'run_ended', runId: actor.id, sourceInstanceId: receipt.sourceInstanceId };
   if (actor?.source === RUN_SOURCE_ACTOR)
     return { kind: 'run_fired', runId: actor.id, node: actor.display ?? null };
   return { kind: 'receipt', receiptId: receipt.id, sourceInstanceId: receipt.sourceInstanceId };
