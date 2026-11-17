@@ -8,16 +8,22 @@ import { z } from '@hono/zod-openapi';
 import {
   createForgeInputBindingSchema,
   createForgeBindingSchema,
+  forgeEventFieldSchema,
   forgeEventSelectorSchema,
+  isForgeEventFieldAvailable,
 } from '@archon/forge';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
-import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
+import {
+  itemMappingSchema,
+  resourceStartBindingIntentSchema,
+} from '@archon/workflows/schemas/resource-start';
 
 export const githubSourceBindingSchema = resourceStartBindingIntentSchema
-  .omit({ bindingRevision: true, eventInputs: true, checkoutFrom: true })
+  .omit({ bindingRevision: true, eventInputs: true, checkoutFrom: true, itemKey: true })
   .extend({
     selector: forgeEventSelectorSchema,
     inputMapping: z.record(z.string(), createForgeInputBindingSchema(jsonValueSchema)),
+    item: itemMappingSchema.extend({ field: forgeEventFieldSchema }).optional(),
   });
 
 export const githubWebhookSourceConfigSchema = z
@@ -50,6 +56,12 @@ export const githubWebhookSourceConfigSchema = z
             path: ['bindings', index, ...issue.path],
             message: issue.message,
           });
+      if (binding.item && !isForgeEventFieldAvailable(binding.selector.kind, binding.item.field))
+        context.addIssue({
+          code: 'custom',
+          path: ['bindings', index, 'item', 'field'],
+          message: `${binding.item.field} is unavailable for ${binding.selector.kind}`,
+        });
       if (!isAbsolute(binding.launch.cwd))
         context.addIssue({
           code: 'custom',

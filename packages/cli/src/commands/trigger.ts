@@ -31,6 +31,7 @@ import {
   type AwaitingExecution,
 } from '@archon/workflows/resource-start-store';
 import {
+  mappedItemKey,
   resourceStartBindingIntentSchema,
   RUN_SOURCE_ACTOR,
   requestingRun,
@@ -223,15 +224,39 @@ function assertItemOptions(options: TriggerOptions): void {
   assertItemKey(options.item);
 }
 
-/** The item the fired start is on: `--item`, none with `--no-item`, else the caller's. */
-async function firedItemKey(
+/**
+ * The item a fire's start is on: `--item` first, none with `--no-item`, then the
+ * binding's `item` mapping read from `--inputs`, then the calling run's item. A binding
+ * that maps its item never inherits one, and a fire whose inputs cannot name the item is
+ * refused before anything is recorded. A recorded delivery keeps its first acceptance's
+ * item, so only `--item` and `--no-item` are read for it.
+ */
+async function fireItemKey(
   host: WorkflowHost,
-  options: TriggerOptions,
-  sourceActor: SourceReceiptInput['sourceActor'],
-  start: { cwd: string; recorded: boolean }
+  fire: {
+    config: TriggerConfig;
+    explicit: string | undefined;
+    noItem: boolean;
+    eventInputs: Readonly<Record<string, unknown>> | undefined;
+    sourceActor: SourceReceiptInput['sourceActor'];
+    recorded: boolean;
+  }
 ): Promise<string | undefined> {
-  if (options.noItem) return undefined;
-  return options.item ?? (await inheritedItemKey(host, sourceActor, start));
+  const { config, recorded } = fire;
+  if (fire.noItem) return undefined;
+  if (fire.explicit !== undefined || recorded) return fire.explicit;
+  if (config.item === undefined)
+    return inheritedItemKey(host, fire.sourceActor, { cwd: config.binding.launch.cwd, recorded });
+  const inputs = fire.eventInputs ?? {};
+  const mapped = mappedItemKey(
+    config.item,
+    Object.hasOwn(inputs, config.item.field) ? inputs[config.item.field] : undefined
+  );
+  if (!mapped.ok)
+    throw new Error(
+      `Binding '${config.binding.bindingId}' names its item from the fire's --inputs, but its ${mapped.reason}. Nothing was recorded or started.`
+    );
+  return mapped.key;
 }
 
 async function triggerFire(
@@ -274,8 +299,12 @@ async function triggerFire(
     options.deliveryId !== undefined &&
     (await host.deps.store.hasStartReceiptForDelivery(config.sourceInstanceId, options.deliveryId));
   if (!recorded) await assertKnownRunAsUser(host, config);
-  const itemKey = await firedItemKey(host, options, sourceActor, {
-    cwd: config.binding.launch.cwd,
+  const itemKey = await fireItemKey(host, {
+    config,
+    explicit: options.item,
+    noItem: options.noItem === true,
+    eventInputs,
+    sourceActor,
     recorded,
   });
   const binding = {

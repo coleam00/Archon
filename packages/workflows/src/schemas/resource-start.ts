@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { isJsonPointer } from '../json-pointer';
 import { jsonValueSchema } from '../output-ref';
-import { itemKeySchema, workflowRunOriginSchema } from './workflow-run';
+import { ITEM_KEY_MAX_LENGTH, itemKeySchema, workflowRunOriginSchema } from './workflow-run';
 import {
   DEFAULT_RESOURCE_CAPACITY,
   declaredCapacitySchema,
@@ -288,6 +288,40 @@ export const sourceReceiptInputSchema = z
 export type SourceReceiptInput = z.infer<typeof sourceReceiptInputSchema>;
 
 /**
+ * How a binding names the item its start is on: the value of one field of the start's
+ * event, after an optional fixed `prefix`. Data only, no expression; the engine gives the
+ * key no meaning. For a source plugin's binding the field is one of the plugin's event
+ * fields; for a fire-only trigger file it is a key of the fire's `--inputs`.
+ */
+export const itemMappingSchema = z
+  .object({ field: z.string().min(1), prefix: z.string().min(1).optional() })
+  .strict();
+export type ItemMapping = z.infer<typeof itemMappingSchema>;
+
+/**
+ * The item key `mapping` makes of the field's value: text as it is, a finite number in
+ * decimal. Anything else, a missing or empty value included, is refused with a reason
+ * that names the field, so a start never falls through to no item.
+ */
+export function mappedItemKey(
+  mapping: ItemMapping,
+  value: unknown
+): { ok: true; key: string } | { ok: false; reason: string } {
+  const field = `field '${mapping.field}'`;
+  if (value === undefined || value === null) return { ok: false, reason: `${field} is missing` };
+  if (value === '') return { ok: false, reason: `${field} is empty` };
+  if (typeof value !== 'string' && !(typeof value === 'number' && Number.isFinite(value)))
+    return { ok: false, reason: `${field} is not text or a number` };
+  const key = `${mapping.prefix ?? ''}${String(value)}`;
+  if (!itemKeySchema.safeParse(key).success)
+    return {
+      ok: false,
+      reason: `${field} makes an item key longer than ${String(ITEM_KEY_MAX_LENGTH)} characters`,
+    };
+  return { ok: true, key };
+}
+
+/**
  * A checkout one run hands the next: `branch` at `commit`, kept in the estate of run
  * `runId`. That is the ended run, or, when the ended run worked on a copy, the run the
  * copy was taken from, so a check's end hands on the build's branch and not its own.
@@ -369,6 +403,13 @@ export const resourceStartBindingIntentSchema = z
      */
     eventInputs: z.record(z.string(), jsonValueSchema).optional(),
     /**
+     * The item a source plugin's binding mapped from its event, for this binding's start
+     * only, since one receipt can start several bindings. A receipt that names its own
+     * `itemKey` leaves this unset. Like `eventInputs`, the SQL store keeps it out of the
+     * `intent` column.
+     */
+    itemKey: itemKeySchema.optional(),
+    /**
      * The checkout a run-ended binding with `checkout: "ended-run"` hands the started run,
      * recorded when the ended run completed. Preparation decides the lane from it, not from
      * `launch.isolation`, which names the branch only for older binaries. Operator configs
@@ -433,6 +474,13 @@ export const sourceReceiptAcceptanceSchema = z
         });
       }
       seen.add(binding.bindingId);
+      if (acceptance.receipt.itemKey !== undefined && binding.itemKey !== undefined) {
+        context.addIssue({
+          code: 'custom',
+          path: ['bindings', index, 'itemKey'],
+          message: 'A binding names its item only when its receipt names none',
+        });
+      }
     }
     for (const [index, binding] of (acceptance.evaluatedBindings ?? []).entries()) {
       if (seen.has(binding.bindingId)) {
@@ -508,12 +556,21 @@ export type AsksSettledTrigger = z.infer<typeof asksSettledTriggerSchema>;
  * exactly one of them; with neither it is fire-only, and nothing but `trigger fire` starts
  * it. A `schedule` or `on` that is present must be complete, so a half-written one is
  * never fire-only.
+ *
+ * `item` names a fire-only binding's item from a field of the fire's `--inputs`. It sits
+ * beside `binding`, not in it, because the launch intent is what the store persists. A
+ * timer tick, a run's end and a settled set are about no event the file could map.
  */
 export const triggerConfigSchema = z
   .object({
     version: z.literal(1),
     sourceInstanceId: z.string().min(1),
-    binding: resourceStartBindingIntentSchema.omit({ eventInputs: true, checkoutFrom: true }),
+    binding: resourceStartBindingIntentSchema.omit({
+      eventInputs: true,
+      checkoutFrom: true,
+      itemKey: true,
+    }),
+    item: itemMappingSchema.optional(),
     schedule: z
       .object({ intervalSeconds: z.number().int().positive(), runAtLoad: z.boolean() })
       .strict()
@@ -533,6 +590,14 @@ export const triggerConfigSchema = z
   .refine(config => config.schedule === undefined || config.on === undefined, {
     message: 'A trigger has either a schedule or on, not both',
     path: ['on'],
+  })
+  .refine(config => config.item === undefined || config.schedule === undefined, {
+    message: 'A timer binding maps no item: a tick is about no item',
+    path: ['item'],
+  })
+  .refine(config => config.item === undefined || config.on === undefined, {
+    message: 'An on binding maps no item: its start is on the item of the run its event names',
+    path: ['item'],
   })
   // The engine picks the lane of a start on the ended run's checkout; a fixed one here
   // would contradict it.

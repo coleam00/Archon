@@ -605,6 +605,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_start_receipt_bindings (
   host_id TEXT,
   intent TEXT,
   event_input_names TEXT,
+  item_key TEXT,
   checkout_from TEXT,
   preparation_status VARCHAR(20) NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
   preparation_owner TEXT,
@@ -732,6 +733,10 @@ ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS event_i
 -- A run-ended start's checkout hand-off (branch, commit, source run), kept beside the
 -- intent for the same reason.
 ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS checkout_from TEXT;
+
+-- The item a source plugin's binding mapped from its event; null means the receipt's
+-- item_key, if any. One receipt can start several bindings, not all on an item.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS item_key TEXT;
 
 -- The durable thing runs are about: a key within a project, and when it was first named.
 -- No status, stage or config; where an item stands is derived from its runs. project_key
