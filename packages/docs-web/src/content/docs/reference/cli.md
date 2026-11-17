@@ -702,7 +702,7 @@ Show detail for a single run by ID, regardless of status (unlike `status`, which
 ```bash
 archon workflow get <run-id>
 archon workflow get <run-id> --json
-archon workflow get <run-id> --verbose   # add the per-node summary
+archon workflow get <run-id> --verbose   # add the per-node summary and loop rounds
 archon workflow get <run-id> --json --verbose
 archon workflow get <run-id> --throughput
 archon workflow get <run-id> --throughput --json
@@ -789,6 +789,18 @@ Verbose JSON node summaries include `execution` for newly recorded work. It iden
 invocation, attempt, provider, requested model and any model the provider reported. Inner retries
 share an invocation; each retry has its own attempt. A new loop-group iteration creates new body
 invocations. Resuming unfinished work keeps its invocation identity.
+
+`nodes` holds each loop body node once, with its latest round. For a run that entered a
+`loop_group`, `--verbose` also prints a `Rounds:` block, and `--json --verbose` adds
+`loop_rounds`: one entry per round, in order, each with its `loop_group_path` (frames
+outermost first, iterations from 1) and the body nodes it reached, with `state`, `error`,
+`started_at` (the invocation's first attempt), `duration_ms` (every attempt's recorded duration summed,
+so a retry counts, the wait between attempts does not; absent until the last attempt ends),
+`output` (bounded as stored, with `output_truncated`): a completed node's output, or the
+stdout a failed `bash:` or `script:` node recorded, and a completed node's `structured_output`. A round still running lists the node it is in;
+nodes it has not reached are absent. A nested loop's rounds are separate entries whose path
+extends the outer round's. The field is absent for a run that ran no loop, and under `--events`.
+The API's `GET /api/workflows/runs/{runId}` serves the same rounds as `run.loop_rounds`.
 
 The run's starting checkout appears as `checkout_baseline` in JSON and as the `Start:` line
 in human output. The engine observes it once, right after the run wins its execution claim

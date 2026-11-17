@@ -8931,7 +8931,7 @@ export interface components {
                 detail?: string;
               };
         } | null;
-        /** @description The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. */
+        /** @description The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. A loop body node holds its latest round. */
         nodes: {
           node_id: string;
           /** @enum {string} */
@@ -9040,6 +9040,128 @@ export interface components {
                 }
             )[];
           };
+        }[];
+        /** @description Each round of each loop_group the run has entered, in order: the body nodes it reached, with state, timing and output. Absent when the run ran no loop. */
+        loop_rounds?: {
+          loop_group_path: {
+            groupId: string;
+            iteration: number;
+          }[];
+          nodes: {
+            node_id: string;
+            /** @enum {string} */
+            state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+            error?: string;
+            /** @enum {string} */
+            reason?:
+              | 'prior_success'
+              | 'when_condition'
+              | 'when_condition_parse_error'
+              | 'trigger_rule'
+              | 'timeout';
+            cause?:
+              | {
+                  /** @enum {string} */
+                  kind: 'condition';
+                  expr: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'condition_parse_error';
+                  expr: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'timeout';
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'upstream_failed';
+                  origin: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'upstream_skipped';
+                  origin: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
+                };
+            fan_out_outcome?: {
+              tally: {
+                total: number;
+                completed: number;
+                failed: number;
+                not_started: number;
+                cancelled_by_engine: number;
+                cancelled_by_workflow: number;
+                cancelled_out_of_band: number;
+                cancelled_unattributed: number;
+              };
+              slots: (
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome: 'completed';
+                    child_run_id: string;
+                  }
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome: 'failed';
+                    child_run_id: string;
+                    error?: string;
+                  }
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome: 'not_started';
+                    error: string;
+                  }
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome:
+                      | 'cancelled_by_engine'
+                      | 'cancelled_by_workflow'
+                      | 'cancelled_out_of_band'
+                      | 'cancelled_unattributed';
+                    child_run_id: string;
+                    /** @enum {string} */
+                    cancel_reason?:
+                      | 'approval_rejected'
+                      | 'operator'
+                      | 'halt_node'
+                      | 'precondition_failed'
+                      | 'conversation_reset'
+                      | 'fan_out';
+                  }
+              )[];
+            };
+            /** Format: date-time */
+            started_at?: string;
+            duration_ms?: number;
+            output?: string;
+            output_truncated?: boolean;
+            structured_output?: unknown;
+          }[];
         }[];
       };
       events: components['schemas']['WorkflowEvent'][];
