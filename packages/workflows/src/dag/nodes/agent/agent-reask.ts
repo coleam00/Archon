@@ -164,7 +164,7 @@ function structuredOutputFailure(
   const nodeId = pc.node.id;
   if (miss.payload === 'invalid') {
     return new NodeFailure(
-      'output_contract',
+      'schema_unmet',
       `Node '${nodeId}': output_format declared but the provider's structured output failed schema validation: ${miss.errors.join('; ')}`
     );
   }
@@ -177,7 +177,7 @@ function structuredOutputFailure(
     );
   }
   return new NodeFailure(
-    'output_contract',
+    'schema_unmet',
     `Node '${nodeId}': output_format declared but the provider returned no schema-valid structured output. ` +
       'The model likely replied with prose, refused, or emitted unparseable JSON.'
   );

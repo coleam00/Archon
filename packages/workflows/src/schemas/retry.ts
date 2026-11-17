@@ -16,8 +16,12 @@ export const stepRetryConfigSchema = z.object({
   delay_ms: retryDelaySchema
     .min(1000, "'retry.delay_ms' must be a number between 1000 and 60000")
     .optional(),
-  /** Which error types trigger a retry. Default: 'transient'. */
-  on_error: z.enum(['transient', 'all']).optional(),
+  /**
+   * Which failures trigger a retry, as a ladder. Default: 'transient', the transient,
+   * rate-limit and capacity classes. 'schema_unmet' adds a final output that did not meet
+   * its schema. 'all' adds `unknown` too. Fatal failures are never retried.
+   */
+  on_error: z.enum(['transient', 'schema_unmet', 'all']).optional(),
 });
 
 export type StepRetryConfig = z.infer<typeof stepRetryConfigSchema>;

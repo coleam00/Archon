@@ -1,4 +1,5 @@
 import type { DagNode, NodeOutput, AgentNode, ExecNode, WorkflowRun } from '../schemas';
+import type { StepRetryConfig } from '../schemas/retry';
 import {
   type RetryClass,
   retryClassOf,
@@ -25,13 +26,16 @@ export const DEFAULT_NODE_MAX_RETRIES = 2;
 
 export const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
 
+/** Which failures a node's retry policy re-runs; `transient` when `retry.on_error` is absent. */
+type RetryOnError = NonNullable<StepRetryConfig['on_error']>;
+
 /**
  * Get effective retry config for a DAG node.
  */
 export function getEffectiveNodeRetryConfig(node: DagNode): {
   maxRetries: number;
   delayMs: number;
-  onError: 'transient' | 'all';
+  onError: RetryOnError;
 } {
   if ('retry' in node && node.retry) {
     return {
@@ -69,13 +73,14 @@ export function getExplicitNodeRetryConfig(
  *
  * Shared by {@link runNodeRetryLoop} for every node type so the retry decision
  * cannot drift. The class comes from {@link retryClassOf}: the kind recorded where
- * the node failed decides, never its error text. Fatal failures (credentials, quota
- * and spend windows, config errors, cancellation) are never retried, even when
- * `on_error: all`; `unknown` is retried only under `on_error: all`.
+ * the node failed decides, never its error text. `on_error` is a ladder: `transient`
+ * retries the transient, rate-limit and capacity classes; `schema_unmet` adds a final
+ * output that did not meet its schema; `all` adds `unknown`. Fatal failures (credentials,
+ * quota and spend windows, config errors, cancellation) are never retried.
  */
 export function retryableFailureClass(
   output: NodeOutput,
-  onError: 'transient' | 'all'
+  onError: RetryOnError
 ): RetryClass | undefined {
   // Only failed outputs carry `error` (discriminated union); a non-failed output
   // is never retried. Callers already guard on `state === 'failed'`, but narrow
@@ -86,6 +91,7 @@ export function retryableFailureClass(
   if (output.retryable === false) return undefined;
   const retryClass = retryClassOf(output.failureKind);
   if (retryClass === 'fatal') return undefined;
+  if (retryClass === 'schema_unmet' && onError === 'transient') return undefined;
   if (retryClass === 'unknown' && onError !== 'all') return undefined;
   return retryClass;
 }
@@ -147,7 +153,7 @@ export async function runNodeRetryLoop(
   workflowRun: WorkflowRun,
   store: Pick<WorkflowDeps['store'], 'createWorkflowEvent' | 'getWorkflowRunStatus'>,
   stepName: string,
-  retryConfig: { maxRetries: number; delayMs: number; onError: 'transient' | 'all' },
+  retryConfig: { maxRetries: number; delayMs: number; onError: RetryOnError },
   run: () => Promise<NodeExecutionResult>,
   initialOutput: NodeExecutionResult,
   iteration?: number
@@ -218,9 +224,11 @@ export async function runNodeRetryLoop(
     const errorKind =
       retryClass === 'overloaded'
         ? 'provider capacity error'
-        : retryClass === 'unknown'
-          ? 'error'
-          : 'transient error';
+        : retryClass === 'schema_unmet'
+          ? 'output that did not meet its schema'
+          : retryClass === 'unknown'
+            ? 'error'
+            : 'transient error';
     await safeSendMessage(
       platform,
       conversationId,

@@ -662,6 +662,8 @@ describe('loop node completion channels', () => {
     expect(String((failed[0][0] as { data: { error: string } }).data.error)).toContain(
       'failed schema validation'
     );
+    const recorded = persistedEvents(store).find(event => event.event_type === 'node_failed');
+    expect(recorded?.data?.failure_kind).toBe('schema_unmet');
   });
 
   it.each(['reask', 'transient retry'] as const)(

@@ -217,7 +217,7 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
     expect(failureKinds).toEqual({ slow: 'timeout' });
   });
 
-  it('a prompt that returns prose for a declared output_format is output_contract', async () => {
+  it('a prompt that returns prose for a declared output_format is schema_unmet', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'Sure, here is my answer in prose.' };
       yield { type: 'result', sessionId: 'sid-prose' };
@@ -230,7 +230,7 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
         output_format: { type: 'object', properties: { kind: { type: 'string' } } },
       },
     ]);
-    expect(failureKinds).toEqual({ classify: 'output_contract' });
+    expect(failureKinds).toEqual({ classify: 'schema_unmet' });
   });
 
   it('an untyped provider error is unknown, whatever its message says', async () => {

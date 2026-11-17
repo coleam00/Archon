@@ -5270,6 +5270,7 @@ export interface components {
                 | 'timeout'
                 | 'exec_failed'
                 | 'output_contract'
+                | 'schema_unmet'
                 | 'max_iterations'
                 | 'child_failed'
                 | 'cancelled'
@@ -5284,6 +5285,7 @@ export interface components {
                   | 'rate_limited'
                   | 'overloaded'
                   | 'transient'
+                  | 'schema_unmet'
                   | 'unknown';
                 retryAfterMs?: number;
                 /** Format: date-time */
@@ -5933,7 +5935,7 @@ export interface components {
         max_attempts: number;
         delay_ms?: number;
         /** @enum {string} */
-        on_error?: 'transient' | 'all';
+        on_error?: 'transient' | 'schema_unmet' | 'all';
       };
       hooks?: {
         PreToolUse?: {
@@ -6884,6 +6886,7 @@ export interface components {
                   | 'timeout'
                   | 'exec_failed'
                   | 'output_contract'
+                  | 'schema_unmet'
                   | 'max_iterations'
                   | 'child_failed'
                   | 'cancelled'
@@ -6898,6 +6901,7 @@ export interface components {
                     | 'rate_limited'
                     | 'overloaded'
                     | 'transient'
+                    | 'schema_unmet'
                     | 'unknown';
                   retryAfterMs?: number;
                   /** Format: date-time */
@@ -8563,6 +8567,7 @@ export interface components {
               | 'timeout'
               | 'exec_failed'
               | 'output_contract'
+              | 'schema_unmet'
               | 'max_iterations'
               | 'child_failed'
               | 'cancelled'

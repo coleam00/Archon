@@ -287,7 +287,7 @@ export async function gateStructuredAttempt(
         ? `Loop node '${node.id}' iteration ${String(i)}: timed out before producing the required structured output.${formatWatchdogResetDiagnostic(attempt.cutOff.lastReset)}`
         : `Loop node '${node.id}' iteration ${String(i)}: output_format declared but the provider returned no schema-valid structured output. The model likely replied with prose, refused, or emitted unparseable JSON.`,
       {
-        failureKind: attempt.cutOff?.kind === 'idle_timeout' ? 'timeout' : 'output_contract',
+        failureKind: attempt.cutOff?.kind === 'idle_timeout' ? 'timeout' : 'schema_unmet',
         output: state.lastOutput,
         ...loopSpend(state),
         loopIterations: i,
@@ -376,6 +376,6 @@ async function gateStructuredPayload(
   }
   return failStructured(
     `Loop node '${node.id}' iteration ${String(i)}: output_format declared but the provider's structured output failed schema validation: ${validation.errors.join('; ')}`,
-    'output_contract'
+    'schema_unmet'
   );
 }

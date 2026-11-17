@@ -173,7 +173,7 @@ export function getRetryDelayMs(
 /** How retry treats a failure; also the failure kinds a provider error can have. */
 export type RetryClass = Extract<
   NodeFailureKind,
-  'fatal' | 'transient' | 'rate_limited' | 'overloaded' | 'unknown'
+  'fatal' | 'transient' | 'rate_limited' | 'overloaded' | 'schema_unmet' | 'unknown'
 >;
 
 /** The node failure kind a provider's typed failure class maps to. */
@@ -187,6 +187,7 @@ export function nodeFailureKindOf(failure: ProviderFailure): RetryClass {
     case 'overloaded':
     case 'rate_limited':
     case 'transient':
+    case 'schema_unmet':
     case 'unknown':
       return failure.class;
     default: {
@@ -212,9 +213,12 @@ const RETRY_CLASS = {
   timeout: 'transient',
   // A script's exit is no evidence a re-run helps; `on_error: all` opts in.
   exec_failed: 'unknown',
-  // A fresh AI attempt can produce valid output under `on_error: all`. An exec contract
-  // failure is never retried: it records `retryable: false`.
+  // A rejected artifact pointer, an unserialisable value or a broken checkout guard;
+  // `on_error: all` opts in. An exec contract failure records `retryable: false`.
   output_contract: 'unknown',
+  // A final output that did not meet its schema; a fresh attempt usually gets past it.
+  // Retried under `on_error: schema_unmet` or `all`.
+  schema_unmet: 'schema_unmet',
   // `fatal` is the class retry never re-runs, even under `on_error: all`.
   config: 'fatal',
   cancelled: 'fatal',

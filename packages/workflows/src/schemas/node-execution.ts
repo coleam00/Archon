@@ -115,7 +115,8 @@ export type ExecutionBinding = z.infer<typeof executionBindingSchema>;
 /**
  * Why a node failed, recorded where the failure is known rather than re-read from
  * `error` prose later. `fatal`/`transient`/`rate_limited`/`overloaded`/`unknown` classify a provider
- * error; the rest name engine-detected causes. Every kind maps to a retry class in
+ * error; `schema_unmet` is a final output that did not meet its schema, found by the provider or
+ * by the engine's own validation; the rest name engine-detected causes. Every kind maps to a retry class in
  * `executor-shared.ts`. Absent on records written before this field existed; retry
  * treats an absent kind as `unknown`.
  */
@@ -128,6 +129,7 @@ export const nodeFailureKindSchema = z.enum([
   'timeout',
   'exec_failed',
   'output_contract',
+  'schema_unmet',
   'max_iterations',
   'child_failed',
   'cancelled',

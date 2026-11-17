@@ -13,6 +13,8 @@ import { z } from 'zod';
  *                       one that outlasts it pauses the run until `resetAt`, or a computed backoff.
  *  - `overloaded`       provider capacity exhausted. Retried with capped exponential backoff.
  *  - `transient`        network or process failure that a new attempt may clear.
+ *  - `schema_unmet`     the provider's own structured-output attempts ended without output meeting
+ *                       the schema. Retried only when the node opts in with `on_error: schema_unmet` or `all`.
  *  - `unknown`          the provider knows the turn failed but not why. Retried only on `on_error: all`.
  */
 export const providerFailureClassSchema = z.enum([
@@ -23,6 +25,7 @@ export const providerFailureClassSchema = z.enum([
   'rate_limited',
   'overloaded',
   'transient',
+  'schema_unmet',
   'unknown',
 ]);
 export type ProviderFailureClass = z.infer<typeof providerFailureClassSchema>;

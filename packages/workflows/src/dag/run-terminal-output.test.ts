@@ -1067,6 +1067,8 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     const errMsg = ((failed[0][0] as Record<string, unknown>).data as Record<string, unknown>)
       .error as string;
     expect(errMsg).toContain('failed schema validation');
+    const recorded = persistedEvents(store).find(event => event.event_type === 'node_failed');
+    expect(recorded?.data?.failure_kind).toBe('schema_unmet');
   });
 
   it.each([
