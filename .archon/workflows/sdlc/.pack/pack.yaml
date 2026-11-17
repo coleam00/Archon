@@ -52,6 +52,9 @@ bindings:
     event:
       kind: issue.lifecycle
       actions: [opened, edited, reopened]
+    # The run is on the issue's item, `itemKey` in .shared/workitem.ts: one history per
+    # issue, and one intake run on an issue at a time.
+    item: { field: subject.number, prefix: issue- }
     inputs:
       repo_host: { event: repository.host }
       repo_path: { event: repository.path }
@@ -72,6 +75,7 @@ bindings:
       predicates:
         - field: label.name
           in: [archon-triage]
+    item: { field: subject.number, prefix: issue- }
     inputs:
       repo_host: { event: repository.host }
       repo_path: { event: repository.path }

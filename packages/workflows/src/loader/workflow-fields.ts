@@ -265,6 +265,13 @@ function validInputSpecs(
       );
       continue;
     }
+    if (
+      parsed.data.result_of !== undefined &&
+      (parsed.data.required === true || parsed.data.default !== undefined)
+    ) {
+      getLog().warn({ filename, name }, 'contradictory_workflow_input_result_of_ignored');
+      continue;
+    }
     valid[name] = parsed.data;
   }
   return valid;

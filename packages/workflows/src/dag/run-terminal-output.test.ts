@@ -1067,6 +1067,8 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     const errMsg = ((failed[0][0] as Record<string, unknown>).data as Record<string, unknown>)
       .error as string;
     expect(errMsg).toContain('failed schema validation');
+    const recorded = persistedEvents(store).find(event => event.event_type === 'node_failed');
+    expect(recorded?.data?.failure_kind).toBe('schema_unmet');
   });
 
   it.each([
@@ -2096,7 +2098,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     expect(store.failWorkflowRun).toHaveBeenCalled();
     const failCall = (store.failWorkflowRun as ReturnType<typeof mock>).mock.calls[0];
     const failMsg = failCall[1] as string;
-    expect(failMsg).toContain('fail-node failed');
+    expect(failMsg).toContain('fail-node (config) failed');
     expect(failMsg).not.toContain('no successful nodes');
   });
 

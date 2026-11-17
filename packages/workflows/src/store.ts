@@ -14,6 +14,7 @@ import type { SourceReceiptAcceptance } from './schemas/resource-start';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { ProviderEventQuery, ProviderEventRecord } from './schemas/provider-event';
 import type { WorkflowEventRow } from './schemas/workflow-event';
+import type { NodeFailureKind } from './schemas/node-execution';
 import type { ExpectedApprovalGate } from './schemas/workflow-run';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
 import type {
@@ -547,7 +548,14 @@ export interface IWorkflowStore
     id: string,
     error: string,
     options?: WorkflowRunFailureOptions
-  ): Promise<{ failed: boolean }>;
+  ): Promise<{
+    failed: boolean;
+    /**
+     * When this call failed the run: the recorded kind of the node it failed at, from the
+     * terminal record written in the same transaction. Absent when no node failure caused it.
+     */
+    failureKind?: NodeFailureKind;
+  }>;
   /**
    * Pause a running run for human review, stamping the approval context. Optional
    * `extraMetadata` is folded into the SAME atomic metadata write (e.g. the

@@ -242,7 +242,12 @@ describe('workflowLogsCommand', () => {
         stdout_tail: 'ok\n',
         stderr_tail: 'bad\nworse\n',
       },
-      { type: 'node_error', step: 'lint', error: 'exit 2' },
+      {
+        type: 'node_error',
+        step: 'lint',
+        error: 'exit 2',
+        execution: { lifecycle: { status: 'failed', error: 'exit 2', failureKind: 'exec_failed' } },
+      },
       {
         type: 'node_skipped',
         step: 'docs',
@@ -296,7 +301,7 @@ describe('workflowLogsCommand', () => {
         '  stderr:',
         '    bad',
         '    worse',
-        '[lint] Failed: exit 2',
+        '[lint] Failed (exec_failed): exit 2',
         "[docs] Skipped (condition: $x == 'y')",
         '[old] Skipped (when_condition)',
         '[review-gate] Waiting (approval)',

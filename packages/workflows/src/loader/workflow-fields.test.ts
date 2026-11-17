@@ -109,6 +109,25 @@ nodes:
     expect(workflow?.inputs).toBeUndefined();
   });
 
+  it('drops a result_of input that also declares required or default', () => {
+    const { workflow, error } = parseWorkflow(
+      `
+name: contradiction
+description: result_of with required or default
+inputs:
+  needed: { result_of: build, required: true }
+  fallback: { result_of: build, default: v }
+  read: { result_of: build }
+nodes:
+  - id: build
+    prompt: "hi"
+`,
+      'result-of-contradiction.yaml'
+    );
+    expect(error).toBeNull();
+    expect(workflow?.inputs).toEqual({ read: { result_of: 'build' } });
+  });
+
   it('drops an invalid input name with a warning while preserving the workflow', () => {
     mockLogger.warn.mockClear();
     const { workflow, error } = parseWorkflow(
