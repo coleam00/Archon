@@ -6,11 +6,12 @@ import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
-import { closeDatabase, resetDatabase } from '@archon/core/db/connection';
+import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/connection';
 import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import { registerFolder } from '@archon/core/handlers/clone';
 import { holdCommand } from './hold';
 import { triggerCommand } from './trigger';
+import { readHeldStarts } from './workflow-held-starts';
 import { workflowStatusCommand } from './workflow-query';
 
 const saved = {
@@ -139,4 +140,28 @@ test('a fire under the hold is listed as held and starts exactly once after the 
   const disposition = (await host.deps.store.getStartReceipt(receiptId))?.bindings[0]?.disposition;
   if (disposition?.status !== 'admitted') throw new Error('Expected the held start to be admitted');
   expect(dispatched).toEqual([disposition.requestId]);
+});
+
+test('the oldest held hand start is listed behind more newer pending runs than one read returns', async () => {
+  const host = createSqlWorkflowHost();
+  const store = host.deps.store;
+  const hand = await store.createWorkflowRun({ workflow_name: 'oldest', user_message: '' });
+  await getDatabase().query(
+    "UPDATE remote_agent_workflow_runs SET started_at = datetime('now', '-1 hour') WHERE id = $1",
+    [hand.id]
+  );
+  const parent = await store.createWorkflowRun({ workflow_name: 'parent', user_message: '' });
+  await store.claimPendingWorkflowRun(parent.id);
+  for (let index = 0; index < 400; index++)
+    await store.createWorkflowRun({
+      workflow_name: 'child',
+      user_message: '',
+      parent_run_id: parent.id,
+    });
+  const { hold } = await store.setInstallHold({ setBy: 'operator' });
+
+  expect(await readHeldStarts(host, undefined)).toEqual({
+    hold,
+    heldStarts: [{ kind: 'run', runId: hand.id, workflow: 'oldest' }],
+  });
 });

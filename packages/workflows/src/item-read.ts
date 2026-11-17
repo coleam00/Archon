@@ -618,8 +618,11 @@ export async function assembleItemRead(
   item: WorkflowItem,
   queue: ItemQueueRead
 ): Promise<ItemRead | null> {
-  // Queued starts first, then the runs: a start admitted between the two reads then shows
-  // in both (its run id is its request id), and is listed once as a run, never in neither.
+  // Held starts first, then queued starts, then the runs, the order a start moves through:
+  // one that moves on between two reads shows twice, never in neither. An admitted start
+  // shows in both queued and runs (its run id is its request id) and is listed once as a run.
+  const hold = await source.store.getInstallHold();
+  const held = hold ? await source.store.listHeldItemStarts(item.id) : [];
   const waiting = await source.store.listQueuedItemStarts(item.id);
   const found = await readItemRuns(source.store, item.projectKey, item.key);
   if (found === null) return null;
@@ -663,7 +666,6 @@ export async function assembleItemRead(
       resource: start.resource,
       heldBehind: (await holds.skippedHeldBehind(start)) ?? null,
     });
-  const hold = await source.store.getInstallHold();
   return {
     item: found.item,
     runs: await Promise.all(
@@ -680,7 +682,7 @@ export async function assembleItemRead(
     queued,
     skipped,
     hold,
-    held: hold ? await source.store.listHeldItemStarts(found.item.id) : [],
+    held,
     questions,
     answers,
     links: facts.links,

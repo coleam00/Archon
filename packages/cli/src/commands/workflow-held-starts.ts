@@ -17,16 +17,28 @@ export async function readHeldStarts(
 ): Promise<{ hold: InstallHold | null; heldStarts: StatusHeldStart[] }> {
   const hold = await host.deps.store.getInstallHold();
   if (!hold) return { hold: null, heldStarts: [] };
-  const { runs } = await host.deps.store.listWorkflowRuns({
-    status: ['pending'],
-    ...(codebaseId ? { codebaseId } : {}),
-  });
+  const runs = await listAllPendingRuns(host, codebaseId);
   const handStarts: StatusHeldStart[] = [];
   for (const run of runs) {
     if (run.parent_run_id || (await host.deps.store.getResourceStartRequest(run.id))) continue;
     handStarts.push({ kind: 'run', runId: run.id, workflow: run.workflow_name });
   }
   return { hold, heldStarts: [...(await host.deps.store.listHeldStarts()), ...handStarts] };
+}
+
+/**
+ * Every pending run in scope, from one read the limit did not cut: the list is newest
+ * first, so a cut would drop the oldest held start.
+ */
+async function listAllPendingRuns(host: WorkflowHost, codebaseId: string | undefined) {
+  for (let limit = 200; ; limit *= 2) {
+    const { runs } = await host.deps.store.listWorkflowRuns({
+      status: ['pending'],
+      limit,
+      ...(codebaseId ? { codebaseId } : {}),
+    });
+    if (runs.length < limit) return runs;
+  }
 }
 
 export function heldStartLine(start: StatusHeldStart): string {
