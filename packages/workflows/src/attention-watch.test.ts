@@ -1486,6 +1486,33 @@ describe('watchAttentionQueue', () => {
     }
   });
 
+  test('a failed read of open asks does not keep the watch from a new claim', async () => {
+    const store = await makeStore();
+    let failing = false;
+    const stream = await watch(
+      store,
+      { bookmarkIntervalMs: 0 },
+      {
+        ...host,
+        itemsWithoutRun: async () => {
+          if (failing) throw new Error('database unavailable');
+          return [];
+        },
+        ownerLoss: async () => ({ observedStatus: 'running' }),
+      }
+    );
+    try {
+      await stream.next(line => line.type === 'ready');
+      failing = true;
+      const runId = await running(store);
+      expect(await stream.next(ofRun(runId, 'owner_lost'))).toMatchObject({
+        observedStatus: 'running',
+      });
+    } finally {
+      await stream.close();
+    }
+  });
+
   test.each(['workflow_started', 'workflow_resumed', 'workflow_unpaused'] as const)(
     'replaying %s after owner loss does not watch the same claim again',
     async eventType => {

@@ -810,8 +810,13 @@ export async function watchAttentionQueue(
         answers = indexAnswers(page);
       },
       onCaughtUp: async () => {
-        await reconcileItemsWithoutRun();
-        await armRunning(true);
+        // Owner-loss discovery must not wait on an unrelated read: the reconcile's failure
+        // still reaches the follower, after the scan ran.
+        try {
+          await reconcileItemsWithoutRun();
+        } finally {
+          await armRunning(true);
+        }
         if (Date.now() - lastLineAt >= bookmarkIntervalMs)
           emit({ type: 'bookmark', cursor: position() });
       },
