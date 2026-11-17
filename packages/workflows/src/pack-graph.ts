@@ -1,8 +1,9 @@
 /**
  * A pack's stage graph as this install has it: its stages, the outcomes each can end
- * with, each stage's nodes and their edges, and the run-ended arrows between stages, each
- * marked active (a trigger file in the install launches it) or declared and inactive (the
- * pack's `.pack/pack.yaml` declares it and no file does). It reports only what the engine
+ * with, each stage's nodes and their edges, and the arrows between stages (a run that
+ * ended with an outcome, or the settling of the asks a run left), each marked active (a
+ * trigger file in the install launches it) or declared and inactive (the pack's
+ * `.pack/pack.yaml` declares it and no file does). It reports only what the engine
  * already reads: no arrow is declared here.
  *
  * `archon pack graph` and `GET /api/packs/{pack}/graph` return this one shape. An item's
@@ -17,7 +18,7 @@ import type { PackBinding } from './schemas/pack-bindings';
 import { kindedPackBinding } from './schemas/pack-bindings';
 import { loopBodyStepNamePrefix, resolvedBodyNodes } from './graph-plan';
 import { isComposeFanOutNode, isLoopGroupNode } from './schemas/node-guards';
-import type { RunEndedTrigger } from './schemas/resource-start';
+import { asksSettledTriggerSchema } from './schemas/resource-start';
 import type {
   ResolvedWorkflow,
   WorkflowLoadResult,
@@ -70,8 +71,18 @@ const packGraphStageSchema = z.object({
   nodes: z.array(packGraphNodeSchema),
 });
 
+/**
+ * What starts an arrow: a run of `stage` completing with `outcome`, or the asks a run of
+ * `stage` left being `settled` that way.
+ */
+const arrowFromSchema = z.union([
+  z.object({ stage: z.string(), outcome: z.string() }),
+  z.object({ stage: z.string(), settled: asksSettledTriggerSchema.shape.settled }),
+]);
+export type PackGraphArrowFrom = z.infer<typeof arrowFromSchema>;
+
 const arrowEndsSchema = {
-  from: z.object({ stage: z.string(), outcome: z.string() }),
+  from: arrowFromSchema,
   /** The workflow the arrow starts; it may be outside the pack. */
   to: z.string(),
 };
@@ -196,9 +207,9 @@ export function packWorkflowName(names: readonly string[], declared: string): st
 
 /**
  * Every full workflow name that belongs to the pack: its stages, and each name its
- * run-ended bindings declare, qualified within the pack, so a stage that failed to load
- * still counts. A run-ended file touches the pack when one of its ends is in this set,
- * compared exactly, as a completion compares the ended run's workflow name.
+ * run-ended and asks-settled bindings declare, qualified within the pack, so a stage that
+ * failed to load still counts. A trigger file touches the pack when one of its ends is in
+ * this set, compared exactly, as a completion compares the ended run's workflow name.
  */
 export function packWorkflowIdentities(
   stageNames: readonly string[],
@@ -206,19 +217,30 @@ export function packWorkflowIdentities(
 ): ReadonlySet<string> {
   const names = new Set(stageNames);
   for (const binding of Object.values(declared ?? {})) {
-    const kinded = kindedPackBinding(binding);
-    if (kinded.kind !== 'run_ended') continue;
-    for (const name of [kinded.binding.run_ended.workflow, kinded.binding.workflow])
+    const from = declaredFrom(binding);
+    if (from === undefined) continue;
+    for (const name of [from, binding.workflow])
       names.add(qualifiedPackWorkflowName(stageNames, name));
   }
   return names;
 }
 
-/** A run-ended trigger file in this install whose binding launches in the pack's project. */
+/** The workflow whose run starts a declared binding, or undefined for one no run starts. */
+function declaredFrom(binding: PackBinding): string | undefined {
+  const kinded = kindedPackBinding(binding);
+  if (kinded.kind === 'run_ended') return kinded.binding.run_ended.workflow;
+  if (kinded.kind === 'asks_settled') return kinded.binding.asks_settled.workflow;
+  return undefined;
+}
+
+/**
+ * A run-ended or asks-settled trigger file in this install whose binding launches in the
+ * pack's project. `from.stage` is the workflow name as the file spells it.
+ */
 export interface InstalledArrow {
   file: string;
   sourceInstanceId: string;
-  runEnded: RunEndedTrigger;
+  from: PackGraphArrowFrom;
   launchWorkflow: string;
   problems: readonly string[];
 }
@@ -287,9 +309,16 @@ interface GraphInput {
   discoveryErrors: WorkflowLoadResult['errors'];
 }
 
-/** One key per arrow, as `runEndedTriggerCheck` keys a duplicate within a project. */
-const arrowKey = (from: string, outcome: string, to: string): string =>
-  JSON.stringify([from, outcome, to]);
+/**
+ * One key per arrow, as `runEndedTriggerCheck` keys a duplicate within a project. The kind
+ * of origin is its own element, so an outcome spelled like a settlement never matches one.
+ */
+const arrowKey = (from: PackGraphArrowFrom, to: string): string =>
+  JSON.stringify(
+    'outcome' in from
+      ? [from.stage, 'outcome', from.outcome, to]
+      : [from.stage, 'settled', from.settled, to]
+  );
 
 const installedSource = (
   entry: InstalledArrow
@@ -299,22 +328,23 @@ const installedSource = (
   problems: [...entry.problems],
 });
 
-/** Each declared run-ended binding as one arrow per outcome it lists, from stage to stage. */
 /**
- * Each declared run-ended binding as one arrow per outcome it lists, from stage to stage.
- * A workflow name that is not a stage is kept as declared, with a problem, so a stage that
- * failed to load leaves its arrows and the load error in the graph instead of failing it.
+ * Each declared run-ended binding as one arrow per outcome it lists, and each declared
+ * asks-settled binding as one arrow, from stage to stage. A workflow name that is not a
+ * stage is kept as declared, with a problem, so a stage that failed to load leaves its
+ * arrows and the load error in the graph instead of failing it.
  */
-function declaredArrows(input: GraphInput): {
+interface DeclaredArrow {
   binding: { binding: string; problems: string[] };
-  from: string;
-  outcome: string;
+  from: PackGraphArrowFrom;
   to: string;
-}[] {
+}
+
+function declaredArrows(input: GraphInput): DeclaredArrow[] {
   const names = input.stages.map(stage => stage.name);
-  return Object.entries(input.declared ?? {}).flatMap(([id, binding]) => {
+  return Object.entries(input.declared ?? {}).flatMap(([id, binding]): DeclaredArrow[] => {
     const kinded = kindedPackBinding(binding);
-    if (kinded.kind !== 'run_ended') return [];
+    if (kinded.kind !== 'run_ended' && kinded.kind !== 'asks_settled') return [];
     const problems: string[] = [];
     // A name that is not a stage keeps its full name in the pack, so a file for it matches.
     const stageName = (declared: string): string => {
@@ -325,13 +355,23 @@ function declaredArrows(input: GraphInput): {
       );
       return qualifiedPackWorkflowName(names, declared);
     };
-    const from = stageName(kinded.binding.run_ended.workflow);
+    if (kinded.kind === 'asks_settled') {
+      const stage = stageName(kinded.binding.asks_settled.workflow);
+      const to = stageName(kinded.binding.workflow);
+      return [
+        {
+          binding: { binding: id, problems },
+          from: { stage, settled: kinded.binding.asks_settled.settled },
+          to,
+        },
+      ];
+    }
+    const stage = stageName(kinded.binding.run_ended.workflow);
     const to = stageName(kinded.binding.workflow);
     const { outcome } = kinded.binding.run_ended;
     return (typeof outcome === 'string' ? [outcome] : outcome).map(value => ({
       binding: { binding: id, problems: [...problems] },
-      from,
-      outcome: value,
+      from: { stage, outcome: value },
       to,
     }));
   });
@@ -344,12 +384,10 @@ function declaredArrows(input: GraphInput): {
 function graphArrows(input: GraphInput): PackGraphArrow[] {
   const arrows: PackGraphArrow[] = [];
   const matched = new Set<InstalledArrow>();
-  for (const { binding, from, outcome, to } of declaredArrows(input)) {
-    const ends = { from: { stage: from, outcome }, to };
+  for (const { binding, from, to } of declaredArrows(input)) {
+    const ends = { from, to };
     const files = input.installed.filter(
-      entry =>
-        arrowKey(entry.runEnded.workflowName, entry.runEnded.outcome, entry.launchWorkflow) ===
-        arrowKey(from, outcome, to)
+      entry => arrowKey(entry.from, entry.launchWorkflow) === arrowKey(from, to)
     );
     if (files.length === 0)
       arrows.push({ ...ends, active: false, declared: binding, installed: null });
@@ -367,7 +405,7 @@ function graphArrows(input: GraphInput): PackGraphArrow[] {
   for (const entry of input.installed) {
     if (matched.has(entry)) continue;
     arrows.push({
-      from: { stage: entry.runEnded.workflowName, outcome: entry.runEnded.outcome },
+      from: entry.from,
       to: entry.launchWorkflow,
       active: true,
       declared: null,
@@ -387,7 +425,7 @@ function graphStage(stage: Stage, started: ReadonlySet<string>): PackGraph['stag
       form: declared.form.kind,
       values: values.map(value => ({
         value,
-        startsNothing: !started.has(arrowKey(stage.name, value, '')),
+        startsNothing: !started.has(arrowKey({ stage: stage.name, outcome: value }, '')),
       })),
     };
   }
@@ -402,14 +440,15 @@ function graphStage(stage: Stage, started: ReadonlySet<string>): PackGraph['stag
 
 /**
  * The graph of one pack from its stages (include-expanded), its declared bindings and the
- * install's run-ended files for its project.
+ * install's run-ended and asks-settled files for its project.
  */
 export function buildPackGraph(input: GraphInput): PackGraph {
   const arrows = graphArrows(input);
+  // Only an outcome arrow starts something for an outcome; an asks arrow starts on answers.
   const started = new Set(
     arrows
       .filter(arrow => arrow.active && arrow.installed.problems.length === 0)
-      .map(arrow => arrowKey(arrow.from.stage, arrow.from.outcome, ''))
+      .map(arrow => arrowKey(arrow.from, ''))
   );
   return {
     pack: input.packKey,

@@ -23,7 +23,12 @@ import { rootOutputFields, type DeclaredOutputPaths, type JsonValue } from '../o
 import { declaredOutcome, readCompletedOutcome } from '../completed-outcome';
 import { readCompletedAsks } from '../completed-asks';
 import type { ItemAsk } from '../schemas/item-ask';
-import type { SourceReceiptAcceptance } from '../schemas/resource-start';
+import {
+  asksCheckoutMetadata,
+  type AsksCheckout,
+  type SourceReceiptAcceptance,
+} from '../schemas/resource-start';
+import { keepHandedOff } from './handed-off-worktree';
 import { resolveRunInputs } from './references';
 import { logWorkflowComplete, logWorkflowError, type WorkflowUsage } from '../logger';
 import { isProviderLimit, rootFailures, type ProviderLimitFailure } from '../executor-shared';
@@ -122,11 +127,9 @@ export async function finishRun(
     if (typeof gate === 'object') return gate;
   }
 
-  // The starts this end causes are read now, after the write-back gate and before the
-  // write that ends the run, so they commit with it.
-  const startReceipts =
-    outcome === undefined ? [] : await readStartReceipts(ctx, outcome, runTranscriptUsage);
-  if (startReceipts === undefined) return;
+  const handOffs = await readHandOffs(ctx, returned, runTranscriptUsage);
+  if (handOffs === undefined) return;
+  const { startReceipts, asksCheckout } = handOffs;
 
   const terminal = selectTerminalOutput(workflow, workflowRun, nodeOutputs);
   await completeRun(
@@ -134,7 +137,8 @@ export async function finishRun(
     nodeCounts,
     terminal,
     runTranscriptUsage,
-    completionResult(returned, startReceipts)
+    completionResult(returned, startReceipts),
+    asksCheckout
   );
   await reportNoOutcome(ctx, outcome);
   await reportUnstartedStages(ctx, startReceipts);
@@ -223,24 +227,33 @@ async function reportUnstartedStages(
 }
 
 /**
- * The starts a completion causes, or undefined when they could not be read and the run
- * was failed naming why: completing without the hand-off would lose it with no trace.
+ * What this end hands on, read before the write that ends the run so it commits with it:
+ * the starts its outcome causes, and the checkout its asks hand an asks-settled binding
+ * with `checkout` (read now, so a start gets the commit this run ended on). Undefined when
+ * a trigger could not be read and the run was failed naming why.
  */
-async function readStartReceipts(
+async function readHandOffs(
   ctx: RunTerminalContext,
-  outcome: RunCompletedOutcome,
+  { outcome, asks }: { outcome?: RunCompletedOutcome; asks?: readonly ItemAsk[] },
   runTranscriptUsage: WorkflowUsage
-): Promise<readonly SourceReceiptAcceptance[] | undefined> {
+): Promise<
+  | { startReceipts: readonly SourceReceiptAcceptance[]; asksCheckout: AsksCheckout | undefined }
+  | undefined
+> {
   const { deps, workflow, workflowRun, nodeOutputs } = ctx;
-  if (!deps.runEndedStarts) return [];
   try {
-    return await deps.runEndedStarts(runEndedFacts(workflow, workflowRun, nodeOutputs, outcome));
+    const startReceipts =
+      outcome === undefined || !deps.runEndedStarts
+        ? []
+        : await deps.runEndedStarts(runEndedFacts(workflow, workflowRun, nodeOutputs, outcome));
+    const asksCheckout = asks?.length ? await deps.asksCheckout?.(workflowRun) : undefined;
+    return { startReceipts, asksCheckout };
   } catch (error) {
     await failAtCompletion(
       ctx,
-      `Workflow '${workflow.name}' completed, but its run-ended triggers could not be read: ${(error as Error).message}. Fix the trigger, then resume the run.`,
+      `Workflow '${workflow.name}' completed, but its triggers could not be read: ${(error as Error).message}. Fix the trigger, then resume the run.`,
       runTranscriptUsage,
-      'dag.run_ended_triggers_fail'
+      'dag.completion_triggers_fail'
     );
     return undefined;
   }
@@ -454,7 +467,8 @@ async function completeRun(
   nodeCounts: NodeCounts,
   terminal: TerminalOutput,
   runTranscriptUsage: WorkflowUsage,
-  result: Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3]
+  result: Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3],
+  asksCheckout: AsksCheckout | undefined
 ): Promise<void> {
   const { deps, workflow, workflowRun, logDir } = ctx;
   const duration = Date.now() - ctx.startedAt;
@@ -467,7 +481,12 @@ async function completeRun(
 
   const assessed = await assessCompletedWorktree(deps, workflowRun);
   const { completedRun } = assessed;
-  const worktreeDisposition = keepHandedOff(assessed.worktreeDisposition, workflowRun, result);
+  const worktreeDisposition = keepHandedOff(
+    assessed.worktreeDisposition,
+    workflowRun,
+    result,
+    asksCheckout
+  );
 
   try {
     await requireTerminalStatusWrite(
@@ -510,6 +529,7 @@ async function completeRun(
           // An asks-settled binding reads the result when the asks settle, by then from
           // the row alone. Gated on the asks a top-level run declares, like the asks.
           ...keptAsksResult(ctx, result),
+          ...(asksCheckout === undefined ? {} : asksCheckoutMetadata(asksCheckout)),
         },
         // The one write of the run's outcome (#5660): it lands with the completed status,
         // so no reader sees an outcome on a run that has not ended. The starts the end
@@ -548,30 +568,6 @@ async function completeRun(
     const lost = wouldBeLost(worktreeDisposition);
     if (lost) await sendRetentionWarning(ctx, keptPath, lost);
   }
-}
-
-/**
- * A worktree this end hands to the stage it starts is kept for that stage, which works in
- * it once admitted. `in_use` is the reason an older binary also reads. After this write,
- * cleanup reads the waiting start from its binding and request rows and keeps the
- * worktree until the start has run, or was withdrawn, skipped or refused.
- */
-function keepHandedOff(
-  disposition: WorktreeDisposition | null | undefined,
-  workflowRun: WorkflowRun,
-  result: Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3]
-): WorktreeDisposition | null | undefined {
-  if (disposition?.disposition !== 'release') return disposition;
-  const stage = result?.startReceipts
-    ?.flatMap(accepted => accepted.bindings)
-    .find(binding => binding.checkoutFrom?.runId === workflowRun.id);
-  return stage
-    ? {
-        disposition: 'retained',
-        reason: 'in_use',
-        detail: `the stage '${stage.launch.workflowName}' its end started`,
-      }
-    : disposition;
 }
 
 /** What removing a kept checkout would lose, or undefined when keeping it needs no warning. */

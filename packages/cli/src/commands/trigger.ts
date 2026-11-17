@@ -60,6 +60,12 @@ export { spawnAdmitted } from '../utils/spawn-admitted';
 type TimerTriggerConfig = TriggerConfig & {
   schedule: NonNullable<TriggerConfig['schedule']>;
 };
+/** The input names a binding maps, for a message that tells the operator what to pass. */
+function mappedNames(inputs: Readonly<Record<string, unknown>> | undefined): string {
+  const names = Object.keys(inputs ?? {});
+  return names.length === 0 ? 'it maps none' : names.join(', ');
+}
+
 function isTimerConfig(config: TriggerConfig): config is TimerTriggerConfig {
   return config.schedule !== undefined;
 }
@@ -278,11 +284,15 @@ async function triggerFire(
   }
   assertItemOptions(options);
   const config = await loadFireConfig(options.config);
-  // A fire has no ended run to take the checkout from; starting the stage anyway would
+  // A fire has no ended or asking run to take the checkout from; starting the stage anyway would
   // cut it from the base branch, which is the one place this binding must never run.
   if (config.on?.runEnded?.checkout !== undefined)
     throw new Error(
       `${options.config} takes its checkout from the run that ended (on.runEnded.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on a run's checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <run-id> --item <key>, naming the run that holds the branch: after a read-only check, the run in the check's metadata.checkout_handoff.runId (archon workflow get <check-run-id> --json), not the check.`
+    );
+  if (config.on?.asksSettled?.checkout !== undefined)
+    throw new Error(
+      `${options.config} takes its checkout from the run that left the asks (on.asksSettled.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on that checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <holder-run-id> --item <key>, naming the run that holds the checkout: metadata.asks_checkout.handoff.runId in archon workflow get <asking-run-id> --json, which after a read-only asking stage is the run it was given, not the asking run. When asks_checkout records a refusal, or none, no checkout is left: run the asking workflow again on the item. Pass an --input <name>=<value> for each input the file maps (${mappedNames(config.on.asksSettled.inputs)}): --adopt carries the checkout, not the answers. Read the answers from archon workflow runs --item <key> --json (its answers of kind 'ask' for the asking run) and the asking run's inputs from archon workflow get <asking-run-id> --json.`
     );
   const sourceActor = await requestingSourceActor(host, env);
   // A redelivery keeps the binding snapshot of its first acceptance, so today's users
