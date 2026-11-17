@@ -163,6 +163,28 @@ describe('a pack graph', () => {
     expect(graph.stages[0]?.outcome?.values).toEqual([{ value: 'ready', startsNothing: true }]);
   });
 
+  test('an outcome spelled like a settlement is never matched by an asks arrow', () => {
+    const graph = graphOf(stages(stage('a', ['asks:answered'], true), stage('b', ['done'])), {
+      declared: { 'b-after-a': runEnded('b', 'a', 'asks:answered') },
+      installed: [
+        {
+          file: '/home/triggers/asks.json',
+          sourceInstanceId: 'asks',
+          from: { stage: 'a', settled: 'answered' },
+          launchWorkflow: 'b',
+          problems: [],
+        },
+      ],
+    });
+    expect(graph.arrows.map(a => [a.from, a.active])).toEqual([
+      [{ stage: 'a', outcome: 'asks:answered' }, false],
+      [{ stage: 'a', settled: 'answered' }, true],
+    ]);
+    expect(graph.stages[0]?.outcome?.values).toEqual([
+      { value: 'asks:answered', startsNothing: true },
+    ]);
+  });
+
   test('an installed pack resolves plain binding names to its own stages, never to another pack', () => {
     // Two installed packs share the authored stage names `plan` and `build`.
     const first = stages(stage('acme/first:plan', ['ready']), stage('acme/first:build', ['done']));

@@ -172,11 +172,30 @@ describe('asks-settled starts', () => {
     });
 
     test("the checkout is read at the asking run's completion only when such a binding matches", async () => {
-      const run = {
+      const run: WorkflowRun = {
+        origin: { conversationId: 'conv-plan' },
         id: RUN_ID,
-        item_id: ITEM.id,
         workflow_name: 'plan',
-      } as unknown as WorkflowRun;
+        conversation_id: 'conv-plan',
+        parent_conversation_id: null,
+        codebase_id: null,
+        status: 'completed',
+        outcome: null,
+        completed_outcome: null,
+        user_message: 'plan it',
+        metadata: {},
+        active_phase_started_at: null,
+        started_at: new Date('2026-11-16T09:00:00.000Z'),
+        completed_at: new Date('2026-11-16T09:30:00.000Z'),
+        last_activity_at: null,
+        working_path: null,
+        user_id: null,
+        parent_run_id: null,
+        adopted_from_run_id: null,
+        output_root: null,
+        checkout_baseline: null,
+        item_id: ITEM.id,
+      };
       const readsFor = async (files: Record<string, unknown>) => {
         const directory = await triggersWith(files);
         const reads: string[] = [];

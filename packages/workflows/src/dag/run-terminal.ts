@@ -28,6 +28,7 @@ import {
   type AsksCheckout,
   type SourceReceiptAcceptance,
 } from '../schemas/resource-start';
+import { keepHandedOff } from './handed-off-worktree';
 import { resolveRunInputs } from './references';
 import { logWorkflowComplete, logWorkflowError, type WorkflowUsage } from '../logger';
 import { isProviderLimit, rootFailures, type ProviderLimitFailure } from '../executor-shared';
@@ -567,29 +568,6 @@ async function completeRun(
     const lost = wouldBeLost(worktreeDisposition);
     if (lost) await sendRetentionWarning(ctx, keptPath, lost);
   }
-}
-
-/**
- * A worktree this end hands to the stage it starts is kept for that stage (`in_use`, which
- * older binaries also read); cleanup then keeps it while the start waits. One its asks will
- * hand on is kept from this release only: if it is gone when they settle, that start is refused.
- */
-function keepHandedOff(
-  disposition: WorktreeDisposition | null | undefined,
-  workflowRun: WorkflowRun,
-  result: Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3],
-  asksCheckout: AsksCheckout | undefined
-): WorktreeDisposition | null | undefined {
-  if (disposition?.disposition !== 'release') return disposition;
-  const stage = result?.startReceipts
-    ?.flatMap(accepted => accepted.bindings)
-    .find(binding => binding.checkoutFrom?.runId === workflowRun.id);
-  const detail = stage
-    ? `the stage '${stage.launch.workflowName}' its end started`
-    : asksCheckout && 'handoff' in asksCheckout && asksCheckout.handoff.runId === workflowRun.id
-      ? 'the stage its asks start once answered'
-      : undefined;
-  return detail ? { disposition: 'retained', reason: 'in_use', detail } : disposition;
 }
 
 /** What removing a kept checkout would lose, or undefined when keeping it needs no warning. */

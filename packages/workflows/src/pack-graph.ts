@@ -310,11 +310,15 @@ interface GraphInput {
 }
 
 /**
- * One key per arrow, as `runEndedTriggerCheck` keys a duplicate within a project. An asks
- * arrow's settlement is prefixed so it never keys like an outcome of the same text.
+ * One key per arrow, as `runEndedTriggerCheck` keys a duplicate within a project. The kind
+ * of origin is its own element, so an outcome spelled like a settlement never matches one.
  */
 const arrowKey = (from: PackGraphArrowFrom, to: string): string =>
-  JSON.stringify([from.stage, 'outcome' in from ? from.outcome : `asks:${from.settled}`, to]);
+  JSON.stringify(
+    'outcome' in from
+      ? [from.stage, 'outcome', from.outcome, to]
+      : [from.stage, 'settled', from.settled, to]
+  );
 
 const installedSource = (
   entry: InstalledArrow
