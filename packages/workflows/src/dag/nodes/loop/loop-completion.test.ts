@@ -797,6 +797,126 @@ describe('loop node completion channels', () => {
     expect(completed.length).toBe(1);
   });
 
+  it("corrects a same-session provider in the iteration's own thread, within the iteration", async () => {
+    mockSendQueryDag.mockImplementationOnce(async function* () {
+      yield { type: 'result', sessionId: 'thread-1', structuredOutput: { done: 'yes' } };
+      yield { type: 'settled', reason: 'turn_complete' };
+    });
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        sessionId: 'thread-1',
+        resumed: true,
+        structuredOutput: { done: true },
+      };
+      yield { type: 'settled', reason: 'turn_complete' };
+    });
+
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'dag-loop-codex-correction',
+          nodes: [
+            {
+              id: 'my-loop',
+              provider: 'codex',
+              output_format: {
+                type: 'object',
+                properties: { done: { type: 'boolean' } },
+                required: ['done'],
+              },
+              kind: 'loop',
+              loop: {
+                fresh_context: false,
+                prompt: 'implement the plan',
+                max_iterations: 4,
+                until_field: 'done',
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('loop-codex-correction'),
+        workflowProvider: 'codex',
+        config: { ...minimalConfig, assistant: 'codex' },
+      })
+    );
+
+    const calls = mockSendQueryDag.mock.calls;
+    expect(calls.length).toBe(2);
+    const [correctionPrompt, , correctionSession, correctionOptions] = calls[1]!;
+    expect(correctionSession).toBe('thread-1');
+    expect((correctionOptions as SendQueryOptions).forkSession).toBe(false);
+    expect(correctionPrompt).toContain('--- CORRECTION ---');
+    expect(correctionPrompt).not.toContain('implement the plan');
+    const rows = persistedEvents(store);
+    expect(rows.filter(row => row.event_type === 'loop_iteration_started')).toHaveLength(1);
+    expect(
+      rows.filter(row => row.event_type === 'node_completed').map(row => row.data?.session_id)
+    ).toEqual(['thread-1']);
+  });
+
+  it('retries a transient failure inside a same-session correction as the correction, not the task', async () => {
+    const calls: Array<{ prompt: string; session: string | undefined }> = [];
+    mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, session) {
+      calls.push({ prompt, session });
+      if (calls.length === 1) {
+        yield { type: 'result', sessionId: 'thread-1', structuredOutput: { done: 'yes' } };
+      } else if (calls.length === 2) {
+        yield {
+          type: 'result',
+          sessionId: 'thread-1',
+          isError: true,
+          failure: { class: 'transient', evidence: 'temporary provider failure' },
+        };
+        return;
+      } else {
+        yield { type: 'result', sessionId: 'thread-1', structuredOutput: { done: true } };
+      }
+      yield { type: 'settled', reason: 'turn_complete' };
+    });
+
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'dag-loop-codex-correction-retry',
+          nodes: [
+            {
+              id: 'my-loop',
+              provider: 'codex',
+              output_format: {
+                type: 'object',
+                properties: { done: { type: 'boolean' } },
+                required: ['done'],
+              },
+              kind: 'loop',
+              retry: { max_attempts: 1, delay_ms: 0 },
+              loop: {
+                fresh_context: false,
+                prompt: 'implement the plan',
+                max_iterations: 4,
+                until_field: 'done',
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('loop-codex-correction-retry'),
+        workflowProvider: 'codex',
+        config: { ...minimalConfig, assistant: 'codex' },
+      })
+    );
+
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+    expect(calls.map(call => call.session)).toEqual([undefined, 'thread-1', 'thread-1']);
+    expect(calls[2]!.prompt).toContain('--- CORRECTION ---');
+    expect(calls[2]!.prompt).not.toContain('implement the plan');
+  });
+
   it('keeps threading the loop session across a mid-loop re-ask', async () => {
     // A reask runs in a throwaway session by design. Adopting it as the loop's
     // thread would silently discard every earlier iteration while

@@ -255,12 +255,16 @@ export async function gateStructuredAttempt(
   i: number,
   attempt: StreamedAttempt,
   reask: Reask,
-  maxReasks: number
+  { maxReasks, hasSessionToCorrect }: { maxReasks: number; hasSessionToCorrect: boolean }
 ): Promise<StructuredVerdict> {
   const { ctx, node } = run;
   // An idle timeout, operator cutoff or user abort is a genuine failure, not a validation
   // miss — never spend a reask on it (mirrors the agent node's canReask).
-  const canReask = reask.attempt < maxReasks && !attempt.cutOff && !attempt.abort.signal.aborted;
+  const canReask =
+    reask.attempt < maxReasks &&
+    hasSessionToCorrect &&
+    !attempt.cutOff &&
+    !attempt.abort.signal.aborted;
 
   if (attempt.structured !== undefined) {
     return gateStructuredPayload(run, state, i, attempt.structured, {

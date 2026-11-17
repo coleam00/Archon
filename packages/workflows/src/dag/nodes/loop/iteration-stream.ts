@@ -5,8 +5,10 @@ import { sessionPreview } from '@archon/provider-contract';
 import {
   type TurnCutOff,
   type WatchdogReset,
-  STRUCTURED_OUTPUT_MAX_REASKS,
+  structuredOutputCorrectionBlock,
+  structuredOutputMaxReasks,
   structuredOutputPass,
+  type StructuredOutputPass,
   NodeFailure,
   providerReportedFailure,
   assertResultBeforeSettlement,
@@ -116,9 +118,12 @@ type ResultChunk = Extract<MessageChunk, { type: 'result' }>;
  *
  * ── Structured-output attempts (#2563) ──────────────────────────────────
  * When the node declares `output_format`, an iteration is one or more STREAM
- * ATTEMPTS: the payload is validated against the schema, and on a best-effort
- * provider (Pi/Copilot) a miss is re-asked with the schema errors appended, up
- * to STRUCTURED_OUTPUT_MAX_REASKS. This mirrors executeAgentNode's contract
+ * ATTEMPTS: the payload is validated against the schema, and on a provider that
+ * declares `structuredOutputCorrection` a miss is re-asked with the schema errors,
+ * up to STRUCTURED_OUTPUT_MAX_REASKS ('fresh-session': Pi/Copilot re-run the
+ * iteration's prompt in a throwaway session; 'same-session': Codex continues the
+ * iteration's thread with only the errors). A correction stays inside the
+ * iteration and never counts as one. This mirrors executeAgentNode's contract
  * exactly, deliberately — a loop should not be the one node type where a
  * structured miss behaves differently. Exhaustion FAILS the node; it is never
  * treated as "not complete yet", which would be the silent degradation the
@@ -143,6 +148,9 @@ export async function runIterationAttempts(
   const needsFreshSession = run.node.loop.fresh_context || i === 1;
   const resumeSessionId = needsFreshSession ? undefined : state.sessionId;
   const retry: IterationRetry = { attempt: 0, sawRateLimit: false };
+  // A same-session correction outlives a transient retry: the retry resends the
+  // correction into the thread that holds the iteration's work, not the task again.
+  const correction = newCorrection();
   for (; ; retry.attempt++) {
     if (retry.attempt > 0) {
       const status = await ctx.deps.store
@@ -164,6 +172,7 @@ export async function runIterationAttempts(
     const outcome = await runReaskAttempts(run, state, i, iterationStart, {
       resumeSessionId,
       retry,
+      correction,
     });
     if (outcome.kind !== 'retry') return outcome;
   }
@@ -174,18 +183,20 @@ async function runReaskAttempts(
   state: LoopState,
   i: number,
   iterationStart: number,
-  iteration: { resumeSessionId: string | undefined; retry: IterationRetry }
+  iteration: {
+    resumeSessionId: string | undefined;
+    retry: IterationRetry;
+    correction: Correction;
+  }
 ): Promise<IterationReply | AttemptVerdict> {
   const { retry } = iteration;
+  const sameSession = run.capabilities.structuredOutputCorrection === 'same-session';
   // A failed attempt's session is not the one the iteration completed in. A reask
-  // keeps the session the iteration's own prompt reported.
-  const thread: { sessionId: string | undefined } = { sessionId: undefined };
-  const reask: Reask = { attempt: 0, errors: [] };
+  // keeps the session the iteration's own prompt reported. A transient retry starts
+  // over from the task, except in a same-session correction, which it continues.
+  const { thread, reask } = sameSession ? iteration.correction : newCorrection();
   const wantsStructured = run.resolvedOptions?.outputFormat !== undefined;
-  const maxReasks =
-    wantsStructured && run.capabilities.structuredOutput === 'best-effort'
-      ? STRUCTURED_OUTPUT_MAX_REASKS
-      : 0;
+  const maxReasks = structuredOutputMaxReasks(run.capabilities, wantsStructured);
   const reply = (attempt: StreamedAttempt, payload: unknown): IterationReply => ({
     kind: 'reply',
     fullOutput: attempt.fullOutput,
@@ -212,12 +223,26 @@ async function runReaskAttempts(
     // ── Structured-output gate for this attempt ───────────────────────────
     // No `output_format` declared: one attempt, nothing to validate.
     if (!wantsStructured) return reply(attempt, undefined);
-    const verdict = await gateStructuredAttempt(run, state, i, attempt, reask, maxReasks);
+    // A same-session correction needs the iteration's thread; without one, the miss fails.
+    const verdict = await gateStructuredAttempt(run, state, i, attempt, reask, {
+      maxReasks,
+      hasSessionToCorrect: !sameSession || thread.sessionId !== undefined,
+    });
     if (verdict.kind === 'accepted') return reply(attempt, verdict.payload);
     if (verdict.kind === 'failed') return verdict;
     reask.attempt++;
     reask.errors = verdict.errors;
   }
+}
+
+/** Where an iteration's structured-output correction stands: its thread and its reask count. */
+interface Correction {
+  thread: { sessionId: string | undefined };
+  reask: Reask;
+}
+
+function newCorrection(): Correction {
+  return { thread: { sessionId: undefined }, reask: { attempt: 0, errors: [] } };
 }
 
 function newAttempt(run: LoopRun): StreamedAttempt {
@@ -420,11 +445,57 @@ function attemptPrompt(
       references: nodeTemplateReferences(run.promptTemplate, ctx),
     }
   );
-  // A reask re-runs this iteration's prompt with the schema errors appended, so
-  // the model is told WHAT was wrong rather than silently asked again.
-  return reask.attempt === 0
-    ? basePrompt
-    : `${basePrompt}\n\n---\n\nYour previous response did not match the required output schema:\n${reask.errors.map(e => `- ${e}`).join('\n')}\n\nRespond again with output that satisfies the schema exactly.`;
+  if (reask.attempt === 0) return basePrompt;
+  // A same-session correction continues the thread that already holds this prompt and
+  // the work it did, so it sends only the errors.
+  if (run.capabilities.structuredOutputCorrection === 'same-session') {
+    return structuredOutputCorrectionBlock(reask.errors);
+  }
+  // A fresh-session reask re-runs this iteration's prompt with the schema errors appended,
+  // so the model is told WHAT was wrong rather than silently asked again.
+  return `${basePrompt}\n\n---\n\nYour previous response did not match the required output schema:\n${reask.errors.map(e => `- ${e}`).join('\n')}\n\nRespond again with output that satisfies the schema exactly.`;
+}
+
+/** One attempt's pass and the chunks it streams. */
+function iterationChunks(
+  run: LoopRun,
+  i: number,
+  attempt: StreamedAttempt,
+  finalPrompt: string,
+  position: AttemptPosition
+): { pass: StructuredOutputPass; generator: AsyncGenerator<MessageChunk> } {
+  const { ctx, node } = run;
+  const pass = structuredOutputPass(
+    position.reask.attempt,
+    position.resumeSessionId,
+    false,
+    run.capabilities.structuredOutputCorrection === 'same-session'
+      ? position.thread.sessionId
+      : undefined
+  );
+  const send = (resumeSessionId: string | undefined): AsyncGenerator<MessageChunk> =>
+    run.aiClient.sendQuery(finalPrompt, ctx.cwd, resumeSessionId, {
+      ...run.resolvedOptions,
+      env: run.iterationEnv,
+      abortSignal: attempt.abort.signal,
+      ...(pass.continuesThread ? { forkSession: false } : {}),
+    });
+  // A same-session correction continues the thread this iteration wrote seconds ago; a
+  // stale-resume fallback would start a fresh session holding only the correction text.
+  const generator = pass.continuesThread
+    ? send(pass.resumeSessionId)
+    : withStaleResumeRetry(send, pass.resumeSessionId, {
+        logContext: { workflowRunId: ctx.workflowRun.id, nodeId: node.id, iteration: i },
+        onRetry: async () => {
+          await safeSendMessage(
+            ctx.platform,
+            ctx.conversationId,
+            `⚠️ Loop \`${node.id}\` iteration ${String(i)}: could not resume the previous iteration's session — continued with a fresh session, so the earlier context was not restored.`,
+            run.msgContext
+          );
+        },
+      });
+  return { pass, generator };
 }
 
 async function consumeIterationStream(
@@ -434,35 +505,11 @@ async function consumeIterationStream(
   listings: InvocationListings,
   scope: StreamScope
 ): Promise<void> {
-  const { ctx, node, capabilities } = run;
+  const { node, capabilities } = run;
   const { attempt, watchdogResets } = scope;
   const { providerEvents } = attempt;
   const finalPrompt = attemptPrompt(run, state, i, listings, scope.position.reask);
-  const pass = structuredOutputPass(
-    scope.position.reask.attempt,
-    scope.position.resumeSessionId,
-    false
-  );
-  const generator = withStaleResumeRetry(
-    resumeSessionId =>
-      run.aiClient.sendQuery(finalPrompt, ctx.cwd, resumeSessionId, {
-        ...run.resolvedOptions,
-        env: run.iterationEnv,
-        abortSignal: attempt.abort.signal,
-      }),
-    pass.resumeSessionId,
-    {
-      logContext: { workflowRunId: ctx.workflowRun.id, nodeId: node.id, iteration: i },
-      onRetry: async () => {
-        await safeSendMessage(
-          ctx.platform,
-          ctx.conversationId,
-          `⚠️ Loop \`${node.id}\` iteration ${String(i)}: could not resume the previous iteration's session — continued with a fresh session, so the earlier context was not restored.`,
-          run.msgContext
-        );
-      },
-    }
-  );
+  const { pass, generator } = iterationChunks(run, i, attempt, finalPrompt, scope.position);
   const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
   const shouldStopStream = (): Promise<boolean> => stopStreamIfRunStopped(run, i, attempt);
   try {
@@ -612,7 +659,7 @@ function applyResultChunk(
 }
 
 /**
- * A reask's throwaway session is not the thread (structuredOutputPass): adopting it
+ * A fresh-session reask's throwaway session is not the thread (structuredOutputPass): adopting it
  * would silently discard iterations 1…N and break the `fresh_context: false` contract
  * ("each iteration resumes the prior conversation"). The repaired answer still reaches
  * the next iteration through $LOOP_PREV_OUTPUT, which is prompt text rather than

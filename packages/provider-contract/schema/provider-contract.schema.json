@@ -258,6 +258,13 @@
             }
           ]
         },
+        "structuredOutputCorrection": {
+          "type": "string",
+          "enum": [
+            "fresh-session",
+            "same-session"
+          ]
+        },
         "requiresAllPropertiesRequired": {
           "type": "boolean"
         },
