@@ -26,6 +26,8 @@
     "./attention-watch": "./src/attention-watch.ts",
     "./attention-needs": "./src/attention-needs.ts",
     "./item-read": "./src/item-read.ts",
+    "./item-window": "./src/item-window.ts",
+    "./item-metrics": "./src/item-metrics.ts",
     "./item-hold": "./src/item-hold.ts",
     "./pack-graph": "./src/pack-graph.ts",
     "./workflow-notice": "./src/workflow-notice.ts",

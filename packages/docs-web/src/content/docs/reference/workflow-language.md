@@ -47,7 +47,7 @@ Workflows live in `.archon/workflows/` relative to the working directory:
 
 The two directories form a fixed package boundary: `.archon/workflows/<pack>/<workflow>/`. A packaged workflow contains exactly one YAML definition; a bare `command:` reference resolves only from its own `commands/` directory, and a named `script:` reference from its own `scripts/` directory, then from the pack's [shared scripts](/guides/script-nodes/#share-a-script-between-workflows-of-a-pack) in `<pack>/.shared/scripts/`. Neither falls back to another pack or scope. Included workflows retain their own resource folder, so two workflows may reuse names such as `review.md` without collisions.
 
-Scripts from different workflows in one pack can import modules from `<pack>/.shared/`. That directory is reserved for modules, `.md` documents, the pack's `metric-views.json` and its shared scripts in `.shared/scripts/`; it holds no workflow definitions. A node reads a document the pack ships through [`$PACK_DIR`](/reference/variables/#pack_dir-the-workflows-own-pack), for example `$PACK_DIR/.shared/policy/triage.md`. Bun and Python use the same pack-relative layout in source checkouts and binary builds. See [Share code within a pack](/guides/script-nodes/#share-code-within-a-pack) for import examples.
+Scripts from different workflows in one pack can import modules from `<pack>/.shared/`. That directory is reserved for modules, `.md` documents, the pack's `metric-views.json` and [`item-metrics.json`](/guides/metrics/#item-metrics-a-pack-declares), and its shared scripts in `.shared/scripts/`; it holds no workflow definitions. A node reads a document the pack ships through [`$PACK_DIR`](/reference/variables/#pack_dir-the-workflows-own-pack), for example `$PACK_DIR/.shared/policy/triage.md`. Bun and Python use the same pack-relative layout in source checkouts and binary builds. See [Share code within a pack](/guides/script-nodes/#share-code-within-a-pack) for import examples.
 
 The same tree works under `~/.archon/workflows/` for home-scoped workflows. Existing flat `.archon/workflows/foo.yaml`, one-level grouped YAML, shared `.archon/commands/`, and shared `.archon/scripts/` remain supported for compatibility.
 
@@ -1774,6 +1774,35 @@ When a run starts, after any wait for its [resource](/guides/workflow-triggers/#
 
 `archon workflow runs --item <key>` shows, for each run, `hasResult`: whether a reader would
 get a value from it.
+
+## Reading a project's items over a window
+
+`items()` reads the items of the run's project that had a run started in a window, each as
+`item()` reads one, with all of its runs. It is [`archon workflow items`](/reference/cli/#workflow-items),
+and returns `{ window, items, next }`. A page holds at most 100 items, but each item is read
+whole, so a page has no byte bound: emit what the node computes from the pages, not the pages
+themselves. Pass `next` back as `after` to read the following page:
+
+```yaml
+nodes:
+  - id: merged
+    runtime: bun
+    script: |
+      import { emit, items } from 'archon:script';
+      let page = items({ since: '30d', limit: 100 });
+      const keys = [];
+      for (;;) {
+        keys.push(...page.items.filter(read => read.merged !== null).map(read => read.item.key));
+        if (page.next === null) break;
+        page = items({ after: page.next, limit: 100 });
+      }
+      emit({ keys });
+```
+
+`since` and `until` take [`archon metrics`](/reference/cli/#metrics-name) syntax and default to
+the last 30 days; `after` is passed alone. A figure over the items, such as a merge rate, needs
+no script: a pack [declares it as data](/guides/metrics/#item-metrics-a-pack-declares) and
+`archon metrics --project` evaluates it. Like `item()`, it runs on the host.
 
 ## Durable state documents
 

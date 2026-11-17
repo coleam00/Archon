@@ -2281,6 +2281,66 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/items/window': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** A page of a project's items with a run started in a window, each read whole */
+    get: {
+      parameters: {
+        query: {
+          project: string;
+          since?: string;
+          until?: string;
+          limit?: number | null;
+          after?: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description The page, with the cursor of the next one */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ItemWindow'];
+          };
+        };
+        /** @description Bad request, an unknown project, or a window or cursor that does not resolve */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/items/rulings': {
     parameters: {
       query?: never;
@@ -7886,6 +7946,11 @@ export interface components {
           requestId: string;
           hostId: string;
         } | null;
+        spend: {
+          usd: number | null;
+          inputTokens: number | null;
+          outputTokens: number | null;
+        };
         heldBehind: {
           runId: string;
           workflow: string;
@@ -8343,6 +8408,19 @@ export interface components {
           } | null;
         } | null;
       }[];
+      merged: {
+        change: string;
+        commit: string | null;
+        /** Format: date-time */
+        at: string;
+        /** Format: date-time */
+        recordedAt: string;
+        via: string;
+        fromRun: {
+          runId: string;
+          nodePath: string;
+        } | null;
+      } | null;
       degraded: (
         | {
             /** @enum {string} */
@@ -8362,10 +8440,583 @@ export interface components {
             /** @enum {string} */
             type: 'degraded';
             /** @enum {string} */
+            reason: 'merge_unreadable';
+            itemId: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
             reason: 'link_unreadable';
             linkId: string;
           }
       )[];
+    };
+    ItemWindow: {
+      window: {
+        /** Format: date-time */
+        since: string;
+        /** Format: date-time */
+        until: string;
+      };
+      items: {
+        item: {
+          id: string;
+          projectKey: string;
+          key: string;
+        };
+        runs: {
+          id: string;
+          workflow: string;
+          /** @enum {string} */
+          status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          outcome: string | null;
+          /** Format: date-time */
+          startedAt: string;
+          /** Format: date-time */
+          completedAt: string | null;
+          cause:
+            | {
+                /** @enum {string} */
+                kind: 'run_ended';
+                runId: string;
+                sourceInstanceId: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'asks_settled';
+                runId: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'run_fired';
+                runId: string;
+                node: string | null;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'receipt';
+                receiptId: string;
+                sourceInstanceId: string;
+              }
+            | unknown;
+          awaitingExecution: {
+            requestId: string;
+            hostId: string;
+          } | null;
+          spend: {
+            usd: number | null;
+            inputTokens: number | null;
+            outputTokens: number | null;
+          };
+          heldBehind: {
+            runId: string;
+            workflow: string;
+            /** @enum {string} */
+            status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+            /** @enum {string|null} */
+            owner: 'reachable' | 'unreachable' | 'unknown' | null;
+          } | null;
+          hasResult: boolean;
+        }[];
+        queued: {
+          requestId: string;
+          workflow: string | null;
+          resource: string;
+          hostId: string;
+          /** Format: date-time */
+          queuedAt: string;
+          ahead: number;
+          heldBehind: {
+            runId: string;
+            workflow: string;
+            /** @enum {string} */
+            status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+            /** @enum {string|null} */
+            owner: 'reachable' | 'unreachable' | 'unknown' | null;
+          } | null;
+        }[];
+        skipped: {
+          requestId: string;
+          workflow: string | null;
+          resource: string;
+          heldBehind: {
+            runId: string;
+            workflow: string;
+            /** @enum {string} */
+            status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+            /** @enum {string|null} */
+            owner: 'reachable' | 'unreachable' | 'unknown' | null;
+          } | null;
+        }[];
+        questions: (
+          | {
+              /** @enum {string} */
+              kind: 'attention';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              run?: {
+                id: string;
+                workflow: string;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+                node: string;
+                occurrence: string;
+              };
+              message: string;
+              /** @enum {string} */
+              form: 'message' | 'approval' | 'select' | 'multi_select';
+              options: {
+                id: string;
+                label?: string;
+                does?: string;
+                value?: unknown;
+                cost?: string;
+              }[];
+              /** @enum {boolean} */
+              other?: true;
+              recommendation?: {
+                option: string;
+                why: string;
+                /** @enum {string} */
+                confidence?: 'low' | 'medium' | 'high';
+              };
+              context?: string;
+              artifacts?: {
+                /** @enum {string} */
+                type: 'archon_artifact';
+                run_id: string;
+                path: string;
+              }[];
+              askedIn?: {
+                runId: string;
+                workflow: string;
+              };
+            }
+          | {
+              /** @enum {string} */
+              kind: 'awaiting_response';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              run: {
+                id: string;
+                workflow: string;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+                node: string;
+                occurrence: string;
+              };
+              message: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'usage_limit';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              run: {
+                id: string;
+                workflow: string;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+                node: string;
+              };
+              /** Format: date-time */
+              resetAt: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'unreadable';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              run: {
+                id: string;
+                workflow: string;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+              };
+              /** @enum {string} */
+              reason:
+                | 'malformed_tool_call_attention'
+                | 'malformed_gate'
+                | 'unrecognized_gate_type'
+                | 'child_pointer_missing'
+                | 'child_run_missing'
+                | 'child_chain_too_deep'
+                | 'source_release_not_continued';
+              detail: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'owner_lost';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              run: {
+                id: string;
+                workflow: string;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+              };
+              /** @enum {string} */
+              observedStatus:
+                | 'pending'
+                | 'running'
+                | 'completed'
+                | 'failed'
+                | 'cancelled'
+                | 'paused';
+            }
+        )[];
+        answers: (
+          | {
+              /** @enum {string} */
+              kind: 'attention';
+              runId: string;
+              node: string | null;
+              occurrence: string | null;
+              at: string;
+              via: string | null;
+              answer:
+                | {
+                    text: string;
+                  }
+                | {
+                    decision: string;
+                    text: string;
+                  }
+                | {
+                    decisions: string[];
+                    text: string;
+                  }
+                | unknown;
+              by:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
+              fromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'gate';
+              runId: string;
+              node: string | null;
+              occurrence: string | null;
+              at: string;
+              via: string | null;
+              decision: string | null;
+              text: string | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'ruling';
+              id: string;
+              text: string;
+              /** Format: date-time */
+              at: string;
+              via: string;
+              by:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
+              fromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
+              withdrawn: {
+                /** Format: date-time */
+                at: string;
+                via: string;
+                by:
+                  | {
+                      declared: string;
+                    }
+                  | {
+                      userId: string;
+                    }
+                  | unknown;
+                fromRun: {
+                  runId: string;
+                  nodePath: string;
+                } | null;
+              } | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'ask';
+              runId: string;
+              node: string | null;
+              occurrence: string | null;
+              at: string;
+              via: string | null;
+              ref: string;
+              question: string;
+              answer:
+                | {
+                    text: string;
+                  }
+                | {
+                    decision: string;
+                    text: string;
+                  }
+                | {
+                    decisions: string[];
+                    text: string;
+                  }
+                | unknown;
+              chosen: {
+                id: string;
+                does: string;
+              } | null;
+              withdrawn: boolean;
+              by:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
+              fromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'asks_settled';
+              runId: string;
+              node: string | null;
+              occurrence: string | null;
+              at: string;
+              via: string | null;
+              answered: number;
+              withdrawn: number;
+            }
+        )[];
+        links: {
+          id: string;
+          /** @enum {string} */
+          kind: 'depends_on' | 'part_of' | 'duplicate_of';
+          /** @enum {string} */
+          direction: 'outgoing' | 'incoming';
+          other: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          /** Format: date-time */
+          at: string;
+          via: string;
+          by:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              }
+            | unknown;
+          fromRun: {
+            runId: string;
+            nodePath: string;
+          } | null;
+          ended: {
+            /** Format: date-time */
+            at: string;
+            via: string;
+            by:
+              | {
+                  declared: string;
+                }
+              | {
+                  userId: string;
+                }
+              | unknown;
+            fromRun: {
+              runId: string;
+              nodePath: string;
+            } | null;
+          } | null;
+        }[];
+        merged: {
+          change: string;
+          commit: string | null;
+          /** Format: date-time */
+          at: string;
+          /** Format: date-time */
+          recordedAt: string;
+          via: string;
+          fromRun: {
+            runId: string;
+            nodePath: string;
+          } | null;
+        } | null;
+        degraded: (
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'run_unreadable';
+              runId?: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'ruling_unreadable';
+              rulingId: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'merge_unreadable';
+              itemId: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'link_unreadable';
+              linkId: string;
+            }
+        )[];
+      }[];
+      next: string | null;
     };
     ItemRuling: {
       /** @enum {string} */
