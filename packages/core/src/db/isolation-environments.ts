@@ -3,11 +3,7 @@
  */
 import { getRegisteredPlatformPolicies } from '../platforms/registry';
 import { pool, getDialect, getDatabaseType } from './connection';
-import {
-  type WorkflowRunStatus,
-  TERMINAL_WORKFLOW_STATUSES,
-  RESUMABLE_WORKFLOW_STATUSES,
-} from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
   WORKTREE_REGISTRATION_ID,
   WORKTREE_REMOVAL_OWNER,
@@ -30,7 +26,12 @@ import { toHydratedTimestamp } from './timestamps';
 import { readWorkflowRunStatus } from './workflow-run-status';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
-import { runOwnsEnvSql } from './isolation-env-users';
+import {
+  liveRunOwnerSql,
+  SETTLEABLE_WORKFLOW_STATUSES,
+  type FailedRunRelease,
+} from './isolation-env-users';
+export type { FailedRunRelease } from './isolation-env-users';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -489,103 +490,25 @@ export async function countActiveByCodebase(codebaseId: string): Promise<number>
   return parseInt(result.rows[0]?.count ?? '0', 10);
 }
 
-/**
- * A run releases its environment unconditionally only once it can never claim it
- * again: terminal AND not resumable. Derived rather than hand-listed so a new
- * resumable status keeps its pin automatically.
- */
-const UNCLAIMABLE_WORKFLOW_STATUSES = TERMINAL_WORKFLOW_STATUSES.filter(
-  status => !RESUMABLE_WORKFLOW_STATUSES.includes(status)
-);
-
-/**
- * Terminal but resumable ('failed'). Such a run pins its environment until a
- * cleanup sweep settles its outcome (see FailedRunRelease). A paused run is
- * resumable but not terminal, so it always pins.
- */
-const SETTLEABLE_WORKFLOW_STATUSES = TERMINAL_WORKFLOW_STATUSES.filter(status =>
-  RESUMABLE_WORKFLOW_STATUSES.includes(status)
-);
-
 /** Whether a claiming run's lock is one a cleanup sweep can release. */
 export function isSettleableRunStatus(status: string): boolean {
   return (SETTLEABLE_WORKFLOW_STATUSES as readonly string[]).includes(status);
 }
 
 /**
- * When a cleanup sweep stops counting a failed run as a lock: once its outcome is
- * settled by Git integration or an eligible PR covering its local tips, or once
- * the run has been inactive longer than the sweep's stale window.
- * The run row itself is never touched.
- */
-export type FailedRunRelease = { kind: 'settled' } | { kind: 'stale'; staleDays: number };
-
-/**
- * Find a workflow run that still owns an environment — the one signal that pins an
- * env for cleanup. Historical conversation rows are data, not locks: every
- * CLI-launched run leaves one behind, so counting references pinned every
- * environment forever (#2868).
- *
- * "Owns" means the run can still act on the estate: it is running, pending or
- * paused, or it failed and remains resumable. With `release`, a failed run whose
- * outcome the caller has settled no longer owns it; every other claimable run
- * still does, whatever else shares the environment.
- *
- * Run metadata, conversation links, and same-codebase checkout paths all pin
- * estate. Creation proof governs deletion, while any claimable user blocks it.
- * A run started on a hand-off (`checkout_handoff`) from a run that owns the
- * environment owns it too: between admission and the lane's layout it records no
- * environment of its own yet.
- * `excludeRunId` leaves out a run that is still claimable while it decides about
- * its own environment.
+ * Find a workflow run that still owns an environment, the signal that pins an env
+ * for cleanup; see liveRunOwnerSql for what owning means. `excludeRunId` leaves out
+ * a run that is still claimable while it decides about its own environment.
+ * Cleanup reads it together with waiting hand-offs through getEnvUse instead.
  */
 export async function getLiveRunOwningEnv(
   envId: string,
   release?: FailedRunRelease,
   excludeRunId?: string
 ): Promise<{ id: string; status: WorkflowRunStatus } | null> {
-  const postgres = getDatabaseType() === 'postgresql';
-  const dialect = getDialect();
-  // Placeholders follow the status lists' lengths so a new status extends an IN
-  // list without a hand-edited parameter position.
   const params: unknown[] = [envId];
-  const placeholders = (values: readonly unknown[]): string =>
-    values.map(value => `$${String(params.push(value))}`).join(', ');
-  const unclaimable = placeholders(UNCLAIMABLE_WORKFLOW_STATUSES);
-  let releaseFilter = '';
-  if (release) {
-    const settleable = placeholders(SETTLEABLE_WORKFLOW_STATUSES);
-    if (release.kind === 'settled') {
-      releaseFilter = `AND r.status NOT IN (${settleable})`;
-    } else {
-      // The run's own clock: a failed run's completed_at is when it failed. SQLite's
-      // datetime() normalizes either stored text format; a NULL or unparseable time
-      // keeps the lock.
-      const coalesced = 'COALESCE(r.completed_at, r.last_activity_at, r.started_at)';
-      const lastActive = postgres ? coalesced : `datetime(${coalesced})`;
-      params.push(release.staleDays);
-      const threshold = dialect.nowMinusDays(params.length);
-      releaseFilter = `AND (r.status NOT IN (${settleable}) OR ${lastActive} IS NULL OR ${lastActive} >= ${threshold})`;
-    }
-  }
-  const exclusion =
-    excludeRunId === undefined
-      ? ''
-      : `AND ${postgres ? 'r.id::text' : 'r.id'} <> $${String(params.push(excludeRunId))}`;
   const result = await pool.query<{ id: string; status: string }>(
-    `SELECT r.id, r.status
-     FROM remote_agent_workflow_runs r
-     LEFT JOIN remote_agent_conversations c ON c.id = r.conversation_id
-     WHERE (r.status NOT IN (${unclaimable}))
-       ${releaseFilter}
-       ${exclusion}
-       AND (${runOwnsEnvSql('r', 'c')}
-         OR EXISTS (SELECT 1 FROM remote_agent_workflow_runs h
-           LEFT JOIN remote_agent_conversations hc ON hc.id = h.conversation_id
-           WHERE ${postgres ? 'h.id::text' : 'h.id'} = ${dialect.jsonText('r.metadata', 'checkout_handoff.runId')}
-             AND ${runOwnsEnvSql('h', 'hc')}))
-     ORDER BY r.started_at DESC
-     LIMIT 1`,
+    liveRunOwnerSql(params, release, excludeRunId),
     params
   );
   const row = result.rows[0];

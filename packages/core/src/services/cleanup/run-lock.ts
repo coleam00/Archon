@@ -10,7 +10,7 @@ import {
 } from '@archon/git';
 import type { RepoPath } from '@archon/git';
 import * as isolationEnvDb from '../../db/isolation-environments';
-import { getWaitingHandoffOfEnv, type WaitingHandoff } from '../../db/isolation-env-users';
+import { getEnvUse, type WaitingHandoff } from '../../db/isolation-env-users';
 import { loadRepoConfig } from '../../config/config-loader';
 import { configuredRemote } from './merge-verdict';
 
@@ -30,19 +30,15 @@ export type UseBlocker = LiveRunBlocker | HandoffBlocker;
 /**
  * The use lock removers report, with the refusal text chat, the CLI, and the sweeps
  * share: a workflow run that can still claim the environment — running, pending,
- * paused, or failed-but-resumable (see getLiveRunOwningEnv) — or else a start handed
- * its checkout that still waits (see getWaitingHandoffOfEnv). Historical conversation
- * references are data, not locks. A lookup failure throws; callers must refuse
- * removal rather than read it as "no use".
- *
- * The waiting start is read before the runs. Admission turns a queued request into a
- * pending run in one transaction, so a start this read misses was already admitted,
- * and the run read after it sees that run. The other order loses both.
+ * paused, or failed-but-resumable — or else a start handed its checkout that still
+ * waits. Both come from one read (getEnvUse), so ownership moving between them cannot
+ * fall between two reads. Historical conversation references are data, not locks.
+ * A lookup failure throws; callers must refuse removal rather than read it as "no use".
  */
 export async function getUseBlocker(envId: string): Promise<UseBlocker | null> {
-  const handoff = await getHandoffBlocker(envId);
-  const liveRun = await isolationEnvDb.getLiveRunOwningEnv(envId);
-  return liveRun ? toLiveRunBlocker(liveRun) : handoff;
+  const { owner, handoff } = await getEnvUse(envId);
+  if (owner) return toLiveRunBlocker(owner);
+  return handoff ? toHandoffBlocker(handoff) : null;
 }
 
 /** The identifiers a log line records for a use lock. */
@@ -52,9 +48,7 @@ export function useBlockerLogFields(blocker: UseBlocker): Record<string, string>
   return handoff;
 }
 
-async function getHandoffBlocker(envId: string): Promise<HandoffBlocker | null> {
-  const handoff = await getWaitingHandoffOfEnv(envId);
-  if (!handoff) return null;
+function toHandoffBlocker(handoff: WaitingHandoff): HandoffBlocker {
   const from = `run ${handoff.fromRunId.slice(0, 8)}`;
   return {
     reason: 'pending_handoff',
@@ -115,27 +109,25 @@ const RELEASE_REASONS: Record<CleanupSettlement['kind'], FailedRunReleaseReason>
  * Merged or closed-PR settlement already proved coverage of both local tips.
  *
  * A start handed the checkout that still waits locks whatever the settlement: no
- * outcome of the run that handed it releases the stage it started. It is read before
- * the runs, for the reason getUseBlocker gives.
+ * outcome of the run that handed it releases the stage it started. Runs, the settled
+ * runs and waiting starts come from one read, for the reason getUseBlocker gives.
  */
 export async function getCleanupRunLock(
   env: { id: string; working_path: string; branch_name: string | null },
   repoPath: RepoPath,
   settlement: CleanupSettlement
 ): Promise<CleanupRunLock> {
-  const handoff = await getHandoffBlocker(env.id);
-  const owner = await isolationEnvDb.getLiveRunOwningEnv(env.id);
+  const { owner, releasedOwner, handoff } = await getEnvUse(
+    env.id,
+    settlement.kind === 'stale' ? settlement : { kind: 'settled' }
+  );
   if (owner) {
-    if (!isolationEnvDb.isSettleableRunStatus(owner.status)) {
-      return { kind: 'locked', blocker: toLiveRunBlocker(owner) };
-    }
-    const lock = await isolationEnvDb.getLiveRunOwningEnv(
-      env.id,
-      settlement.kind === 'stale' ? settlement : { kind: 'settled' }
-    );
+    // A non-settleable owner locks; a settleable one locks unless the settlement
+    // releases every owner (releasedOwner is what is left once it applies).
+    const lock = isolationEnvDb.isSettleableRunStatus(owner.status) ? releasedOwner : owner;
     if (lock) return { kind: 'locked', blocker: toLiveRunBlocker(lock) };
   }
-  if (handoff) return { kind: 'locked', blocker: handoff };
+  if (handoff) return { kind: 'locked', blocker: toHandoffBlocker(handoff) };
   if (settlement.kind === 'stale') {
     const commits = await countUnpushedCommits(env, repoPath);
     if (commits > 0) return toUnpushedLock(env, owner?.id ?? null, commits);

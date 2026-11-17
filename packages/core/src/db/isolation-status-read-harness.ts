@@ -68,16 +68,20 @@ export function isolationStatusReadTests(
 
   /** A completed run owning `envId` whose end handed its checkout to a start, still pending. */
   async function seedHandoff(envId: string) {
+    return handOff(await seedRun(envId, 'completed'));
+  }
+
+  /** What run `from`'s end records: a receipt whose binding hands on its checkout. */
+  async function handOff(from: string, query: IDatabase['query'] = getDb().query.bind(getDb())) {
     const db = getDb();
-    const from = await seedRun(envId, 'completed');
     const receiptId = randomUUID();
-    await db.query(
+    await query(
       `INSERT INTO remote_agent_start_receipts (id, source_instance_id, content_digest, received_at, outcome)
        VALUES ($1, 'run-ended', 'digest', $2, 'matched')`,
       [receiptId, new Date().toISOString()]
     );
     const checkoutFrom = { runId: from, branch: 'task-build', commit: 'a'.repeat(40) };
-    await db.query(
+    await query(
       `INSERT INTO remote_agent_start_receipt_bindings (receipt_id, binding_id, checkout_from, preparation_status)
        VALUES ($1, 'next', $2, 'pending')`,
       [receiptId, JSON.stringify(checkoutFrom)]
@@ -198,34 +202,58 @@ export function isolationStatusReadTests(
     expect(await lock()).toEqual({ kind: 'free' });
   });
 
-  test('a start admitted between the lock reads still keeps its checkout', async () => {
+  test('ownership moving to or from a waiting start during a lock read keeps the checkout', async () => {
     const db = getDb();
     const { getUseBlocker } = await import('../services/cleanup/run-lock');
-    // Admission commits right after the first query a lock makes, whichever read that is.
-    async function admittedAfterFirstRead<T>(
-      read: (env: IsolationEnvironmentRow) => Promise<T>
+    /** Runs `move` right after the first query `read` makes, whichever read that is. */
+    async function movedAfterFirstQuery<T>(
+      read: () => Promise<T>,
+      move: (query: IDatabase['query']) => Promise<void>
     ): Promise<T> {
-      const env = await createEnv(randomUUID());
-      const { queue, admit } = await seedHandoff(env.id);
-      const requestId = await queue();
       const query = db.query.bind(db);
-      let admitted = false;
+      let moved = false;
       db.query = (async (...args: Parameters<IDatabase['query']>) => {
         const result = await query(...args);
-        if (!admitted) {
-          admitted = true;
-          await admit(requestId, query);
+        if (!moved) {
+          moved = true;
+          await move(query);
         }
         return result;
       }) as IDatabase['query'];
       try {
-        return await read(env);
+        return await read();
       } finally {
         db.query = query;
       }
     }
-    expect(await admittedAfterFirstRead(cleanupLock)).toMatchObject({ kind: 'locked' });
-    expect(await admittedAfterFirstRead(env => getUseBlocker(env.id))).not.toBeNull();
+    // Admission: a queued request becomes a pending run.
+    const admitted = async <T>(read: (env: IsolationEnvironmentRow) => Promise<T>) => {
+      const env = await createEnv(randomUUID());
+      const { queue, admit } = await seedHandoff(env.id);
+      const requestId = await queue();
+      return movedAfterFirstQuery(
+        () => read(env),
+        query => admit(requestId, query)
+      );
+    };
+    // Completion: a running owner completes and records the start its end hands on.
+    const completed = async <T>(read: (env: IsolationEnvironmentRow) => Promise<T>) => {
+      const env = await createEnv(randomUUID());
+      const from = await seedRun(env.id, 'running');
+      return movedAfterFirstQuery(
+        () => read(env),
+        async query => {
+          await query("UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1", [
+            from,
+          ]);
+          await handOff(from, query);
+        }
+      );
+    };
+    for (const moved of [admitted, completed]) {
+      expect(await moved(cleanupLock)).toMatchObject({ kind: 'locked' });
+      expect(await moved(env => getUseBlocker(env.id))).not.toBeNull();
+    }
   });
 
   test.each(['unexpected', ''])(

@@ -269,10 +269,22 @@ mock.module('../../db/isolation-environments', () => ({
 }));
 
 export const mockGetWaitingHandoffOfEnv =
-  mock<typeof import('../../db/isolation-env-users').getWaitingHandoffOfEnv>();
+  mock<() => Promise<import('../../db/isolation-env-users').WaitingHandoff | null>>();
+// getEnvUse in one read; tests drive its runs through mockGetLiveRunOwningEnv, called as
+// the separate reads were: the released owner is asked for only behind a failed owner.
 mock.module('../../db/isolation-env-users', () => ({
-  getWaitingHandoffOfEnv: mockGetWaitingHandoffOfEnv,
+  getEnvUse: async (
+    envId: string,
+    release?: import('../../db/isolation-env-users').FailedRunRelease
+  ) => {
+    const owner = await mockGetLiveRunOwningEnv(envId);
+    const releasedOwner =
+      release && owner?.status === 'failed' ? await mockGetLiveRunOwningEnv(envId, release) : null;
+    return { owner, releasedOwner, handoff: await mockGetWaitingHandoffOfEnv() };
+  },
+  liveRunOwnerSql: mock(),
   runOwnsEnvSql: mock(),
+  SETTLEABLE_WORKFLOW_STATUSES: ['failed'],
 }));
 
 export const mockGetWorkflowRun = mock<typeof WorkflowDb.getWorkflowRun>(async () => null);
