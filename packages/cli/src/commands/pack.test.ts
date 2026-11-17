@@ -41,6 +41,7 @@ const DECLARATION = `bindings:
     workflow: fixture-sweep
     resource: follow-up
     overlap: queue
+    item: { field: number, prefix: issue- }
   opened:
     workflow: fixture-sweep
     resource: opened
@@ -48,6 +49,7 @@ const DECLARATION = `bindings:
     event:
       kind: issue.lifecycle
       actions: [opened]
+    item: { field: subject.number, prefix: issue- }
     inputs:
       number: { event: subject.number }
       mode: slow
@@ -223,6 +225,7 @@ describe('archon pack bindings', () => {
     const file = await fileFor('follow-up');
     const config = triggerConfigSchema.parse(await readJson(file));
     expect(config.schedule).toBeUndefined();
+    expect(config.item).toEqual({ field: 'number', prefix: 'issue-' });
     expect(config.binding.resource).toBe('fixture:git.example.com/acme/widgets:follow-up');
     const printed = logSpy.mock.calls.flat().join('\n');
     expect(printed).toContain('Fire-only bindings');
@@ -257,6 +260,7 @@ describe('archon pack bindings', () => {
       },
       inputMapping: { number: { source: 'field', field: 'subject.number' } },
     });
+    expect(config.bindings[0]?.item).toEqual({ field: 'subject.number', prefix: 'issue-' });
   });
 
   it('refuses an event binding for a host the source plugin does not read, writing nothing', async () => {
@@ -353,6 +357,8 @@ describe('archon pack bindings: run-ended', () => {
     expect(existsSync(join(root, 'home', 'triggers'))).toBe(false);
     const bindings = await readRunEndedBindings(out);
     expect(bindings.map(entry => entry.runEnded.outcome).sort()).toEqual(['blocked', 'planned']);
+    const printed = logSpy.mock.calls.flat().join('\n');
+    for (const entry of bindings) expect(printed).toContain(`archon trigger add '${entry.file}'`);
     for (const entry of bindings) {
       const name = basename(entry.file, '.json');
       expect(entry.sourceInstanceId).toBe(name);

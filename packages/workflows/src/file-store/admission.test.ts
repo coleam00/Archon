@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { expect, spyOn, test } from 'bun:test';
 import { ZodError } from 'zod';
 import { mkdtemp, readdir, readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
@@ -9,6 +9,7 @@ import { currentProcessOwner, ProcessOwnerRecordError } from '@archon/paths/proc
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { WorkflowResourceBusyError, WorkflowNotResumableError } from '../store';
 import type { ResourceStartIntent } from '../schemas/resource-start';
+import { FileStoreUnsupportedError } from './errors';
 import { createFileWorkflowStore } from './store';
 import * as commitModule from './commit';
 const roots = trackTempRoots();
@@ -248,6 +249,44 @@ test('admission cannot reuse a deleted run ID', async () => {
     `Run already exists: ${deleted.id}`
   );
   expect(await store.getWorkflowRun(deleted.id)).toBeNull();
+});
+
+test('a start on an item is refused before anything is recorded, by receipt or by binding', async () => {
+  const { store } = await fixture();
+  const binding = {
+    bindingId: 'binding',
+    bindingRevision: null,
+    hostId: 'host',
+    runAsUserId: 'operator',
+    resource: 'resource',
+    overlap: 'queue' as const,
+    launch: {
+      cwd: '/test',
+      workflowName: 'test',
+      inputs: {},
+      isolation: { kind: 'in-place' as const },
+    },
+  };
+  const accept = (itemKeys: { receipt?: string; binding?: string }) =>
+    store.acceptStartReceipt({
+      receipt: {
+        id: randomUUID(),
+        sourceInstanceId: 'source',
+        deliveryId: null,
+        contentDigest: 'digest',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        occurredAt: null,
+        sourceActor: null,
+        ...(itemKeys.receipt === undefined ? {} : { itemKey: itemKeys.receipt }),
+      },
+      outcome: 'matched',
+      bindings: [
+        { ...binding, ...(itemKeys.binding === undefined ? {} : { itemKey: itemKeys.binding }) },
+      ],
+    });
+  await expect(accept({ receipt: 'issue-7' })).rejects.toBeInstanceOf(FileStoreUnsupportedError);
+  await expect(accept({ binding: 'issue-7' })).rejects.toBeInstanceOf(FileStoreUnsupportedError);
+  expect(await store.listStartReceipts()).toEqual([]);
 });
 
 // SQLite sorts text by code unit; localeCompare would put 'a' before 'B'.

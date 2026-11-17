@@ -19,6 +19,7 @@ import {
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
   pauseCursorMatches,
+  requireOwnerlessLease,
   resumeCursorMatches,
   type PauseCursor,
   type ResumeClaimCursor,
@@ -237,6 +238,7 @@ export async function resumeWorkflowRun(
   id: string,
   cursor?: ResumeClaimCursor
 ): Promise<WorkflowRun> {
+  requireOwnerlessLease(id, cursor);
   let updateResult:
     | { rowCount: 0 }
     | { busy: WorkflowResourceBusyError }

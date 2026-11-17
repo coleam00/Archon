@@ -43,7 +43,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--workflow-source <path>',
     description:
-      'Read the workflow, its commands and scripts from this directory\ninstead of --cwd (which stays the workspace the run acts on)',
+      'Read the workflow, its commands and scripts from this checkout root\n(<path>/.archon/workflows) instead of --cwd (which stays the workspace the run acts on)',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {

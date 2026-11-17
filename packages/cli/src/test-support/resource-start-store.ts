@@ -298,10 +298,11 @@ export function createInMemoryResourceStartStore(
         [...receipts.values()]
           .sort(compareStartReceipts)
           .slice(0, validateStartReceiptLimit(limit))
-          .map(({ id, sourceInstanceId, deliveryId, outcome, reason, receivedAt }) => ({
+          .map(({ id, sourceInstanceId, deliveryId, itemKey, outcome, reason, receivedAt }) => ({
             id,
             sourceInstanceId,
             deliveryId,
+            itemKey,
             outcome,
             reason,
             receivedAt,
@@ -336,6 +337,9 @@ export function createInMemoryResourceStartStore(
           .filter(item => item.hostId === hostId && item.status === 'queued')
           .map(inspect)
       ),
+    listQueuedItemStarts: async () => {
+      throw new Error('The test store has no items');
+    },
     withdrawQueuedResourceStart: async (
       id
     ): ReturnType<IResourceStartStore['withdrawQueuedResourceStart']> => {

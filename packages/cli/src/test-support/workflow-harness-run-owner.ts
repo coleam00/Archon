@@ -1,5 +1,6 @@
 /** Fakes for run ownership: the detached owner, the live owner, attention waits and cleanup. */
 import { mock } from 'bun:test';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 import type * as RunOwnerStop from '@archon/core/services/run-owner-stop';
 import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '@archon/core/services/run-owner-stop';
 
@@ -17,7 +18,8 @@ export function setMockDetachedStopRequested(value: boolean): void {
 }
 export const mockStartRunLiveOwner = mock<
   typeof import('@archon/core/services/run-live-owner').startRunLiveOwner
->(async () => ({
+>(async runId => ({
+  lease: testRunOwnerLease(runId),
   close: mockRunLiveOwnerClose,
   isStopRequested: (): boolean => mockDetachedStopRequested,
   registerTerminationPreparation: () => () => undefined,

@@ -1,5 +1,6 @@
 // @archon-test-isolated
 import { makeRun } from '../../test/orchestrator-agent-fixtures';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, realpath } from 'node:fs/promises';
@@ -93,6 +94,7 @@ const mockCloseRunLiveOwner = mock(() => {
 const mockStartRunLiveOwner = mock<typeof RunLiveOwnerModule.startRunLiveOwner>(runId => {
   runLiveOwnerCalls.push(`start:${runId}`);
   return Promise.resolve({
+    lease: testRunOwnerLease(runId),
     close: mockCloseRunLiveOwner,
     isStopRequested: () => false,
     registerTerminationPreparation: () => () => undefined,

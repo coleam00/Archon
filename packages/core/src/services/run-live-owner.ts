@@ -13,6 +13,7 @@ import {
   type RunOwnerPreparedStop,
   type RunOwnerTerminationPreparation,
 } from './run-owner-preparation';
+import type { RunOwnerLease } from '@archon/workflows/store';
 import { currentWindowsRunJob } from './windows-run-job';
 
 /** Idle lifetime for a connection that has not completed an owner handshake. */
@@ -41,6 +42,8 @@ export interface RunLiveOwnerOptions {
 }
 
 export interface RunLiveOwner {
+  /** Proof for the store that this process holds the endpoint; required to resume a `running` run. */
+  readonly lease: RunOwnerLease;
   /** Ring attached waiters, close the endpoint, and release its exact-run lock. */
   close(): Promise<void>;
   /** True only while a detached controller holds a stop lease. */
@@ -418,6 +421,8 @@ export async function startRunLiveOwner(
 
   let closePromise: Promise<void> | undefined;
   return {
+    // The only mint site: holding the brand means this endpoint was opened for `runId`.
+    lease: { runId, isHeld: () => closePromise === undefined } as RunOwnerLease,
     close: async (): Promise<void> => {
       if (closePromise) return closePromise;
       closePromise = (async (): Promise<void> => {

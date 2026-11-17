@@ -179,6 +179,8 @@ COPY --from=web-build --chown=appuser:appuser /app/packages/web/dist/ ./packages
 # Copy config, migrations, and bundled defaults
 COPY --chown=appuser:appuser .archon/ ./.archon/
 COPY --chown=appuser:appuser migrations/ ./migrations/
+# packages/cli/src/bundled-skill.ts imports the archon-cli skill files as text
+COPY --chown=appuser:appuser .claude/skills/archon-cli/ ./.claude/skills/archon-cli/
 COPY --chown=appuser:appuser tsconfig*.json ./
 
 # Back to root: the entrypoint must start as root to fix volume ownership,

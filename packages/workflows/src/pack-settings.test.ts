@@ -125,7 +125,7 @@ describe('parsePackDeclaration bindings', () => {
 
   it('reads a timer, an event and a fire-only binding, applying the defaults', () => {
     const declared = parsePackDeclaration(
-      `bindings:\n${timer('    inputs:\n      self: { binding: sweep }\n      host: { repo: host }\n      mode: fast\n      next: { binding: follow-up }\n')}  follow-up:\n    workflow: sweep\n    resource: follow-up\n    overlap: queue\n  opened:\n    workflow: sweep\n    resource: opened\n    capacity: 2\n    overlap: queue\n    isolation: { kind: worktree }\n    event: { kind: issue.lifecycle, actions: [opened] }\n    inputs:\n      number: { event: subject.number }\n`,
+      `bindings:\n${timer('    inputs:\n      self: { binding: sweep }\n      host: { repo: host }\n      mode: fast\n      next: { binding: follow-up }\n')}  follow-up:\n    workflow: sweep\n    resource: follow-up\n    overlap: queue\n    item: { field: number, prefix: issue- }\n  opened:\n    workflow: sweep\n    resource: opened\n    capacity: 2\n    overlap: queue\n    isolation: { kind: worktree }\n    event: { kind: issue.lifecycle, actions: [opened] }\n    item: { field: subject.number }\n    inputs:\n      number: { event: subject.number }\n`,
       'p/.pack/pack.yaml'
     );
     expect(declared).toEqual({
@@ -152,6 +152,7 @@ describe('parsePackDeclaration bindings', () => {
           overlap: 'queue',
           isolation: { kind: 'default' },
           inputs: {},
+          item: { field: 'number', prefix: 'issue-' },
         },
         opened: {
           workflow: 'sweep',
@@ -162,6 +163,7 @@ describe('parsePackDeclaration bindings', () => {
           isolation: { kind: 'worktree' },
           event: { kind: 'issue.lifecycle', actions: ['opened'] },
           inputs: { number: { event: 'subject.number' } },
+          item: { field: 'subject.number' },
         },
       },
     });
@@ -215,6 +217,7 @@ describe('parsePackDeclaration bindings', () => {
       'only an event binding has an event',
     ],
     [timer('    event: { kind: issue.lifecycle }\n'), "must set at most one of 'schedule'"],
+    [timer('    item: { field: number }\n'), 'Unrecognized key: "item"'],
     // A schedule key without its expression is a broken timer, never a fire-only binding.
     [
       '  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n    schedule:\n',

@@ -301,7 +301,8 @@ describe('reading an item over HTTP', () => {
   };
 
   test('reads a known item by project and key, with its question and answers', async () => {
-    mockGetItemRuns.mockImplementationOnce(async (projectKey, key) =>
+    // The read resolves the item twice: once for its queued starts, then for its runs.
+    mockGetItemRuns.mockImplementation(async (projectKey, key) =>
       projectKey === item.projectKey && key === item.key
         ? { item, runs: [asking], descendantIds: [] }
         : null
@@ -328,16 +329,23 @@ describe('reading an item over HTTP', () => {
           ])
         )
     );
-    const { app } = makeApp();
-    const response = await app.request(
-      `/api/items?project=${encodeURIComponent(item.projectKey)}&key=${encodeURIComponent(item.key)}`
-    );
-    expect(response.status).toBe(200);
-    const read = itemReadSchema.parse(await response.json());
-    expect(read.item).toEqual(item);
-    expect(read.runs.map(run => [run.id, run.status])).toEqual([['run-item', 'paused']]);
-    expect(read.questions.map(question => question.run?.id)).toEqual(['run-item']);
-    expect(read.answers).toMatchObject([{ kind: 'gate', runId: 'run-item', decision: 'approved' }]);
+    try {
+      const { app } = makeApp();
+      const response = await app.request(
+        `/api/items?project=${encodeURIComponent(item.projectKey)}&key=${encodeURIComponent(item.key)}`
+      );
+      expect(response.status).toBe(200);
+      const read = itemReadSchema.parse(await response.json());
+      expect(read.item).toEqual(item);
+      expect(read.runs.map(run => [run.id, run.status])).toEqual([['run-item', 'paused']]);
+      expect(read.questions.map(question => question.run?.id)).toEqual(['run-item']);
+      expect(read.answers).toMatchObject([
+        { kind: 'gate', runId: 'run-item', decision: 'approved' },
+      ]);
+      expect(read.queued).toEqual([]);
+    } finally {
+      mockGetItemRuns.mockImplementation(async () => null);
+    }
   });
 
   test('an unknown key is 404 and a missing parameter is 400', async () => {
@@ -475,13 +483,17 @@ describe('rulings on an item over HTTP', () => {
 
   test('reading the item shows its rulings', async () => {
     const item = { id: 'item-row', projectKey: project, key: 'issues/8' };
-    mockGetItemRuns.mockImplementationOnce(async () => ({ item, runs: [], descendantIds: [] }));
+    mockGetItemRuns.mockImplementation(async () => ({ item, runs: [], descendantIds: [] }));
     mockListItemRulings.mockImplementationOnce(async () => [ruling()]);
     mockListAttentionQueueRows.mockImplementationOnce(async () => []);
-    const response = await makeApp().app.request(
-      `/api/items?project=${encodeURIComponent(project)}&key=issues%2F8`
-    );
-    expect(itemReadSchema.parse(await response.json()).answers).toEqual([ruling()]);
+    try {
+      const response = await makeApp().app.request(
+        `/api/items?project=${encodeURIComponent(project)}&key=issues%2F8`
+      );
+      expect(itemReadSchema.parse(await response.json()).answers).toEqual([ruling()]);
+    } finally {
+      mockGetItemRuns.mockImplementation(async () => null);
+    }
   });
 });
 

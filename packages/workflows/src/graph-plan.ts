@@ -86,6 +86,14 @@ export function resolveWorkflow(authored: WorkflowDefinition): ResolvedWorkflow 
   return resolved as ResolvedWorkflow;
 }
 
+/**
+ * The step-name prefix of a loop group's body nodes: a body node runs and is recorded as
+ * `<group step name>.<body id>`, which composes across nested groups (`outer.inner.node`).
+ */
+export function loopBodyStepNamePrefix(groupStepName: string): string {
+  return `${groupStepName}.`;
+}
+
 /** Narrow an expanded loop-group body at its shared execution boundary. */
 export function resolvedBodyNodes(group: LoopGroupNodeConfig): readonly DagNode[] {
   return requireResolvedNodes(group.nodes);
