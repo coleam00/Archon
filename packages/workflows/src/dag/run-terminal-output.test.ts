@@ -1685,6 +1685,111 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     expect(errMsg).toContain('failed schema validation');
   });
 
+  // Issue 4935: a Codex reviewer returned `evidence` as a string and lost the whole node.
+  const evidenceSchema = {
+    type: 'object',
+    properties: { evidence: { type: 'array', items: { type: 'string' } } },
+    required: ['evidence'],
+  };
+  const codexEvidenceWorkflow = {
+    name: 'codex-correction',
+    nodes: [
+      {
+        id: 'review',
+        kind: 'agent' as const,
+        source: { kind: 'inline' as const, prompt: 'review the change' },
+        provider: 'codex',
+        output_format: evidenceSchema,
+        retry: { max_attempts: 0 },
+      },
+    ],
+  };
+
+  it('same-session provider: a schema miss is corrected in the same thread, keeping its work', async () => {
+    mockSendQueryDag
+      .mockImplementationOnce(async function* () {
+        yield { type: 'tool_call', toolCallId: 't1', name: 'Bash', title: 'ls' };
+        yield { type: 'tool_call_update', toolCallId: 't1', status: 'completed' };
+        yield {
+          type: 'result',
+          sessionId: 'thread-1',
+          structuredOutput: { evidence: 'one string' },
+          tokens: { input: 100, output: 10 },
+        };
+        yield { type: 'settled', reason: 'turn_complete' };
+      })
+      .mockImplementationOnce(async function* () {
+        yield {
+          type: 'result',
+          sessionId: 'thread-1',
+          resumed: true,
+          structuredOutput: { evidence: ['one string'] },
+          tokens: { input: 20, output: 5 },
+        };
+        yield { type: 'settled', reason: 'turn_complete' };
+      });
+
+    const store = createMockStore();
+    const result = await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: codexEvidenceWorkflow,
+        workflowRun: makeWorkflowRun(),
+        workflowProvider: 'codex',
+        config: { ...minimalConfig, assistant: 'codex' },
+      })
+    );
+
+    expect(result).toBe('{"evidence":["one string"]}');
+    const calls = mockSendQueryDag.mock.calls;
+    expect(calls.length).toBe(2);
+    const [correctionPrompt, , correctionSession, correctionOptions] = calls[1]!;
+    expect(correctionSession).toBe('thread-1');
+    expect(correctionOptions?.forkSession).toBe(false);
+    // Only the errors go into the thread; the task is already there, with its work.
+    expect(correctionPrompt).toContain('--- CORRECTION ---');
+    expect(correctionPrompt).toContain('evidence');
+    expect(correctionPrompt).not.toContain('review the change');
+
+    const completed = persistedEvents(store).find(
+      row => row.event_type === 'node_completed' && row.step_name === 'review'
+    );
+    expect(completed?.data?.session_id).toBe('thread-1');
+    // A fresh node stays fresh: the correction's resume is Archon's, not the node's.
+    expect(completed?.data?.binding).toMatchObject({ sessionOrigin: 'fresh' });
+    expect(completed?.data?.tokens).toMatchObject({ input: 120, output: 15 });
+  });
+
+  it('same-session provider: correction exhaustion fails after the same count as a fresh-session one, naming the errors', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'result', sessionId: 'thread-1', structuredOutput: { evidence: 'x' } };
+      yield { type: 'settled', reason: 'turn_complete' };
+    });
+
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: codexEvidenceWorkflow,
+        workflowRun: makeWorkflowRun(),
+        workflowProvider: 'codex',
+        config: { ...minimalConfig, assistant: 'codex' },
+      })
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(4);
+    expect(mockSendQueryDag.mock.calls.slice(1).map(call => call[2])).toEqual([
+      'thread-1',
+      'thread-1',
+      'thread-1',
+    ]);
+    const failed = persistedEvents(store).find(row => row.event_type === 'node_failed');
+    expect(failed?.data?.error).toContain('failed schema validation');
+    expect(failed?.data?.error).toContain('evidence');
+  });
+
   it('enforced provider does NOT reask on a validation miss (exactly one sendQuery)', async () => {
     // Claude is 'enforced' → maxReasks = 0. A validation miss must fail on the
     // FIRST pass — a regressed gate would silently make 4 API calls per miss.
