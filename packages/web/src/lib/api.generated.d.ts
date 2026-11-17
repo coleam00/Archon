@@ -9891,10 +9891,16 @@ export interface components {
       }[];
       arrows: (
         | {
-            from: {
-              stage: string;
-              outcome: string;
-            };
+            from:
+              | {
+                  stage: string;
+                  outcome: string;
+                }
+              | {
+                  stage: string;
+                  /** @enum {string} */
+                  settled: 'answered' | 'withdrawn' | 'any';
+                };
             to: string;
             /** @enum {boolean} */
             active: true;
@@ -9909,10 +9915,16 @@ export interface components {
             };
           }
         | {
-            from: {
-              stage: string;
-              outcome: string;
-            };
+            from:
+              | {
+                  stage: string;
+                  outcome: string;
+                }
+              | {
+                  stage: string;
+                  /** @enum {string} */
+                  settled: 'answered' | 'withdrawn' | 'any';
+                };
             to: string;
             /** @enum {boolean} */
             active: false;

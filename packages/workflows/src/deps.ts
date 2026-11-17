@@ -23,7 +23,7 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import type { WorktreeDisposition } from './schemas/terminal-record';
-import type { SourceReceiptAcceptance } from './schemas/resource-start';
+import type { AsksCheckout, SourceReceiptAcceptance } from './schemas/resource-start';
 import type { RunCompletedOutcome } from './schemas';
 import type { JsonValue } from './output-ref';
 import type { OutcomeForm } from './completed-outcome';
@@ -304,6 +304,15 @@ export interface WorkflowDeps {
    * fails naming the reason, so a completion never silently drops its hand-off.
    */
   runEndedStarts?: (ended: RunEndedFacts) => Promise<readonly SourceReceiptAcceptance[]>;
+  /**
+   * Optional: the checkout a run that completes leaving asks hands an asks-settled binding
+   * with `checkout: "asking-run"`, read before the completing write, which records it on
+   * the run for the settling of its asks, and keeps the run's worktree for it. Undefined
+   * when no such binding matches the run.
+   * It throws when a binding it must read is unreadable, and the run then fails naming
+   * the reason, as for `runEndedStarts`.
+   */
+  asksCheckout?: (run: WorkflowRun) => Promise<AsksCheckout | undefined>;
   /**
    * Optional: refuse a run before it starts when a run-ended binding its end could fire
    * is broken (a missing stage, an undeclared outcome or input), and likewise an

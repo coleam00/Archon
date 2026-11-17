@@ -6,7 +6,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import type { RunEndedFacts } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { providerRegistry } from '@archon/providers';
-import type { EndedCheckout } from './ended-checkout';
+import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
 import { createRunEndedPreflight, createRunEndedStarts, launchProjectKey } from './run-ended';
 
 const track = trackTempRoots();

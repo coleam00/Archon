@@ -47,7 +47,11 @@ import {
   launchProjectKey,
   type RunEndedStartsDependencies,
 } from './run-ended';
-import { createAsksSettledPreflight, createAsksSettledStarts } from './asks-settled';
+import {
+  createAsksCheckout,
+  createAsksSettledPreflight,
+  createAsksSettledStarts,
+} from './asks-settled';
 import { createEndedCheckout } from './ended-checkout';
 import { registeredProjectKeyForPath } from '../services/codebase-checkout-resolver';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
@@ -365,16 +369,15 @@ export function createWorkflowDeps(
   };
   const runEndedPreflight = createRunEndedPreflight(onBindings);
   const asksSettledPreflight = createAsksSettledPreflight(onBindings);
+  // Only the SQL store records items, so only its runs reach this.
+  const endedCheckout = createEndedCheckout({
+    findEnvironmentByPath: isolationEnvironmentsDb.findLatestByCodebaseAndWorkingPath,
+  });
   return {
     store,
     credentialStore,
-    runEndedStarts: createRunEndedStarts({
-      ...onBindings,
-      // Only the SQL store records items, so only its runs reach this.
-      endedCheckout: createEndedCheckout({
-        findEnvironmentByPath: isolationEnvironmentsDb.findLatestByCodebaseAndWorkingPath,
-      }),
-    }),
+    runEndedStarts: createRunEndedStarts({ ...onBindings, endedCheckout }),
+    asksCheckout: createAsksCheckout({ ...onBindings, endedCheckout }),
     // A run is refused before it starts for a broken binding its end or its asks could fire.
     checkRunEndedBindings: async run => {
       await runEndedPreflight(run);

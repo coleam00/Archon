@@ -373,7 +373,7 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
 
 ### See how a pack's stages connect
 
-`archon pack graph <pack> --json`, or `GET /api/packs/{pack}/graph?codebaseId=<id>`, reads a pack's stages and the run-ended arrows between them for one project. A drawing, a console view or an agent can build from it alone. A pack with stages `plan`, `build` and `ship`, whose `.pack/pack.yaml` declares `build-after-plan` and `ship-after-build`, with only the first file copied into the triggers directory:
+`archon pack graph <pack> --json`, or `GET /api/packs/{pack}/graph?codebaseId=<id>`, reads a pack's stages and the arrows between them for one project: a run that ended with an outcome, or the settling of the asks a run left. A drawing, a console view or an agent can build from it alone. A pack with stages `plan`, `build` and `ship`, whose `.pack/pack.yaml` declares `build-after-plan` and `ship-after-build`, with only the first file copied into the triggers directory:
 
 ```json
 {
@@ -453,6 +453,7 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
 - `nodes` are the stage's nodes after includes are expanded, under the ids its runs record (`<include>__<id>`); `blocks` names the include each came from, outermost first. A `loop_group` is a node, and its body follows it: each body node has `loopGroup` set to the group's id, and its `id` and `dependsOn` are the step names its runs are recorded under (`<group>.<id>`, composing across nested groups, as in `rounds.review__check`). A body's included blocks are named the same way (`rounds.review`). An `include:` with `fan_out:` is one `compose_fan_out` node, because its width is known only at run time; its `fanOut.workflow` names its body in `fanOutBlocks`, which lists each such body's nodes once, including bodies a body fans out to.
 - An arrow is `active` when a trigger file launches it in this project. A declared arrow with no file is reported with `active: false`, not left out. `to` may be a workflow outside the pack. An active arrow's `installed.problems` is what `archon trigger check` reports as the check a run gets before it starts: when it is not empty, every run of `from.stage` on an item is refused before it starts, so the arrow starts nothing until the file is fixed. A file whose `launch.cwd` no longer exists is in no project, so the end of a run never starts it; it is shown with that problem because which project it was meant for cannot be known.
 - A declared binding that names a workflow which is not a stage as the pack loaded keeps the name as written, and its `declared.problems` says so. When that stage failed to load, its load error is in `discoveryErrors`; the rest of the graph is still read.
+- An arrow from an [asks-settled binding](#start-a-stage-again-when-its-asks-are-answered) has `from: { "stage", "settled" }` in place of `outcome`, where `settled` is the binding's `answered`, `withdrawn` or `any`. It starts nothing for an outcome, so it does not change `startsNothing`.
 - `startsNothing` marks an outcome no active arrow without problems leaves. With `asks: false` such an outcome ends in silence; whether that is right is the pack's call.
 - `discoveryErrors` lists every workflow that failed to load from the source the pack was read from. A stage that failed is missing from `stages`, so a non-empty list means the graph may be incomplete.
 - When the pack's workflows are not in the checkout, pass `--workflow-source <dir>` (`workflowSource=` on the API), the directory a binding's `launch.discoveryCwd` names. The arrows are still those of the checkout's project.
@@ -580,6 +581,41 @@ Answering is not starting. Who may answer or withdraw an ask is unchanged: the r
 `archon workflow runs --item <key>` shows the started run's `cause` as `{"kind": "asks_settled", "runId"}`, naming the run whose asks they were. The receipt records that run as its `sourceActor` (`{"source": "archon-asks-settled", "id": <run id>, "display": "answered" | "withdrawn"}`) and uses its ID as the delivery ID. `archon trigger check` lists asks-settled bindings under `asksSettled` and reports one whose asking workflow declares no `returns.asks`.
 
 Asks-settled bindings need the database store, as asks do. A [`wait: attention`](/reference/workflow-language/) node is unchanged: it pauses its own run and resumes it with the answer, and starts nothing.
+
+A workflow pack can declare this binding as an [`asks_settled:` binding](/reference/workflow-language/#pack-bindings); [`archon pack bindings`](/reference/cli/#pack-bindings) writes it, checked, and `archon trigger add` registers it.
+
+### Work in the checkout the asking run left
+
+By default the started run gets a fresh worktree cut from the base branch. With `"checkout": "asking-run"` in `on.asksSettled`, it works on the branch of the run that left the asks, at the commit that run ended on: a build that stopped to ask continues its change once the answer is in. The rules are those of [`checkout: "ended-run"`](#work-in-the-checkout-the-ended-run-left): the binding's `launch.isolation` must be `{ "kind": "default" }`, a workflow that changes its checkout continues on the branch, one with `mutates_checkout: false` gets a worktree of its own cut at the commit, and a start never falls back to the base branch.
+
+```json
+"on": {
+  "asksSettled": {
+    "workflowName": "build",
+    "settled": "answered",
+    "checkout": "asking-run",
+    "inputs": { "decisions": { "answers": true } }
+  }
+}
+```
+
+The branch and commit are read when the asking run completes, not when its asks settle, and kept on that run's record with the worktree it left them in. Completion keeps that worktree, where it would otherwise have removed it: its terminal record says `retained` with reason `in_use`. Nothing else holds it while the asks are open, so `archon isolation cleanup` can still remove it, and then the start is refused. When the last ask closes and the worktree is still there, the branch and commit are handed to the start and shown on its receipt as `checkoutFrom`.
+
+The start is refused, naming why:
+
+- **The asking run left no branch** (it ran in place, its worktree was gone or on another branch when it completed), **its worktree is gone by the time the asks settle**, **its record is gone**, or **it recorded no checkout**, because the file gained `checkout` after the run completed or an older Archon ran it. The receipt is `unmatched` with a `reason` that begins `Checkout:`; `archon trigger list` shows it.
+- **The branch moved after the asking run's commit, or is gone.** This holds for a stage with `mutates_checkout: false` too: its copy is cut only while the branch is still at that commit. The started run fails before its first node with `launch_failed`, and `archon workflow get <run-id>` shows the branch, the commit it is at and the commit the asking run ended on.
+
+`archon trigger check`, and the check a run gets before it starts, report a binding whose asking or started workflow pins `worktree.enabled: false`. `archon trigger fire` refuses a file with `checkout`, because a fire has no asking run.
+
+To start a refused stage by hand, pass what the binding would have passed. `--adopt` carries the asking run's checkout, not its answers or inputs, and a stage started without its answers runs without the decisions. Read the answers from `archon workflow runs --item <key> --json` (the `answers` entries of kind `ask` whose `runId` is the asking run) and the asking run's inputs from `archon workflow get <run-id> --json`, then give each input the binding maps with `--input`:
+
+```bash
+archon workflow run build --adopt <asking-run-id> --item <key> \
+  --input decisions="$(cat decisions.json)" --input plan="<the asking run's plan>"
+```
+
+When the branch is gone or moved, run the asking workflow again on the item instead: adoption continues the branch as it is now and does not check the commit.
 
 ### Who prepares the start
 

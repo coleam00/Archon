@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
+import { asksCheckoutMetadata } from '@archon/workflows/schemas/resource-start';
 import { asksResultMetadata } from '@archon/workflows/schemas/run-metadata';
-import { createAsksSettledStarts } from './asks-settled';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { createAsksCheckout, createAsksSettledStarts } from './asks-settled';
 
 const track = trackTempRoots();
 
@@ -41,7 +43,11 @@ const SETTLED = [
   storedAsk(1, { as: 'withdrawn', act }),
 ];
 
-function trigger(inputs: Record<string, unknown>, cwd = PROJECT_CWD) {
+function trigger(
+  inputs: Record<string, unknown>,
+  cwd = PROJECT_CWD,
+  extra: { checkout?: 'asking-run' } = {}
+) {
   return {
     version: 1,
     sourceInstanceId: 'build-after-answers',
@@ -54,17 +60,22 @@ function trigger(inputs: Record<string, unknown>, cwd = PROJECT_CWD) {
       overlap: 'queue',
       launch: { cwd, workflowName: 'build', inputs: {}, isolation: { kind: 'default' } },
     },
-    on: { asksSettled: { workflowName: 'plan', settled: 'answered', inputs } },
+    on: { asksSettled: { workflowName: 'plan', settled: 'answered', inputs, ...extra } },
   };
 }
 
-async function prepareWith(files: Record<string, unknown>) {
+async function triggersWith(files: Record<string, unknown>): Promise<string> {
   const directory = track(await mkdtemp(join(tmpdir(), 'archon-asks-settled-')));
   for (const [name, value] of Object.entries(files))
     await writeFile(
       join(directory, name),
       typeof value === 'string' ? value : JSON.stringify(value)
     );
+  return directory;
+}
+
+async function prepareWith(files: Record<string, unknown>) {
+  const directory = await triggersWith(files);
   const prepare = createAsksSettledStarts({
     triggersDirectory: () => directory,
     getItem: async id => (id === ITEM.id ? ITEM : null),
@@ -119,5 +130,77 @@ describe('asks-settled starts', () => {
       'build.json': trigger({ decisions: { answers: true } }, '/srv/other'),
     });
     expect(elsewhere.build).toBeUndefined();
+  });
+
+  describe('with checkout: asking-run', () => {
+    const takesCheckout = { 'build.json': trigger({}, PROJECT_CWD, { checkout: 'asking-run' }) };
+    const commit = 'a'.repeat(40);
+
+    test('hands on the checkout the asking run recorded when it ended', async () => {
+      const { build } = await prepareWith(takesCheckout);
+      const metadata = asksCheckoutMetadata({
+        handoff: { runId: RUN_ID, branch: 'archon/plan-1', commit },
+      });
+      expect(build?.(SETTLED, { metadata })).toMatchObject([
+        {
+          outcome: 'matched',
+          bindings: [
+            {
+              checkoutFrom: { runId: RUN_ID, branch: 'archon/plan-1', commit },
+              launch: { isolation: { kind: 'worktree', branch: 'archon/plan-1' } },
+            },
+          ],
+        },
+      ]);
+    });
+
+    test.each([
+      [
+        'a recorded refusal',
+        { metadata: asksCheckoutMetadata({ refused: 'the worktree is gone' }) },
+        'the worktree is gone',
+      ],
+      ['no record', { metadata: {} }, 'recorded no checkout'],
+      ['a deleted asking run', null, 'no longer exists'],
+    ] as const)('refuses the start naming why on %s', async (_, run, why) => {
+      const { build } = await prepareWith(takesCheckout);
+      const [receipt] = build?.(SETTLED, run) ?? [];
+      expect(receipt).toMatchObject({ outcome: 'unmatched', bindings: [] });
+      expect(receipt?.reason).toContain(`Checkout: `);
+      expect(receipt?.reason).toContain(why);
+    });
+
+    test("the checkout is read at the asking run's completion only when such a binding matches", async () => {
+      const run = {
+        id: RUN_ID,
+        item_id: ITEM.id,
+        workflow_name: 'plan',
+      } as unknown as WorkflowRun;
+      const readsFor = async (files: Record<string, unknown>) => {
+        const directory = await triggersWith(files);
+        const reads: string[] = [];
+        const checkout = await createAsksCheckout({
+          triggersDirectory: () => directory,
+          getItem: async id => (id === ITEM.id ? ITEM : null),
+          projectKeyOf: async cwd => (cwd === PROJECT_CWD ? ITEM.projectKey : 'acme/other'),
+          endedCheckout: async ended => {
+            reads.push(ended.id);
+            return { refused: 'read' };
+          },
+        })(run);
+        return { checkout, reads };
+      };
+      expect(await readsFor(takesCheckout)).toEqual({
+        checkout: { refused: 'read' },
+        reads: [RUN_ID],
+      });
+      expect(await readsFor({ 'build.json': trigger({}) })).toEqual({
+        checkout: undefined,
+        reads: [],
+      });
+      expect(
+        await readsFor({ 'build.json': trigger({}, '/srv/other', { checkout: 'asking-run' }) })
+      ).toEqual({ checkout: undefined, reads: [] });
+    });
   });
 });

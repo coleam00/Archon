@@ -7,7 +7,7 @@ import {
   packGraphSchema,
   packWorkflowIdentities,
 } from './pack-graph';
-import { packRunEndedBindingSchema } from './schemas/pack-bindings';
+import { packAsksSettledBindingSchema, packRunEndedBindingSchema } from './schemas/pack-bindings';
 
 function decide(values: string[]) {
   return {
@@ -53,7 +53,7 @@ function installed(
   return {
     file: `/home/triggers/${id}.json`,
     sourceInstanceId: id,
-    runEnded: { workflowName: from, outcome },
+    from: { stage: from, outcome },
     launchWorkflow: to,
     problems,
   };
@@ -130,6 +130,37 @@ describe('a pack graph', () => {
       ['b', true, ['done', 'stuck']],
       ['c', false, ['shipped']],
     ]);
+  });
+
+  test('an asks arrow is active with its file and declared, inactive without one', () => {
+    const asks = (workflow: string, from: string, settled: 'answered' | 'withdrawn') =>
+      packAsksSettledBindingSchema.parse({
+        workflow,
+        resource: workflow,
+        overlap: 'queue',
+        asks_settled: { workflow: from, settled, checkout: 'asking-run' },
+      });
+    const graph = graphOf(stages(stage('a', ['ready'], true), stage('b', ['done'])), {
+      declared: {
+        'a-answered': asks('a', 'a', 'answered'),
+        'b-withdrawn': asks('b', 'a', 'withdrawn'),
+      },
+      installed: [
+        {
+          file: '/home/triggers/answered.json',
+          sourceInstanceId: 'answered',
+          from: { stage: 'a', settled: 'answered' },
+          launchWorkflow: 'a',
+          problems: [],
+        },
+      ],
+    });
+    expect(graph.arrows.map(a => [a.from, a.to, a.active])).toEqual([
+      [{ stage: 'a', settled: 'answered' }, 'a', true],
+      [{ stage: 'a', settled: 'withdrawn' }, 'b', false],
+    ]);
+    // An asks arrow starts on answers, not on an outcome.
+    expect(graph.stages[0]?.outcome?.values).toEqual([{ value: 'ready', startsNothing: true }]);
   });
 
   test('an installed pack resolves plain binding names to its own stages, never to another pack', () => {

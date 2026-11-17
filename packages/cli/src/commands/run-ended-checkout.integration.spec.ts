@@ -2,7 +2,8 @@
 /**
  * A loop made of runs: build, then a read-only check on the built commit, then build again
  * on the same branch when the check returns it. Three run-ended bindings with
- * `checkout: "ended-run"`, real git and SQLite, every run in its own CLI process.
+ * `checkout: "ended-run"`, real git and SQLite, every run in its own CLI process. Then the
+ * same hand-off from a run that left asks, through `checkout: "asking-run"`.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -74,6 +75,48 @@ ${body
       required: [outcome]
 `;
 
+// Commits, publishes, and leaves one ask on its item.
+const ASK_BUILD = `name: ask-build
+description: Add a commit and ask.
+returns: { node: commit, asks: asks }
+nodes:
+  - id: commit
+    bash: |
+      set -e
+      echo asked > asked.txt
+      git add . && git commit -qm "asked" && git push -q origin HEAD
+      printf '%s' '${JSON.stringify({
+        summary: 'asked',
+        asks: [
+          {
+            question: 'Keep going?',
+            context: 'Half built.',
+            options: [
+              { id: 'go', does: 'Go on.', cost: 'Time.' },
+              { id: 'stop', does: 'Stop.', cost: 'Work.' },
+            ],
+            recommendation: { option: 'go', why: 'It is half built.' },
+            artifacts: [],
+          },
+        ],
+      })}'
+    output_format:
+      type: object
+      properties: { summary: { type: string } }
+      required: [summary]
+`;
+
+/** A stage that records the branch and commit it starts on; `carry-on` then adds a commit. */
+const stageAfterAsks = (name: string, readOnly: boolean, then = '') => `name: ${name}
+description: Continue after the answers.
+${readOnly ? 'mutates_checkout: false\n' : ''}nodes:
+  - id: record
+    bash: |
+      set -e
+      echo "$(git branch --show-current) $(git rev-parse HEAD)" > "$ROOT/${name}"
+      ${then}
+`;
+
 interface Fixture {
   root: string;
   repo: string;
@@ -82,6 +125,7 @@ interface Fixture {
   cli: (args: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
   rows: <T>(sql: string) => T[];
   bind: (name: string, ended: string, outcome: string, stage: string) => void;
+  bindAsks: (name: string, asking: string, stage: string) => void;
 }
 
 async function makeFixture(label: string, checkBody: string): Promise<Fixture> {
@@ -109,6 +153,19 @@ async function makeFixture(label: string, checkBody: string): Promise<Fixture> {
     `name: land\ndescription: Record what landed.\nnodes:\n  - id: land\n    bash: echo "$(git branch --show-current) $(git rev-parse HEAD)" > "${root}/landed"\n`
   );
   writeFileSync(join(workflows, 'pinned.yaml'), PINNED);
+  writeFileSync(join(workflows, 'ask-build.yaml'), ASK_BUILD);
+  writeFileSync(
+    join(workflows, 'carry-on.yaml'),
+    stageAfterAsks(
+      'carry-on',
+      false,
+      'echo on > on.txt && git add . && git commit -qm "carry on"'
+    ).replaceAll('$ROOT', root)
+  );
+  writeFileSync(
+    join(workflows, 'look-again.yaml'),
+    stageAfterAsks('look-again', true).replaceAll('$ROOT', root)
+  );
   git('add', '.');
   git('commit', '-qm', 'fixture');
   git('push', '-q', 'origin', 'main');
@@ -153,7 +210,7 @@ async function makeFixture(label: string, checkBody: string): Promise<Fixture> {
       database.close();
     }
   };
-  const bind = (name: string, ended: string, outcome: string, stage: string): void => {
+  const bindFile = (name: string, stage: string, on: Record<string, unknown>): void => {
     mkdirSync(join(home, 'triggers'), { recursive: true });
     writeFileSync(
       join(home, 'triggers', `${name}.json`),
@@ -169,11 +226,17 @@ async function makeFixture(label: string, checkBody: string): Promise<Fixture> {
           overlap: 'queue',
           launch: { cwd: repo, workflowName: stage, inputs: {}, isolation: { kind: 'default' } },
         },
-        on: { runEnded: { workflowName: ended, outcome, checkout: 'ended-run' } },
+        on,
       })
     );
   };
-  return { root, repo, home, git, cli, rows, bind };
+  const bind = (name: string, ended: string, outcome: string, stage: string): void =>
+    bindFile(name, stage, { runEnded: { workflowName: ended, outcome, checkout: 'ended-run' } });
+  const bindAsks = (name: string, asking: string, stage: string): void =>
+    bindFile(name, stage, {
+      asksSettled: { workflowName: asking, settled: 'answered', checkout: 'asking-run' },
+    });
+  return { root, repo, home, git, cli, rows, bind, bindAsks };
 }
 
 /** The build, check, build loop: three bindings, and `land` once a check passes. */
@@ -336,5 +399,136 @@ printf '{"outcome": "return"}'`
     ]);
     expect(fired.exitCode).not.toBe(0);
     expect(fired.stderr).toContain(join(fixture.home, 'triggers', 'after-pinned.json'));
+  }, 120_000);
+});
+
+/** Answer the one open ask with its recommendation. */
+async function answerTheAsk(fixture: Fixture): Promise<void> {
+  const listed = await fixture.cli(['workflow', 'attention', '--all', '--json']);
+  const [ask] = (JSON.parse(listed.stdout) as { items: { ref: string }[] }).items;
+  if (ask === undefined) throw new Error(`No open ask: ${listed.stdout}`);
+  const answered = await fixture.cli(['workflow', 'answer', '--ref', ask.ref, '--recommended']);
+  if (answered.exitCode !== 0) throw new Error(answered.stderr || answered.stdout);
+}
+
+async function startAskBuild(fixture: Fixture): Promise<RunRow> {
+  const started = await fixture.cli(['workflow', 'run', 'ask-build', '--item', 'issue-1']);
+  if (started.exitCode !== 0) throw new Error(started.stderr || started.stdout);
+  const [asking] = await waitForRuns(fixture, 1);
+  if (asking === undefined) throw new Error('No asking run');
+  return asking;
+}
+
+describe('a stage on the checkout the asking run left', () => {
+  test("answering the last ask starts the stage on the asking run's branch at the commit it ended on", async () => {
+    const fixture = await makeFixture('asks', `printf '{"outcome": "pass"}'`);
+    fixture.bindAsks('carry-on-after-answers', 'ask-build', 'carry-on');
+    fixture.bindAsks('look-after-answers', 'ask-build', 'look-again');
+    const asking = await startAskBuild(fixture);
+    const { handoff } = metadata(asking).asks_checkout as {
+      handoff: { runId: string; branch: string; commit: string };
+    };
+    expect(handoff.runId).toBe(asking.id);
+    expect(fixture.git('log', '-1', '--format=%s', handoff.commit)).toBe('asked');
+
+    // A fire has no asking run to take the checkout from.
+    const fired = await fixture.cli([
+      'trigger',
+      'fire',
+      '--config',
+      join(fixture.home, 'triggers', 'carry-on-after-answers.json'),
+    ]);
+    expect(fired.exitCode).not.toBe(0);
+    expect(fired.stderr).toContain('on.asksSettled.checkout');
+
+    await answerTheAsk(fixture);
+    const all = await waitForRuns(fixture, 3);
+    expect(all.map(run => [run.workflow_name, run.status]).sort()).toEqual([
+      ['ask-build', 'completed'],
+      ['carry-on', 'completed'],
+      ['look-again', 'completed'],
+    ]);
+    const read = (name: string): string => readFileSync(join(fixture.root, name), 'utf8').trim();
+    // The mutating stage continued on the branch, from the commit the asking run ended on,
+    // and its own commit landed there.
+    expect(read('carry-on')).toBe(`${handoff.branch} ${handoff.commit}`);
+    expect(fixture.git('log', '--format=%s', `main..${handoff.branch}`).split('\n')).toEqual([
+      'carry on',
+      'asked',
+    ]);
+    // The read-only stage got a checkout of its own at that commit.
+    const [lookBranch, lookCommit] = read('look-again').split(' ');
+    expect(lookCommit).toBe(handoff.commit);
+    expect(lookBranch).not.toBe(handoff.branch);
+    const byName = (name: string): RunRow | undefined =>
+      all.find(run => run.workflow_name === name);
+    expect(metadata(byName('carry-on')).checkout_handoff).toMatchObject({
+      runId: asking.id,
+      lane: 'continue',
+    });
+    expect(metadata(byName('look-again')).checkout_handoff).toMatchObject({
+      runId: asking.id,
+      lane: 'copy',
+    });
+  }, 120_000);
+
+  test('a branch that moved after the asking run ended is refused, for a read-only stage too', async () => {
+    const fixture = await makeFixture('asks-moved', `printf '{"outcome": "pass"}'`);
+    fixture.bindAsks('carry-on-after-answers', 'ask-build', 'carry-on');
+    fixture.bindAsks('look-after-answers', 'ask-build', 'look-again');
+    const asking = await startAskBuild(fixture);
+    const { handoff } = metadata(asking).asks_checkout as {
+      handoff: { branch: string; commit: string };
+    };
+    // Someone moves the branch while the ask is open.
+    const meddled = fixture.git(
+      'commit-tree',
+      '-p',
+      handoff.commit,
+      '-m',
+      'meddle',
+      `${handoff.commit}^{tree}`
+    );
+    fixture.git('update-ref', `refs/heads/${handoff.branch}`, meddled);
+
+    await answerTheAsk(fixture);
+    const all = await waitForRuns(fixture, 3);
+    expect(all.map(run => [run.workflow_name, run.status]).sort()).toEqual([
+      ['ask-build', 'completed'],
+      ['carry-on', 'failed'],
+      ['look-again', 'failed'],
+    ]);
+    for (const started of all.slice(1)) {
+      const error = String(metadata(started).error);
+      expect(error).toContain(handoff.branch);
+      expect(error).toContain(asking.id);
+    }
+    expect(existsSync(join(fixture.root, 'carry-on'))).toBe(false);
+    expect(existsSync(join(fixture.root, 'look-again'))).toBe(false);
+  }, 120_000);
+
+  test('an asking worktree removed while the asks were open refuses the start on its receipt', async () => {
+    const fixture = await makeFixture('asks-gone', `printf '{"outcome": "pass"}'`);
+    fixture.bindAsks('carry-on-after-answers', 'ask-build', 'carry-on');
+    const asking = await startAskBuild(fixture);
+    // Completion keeps the worktree its asks will hand on; something removes it later.
+    expect(metadata(asking).worktree_disposition).toMatchObject({
+      disposition: 'retained',
+      reason: 'in_use',
+    });
+    const worktree = asking.working_path ?? '';
+    fixture.git('worktree', 'remove', '--force', worktree);
+
+    await answerTheAsk(fixture);
+    const receipts = JSON.parse((await fixture.cli(['trigger', 'list'])).stdout) as {
+      outcome: string;
+      reason: string | null;
+    }[];
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]?.outcome).toBe('unmatched');
+    expect(receipts[0]?.reason).toContain(
+      `Checkout: the worktree run '${asking.id}' left at '${worktree}' is gone`
+    );
+    expect(runs(fixture).map(run => run.workflow_name)).toEqual(['ask-build']);
   }, 120_000);
 });
