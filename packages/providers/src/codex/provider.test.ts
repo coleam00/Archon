@@ -927,6 +927,28 @@ describe('CodexProvider', () => {
       expect(resultOf(chunks).tokens).toMatchObject({ input: 140, output: 14 });
     });
 
+    test('a v1 subagent’s running turn keeps the node observed after the parent completes', async () => {
+      const childStart = turnCompleted('inProgress', null, 'child-turn', 'child-thread');
+      const chunks = await streamOf({
+        notifications: [
+          { ...childStart, method: 'turn/started' } as ServerNotification,
+          itemCompleted(collabSpawn('completed', ['child-thread'])),
+          tokenUsage({ input: 100, output: 10 }),
+          turnCompleted('completed'),
+          tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn', 'child-thread'),
+          turnCompleted('completed', null, 'child-turn', 'child-thread'),
+        ],
+        completion: null,
+      });
+      const results = chunks.filter(
+        (c): c is Extract<MessageChunk, { type: 'result' }> => c.type === 'result'
+      );
+      expect(results.map(r => r.tokens)).toMatchObject([
+        { input: 100, output: 10 },
+        { input: 40, output: 4 },
+      ]);
+    });
+
     test('a later result carries the usage subagents report after the first, and repeats its output', async () => {
       const { provider, server } = providerWith({
         notifications: [

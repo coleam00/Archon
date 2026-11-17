@@ -43,7 +43,8 @@ reporting declarations; absence means unknown, not unsupported.
 Background work: `reported` waits for runtime-reported task endings; `none` means verified absent;
 `unobserved` means background work may exist without an observable lifecycle. A process
 backgrounded inside a foreground shell command (`cmd &`) is invisible to every provider.
-Codex observes subagents through `subAgentActivity` notifications and unified-exec processes
+Codex observes subagents through `subAgentActivity` notifications (v2 multi-agent tools) or,
+for its v1 `spawn_agent`, the turns of the spawned thread, and unified-exec processes
 through `commandExecution` items with source `unifiedExecStartup`. Idle thread status is
 not evidence that this work has ended. See [Streaming event mapping](/contributing/adding-a-community-provider/#streaming-event-mapping)
 for the background-start admission and observation cutoff rules.

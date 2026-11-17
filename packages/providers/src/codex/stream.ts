@@ -292,6 +292,10 @@ interface TurnObservation {
   readonly startedToolIds: Set<string>;
   readonly liveTasks: Set<string>;
   readonly agentThreads: Set<string>;
+  /** Threads spawned by Codex's v1 tool, which reports no subagent lifecycle of its own. */
+  readonly v1Threads: Set<string>;
+  /** The thread of each turn another thread has started and not completed, by turn key. */
+  readonly otherTurns: Map<string, string>;
   pendingFailure: ResultChunk | undefined;
   /** What the turn's result reported, so a later result carries only what followed. */
   reported: Pick<ResultChunk, 'tokens' | 'structuredOutput'> | undefined;
@@ -308,7 +312,6 @@ interface TurnObservation {
   // gets a span, across all of its turns. A span starts at the thread's first snapshot because
   // a forked subagent, the default for `spawn_agent`, starts from its parent's running total.
   // A v2 `subAgentActivity` start or a completed v1 `spawnAgent` item marks a thread a subagent.
-  // Only v2 ones are live tasks: a v1 subagent's usage after the parent completes is missed.
   readonly agentUsageSpans: Map<string, UsageSpan>;
   rateLimits: RateLimitSnapshot | undefined;
   retries: number;
@@ -366,6 +369,8 @@ export async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageC
     startedToolIds: new Set(),
     liveTasks: new Set(),
     agentThreads: new Set(),
+    v1Threads: new Set(),
+    otherTurns: new Map(),
     pendingFailure: undefined,
     reported: undefined,
     errors: [],
@@ -381,15 +386,26 @@ export async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageC
   for await (const notification of connection.notifications()) {
     yield* observeNotification(request, ids, observation, notification);
     // While observed work remains live, starts on this parent turn and recognized
-    // descendant threads are still accepted after parent completion. An empty set ends
+    // descendant threads are still accepted after parent completion. No live work ends
     // observation; it does not establish that Codex cannot report another start later.
-    if (observation.parentCompleted && observation.liveTasks.size === 0) {
+    if (observation.parentCompleted && !hasLiveWork(observation)) {
       yield* remainingResult(ids, observation);
       return;
     }
   }
   yield* remainingResult(ids, observation);
   throw connection.closedError(await connection.ended, observation.errors);
+}
+
+/**
+ * A v2 subagent is live until its `subAgentActivity` completes. A v1 subagent has no such
+ * signal; one is live while a turn on its thread runs, which its own `turn/completed` ends.
+ */
+function hasLiveWork(observation: TurnObservation): boolean {
+  if (observation.liveTasks.size > 0) return true;
+  for (const threadId of observation.otherTurns.values())
+    if (observation.v1Threads.has(threadId)) return true;
+  return false;
 }
 
 /**
@@ -551,7 +567,13 @@ async function* observeNotification(
       }
       return;
 
+    case 'turn/started':
+      if (notification.params.threadId !== ids.threadId)
+        observation.otherTurns.set(turnKeyOf(notification.params), notification.params.threadId);
+      return;
+
     case 'turn/completed':
+      observation.otherTurns.delete(turnKeyOf(notification.params));
       yield* observeTurnCompleted(request, ids, observation, notification.params);
       return;
 
@@ -646,7 +668,14 @@ function* observeItem(
 /** Codex's v1 spawn tool reports no `subAgentActivity`; its completed item names the thread. */
 function registerV1Spawn(observation: TurnObservation, item: ThreadItem): void {
   if (item.type !== 'collabAgentToolCall' || item.tool !== 'spawnAgent') return;
-  for (const threadId of item.receiverThreadIds) observation.agentThreads.add(threadId);
+  for (const threadId of item.receiverThreadIds) {
+    observation.agentThreads.add(threadId);
+    observation.v1Threads.add(threadId);
+  }
+}
+
+function turnKeyOf({ threadId, turn }: NotificationParams<'turn/started'>): string {
+  return JSON.stringify([threadId, turn.id]);
 }
 
 function* observeBackgroundItem(
