@@ -98,6 +98,8 @@ nodes:
 interface Fixture {
   /** The run rows, oldest first. */
   rows: () => { id: string; status: string; metadata: string }[];
+  /** Overwrite a run's terminal event data, as a damaged row reads. */
+  corruptTerminalEvent: (runId: string, data: string) => void;
   cli: (args: string[]) => Promise<string>;
   attempt: (args: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 }
@@ -163,7 +165,19 @@ async function makeFixture(label: string): Promise<Fixture> {
       database.close();
     }
   };
-  return { cli, attempt, rows };
+  const corruptTerminalEvent = (runId: string, data: string): void => {
+    const database = new Database(join(root, 'home', 'archon.db'));
+    try {
+      database
+        .query(
+          "UPDATE remote_agent_workflow_events SET data = ? WHERE workflow_run_id = ? AND event_type = 'workflow_completed'"
+        )
+        .run(data, runId);
+    } finally {
+      database.close();
+    }
+  };
+  return { cli, attempt, rows, corruptTerminalEvent };
 }
 
 const run = (workflow: string, ...inputs: string[]): string[] => [
@@ -231,6 +245,19 @@ test('a run that failed after its returns node completed has no result for a rea
   expect((await detail(fixture, runs[1]?.id)).terminal_record.returns.value).toEqual({
     read: null,
   });
+}, 120_000);
+
+test('an unreadable terminal record fails the reader instead of reading as no result', async () => {
+  const fixture = await makeFixture('unreadable');
+  await fixture.cli(run('stage-a', 'tag=r1'));
+  const [written] = fixture.rows();
+  fixture.corruptTerminalEvent(String(written?.id), '{not json');
+  const failed = await fixture.attempt(run('stage-c'));
+  expect(failed.exitCode).not.toBe(0);
+  expect(`${failed.stdout}${failed.stderr}`).toContain(
+    'Unable to read the earlier results its result_of inputs name'
+  );
+  expect(fixture.rows().map(row => row.status)).toEqual(['completed', 'failed']);
 }, 120_000);
 
 test('a stage reads the latest result of its own workflow on the item', async () => {

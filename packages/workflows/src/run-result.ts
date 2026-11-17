@@ -88,7 +88,9 @@ export async function latestResultsOnItem(
       ? new Map()
       : await store.listEventsForRuns(
           read.map(run => run.id),
-          ['workflow_completed']
+          ['workflow_completed'],
+          // A tolerant read turns a malformed record into an empty one, which reads as none.
+          { strict: true }
         );
   const results = new Map<string, LatestResult>();
   for (const name of workflowNames) {
