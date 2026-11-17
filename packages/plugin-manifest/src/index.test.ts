@@ -196,6 +196,7 @@ test('provider receipts validate the owned descriptor contract', () => {
         ),
         backgroundWork: 'none',
         sessionFork: undefined,
+        structuredOutputCorrection: undefined,
         knownToolNames: undefined,
         renamedTools: undefined,
       },

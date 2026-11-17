@@ -13,6 +13,7 @@ import {
 import { createLogger } from '@archon/paths';
 import {
   attentionNoticeRoutesSchema,
+  itemTrackerConfigSchema,
   platformStreamingSchema,
   workflowContinuationConfigSchema,
 } from './config-types';
@@ -175,6 +176,18 @@ export function validateAttentionNoticesConfig(parsed: unknown, configPath: stri
   parsed.attentionNotices = result.data;
 }
 
+export function validateItemTrackerConfig(parsed: unknown, configPath: string): void {
+  if (!isConfigRecord(parsed) || parsed.itemTracker === undefined) return;
+  const result = itemTrackerConfigSchema.safeParse(parsed.itemTracker);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map(issue => `itemTracker.${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ');
+    throw new InvalidConfigError('Invalid itemTracker config', configPath, issues);
+  }
+  parsed.itemTracker = result.data;
+}
+
 export function validateConversationConcurrencyConfig(parsed: unknown, configPath: string): void {
   if (!isConfigRecord(parsed) || parsed.concurrency == null) return;
   if (!isConfigRecord(parsed.concurrency)) {
@@ -204,5 +217,6 @@ export function validateGlobalConfigBlocks(parsed: unknown, configPath: string):
   validateModelBindingConfig(parsed, configPath);
   validateStreamingConfig(parsed, configPath);
   validateAttentionNoticesConfig(parsed, configPath);
+  validateItemTrackerConfig(parsed, configPath);
   validateConversationConcurrencyConfig(parsed, configPath);
 }

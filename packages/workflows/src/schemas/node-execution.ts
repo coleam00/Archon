@@ -189,7 +189,12 @@ export const mcpUnavailableSchema = z.object({
 });
 export type McpUnavailable = z.infer<typeof mcpUnavailableSchema>;
 
-export const childUsageSchema = runUsageSchema.extend({ childRunId: z.string() });
+// A child run's usage reaches its parent through run metadata, which carries counters
+// only. Its request evidence (`calls`) lives in the child run's own node records.
+export const childUsageSchema = runUsageSchema.extend({
+  childRunId: z.string(),
+  tokens: tokenUsageSchema.omit({ calls: true, callsPartial: true }).optional(),
+});
 
 export const executionDiagnosticsSchema = z.object({
   iteration: z.number().optional(),

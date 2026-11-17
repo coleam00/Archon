@@ -10,6 +10,7 @@
     "./operations": "./src/operations.ts",
     "./dispatch": "./src/dispatch.ts",
     "./discovery": "./src/discovery.ts",
+    "./host-plugins": "./src/host-plugins.ts",
     "./plugin-config": "./src/plugin-config.ts",
     "./test-fixtures": "./src/fixtures/compile-discovery-plugin.ts"
   },

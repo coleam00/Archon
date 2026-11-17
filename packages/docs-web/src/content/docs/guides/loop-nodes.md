@@ -278,10 +278,12 @@ Controls session continuity between iterations:
 The first iteration is always fresh regardless of this setting.
 
 A structured-output re-ask (see [`until_field`](#until_field)) does **not** disturb
-threading. It runs in its own throwaway session so an invalid turn is not carried
-forward as context, and that session is discarded — the next iteration still resumes
-the conversation the loop was already threading. The repaired answer still reaches it
-through `$LOOP_PREV_OUTPUT`.
+threading. On Pi and Copilot it runs in its own throwaway session so an invalid turn is
+not carried forward as context, and that session is discarded — the next iteration still
+resumes the conversation the loop was already threading. The repaired answer still
+reaches it through `$LOOP_PREV_OUTPUT`. On Codex the correction continues the
+iteration's own thread with only the schema errors, so that thread stays the one the
+next iteration resumes.
 
 ### `until_bash`
 
@@ -402,8 +404,9 @@ carries the same value.
 **Per-provider behavior is the same as any other node.** On a provider with
 *enforced* structured output (Claude, Codex, OpenCode) the schema constrains
 decoding. On a *best-effort* provider the model is asked for the schema (Pi through
-a `structured_output` tool call, Copilot through the prompt), and a payload that fails
-validation is re-asked up to three times **within the same iteration** — a reask does not consume a loop iteration. If those are
+a `structured_output` tool call, Copilot through the prompt). On Pi, Copilot and Codex
+a payload that fails validation is re-asked up to three times **within the same
+iteration** — a reask does not consume a loop iteration. If those are
 exhausted, the node **fails** with the validation errors; it is never treated as an
 incomplete iteration. See
 [provider capabilities](/reference/provider-capabilities/).

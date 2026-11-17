@@ -216,6 +216,7 @@ describe('CodexProvider', () => {
       agents: false,
       toolRestrictions: false,
       structuredOutput: 'enforced',
+      structuredOutputCorrection: 'same-session',
       requiresAllPropertiesRequired: true,
       envInjection: true,
       costControl: false,
