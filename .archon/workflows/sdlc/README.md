@@ -327,9 +327,10 @@ recommends under `bindings:` in `.pack/pack.yaml`:
   `build-queue` file. The merge queue's schedule is short, and a sweep where nothing
   changed runs no agent.
 - `metrics-prs` and `metrics-test-value` refresh the pack's metrics.
-- `worktree-cleanup` removes merged worktrees, for an install that runs no server.
-  `archon isolation cleanup schedule install` schedules the same sweep with no workflow;
-  prefer it.
+
+An install that runs no server also needs the merged-worktree sweep a server runs by
+itself: `archon isolation cleanup schedule install` schedules it. It is an engine command,
+not a pack binding.
 
 **Ask the user** which to enable. Then write them as files:
 
@@ -409,7 +410,7 @@ bindings were written for. What to look at when choosing the build number:
   and reviewers do the same in scratch worktrees. Ten runs can mean ten test suites at
   once.
 - **Disk.** Each run has its own worktree with installed dependencies, and each review
-  round adds scratch worktrees that are removed when the round ends. Measured on Archon
+  round adds scratch worktrees; Archon removes each when the reviewer that made it ends. Measured on Archon
   itself: about 0.7 GB per worktree with dependencies, one or two scratch worktrees in a
   typical review round and up to six in a large one. Ten runs is roughly 15 to 20 GB in
   the usual case and up to about 50 GB when every run is in a large round. A full disk

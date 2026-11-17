@@ -27,6 +27,7 @@ import type { IWorkflowStore } from '@archon/workflows/store';
 import { itemAct } from './item-act';
 import { RunActionForbiddenError, type RunActor } from './run-authorization';
 import {
+  AttentionAnswerInvalidError,
   expectedGateForOccurrence,
   type AttentionAnswerRequest,
   type WorkflowOperations,
@@ -166,14 +167,6 @@ export async function answerAttentionItem(
   };
 }
 
-/** An answer that does not fit the ask's form: an undeclared option, or `other` without text. */
-export class AskAnswerInvalidError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'AskAnswerInvalidError';
-  }
-}
-
 /** The ask `askId` names and its queue item, when `actor` may answer it. */
 async function answerableAsk(
   deps: AttentionItemDeps,
@@ -200,7 +193,7 @@ async function answerAsk(
   const text = request.text ?? '';
   const choose = 'recommended' in request ? [ask.ask.recommendation.option] : request.choose;
   const problem = attentionAnswerProblem(item, { choose, text });
-  if (problem !== undefined) throw new AskAnswerInvalidError(`Ask ${item.ref} ${problem}`);
+  if (problem !== undefined) throw new AttentionAnswerInvalidError(`Ask ${item.ref} ${problem}`);
   const [decision = ''] = choose;
   const result = await deps.queue.store.answerItemAsk({
     askId,

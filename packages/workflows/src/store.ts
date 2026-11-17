@@ -442,7 +442,9 @@ export interface IWorkflowStore
    * `WorkflowNotResumableError`. A failed or paused run resumes with or without a
    * `cursor`. A `running` run resumes only with an `ownerless` cursor whose claim still
    * matches; the caller has checked that no owner answers for it, and an admitted one
-   * keeps the resource slot it already holds.
+   * keeps the resource slot it already holds. That cursor must carry the caller's held
+   * live-owner lease for this run, or the store throws before it changes anything
+   * (`requireOwnerlessLease`).
    *
    * A resume of a failed or paused run admitted through a resource start takes a slot or throws
    * `WorkflowResourceBusyError` (`resourceResumeBlocker`). A paused run refused while ready

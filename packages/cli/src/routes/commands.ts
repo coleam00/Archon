@@ -98,7 +98,10 @@ export async function runPack({
   cwd,
   json,
 }: CliRouteContext): Promise<number> {
-  const { packCommand } = await loadRoute(() => import('../commands/pack'));
+  // The graph resolves each run-ended file's project from the codebase records.
+  const { packCommand } = await loadRoute(() => import('../commands/pack'), {
+    database: subcommand === 'graph' && (await usesDatabaseStore()),
+  });
   const text = (name: string): string | undefined => {
     const value = values[name];
     return typeof value === 'string' ? value : undefined;
@@ -109,6 +112,8 @@ export async function runPack({
     host: text('host'),
     runAs: text('run-as'),
     out: text('out'),
+    config: text('config'),
+    workflowSource: text('workflow-source'),
     only: text('only'),
     force: values.force === true,
     json,

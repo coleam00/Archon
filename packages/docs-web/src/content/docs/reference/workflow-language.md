@@ -1276,6 +1276,8 @@ is the YAML-coordinates / code-computes split. A skipped producer with **no**
 binding, producer, and fix named: a binding never silently resolves to `''`.
 `if_skipped` is literal data, so reference-looking text there is neither substituted nor
 validated as an output reference.
+The same directive works in an include's or a `workflow:` node's `with:` (see
+[Passing values into an included block](#passing-values-into-an-included-block)).
 
 `if_skipped` covers a producer that completed as **skipped**, including an exec node that
 ran until an opted-in timeout. A producer that **failed** always fails the binding too,
@@ -1980,20 +1982,41 @@ depends on whether the block declares `inputs:` (see
 `inputs:` ignores unrecognized keys; a block that declares `inputs:` rejects an undeclared
 key at load.
 
-An object value is a literal, with one exception. An object with exactly the shape of a
-command/script directive is a load error naming the input: `{ from }` with an optional
-`if_skipped`, or `{ outputs }` with an optional `if_unreadable`. Because those keys are
-optional, a plain `{ from: alice }` is refused too. Those directives are read only on a command or script node's own `with:` (see
-[Binding values](#binding-values-into-command-and-script-nodes)); passed through an include
-it would reach the block as data, and its `if_skipped` would never apply. To carry a skip
-fallback across an include, bind it with `if_skipped` in a `script:` node's own `with:`, set
-`trigger_rule: all_done` on that node so it runs when its source is skipped (see
-[Reading across a skipped branch](#reading-across-a-skipped-branch)), have it print the value,
-and pass `$<that-node>.output` to the include. Any other object,
-such as `{ from: alice, to: bob }`, stays a literal. There is no escape for passing a
-directive-shaped object as data, but only a top-level value is checked, so the same object
-nested inside an array or another object (`[{ from: alice }]`, `{ user: { from: alice } }`)
-passes as a literal. The same rule holds for a `workflow:` node's `with:`.
+An object value is a literal, with two exceptions. An object with exactly the shape
+`{ from, if_skipped }` (`if_skipped` optional) is the binding directive, with the same
+rules as on a command or script node (see
+[Reading across a skipped branch](#reading-across-a-skipped-branch)): `from` must be one
+whole `$node.output[.field]` reference, so a plain `{ from: alice }` is a load error. It
+reads the producer's value with its type when the producer ran, `if_skipped` when it was
+skipped, and fails the reading node when it failed. As on a command node, the include must
+list the producer in `depends_on` and use a `trigger_rule` that lets the block start when
+the producer was skipped, such as `all_done`:
+
+```yaml
+  - id: review
+    include: review-block
+    depends_on: [fix]
+    trigger_rule: all_done
+    with:
+      fixes: { from: $fix.output.summary, if_skipped: null }
+```
+
+The directive resolves at run time, so the block can read the input only where a run-time
+value can go: a `command:` or `script:` node's `with:` value that is exactly
+`$INPUTS.<name>`, a `workflow:` node's or nested include's `with:`, the
+`INPUTS_<UPPER_SNAKE>` env var of a `bash:` or `script:` node or a `loop:` or `loop_group:`
+`until_bash:` check, and an AI node's prompt or command body. Any other surface that names the input, such as `when:`, `systemPrompt:`, a
+`loop:` prompt, or an approval message, is substituted at load, so it is a load error that
+names the node and field.
+
+The second exception is `{ outputs }` with an optional `if_unreadable`: only a script
+node's own `with:` reads it (see
+[Binding every output of a type](#binding-every-output-of-a-type)), so here it is a load
+error naming the input. Any other object, such as `{ from: alice, to: bob }`, stays a
+literal. A directive-shaped object always means the directive; there is no escape for
+passing one as data. Only a top-level value is read this way, so the same object nested
+inside an array or another object (`[{ from: alice }]`, `{ user: { from: alice } }`)
+passes as a literal. The same rules hold for a `workflow:` node's `with:`.
 
 Substitution applies everywhere the value could reach the model, including inside Markdown
 code fences and inline code spans: `$INPUTS.<name>` has no documentation-only meaning, so a
@@ -2533,18 +2556,41 @@ bindings:
       actions: [opened]
     inputs:
       number: { event: subject.number }   # an event field; event bindings only
-  follow-up:                          # neither schedule nor event: fire-only
+  follow-up:                          # no schedule, event or run_ended: fire-only
     workflow: review-follow-up
     resource: follow-up
     overlap: queue
+  fix:
+    workflow: review-fix
+    resource: fix
+    overlap: queue
+    run_ended:                        # starts when a run of this pack's workflow ends
+      workflow: review-pull-request
+      outcome: [changes, blocked]     # one outcome, or a list: one file per outcome
+    inputs:
+      number: { input: number }       # one of the ended run's inputs; run-ended bindings only
+      findings: { result: /findings } # a JSON Pointer into the ended run's result
 ```
 
-A binding sets `schedule:` (a timer binding, written as a file
+A binding sets at most one of `schedule:` (a timer binding, written as a file
 `archon trigger fire --config` reads), `event:` (an entry for the GitHub source plugin's
-`bindings` array), or neither. With neither it is a
+`bindings` array) and `run_ended:`. With none it is a
 [fire-only binding](/guides/workflow-triggers/#start-a-binding-only-with-trigger-fire): the
 same file as a timer binding without a schedule, started only when a run or an operator fires
-it. Setting both is refused, and so is a `schedule:` or `event:` key with an invalid value.
+it. Setting more than one is refused, and so is a `schedule:`, `event:` or `run_ended:` key
+with an invalid value.
+
+A `run_ended:` binding is a
+[run-ended trigger file](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends):
+it starts its workflow on an item when a run of `run_ended.workflow`, a workflow of this pack,
+completes on that item with `run_ended.outcome`. `{ input: <name> }` and
+`{ result: <JSON Pointer> }` inputs read the ended run's inputs and result, as
+`on.runEnded.inputs` does; every other input is written as the start's own input.
+`archon pack bindings` writes one file per outcome, which the operator registers with
+`archon trigger add`, and refuses the whole set, writing nothing, when the ended workflow does not
+declare the outcome or an input read from it, or the started workflow does not declare an input
+mapped to it. A stage that needs both a clock and a hand-off declares two bindings with the
+same `workflow` and `resource`; they share the resource's slots and overlap policy.
 `capacity`, `overlap` and `isolation` mean what they mean in a
 [binding](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). The
 resource is written as `<pack>:<host>/<owner>/<name>:<resource>`, so bindings that declare the
@@ -2556,8 +2602,9 @@ binding's `capacity` applies to it. An omitted `capacity` means the workflow's d
 
 The declaration is validated when the pack loads, and an invalid one fails every workflow of
 the pack, naming the file and the binding. Beyond each binding's shape, a `{ binding: <id> }`
-input must name a declared timer or fire-only binding, and an `{ event: <field> }` input belongs to an
-event binding. Bindings sharing a resource need not agree on its capacity. An `event:` selector
+input must name a declared timer or fire-only binding, an `{ event: <field> }` input belongs to an
+event binding, and an `{ input: <name> }` or `{ result: <pointer> }` input to a run-ended
+binding. Bindings sharing a resource need not agree on its capacity. An `event:` selector
 and its fields are checked against the source plugin when a binding is generated, not at load.
 
 ## Launching a Separate Governed Run with `workflow:`
@@ -2611,7 +2658,8 @@ A `workflow:` node has **one** input channel per invocation: either the untyped 
 (delivered as the child's `$ARGUMENTS`) **or** the named `with:` map (delivered as the child's
 `$INPUTS.<name>`. See [Workflow Signature](#workflow-signature-inputs-returns-and-inputs)).
 Setting both on one node is a load error. Values follow the same rule as an include's `with:`:
-JSON literals, and a directive-shaped object such as `{ from, if_skipped }` is a load error (see
+JSON literals, except that `{ from, if_skipped }` is the binding directive, resolved before the
+child starts (see
 [Passing values into an included block](#passing-values-into-an-included-block)). Use `with:`
 when the child declares named `inputs:` or when its `command:` bodies need named values:
 

@@ -10,6 +10,7 @@ import {
 } from '@archon/git';
 import type { RepoPath } from '@archon/git';
 import * as isolationEnvDb from '../../db/isolation-environments';
+import { getEnvUse, type WaitingHandoff } from '../../db/isolation-env-users';
 import { loadRepoConfig } from '../../config/config-loader';
 import { configuredRemote } from './merge-verdict';
 
@@ -20,16 +21,43 @@ export interface LiveRunBlocker {
   runStatus: string;
 }
 
+/** A start handed the environment's checkout that has not been admitted yet. Never settleable. */
+export type HandoffBlocker = { reason: 'pending_handoff'; display: string } & WaitingHandoff;
+
+/** Something that will still use the environment's checkout. */
+export type UseBlocker = LiveRunBlocker | HandoffBlocker;
+
 /**
- * The live-run lock removers report: a workflow run that can still claim the
- * environment — running, pending, paused, or failed-but-resumable (see
- * getLiveRunOwningEnv) — with the refusal text chat, the CLI, and the sweeps share.
- * Historical conversation references are data, not locks. A lookup failure throws;
- * callers must refuse removal rather than read it as "no run".
+ * The use lock removers report, with the refusal text chat, the CLI, and the sweeps
+ * share: a workflow run that can still claim the environment — running, pending,
+ * paused, or failed-but-resumable — or else a start handed its checkout that still
+ * waits. Both come from one read (getEnvUse), so ownership moving between them cannot
+ * fall between two reads. Historical conversation references are data, not locks.
+ * A lookup failure throws; callers must refuse removal rather than read it as "no use".
  */
-export async function getLiveRunBlocker(envId: string): Promise<LiveRunBlocker | null> {
-  const liveRun = await isolationEnvDb.getLiveRunOwningEnv(envId);
-  return liveRun ? toLiveRunBlocker(liveRun) : null;
+export async function getUseBlocker(envId: string): Promise<UseBlocker | null> {
+  const { owner, handoff } = await getEnvUse(envId);
+  if (owner) return toLiveRunBlocker(owner);
+  return handoff ? toHandoffBlocker(handoff) : null;
+}
+
+/** The identifiers a log line records for a use lock. */
+export function useBlockerLogFields(blocker: UseBlocker): Record<string, string> {
+  if (blocker.reason === 'live_run') return { runId: blocker.runId, runStatus: blocker.runStatus };
+  const { reason: _reason, display: _display, ...handoff } = blocker;
+  return handoff;
+}
+
+function toHandoffBlocker(handoff: WaitingHandoff): HandoffBlocker {
+  const from = `run ${handoff.fromRunId.slice(0, 8)}`;
+  return {
+    reason: 'pending_handoff',
+    display:
+      handoff.waitingFor === 'capacity'
+        ? `start request ${handoff.requestId} handed this checkout by ${from} is queued (archon trigger withdraw ${handoff.requestId} releases it)`
+        : `a start handed this checkout by ${from} is being prepared (receipt ${handoff.receiptId}, binding ${handoff.bindingId})`,
+    ...handoff,
+  };
 }
 
 function toLiveRunBlocker(run: { id: string; status: string }): LiveRunBlocker {
@@ -59,7 +87,7 @@ export interface ReleasedFailedRun {
 
 export type CleanupRunLock =
   | { kind: 'free' }
-  | { kind: 'locked'; blocker: LiveRunBlocker }
+  | { kind: 'locked'; blocker: UseBlocker }
   | ({ kind: 'released' } & ReleasedFailedRun)
   | { kind: 'unpushed'; runId: string | null; commits: number; display: string };
 
@@ -79,23 +107,27 @@ const RELEASE_REASONS: Record<CleanupSettlement['kind'], FailedRunReleaseReason>
  * environment whose worktree HEAD or branch holds a commit on no remote, whether
  * or not a run owns it: that work stays until an operator removes it explicitly.
  * Merged or closed-PR settlement already proved coverage of both local tips.
+ *
+ * A start handed the checkout that still waits locks whatever the settlement: no
+ * outcome of the run that handed it releases the stage it started. Runs, the settled
+ * runs and waiting starts come from one read, for the reason getUseBlocker gives.
  */
 export async function getCleanupRunLock(
   env: { id: string; working_path: string; branch_name: string | null },
   repoPath: RepoPath,
   settlement: CleanupSettlement
 ): Promise<CleanupRunLock> {
-  const owner = await isolationEnvDb.getLiveRunOwningEnv(env.id);
+  const { owner, releasedOwner, handoff } = await getEnvUse(
+    env.id,
+    settlement.kind === 'stale' ? settlement : { kind: 'settled' }
+  );
   if (owner) {
-    if (!isolationEnvDb.isSettleableRunStatus(owner.status)) {
-      return { kind: 'locked', blocker: toLiveRunBlocker(owner) };
-    }
-    const lock = await isolationEnvDb.getLiveRunOwningEnv(
-      env.id,
-      settlement.kind === 'stale' ? settlement : { kind: 'settled' }
-    );
+    // A non-settleable owner locks; a settleable one locks unless the settlement
+    // releases every owner (releasedOwner is what is left once it applies).
+    const lock = isolationEnvDb.isSettleableRunStatus(owner.status) ? releasedOwner : owner;
     if (lock) return { kind: 'locked', blocker: toLiveRunBlocker(lock) };
   }
+  if (handoff) return { kind: 'locked', blocker: toHandoffBlocker(handoff) };
   if (settlement.kind === 'stale') {
     const commits = await countUnpushedCommits(env, repoPath);
     if (commits > 0) return toUnpushedLock(env, owner?.id ?? null, commits);
@@ -162,7 +194,7 @@ export async function readLiveRemoteTips(
 /** Why an environment cannot be removed. */
 export type RemovalBlocker =
   | { reason: 'uncommitted_changes'; display: string }
-  | LiveRunBlocker
+  | UseBlocker
   | { reason: 'unpushed_commits'; display: string; runId: string | null };
 
 export type RemovalCheck =

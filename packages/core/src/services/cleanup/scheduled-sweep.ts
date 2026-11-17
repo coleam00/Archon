@@ -17,8 +17,9 @@ import { configuredRemote, judgeBranchForRemoval, skipReasonFor } from './merge-
 import {
   checkRemoval,
   countUnpushedCommits,
-  getLiveRunBlocker,
+  getUseBlocker,
   toUnpushedLock,
+  useBlockerLogFields,
   type ReleasedFailedRun,
   type RemovalBlocker,
 } from './run-lock';
@@ -132,16 +133,21 @@ export async function sweepScheduledEnvironment(
 async function sweepMissingPath(env: SweptEnvironment, sweep: ScheduledSweep): Promise<boolean> {
   // Even with the directory gone, marking the env destroyed invalidates
   // the live run's resume handle.
-  const liveRun = await getLiveRunBlocker(env.id);
-  if (liveRun && !isolationEnvDb.isSettleableRunStatus(liveRun.runStatus)) {
-    sweep.report.skipped.push({ id: env.id, reason: `path missing but ${liveRun.display}` });
+  const inUse = await getUseBlocker(env.id);
+  if (
+    inUse &&
+    (inUse.reason === 'pending_handoff' || !isolationEnvDb.isSettleableRunStatus(inUse.runStatus))
+  ) {
+    sweep.report.skipped.push({ id: env.id, reason: `path missing but ${inUse.display}` });
     getLog().info(
-      { envId: env.id, runId: liveRun.runId, runStatus: liveRun.runStatus },
-      'skip_path_missing_live_run'
+      { envId: env.id, ...useBlockerLogFields(inUse) },
+      inUse.reason === 'live_run'
+        ? 'skip_path_missing_live_run'
+        : 'skip_path_missing_pending_handoff'
     );
     return true;
   }
-  if (liveRun) return false;
+  if (inUse) return false;
   // Removal deletes a branch this environment created, so a branch holding
   // commits on no remote stays, as it does in the stale sweep.
   const commits = readWorktreeBranchCreated(env.metadata)
@@ -168,13 +174,16 @@ async function sweepMerged(
   if (check.blocker) {
     const { blocker } = check;
     sweep.report.skipped.push({ id: env.id, reason: `merged but ${blocker.display}` });
-    if (blocker.reason === 'live_run') {
-      getLog().info(
-        { envId: env.id, runId: blocker.runId, runStatus: blocker.runStatus },
-        'skip_merged_live_run'
-      );
-    } else {
-      getLog().warn({ envId: env.id }, 'skip_merged_uncommitted_changes');
+    switch (blocker.reason) {
+      case 'live_run':
+      case 'pending_handoff':
+        getLog().info(
+          { envId: env.id, ...useBlockerLogFields(blocker) },
+          `skip_merged_${blocker.reason}`
+        );
+        break;
+      default:
+        getLog().warn({ envId: env.id }, 'skip_merged_uncommitted_changes');
     }
     return;
   }
@@ -211,10 +220,8 @@ async function sweepStale(
 function logStaleBlocker(envId: string, blocker: RemovalBlocker): void {
   switch (blocker.reason) {
     case 'live_run':
-      getLog().info(
-        { envId, runId: blocker.runId, runStatus: blocker.runStatus },
-        'skip_stale_live_run'
-      );
+    case 'pending_handoff':
+      getLog().info({ envId, ...useBlockerLogFields(blocker) }, `skip_stale_${blocker.reason}`);
       break;
     case 'unpushed_commits':
       getLog().warn({ envId, runId: blocker.runId }, 'skip_stale_unpushed_commits');

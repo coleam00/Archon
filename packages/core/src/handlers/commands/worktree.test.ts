@@ -30,7 +30,7 @@ import {
   emptyCleanup,
   mockCleanupMergedWorktrees,
   mockCleanupStaleWorktrees,
-  mockGetLiveRunBlocker,
+  mockGetUseBlocker,
   restoreSpies,
   baseConversation,
   resetCommandHandlerMocks,
@@ -570,7 +570,7 @@ describe('CommandHandler', () => {
             isolation_env_id: 'env-uuid-feat-x',
           });
           mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
-          mockGetLiveRunBlocker.mockResolvedValue({
+          mockGetUseBlocker.mockResolvedValue({
             reason: 'live_run',
             display: 'run run-live is paused',
             runId: 'run-live-1234',
@@ -581,7 +581,7 @@ describe('CommandHandler', () => {
 
           expect(result.success).toBe(false);
           expect(result.message).toContain('Worktree kept: run run-live is paused.');
-          expect(mockGetLiveRunBlocker).toHaveBeenCalledWith('env-uuid-feat-x');
+          expect(mockGetUseBlocker).toHaveBeenCalledWith('env-uuid-feat-x');
           expect(mockIsolationDestroy).not.toHaveBeenCalled();
           expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
           expect(mockUpdateConversation).not.toHaveBeenCalled();
@@ -593,7 +593,7 @@ describe('CommandHandler', () => {
             isolation_env_id: 'env-uuid-feat-x',
           });
           mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
-          mockGetLiveRunBlocker.mockResolvedValue({
+          mockGetUseBlocker.mockResolvedValue({
             reason: 'live_run',
             display: 'run run-live is paused',
             runId: 'run-live-1234',
@@ -608,7 +608,7 @@ describe('CommandHandler', () => {
 
           expect(result.success).toBe(false);
           expect(result.message).toContain('Worktree kept: run run-live is paused.');
-          expect(mockGetLiveRunBlocker).toHaveBeenCalledWith('env-uuid-feat-x');
+          expect(mockGetUseBlocker).toHaveBeenCalledWith('env-uuid-feat-x');
           expect(mockIsolationDestroy).not.toHaveBeenCalled();
           expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
           expect(mockUpdateConversation).not.toHaveBeenCalled();

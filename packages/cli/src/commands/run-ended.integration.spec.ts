@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * A run's end starts the stage a run-ended binding names and admits the work its slot
  * held back, with no other command: real SQLite, every run in its own CLI process.
@@ -5,9 +6,11 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -17,6 +20,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import { packGraphSchema } from '@archon/workflows/pack-graph';
 
 const CLI_PATH = resolve(import.meta.dir, '..', 'cli.ts');
 const HOST = 'factory-host';
@@ -363,14 +367,117 @@ describe('a run-ended binding', () => {
     expect(read.runs.map(run => run.id)).toEqual(runs.map(run => run.id));
     expect(read.runs.map(run => run.cause)).toEqual([
       { kind: 'receipt', receiptId: expect.any(String), sourceInstanceId: 'plan' },
-      { kind: 'run_ended', runId: runs[0]?.id },
+      { kind: 'run_ended', runId: runs[0]?.id, sourceInstanceId: 'build-after-plan' },
       { kind: 'receipt', receiptId: expect.any(String), sourceInstanceId: 'plan' },
-      { kind: 'run_ended', runId: runs[2]?.id },
+      { kind: 'run_ended', runId: runs[2]?.id, sourceInstanceId: 'build-after-plan' },
     ]);
     expect(read.runs.map(run => run.outcome)).toEqual(['planned', null, 'planned', null]);
     expect(await fixture.cli(['workflow', 'runs', '--item', 'issue-1'])).toContain(
       `after run ${runs[2]?.id.slice(0, 8)} ended`
     );
+  }, 90_000);
+
+  test('a pack declares it, `pack bindings` writes it inactive, and once copied into the triggers directory the end of a run starts it', async () => {
+    const fixture = await makeFixture('pack');
+    const pack = join(fixture.projectRoot, '.archon', 'workflows', 'chain');
+    for (const [name, body] of [
+      ['chain-plan', STAGE_A.replace('name: stage-a', 'name: chain-plan')],
+      ['chain-build', STAGE_B.replace('name: stage-b', 'name: chain-build')],
+    ] as const) {
+      mkdirSync(join(pack, name), { recursive: true });
+      writeFileSync(join(pack, name, `${name}.yaml`), body);
+    }
+    mkdirSync(join(pack, '.pack'), { recursive: true });
+    writeFileSync(
+      join(pack, '.pack', 'pack.yaml'),
+      `bindings:
+  build:
+    workflow: chain-build
+    resource: build
+    overlap: queue
+    isolation: { kind: in-place }
+    run_ended: { workflow: chain-plan, outcome: planned }
+    inputs:
+      plan: { result: /plan }
+      issue: { input: issue }
+`
+    );
+    const { runAsUserId } = JSON.parse(await fixture.cli(['trigger', 'whoami'])) as {
+      runAsUserId: string;
+    };
+    await fixture.cli([
+      'pack',
+      'bindings',
+      'chain',
+      '--repo',
+      'github.com/acme/widgets',
+      '--host',
+      HOST,
+      '--run-as',
+      runAsUserId,
+      '--out',
+      join(fixture.root, 'bindings'),
+      '--json',
+    ]);
+    const written = JSON.parse(await fixture.cli(['trigger', 'check'])) as { runEnded: unknown[] };
+    expect(written.runEnded).toEqual([]);
+    const graph = async () =>
+      packGraphSchema.parse(JSON.parse(await fixture.cli(['pack', 'graph', 'chain', '--json'])));
+    const declared = await graph();
+    expect(declared.stages.map(stage => stage.name).sort()).toEqual(['chain-build', 'chain-plan']);
+    expect(declared.arrows).toEqual([
+      {
+        from: { stage: 'chain-plan', outcome: 'planned' },
+        to: 'chain-build',
+        active: false,
+        declared: { binding: 'build', problems: [] },
+        installed: null,
+      },
+    ]);
+    mkdirSync(join(fixture.archonHome, 'triggers'), { recursive: true });
+    for (const file of readdirSync(join(fixture.root, 'bindings')))
+      copyFileSync(
+        join(fixture.root, 'bindings', file),
+        join(fixture.archonHome, 'triggers', file)
+      );
+    const listed = JSON.parse(await fixture.cli(['trigger', 'check'])) as {
+      runEnded: { workflowName: string; problems: string[] }[];
+    };
+    expect(listed.runEnded).toMatchObject([{ workflowName: 'chain-build', problems: [] }]);
+    const [arrow] = (await graph()).arrows;
+    expect(arrow).toMatchObject({ active: true, declared: { binding: 'build', problems: [] } });
+    if (!arrow?.active) throw new Error('the copied file did not activate the arrow');
+    const arrowId = arrow.installed.sourceInstanceId;
+
+    await fixture.cli([
+      'workflow',
+      'run',
+      'chain-plan',
+      '--no-worktree',
+      '--item',
+      'issue-1',
+      '--input',
+      'plan=p1',
+      '--input',
+      'issue=i1',
+    ]);
+    const runs = await waitFor(
+      () => completedRuns(fixture, 2),
+      'the plan and the build its end started'
+    );
+    expect(runs.map(run => run.workflow_name)).toEqual(['chain-plan', 'chain-build']);
+    expect(JSON.parse(runs[1]?.metadata ?? '{}')).toMatchObject({
+      inputs: { plan: 'planned: p1', issue: 'i1' },
+    });
+    const read = itemReadSchema.parse(
+      JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json']))
+    );
+    // The item's path: the build was started by the plan's end, through the graph's arrow.
+    expect(read.runs[1]?.cause).toEqual({
+      kind: 'run_ended',
+      runId: runs[0]?.id,
+      sourceInstanceId: arrowId,
+    });
   }, 90_000);
 
   test('a hand run with no trigger host starts the stage its end caused, with no other command', async () => {

@@ -39,16 +39,15 @@ const mockCleanupMerged = mock<typeof MergedSweep.cleanupMergedWorktrees>(() =>
     warnings: [],
   })
 );
-const mockGetLiveRunBlocker = mock<typeof CleanupRunLock.getLiveRunBlocker>(() =>
-  Promise.resolve(null)
-);
+const mockGetUseBlocker = mock<typeof CleanupRunLock.getUseBlocker>(() => Promise.resolve(null));
 mock.module('../services/cleanup/merged-sweep', () => ({
   cleanupMergedWorktrees: mockCleanupMerged,
   cleanupToMakeRoom: mock(),
   recordCleanupRemoval: mock(),
 }));
 mock.module('../services/cleanup/run-lock', () => ({
-  getLiveRunBlocker: mockGetLiveRunBlocker,
+  getUseBlocker: mockGetUseBlocker,
+  useBlockerLogFields: () => ({}),
   getCleanupRunLock: mock(),
   toUnpushedLock: mock(),
   countUnpushedCommits: mock(),
@@ -118,8 +117,8 @@ describe('listEnvironments', () => {
     mockLstat.mockReset();
     mockLstat.mockImplementation(() => Promise.resolve());
     mockMarkWorktreeDestroyed.mockClear();
-    mockGetLiveRunBlocker.mockClear();
-    mockGetLiveRunBlocker.mockImplementation(() => Promise.resolve(null));
+    mockGetUseBlocker.mockClear();
+    mockGetUseBlocker.mockImplementation(() => Promise.resolve(null));
   });
 
   test('returns empty result when no active environments', async () => {
@@ -186,7 +185,7 @@ describe('listEnvironments', () => {
     const env = makeEnvWithAge({ id: 'env-owned', working_path: '/worktrees/gone' });
     mockListByCodebaseWithAge.mockResolvedValueOnce([env]);
     mockLstat.mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }));
-    mockGetLiveRunBlocker.mockImplementation(() =>
+    mockGetUseBlocker.mockImplementation(() =>
       Promise.resolve({
         reason: 'live_run',
         display: 'run run-abcd is failed',

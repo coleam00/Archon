@@ -136,12 +136,3 @@ bindings:
     schedule: { interval_seconds: 86400 }
     inputs:
       since: 1d
-  worktree-cleanup:
-    workflow: archon-worktree-cleanup
-    # The sweep covers every project registered on the host, so one resource guards it.
-    resource: worktree-cleanup
-    resource_scope: host
-    overlap: skip
-    schedule: { interval_seconds: 21600 }
-    inputs:
-      include_closed: 'false'

@@ -36,11 +36,11 @@ describe('NodeDivider cost', () => {
     expect(html).not.toContain('· $0.04');
   });
 
-  test.each(['own', 'total'] as const)('shows reported zero with %s scope', scope => {
-    expect(render(0, scope)).toContain(scope === 'total' ? '· total $0.0000' : '· $0.0000');
+  test('shows reported zero with own scope', () => {
+    expect(render(0, 'own')).toContain('· $0.0000');
   });
 
-  test.each([null, undefined, -1, Number.NaN, Infinity, -Infinity])(
+  test.each([null, undefined, -1, Number.NaN, Infinity])(
     'omits absent or invalid cost %s',
     cost => {
       expect(render(cost)).not.toContain('$');

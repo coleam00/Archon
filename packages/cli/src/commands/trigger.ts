@@ -3,7 +3,7 @@ import { toPersistedMessageMetadata } from '@archon/core/types';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import { getArchonHome } from '@archon/paths';
 import {
@@ -12,6 +12,7 @@ import {
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
 import {
+  getTriggersPath,
   readOnBindings,
   runEndedTriggerCheck,
   type OnBinding,
@@ -46,6 +47,7 @@ import {
   DETACHED_RUN_OWNER_ENV,
 } from '../utils/detached-run-control';
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
+import { addTriggerFile } from '../triggers/add-trigger-file';
 import { installMacosNativeSchedule, removeMacosNativeSchedule } from '../triggers/native-schedule';
 import { resolveCliUserId } from './auth';
 import { readCallingNode } from '../utils/calling-node';
@@ -256,6 +258,12 @@ async function triggerFire(
   }
   assertItemOptions(options);
   const config = await loadFireConfig(options.config);
+  // A fire has no ended run to take the checkout from; starting the stage anyway would
+  // cut it from the base branch, which is the one place this binding must never run.
+  if (config.on?.runEnded?.checkout !== undefined)
+    throw new Error(
+      `${options.config} takes its checkout from the run that ended (on.runEnded.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on a run's checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <run-id> --item <key>, naming the run that holds the branch: after a read-only check, the run in the check's metadata.checkout_handoff.runId (archon workflow get <check-run-id> --json), not the check.`
+    );
   const sourceActor = await requestingSourceActor(host, env);
   // A redelivery keeps the binding snapshot of its first acceptance, so today's users
   // must not turn a recorded delivery into a failure; the store answers replay or
@@ -548,11 +556,6 @@ async function installTimer(
   });
 }
 
-/** The directory run-ended and asks-settled bindings are read from; `trigger check` lists the same files. */
-export function triggersDirectory(): string {
-  return join(getArchonHome(), 'triggers');
-}
-
 /**
  * List every binding with `on` that is active (each `on.runEnded` and `on.asksSettled`
  * file in the triggers directory) and check it against the workflows of the project it
@@ -565,7 +568,7 @@ export function triggersDirectory(): string {
  * starts the workflow that ended, and two files that start the same stage.
  */
 async function checkTriggers(host: WorkflowHost): Promise<void> {
-  const bindings = await readOnBindings(triggersDirectory());
+  const bindings = await readOnBindings(getTriggersPath());
   // The file store has no items, so a binding with `on` can never start anything there.
   if (host.deps.credentialStore === 'files' && bindings.length > 0)
     throw new FileStoreUnsupportedError(
@@ -593,12 +596,18 @@ async function checkTriggers(host: WorkflowHost): Promise<void> {
     runEnded: runEnded.map((entry, index) => listed(entry, runEndedProblems[index])),
     asksSettled: asksSettled.map((entry, index) => listed(entry, asksSettledProblems[index])),
   };
-  await writeJsonLine({ directory: triggersDirectory(), ...checked });
+  await writeJsonLine({ directory: getTriggersPath(), ...checked });
   const broken = [...checked.runEnded, ...checked.asksSettled].filter(
     entry => entry.problems.length > 0
   ).length;
   if (broken > 0)
     throw new Error(`${String(broken)} trigger binding(s) have problems; see "problems" above.`);
+}
+
+async function addTrigger(args: string[]): Promise<void> {
+  const [file, ...rest] = args;
+  if (file === undefined || rest.length > 0) throw new Error('Usage: archon trigger add <file>');
+  await writeJsonLine({ added: await addTriggerFile(resolve(file), getTriggersPath()) });
 }
 
 export interface TriggerDependencies {
@@ -623,6 +632,8 @@ export async function triggerCommand(
       return triggerWhoami(host);
     case 'list':
       return triggerList(host, options);
+    case 'add':
+      return addTrigger(args);
     case 'check':
       return checkTriggers(host);
     case 'fire':
@@ -641,7 +652,7 @@ export async function triggerCommand(
       return scheduleTrigger(host, args, options);
     default:
       throw new Error(
-        'Usage: archon trigger <fire|drain|execute|list|check|inspect|withdraw|recover-preparation|schedule|whoami>'
+        'Usage: archon trigger <fire|drain|execute|list|add|check|inspect|withdraw|recover-preparation|schedule|whoami>'
       );
   }
 }

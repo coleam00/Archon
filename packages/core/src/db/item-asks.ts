@@ -136,7 +136,9 @@ function readAskOrThrow(row: AskRow): StoredItemAsk {
 /**
  * Open the asks a completed run left, inside the transaction that completes it, after
  * closing as `replaced` the asks still open from the same workflow on the same item.
- * Called only when that transaction won the run's change to `completed`.
+ * Called only when that transaction won the run's change to `completed`. Completions of
+ * one workflow on one item serialize, so an item has at most one open set per workflow:
+ * the last committed.
  */
 export async function openItemAsksForCompletedRun(
   query: TransactionQuery,
@@ -154,6 +156,14 @@ export async function openItemAsksForCompletedRun(
       throw new Error(`Run '${runId}' left asks but has no item; an ask belongs to an item`);
     return;
   }
+  // Completions of one workflow on one item serialize here, so the later one's replace
+  // sees the earlier set committed and closes it. Under PostgreSQL READ COMMITTED, two
+  // overlapping completions would each miss the other's uncommitted insert and both sets
+  // would stay open. SQLite has one writer, taken by the run's status update.
+  if (getDatabaseType() === 'postgresql')
+    await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      JSON.stringify(['item-asks', run.item_id, run.workflow_name]),
+    ]);
   const now = new Date().toISOString();
   await query(
     `UPDATE remote_agent_item_asks

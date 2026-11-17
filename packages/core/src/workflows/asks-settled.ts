@@ -36,7 +36,8 @@ import {
   type RunEndedStartsDependencies,
 } from './run-ended';
 
-export interface AsksSettledStartsDependencies extends RunEndedStartsDependencies {
+export interface AsksSettledStartsDependencies
+  extends Omit<RunEndedStartsDependencies, 'endedCheckout'> {
   getItemAsk: (id: string) => Promise<StoredItemAsk | null>;
 }
 
@@ -119,6 +120,7 @@ export function createAsksSettledStarts(
               itemKey,
             },
             mappedInputs(candidate.asksSettled.inputs, from),
+            undefined,
             now
           )
         );
@@ -249,7 +251,7 @@ function sharingFiles(
  * are answered.
  */
 export function createAsksSettledPreflight(
-  dependencies: Omit<RunEndedStartsDependencies, 'now'> &
+  dependencies: Omit<RunEndedStartsDependencies, 'now' | 'endedCheckout'> &
     Pick<WorkflowDeps, 'loadConfig' | 'providers'>
 ): (run: WorkflowRun) => Promise<void> {
   return async run => {

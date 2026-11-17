@@ -29,7 +29,7 @@ import {
 import type { CheckoutSharedEventData } from './schemas/workflow-event';
 import { ContinuedItemProjectError, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
-import { refuseBrokenRunEndedBindings } from './run-ended-refusal';
+import { refusePendingStart } from './start-refusal';
 import { holdWorkflowResource } from './resource-hold';
 import { workflowPathPriorityTime } from './workflow-path-lock';
 
@@ -220,48 +220,19 @@ async function createWorkflowRunRow(
 }
 
 /**
- * A run whose end would fire a broken run-ended binding is refused before it does any
- * work, so a binding that names a missing stage is found before the stage feeding it runs.
+ * Refuse a pending row before the claim, for every reason `refusePendingStart` decides,
+ * and tell the conversation why.
  */
-async function refuseRunOnBrokenBindings(
-  deps: WorkflowDeps,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  workflowRun: WorkflowRun
-): Promise<WorkflowExecutionResult | undefined> {
-  const reason = await refuseBrokenRunEndedBindings(deps, workflowRun);
-  if (reason === undefined) return undefined;
-  await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${reason}`);
-  return { success: false, workflowRunId: workflowRun.id, error: reason };
-}
-
-/**
- * A workflow that declares `returns.asks` leaves its asks on the run's item, so a top-level
- * run of it with no item is refused before it does any work, naming why. A `workflow:`
- * child carries no item and opens no asks, so it is not refused. A store without items
- * refuses the item at creation, so asks are refused there before a run starts.
- */
-async function refuseAsksWithoutItem(
+async function refuseRunBeforeClaim(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
   workflow: ResolvedWorkflow,
   workflowRun: WorkflowRun
 ): Promise<WorkflowExecutionResult | undefined> {
-  const field = workflow.result?.asks;
-  if (field === undefined || workflowRun.parent_run_id !== null || workflowRun.item_id !== null)
-    return undefined;
-  const reason = `Workflow '${workflow.name}' declares returns.asks '${field}', so it runs on an item: start it with --item <key>`;
+  const reason = await refusePendingStart(deps, workflow, workflowRun);
+  if (reason === undefined) return undefined;
   await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${reason}`);
-  await requireTerminalStatusWrite(
-    // Before the claim another dispatcher may own this row: cancel it only while pending.
-    deps.store.cancelWorkflowRun(
-      workflowRun.id,
-      { cancel_reason: 'precondition_failed' },
-      { pendingOnly: true }
-    ),
-    { workflowRunId: workflowRun.id, site: 'workflow.asks_without_item_refused' }
-  );
   return { success: false, workflowRunId: workflowRun.id, error: reason };
 }
 
@@ -279,16 +250,14 @@ async function claimPendingRun(
   execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
   { onExecutionClaimed, noWait }: ExecuteWorkflowOptions
 ): Promise<RunPhase<CheckoutSample>> {
-  const broken = await refuseRunOnBrokenBindings(deps, platform, conversationId, workflowRun);
-  if (broken) return { stopped: true, result: broken };
-  const askless = await refuseAsksWithoutItem(
+  const notStarted = await refuseRunBeforeClaim(
     deps,
     platform,
     conversationId,
     workflow,
     workflowRun
   );
-  if (askless) return { stopped: true, result: askless };
+  if (notStarted) return { stopped: true, result: notStarted };
   const refused = await holdWorkflowResource(
     deps,
     platform,
