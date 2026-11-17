@@ -565,6 +565,7 @@ describe('typed provider failures decide retry — #3520', () => {
       'rate_limited',
       'overloaded',
       'transient',
+      'schema_unmet',
       'unknown',
     ]);
   });
@@ -586,6 +587,7 @@ describe('typed provider failures decide retry — #3520', () => {
       timeout: 'transient',
       exec_failed: 'unknown',
       output_contract: 'unknown',
+      schema_unmet: 'schema_unmet',
       max_iterations: 'unknown',
       child_failed: 'unknown',
       cancelled: 'fatal',

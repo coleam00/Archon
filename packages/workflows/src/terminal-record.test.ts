@@ -832,6 +832,12 @@ describe('why a run that ended needs a look', () => {
     });
     expect(terminalReason(failed)).toEqual(['exit 2: tsc failed']);
     expect(terminalReason({ ...failed!, nodes: [] })).toEqual(['run stopped']);
+    // The node's recorded kind leads its reason: the name a retry policy targets.
+    const kinded = {
+      ...failed!,
+      nodes: [{ ...failed!.nodes[0]!, failure_kind: 'schema_unmet' as const }],
+    };
+    expect(terminalReason(kinded)).toEqual(['(schema_unmet) exit 2: tsc failed']);
   });
 
   it('a run that needs no look, and a run with no record, give none', () => {

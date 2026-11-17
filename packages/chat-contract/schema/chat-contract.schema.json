@@ -587,6 +587,10 @@
             },
             "error": {
               "type": "string"
+            },
+            "failureKind": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "required": [
@@ -663,6 +667,10 @@
             },
             "error": {
               "type": "string"
+            },
+            "failureKind": {
+              "type": "string",
+              "minLength": 1
             },
             "completedOutcome": {
               "type": "string",

@@ -374,7 +374,7 @@ function noSuccessfulNodesMessage(
 ): string {
   const failedNodes: string[] = [];
   for (const [nodeId, output] of nodeOutputs) {
-    if (output.state === 'failed') failedNodes.push(nodeId);
+    if (output.state === 'failed') failedNodes.push(`${nodeId}${kindSuffix(output)}`);
   }
   return failedNodes.length > 0
     ? `DAG workflow '${workflowName}' failed: node${failedNodes.length > 1 ? 's' : ''} ${failedNodes.join(', ')} failed. ` +
@@ -383,13 +383,20 @@ function noSuccessfulNodesMessage(
         'Check node conditions, trigger rules, and upstream failures.';
 }
 
+/** A failed node's recorded kind, the name a `retry.on_error` policy targets, as ` (kind)`. */
+function kindSuffix(output: NodeOutput): string {
+  return output.state === 'failed' && output.failureKind !== undefined
+    ? ` (${output.failureKind})`
+    : '';
+}
+
 function partialFailureMessage(
   workflowName: string,
   nodeOutputs: ReadonlyMap<string, NodeOutput>
 ): string {
   const failedNodes = [...nodeOutputs.entries()]
     .filter(([, o]) => o.state === 'failed')
-    .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
+    .map(([id, o]) => `'${id}'${kindSuffix(o)}: ${o.state === 'failed' ? o.error : 'unknown'}`)
     .join('; ');
   return `DAG workflow '${workflowName}' completed with failures: ${failedNodes}`;
 }
@@ -714,7 +721,7 @@ export async function failRun(
 ): Promise<void> {
   const emitter = getWorkflowEventEmitter();
   try {
-    const { failed } = await requireTerminalStatusWrite(
+    const { failed, failureKind } = await requireTerminalStatusWrite(
       deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason }),
       { workflowRunId: workflowRun.id, site }
     );
@@ -724,6 +731,7 @@ export async function failRun(
         runId: workflowRun.id,
         workflowName,
         error: failMsg,
+        ...(failureKind !== undefined ? { failureKind } : {}),
       });
     }
   } finally {

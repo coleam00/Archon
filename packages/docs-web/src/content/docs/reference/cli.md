@@ -775,7 +775,8 @@ These are audit facts. They never name who answered, and nothing routes on them.
 - **Reason** is why a run that ended needs a look, in up to two short lines: for a failed
   outcome, what the `returns:` node said (its first lines, or its text fields as `key: text`);
   for a failed run, the first line of its first failed node's error, falling back to the
-  run's own error when no failed-node error is available, including launch failures. `workflow get` prints
+  run's own error when no failed-node error is available, including launch failures. A failed
+  node's recorded kind leads its line, as in `(schema_unmet) the answer was rejected`. `workflow get` prints
   it as `Reason:` under the status and carries it as `reason` in `--json`; both are omitted
   when the record holds no reason text. The full value stays in `terminal_record`.
 
@@ -795,7 +796,7 @@ invocations. Resuming unfinished work keeps its invocation identity.
 `nodes` holds each loop body node once, with its latest round. For a run that entered a
 `loop_group`, `--verbose` also prints a `Rounds:` block, and `--json --verbose` adds
 `loop_rounds`: one entry per round, in order, each with its `loop_group_path` (frames
-outermost first, iterations from 1) and the body nodes it reached, with `state`, `error`,
+outermost first, iterations from 1) and the body nodes it reached, with `state`, `error`, `failure_kind` (a failed node's recorded kind),
 `started_at` (the invocation's first attempt), `duration_ms` (every attempt's recorded duration summed,
 so a retry counts, the wait between attempts does not; absent until the last attempt ends),
 `output` (bounded as stored, with `output_truncated`): a completed node's output, or the
@@ -932,6 +933,9 @@ For both commands, `--json --verbose` adds a `nodes` array. Nodes are ordered by
 first appearance of each node in the deterministically ordered event stream. Every
 entry includes `nodeId` and `state`; nodes with a start event include the original ISO
 `startedAt`, and terminal nodes with both start and end events include `durationMs`.
+A failed node includes `failureKind`, the recorded kind a `retry.on_error` policy targets
+(such as `schema_unmet`), and the text views print it before the error as
+`Error:  (schema_unmet) ...`.
 Completed nodes with recorded output include `output` (the full persisted text),
 `outputTruncated` (whether persistence truncated it), and `outputPreview` (the first
 200 characters followed by ASCII `...` when longer). These fields also apply to
