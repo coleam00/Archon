@@ -115,7 +115,9 @@ export function evaluateItemMetrics(
     const groups = new Map<string | null, ItemRead[]>();
     for (const read of population) {
       const key = groupOf(read, groupBy);
-      groups.set(key, [...(groups.get(key) ?? []), read]);
+      const group = groups.get(key);
+      if (group === undefined) groups.set(key, [read]);
+      else group.push(read);
     }
     const keys = [...groups.keys()].sort((a, b) =>
       a === null ? 1 : b === null ? -1 : a.localeCompare(b)
