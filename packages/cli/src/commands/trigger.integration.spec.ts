@@ -707,7 +707,7 @@ nodes:
     );
     const database = join(fixture.archonHome, 'archon.db');
     const runs = () =>
-      readRows<{ workflow_name: string; status: string; item: string | null }>(
+      readRows<{ workflow_name: string; status: WorkflowRunStatus; item: string | null }>(
         database,
         `SELECT r.workflow_name, r.status, i.key || ' in ' || i.project_key AS item
            FROM remote_agent_workflow_runs r LEFT JOIN remote_agent_items i ON i.id = r.item_id
@@ -722,13 +722,55 @@ nodes:
       '--item',
       'item-1',
     ]);
-    const settled = await waitFor(
-      () =>
-        runs().length === 3 && runs().every(run => run.status === 'completed') ? runs() : undefined,
-      'all three runs to complete',
-      // Three detached runs take 12 to 19 s on Windows CI; the test's own limit is 60 s.
-      45_000
-    );
+    // Each of the script's fires is its own CLI process, so each start gets its own deadline.
+    // A script that throws fails the first run; that ends the wait at once instead of at the
+    // deadline. A completed first run does not: its last start may still be queued behind the
+    // other project's resource, with no run row yet.
+    const step = async (reached: () => boolean, label: string): Promise<void> => {
+      await waitFor(() => {
+        if (reached()) return true;
+        const first = runs()[0];
+        return first && isTerminalRunStatus(first.status) && first.status !== 'completed'
+          ? true
+          : undefined;
+      }, label);
+      if (!reached())
+        throw new Error(`The first run failed before ${label}: ${JSON.stringify(runs())}`);
+    };
+    // Nothing may still execute when afterEach removes the temp tree, on success or failure.
+    // A queued start has no run row yet but will run, so it counts as not ended.
+    // A run that does not end in time is left for afterEach to stop.
+    const queued = () =>
+      readRows(
+        database,
+        "SELECT id FROM remote_agent_resource_start_requests WHERE status = 'queued'"
+      ).length;
+    const allEnded = () =>
+      waitFor(
+        () =>
+          queued() === 0 && runs().every(run => isTerminalRunStatus(run.status))
+            ? runs()
+            : undefined,
+        'all runs to end'
+      ).catch((error: unknown) => {
+        for (const run of readRows<RunRow>(
+          database,
+          'SELECT id,status FROM remote_agent_workflow_runs'
+        ))
+          if (!isTerminalRunStatus(run.status)) activeRuns.add(run.id);
+        throw error;
+      });
+    try {
+      await step(() => runs().length >= 2, "the script's fire naming item-2 to record its run");
+      await step(() => existsSync(refusal), "the script's inherited fire to be refused");
+      await step(() => runs().length === 3, "the script's fire with no item to record its run");
+    } catch (failure) {
+      // Let every admitted run end before reporting the step that failed, and report that step.
+      await allEnded().catch(() => undefined);
+      throw failure;
+    }
+    const settled = await allEnded();
+    expect(settled.map(run => run.status)).toEqual(['completed', 'completed', 'completed']);
     const projects = readRows<{ project_key: string; key: string }>(
       database,
       'SELECT project_key, key FROM remote_agent_items ORDER BY key'
