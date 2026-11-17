@@ -213,9 +213,6 @@
       "src/services/attention-router.integration.test.ts"
     ],
     [
-      "src/services/item-tracker.integration.test.ts"
-    ],
-    [
       "src/chat-host/attention-destination.test.ts"
     ],
     [

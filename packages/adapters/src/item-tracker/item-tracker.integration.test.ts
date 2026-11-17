@@ -1,4 +1,4 @@
-import { Pool } from 'pg';
+import { SQL } from 'bun';
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,7 +20,9 @@ import {
 import { recordItemRuling, withdrawItemRuling } from '@archon/core/db/item-rulings';
 import { ensureItemInProject } from '@archon/core/db/items';
 import { createWorkflowRun } from '@archon/core/db/workflows';
+import { claimTrackerPass, releaseTrackerPass } from '@archon/core/db/item-tracker';
 import { insertWorkflowEvent, listAttentionNotices } from '@archon/core/db/workflow-events';
+import { currentProcessOwner } from '@archon/paths/process-owner';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { ItemTracker, type ItemTrackerForge } from './item-tracker';
 import { ITEM_STATUS_MARKER } from './item-tracker-render';
@@ -29,7 +31,7 @@ let root: string;
 let savedHome: string | undefined;
 let savedDatabase: string | undefined;
 const postgresUrl = process.env.ARCHON_TEST_PG_URL;
-let postgresAdmin: Pool | undefined;
+let postgresAdmin: SQL | undefined;
 let scratchDatabase: string | undefined;
 
 beforeEach(async () => {
@@ -39,9 +41,9 @@ beforeEach(async () => {
   process.env.ARCHON_HOME = root;
   process.env.DATABASE_URL = '';
   if (postgresUrl) {
-    postgresAdmin = new Pool({ connectionString: postgresUrl });
+    postgresAdmin = new SQL(postgresUrl);
     scratchDatabase = `archon_tracker_${crypto.randomUUID().replaceAll('-', '')}`;
-    await postgresAdmin.query(`CREATE DATABASE "${scratchDatabase}"`);
+    await postgresAdmin.unsafe(`CREATE DATABASE "${scratchDatabase}"`);
     const url = new URL(postgresUrl);
     url.pathname = `/${scratchDatabase}`;
     process.env.DATABASE_URL = url.toString();
@@ -52,9 +54,9 @@ afterEach(async () => {
   await closeDatabase();
   if (postgresAdmin && scratchDatabase) {
     try {
-      await postgresAdmin.query(`DROP DATABASE "${scratchDatabase}" WITH (FORCE)`);
+      await postgresAdmin.unsafe(`DROP DATABASE "${scratchDatabase}" WITH (FORCE)`);
     } finally {
-      await postgresAdmin.end();
+      await postgresAdmin.close();
       postgresAdmin = undefined;
       scratchDatabase = undefined;
     }
@@ -320,8 +322,8 @@ test('an item with no tracker reference gets nothing, and its ended runs are not
       )
     ).rows.length;
   const settled = await terminalRows();
-  // A terminal and a result row per run, and the anchor that records the tracker as on.
-  expect(settled).toBe(9);
+  // A terminal and a result row per run.
+  expect(settled).toBe(8);
   await tracker.scan();
   expect(await terminalRows()).toBe(settled);
 });
@@ -337,7 +339,14 @@ test('a plugin without the comment operation is reported once and nothing is wri
   });
   const tracker = await activeTracker(fake.forge);
   await startRun('issue-7', 'plan');
-  await tracker.scan();
+  expect(await tracker.scan()).toEqual([
+    {
+      project: PROJECT,
+      outcome: 'misconfigured',
+      errorKind: 'unsupported_op',
+      unsupported: ['workitem.comment.upsert'],
+    },
+  ]);
   await tracker.scan();
   await tracker.scan();
   expect(fake.checks).toEqual(['github.com']);
@@ -380,9 +389,25 @@ test('an unknown write outcome is retried; a refused write is not retried before
       outcome: 'outcome_unknown',
     },
   });
-  await tracker.scan();
+  expect(await tracker.scan()).toEqual([
+    {
+      project: PROJECT,
+      outcome: 'scanned',
+      posted: [],
+      notPosted: [
+        { item: 'issue-7', marker: ITEM_STATUS_MARKER, errorKind: 'timeout', retried: true },
+      ],
+    },
+  ]);
   expect(await shownRows(run)).toEqual([]);
-  await tracker.scan();
+  expect(await tracker.scan()).toEqual([
+    {
+      project: PROJECT,
+      outcome: 'scanned',
+      posted: [{ item: 'issue-7', marker: ITEM_STATUS_MARKER }],
+      notPosted: [],
+    },
+  ]);
   expect(fake.calls.length).toBe(2);
   expect(fake.status()?.posts).toBe(1);
 
@@ -398,9 +423,41 @@ test('an unknown write outcome is retried; a refused write is not retried before
     },
   });
   await tracker.scan();
-  await tracker.scan();
+  const missed = { item: 'issue-404', marker: ITEM_STATUS_MARKER, errorKind: 'not_found' };
+  expect(await tracker.scan()).toEqual([
+    {
+      project: PROJECT,
+      outcome: 'scanned',
+      posted: [],
+      notPosted: [{ ...missed, retried: false }],
+    },
+  ]);
   expect(fake.calls.filter(call => call.subject.ref.number === 404).length).toBe(1);
   expect(await shownRows(missing)).toEqual([]);
+});
+
+test('a pass that fails after posting reports what it posted', async () => {
+  const fake = fakeForge();
+  // The run is deleted once its status is posted, so recording the write fails the pass.
+  const forge: ItemTrackerForge = {
+    ...fake.forge,
+    upsertComment: async request => {
+      const response = await fake.forge.upsertComment(request);
+      await getDatabase().query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [run]);
+      return response;
+    },
+  };
+  const tracker = await activeTracker(forge);
+  const run = await startRun('issue-7', 'plan');
+  expect(await tracker.scan()).toEqual([
+    {
+      project: PROJECT,
+      outcome: 'failed',
+      error: expect.any(String),
+      posted: [{ item: 'issue-7', marker: ITEM_STATUS_MARKER }],
+      notPosted: [],
+    },
+  ]);
 });
 
 test('cost and token counts are written only when usage is turned on', async () => {
@@ -853,4 +910,118 @@ test('after a refused write and a restart, a run that ended meanwhile is shown',
   await tracker.scan();
   await (await activeTracker(fake.forge)).scan();
   expect(fake.status(9)?.body).toContain('| plan | completed | ready |');
+});
+
+const DESTINATION = `tracker:${PROJECT}`;
+/** Another process on this host; this one proves it gone, as it shares this pid. */
+const goneProcess = { ...currentProcessOwner, instance: 'an-earlier-process' };
+
+async function destinationRows(): Promise<number> {
+  return (await getDatabase().query('SELECT 1 FROM remote_agent_item_tracker_destinations')).rows
+    .length;
+}
+
+test('a pass that finds the project held asks the holder for one more, and nothing is posted twice', async () => {
+  const fake = fakeForge();
+  const parked = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+  let first = true;
+  const parking: ItemTrackerForge = {
+    ...fake.forge,
+    upsertComment: async request => {
+      if (first) {
+        first = false;
+        parked.resolve();
+        await gate.promise;
+      }
+      return fake.forge.upsertComment(request);
+    },
+  };
+  const holder = await activeTracker(parking);
+  const plan = await startRun('issue-7', 'plan');
+  await endRun(plan, 'completed', 'ready');
+  const holderPass = holder.scan();
+  await parked.promise;
+
+  // Another process ends a run on the item while the holder's write is in flight.
+  const review = await startRun('issue-7', 'review');
+  await endRun(review, 'failed');
+  const other = new ItemTracker(trackerConfig(), fake.forge, {
+    ...currentProcessOwner,
+    instance: 'cli-process',
+  });
+  await other.activate();
+  const [held] = await other.scan({ request: true });
+  expect(held?.outcome).toBe('held');
+  if (held?.outcome !== 'held') throw new Error('expected a held pass');
+  expect(held.heldBy).toEqual(currentProcessOwner);
+  const callsWhileHeld = fake.calls.length;
+  expect(callsWhileHeld).toBe(0);
+
+  gate.resolve();
+  const [report] = await holderPass;
+  expect(report?.outcome).toBe('scanned');
+  expect(fake.status()?.body).toContain('| plan | completed | ready |');
+  expect(fake.status()?.body).toContain('| review | failed |');
+  expect([...fake.comments.values()].map(comment => comment.posts)).toEqual([1, 1]);
+  expect(newComments(fake)).toEqual([expect.stringContaining('the `review` stage failed')]);
+  // The holder let go once it ran the pass it was asked for.
+  expect((await other.scan({ request: true }))[0]?.outcome).toBe('scanned');
+});
+
+test('a pass held by a process this host proves gone is taken over', async () => {
+  const fake = fakeForge();
+  const tracker = await activeTracker(fake.forge);
+  expect(await claimTrackerPass(DESTINATION, goneProcess, false)).toEqual({ claimed: true });
+  const run = await startRun('issue-7', 'plan');
+  await endRun(run, 'completed', 'ready');
+  expect((await tracker.scan({ request: true }))[0]?.outcome).toBe('scanned');
+  expect(fake.status()?.posts).toBe(1);
+  expect(newComments(fake)).toEqual([expect.stringContaining('the `plan` stage completed')]);
+});
+
+test('a run that starts and ends while no tracker runs after first activation is posted', async () => {
+  const fake = fakeForge();
+  await activeTracker(fake.forge);
+  expect(await destinationRows()).toBe(1);
+  expect(
+    (
+      await getDatabase().query(
+        "SELECT 1 FROM remote_agent_workflow_events WHERE event_type = 'attention_notice_sent'"
+      )
+    ).rows
+  ).toEqual([]);
+  const run = await startRun('issue-7', 'plan');
+  await endRun(run, 'completed', 'ready');
+  await (await activeTracker(fake.forge)).scan();
+  expect(fake.status()?.body).toContain('| plan | completed | ready |');
+  expect(newComments(fake)).toEqual([expect.stringContaining('the `plan` stage completed')]);
+});
+
+test('a destination a binary from before the destination row turned on is not baselined again', async () => {
+  const fake = fakeForge();
+  const tracker = await activeTracker(fake.forge);
+  await startRun('issue-7', 'plan');
+  await tracker.scan();
+  await getDatabase().query('DELETE FROM remote_agent_item_tracker_destinations');
+  const later = await startRun('issue-8', 'implement');
+  await endRun(later, 'completed', 'delivered');
+  await (await activeTracker(fake.forge)).scan();
+  expect(await destinationRows()).toBe(1);
+  expect(fake.status(8)?.body).toContain('| implement | completed | delivered |');
+});
+
+test('an operator release refuses a pass held by a live process here and frees a gone one', async () => {
+  await activeTracker(fakeForge().forge);
+  expect(await releaseTrackerPass(DESTINATION)).toBe('not_held');
+  await claimTrackerPass(DESTINATION, currentProcessOwner, false);
+  expect(await releaseTrackerPass(DESTINATION)).toBe('owner_running');
+  await getDatabase().query(
+    'UPDATE remote_agent_item_tracker_destinations SET pass_owner_instance = $1',
+    [goneProcess.instance]
+  );
+  expect(await releaseTrackerPass(DESTINATION)).toBe('released');
+  expect(await claimTrackerPass(DESTINATION, currentProcessOwner, false)).toEqual({
+    claimed: true,
+  });
 });

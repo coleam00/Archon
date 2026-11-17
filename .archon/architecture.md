@@ -19,9 +19,9 @@ A map of the code as it is, where it is going, and the boundaries that hold whil
 | `workflows` | The engine: loading, validation, DAG execution, durable pauses, attention queue, store contract, file store | `forge`, `git`, `paths`, `plugin-manifest`, `provider-contract`, `script-api` | `providers` |
 | `isolation` | Worktree provider, in-place and container backends, isolation resolver | `git`, `paths`, `provider-contract`, `workflows` | |
 | `core` | Database, conversations, chat orchestrator, workflow operations and hosts, credentials | `chat-contract`, `git`, `isolation`, `paths`, `plugin-manifest`, `provider-contract`, `providers`, `workflows` | |
-| `adapters` | Bundled chat adapters (Telegram; Discord under `community/`), the GitHub forge adapter (Gitea and GitLab under `community/`), platform policies, the Standard Webhooks source | `core`, `forge`, `git`, `isolation`, `paths`, `providers`, `workflows` | |
+| `adapters` | Bundled chat adapters (Telegram; Discord under `community/`), the GitHub forge adapter (Gitea and GitLab under `community/`), platform policies, the Standard Webhooks source, the item tracker | `core`, `forge`, `git`, `isolation`, `paths`, `providers`, `workflows` | |
 | `chat-slack` | The maintained Slack chat plugin | `chat-contract` | |
-| `server` | HTTP API, the Web adapter, webhooks, SSE, the chat plugin host, the item tracker, serving the console | `adapters`, `chat-contract`, `core`, `forge`, `git`, `paths`, `provider-contract`, `providers`, `workflows` | |
+| `server` | HTTP API, the Web adapter, webhooks, SSE, the chat plugin host, serving the console | `adapters`, `chat-contract`, `core`, `forge`, `git`, `paths`, `provider-contract`, `providers`, `workflows` | |
 | `cli` | The `archon` command and the CLI adapter | `adapters`, `chat-contract`, `core`, `forge`, `git`, `isolation`, `paths`, `plugin-manifest`, `provider-contract`, `providers`, `workflows` | |
 | `web` | The console; reads the API through generated types | none | |
 | `docs-web` | The docs site | `plugin-manifest` | |

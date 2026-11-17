@@ -2706,6 +2706,26 @@ reported on stderr. `item_metrics` is null without `--project`, with one of thos
 flags, and on the file store, which says so on stderr. A bad declaration does not change the
 exit code.
 
+### `tracker`
+
+Bring the [item tracker](/guides/workflow-triggers/#show-progress-on-the-items-tracker) up to date without a running server. Needs the SQL store.
+
+```bash
+archon tracker sync [--json]
+archon tracker release <project> [--json]
+```
+
+`tracker sync` runs one pass over every project in the `itemTracker` config: it posts the status, question, ask, ruling and result comments each item is owed. It is the same pass the server runs every 5 seconds and a CLI process that changed a run runs before it exits. With no `itemTracker` block it says nothing is tracked and exits 0. Text output prints one line per project. `--json` prints `{ ok, projects }`, one entry per project with its `project` and `outcome`:
+
+- `scanned`: `posted` lists each comment written as `{ item, marker }`, and `notPosted` each one the forge did not take as `{ item, marker, errorKind, retried }`. `retried` is true when the next pass tries the write again. What was not posted stays owed.
+- `held`: another process is running the project's pass. `heldBy` (`host`, `pid`, `instance`) and `since` name it. It was asked to run one more pass, which shows what this one would have.
+- `misconfigured`: the project's forge plugin check failed. `errorKind` names why, and `unsupported` the operations the plugin lacks.
+- `failed`: the pass threw; `error` carries the message, and `posted` and `notPosted` what it wrote before it threw. What it did not write stays owed.
+
+It exits 1 only when a project could not be scanned at all (`misconfigured` or `failed`), and then `ok` is false. A `held` project is not a failure.
+
+`tracker release <project>` lets go of a project's pass when its holder is a process this host cannot prove gone, such as one on another host or in a container recreated under another hostname. It refuses, exiting 1, when the holder runs on this host and is still alive, and when the project is not in the `itemTracker` config. It cannot check a holder on another host: release only after confirming that process is gone, since a holder still running its pass overlaps the next one and can post a comment twice or edit the status comment out of order. A pass held by a gone process on the same host needs no release: the next pass takes it over.
+
 ### `chat <message>`
 
 Send one message to the orchestrator, print its response and exit. Each invocation creates a new conversation. Multi-turn conversations and project selection through `/setproject <name>` are available in the Web UI and chat adapters. Projectless chat can answer questions; use `archon workflow run <name> --project <owner/repo>` to launch work for a registered repository from the CLI.
