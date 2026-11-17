@@ -14,7 +14,10 @@ of records stores them with its completion, and `archon metrics` and `GET /api/m
 aggregate those records across runs by name, time window and subject. There is no
 metric node type and no metric config file: a script node counts, a prompt node judges.
 A pack can declare [overview cards](#overview-cards-a-pack-declares) for the console, but
-they only display records; they never define a metric.
+they only display records; they never define a metric. Figures about a project's items,
+such as a merge rate, are not records at all: a pack [declares them as
+data](#item-metrics-a-pack-declares) and the engine computes them from its own record of
+the items and their runs.
 
 ## A count metric from a script node
 
@@ -473,3 +476,61 @@ declaration at a higher scope replaces a lower one's (bundled < global < project
 that is not JSON or does not match the shapes, or a scope that cannot be read, is reported by
 [`GET /api/metric-views`](/reference/api/#metrics) and on the overview, and the other packs'
 cards still show.
+
+## Item metrics a pack declares
+
+A figure about a project's items, such as lead time, review rounds, answers per item or
+the share of items that merged, comes from the engine's own record: the [items with a run
+in the window](/reference/cli/#workflow-items), each with all its runs, its answers and its
+[recorded merge](/reference/cli/#workflow-merged). A pack declares what each figure means in
+`<pack>/.shared/item-metrics.json`, and `archon metrics --project <project>` evaluates it over
+the same window as the records. No script computes it and the pack keeps no second record.
+
+```json
+{
+  "metrics": [
+    { "name": "sdlc.merge_rate", "op": "share", "where": { "merged": true } },
+    {
+      "name": "sdlc.review_rounds_per_merged_item",
+      "op": "count",
+      "of": "runs",
+      "runs": { "workflow": ["archon-review"] },
+      "items": { "merged": true }
+    },
+    {
+      "name": "sdlc.lead_time",
+      "op": "duration",
+      "from": { "run": "first", "at": "started" },
+      "to": "merged",
+      "group_by": "first_run.workflow"
+    }
+  ]
+}
+```
+
+Each definition has a `name` (a metric name), an `op`, and optionally `items`, a condition
+that narrows the population, and `group_by`. The population is the items with one of their
+own runs started in the window that match `items`. The semantics are fixed:
+
+| `op` | Figure |
+|------|--------|
+| `share` | The population items that match `where`, as a share of the population: `value`, `numerator`, `denominator`. |
+| `count` with `of: "runs"` | Per item, its runs that match `runs`: `value` is the mean per item, with `total` and `n` items. |
+| `count` with `of: "answers"` | Per item, its answers of the listed `kinds` (`attention`, `gate`, `ruling`, `ask`, `asks_settled`; all when absent), as above. |
+| `duration` | Per item, the hours from `from` to `to`: `value` is the mean over the `n` items that have both times, and `missing` counts the rest. |
+
+`value` is null when the population gives none. A run filter (`runs`, `has_run`, `last_run`,
+`of`) lists the `workflow`, `status` and `outcome` values a run must have; every field given
+must contain the run's value, and a run with no outcome matches no `outcome` list. An item
+condition holds when each given field does: `merged` (whether a merge is recorded), `has_run`
+(one of its runs matches) and `last_run` (its latest started run matches). A time is
+`"merged"`, or `{ "run": "first" | "last", "at": "started" | "completed", "of": <run filter> }`.
+`group_by` is `first_run.workflow`, `last_run.workflow` or `last_run.outcome`, and adds the
+same figures per group, with items that have no such value in a `null` group listed last.
+
+What a figure means stays the pack's: which workflow is a review round, and whether merged
+is the recorded fact or a run outcome. The engine applies the definition and decides nothing
+about it. There is no expression language: a key the schema does not know refuses the whole
+file. Declarations are found as metric views are, and a file that does not read is reported
+under `item_metrics.errors` and on stderr while the other packs still report. Every page of
+the window is read, so the figures cover every item, not one page.

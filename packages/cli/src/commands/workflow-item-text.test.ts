@@ -14,6 +14,7 @@ const read: ItemRead = {
       completedAt: '2026-11-01T09:30:00.000Z',
       cause: null,
       awaitingExecution: null,
+      spend: { usd: 0.5, inputTokens: 100, outputTokens: 20 },
       heldBehind: null,
       hasResult: true,
     },
@@ -137,6 +138,14 @@ const read: ItemRead = {
     { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'ruling-lost' },
     { type: 'degraded', reason: 'link_unreadable', linkId: 'link-lost' },
   ],
+  merged: {
+    change: 'https://github.com/acme/web/pull/12',
+    commit: null,
+    at: '2026-11-01T11:00:00.000Z',
+    recordedAt: '2026-11-01T11:01:00.000Z',
+    via: 'cli',
+    fromRun: null,
+  },
 };
 
 test('an item read prints its runs, open questions and answers', () => {
@@ -148,6 +157,7 @@ test('an item read prints its runs, open questions and answers', () => {
   expect(runLine).toContain('2026-11-01T09:00Z');
   expect(runLine).toContain('2026-11-01T09:30Z');
   const text = lines.join('\n');
+  expect(text).toContain('Merged 2026-11-01T11:00Z: https://github.com/acme/web/pull/12');
   expect(text).toContain('result: archon workflow get run-done-1 --json');
   expect(text).toContain('Ship the fix?');
   expect(text).toContain('archon workflow approve run-ask-1 --occurrence gate-3');

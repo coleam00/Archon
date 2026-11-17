@@ -185,6 +185,11 @@ Commands:
   workflow link --item <key> --kind <kind> --to <key>
                              Record a link from one item of this project to another: depends_on, part_of or
                              duplicate_of, read from --item to --to. Recording it again leaves one link; prints the link's id
+  workflow items             This project's items with a run started in a window (default the last 30 days),
+                             each with all its runs, questions, answers and merge, ordered by item id
+  workflow merged --item <key> --change <ref> --at <ISO>
+                             Record that an item's change merged, as the forge reported it. Recorded once:
+                             a second report keeps the first
   workflow notice <text>     Inside a workflow node: say what the run did, for whoever watches attention
                              with --notices. Never pauses the run and cannot be answered
   workflow event emit        Emit a workflow event into a run
@@ -289,10 +294,10 @@ Options:
                              is not terminal (with or without a resource:)
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
-  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on
+  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow merged': the item whose change merged; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on
   --no-item                  For 'trigger fire': start the run on no item instead of inheriting the firing run's item
   --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded
-  --limit <n>                For 'workflow runs': max rows (default 20)
+  --limit <n>                For 'workflow runs': max rows (default 20); for 'workflow items': items a page (default 20, at most 100)
   --timeout <seconds>        For 'workflow wait': give up after N seconds (default: wait indefinitely)
   --follow                   For 'workflow logs': stream appended rows until the run ends
   --format <jsonl|text>      For 'workflow logs': jsonl (default) prints the exact transcript;
