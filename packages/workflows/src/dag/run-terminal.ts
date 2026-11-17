@@ -14,9 +14,11 @@ import { SUBRUN_METADATA_KEYS } from '../schemas';
 import { asksResultMetadata } from '../schemas/run-metadata';
 import type { RunExitReason } from '../schemas/run-terminal-reason';
 import {
+  RESULT_COMMIT_METADATA_KEY,
   WORKTREE_DISPOSITION_METADATA_KEY,
   type WorktreeDisposition,
 } from '../schemas/terminal-record';
+import { sampleResultCommit } from '../run-result';
 import { getWorkflowEventEmitter } from '../event-emitter';
 import { requireTerminalStatusWrite } from '../terminal-status-write';
 import { rootOutputFields, type DeclaredOutputPaths, type JsonValue } from '../output-ref';
@@ -47,6 +49,8 @@ export type RunTerminalContext = Pick<
   | 'deps'
   | 'platform'
   | 'conversationId'
+  | 'cwd'
+  | 'returnsCheckout'
   | 'config'
   | 'workflowRun'
   | 'artifactsDir'
@@ -487,6 +491,7 @@ async function completeRun(
     result,
     asksCheckout
   );
+  const resultCommit = await sampleResultCommit(ctx, workflowRun.id);
 
   try {
     await requireTerminalStatusWrite(
@@ -526,6 +531,7 @@ async function completeRun(
           ...(worktreeDisposition
             ? { [WORKTREE_DISPOSITION_METADATA_KEY]: worktreeDisposition }
             : {}),
+          [RESULT_COMMIT_METADATA_KEY]: resultCommit,
           // An asks-settled binding reads the result when the asks settle, by then from
           // the row alone. Gated on the asks a top-level run declares, like the asks.
           ...keptAsksResult(ctx, result),

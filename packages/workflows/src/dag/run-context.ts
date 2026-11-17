@@ -7,6 +7,7 @@ import { buildAiNodeEnvironment } from '../exec-environment';
 import type { NodeExecutionResult } from '../node-record-serialization';
 import type { NodeExecutionRecord, NodeInvocation } from '../schemas/node-execution';
 import type { CheckoutObservation } from '../schemas/checkout-observation';
+import type { ReturnsCheckout } from '../run-result';
 import type { createRunToolCallAttention } from '../tool-call-attention';
 import type { WorkflowSourceRoots } from '../workflow-source';
 import type { WorkflowPack } from '../schemas/pack-settings';
@@ -168,6 +169,13 @@ export interface RunDerived {
    * (which also run with `persistScope: undefined`).
    */
   scopeArtifactsDir: string | undefined;
+  /**
+   * The top-level `returns:` node, and the checkout sampled when it completed in this pass:
+   * what its result was given at (#5769). Undefined when the workflow declares no
+   * `returns:`. Shared by reference, so nested contexts inherit it; only the top-level
+   * DAG (empty `stepNamePrefix`) samples into it.
+   */
+  returnsCheckout?: ReturnsCheckout;
 }
 
 /**

@@ -2079,6 +2079,7 @@ declare module 'archon:script' {
         readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
       } | null;
       readonly hasResult: boolean;
+      readonly resultCommit: string | null;
     }>;
     readonly queued: ReadonlyArray<{
       readonly requestId: string;
@@ -2530,6 +2531,7 @@ declare module 'archon:script' {
           readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
         } | null;
         readonly hasResult: boolean;
+        readonly resultCommit: string | null;
       }>;
       readonly queued: ReadonlyArray<{
         readonly requestId: string;

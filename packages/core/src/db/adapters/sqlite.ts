@@ -596,6 +596,16 @@ export class SqliteAdapter implements IDatabase {
         from_node_path TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
+      -- An item tracker destination's activation and pass holder; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_tracker_destinations (
+        destination TEXT PRIMARY KEY,
+        activated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        pass_owner_host TEXT,
+        pass_owner_pid INTEGER,
+        pass_owner_instance TEXT,
+        pass_started_at TEXT,
+        pass_requested INTEGER NOT NULL DEFAULT 0
+      );
       -- Links between items, one row per link, ended not deleted; see migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_item_links (
         -- Recording order; timestamps tie and the id is random.

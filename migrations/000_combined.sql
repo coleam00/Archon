@@ -809,6 +809,22 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_merges (
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
+-- One row per item tracker destination ('tracker:<project>'). The row exists once the
+-- destination's activation baseline is committed, so a later activation does not baseline
+-- again. The pass_owner_* columns name the process running the destination's pass, NULL
+-- when none: one pass writes at a time across processes. pass_requested is 1 when a
+-- process found the pass held and asked the holder for one more. What the tracker showed
+-- stays in its attention_notice_sent ledger, not here.
+CREATE TABLE IF NOT EXISTS remote_agent_item_tracker_destinations (
+  destination TEXT PRIMARY KEY,
+  activated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  pass_owner_host TEXT,
+  pass_owner_pid INTEGER,
+  pass_owner_instance TEXT,
+  pass_started_at TIMESTAMP WITH TIME ZONE,
+  pass_requested INTEGER NOT NULL DEFAULT 0
+);
+
 -- Links between items: accepted, directed relations, read from from_item_id to to_item_id.
 -- One row per link. The link and who recorded it are written at insert and never change;
 -- ending a link writes the ended_* columns once, so the original fact and who ended it and

@@ -109,7 +109,7 @@ nodes:
     expect(workflow?.inputs).toBeUndefined();
   });
 
-  it('drops a result_of input that also declares required or default', () => {
+  it('drops a result_of input that also declares required or default, and at without result_of', () => {
     const { workflow, error } = parseWorkflow(
       `
 name: contradiction
@@ -118,6 +118,8 @@ inputs:
   needed: { result_of: build, required: true }
   fallback: { result_of: build, default: v }
   read: { result_of: build }
+  bare_at: { at: checkout }
+  approval: { result_of: review, at: checkout }
 nodes:
   - id: build
     prompt: "hi"
@@ -125,7 +127,10 @@ nodes:
       'result-of-contradiction.yaml'
     );
     expect(error).toBeNull();
-    expect(workflow?.inputs).toEqual({ read: { result_of: 'build' } });
+    expect(workflow?.inputs).toEqual({
+      read: { result_of: 'build' },
+      approval: { result_of: 'review', at: 'checkout' },
+    });
   });
 
   it('drops an invalid input name with a warning while preserving the workflow', () => {

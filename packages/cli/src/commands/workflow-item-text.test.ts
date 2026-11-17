@@ -17,6 +17,7 @@ const read: ItemRead = {
       spend: { usd: 0.5, inputTokens: 100, outputTokens: 20 },
       heldBehind: null,
       hasResult: true,
+      resultCommit: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
     },
   ],
   queued: [
@@ -160,7 +161,7 @@ test('an item read prints its runs, open questions and answers', () => {
   expect(runLine).toContain('2026-11-01T09:30Z');
   const text = lines.join('\n');
   expect(text).toContain('Merged 2026-11-01T11:00Z: https://github.com/acme/web/pull/12');
-  expect(text).toContain('result: archon workflow get run-done-1 --json');
+  expect(text).toContain('result: archon workflow get run-done-1 --json, holds at a1b2c3d4e5f6');
   expect(text).toContain('Ship the fix?');
   expect(text).toContain('archon workflow approve run-ask-1 --occurrence gate-3');
   const answerLine = lines.find(line => line.includes('needs tests'));
@@ -257,4 +258,13 @@ test('an item read prints each link with the other item, kind and direction', ()
   expect(line('link-ended')).toContain('2026-11-01T08:30Z');
   expect(line('link-out')).not.toContain('ended');
   expect(section.some(row => row.includes('link-lost'))).toBe(true);
+});
+
+test('a result that holds at a commit prints it even when the result is not readable', () => {
+  const text = itemReadLines({
+    ...read,
+    runs: read.runs.map(run => ({ ...run, id: 'run-truncated', hasResult: false })),
+  }).join('\n');
+  expect(text).toContain('result: holds at a1b2c3d4e5f6');
+  expect(text).not.toContain('archon workflow get run-truncated');
 });

@@ -16,6 +16,7 @@ function run(workflow: string, startedAt: string, outcome: string | null = null)
     spend: { usd: null, inputTokens: null, outputTokens: null },
     heldBehind: null,
     hasResult: false,
+    resultCommit: null,
   };
 }
 

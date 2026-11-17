@@ -5,13 +5,17 @@
  * once for each question, ask and ruling, and for the final result. It reads only engine
  * records and never reads a comment back.
  *
- * Like the attention router it polls durable facts instead of subscribing to the
- * in-process emitter: a run a CLI process ends never reaches this server's emitter, and a
- * poll with a durable ledger catches up after a restart.
+ * It polls durable facts with a ledger instead of subscribing to the in-process emitter,
+ * so a pass can run in any process: the server runs one on its timer, a CLI process that
+ * started, paused or ended a run runs one before it exits, and `archon tracker sync` runs
+ * one on demand. One pass per destination runs at a time across processes
+ * (`claimTrackerPass`); a pass that finds the destination held can ask the holder for one
+ * more instead.
  */
 import { randomUUID } from 'node:crypto';
 import { createLogger, getPluginsPath } from '@archon/paths';
 import { getArchonConfigPath, getArchonHome } from '@archon/paths/archon-paths';
+import { currentProcessOwner, type ProcessOwner } from '@archon/paths/process-owner';
 import {
   forgeOperationAuditSchema,
   repoRefSchema,
@@ -24,16 +28,18 @@ import { checkForgeAccess, dispatchForge, type ForgeAccessCheck } from '@archon/
 import { readForgeConfig, sourceForgePlugins } from '@archon/forge/host-plugins';
 import { forgePluginConfigSchema } from '@archon/forge/plugin-config';
 import type { ItemTrackerConfig, TrackedProject } from '@archon/core/config/config-types';
-import { getDatabase } from '@archon/core/db/connection';
 import { listItemAsks } from '@archon/core/db/item-asks';
 import { listItemRulings } from '@archon/core/db/item-rulings';
 import { getItemRuns } from '@archon/core/db/items';
 import {
+  abandonTrackerPass,
+  activateTrackerDestination,
+  claimTrackerPass,
+  finishTrackerPass,
   listTrackerCandidateRuns,
   listTrackerItemsOwingComments,
   listTrackerLedger,
   listTrackerResultsOwed,
-  recordTrackerBaseline,
   runEndStageOwed,
   TRACKER_RESULT_KEY,
   trackerAskKey,
@@ -42,16 +48,11 @@ import {
   type TrackerCandidateRun,
   type TrackerRow,
 } from '@archon/core/db/item-tracker';
-import {
-  hasAnyAttentionNotice,
-  listEventsForRuns,
-  persistWorkflowEvent,
-} from '@archon/core/db/workflow-events';
+import { listEventsForRuns, persistWorkflowEvent } from '@archon/core/db/workflow-events';
 import { splitAttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import { isTerminalRunStatus } from '@archon/workflows/schemas/run-status';
 import { runAttention, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import type { PushDestinationState } from './attention-router';
 import {
   ITEM_STATUS_MARKER,
   questionKey,
@@ -106,83 +107,122 @@ export function hostItemTrackerForge(env: NodeJS.ProcessEnv = process.env): Item
   };
 }
 
-type TrackerState = Extract<PushDestinationState, 'active' | 'misconfigured'>;
+/** The states a tracker destination reports in `/api/health`. */
+export type TrackerState = 'active' | 'misconfigured';
 
-interface Tracked {
-  project: TrackedProject;
-  destination: string;
-  repo?: RepoRef;
-  state: TrackerState;
-  /** The destination has a ledger row, so a restart does not baseline it again. */
-  anchored: boolean;
+/** Why a project's tracker writes nothing: its repo or its forge plugin. */
+export interface TrackerProblem {
+  errorKind: string;
+  unsupported?: string[];
 }
 
-function itemTrackerDestinationId(projectKey: string): string {
+/** One comment a pass wrote, by the item's key and the comment's marker. */
+export interface TrackerWrite {
+  item: string;
+  marker: string;
+}
+
+/** A comment a pass owed and did not write; `retried` when a later pass tries it again. */
+export interface TrackerMissedWrite extends TrackerWrite {
+  errorKind: string;
+  retried: boolean;
+}
+
+/** What one pass did for one tracked project. */
+export type TrackerPassReport = { project: string } & (
+  | { outcome: 'scanned'; posted: TrackerWrite[]; notPosted: TrackerMissedWrite[] }
+  /** Another process runs the project's pass; it was asked for one more when requested. */
+  | { outcome: 'held'; heldBy: ProcessOwner; since: string }
+  | ({ outcome: 'misconfigured' } & TrackerProblem)
+  /** The pass threw after writing what it lists; what it did not write stays owed. */
+  | ({ outcome: 'failed'; error: string } & PassWrites)
+);
+
+type Tracked = {
+  project: TrackedProject;
+  destination: string;
+} & ({ state: 'active'; repo: RepoRef } | { state: 'misconfigured'; problem: TrackerProblem });
+
+/** The writes of one pass over one project. */
+export interface PassWrites {
+  posted: TrackerWrite[];
+  notPosted: TrackerMissedWrite[];
+}
+
+/** The ledger's destination id for a tracked project. */
+export function itemTrackerDestinationId(projectKey: string): string {
   return `tracker:${projectKey}`;
 }
 
 export class ItemTracker {
   private timer: ReturnType<typeof setTimeout> | undefined;
-  private scanning: Promise<void> | undefined;
+  private scanning: Promise<TrackerPassReport[]> | undefined;
   private stopped = true;
-  private readonly log = createLogger('server.item-tracker');
-  private readonly tracked: Tracked[];
-  /** Writes the forge refused for good; not retried before a restart, so a bad key costs one call. */
-  private readonly refused = new Set<string>();
+  private readonly log = createLogger('item-tracker');
+  private tracked: Tracked[];
+  /**
+   * Writes the forge refused for good, with the error kind it gave; not retried by this
+   * instance, so a bad key costs one call per process.
+   */
+  private readonly refused = new Map<string, string>();
 
   constructor(
     private readonly config: ItemTrackerConfig,
-    private readonly forge: ItemTrackerForge
+    private readonly forge: ItemTrackerForge,
+    /** The process this tracker's passes run as; a test simulates a second process. */
+    private readonly owner: ProcessOwner = currentProcessOwner
   ) {
-    // A project starts misconfigured and becomes active only once `activate` has checked
-    // its plugin and committed its baseline.
+    // A project is misconfigured until `activate` has checked its plugin and committed
+    // its baseline.
     this.tracked = config.projects.map(project => ({
       project,
       destination: itemTrackerDestinationId(project.project),
       state: 'misconfigured',
-      anchored: false,
+      problem: { errorKind: 'not_activated' },
     }));
   }
 
   /** Check each project's forge plugin once, and baseline a project's first activation. */
   async activate(): Promise<void> {
+    const activated: Tracked[] = [];
     for (const tracked of this.tracked) {
-      const problem = await this.checkProject(tracked);
-      if (problem) {
+      const { project, destination } = tracked;
+      const checked = await this.checkProject(project);
+      if ('problem' in checked) {
         this.log.error(
-          { project: tracked.project.project, ...problem },
+          { project: project.project, ...checked.problem },
           'item_tracker.misconfigured'
         );
+        activated.push({ project, destination, state: 'misconfigured', problem: checked.problem });
         continue;
       }
-      if (!(await hasAnyAttentionNotice(tracked.destination))) {
-        const pauses = await openQuestionRows(tracked);
-        await getDatabase().withTransaction(query =>
-          recordTrackerBaseline(tracked.project.project, tracked.destination, query, pauses)
-        );
-      }
-      tracked.anchored = await hasAnyAttentionNotice(tracked.destination);
-      tracked.state = 'active';
+      const active: Tracked = { project, destination, state: 'active', repo: checked.repo };
+      await activateTrackerDestination(project.project, destination, () =>
+        openQuestionRows(active)
+      );
+      activated.push(active);
     }
+    this.tracked = activated;
   }
 
   private async checkProject(
-    tracked: Tracked
-  ): Promise<{ errorKind: string; unsupported?: string[] } | undefined> {
-    const repo = repoRefSchema.safeParse(tracked.project.repo);
-    if (!repo.success) return { errorKind: 'invalid_repo' };
-    tracked.repo = repo.data;
+    project: TrackedProject
+  ): Promise<{ repo: RepoRef } | { problem: TrackerProblem }> {
+    const repo = repoRefSchema.safeParse(project.repo);
+    if (!repo.success) return { problem: { errorKind: 'invalid_repo' } };
     let check: ForgeAccessCheck;
     try {
       check = await this.forge.check({ host: repo.data.host, operations: [UPSERT_OPERATION] });
     } catch (err) {
-      this.log.error({ err, project: tracked.project.project }, 'item_tracker.check_failed');
-      return { errorKind: 'check_failed' };
+      this.log.error({ err, project: project.project }, 'item_tracker.check_failed');
+      return { problem: { errorKind: 'check_failed' } };
     }
-    if (check.ok) return undefined;
+    if (check.ok) return { repo: repo.data };
     return {
-      errorKind: check.error.kind,
-      ...(check.unsupported ? { unsupported: check.unsupported } : {}),
+      problem: {
+        errorKind: check.error.kind,
+        ...(check.unsupported ? { unsupported: check.unsupported } : {}),
+      },
     };
   }
 
@@ -190,16 +230,61 @@ export class ItemTracker {
     return this.tracked.map(tracked => ({ id: tracked.destination, state: tracked.state }));
   }
 
-  scan(): Promise<void> {
-    this.scanning ??= this.scanOnce().finally(() => {
+  /**
+   * One pass over every tracked project. With `request`, a project whose pass another
+   * process holds asks that holder for one more pass, for a caller that will not come back
+   * (a CLI process about to exit). The server's timer returns anyway, so it does not ask.
+   */
+  scan(options: { request: boolean } = { request: false }): Promise<TrackerPassReport[]> {
+    this.scanning ??= this.scanOnce(options.request).finally(() => {
       this.scanning = undefined;
     });
     return this.scanning;
   }
 
-  private async scanOnce(): Promise<void> {
-    for (const tracked of this.tracked)
-      if (tracked.state === 'active' && tracked.repo) await this.scanProject(tracked, tracked.repo);
+  private async scanOnce(request: boolean): Promise<TrackerPassReport[]> {
+    const reports: TrackerPassReport[] = [];
+    for (const tracked of this.tracked) reports.push(await this.passProject(tracked, request));
+    return reports;
+  }
+
+  /**
+   * Hold the project's pass and scan until no other process has asked for one more. A pass
+   * that throws lets go of the pass; what it did not write stays owed.
+   */
+  private async passProject(tracked: Tracked, request: boolean): Promise<TrackerPassReport> {
+    const project = tracked.project.project;
+    if (tracked.state === 'misconfigured')
+      return { project, outcome: 'misconfigured', ...tracked.problem };
+    const { destination } = tracked;
+    let claimed = false;
+    const writes: PassWrites = { posted: [], notPosted: [] };
+    try {
+      const claim = await claimTrackerPass(destination, this.owner, request);
+      if (!claim.claimed) {
+        this.log.info(
+          { destination, heldBy: claim.heldBy, since: claim.since },
+          'item_tracker.pass_held'
+        );
+        return { project, outcome: 'held', heldBy: claim.heldBy, since: claim.since };
+      }
+      claimed = true;
+      do await this.scanProject(tracked, tracked.repo, writes);
+      while ((await finishTrackerPass(destination, this.owner)) === 'again');
+      return { project, outcome: 'scanned', ...writes };
+    } catch (err) {
+      this.log.error({ err, destination }, 'item_tracker.pass_failed');
+      if (claimed)
+        await abandonTrackerPass(destination, this.owner).catch((abandonErr: unknown) => {
+          this.log.error({ err: abandonErr, destination }, 'item_tracker.pass_release_failed');
+        });
+      return {
+        project,
+        outcome: 'failed',
+        error: err instanceof Error ? err.message : String(err),
+        ...writes,
+      };
+    }
   }
 
   /**
@@ -207,10 +292,9 @@ export class ItemTracker {
    * status comment does not show its current state, an ask or ruling not yet posted, or
    * a final result not yet posted.
    */
-  private async scanProject(tracked: Tracked, repo: RepoRef): Promise<void> {
+  private async scanProject(tracked: Tracked, repo: RepoRef, writes: PassWrites): Promise<void> {
     const projectKey = tracked.project.project;
     const candidates = await listTrackerCandidateRuns(projectKey, tracked.destination);
-    await this.anchor(tracked, candidates);
     const owed = new Map<string, TrackerCandidateRun[]>();
     for (const run of candidates)
       if (!run.shown) owed.set(run.itemKey, [...(owed.get(run.itemKey) ?? []), run]);
@@ -222,7 +306,7 @@ export class ItemTracker {
     for (const itemKey of new Set([...owed.keys(), ...owingComments, ...owingResults, ...live])) {
       const subject = trackerSubject(tracked.project, repo, itemKey);
       const owedRuns = owed.get(itemKey) ?? [];
-      if (subject) await this.writeItem(tracked, itemKey, subject, owedRuns);
+      if (subject) await this.writeItem(tracked, itemKey, subject, owedRuns, writes);
       else if (
         owedRuns.length > 0 ||
         owingComments.includes(itemKey) ||
@@ -230,21 +314,6 @@ export class ItemTracker {
       )
         await this.settleUnmapped(tracked, itemKey, owedRuns);
     }
-  }
-
-  /**
-   * The project's first ledger row is what tells a restart the tracker was already on,
-   * so the activation baseline runs once. A first activation with nothing to baseline
-   * records that row on the first run the tracker sees, before any write can fail.
-   */
-  private async anchor(
-    tracked: Tracked,
-    candidates: readonly TrackerCandidateRun[]
-  ): Promise<void> {
-    const first = candidates[0];
-    if (tracked.anchored || !first) return;
-    await this.record(tracked, { runId: first.id, key: 'activated' }, true);
-    tracked.anchored = true;
   }
 
   /**
@@ -289,13 +358,14 @@ export class ItemTracker {
     tracked: Tracked,
     itemKey: string,
     subject: ForgeSubjectRef,
-    owedRuns: readonly TrackerCandidateRun[]
+    owedRuns: readonly TrackerCandidateRun[],
+    writes: PassWrites
   ): Promise<void> {
     const facts = await itemFacts(tracked, itemKey);
     if (!facts) return;
     const { itemId, runs, comments } = facts;
     const write = (comment: TrackerComment): Promise<boolean> =>
-      this.writeComment(tracked, itemId, subject, comment);
+      this.writeComment(tracked, { itemId, itemKey }, subject, comment, writes);
     if (owedRuns.length > 0) {
       const body = renderItemStatus(
         runs,
@@ -351,18 +421,29 @@ export class ItemTracker {
   /** Upsert one marked comment; false when it was not written. */
   private async writeComment(
     tracked: Tracked,
-    itemId: string,
+    item: { itemId: string; itemKey: string },
     subject: ForgeSubjectRef,
-    comment: TrackerComment
+    comment: TrackerComment,
+    writes: PassWrites
   ): Promise<boolean> {
+    const written = { item: item.itemKey, marker: comment.marker };
     const write = `${tracked.destination}|${subject.kind}:${String(subject.ref.number)}|${comment.marker}`;
-    if (this.refused.has(write)) return false;
-    const response = await this.upsert(tracked, subject, comment);
-    if (!response.ok) {
-      this.reportFailure(tracked, itemId, write, response);
+    const refusedKind = this.refused.get(write);
+    if (refusedKind !== undefined) {
+      writes.notPosted.push({ ...written, errorKind: refusedKind, retried: false });
       return false;
     }
-    this.log.info({ destination: tracked.destination, itemId }, 'item_tracker.comment_written');
+    const response = await this.upsert(tracked, subject, comment);
+    if (!response.ok) {
+      const retried = this.reportFailure(tracked, item.itemId, write, response);
+      writes.notPosted.push({ ...written, errorKind: response.error.kind, retried });
+      return false;
+    }
+    this.log.info(
+      { destination: tracked.destination, itemId: item.itemId },
+      'item_tracker.comment_written'
+    );
+    writes.posted.push(written);
     return true;
   }
 
@@ -393,19 +474,21 @@ export class ItemTracker {
 
   /**
    * A write that failed is retried on the next scan. One the forge refused for good, such
-   * as a key naming an issue that does not exist, is not retried until a restart. The
-   * upsert's marker makes a retry after an unknown outcome safe: it edits, never posts twice.
+   * as a key naming an issue that does not exist, is not retried by this instance, so a
+   * running server tries it again only after a restart. The upsert's marker makes a retry
+   * after an unknown outcome safe: it edits, never posts twice. Returns whether a later
+   * scan retries the write.
    */
   private reportFailure(
     tracked: Tracked,
     itemId: string,
     write: string,
     response: Extract<ForgeResponse, { ok: false }>
-  ): void {
+  ): boolean {
     const outcome = response.mutation?.outcome ?? 'refused';
     const temporary = (temporaryErrorKinds as readonly string[]).includes(response.error.kind);
     const settled = outcome === 'refused' && !temporary && response.error.kind !== 'process_failed';
-    if (settled) this.refused.add(write);
+    if (settled) this.refused.set(write, response.error.kind);
     this.log.error(
       {
         destination: tracked.destination,
@@ -417,6 +500,7 @@ export class ItemTracker {
       },
       'item_tracker.write_failed'
     );
+    return !settled;
   }
 
   start(): void {

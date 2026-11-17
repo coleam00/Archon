@@ -331,6 +331,10 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 - **`remote_agent_item_merges`** - The merge of an item's change, as the forge reported it (`archon workflow merged`)
   - Append-only, one row per item: `item_id` is the primary key, so the fact is recorded once and a second report keeps the first
   - `change` (the forge's identity of the merged change, never parsed), `merge_commit` (nullable), `merged_at` (the forge's merge time), `via`, `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`
+- **`remote_agent_item_tracker_destinations`** - One row per item tracker destination (`tracker:<project>`)
+  - The row exists once the destination's activation baseline is committed (`activated_at`), so a later activation by any process does not baseline again
+  - `pass_owner_host`, `pass_owner_pid`, `pass_owner_instance` and `pass_started_at` name the process running the destination's pass, all null when none runs; one pass runs at a time across the server and CLI processes. `pass_requested` is 1 when another process asked the holder for one more pass
+  - What the tracker showed stays in its `attention_notice_sent` ledger rows, not here
 - **`remote_agent_item_links`** - Links between items: accepted, directed relations
   - One row per link, read from `from_item_id` to `to_item_id`, with `kind` one of `depends_on`, `part_of` or `duplicate_of`. The engine gives the kinds no meaning. The kind is checked in code, not by a database constraint, so a later kind needs no schema change; a binary that reads a kind it does not know reports that link as unreadable and reads the rest of the item
   - `by_declared` or `by_user_id`, `via`, `from_run_id`, `from_node_path` and `created_at` record who recorded the link, as for rulings. They and the link itself are never updated

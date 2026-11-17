@@ -132,6 +132,8 @@ Commands:
   state <get|put|patch|log|delete|list|claim>
                              Read and audit durable project or install JSON documents
   metrics [name]             Aggregate metric records by name, window and instrument
+  tracker sync               Bring every tracked project's item tracker up to date in one pass (no server needed)
+  tracker release <project>  Let go of a project's tracker pass held by a process this host cannot prove gone
   forge resolve              Resolve an explicit remote through optional forge plugins
   forge checks               Observe checks for an explicit qualified pull request
   user <list|role|link>      List users, link identities and manage roles as the operator
