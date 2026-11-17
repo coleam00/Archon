@@ -139,6 +139,8 @@ Commands:
   project config <id|name>   Show a project's merged config with secrets removed (env key names only)
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
+  pack graph <pack>          Show a pack's stages, their outcomes and the run-ended arrows between them,
+                             each active in this install or declared and inactive (--json for the read)
   pack bindings <pack>       Write a pack's recommended trigger bindings as files for one repository;
                              registers and schedules nothing. Needs --repo, --host, --run-as and --out
   chat <message>             Send a message to the orchestrator

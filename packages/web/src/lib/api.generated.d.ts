@@ -3787,6 +3787,86 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/packs/{pack}/graph': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** A pack's stages, outcomes and run-ended arrows, each active or declared */
+    get: {
+      parameters: {
+        query: {
+          /** @description The codebase whose project the pack is discovered from and its arrows launch in */
+          codebaseId: string;
+          /** @description An absolute directory the pack's workflows are discovered from instead of the codebase, as a binding's launch.discoveryCwd names it */
+          workflowSource?: string;
+        };
+        header?: never;
+        path: {
+          /** @description The pack key: its folder name */
+          pack: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['PackGraph'];
+          };
+        };
+        /** @description workflowSource is not an absolute path */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Codebase not found, or no workflow of the pack was found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description A trigger file in the install cannot be read, or the store cannot hold run-ended bindings; the error names the file */
+        422: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/workflows/validate': {
     parameters: {
       query?: never;
@@ -7666,6 +7746,7 @@ export interface components {
               /** @enum {string} */
               kind: 'run_ended';
               runId: string;
+              sourceInstanceId: string;
             }
           | {
               /** @enum {string} */
@@ -9535,6 +9616,91 @@ export interface components {
         pack: string;
         /** @enum {string} */
         source: 'project' | 'bundled' | 'global' | 'installed';
+        error: string;
+      }[];
+    };
+    PackGraph: {
+      pack: string;
+      stages: {
+        name: string;
+        returns: string | null;
+        outcome: {
+          field: string;
+          /** @enum {string} */
+          form: 'enum' | 'boolean';
+          values: {
+            value: string;
+            startsNothing: boolean;
+          }[];
+        } | null;
+        asks: boolean;
+        nodes: {
+          id: string;
+          kind: string;
+          dependsOn: string[];
+          loopGroup: string | null;
+          blocks: {
+            include: string;
+            workflow: string;
+          }[];
+          fanOut: {
+            workflow: string;
+          } | null;
+        }[];
+      }[];
+      arrows: (
+        | {
+            from: {
+              stage: string;
+              outcome: string;
+            };
+            to: string;
+            /** @enum {boolean} */
+            active: true;
+            declared: {
+              binding: string;
+              problems: string[];
+            } | null;
+            installed: {
+              file: string;
+              sourceInstanceId: string;
+              problems: string[];
+            };
+          }
+        | {
+            from: {
+              stage: string;
+              outcome: string;
+            };
+            to: string;
+            /** @enum {boolean} */
+            active: false;
+            declared: {
+              binding: string;
+              problems: string[];
+            };
+            installed: unknown;
+          }
+      )[];
+      fanOutBlocks: {
+        workflow: string;
+        nodes: {
+          id: string;
+          kind: string;
+          dependsOn: string[];
+          loopGroup: string | null;
+          blocks: {
+            include: string;
+            workflow: string;
+          }[];
+          fanOut: {
+            workflow: string;
+          } | null;
+        }[];
+      }[];
+      discoveryErrors: {
+        filename: string;
+        workflowName: string | null;
         error: string;
       }[];
     };

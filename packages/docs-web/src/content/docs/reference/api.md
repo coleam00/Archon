@@ -241,6 +241,7 @@ Returns the active isolation environments (worktrees and containers) associated 
 | POST | `/api/workflows/validate` | Validate a workflow definition (in-memory, no save) |
 | PUT | `/api/workflows/{name}` | Save (create or update) a workflow |
 | DELETE | `/api/workflows/{name}` | Delete a user-defined workflow |
+| GET | `/api/packs/{pack}/graph` | A pack's [stage graph](/guides/workflow-triggers/#see-how-a-packs-stages-connect) as `PackGraph`: its stages with their outcomes and nodes, and the run-ended arrows between them, each active or declared and inactive. `codebaseId` (required) names the project the pack is discovered from and its arrows launch in; `workflowSource` (an absolute directory, optional) discovers the pack there instead, as a binding's `launch.discoveryCwd` does. 400 for a relative `workflowSource`; 404 for an unknown codebase or a pack with no workflow there; 422 naming the file for a trigger file that cannot be read, or for run-ended files under `store: files`. The same read as `archon pack graph --json` |
 | DELETE | `/api/workflows/{name}/node-sessions` | Reset persisted per-node provider sessions with optional `scope` and `node` filters; omitting `scope` requires `confirm=all-scopes`, and returns `403` when conversations are private ([Security](/reference/security/#adapter-authorization)); there `scope` must name an existing conversation, and a web or CLI one must be the caller's own (chat and forge conversations need no ownership) |
 
 #### List Workflows
