@@ -651,6 +651,10 @@ async function stopServices({
 }: ServerServices): Promise<void> {
   try {
     await tracker?.stop();
+  } catch (error) {
+    getLog().error({ err: error }, 'item_tracker_stop_error');
+  }
+  try {
     await chat.router.stop();
     await chat.host.stop();
   } catch (error) {
