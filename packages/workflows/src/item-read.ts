@@ -284,6 +284,16 @@ function hasResult(run: WorkflowRun, events: readonly WorkflowEventRow[]): boole
   }
 }
 
+/** The `workflow_completed` events of the completed runs, which hold their results. */
+async function completionEvents(
+  source: ItemReadSource,
+  runs: readonly WorkflowRun[]
+): Promise<ReadonlyMap<string, WorkflowEventRow[]>> {
+  const completedIds = runs.filter(run => run.status === 'completed').map(run => run.id);
+  if (completedIds.length === 0) return new Map();
+  return source.store.listEventsForRuns(completedIds, ['workflow_completed']);
+}
+
 async function itemRun(
   source: ItemReadSource,
   run: WorkflowRun,
@@ -543,11 +553,7 @@ export async function readItem(
   for (const read of await source.store.listItemLinks(found.item.id))
     if ('type' in read) unreadableLinks.push(read);
     else links.push(readLink(found.item.id, read));
-  const completedIds = own.values.filter(run => run.status === 'completed').map(run => run.id);
-  const terminalEvents =
-    completedIds.length === 0
-      ? new Map<string, WorkflowEventRow[]>()
-      : await source.store.listEventsForRuns(completedIds, ['workflow_completed']);
+  const terminalEvents = await completionEvents(source, own.values);
   const asks = splitAttentionRead(await source.store.listItemAsks(found.item.id));
   const answers = [
     ...[...events.values()].flat().map(itemAnswer),
