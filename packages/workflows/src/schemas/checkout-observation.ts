@@ -15,7 +15,7 @@ import { artifactPointerSchema } from './artifact-pointer';
  * into every event and log.
  */
 
-const gitObjectIdSchema = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
+export const gitObjectIdSchema = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
 
 /**
  * A repository-relative path exactly as Git reported it. A path whose bytes are not valid

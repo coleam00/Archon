@@ -882,6 +882,7 @@ describe('loop node execution', () => {
     expect(completeCalls[0][1]?.duration_ms).toBeNumber();
     expect(completeCalls[0][2]).toEqual({
       node_counts: { completed: 1, failed: 0, skipped: 0, total: 1 },
+      result_commit: expect.anything(),
     });
     expect(mockDeps.store.createWorkflowEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'workflow_completed' })

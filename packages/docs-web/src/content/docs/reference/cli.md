@@ -868,6 +868,19 @@ manifest. Historical runs without a record and active resumed runs report `null`
 An event-query failure exits non-zero with `error: "workflow_events_unavailable"` in
 JSON; it does not masquerade as a missing historical record.
 
+A completed run's record has `result_commit`: `{ "held": true, "commit": "<sha>" }` when
+the checkout was clean at that commit when the run's `returns:` node completed and when the
+run completed, the commit its result holds at, or `{ "held": false, "reason": ... }` with
+`dirty`, `not_git`, `unavailable`, `unborn`, `moved` (HEAD moved after the `returns:`
+node completed, even to another commit and back, or a `mutates_checkout: false` run ended on
+a commit other than its start or saw HEAD move since its first pass began), `concurrent`
+(another node of its layer ran, or could still start, beside the `returns:` node) or
+`unobserved` (no `returns:` node completed in the pass that completed the run, HEAD or its
+branch keeps no reflog to show it did not move, or a `mutates_checkout: false` run has no git commit or
+mark recorded for its start, as on a resume after an earlier pass completed a node). Runs
+completed before it was recorded have none and hold at no commit. See [the result that holds
+at this run's commit](/reference/workflow-language/#the-result-that-holds-at-this-runs-commit).
+
 When the run holds proof that it created its worktree, the record has
 `worktree_disposition`; a completed run has it only when that worktree is on the run's own
 generated branch (launched without `--branch`). `{ "disposition": "release" }` means the
@@ -2731,7 +2744,7 @@ A binding can also [map its item from its event](/guides/workflow-triggers/#put-
 
 A continuation started with `--adopt <run-id>` or `--supersedes <run-id>` and no `--item` belongs to the item of the run it continues, so a fix round or a rerun stays in the item's history. `--item <key>` names another item instead, and a continuation of a run with no item has none. `--supersedes` can name a run of another project by its full id; that run's item cannot be inherited, so the continuation is refused before it starts unless it passes `--item`. The same holds when the continuation has no registered project. A continuation of a run with no item starts in every case.
 
-A run started with no item, and no run to inherit one from, has none. One item is worked by at most one run of a workflow at a time: a start of a workflow on an item waits, or is skipped or refused, while another run of that workflow on the item is not terminal. See [one run of a workflow per item](/guides/workflow-triggers/#one-run-of-a-workflow-per-item). `archon workflow runs --item <key>` reads an item: its runs, open questions, and answers with rulings. Each run carries its `cause`: the run whose end started it, the run whose asks settling started it, the run and node that fired it, the trigger source that started it, or `null` for a start by hand, and `hasResult`: whether it completed with a readable `returns:` value, which `archon workflow get <id> --json` shows at `terminal_record.returns.value` and a later run on the item reads through a [`result_of` input](/reference/workflow-language/#reading-an-earlier-runs-result). `GET /api/items?project=<project>&key=<key>` is the same read over HTTP. `workflow wait`, `cancel` and `abandon` also accept `--item <key>` and never choose between an item's runs: `wait` reports every run that settled, and `cancel` and `abandon` refuse when more than one run applies unless `--all-runs` is passed.
+A run started with no item, and no run to inherit one from, has none. One item is worked by at most one run of a workflow at a time: a start of a workflow on an item waits, or is skipped or refused, while another run of that workflow on the item is not terminal. See [one run of a workflow per item](/guides/workflow-triggers/#one-run-of-a-workflow-per-item). `archon workflow runs --item <key>` reads an item: its runs, open questions, and answers with rulings. Each run carries its `cause`: the run whose end started it, the run whose asks settling started it, the run and node that fired it, the trigger source that started it, or `null` for a start by hand, and `hasResult`: whether it completed with a readable `returns:` value, which `archon workflow get <id> --json` shows at `terminal_record.returns.value` and a later run on the item reads through a [`result_of` input](/reference/workflow-language/#reading-an-earlier-runs-result), and `resultCommit`: the commit that result holds at, which an [`at: checkout`](/reference/workflow-language/#the-result-that-holds-at-this-runs-commit) input matches, or `null`. `GET /api/items?project=<project>&key=<key>` is the same read over HTTP. `workflow wait`, `cancel` and `abandon` also accept `--item <key>` and never choose between an item's runs: `wait` reports every run that settled, and `cancel` and `abandon` refuse when more than one run applies unless `--all-runs` is passed.
 
 `archon workflow items` reads every item of the project that had a run in a window, a page at a time ([`workflow items`](#workflow-items)).
 
