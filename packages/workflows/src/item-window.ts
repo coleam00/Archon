@@ -5,10 +5,8 @@
  * that pins the window, so following it returns each remaining item once.
  */
 import { z } from 'zod';
-import { listAttentionQueue } from './attention-queue';
-import { assembleItemRead, itemReadSchema, type ItemReadSource } from './item-read';
+import { assembleItemRead, itemReadSchema, readItemQueue, type ItemReadSource } from './item-read';
 import { MetricsQueryError, resolveMetricsWindow } from './metrics';
-import { splitAttentionRead } from './schemas/attention-degraded';
 import type { IWorkflowStore } from './store';
 
 export const ITEM_WINDOW_DEFAULT_LIMIT = 20;
@@ -121,13 +119,13 @@ export async function readItemWindow(
   const window = { since: since.toISOString(), until: until.toISOString() };
   const last = page.at(-1);
   if (last === undefined) return { window, items: [], next: null };
-  const queue = splitAttentionRead(await listAttentionQueue(source));
+  const queue = await readItemQueue(source);
   const items = [];
   for (const item of page) {
-    const found = await source.store.getItemRuns(projectKey, item.key);
+    const read = await assembleItemRead(source, item, queue);
     // Items are never deleted, so one the window listed is still there.
-    if (found === null) throw new Error(`Item '${item.key}' was listed but not found`);
-    items.push(await assembleItemRead(source, found, queue));
+    if (read === null) throw new Error(`Item '${item.key}' was listed but not found`);
+    items.push(read);
   }
   return {
     window,

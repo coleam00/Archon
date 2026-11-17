@@ -18,8 +18,10 @@ import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import type { MergedConfig } from '../config/config-types';
 import * as itemsDb from '../db/items';
+import * as itemLinksDb from '../db/item-links';
 import * as itemRulingsDb from '../db/item-rulings';
 import * as itemMergesDb from '../db/item-merges';
+import * as itemAsksDb from '../db/item-asks';
 import * as workflowDb from '../db/workflows';
 import * as resourceStarts from '../db/resource-starts';
 import { toHydratedTimestamp } from '../db/timestamps';
@@ -32,13 +34,22 @@ import {
   upsertWorkflowRunNodeSession,
 } from '../db/workflow-run-node-sessions';
 import * as codebaseDb from '../db/codebases';
+import * as isolationEnvironmentsDb from '../db/isolation-environments';
 import type { IIsolationStore } from '@archon/isolation';
 import * as envVarDb from '../db/env-vars';
 import { getAgentProvider } from '../services/provider-admission';
 import type { WorktreeOwnershipReaders } from '../services/cleanup/run-worktree';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
-import { createLogger, getArchonHome } from '@archon/paths';
-import { createRunEndedPreflight, createRunEndedStarts, launchProjectKey } from './run-ended';
+import { createLogger } from '@archon/paths';
+import {
+  createRunEndedPreflight,
+  createRunEndedStarts,
+  getTriggersPath,
+  launchProjectKey,
+  type RunEndedStartsDependencies,
+} from './run-ended';
+import { createAsksSettledPreflight, createAsksSettledStarts } from './asks-settled';
+import { createEndedCheckout } from './ended-checkout';
 import { registeredProjectKeyForPath } from '../services/codebase-checkout-resolver';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
 import { createGitHubAppAuthProvider } from '../github-auth/auth';
@@ -116,7 +127,23 @@ function collectOAuthCredentialValues(
   }
 }
 
+/** Where trigger files with `on` are read from and how a binding is placed in a project. */
+function onBindingDeps(
+  getItem: IWorkflowStore['getItem']
+): Omit<RunEndedStartsDependencies, 'endedCheckout' | 'now'> {
+  return {
+    triggersDirectory: getTriggersPath,
+    getItem,
+    projectKeyOf: launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb)),
+  };
+}
+
 export function createWorkflowStore(): IWorkflowStore {
+  // The close that settles a set writes the starts its asks-settled bindings cause.
+  const asksSettledStarts = createAsksSettledStarts({
+    ...onBindingDeps(itemsDb.getItem),
+    getItemAsk: itemAsksDb.getItemAsk,
+  });
   return {
     ...createSqlStateDocumentStore(getDatabase),
     setToolCallAttention: workflowDb.setToolCallAttention,
@@ -129,7 +156,10 @@ export function createWorkflowStore(): IWorkflowStore {
     listStartReceipts: resourceStarts.listStartReceipts,
     listPendingStartBindings: resourceStarts.listPendingStartBindings,
     getResourceStartRequest: resourceStarts.getResourceStartRequest,
+    listSkippedItemStarts: resourceStarts.listSkippedItemStarts,
+    listWaitedItemHolders: resourceStarts.listWaitedItemHolders,
     listQueuedResourceStartsForHost: resourceStarts.listQueuedResourceStartsForHost,
+    listQueuedItemStarts: resourceStarts.listQueuedItemStarts,
     withdrawQueuedResourceStart: resourceStarts.withdrawQueuedResourceStart,
     claimStartBindingPreparation: resourceStarts.claimStartBindingPreparation,
     completeStartBindingPreparation: resourceStarts.completeStartBindingPreparation,
@@ -149,6 +179,16 @@ export function createWorkflowStore(): IWorkflowStore {
     listItemsInWindow: itemsDb.listItemsInWindow,
     getItemMerge: itemMergesDb.getItemMerge,
     recordItemMerge: itemMergesDb.recordItemMerge,
+    listItemLinks: itemLinksDb.listItemLinks,
+    recordItemLink: itemLinksDb.recordItemLink,
+    endItemLink: itemLinksDb.endItemLink,
+    listOpenItemAsks: itemAsksDb.listOpenItemAsks,
+    listItemAsks: itemAsksDb.listItemAsks,
+    getItemAsk: itemAsksDb.getItemAsk,
+    answerItemAsk: async input =>
+      itemAsksDb.answerItemAsk(input, await asksSettledStarts(input.askId)),
+    withdrawItemAsk: async input =>
+      itemAsksDb.withdrawItemAsk(input, await asksSettledStarts(input.askId)),
     findAdoptingRuns: workflowDb.findAdoptingRuns,
     deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,
     getWorkflowEventHead: async () => sqlCursor(await workflowEventDb.getWorkflowEventHead()),
@@ -322,20 +362,28 @@ export function createWorkflowDeps(
   loadConfig: typeof loadMergedConfig;
 } {
   const provider = registeredGitHubAppAuthProvider;
-  const runEnded = {
-    triggersDirectory: () => join(getArchonHome(), 'triggers'),
-    getItem: (id: string) => store.getItem(id),
-    projectKeyOf: launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb)),
+  const onBindings = {
+    ...onBindingDeps(id => store.getItem(id)),
+    loadConfig: loadMergedConfig,
+    providers: providerRegistry,
   };
+  const runEndedPreflight = createRunEndedPreflight(onBindings);
+  const asksSettledPreflight = createAsksSettledPreflight(onBindings);
   return {
     store,
     credentialStore,
-    runEndedStarts: createRunEndedStarts(runEnded),
-    checkRunEndedBindings: createRunEndedPreflight({
-      ...runEnded,
-      loadConfig: loadMergedConfig,
-      providers: providerRegistry,
+    runEndedStarts: createRunEndedStarts({
+      ...onBindings,
+      // Only the SQL store records items, so only its runs reach this.
+      endedCheckout: createEndedCheckout({
+        findEnvironmentByPath: isolationEnvironmentsDb.findLatestByCodebaseAndWorkingPath,
+      }),
     }),
+    // A run is refused before it starts for a broken binding its end or its asks could fire.
+    checkRunEndedBindings: async run => {
+      await runEndedPreflight(run);
+      await asksSettledPreflight(run);
+    },
     releaseRunResources: createRunResourceRelease(store),
     providers: providerRegistry,
     getAgentProvider,

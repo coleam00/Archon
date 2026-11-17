@@ -23,9 +23,10 @@ import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { formatAge } from './workflow-shared';
 
 /**
- * How much of an item its text carries. The list and the watch print a `brief`: the
- * question's first line and a pointer to the rest. The single read prints the `full`
- * message. Both carry the recommendation, the options and the answer commands.
+ * How much of a paused run's item its text carries. The list and the watch print a `brief`:
+ * the question's first line and a pointer to the rest. The single read prints the `full`
+ * message. Both carry the recommendation, the options and the answer commands. An ask no
+ * run holds always prints whole, since no single read exists for it.
  */
 export type AttentionItemDetail = 'brief' | 'full';
 
@@ -79,7 +80,8 @@ function offerLines(ask: Ask): string[] {
   for (const option of ask.options) {
     const label = option.label === undefined ? '' : ` (${option.label})`;
     const does = option.does === undefined ? '' : `: ${oneLine(option.does)}`;
-    lines.push(`option ${option.id}${label}${does}`);
+    const cost = option.cost === undefined ? '' : ` (cost: ${oneLine(option.cost)})`;
+    lines.push(`option ${option.id}${label}${does}${cost}`);
   }
   return lines;
 }
@@ -98,6 +100,35 @@ function askLines(ask: RunAsk, detail: AttentionItemDetail): string[] {
     );
   lines.push(`answer: ${answerCommand(ask)}`);
   if (detail === 'brief') lines.push(`full question: ${command(`attention ${id}`)}`);
+  return lines;
+}
+
+/**
+ * An item no run holds, such as an ask a completed run left: answered by its ref. Its
+ * question and context are printed whole in every form: no other command reads an ask a
+ * finished run left, so a cut here would be an answer given without knowing what was cut.
+ */
+function refItemLines(item: Ask): string[] {
+  const lines = [item.message.trim()];
+  if (item.askedIn !== undefined)
+    lines.push(`left by run ${item.askedIn.runId} (${item.askedIn.workflow}), which completed`);
+  if (item.context !== undefined) {
+    const [head = '', ...rest] = item.context.trim().split('\n');
+    lines.push(`context: ${head}`, ...rest.map(line => `  ${line}`));
+  }
+  lines.push(...offerLines(item));
+  for (const artifact of item.artifacts ?? [])
+    lines.push(`artifact: ${artifact.path} (run ${artifact.run_id})`);
+  if (item.recommendation !== undefined)
+    lines.push(
+      `accept the recommendation: ${command(`answer --ref ${item.ref} --recommended [--text <why>]`)}`
+    );
+  lines.push(
+    `answer: ${command(`answer --ref ${item.ref} --choose <option> [--text <text>]`)}` +
+      (item.other === true ? " ('other' needs text)" : '')
+  );
+  if (item.askedIn !== undefined)
+    lines.push(`withdraw: ${command(`answer --withdraw ${item.ref}`)}`);
   return lines;
 }
 
@@ -123,7 +154,33 @@ function itemBody(item: RunAttentionQueueItem, detail: AttentionItemDetail): str
         `needs a look: ${item.detail}`,
         `show more: ${command(`get ${run.id}`)}, then resume or abandon it`,
       ];
+    case 'owner_lost':
+      return [
+        `${item.observedStatus} but its owner is gone, holding item ${item.item?.key ?? '(unread)'}: later starts of ${run.workflow} on it wait behind it`,
+        `continue it: ${command(`resume ${run.id}`)}, or end it: ${command(`abandon ${run.id}`)}`,
+      ];
   }
+}
+
+/**
+ * The line that heads an item: the paused run that holds it, or, for an item no run
+ * holds, its ref as an open ask with the item it belongs to and when it opened.
+ */
+function headingLine(item: AttentionQueueItem): string {
+  const project = item.project?.name ?? '(no project)';
+  if (isHeldByRun(item)) {
+    const paused =
+      item.kind === 'owner_lost'
+        ? 'owner gone'
+        : item.pausedAt === null
+          ? 'pause time not recorded'
+          : `paused ${formatAge(item.pausedAt)} ago`;
+    return `  ${item.run.id}  ${item.run.workflow}  ${project}  ${paused}`;
+  }
+  const opened =
+    item.pausedAt === null ? 'open time not recorded' : `opened ${formatAge(item.pausedAt)} ago`;
+  const key = item.item === undefined ? '' : `  item ${item.item.key}`;
+  return `  ${item.ref}  open ask  ${project}${key}  ${opened}`;
 }
 
 /** One queue item as a block of text lines. */
@@ -132,14 +189,7 @@ export function attentionItemLines(
   detail: AttentionItemDetail
 ): string[] {
   const run = isHeldByRun(item) ? item.run : undefined;
-  const paused =
-    item.pausedAt === null ? 'pause time not recorded' : `paused ${formatAge(item.pausedAt)} ago`;
-  const project = item.project?.name ?? '(no project)';
-  const lines = [
-    run === undefined
-      ? `  ${item.ref}  ${project}  ${paused}`
-      : `  ${run.id}  ${run.workflow}  ${project}  ${paused}`,
-  ];
+  const lines = [headingLine(item)];
   if (run !== undefined && run.fanOut !== null)
     lines.push(`    fan-out item ${String(run.fanOut.index)} of run ${run.fanOut.parentRunId}`);
   else if (run !== undefined && run.parentRunId !== null)
@@ -147,10 +197,8 @@ export function attentionItemLines(
   const labels = Object.entries(item.labels);
   if (labels.length > 0)
     lines.push(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
-  // No run holds it, so no run command answers it: the text says what is asked and offered.
-  const body = isHeldByRun(item)
-    ? itemBody(item, detail)
-    : [question(item.message, detail), ...offerLines(item)];
+  // No run holds it, so no run command answers it: it is answered by its ref.
+  const body = isHeldByRun(item) ? itemBody(item, detail) : refItemLines(item);
   for (const line of body) lines.push(`    ${line}`);
   return lines;
 }
@@ -207,6 +255,8 @@ function closedText(line: Extract<AttentionStreamLine, { type: 'resolved' }>): s
       return `was answered${line.answeredVia === null ? '' : ` via ${line.answeredVia}`}${answererText(line.answeredBy)}${line.answeredFromRun === null ? '' : ` from run ${line.answeredFromRun.runId} (node ${line.answeredFromRun.nodePath})`}.`;
     case 'withdrawn':
       return 'no longer needs attention.';
+    case 'replaced':
+      return `was replaced by the asks of run ${line.replacedByRunId}.`;
     case 'no_longer_listed':
       return 'is no longer listed.';
   }
@@ -233,11 +283,17 @@ export function attentionStreamText(
       return [`Run ${line.runId} resumed (${line.status}).${runContextText(line)}`];
     case 'notice':
       return [noticeText(line)];
-    case 'owner_lost':
+    case 'owner_lost': {
+      // A run on an item holds it, so the later starts of its workflow on it wait behind it.
+      const held =
+        line.item == null
+          ? ''
+          : ` It holds item ${line.item}: later starts of ${line.workflow ?? 'its workflow'} on it wait behind it.`;
       return [
-        `Run ${line.runId} is ${line.observedStatus} but its owner is gone.${runContextText(line)} ` +
-          `Show more with ${command(`get ${line.runId}`)}, or abandon it with ${command(`abandon ${line.runId}`)}.`,
+        `Run ${line.runId} is ${line.observedStatus} but its owner is gone.${runContextText(line)}${held} ` +
+          `Show more with ${command(`get ${line.runId}`)}, continue it with ${command(`resume ${line.runId}`)}, or abandon it with ${command(`abandon ${line.runId}`)}.`,
       ];
+    }
     case 'ready':
       return [
         `Watching ${scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`} for attention. Ctrl-C stops.`,

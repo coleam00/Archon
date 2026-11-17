@@ -61,6 +61,7 @@ export function attentionWatchReader(
             shown.add(line.item.ref);
             return { needs: 'answer' };
           case 'unreadable':
+          case 'owner_lost':
             shown.add(line.item.ref);
             return { needs: 'look' };
           case 'usage_limit':

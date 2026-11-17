@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';

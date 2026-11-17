@@ -325,20 +325,15 @@ The `discoveries` binding starts a pass on a schedule, with `overlap: skip`: a s
 
 ## Worktree cleanup
 
-`archon-worktree-cleanup` runs [`archon isolation cleanup --merged`](/reference/cli/#isolation-cleanup-days) across every project registered on the install. It removes each merged worktree with its local branch, including a branch the worktree adopted instead of creating. Removal accepts Git base ancestry, patch equivalence, or one merged pull request head that covers every existing local tip (the worktree's HEAD and its branch ref). Cleanup finds that pull request by the local commits, so it counts even when its published branch name differs.
+The pack has no cleanup workflow. Merged worktrees are removed by the engine's merged sweep, [`archon isolation cleanup --merged`](/reference/cli/#isolation-cleanup-days), across every project registered on the install. A server runs it on its cleanup schedule. An install that runs only the CLI schedules the same sweep with [`archon isolation cleanup schedule install`](/reference/cli/#isolation-cleanup-schedule).
 
-- A worktree with uncommitted changes, or one a run can still claim, stays and is reported. One with a commit the merge does not cover stays as ordinary unmerged work.
-- With `include_closed: "true"` it also accepts a closed, unmerged pull request whose head covers every existing local tip. The default is `"false"`; any other value refuses the run.
-- Remote branches are retained with a warning, including with force. On GitHub, enable **Automatically delete head branches** in repository settings, or follow the [remote branch recovery procedure](/reference/cli/#recovering-remote-branch-cleanup).
-- It runs in place and creates no worktree of its own.
+The sweep removes each merged worktree with its local branch, including a branch the worktree adopted instead of creating. A worktree with uncommitted changes, one a run can still claim, or one with a commit the merge does not cover stays. Remote branches are retained with a warning; on GitHub, enable **Automatically delete head branches** in repository settings, or follow the [remote branch recovery procedure](/reference/cli/#recovering-remote-branch-cleanup).
 
 Who removes each checkout:
 
-- Intake, triage, the split queue, discoveries, the merge queue, the forge check and cleanup create no worktree. They run in the launch checkout as it stands.
+- Intake, triage, the split queue, discoveries, the merge queue and the forge check create no worktree. They run in the launch checkout as it stands.
 - A run that creates a worktree on its own run-named branch, such as a build round, removes it when the run completes, if the checkout is clean and every commit is on a remote; its pushed branch counts. A branch with commits of its own stays; one still at the commit it was cut from is deleted with the worktree. Otherwise the run reports what removing it would lose, and the checkout stays listed by `archon isolation list`.
 - A worktree launched with `--branch` waits for the merged sweep.
-
-A server already runs a merged sweep on its cleanup schedule. An install that runs only the CLI can schedule the same sweep without a workflow, with [`archon isolation cleanup schedule install`](/reference/cli/#isolation-cleanup-schedule); the `worktree-cleanup` binding remains for now. Its resource is named for the host, not the repository, because one pass covers every project registered there: generated for two repositories, the two schedules share one slot and `overlap: skip` drops the second pass.
 
 ## Notices
 

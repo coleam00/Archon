@@ -1,6 +1,7 @@
 /**
  * The attention queue as a stream (#3050), across runs including those started later.
- * Unreadable run deliveries may be omitted after a `degraded` warning.
+ * Unreadable run deliveries may be omitted after a `degraded` warning, and an open ask
+ * whose row turns unreadable stays open rather than reading as resolved.
  *
  * Queue items reflect the current row; lifecycle lines follow committed events so
  * transitions survive even when the row has already moved on. Out-of-process runs are
@@ -41,6 +42,7 @@ import {
   type Answered,
   type AnswerOrigin,
   type Resolution,
+  closedWithoutRun,
 } from './attention-watch-events';
 import { recordSurfaceSchema } from './schemas/record-surface';
 import type { WorkflowEventRow } from './schemas/workflow-event';
@@ -137,6 +139,14 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
       type: z.literal('resolved'),
       ...itemLineBase,
       occurrence: z.string().nullable(),
+      /** An ask a later completed run of the same workflow on the same item replaced. */
+      reason: z.literal('replaced'),
+      replacedByRunId: z.string(),
+    }),
+    z.object({
+      type: z.literal('resolved'),
+      ...itemLineBase,
+      occurrence: z.string().nullable(),
       /**
        * An item no run holds is no longer in the list. That is all the stream observed:
        * it does not know whether the item was answered or withdrawn.
@@ -179,7 +189,13 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
     at: z.string(),
     ...workflowNoticeDataSchema.shape,
   }),
-  z.object({ type: z.literal('owner_lost'), ...lineBase, observedStatus: workflowRunStatusSchema }),
+  z.object({
+    type: z.literal('owner_lost'),
+    ...lineBase,
+    observedStatus: workflowRunStatusSchema,
+    /** The key of the item the run holds (`holdsItem`), so starts on it wait; null for none. */
+    item: z.string().nullable().optional(),
+  }),
   z.object({ type: z.literal('ready'), cursor: cursorSchema }),
   /** Sent only after a read that reached the head, so a stream that cannot read stops sending them. */
   z.object({ type: z.literal('bookmark'), cursor: cursorSchema }),
@@ -217,6 +233,7 @@ export type AttentionWatchStore = Pick<
   | 'getWorkflowRunForAttention'
   | 'getCodebase'
   | 'getItem'
+  | 'getItemAsk'
   | 'listWorkflowRuns'
   | 'listEventsForRuns'
 >;
@@ -255,9 +272,27 @@ function lifecycleFields(
   };
 }
 
-/** The run fields of a line about `item`, from the run that holds it. */
+/** The run fields of a line about `item`, from the run that holds it or, for an ask, left it. */
 function itemContext(item: AttentionQueueItem): RunContext {
-  return { workflow: item.run?.workflow ?? null, parentRunId: item.run?.parentRunId ?? null };
+  const askedIn = item.kind === 'attention' ? item.askedIn : undefined;
+  return {
+    workflow: item.run?.workflow ?? askedIn?.workflow ?? null,
+    parentRunId: item.run?.parentRunId ?? null,
+  };
+}
+
+/** The key of `run`'s item; null for none, or when unreadable so the line still goes out. */
+async function itemKeyOf(store: AttentionWatchStore, run: WorkflowRun): Promise<string | null> {
+  if (run.item_id === null) return null;
+  try {
+    return (await store.getItem(run.item_id))?.key ?? null;
+  } catch (error) {
+    getLog().warn(
+      { err: error as Error, runId: run.id },
+      'workflow.attention_watch_item_read_failed'
+    );
+    return null;
+  }
 }
 
 /** How a line names an item that closed. */
@@ -378,6 +413,7 @@ export async function watchAttentionQueue(
           if (signal.aborted) return;
         }
       }
+      const item = result === null ? null : await itemKeyOf(store, run);
       if (waiters.get(runId)?.controller !== controller || signal.aborted) return;
       waiters.delete(runId);
       if (result === null) return;
@@ -389,6 +425,7 @@ export async function watchAttentionQueue(
         runId,
         ...runContext(run),
         observedStatus: result.observedStatus,
+        item,
       });
     })();
   };
@@ -419,6 +456,8 @@ export async function watchAttentionQueue(
   for (const report of degraded) {
     await emit({ type: report.type, reason: report.reason, cursor: start });
   }
+  // Runs with an unreadable row, already reported: a reconcile warns again only for a new one.
+  let unreadableAskRuns = new Set(degraded.map(report => report.runId));
   await emit({ type: 'ready', cursor: start });
 
   // 2. Arm liveness for every run already running in scope.
@@ -608,25 +647,31 @@ export async function watchAttentionQueue(
   };
 
   /**
-   * Items no run holds commit no event to the feed, so they are read again each time the
-   * tail reaches the head and compared with the open set. One that is gone closes as
-   * `no_longer_listed`: the stream saw it leave the list, and nothing it reads says why.
+   * Items no run holds commit no event of their own to the feed, so they are read again
+   * each time the tail reaches the head and compared with the open set. An ask's answer
+   * or withdrawal writes an event on the run that left it, which brings the tail here.
    */
   const reconcileItemsWithoutRun = async (): Promise<void> => {
     if (source.itemsWithoutRun === undefined) return;
     const cursor = position();
-    const now = new Map(
-      (await source.itemsWithoutRun()).filter(inQuery).map(item => [item.ref, item])
-    );
+    const read = splitAttentionRead(await source.itemsWithoutRun());
+    const now = new Map(read.values.filter(inQuery).map(item => [item.ref, item]));
+    const unreadable = new Set(read.degraded.map(report => report.runId));
+    if ([...unreadable].some(runId => !unreadableAskRuns.has(runId)))
+      await emit({ type: 'degraded', reason: 'run_unreadable', cursor });
+    unreadableAskRuns = unreadable;
     for (const prev of [...open.values()])
       if (!isHeldByRun(prev) && !now.has(prev.ref)) {
+        // A degraded row names only its run, so any open ask of that run may be the one
+        // that cannot be read: the watch cannot say it closed.
+        if (prev.askedIn !== undefined && unreadable.has(prev.askedIn.runId)) continue;
         await emit({
           type: 'resolved',
           cursor,
           project: prev.project,
           ...closedItemFields(prev),
           occurrence: null,
-          reason: 'no_longer_listed',
+          ...(await closedWithoutRun(store, prev.ref)),
         });
         open.delete(prev.ref);
       }

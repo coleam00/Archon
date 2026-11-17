@@ -66,7 +66,10 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     // the adopted lane's worktree and resolve the branch's vintage of the workflow.
     discoverMock
       .mockResolvedValueOnce({
-        workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Parent vintage' })],
+        // `project`: a run with an explicit --workflow-source must find the named workflow there.
+        workflows: [
+          makeTestWorkflowWithSource({ name: 'assist', description: 'Parent vintage' }, 'project'),
+        ],
         errors: [],
       })
       .mockResolvedValueOnce({

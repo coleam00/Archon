@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 import { captureLogLines } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
@@ -59,6 +60,7 @@ const mockStartRunLiveOwner = mock<
 >(async runId => {
   runLiveOwnerCalls.push(`start:${runId}`);
   return {
+    lease: testRunOwnerLease(runId),
     close: mockCloseRunLiveOwner,
     isStopRequested: () => false,
     registerTerminationPreparation: () => () => undefined,

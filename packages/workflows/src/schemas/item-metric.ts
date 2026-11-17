@@ -9,6 +9,7 @@
  * strict, so a key the engine does not know is refused when the file is read.
  */
 import { z } from 'zod';
+import { itemAnswerKindSchema } from '../item-read';
 import { metricNameSchema } from './metric';
 import { workflowRunStatusSchema } from './run-status';
 import { workflowSourceSchema } from './workflow';
@@ -74,10 +75,7 @@ export const itemMetricDefinitionSchema = z.union([
     ...base,
     op: z.literal('count'),
     of: z.literal('answers'),
-    kinds: z
-      .array(z.enum(['attention', 'gate', 'ruling']))
-      .min(1)
-      .optional(),
+    kinds: z.array(itemAnswerKindSchema).min(1).optional(),
   }),
   /** The hours from `from` to `to`, per item that has both. */
   z.strictObject({

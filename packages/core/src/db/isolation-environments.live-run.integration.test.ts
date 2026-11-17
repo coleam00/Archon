@@ -15,7 +15,9 @@
 import { describe, test, expect, mock } from 'bun:test';
 import { isolationStatusReadTests } from './isolation-status-read-harness';
 
+const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  ...paths,
   createLogger: () => ({
     info() {},
     warn() {},
@@ -204,6 +206,28 @@ describe('getLiveRunOwningEnv — real SQLite behavior', () => {
 
     await failedDaysAgo('run-failed-stale', 10);
     await expect(getLiveRunOwningEnv(env.id, stale)).resolves.toBeNull();
+  });
+
+  // The cutoff is datetime() text ('YYYY-MM-DD HH:MM:SS'). Compared as raw text, an
+  // ISO time on the cutoff's own date always sorts after it ('T' > ' '), so a run
+  // that went stale earlier that day would keep its pin.
+  test('a failed run with an ISO completed_at is released by its time, not its format', async () => {
+    const env = await create({
+      codebase_id: 'cb-1',
+      workflow_type: 'task',
+      workflow_id: 'task-failed-iso',
+      working_path: '/tmp/ops-client',
+      branch_name: '' as never,
+    });
+    await seedConversation('conv-failed-iso', env.id);
+    await seedRun('run-failed-iso', 'conv-failed-iso', 'failed');
+    await db.query(
+      `UPDATE remote_agent_workflow_runs
+       SET completed_at = strftime('%Y-%m-%dT00:00:00.000Z', 'now', '-7 days') WHERE id = $1`,
+      ['run-failed-iso']
+    );
+
+    await expect(getLiveRunOwningEnv(env.id, { kind: 'stale', staleDays: 7 })).resolves.toBeNull();
   });
 
   test('a paused run pins the env through every release, whatever its age', async () => {

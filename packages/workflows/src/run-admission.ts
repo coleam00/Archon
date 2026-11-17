@@ -29,8 +29,9 @@ import {
 import type { CheckoutSharedEventData } from './schemas/workflow-event';
 import { ContinuedItemProjectError, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
-import { refuseBrokenRunEndedBindings } from './run-ended-refusal';
-import { holdWorkflowResource } from './resource-hold';
+import { refusePendingStart } from './start-refusal';
+import { holdWorkflowResource, itemHold, waitForTurn } from './resource-hold';
+import { WorkflowItemHeldError } from './store/errors';
 import { workflowPathPriorityTime } from './workflow-path-lock';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -220,16 +221,17 @@ async function createWorkflowRunRow(
 }
 
 /**
- * A run whose end would fire a broken run-ended binding is refused before it does any
- * work, so a binding that names a missing stage is found before the stage feeding it runs.
+ * Refuse a pending row before the claim, for every reason `refusePendingStart` decides,
+ * and tell the conversation why.
  */
-async function refuseRunOnBrokenBindings(
+async function refuseRunBeforeClaim(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
+  workflow: ResolvedWorkflow,
   workflowRun: WorkflowRun
 ): Promise<WorkflowExecutionResult | undefined> {
-  const reason = await refuseBrokenRunEndedBindings(deps, workflowRun);
+  const reason = await refusePendingStart(deps, workflow, workflowRun);
   if (reason === undefined) return undefined;
   await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${reason}`);
   return { success: false, workflowRunId: workflowRun.id, error: reason };
@@ -237,7 +239,8 @@ async function refuseRunOnBrokenBindings(
 
 /**
  * Take the workflow's resource slot, win execution ownership of a pending row, then sample
- * the checkout the run starts from.
+ * the checkout the run starts from. While another run of the workflow holds the run's item,
+ * the claim waits for it like a full resource, or is refused under `noWait`.
  */
 async function claimPendingRun(
   deps: WorkflowDeps,
@@ -249,8 +252,14 @@ async function claimPendingRun(
   execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
   { onExecutionClaimed, noWait }: ExecuteWorkflowOptions
 ): Promise<RunPhase<CheckoutSample>> {
-  const broken = await refuseRunOnBrokenBindings(deps, platform, conversationId, workflowRun);
-  if (broken) return { stopped: true, result: broken };
+  const notStarted = await refuseRunBeforeClaim(
+    deps,
+    platform,
+    conversationId,
+    workflow,
+    workflowRun
+  );
+  if (notStarted) return { stopped: true, result: notStarted };
   const refused = await holdWorkflowResource(
     deps,
     platform,
@@ -261,10 +270,27 @@ async function claimPendingRun(
     noWait === true
   );
   if (refused) return { stopped: true, result: refused };
-  let claimed: WorkflowRun | null;
-  try {
-    claimed = await deps.store.claimPendingWorkflowRun(workflowRun.id, cwd);
-  } catch (error) {
+  const claim: { run?: WorkflowRun | null; error?: unknown } = {};
+  const itemRefused = await waitForTurn({
+    deps,
+    platform,
+    conversationId,
+    workflowRun,
+    noWait: noWait === true,
+    attempt: async () => {
+      try {
+        claim.run = await deps.store.claimPendingWorkflowRun(workflowRun.id, cwd);
+      } catch (error) {
+        if (error instanceof WorkflowItemHeldError)
+          return { held: itemHold(error.itemKey, error.holderRunId, error.workflow) };
+        claim.error = error;
+      }
+      return { done: undefined };
+    },
+  });
+  if (itemRefused) return { stopped: true, result: itemRefused };
+  if ('error' in claim) {
+    const error = claim.error;
     getLog().error({ err: error, workflowRunId: workflowRun.id }, 'workflow.pending_claim_failed');
     // A lost connection may hide a committed claim. Do not release ownership or
     // write a terminal state when this process cannot confirm the transition.
@@ -282,6 +308,7 @@ async function claimPendingRun(
       },
     };
   }
+  const claimed = claim.run;
   if (!claimed) {
     getLog().warn({ workflowRunId: workflowRun.id }, 'workflow.pending_claim_lost');
     return {

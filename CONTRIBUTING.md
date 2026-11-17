@@ -28,17 +28,19 @@ A build running from inside an Archon home's `workspaces/` (a run's worktree or 
 
 ### Code Quality
 
-Packages using the shared test runner without legacy `testGroups` discover tests
-under `src` automatically (`*.test.ts`, `*.spec.ts`, and their `.tsx` equivalents).
-Core uses this default. A test that uses `mock.module()`, directly
+Packages using the shared test runner discover tests under `src` automatically
+(`*.test.ts`, `*.spec.ts`, and their `.tsx` equivalents). Core uses this default.
+A package's legacy `testGroups` pin the files their selectors name into fixed processes;
+discovery groups every other test, so a new test needs no manifest edit. A test that uses `mock.module()`, directly
 or through a helper, must start with the exact line `// @archon-test-isolated`;
-discovery fails on a direct call without it.
+discovery fails on a direct call without it. The line isolates only a discovered test: a file a
+directory selector such as `src/` covers stays in that selector's group until the selector is
+narrowed to leave it out.
 Use the same directive for any other test requiring a fresh process. Unmarked tests
 share one process. Run package test scripts to preserve isolation; requested selectors
 retain Bun's substring-filter meaning and run only matching files, preserving the same
 isolation groups. Every requested group runs, and any failed group makes the command
-fail. Discovery errors, including selected files outside explicit `testGroups`, stop
-the request before any group starts. Test flags apply to each selected group; JUnit output
+fail. Discovery errors stop the request before any group starts. Test flags apply to each selected group; JUnit output
 is combined across groups and, from the repository root, across every started owner.
 Name filters (`-t` or `--test-name-pattern`) are supported only when the request selects
 one isolation group, preserving Bun's native exit result. Requests selecting multiple
@@ -179,7 +181,7 @@ drop; never run destructive verification against a configured live database.
 
 | CI job | Needs | Run it yourself |
 | --- | --- | --- |
-| `schema-upgrade` | a live PostgreSQL; the SQLite half also reads every release tag | `bun run check:schema-upgrades` (`PGHOST`/`PGUSER`/… or `DATABASE_URL`) and `bun run check:sqlite-vintages` |
+| `schema-upgrade` | a scratch PostgreSQL you start; the SQLite half also reads every release tag | `PGHOST=<scratch host or socket dir> PGUSER=<user> bun run check:schema-upgrades` (or a `DATABASE_URL` with a host); with no server named it refuses. Then `bun run check:sqlite-vintages` |
 | `postgres-parity` | a PostgreSQL service; conformance creates and drops scratch databases and requires `CREATE DATABASE` permission | `ARCHON_TEST_PG_URL=postgres://… bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts`, then the same for `packages/core/src/db/resource-slots.postgres.integration.test.ts`, `packages/core/src/db/provider-attempts.postgres.integration.test.ts`, `packages/core/src/db/workflows.postgres.integration.test.ts`, `packages/core/src/db/workflow-events.provider-events.postgres.integration.test.ts`, `packages/core/src/db/workflow-store.conformance.postgres.integration.test.ts`, `packages/core/src/db/state-documents.postgres.integration.test.ts`, `packages/core/src/db/codebase-rename.postgres.integration.test.ts`, and `packages/core/src/db/schema-convergence.postgres.integration.test.ts`; then `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/users.postgres.integration.test.ts`, `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/codebase-delete.postgres.integration.test.ts`, and `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/user-provider-key-store.postgres.integration.test.ts` |
 | `docker-build` | a Docker daemon, and ~14GB of free disk for the image | `docker build .` |
 | Linux `test` Slack conformance and smoke | compiled Slack plugin with a stubbed client for conformance, and the unmodified release binary for initialization and missing-token smoke | CI only; source conformance runs in `cd packages/chat-slack && bun run test` |
@@ -194,8 +196,11 @@ checks, and the server-free bundle assertion (including a restored-import
 negative proof), run in CI. Local `check:cli-import-boundary` still checks startup
 and policy import boundaries. Do not compile these binaries locally on macOS.
 
-**Schema changes**: run `bun run check:schema-upgrades` and `bun run check:sqlite-vintages`
-yourself if you touched `migrations/000_combined.sql`. A statement that applies cleanly to a fresh install can
+**Schema changes**: if you touched `migrations/000_combined.sql`, run
+`PGHOST=<scratch host or socket dir> PGUSER=<user> bun run check:schema-upgrades` and
+`bun run check:sqlite-vintages` yourself. The upgrade check creates and drops databases, so name a
+scratch PostgreSQL you started for it. With no server named it exits before connecting, and it does
+not read `DATABASE_URL` from `.env`. A statement that applies cleanly to a fresh install can
 abort the whole apply on an upgrade, and nothing before that job catches it.
 
 **SDLC workflows**: We do not accept pull requests from outside contributors

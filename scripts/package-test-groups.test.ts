@@ -56,10 +56,19 @@ test('a direct mock.module() call without the directive fails discovery', () => 
   expect(() => resolvePackageTestGroups(root, {})).toThrow('src/unmarked.test.ts');
 });
 
-test('legacy groups retain their order and malformed declarations fail', () => {
+test('legacy groups retain their order, other tests are discovered, and malformed declarations fail', () => {
   const root = fixture();
   const groups = [['src/z.test.ts', 'src/a.test.ts'], ['src/nested/']];
+  for (const file of ['src/z.test.ts', 'src/a.test.ts', 'src/nested/b.test.ts']) write(root, file);
   expect(resolvePackageTestGroups(root, { testGroups: groups })).toEqual(groups);
+  write(root, 'src/isolated.spec.ts', TEST_ISOLATION_DIRECTIVE);
+  write(root, 'src/new.spec.ts');
+  write(root, 'src/other.test.ts');
+  expect(resolvePackageTestGroups(root, { testGroups: groups })).toEqual([
+    ...groups,
+    ['src/isolated.spec.ts'],
+    ['src/new.spec.ts', 'src/other.test.ts'],
+  ]);
   for (const declaration of [
     null,
     { testGroups: [] },
@@ -141,7 +150,7 @@ test('inventory accepts independent additions and rejects invalid groups and sta
     JSON.stringify({ scripts: manifest.scripts, testGroups: [['src/missing.test.ts']] })
   );
   expect(inspectPackage(root)?.staleSelectors).toEqual(['src/missing.test.ts']);
-  expect(inspectPackage(root)?.missingTests).toEqual(['src/nested/two.test.ts', 'src/one.test.ts']);
+  expect(inspectPackage(root)?.missingTests).toEqual([]);
   write(root, 'package.json', JSON.stringify({ scripts: manifest.scripts, testGroups: [[]] }));
   expect(inspectPackage(root)?.unsupportedDeclarations.length).toBe(1);
   expect(

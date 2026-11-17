@@ -38,7 +38,7 @@ import { observeTerminalArtifacts } from '@archon/workflows/terminal-record';
 import type { IDatabase } from './adapters/types';
 import { getDatabase, getDialect } from './connection';
 import { lockConversationOwnership } from './conversation-ownership';
-import type { TransactionQuery } from './resource-slots';
+import { heldItemRefusal, type TransactionQuery } from './resource-slots';
 import { continuedItem, ensureItem } from './items';
 import { insertWorkflowEvent } from './workflow-events';
 import { assertPublicConversation, ensureWorkflowOriginAnchor } from './workflow-origin-anchor';
@@ -51,6 +51,7 @@ import {
 } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 import { insertStartReceipt } from './start-receipt-writes';
+import { openItemAsksForCompletedRun } from './item-asks';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
 
@@ -204,6 +205,8 @@ export async function claimPendingWorkflowRun(
   workingPath?: string
 ): Promise<WorkflowRun | null> {
   return getDatabase().withTransaction(async query => {
+    const held = await heldItemRefusal(query, id, ['pending']);
+    if (held) throw held;
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs
           SET status = 'running', last_activity_at = ${getDialect().now()},
@@ -382,6 +385,8 @@ export async function completeWorkflowRun(
         );
         // The starts this end causes commit with it, and only when this write won.
         for (const receipt of result?.startReceipts ?? []) await insertStartReceipt(query, receipt);
+        // The asks it leaves open with it too, replacing its workflow's open set on the item.
+        if (result?.asks !== undefined) await openItemAsksForCompletedRun(query, id, result.asks);
       }
       return update;
     });

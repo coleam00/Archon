@@ -12,6 +12,12 @@ import {
   mockListItemRulings,
   mockRecordItemRuling,
   mockWithdrawItemRuling,
+  mockGetItemAsk,
+  mockGetItem,
+  mockListOpenItemAsks,
+  mockAnswerItemAsk,
+  mockAnswerAttentionWait,
+  mockWithdrawItemAsk,
   mockGetUserById,
   makeUser,
   setSessionUserId,
@@ -22,6 +28,7 @@ import {
 import { describe, test, expect } from 'bun:test';
 import { itemReadSchema } from '@archon/workflows/item-read';
 import { itemWindowSchema } from '@archon/workflows/item-window';
+import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import {
   ItemRulingNotFoundError,
   ItemRulingOutsideProjectError,
@@ -296,7 +303,8 @@ describe('reading an item over HTTP', () => {
   };
 
   test('reads a known item by project and key, with its question and answers', async () => {
-    mockGetItemRuns.mockImplementationOnce(async (projectKey, key) =>
+    // The read resolves the item twice: once for its queued starts, then for its runs.
+    mockGetItemRuns.mockImplementation(async (projectKey, key) =>
       projectKey === item.projectKey && key === item.key
         ? { item, runs: [asking], descendantIds: [] }
         : null
@@ -323,16 +331,23 @@ describe('reading an item over HTTP', () => {
           ])
         )
     );
-    const { app } = makeApp();
-    const response = await app.request(
-      `/api/items?project=${encodeURIComponent(item.projectKey)}&key=${encodeURIComponent(item.key)}`
-    );
-    expect(response.status).toBe(200);
-    const read = itemReadSchema.parse(await response.json());
-    expect(read.item).toEqual(item);
-    expect(read.runs.map(run => [run.id, run.status])).toEqual([['run-item', 'paused']]);
-    expect(read.questions.map(question => question.run?.id)).toEqual(['run-item']);
-    expect(read.answers).toMatchObject([{ kind: 'gate', runId: 'run-item', decision: 'approved' }]);
+    try {
+      const { app } = makeApp();
+      const response = await app.request(
+        `/api/items?project=${encodeURIComponent(item.projectKey)}&key=${encodeURIComponent(item.key)}`
+      );
+      expect(response.status).toBe(200);
+      const read = itemReadSchema.parse(await response.json());
+      expect(read.item).toEqual(item);
+      expect(read.runs.map(run => [run.id, run.status])).toEqual([['run-item', 'paused']]);
+      expect(read.questions.map(question => question.run?.id)).toEqual(['run-item']);
+      expect(read.answers).toMatchObject([
+        { kind: 'gate', runId: 'run-item', decision: 'approved' },
+      ]);
+      expect(read.queued).toEqual([]);
+    } finally {
+      mockGetItemRuns.mockImplementation(async () => null);
+    }
   });
 
   test('an unknown key is 404 and a missing parameter is 400', async () => {
@@ -491,12 +506,212 @@ describe('rulings on an item over HTTP', () => {
 
   test('reading the item shows its rulings', async () => {
     const item = { id: 'item-row', projectKey: project, key: 'issues/8' };
-    mockGetItemRuns.mockImplementationOnce(async () => ({ item, runs: [], descendantIds: [] }));
+    mockGetItemRuns.mockImplementation(async () => ({ item, runs: [], descendantIds: [] }));
     mockListItemRulings.mockImplementationOnce(async () => [ruling()]);
     mockListAttentionQueueRows.mockImplementationOnce(async () => []);
-    const response = await makeApp().app.request(
-      `/api/items?project=${encodeURIComponent(project)}&key=issues%2F8`
+    try {
+      const response = await makeApp().app.request(
+        `/api/items?project=${encodeURIComponent(project)}&key=issues%2F8`
+      );
+      expect(itemReadSchema.parse(await response.json()).answers).toEqual([ruling()]);
+    } finally {
+      mockGetItemRuns.mockImplementation(async () => null);
+    }
+  });
+});
+
+describe('asks answered and withdrawn by ref over HTTP', () => {
+  const left: WorkflowRun = { ...MOCK_RUNNING_RUN, status: 'completed' };
+  const open: StoredItemAsk = {
+    id: 'a1',
+    itemId: 'item-1',
+    runId: left.id,
+    workflowName: 'plan',
+    position: 0,
+    ask: {
+      question: 'Keep the flag?',
+      context: 'Two readings.',
+      options: [
+        { id: 'keep', does: 'Keep it.', cost: 'One more flag.' },
+        { id: 'drop', does: 'Drop it.', cost: 'Old configs break.' },
+      ],
+      recommendation: { option: 'keep', why: 'Nothing needs it gone.' },
+      artifacts: [],
+    },
+    openedAt: '2026-11-16T10:00:00.000Z',
+    closed: null,
+  };
+  const answered: StoredItemAsk = {
+    ...open,
+    closed: {
+      as: 'answered',
+      answer: { decision: 'keep', text: '' },
+      act: { at: '2026-11-16T11:00:00.000Z', via: 'api', by: null, fromRun: null },
+    },
+  };
+  const post = (path: string, body: object) =>
+    makeApp().app.request(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const withAsk = (ask: StoredItemAsk | null): void => {
+    mockGetItemAsk.mockImplementation(async () => ask);
+    mockGetWorkflowRun.mockImplementation(async () => left);
+  };
+
+  test('the attention list carries a stored open ask with its item and no run', async () => {
+    const item = { id: 'item-1', projectKey: 'acme/widgets', key: 'issues/7' };
+    withAsk(open);
+    mockListOpenItemAsks.mockImplementation(async () => [open]);
+    mockGetItem.mockImplementation(async () => item);
+    mockListAttentionQueueRows.mockImplementation(async () => []);
+    try {
+      const response = await makeApp().app.request('/api/runs/attention');
+      expect(response.status).toBe(200);
+      const { items } = runsNeedingAttentionResponseSchema.parse(await response.json());
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        ref: 'ask:a1',
+        item,
+        message: 'Keep the flag?',
+        context: 'Two readings.',
+        askedIn: { runId: left.id, workflow: 'plan' },
+      });
+      expect(items[0]).not.toHaveProperty('run');
+    } finally {
+      mockListOpenItemAsks.mockImplementation(async () => []);
+      mockGetItem.mockImplementation(async () => null);
+      mockListAttentionQueueRows.mockReset();
+    }
+  });
+
+  test('an answer is recorded through the API surface and says when it settled the set', async () => {
+    withAsk(open);
+    mockAnswerItemAsk.mockImplementationOnce(async () => ({
+      kind: 'closed',
+      ask: answered,
+      settled: true,
+      startReceipts: [],
+    }));
+    const response = await post('/api/attention/answer', { ref: 'ask:a1', recommended: true });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ref: 'ask:a1',
+      action: 'answer',
+      unchanged: false,
+      settled: true,
+    });
+    expect(mockAnswerItemAsk.mock.calls.at(-1)?.[0]).toMatchObject({
+      askId: 'a1',
+      answer: { decision: 'keep', text: '' },
+      via: 'api',
+    });
+  });
+
+  test('a repeat is unchanged, a different answer is 409, an undeclared option is 400', async () => {
+    withAsk(answered);
+    mockAnswerItemAsk.mockImplementationOnce(async () => ({ kind: 'unchanged', ask: answered }));
+    const repeat = await post('/api/attention/answer', { ref: 'ask:a1', choose: ['keep'] });
+    expect(repeat.status).toBe(200);
+    expect(await repeat.json()).toMatchObject({ unchanged: true });
+
+    mockAnswerItemAsk.mockImplementationOnce(async () => ({ kind: 'refused', ask: answered }));
+    expect((await post('/api/attention/answer', { ref: 'ask:a1', choose: ['drop'] })).status).toBe(
+      409
     );
-    expect(itemReadSchema.parse(await response.json()).answers).toEqual([ruling()]);
+
+    const calls = mockAnswerItemAsk.mock.calls.length;
+    expect((await post('/api/attention/answer', { ref: 'ask:a1', choose: ['nope'] })).status).toBe(
+      400
+    );
+    expect(mockAnswerItemAsk.mock.calls.length).toBe(calls);
+  });
+
+  test("a withdrawal is 200, an unknown ref is 404, and a paused run's item is 400", async () => {
+    withAsk(open);
+    mockWithdrawItemAsk.mockImplementationOnce(async () => ({
+      kind: 'closed',
+      ask: {
+        ...open,
+        closed: {
+          as: 'withdrawn',
+          act: { at: '2026-11-16T11:00:00.000Z', via: 'api', by: null, fromRun: null },
+        },
+      },
+      settled: false,
+      startReceipts: [],
+    }));
+    const withdrawn = await post('/api/attention/withdraw', { ref: 'ask:a1' });
+    expect(withdrawn.status).toBe(200);
+    expect(await withdrawn.json()).toEqual({
+      ref: 'ask:a1',
+      action: 'withdraw',
+      unchanged: false,
+      settled: false,
+    });
+
+    withAsk(null);
+    expect((await post('/api/attention/withdraw', { ref: 'ask:missing' })).status).toBe(404);
+    expect((await post('/api/attention/withdraw', { ref: `${left.id}:pause-1` })).status).toBe(400);
+  });
+});
+
+describe("answers to a paused run's attention wait by ref over HTTP", () => {
+  const pausedAt = (fields: Partial<WorkflowAttentionWaitContext>): WorkflowRun => ({
+    ...MOCK_RUNNING_RUN,
+    status: 'paused',
+    metadata: {
+      wait: {
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: '2026-11-16T10:00:00.000Z',
+        message: 'Merge it?',
+        pauseId: 'pause-1',
+        form: 'select',
+        options: [{ id: 'merge' }],
+        ...fields,
+      },
+    },
+  });
+  const answer = async (run: WorkflowRun, body: object) => {
+    mockGetWorkflowRun.mockImplementation(async id => (id === run.id ? run : null));
+    const response = await makeApp().app.request('/api/attention/answer', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ref: `${run.id}:pause-1`, ...body }),
+    });
+    return { status: response.status, body: await response.text() };
+  };
+
+  test('an answer the wait does not declare is 400 and is not recorded', async () => {
+    const calls = mockAnswerAttentionWait.mock.calls.length;
+    try {
+      const undeclared = await answer(pausedAt({}), { choose: ['nope'] });
+      expect(undeclared.status).toBe(400);
+      expect(undeclared.body).toContain('nope');
+      expect((await answer(pausedAt({ other: true }), { choose: ['other'] })).status).toBe(400);
+      expect(
+        (await answer(pausedAt({ form: 'message', options: [] }), { choose: ['merge'] })).status
+      ).toBe(400);
+      expect((await answer(pausedAt({}), { recommended: true })).status).toBe(400);
+      expect(mockAnswerAttentionWait.mock.calls.length).toBe(calls);
+    } finally {
+      mockGetWorkflowRun.mockReset();
+    }
+  });
+
+  test("a store failure while recording a valid answer is the server's 500", async () => {
+    mockAnswerAttentionWait.mockImplementationOnce(async () => {
+      throw new Error('db down');
+    });
+    try {
+      const failed = await answer(pausedAt({}), { choose: ['merge'] });
+      expect(failed.status).toBe(500);
+      expect(failed.body).not.toContain('db down');
+    } finally {
+      mockGetWorkflowRun.mockReset();
+    }
   });
 });

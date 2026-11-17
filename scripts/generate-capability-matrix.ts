@@ -52,7 +52,8 @@ const AXES: readonly { key: keyof ProviderCapabilities; label: string }[] = [
   { key: 'sessionResume', label: 'Session resume' },
   {
     key: 'sessionFork',
-    label: 'Immutable session fork (`context.resume`, cross-run `persist_session`)',
+    label:
+      'Immutable session fork (`context.resume`, cross-run `persist_session` and `context: same`)',
   },
   { key: 'mcp', label: 'MCP servers (`mcp:`)' },
   { key: 'hooks', label: 'Hooks (`hooks:`)' },

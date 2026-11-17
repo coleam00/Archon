@@ -516,7 +516,7 @@ own runs started in the window that match `items`. The semantics are fixed:
 |------|--------|
 | `share` | The population items that match `where`, as a share of the population: `value`, `numerator`, `denominator`. |
 | `count` with `of: "runs"` | Per item, its runs that match `runs`: `value` is the mean per item, with `total` and `n` items. |
-| `count` with `of: "answers"` | Per item, its answers of the listed `kinds` (`attention`, `gate`, `ruling`; all when absent), as above. |
+| `count` with `of: "answers"` | Per item, its answers of the listed `kinds` (`attention`, `gate`, `ruling`, `ask`, `asks_settled`; all when absent), as above. |
 | `duration` | Per item, the hours from `from` to `to`: `value` is the mean over the `n` items that have both times, and `missing` counts the rest. |
 
 `value` is null when the population gives none. A run filter (`runs`, `has_run`, `last_run`,

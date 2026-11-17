@@ -37,7 +37,7 @@ export const workflowRunOriginSchema = z
 
 export type WorkflowRunOrigin = z.infer<typeof workflowRunOriginSchema>;
 
-const ITEM_KEY_MAX_LENGTH = 200;
+export const ITEM_KEY_MAX_LENGTH = 200;
 /** An item's key within its project. The engine gives it no meaning and never parses it. */
 export const itemKeySchema = z.string().min(1).max(ITEM_KEY_MAX_LENGTH);
 

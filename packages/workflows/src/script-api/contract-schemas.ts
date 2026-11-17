@@ -59,7 +59,7 @@ const types: readonly (readonly [string, string, z.ZodType, 'input' | 'output'])
   ],
   [
     'ItemRead',
-    'The item a run belongs to: its runs, open questions, and answers with rulings, oldest first.',
+    'The item a run belongs to: its runs, open questions, answers with rulings, oldest first, and links.',
     itemReadSchema,
     'output',
   ],

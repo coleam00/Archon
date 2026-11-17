@@ -16,7 +16,9 @@ import type {
   ResourceBlocker,
   ResourceStartRequestInspection,
   QueuedResourceStartInspection,
+  SkippedItemStart,
 } from '@archon/workflows/resource-start-store';
+import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 export { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 export type {
   StartBindingInspection,
@@ -25,6 +27,7 @@ export type {
 } from '@archon/workflows/resource-start-store';
 import type {
   PreparedWorkflowLaunch,
+  QueuedItemStart,
   ResourceStartBindingIntent,
   ResourceStartDisposition,
   ResourceStartIntent,
@@ -34,11 +37,14 @@ import {
   sourceReceiptInputSchema,
   preparedWorkflowLaunchSchema,
   resourceStartBindingIntentSchema,
+  checkoutHandoffSchema,
 } from '@archon/workflows/schemas/resource-start';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
-import { getDatabase, getDatabaseType, getDialect } from './connection';
+import { getDatabase, getDialect } from './connection';
 import {
   addResourceSlotHolder,
+  liveItemRuns,
+  lockAdmission,
   lockResourceSlot,
   lockResourceSlotForAdmission,
   resourceStartOccupancy,
@@ -47,9 +53,14 @@ import {
 } from './resource-slots';
 import { loadResourceCapacities } from '../config/concurrency-config';
 import { insertWorkflowRun } from './workflows';
+import { getLog } from './workflow-run-shared';
+import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
+import { holdsItem, itemHolder, itemHolders } from '@archon/workflows/item-hold';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { ensureItem } from './items';
 import { WorkflowStatusReadError } from './workflow-run-reads';
 import { insertStartReceipt } from './start-receipt-writes';
+import { toHydratedTimestamp } from './timestamps';
 
 interface RequestRow {
   id: string;
@@ -60,12 +71,6 @@ interface RequestRow {
   blocker_run_id: string | null;
   blocker_kind: NonNullable<ResourceStartRequestInspection['blocker']>['kind'] | null;
   launch: unknown;
-}
-
-// Different resource rows can reserve the same checkout. Hold one transaction lock
-// across occupancy and publication; SQLite already serializes writers.
-async function lockCheckoutReservations(query: Query): Promise<void> {
-  if (getDatabaseType() === 'postgresql') await query('SELECT pg_advisory_xact_lock(1797)');
 }
 
 /** Start requests are the run holder's durable FIFO waiters for a resource slot. */
@@ -116,7 +121,7 @@ async function admitResourceStartWithQuery(
   intent: ResourceStartIntent,
   itemId: string | null = null
 ): Promise<ResourceStartDisposition> {
-  await lockCheckoutReservations(query);
+  await lockAdmission(query);
   const { capacity } = await lockResourceSlotForAdmission(query, intent.resource, intent.capacity);
   const existing = await query<RequestRow>(
     'SELECT * FROM remote_agent_resource_start_requests WHERE id = $1',
@@ -128,7 +133,8 @@ async function admitResourceStartWithQuery(
   const blocker = resourceStartBlocker(
     await resourceStartOccupancy(query, intent.resource, capacity),
     launch,
-    intent.hostId
+    intent.hostId,
+    itemId
   );
   const status = blocker && intent.overlap === 'skip' ? 'skipped' : 'queued';
   await query(
@@ -217,7 +223,7 @@ export async function admitPendingRun(input: {
   const launch = preparedWorkflowLaunchSchema.parse(input.launch);
   const id = launch.run.id;
   return getDatabase().withTransaction(async query => {
-    await lockCheckoutReservations(query);
+    await lockAdmission(query);
     // A hand start is checked against its own number and leaves the slot's recorded one.
     await lockResourceSlot(query, input.resource);
     const capacity = (await loadResourceCapacities()).get(input.resource) ?? input.capacity;
@@ -228,16 +234,18 @@ export async function admitPendingRun(input: {
     const request = existing.rows[0];
     if (request?.status === 'admitted') return null;
     if (request) throw new Error(`Run '${id}' already has a ${request.status} resource request`);
-    const run = await query<{ status: string }>(
-      'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+    const run = await query<{ status: string; item_id: string | null }>(
+      'SELECT status, item_id FROM remote_agent_workflow_runs WHERE id = $1',
       [id]
     );
     const status = run.rows[0]?.status;
     if (status !== 'pending') throw new Error(`Run '${id}' is ${status ?? 'missing'}, not pending`);
+    const itemId = run.rows[0]?.item_id;
     const blocker = resourceStartBlocker(
       await resourceStartOccupancy(query, input.resource, capacity),
       launch,
-      DIRECT_START_HOST_ID
+      DIRECT_START_HOST_ID,
+      itemId == null ? null : String(itemId)
     );
     if (blocker) return blocker;
     await query(
@@ -257,7 +265,7 @@ export async function drainResourceStarts(options: {
   hostId: string;
 }): Promise<ResourceStartDisposition[]> {
   return getDatabase().withTransaction(async query => {
-    await lockCheckoutReservations(query);
+    await lockAdmission(query);
     const { capacity } = await lockResourceSlotForAdmission(query, options.resource);
     const slot = await resourceStartOccupancy(query, options.resource, capacity);
     const admitted: ResourceStartDisposition[] = [];
@@ -289,8 +297,28 @@ function parseStoredJson(value: unknown): unknown {
 }
 
 /** Reverses `storableIntent` in `./start-receipt-writes`. */
-function readStoredIntent(intent: unknown, eventInputNames: unknown): ResourceStartBindingIntent {
-  const stored = resourceStartBindingIntentSchema.parse(parseStoredJson(intent));
+function readStoredIntent(
+  intent: unknown,
+  eventInputNames: unknown,
+  checkoutFrom: unknown,
+  itemKey: unknown
+): ResourceStartBindingIntent {
+  const parsed = resourceStartBindingIntentSchema.parse(parseStoredJson(intent));
+  const stored = withEventInputs(
+    typeof itemKey === 'string' ? { ...parsed, itemKey } : parsed,
+    eventInputNames
+  );
+  // A malformed hand-off throws like a malformed intent: read as absent, the start would
+  // run on the branch with no commit pin.
+  return checkoutFrom == null
+    ? stored
+    : { ...stored, checkoutFrom: checkoutHandoffSchema.parse(parseStoredJson(checkoutFrom)) };
+}
+
+function withEventInputs(
+  stored: ResourceStartBindingIntent,
+  eventInputNames: unknown
+): ResourceStartBindingIntent {
   if (eventInputNames == null) return stored;
   const names = new Set(z.array(z.string()).parse(parseStoredJson(eventInputNames)));
   for (const name of names)
@@ -342,7 +370,10 @@ function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
     status: row.preparation_status as StartBindingInspection['status'],
     ownerId: typeof row.preparation_owner === 'string' ? row.preparation_owner : null,
     error: typeof row.preparation_error === 'string' ? row.preparation_error : null,
-    intent: row.intent == null ? null : readStoredIntent(row.intent, row.event_input_names),
+    intent:
+      row.intent == null
+        ? null
+        : readStoredIntent(row.intent, row.event_input_names, row.checkout_from, row.item_key),
     requestStatus,
     disposition: requestDisposition,
   };
@@ -392,7 +423,7 @@ export async function listStartReceipts(
 ): Promise<
   Pick<
     StartReceiptInspection,
-    'id' | 'sourceInstanceId' | 'deliveryId' | 'outcome' | 'reason' | 'receivedAt'
+    'id' | 'sourceInstanceId' | 'deliveryId' | 'itemKey' | 'outcome' | 'reason' | 'receivedAt'
   >[]
 > {
   const receiptLimit = validateStartReceiptLimit(limit);
@@ -408,17 +439,19 @@ export async function listStartReceipts(
     id: string;
     source_instance_id: string;
     delivery_id: string | null;
+    item_key: string | null;
     outcome: StartReceiptInspection['outcome'];
     reason: string | null;
     received_at: string | Date;
   }>(
-    `SELECT id, source_instance_id, delivery_id, outcome, reason, received_at FROM remote_agent_start_receipts ORDER BY ${receivedAtOrder} DESC, id DESC LIMIT $1`,
+    `SELECT id, source_instance_id, delivery_id, item_key, outcome, reason, received_at FROM remote_agent_start_receipts ORDER BY ${receivedAtOrder} DESC, id DESC LIMIT $1`,
     [receiptLimit]
   );
   return result.rows.map(row => ({
     id: row.id,
     sourceInstanceId: row.source_instance_id,
     deliveryId: row.delivery_id,
+    itemKey: row.item_key,
     outcome: row.outcome,
     reason: row.reason,
     receivedAt: row.received_at instanceof Date ? row.received_at.toISOString() : row.received_at,
@@ -490,6 +523,79 @@ export async function getResourceStartRequest(
   return result.rows[0] ? inspectRequest(result.rows[0]) : null;
 }
 
+export async function listSkippedItemStarts(itemId: string): Promise<SkippedItemStart[]> {
+  const result = await getDatabase().query<{
+    id: string;
+    resource_key: string;
+    blocker_kind: string | null;
+    blocker_run_id: string | null;
+    launch: unknown;
+  }>(
+    `SELECT id, resource_key, blocker_kind, blocker_run_id, launch
+       FROM remote_agent_resource_start_requests
+      WHERE item_id = $1 AND status = 'skipped'
+      ORDER BY queue_position`,
+    [itemId]
+  );
+  return result.rows.map(row => ({
+    requestId: row.id,
+    workflow: storedWorkflowName(row.launch),
+    resource: row.resource_key,
+    blockerRunId: row.blocker_kind === 'run' ? row.blocker_run_id : null,
+  }));
+}
+
+/** Runs by id; a row that cannot be normalized is reported `run_unreadable`. */
+async function readRunsForAttention(ids: readonly string[]): Promise<AttentionRead<WorkflowRun>[]> {
+  const runs: AttentionRead<WorkflowRun>[] = [];
+  for (const id of ids) {
+    const row = (
+      await getDatabase().query<WorkflowRunRow>(
+        'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
+        [id]
+      )
+    ).rows[0];
+    if (row === undefined) continue;
+    try {
+      runs.push(normalizeWorkflowRun(row));
+    } catch {
+      // Parser errors can quote stored data, including message text.
+      getLog().error({ workflowRunId: id }, 'attention_run_normalization_failed');
+      runs.push({ type: 'degraded', reason: 'run_unreadable', runId: id });
+    }
+  }
+  return runs;
+}
+
+export async function listWaitedItemHolders(): Promise<AttentionRead<WorkflowRun>[]> {
+  const db = getDatabase();
+  const runs = await liveItemRuns(db.query.bind(db));
+  const queued = await db.query<{ id: string; item_id: string; launch: unknown }>(
+    `SELECT id, item_id, launch FROM remote_agent_resource_start_requests
+      WHERE status = 'queued' AND item_id IS NOT NULL`
+  );
+  const held = itemHolders(runs);
+  const waiting = [
+    ...runs
+      .filter(run => !holdsItem(run))
+      .map(run => ({ runId: run.id, workflow: run.workflow_name, itemId: run.item_id })),
+    ...queued.rows.flatMap(row => {
+      const launch = preparedWorkflowLaunchSchema.safeParse(parseStoredJson(row.launch));
+      // A damaged request is reported by the trigger reads; it names no workflow here.
+      if (!launch.success) return [];
+      const workflow = launch.data.run.workflow_name;
+      return [{ runId: String(row.id), workflow, itemId: String(row.item_id) }];
+    }),
+  ];
+  const ids = new Set(
+    waiting.flatMap(start => {
+      const holder = itemHolder(held, start);
+      return holder === undefined ? [] : [holder];
+    })
+  );
+  return readRunsForAttention([...ids]);
+}
+
 export async function listQueuedResourceStartsForHost(
   hostId: string
 ): Promise<QueuedResourceStartInspection[]> {
@@ -512,6 +618,48 @@ export async function listQueuedResourceStartsForHost(
       };
     }
   });
+}
+
+const storedWorkflowNameSchema = z.object({ run: z.object({ workflow_name: z.string() }) });
+
+/** The launch's workflow name, or null when the stored launch does not read. */
+function storedWorkflowName(launch: unknown): string | null {
+  try {
+    const parsed = storedWorkflowNameSchema.safeParse(parseStoredJson(launch));
+    return parsed.success ? parsed.data.run.workflow_name : null;
+  } catch {
+    // Malformed JSON: the item read reports the start without its workflow.
+    return null;
+  }
+}
+
+export async function listQueuedItemStarts(itemId: string): Promise<QueuedItemStart[]> {
+  const result = await getDatabase().query<{
+    id: string;
+    resource_key: string;
+    host_id: string;
+    launch: unknown;
+    created_at: string | Date;
+    ahead: number | string;
+  }>(
+    `SELECT r.id, r.resource_key, r.host_id, r.launch, r.created_at,
+       (SELECT COUNT(*) FROM remote_agent_resource_start_requests q
+         WHERE q.resource_key = r.resource_key AND q.host_id = r.host_id
+           AND q.status = 'queued' AND q.queue_position < r.queue_position) AS ahead
+       FROM remote_agent_resource_start_requests r
+      WHERE r.item_id = $1 AND r.status = 'queued'
+      ORDER BY r.queue_position`,
+    [itemId]
+  );
+  return result.rows.map(row => ({
+    requestId: row.id,
+    workflow: storedWorkflowName(row.launch),
+    resource: row.resource_key,
+    hostId: row.host_id,
+    queuedAt: toHydratedTimestamp(row.created_at).toISOString(),
+    // Postgres returns COUNT(*) as a string.
+    ahead: Number(row.ahead),
+  }));
 }
 
 export async function withdrawQueuedResourceStart(
@@ -562,18 +710,18 @@ export async function completeStartBindingPreparation(
         [input.receiptId, input.bindingId]
       );
     }
-    const binding = await query<{ intent: unknown }>(
-      `SELECT intent FROM remote_agent_start_receipt_bindings
+    const binding = await query<{ intent: unknown; item_key: string | null }>(
+      `SELECT intent, item_key FROM remote_agent_start_receipt_bindings
         WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3${getDialect().rowLock()}`,
       [input.receiptId, input.bindingId, input.ownerId]
     );
-    const rawIntent = binding.rows[0]?.intent;
-    if (!rawIntent) return null;
-    const persisted = resourceStartBindingIntentSchema.parse(parseStoredJson(rawIntent));
+    const row = binding.rows[0];
+    if (!row?.intent) return null;
+    const persisted = resourceStartBindingIntentSchema.parse(parseStoredJson(row.intent));
     const disposition = await admitResourceStartWithQuery(
       query,
       preparedBindingStart(persisted, input),
-      await namedItem(query, input)
+      await namedItem(query, input, row.item_key)
     );
     await query(
       `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'complete', preparation_error = NULL, updated_at = ${getDialect().now()}
@@ -585,15 +733,20 @@ export async function completeStartBindingPreparation(
 }
 
 /**
- * The item the receipt named, in the project preparation resolved. It is written with the
- * start request, so a start that waits for capacity already has its item.
+ * The item the binding mapped, else the one its receipt named, in the project preparation
+ * resolved. It is written with the start request, so a start that waits for capacity
+ * already has its item.
  */
-async function namedItem(query: Query, input: PreparedBindingInput): Promise<string | null> {
+async function namedItem(
+  query: Query,
+  input: PreparedBindingInput,
+  bindingItemKey: string | null
+): Promise<string | null> {
   const receipt = await query<{ item_key: string | null }>(
     'SELECT item_key FROM remote_agent_start_receipts WHERE id = $1',
     [input.receiptId]
   );
-  const key = receipt.rows[0]?.item_key;
+  const key = bindingItemKey ?? receipt.rows[0]?.item_key;
   if (!key) return null;
   return ensureItem(query, input.launch.run.codebase_id, key);
 }

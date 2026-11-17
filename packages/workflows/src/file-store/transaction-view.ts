@@ -31,6 +31,7 @@ import {
   type ResumeClaimCursor,
   waitCompletionEvents,
   FAN_OUT_CANCEL_REASONS,
+  requireOwnerlessLease,
   resumeCursorMatches,
   waitAnsweredEvent,
   labeledAttentionWait,
@@ -86,6 +87,14 @@ export type TransactionView = Omit<
   | 'listItemsInWindow'
   | 'getItemMerge'
   | 'recordItemMerge'
+  | 'listItemLinks'
+  | 'recordItemLink'
+  | 'endItemLink'
+  | 'listOpenItemAsks'
+  | 'listItemAsks'
+  | 'getItemAsk'
+  | 'answerItemAsk'
+  | 'withdrawItemAsk'
 > & {
   /**
    * The run `resumeWorkflowRun(id, cursor)` would continue; throws what it would throw
@@ -130,6 +139,7 @@ export function createTransactionView(
     });
   };
   const resumableRun = (id: string, cursor?: ResumeClaimCursor): WorkflowRun => {
+    requireOwnerlessLease(id, cursor);
     const run = row(id);
     const statusAllows = isResumable(run) || cursor?.kind === 'ownerless';
     if (!statusAllows || (cursor !== undefined && !resumeCursorMatches(run, cursor)))
@@ -334,8 +344,10 @@ export function createTransactionView(
       result
     ): ReturnType<IWorkflowStore['completeWorkflowRun']> => {
       validateWorkflowWaitMetadata(metadata);
-      // A start receipt names an item, and items are refused here before a run starts.
-      if ((result?.startReceipts?.length ?? 0) > 0) throw new FileStoreUnsupportedError('items');
+      // A start receipt and an ask name an item, and items are refused here before a run
+      // starts, so neither can reach this write.
+      if ((result?.startReceipts?.length ?? 0) > 0 || (result?.asks?.length ?? 0) > 0)
+        throw new FileStoreUnsupportedError('items');
       const run = structuredClone(row(id));
       if (run.status !== 'running') throw new Error('Run not in running state');
       run.status = 'completed';

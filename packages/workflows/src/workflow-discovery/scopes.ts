@@ -269,18 +269,11 @@ export async function loadProjectScope(
   }
   const repoResult = await loadScopeDirectory(context, workflowPath, workflowPath, 'project');
 
-  // Repo workflows override bundled AND home scope by exact filename match.
-  // Preserve 'bundled' source for workflows loaded from the defaults/ subdirectory
-  // that were already registered as bundled in step 1.
+  // Repo workflows override bundled AND home scope by exact filename match. A file read
+  // from here is `project`, even when its name matches a bundled one: `--workflow-source`
+  // admission and dispatch provenance trust this label to say where the bytes came from.
   for (const [filename, parsed] of repoResult.workflows) {
     const existing = files.get(filename);
-    if (existing?.source === 'bundled') {
-      // This file was already loaded as a bundled default — the repo's defaults/
-      // subdirectory is re-discovering it. Keep the bundled source label.
-      getLog().debug({ filename }, 'repo_default_preserves_bundled_source');
-      files.set(filename, { ...parsed, source: 'bundled' });
-      continue;
-    }
     if (existing) {
       getLog().debug(
         { filename, overriddenSource: existing.source },

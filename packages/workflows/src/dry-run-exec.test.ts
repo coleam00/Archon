@@ -5,6 +5,7 @@ import { applyRunEnvironment } from './run-preflight';
 import { existsSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import { EXEC_NODE_ENVIRONMENT_NAMES } from './exec-environment';
 import { join, sep } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { makeTestWorkflow } from './test-utils';
 import { dryRunWorkflow, useDryRunFiles } from './dry-run-test-utils';
 import { inputEnvKey } from './schemas/node-bindings';
@@ -12,6 +13,28 @@ import { inputEnvKey } from './schemas/node-bindings';
 const { temporaryDirectory } = useDryRunFiles();
 
 describe('dry-run code execution', () => {
+  test('releases each node scratch before a dependent checks out the same branch', async () => {
+    const repo = temporaryDirectory();
+    const run = (...args: string[]) => execFileSync('git', ['-C', repo, ...args]);
+    run('init', '-q');
+    run('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
+    run('branch', 'probe');
+    const checkout = 'git worktree add -q "$NODE_SCRATCH_DIR/wt" probe';
+    const result = await dryRunWorkflow({
+      cwd: repo,
+      execCode: true,
+      workflow: makeTestWorkflow({
+        name: 'scratch-same-branch',
+        nodes: [
+          { id: 'first', bash: checkout },
+          { id: 'second', bash: checkout, depends_on: ['first'] },
+        ],
+      }),
+    });
+    expect(result.outcome).toBe('completed');
+    expect(String(run('worktree', 'list', '--porcelain')).match(/^worktree /gm)).toHaveLength(1);
+  });
+
   test('executes bash only with execCode and captures failures', async () => {
     const success = makeTestWorkflow({
       name: 'bash-ok',

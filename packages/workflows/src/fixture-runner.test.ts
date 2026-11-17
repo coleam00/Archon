@@ -1457,9 +1457,12 @@ describe('runFixtures exec-code isolation (#2851)', () => {
       writeFileSync(join(cwd, 'scratch.txt'), 'untracked stray\n');
       const dirtyReport = await runFixtures({ workflows, cwd });
       expect(dirtyReport.passed).toBe(1);
-      expect(
-        execSpy.mock.calls.filter(([cmd]) => cmd === 'git').map(([, args]) => args.slice(0, 2))
-      ).toEqual([
+      // Node scratch release lists worktrees once per node end, whatever the fixture's
+      // isolation does; it is not the preflight this guards against.
+      const isolationCalls = execSpy.mock.calls
+        .filter(([cmd, args]) => cmd === 'git' && !(args[0] === '-C' && args[3] === 'list'))
+        .map(([, args]) => args.slice(0, 2));
+      expect(isolationCalls).toEqual([
         ['worktree', 'add'],
         ['worktree', 'remove'],
         ['worktree', 'add'],

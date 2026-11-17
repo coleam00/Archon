@@ -14,6 +14,7 @@ function run(workflow: string, startedAt: string, outcome: string | null = null)
     cause: null,
     awaitingExecution: null,
     spend: { usd: null, inputTokens: null, outputTokens: null },
+    heldBehind: null,
   };
 }
 
@@ -21,8 +22,11 @@ function read(key: string, runs: ItemRun[], mergedAt: string | null): ItemRead {
   return {
     item: { id: key, projectKey: 'acme/web', key },
     runs,
+    queued: [],
+    skipped: [],
     questions: [],
     answers: [],
+    links: [],
     merged:
       mergedAt === null
         ? null

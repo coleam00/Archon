@@ -104,7 +104,7 @@ describe('parsePackDeclaration bindings', () => {
 
   it('reads a timer, an event and a fire-only binding, applying the defaults', () => {
     const declared = parsePackDeclaration(
-      `bindings:\n${timer('    inputs:\n      self: { binding: sweep }\n      host: { repo: host }\n      mode: fast\n      next: { binding: follow-up }\n')}  follow-up:\n    workflow: sweep\n    resource: follow-up\n    overlap: queue\n  opened:\n    workflow: sweep\n    resource: opened\n    capacity: 2\n    overlap: queue\n    isolation: { kind: worktree }\n    event: { kind: issue.lifecycle, actions: [opened] }\n    inputs:\n      number: { event: subject.number }\n`,
+      `bindings:\n${timer('    inputs:\n      self: { binding: sweep }\n      host: { repo: host }\n      mode: fast\n      next: { binding: follow-up }\n')}  follow-up:\n    workflow: sweep\n    resource: follow-up\n    overlap: queue\n    item: { field: number, prefix: issue- }\n  opened:\n    workflow: sweep\n    resource: opened\n    capacity: 2\n    overlap: queue\n    isolation: { kind: worktree }\n    event: { kind: issue.lifecycle, actions: [opened] }\n    item: { field: subject.number }\n    inputs:\n      number: { event: subject.number }\n`,
       'p/.pack/pack.yaml'
     );
     expect(declared).toEqual({
@@ -131,6 +131,7 @@ describe('parsePackDeclaration bindings', () => {
           overlap: 'queue',
           isolation: { kind: 'default' },
           inputs: {},
+          item: { field: 'number', prefix: 'issue-' },
         },
         opened: {
           workflow: 'sweep',
@@ -141,7 +142,29 @@ describe('parsePackDeclaration bindings', () => {
           isolation: { kind: 'worktree' },
           event: { kind: 'issue.lifecycle', actions: ['opened'] },
           inputs: { number: { event: 'subject.number' } },
+          item: { field: 'subject.number' },
         },
+      },
+    });
+  });
+
+  it('reads a run-ended binding with its outcomes and the ended run inputs it maps', () => {
+    const declared = parsePackDeclaration(
+      `bindings:\n${timer()}  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: [build, narrow] }\n    inputs:\n      issue: { input: issue }\n      verdict: { result: /verdict }\n      policy: docs/policy.md\n      next: { binding: sweep }\n`,
+      'p/.pack/pack.yaml'
+    );
+    expect(declared.bindings?.plan).toEqual({
+      workflow: 'plan',
+      resource: 'plan',
+      resource_scope: 'repo',
+      overlap: 'queue',
+      isolation: { kind: 'default' },
+      run_ended: { workflow: 'triage', outcome: ['build', 'narrow'] },
+      inputs: {
+        issue: { input: 'issue' },
+        verdict: { result: '/verdict' },
+        policy: 'docs/policy.md',
+        next: { binding: 'sweep' },
       },
     });
   });
@@ -149,10 +172,31 @@ describe('parsePackDeclaration bindings', () => {
   it.each([
     [timer('    inputs:\n      other: { binding: missing }\n'), "names unknown binding 'missing'"],
     [
+      `${timer()}${'  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done }\n'}  ref:\n    workflow: w\n    resource: x\n    overlap: skip\n    inputs:\n      p: { binding: plan }\n`,
+      "names run-ended binding 'plan'",
+    ],
+    [
+      timer('    inputs:\n      v: { result: /verdict }\n'),
+      'only a run-ended binding has an ended run',
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: [done, done] }\n',
+      'outcomes must be distinct',
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: [] }\n',
+      "binding 'plan' is invalid at 'run_ended.outcome'",
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { outcome: done }\n',
+      "binding 'plan' is invalid at 'run_ended.workflow'",
+    ],
+    [
       timer('    inputs:\n      n: { event: subject.number }\n'),
       'only an event binding has an event',
     ],
-    [timer('    event: { kind: issue.lifecycle }\n'), "must not set both 'schedule'"],
+    [timer('    event: { kind: issue.lifecycle }\n'), "must set at most one of 'schedule'"],
+    [timer('    item: { field: number }\n'), 'Unrecognized key: "item"'],
     // A schedule key without its expression is a broken timer, never a fire-only binding.
     [
       '  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n    schedule:\n',

@@ -28,7 +28,11 @@ import {
   removeEnvironment,
   type RemoveEnvironmentResult,
 } from '@archon/core/services/cleanup/remove-environment';
-import { getCleanupRunLock, getLiveRunBlocker } from '@archon/core/services/cleanup/run-lock';
+import {
+  getCleanupRunLock,
+  getUseBlocker,
+  useBlockerLogFields,
+} from '@archon/core/services/cleanup/run-lock';
 import {
   listEnvironments,
   cleanupMergedEnvironments,
@@ -147,9 +151,12 @@ async function cleanupStaleWorktree(
       staleDays: daysStale,
     });
     if (lock.kind === 'locked') {
-      const { runId, runStatus, display } = lock.blocker;
-      getLog().info({ envId: env.id, runId, runStatus }, 'skip_stale_live_run');
-      console.log(`  Status: Skipped — ${display}`);
+      const { blocker } = lock;
+      getLog().info(
+        { envId: env.id, ...useBlockerLogFields(blocker) },
+        `skip_stale_${blocker.reason}`
+      );
+      console.log(`  Status: Skipped — ${blocker.display}`);
       return 'skipped';
     }
     if (lock.kind === 'unpushed') {
@@ -354,7 +361,7 @@ async function checkCompletionLiveRun(
   blockers: string[]
 ): Promise<void> {
   try {
-    const liveRun = await getLiveRunBlocker(env.id);
+    const liveRun = await getUseBlocker(env.id);
     if (liveRun) blockers.push(liveRun.display);
   } catch (error) {
     const err = error as Error;

@@ -10,6 +10,7 @@ import {
 import { join } from 'node:path';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths/logger';
+import { FileStoreUnsupportedError } from './errors';
 import {
   preparedWorkflowLaunchSchema,
   type ResourceStartDisposition,
@@ -143,11 +144,18 @@ export function createFileAdmissionStore(
         }
         return admitted;
       }),
+    // No start names an item here (`FileStoreUnsupportedError('items')`).
+    listSkippedItemStarts: async () => [],
+    listWaitedItemHolders: async () => [],
     getResourceStartRequest: id =>
       query(async tx => {
         const row = await tx.request(id);
         return row ? inspect(row) : null;
       }),
+    // The file store refuses items, so no start on it names one.
+    listQueuedItemStarts: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
     listQueuedResourceStartsForHost: hostId =>
       query(async () => {
         const queued: { inspection: QueuedResourceStartInspection; position: number }[] = [];

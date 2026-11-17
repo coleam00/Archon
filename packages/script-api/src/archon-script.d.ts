@@ -2022,7 +2022,7 @@ declare module 'archon:script' {
     }>;
   };
 
-  /** The item a run belongs to: its runs, open questions, and answers with rulings, oldest first. */
+  /** The item a run belongs to: its runs, open questions, answers with rulings, oldest first, and links. */
   export type ItemRead = {
     readonly item: {
       readonly id: string;
@@ -2038,6 +2038,10 @@ declare module 'archon:script' {
       readonly completedAt: string | null;
       readonly cause: {
         readonly kind: 'run_ended';
+        readonly runId: string;
+        readonly sourceInstanceId: string;
+      } | {
+        readonly kind: 'asks_settled';
         readonly runId: string;
       } | {
         readonly kind: 'run_fired';
@@ -2057,6 +2061,37 @@ declare module 'archon:script' {
         readonly inputTokens: number | null;
         readonly outputTokens: number | null;
       };
+      readonly heldBehind: {
+        readonly runId: string;
+        readonly workflow: string;
+        readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
+      } | null;
+    }>;
+    readonly queued: ReadonlyArray<{
+      readonly requestId: string;
+      readonly workflow: string | null;
+      readonly resource: string;
+      readonly hostId: string;
+      readonly queuedAt: string;
+      readonly ahead: number;
+      readonly heldBehind: {
+        readonly runId: string;
+        readonly workflow: string;
+        readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
+      } | null;
+    }>;
+    readonly skipped: ReadonlyArray<{
+      readonly requestId: string;
+      readonly workflow: string | null;
+      readonly resource: string;
+      readonly heldBehind: {
+        readonly runId: string;
+        readonly workflow: string;
+        readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
+      } | null;
     }>;
     readonly questions: ReadonlyArray<{
       readonly kind: 'attention';
@@ -2099,12 +2134,23 @@ declare module 'archon:script' {
         readonly label?: string;
         readonly does?: string;
         readonly value?: unknown;
+        readonly cost?: string;
       }>;
       readonly other?: true;
       readonly recommendation?: {
         readonly option: string;
         readonly why: string;
         readonly confidence?: 'low' | 'medium' | 'high';
+      };
+      readonly context?: string;
+      readonly artifacts?: ReadonlyArray<{
+        readonly type: 'archon_artifact';
+        readonly run_id: string;
+        readonly path: string;
+      }>;
+      readonly askedIn?: {
+        readonly runId: string;
+        readonly workflow: string;
       };
     } | {
       readonly kind: 'awaiting_response';
@@ -2209,6 +2255,39 @@ declare module 'archon:script' {
       };
       readonly reason: 'malformed_tool_call_attention' | 'malformed_gate' | 'unrecognized_gate_type' | 'child_pointer_missing' | 'child_run_missing' | 'child_chain_too_deep' | 'source_release_not_continued';
       readonly detail: string;
+    } | {
+      readonly kind: 'owner_lost';
+      readonly ref: string;
+      readonly project: {
+        readonly key: string;
+        readonly codebaseId: string | null;
+        readonly name: string;
+      } | null;
+      readonly item?: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      };
+      readonly revision: number;
+      readonly labels: Readonly<Record<string, string>>;
+      readonly pausedAt: string | null;
+      readonly run: {
+        readonly id: string;
+        readonly workflow: string;
+        readonly parentRunId: string | null;
+        readonly fanOut: {
+          readonly parentRunId: string;
+          readonly nodeId: string;
+          readonly index: number;
+        } | null;
+        readonly context: {
+          readonly artifactsDir: string | null;
+          readonly transcript: string | null;
+          readonly workingPath: string | null;
+          readonly branch: string | null;
+        };
+      };
+      readonly observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
     }>;
     readonly answers: ReadonlyArray<{
       readonly kind: 'attention';
@@ -2272,6 +2351,81 @@ declare module 'archon:script' {
           readonly nodePath: string;
         } | null;
       } | null;
+    } | {
+      readonly kind: 'ask';
+      readonly runId: string;
+      readonly node: string | null;
+      readonly occurrence: string | null;
+      readonly at: string;
+      readonly via: string | null;
+      readonly ref: string;
+      readonly question: string;
+      readonly answer: {
+        readonly text: string;
+      } | {
+        readonly decision: string;
+        readonly text: string;
+      } | {
+        readonly decisions: ReadonlyArray<string>;
+        readonly text: string;
+      } | null;
+      readonly chosen: {
+        readonly id: string;
+        readonly does: string;
+      } | null;
+      readonly withdrawn: boolean;
+      readonly by: {
+        readonly declared: string;
+      } | {
+        readonly userId: string;
+      } | null;
+      readonly fromRun: {
+        readonly runId: string;
+        readonly nodePath: string;
+      } | null;
+    } | {
+      readonly kind: 'asks_settled';
+      readonly runId: string;
+      readonly node: string | null;
+      readonly occurrence: string | null;
+      readonly at: string;
+      readonly via: string | null;
+      readonly answered: number;
+      readonly withdrawn: number;
+    }>;
+    readonly links: ReadonlyArray<{
+      readonly id: string;
+      readonly kind: 'depends_on' | 'part_of' | 'duplicate_of';
+      readonly direction: 'outgoing' | 'incoming';
+      readonly other: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      };
+      readonly at: string;
+      readonly via: string;
+      readonly by: {
+        readonly declared: string;
+      } | {
+        readonly userId: string;
+      } | null;
+      readonly fromRun: {
+        readonly runId: string;
+        readonly nodePath: string;
+      } | null;
+      readonly ended: {
+        readonly at: string;
+        readonly via: string;
+        readonly by: {
+          readonly declared: string;
+        } | {
+          readonly userId: string;
+        } | null;
+        readonly fromRun: {
+          readonly runId: string;
+          readonly nodePath: string;
+        } | null;
+      } | null;
     }>;
     readonly merged: {
       readonly change: string;
@@ -2296,6 +2450,10 @@ declare module 'archon:script' {
       readonly type: 'degraded';
       readonly reason: 'merge_unreadable';
       readonly itemId: string;
+    } | {
+      readonly type: 'degraded';
+      readonly reason: 'link_unreadable';
+      readonly linkId: string;
     }>;
   };
 
@@ -2321,6 +2479,10 @@ declare module 'archon:script' {
         readonly cause: {
           readonly kind: 'run_ended';
           readonly runId: string;
+          readonly sourceInstanceId: string;
+        } | {
+          readonly kind: 'asks_settled';
+          readonly runId: string;
         } | {
           readonly kind: 'run_fired';
           readonly runId: string;
@@ -2339,6 +2501,37 @@ declare module 'archon:script' {
           readonly inputTokens: number | null;
           readonly outputTokens: number | null;
         };
+        readonly heldBehind: {
+          readonly runId: string;
+          readonly workflow: string;
+          readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
+        } | null;
+      }>;
+      readonly queued: ReadonlyArray<{
+        readonly requestId: string;
+        readonly workflow: string | null;
+        readonly resource: string;
+        readonly hostId: string;
+        readonly queuedAt: string;
+        readonly ahead: number;
+        readonly heldBehind: {
+          readonly runId: string;
+          readonly workflow: string;
+          readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
+        } | null;
+      }>;
+      readonly skipped: ReadonlyArray<{
+        readonly requestId: string;
+        readonly workflow: string | null;
+        readonly resource: string;
+        readonly heldBehind: {
+          readonly runId: string;
+          readonly workflow: string;
+          readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
+        } | null;
       }>;
       readonly questions: ReadonlyArray<{
         readonly kind: 'attention';
@@ -2381,12 +2574,23 @@ declare module 'archon:script' {
           readonly label?: string;
           readonly does?: string;
           readonly value?: unknown;
+          readonly cost?: string;
         }>;
         readonly other?: true;
         readonly recommendation?: {
           readonly option: string;
           readonly why: string;
           readonly confidence?: 'low' | 'medium' | 'high';
+        };
+        readonly context?: string;
+        readonly artifacts?: ReadonlyArray<{
+          readonly type: 'archon_artifact';
+          readonly run_id: string;
+          readonly path: string;
+        }>;
+        readonly askedIn?: {
+          readonly runId: string;
+          readonly workflow: string;
         };
       } | {
         readonly kind: 'awaiting_response';
@@ -2491,6 +2695,39 @@ declare module 'archon:script' {
         };
         readonly reason: 'malformed_tool_call_attention' | 'malformed_gate' | 'unrecognized_gate_type' | 'child_pointer_missing' | 'child_run_missing' | 'child_chain_too_deep' | 'source_release_not_continued';
         readonly detail: string;
+      } | {
+        readonly kind: 'owner_lost';
+        readonly ref: string;
+        readonly project: {
+          readonly key: string;
+          readonly codebaseId: string | null;
+          readonly name: string;
+        } | null;
+        readonly item?: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        };
+        readonly revision: number;
+        readonly labels: Readonly<Record<string, string>>;
+        readonly pausedAt: string | null;
+        readonly run: {
+          readonly id: string;
+          readonly workflow: string;
+          readonly parentRunId: string | null;
+          readonly fanOut: {
+            readonly parentRunId: string;
+            readonly nodeId: string;
+            readonly index: number;
+          } | null;
+          readonly context: {
+            readonly artifactsDir: string | null;
+            readonly transcript: string | null;
+            readonly workingPath: string | null;
+            readonly branch: string | null;
+          };
+        };
+        readonly observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
       }>;
       readonly answers: ReadonlyArray<{
         readonly kind: 'attention';
@@ -2554,6 +2791,81 @@ declare module 'archon:script' {
             readonly nodePath: string;
           } | null;
         } | null;
+      } | {
+        readonly kind: 'ask';
+        readonly runId: string;
+        readonly node: string | null;
+        readonly occurrence: string | null;
+        readonly at: string;
+        readonly via: string | null;
+        readonly ref: string;
+        readonly question: string;
+        readonly answer: {
+          readonly text: string;
+        } | {
+          readonly decision: string;
+          readonly text: string;
+        } | {
+          readonly decisions: ReadonlyArray<string>;
+          readonly text: string;
+        } | null;
+        readonly chosen: {
+          readonly id: string;
+          readonly does: string;
+        } | null;
+        readonly withdrawn: boolean;
+        readonly by: {
+          readonly declared: string;
+        } | {
+          readonly userId: string;
+        } | null;
+        readonly fromRun: {
+          readonly runId: string;
+          readonly nodePath: string;
+        } | null;
+      } | {
+        readonly kind: 'asks_settled';
+        readonly runId: string;
+        readonly node: string | null;
+        readonly occurrence: string | null;
+        readonly at: string;
+        readonly via: string | null;
+        readonly answered: number;
+        readonly withdrawn: number;
+      }>;
+      readonly links: ReadonlyArray<{
+        readonly id: string;
+        readonly kind: 'depends_on' | 'part_of' | 'duplicate_of';
+        readonly direction: 'outgoing' | 'incoming';
+        readonly other: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        };
+        readonly at: string;
+        readonly via: string;
+        readonly by: {
+          readonly declared: string;
+        } | {
+          readonly userId: string;
+        } | null;
+        readonly fromRun: {
+          readonly runId: string;
+          readonly nodePath: string;
+        } | null;
+        readonly ended: {
+          readonly at: string;
+          readonly via: string;
+          readonly by: {
+            readonly declared: string;
+          } | {
+            readonly userId: string;
+          } | null;
+          readonly fromRun: {
+            readonly runId: string;
+            readonly nodePath: string;
+          } | null;
+        } | null;
       }>;
       readonly merged: {
         readonly change: string;
@@ -2578,6 +2890,10 @@ declare module 'archon:script' {
         readonly type: 'degraded';
         readonly reason: 'merge_unreadable';
         readonly itemId: string;
+      } | {
+        readonly type: 'degraded';
+        readonly reason: 'link_unreadable';
+        readonly linkId: string;
       }>;
     }>;
     readonly next: string | null;
@@ -2723,8 +3039,10 @@ declare module 'archon:script' {
    * The item this run belongs to (`archon workflow runs --item-of`): the item of the run's
    * root, since a `workflow:` child carries none of its own. It holds the item's runs, open
    * questions, and its answers and rulings in one list, oldest first; a withdrawn ruling
-   * stays, with `withdrawn` set. Null when the run is on no item. Read it in a `script:`
-   * node and `emit()` what a later node needs; the engine hands rulings to no node itself.
+   * stays, with `withdrawn` set. `links` holds every link from or to the item, each with
+   * its direction and the other item; an ended link stays, with `ended` set. Null when the
+   * run is on no item. Read it in a `script:` node and `emit()` what a later node needs; the
+   * engine hands rulings and links to no node itself.
    * A container run cannot call it, as it cannot call `state`.
    */
   export function item(): ItemRead | null;
@@ -2751,6 +3069,11 @@ declare module 'archon:script' {
   export interface TriggerFireOptions {
       /** One delivery id starts at most one run; build it from values a retry repeats. */
       readonly deliveryId?: string;
+      /**
+       * The item the started run is on (`--item`), or `null` for no item (`--no-item`).
+       * Left out, a fire from a run on an item inherits it.
+       */
+      readonly item?: string | null;
   }
   /** A fire's receipt and the admission its binding's request got; null when it got none. */
   export interface TriggerFired {

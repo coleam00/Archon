@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 import {
   createReleaseRepo,

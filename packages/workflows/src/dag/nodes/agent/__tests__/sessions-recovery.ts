@@ -78,6 +78,7 @@ export function registerPersistRecoveryTests(fixture: ReturnType<typeof setupPer
         node_id: 'planner',
         scope_key: 'conv-dag',
         provider: 'claude',
+        model: null,
         provider_session_id: 'prior-id',
         last_run_id: null,
         created_at: '2026-05-01T00:00:00Z',
@@ -181,6 +182,7 @@ export function registerPersistRecoveryTests(fixture: ReturnType<typeof setupPer
       node_id: 'planner',
       scope_key: 'conv-dag',
       provider: 'claude',
+      model: null,
       provider_session_id: 'new-session-id',
       last_run_id: 'dag-test-run-id',
     });
@@ -330,6 +332,7 @@ export function registerConcurrentPersistTests() {
       };
       rows.set(key(seed), {
         ...seed,
+        model: null,
         provider_session_id: initial,
         last_run_id: 'earlier-run',
         created_at: '2026-10-01T00:00:00Z',

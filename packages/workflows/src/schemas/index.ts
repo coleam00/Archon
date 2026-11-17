@@ -89,6 +89,7 @@ export {
   dagNodeBaseSchema,
   nodeContextSchema,
   isNodeContextResume,
+  isNodeContextSame,
 } from './dag-node-base';
 export {
   nodeMcpSchema,
@@ -134,6 +135,7 @@ export {
   inputEnvKey,
   bindingDirectiveSchema,
   isBindingDirective,
+  isBindingDirectiveShape,
   isTypedOutputsDirective,
 } from './node-bindings';
 export {

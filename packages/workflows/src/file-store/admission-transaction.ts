@@ -275,7 +275,9 @@ export function createAdmissionTransaction(
     const queue: QueuedStart[] = [];
     for (const id of ids) {
       try {
-        queue.push(queuedRequestSchema(id, pathFor('slots', resource)).parse(await request(id)));
+        const start = queuedRequestSchema(id, pathFor('slots', resource)).parse(await request(id));
+        // The file store carries no items (`FileStoreUnsupportedError('items')`).
+        queue.push({ ...start, itemId: null });
       } catch (error) {
         if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
         const queueError = new Error(`Queued resource request '${id}' is invalid`, {
@@ -338,6 +340,7 @@ export function createAdmissionTransaction(
       heldCheckouts: heldCheckouts(possiblyLocal, reusable),
       foreignHeldCheckouts: heldCheckouts(foreign, reusable),
       unknownForeignCheckoutHolder,
+      heldItems: new Map(),
     };
   }
   async function admitExisting(
@@ -374,7 +377,8 @@ export function createAdmissionTransaction(
     const blocker = resourceStartBlocker(
       await occupancy(intent.resource, launch),
       launch,
-      intent.hostId
+      intent.hostId,
+      null
     );
     const head = z.object({ seq: z.number() }).parse(await readJson(join(root, 'head.json')));
     const row: Request = {
@@ -417,7 +421,8 @@ export function createAdmissionTransaction(
         capacity: (await resourceCapacity(resourceName)) ?? declaredCapacity,
       },
       launch,
-      DIRECT_START_HOST_ID
+      DIRECT_START_HOST_ID,
+      null
     );
     if (blocker) return blocker;
     const head = z.object({ seq: z.number() }).parse(await readJson(join(root, 'head.json')));

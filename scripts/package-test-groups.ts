@@ -26,11 +26,19 @@ export function resolvePackageTestGroups(
       )
     )
       throw new Error('testGroups must contain nonempty arrays of string selectors');
-    return selectedFiles === undefined
-      ? groups
-      : groups.map(group =>
-          selectedFiles.filter(file => group.some(selector => file.includes(selector)))
-        );
+    const files = selectedFiles ?? discoverPackageTestFiles(packageDirectory);
+    const selects = (group: string[], file: string) =>
+      group.some(selector => file.includes(selector));
+    const declared =
+      selectedFiles === undefined
+        ? groups
+        : groups.map(group => selectedFiles.filter(file => selects(group, file)));
+    // Declared groups only pin files that need a shared process; every other test is grouped
+    // by discovery, so adding a test never means editing the manifest.
+    const undeclared = files.filter(file => !groups.some(group => selects(group, file)));
+    return undeclared.length === 0
+      ? declared
+      : [...declared, ...groupDiscoveredTestFiles(packageDirectory, undeclared)];
   }
 
   return groupDiscoveredTestFiles(

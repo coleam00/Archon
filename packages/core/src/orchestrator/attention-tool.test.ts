@@ -4,9 +4,10 @@ import { getArchonWorkspacesPath } from '@archon/paths';
 import type {
   AttentionQueueItem,
   AttentionQueueItemWithoutRun,
-  AttentionQueueSource,
 } from '@archon/workflows/attention-queue';
-import { projectRef } from '@archon/workflows/attention-queue';
+import { askQueueItem, projectRef } from '@archon/workflows/attention-queue';
+import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
+import type { IWorkflowStore } from '@archon/workflows/store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   authorizeRunAction,
@@ -87,16 +88,27 @@ function harness(
   runs: WorkflowRun[],
   codebaseId: string | null = null,
   actor: RunActor = operator,
-  itemsWithoutRun: AttentionQueueItemWithoutRun[] = []
+  itemsWithoutRun: AttentionQueueItemWithoutRun[] = [],
+  asks: StoredItemAsk[] = []
 ) {
   const byId = new Map(runs.map(run => [run.id, run]));
-  const queue: AttentionQueueSource = {
+  const answerItemAsk = mock<IWorkflowStore['answerItemAsk']>(async input => {
+    const stored = asks.find(candidate => candidate.id === input.askId);
+    if (stored === undefined) return { kind: 'not_found' };
+    return { kind: 'closed', ask: stored, settled: true, startReceipts: [] };
+  });
+  const queue: AttentionToolContext['queue'] = {
     store: {
       listAttentionQueueRows: async () => runs,
       getWorkflowRun: async id => byId.get(id) ?? null,
       getWorkflowRunForAttention: async id => byId.get(id) ?? null,
       getCodebase: async id => [WEB, API].find(codebase => codebase.id === id) ?? null,
       getItem: async () => null,
+      getItemAsk: async id => asks.find(candidate => candidate.id === id) ?? null,
+      answerItemAsk,
+      withdrawItemAsk: async () => {
+        throw new Error('not used');
+      },
     },
     branchOf: async () => null,
     itemsWithoutRun: async () => itemsWithoutRun,
@@ -127,7 +139,7 @@ function harness(
     },
     codebaseId,
   };
-  return { tool: buildAttentionTool(ctx), answerWorkflow, respondToWorkflow };
+  return { tool: buildAttentionTool(ctx), answerWorkflow, respondToWorkflow, answerItemAsk };
 }
 
 /** The items a list result carries: the JSON block between its count line and the answer guide. */
@@ -283,8 +295,8 @@ describe('attention tool', () => {
     expect(answerWorkflow).not.toHaveBeenCalled();
   });
 
-  // Who may answer is the run's rule today, so an item no run holds is nobody's to answer yet.
-  test('an item no run holds is counted, not listed, and takes no answer', async () => {
+  // An item no run holds and no run left has nobody whose rule could let anyone answer it.
+  test('an item no run holds or left is counted, not listed, and takes no answer', async () => {
     const withoutRun: AttentionQueueItemWithoutRun = {
       kind: 'attention',
       ref: 'ask:1',
@@ -309,5 +321,58 @@ describe('attention tool', () => {
     ).toContain("nothing matches item 'ask:1'");
     expect(answerWorkflow).not.toHaveBeenCalled();
     expect(respondToWorkflow).not.toHaveBeenCalled();
+  });
+
+  // An ask a completed run left is held to that run's rule: its starter, or an admin.
+  test("an ask a completed run left is listed and answered by the run's starter, and withheld from others", async () => {
+    const left = {
+      ...webAsk,
+      id: 'run-left',
+      status: 'completed' as const,
+      metadata: {},
+      user_id: 'user-1',
+    };
+    const stored: StoredItemAsk = {
+      id: 'a1',
+      itemId: 'item-1',
+      runId: 'run-left',
+      workflowName: 'plan',
+      position: 0,
+      ask: {
+        question: 'Keep the flag?',
+        context: 'Two readings.',
+        options: [
+          { id: 'keep', does: 'Keep it.', cost: 'One more flag.' },
+          { id: 'drop', does: 'Drop it.', cost: 'Old configs break.' },
+        ],
+        recommendation: { option: 'keep', why: 'Nothing needs it gone.' },
+        artifacts: [],
+      },
+      openedAt: '2026-06-03T10:00:00.000Z',
+      closed: null,
+    };
+    const item = await askQueueItem(
+      { getItem: async () => null, getWorkflowRun: async () => left, getCodebase: async () => WEB },
+      stored
+    );
+    const mine = harness([left], null, { kind: 'user', userId: 'user-1' }, [item], [stored]);
+    expect(listed(await mine.tool.handler({ action: 'list' })).map(i => i.ref)).toEqual(['ask:a1']);
+    expect(
+      await mine.tool.handler({ action: 'answer', item: 'ask:a1', recommended: true })
+    ).toContain('the set is settled');
+    expect(mine.answerItemAsk.mock.calls[0]?.[0]).toMatchObject({
+      askId: 'a1',
+      answer: { decision: 'keep', text: '' },
+      via: 'attention_tool',
+      by: { userId: 'user-1' },
+    });
+
+    const theirs = harness([left], null, { kind: 'user', userId: 'user-2' }, [item], [stored]);
+    const out = await theirs.tool.handler({ action: 'list' });
+    expect(out).not.toContain('Keep the flag?');
+    expect(
+      await theirs.tool.handler({ action: 'answer', item: 'ask:a1', choose: '["keep"]' })
+    ).toContain("nothing matches item 'ask:a1'");
+    expect(theirs.answerItemAsk).not.toHaveBeenCalled();
   });
 });
