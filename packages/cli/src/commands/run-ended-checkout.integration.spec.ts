@@ -114,6 +114,8 @@ const ASK_BUILD = leavesAsk(
 /** A stage that records the branch and commit it starts on; `carry-on` then adds a commit. */
 const stageAfterAsks = (name: string, readOnly: boolean, then = '') => `name: ${name}
 description: Continue after the answers.
+inputs:
+  progress: {}
 ${readOnly ? 'mutates_checkout: false\n' : ''}nodes:
   - id: record
     bash: |
@@ -130,7 +132,7 @@ interface Fixture {
   cli: (args: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
   rows: <T>(sql: string) => T[];
   bind: (name: string, ended: string, outcome: string, stage: string) => void;
-  bindAsks: (name: string, asking: string, stage: string) => void;
+  bindAsks: (name: string, asking: string, stage: string, inputs?: Record<string, unknown>) => void;
 }
 
 async function makeFixture(label: string, checkBody: string): Promise<Fixture> {
@@ -238,9 +240,19 @@ async function makeFixture(label: string, checkBody: string): Promise<Fixture> {
   };
   const bind = (name: string, ended: string, outcome: string, stage: string): void =>
     bindFile(name, stage, { runEnded: { workflowName: ended, outcome, checkout: 'ended-run' } });
-  const bindAsks = (name: string, asking: string, stage: string): void =>
+  const bindAsks = (
+    name: string,
+    asking: string,
+    stage: string,
+    inputs?: Record<string, unknown>
+  ): void =>
     bindFile(name, stage, {
-      asksSettled: { workflowName: asking, settled: 'answered', checkout: 'asking-run' },
+      asksSettled: {
+        workflowName: asking,
+        settled: 'answered',
+        checkout: 'asking-run',
+        ...(inputs ? { inputs } : {}),
+      },
     });
   return { root, repo, home, git, cli, rows, bind, bindAsks };
 }
@@ -408,13 +420,14 @@ printf '{"outcome": "return"}'`
   }, 120_000);
 });
 
-/** Answer the one open ask with its recommendation. */
-async function answerTheAsk(fixture: Fixture): Promise<void> {
+/** Answer the one open ask with its recommendation; returns what the answer printed. */
+async function answerTheAsk(fixture: Fixture): Promise<string> {
   const listed = await fixture.cli(['workflow', 'attention', '--all', '--json']);
   const [ask] = (JSON.parse(listed.stdout) as { items: { ref: string }[] }).items;
   if (ask === undefined) throw new Error(`No open ask: ${listed.stdout}`);
   const answered = await fixture.cli(['workflow', 'answer', '--ref', ask.ref, '--recommended']);
   if (answered.exitCode !== 0) throw new Error(answered.stderr || answered.stdout);
+  return answered.stdout;
 }
 
 async function startAskBuild(fixture: Fixture): Promise<RunRow> {
@@ -576,6 +589,34 @@ describe('a stage on the checkout the asking run left', () => {
       `the worktree at '${build?.working_path}'`
     );
     expect(runs(fixture).map(run => run.workflow_name)).toEqual(['build', 'ask-look']);
+  }, 120_000);
+
+  test('after a read-only asking stage, the printed recovery adopts the run that holds the checkout', async () => {
+    const fixture = await makeFixture('asks-recover', `printf '{"outcome": "pass"}'`);
+    fixture.bind('look-after-build', 'build', 'built', 'ask-look');
+    // A pointer the asking run's result lacks refuses the start; the checkout is intact.
+    fixture.bindAsks('carry-on-after-answers', 'ask-look', 'carry-on', {
+      progress: { result: '/missing' },
+    });
+    await startBuild(fixture);
+    const [build] = await waitForRuns(fixture, 2);
+    const printed = await answerTheAsk(fixture);
+    const command = /archon workflow run <stage> (--adopt \S+ --item \S+)/.exec(printed)?.[1];
+    expect(command, printed).toBe(`--adopt ${build?.id} --item issue-1`);
+
+    // The printed command, run as printed, continues the build's branch.
+    const recovered = await fixture.cli([
+      'workflow',
+      'run',
+      'carry-on',
+      ...(command ?? '').split(' '),
+      '--input',
+      'progress=by hand',
+    ]);
+    expect(recovered.exitCode, recovered.stderr || recovered.stdout).toBe(0);
+    const branch = fixture.git('-C', build?.working_path ?? '', 'branch', '--show-current');
+    expect(readFileSync(join(fixture.root, 'carry-on'), 'utf8').split(' ')[0]).toBe(branch);
+    expect(fixture.git('log', '-1', '--format=%s', branch)).toBe('carry on');
   }, 120_000);
 });
 
