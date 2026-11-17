@@ -235,6 +235,25 @@ describe('install hold', () => {
     expect(await store.claimPendingWorkflowRun(hand.id)).toMatchObject({ status: 'running' });
   });
 
+  test('a hand start cancelled under the hold is told it is no longer pending', async () => {
+    const store = createWorkflowStore();
+    const hand = await store.createWorkflowRun({
+      id: crypto.randomUUID(),
+      workflow_name: 'test',
+      user_message: '',
+    });
+    await store.setInstallHold({ setBy: 'operator' });
+    await store.cancelWorkflowRun(hand.id);
+    const waiting = launch();
+    waiting.run.id = hand.id;
+
+    const refused = await store
+      .admitPendingRun({ resource: 'other', capacity: 1, launch: waiting })
+      .catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(Error);
+    expect(refused).not.toBeInstanceOf(InstallHeldError);
+  });
+
   test('a hand start waits at its claim for the lift, or is refused under --no-wait', async () => {
     registerBuiltinProviders();
     const store = createWorkflowStore();

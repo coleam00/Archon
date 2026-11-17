@@ -2761,7 +2761,7 @@ archon hold lift --json  # { lifted, drainedHosts, failures }
 `hold set` records your CLI identity (`ARCHON_USER_ID`, else `$USER`) and the time. Setting it again keeps the first hold and says who set it. While it is set, admission admits no new run from any source:
 
 - A timer, a webhook or poll, a `trigger fire`, a run that ends with a [run-ended](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends) hand-off it owes, and an [asks-settled](/guides/workflow-triggers/#start-a-stage-again-when-its-asks-are-answered) hand-off still record their receipt, but the binding is not prepared: it stays pending and nothing is admitted, queued or skipped.
-- Requests already queued for capacity are not admitted; they keep their places.
+- Requests already queued for capacity are not admitted; they keep their places. `trigger drain` drains nothing and prints `{ hostId, drained: false, hold }`; without the hold it prints `{ hostId, drained: true, hold: null }`.
 - A hand start (`workflow run`, chat, Web or API) creates its `pending` run and waits for the lift in the process that started it, printing `Waiting for the install hold`. With `--no-wait` it is refused and its run cancelled. A start that waits dies with its process, as a start waiting for a full resource does.
 
 Runs already running or paused are not touched: they finish, pause, resume and take answers as usual. A run admitted before the hold, and a `workflow:` child of a running run, still start.

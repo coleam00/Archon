@@ -417,8 +417,16 @@ async function triggerDrain(
   dispatch: TriggerDispatch
 ): Promise<void> {
   if (!options.host) throw new Error('Usage: archon trigger drain --host <configured-host>');
+  const hold = await host.deps.store.getInstallHold();
+  if (hold) {
+    process.stderr.write(
+      `New runs are held on this install (${describeInstallHold(hold)}); nothing was drained. Run archon hold lift to start what it keeps.\n`
+    );
+    await writeJsonLine({ hostId: options.host, drained: false, hold });
+    return;
+  }
   await drainHost(host, options.host, dispatch);
-  await writeJsonLine({ hostId: options.host, drained: true });
+  await writeJsonLine({ hostId: options.host, drained: true, hold: null });
 }
 
 async function triggerExecute(

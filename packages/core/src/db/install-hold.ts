@@ -7,10 +7,13 @@
  */
 import { z } from 'zod';
 import type { HeldStart } from '@archon/workflows/resource-start-store';
-import type { InstallHold } from '@archon/workflows/schemas/resource-start';
+import {
+  type InstallHold,
+  resourceStartBindingIntentSchema,
+} from '@archon/workflows/schemas/resource-start';
 import { getDatabase } from './connection';
 import { INSTALL_HOLD_ID, lockAdmission, readInstallHold } from './resource-slots';
-import { storedWorkflowName } from './resource-starts';
+import { parseStoredJson, storedWorkflowName } from './resource-starts';
 import { toHydratedTimestamp } from './timestamps';
 
 export async function getInstallHold(): Promise<InstallHold | null> {
@@ -42,16 +45,17 @@ export async function liftInstallHold(): Promise<InstallHold | null> {
   });
 }
 
+// Stripped, not strict like its owner, so a start whose intent a newer binary extended still lists.
 const heldIntentSchema = z.object({
-  launch: z.object({ cwd: z.string(), workflowName: z.string() }),
+  launch: resourceStartBindingIntentSchema.shape.launch
+    .pick({ cwd: true, workflowName: true })
+    .strip(),
 });
 
 /** The stored intent's workflow and checkout, or null when it does not read. */
 function heldIntent(intent: unknown): { workflow: string; cwd: string } | null {
   try {
-    const parsed = heldIntentSchema.safeParse(
-      typeof intent === 'string' ? JSON.parse(intent) : intent
-    );
+    const parsed = heldIntentSchema.safeParse(parseStoredJson(intent));
     return parsed.success
       ? { workflow: parsed.data.launch.workflowName, cwd: parsed.data.launch.cwd }
       : null;

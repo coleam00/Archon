@@ -125,6 +125,12 @@ test('a fire under the hold is listed as held and starts exactly once after the 
     heldStarts: [{ kind: 'trigger', receiptId, bindingId: 'fired', workflow: 'portable' }],
   });
 
+  const [heldDrain] = await jsonLines(() =>
+    triggerCommand(host, 'drain', [], { host: 'host' }, { dispatch })
+  );
+  expect(heldDrain).toEqual({ hostId: 'host', drained: false, hold });
+  expect(dispatched).toEqual([]);
+
   const [lifted] = await jsonLines(() => holdCommand(host, 'lift', { json: true }, dispatch));
   expect(lifted).toEqual({ lifted: hold, drainedHosts: ['host'], failures: [] });
   const [after] = await jsonLines(() => triggerCommand(host, 'list', [], {}, { dispatch }));

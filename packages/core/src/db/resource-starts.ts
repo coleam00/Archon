@@ -237,14 +237,15 @@ export async function admitPendingRun(input: {
     const request = existing.rows[0];
     if (request?.status === 'admitted') return null;
     if (request) throw new Error(`Run '${id}' already has a ${request.status} resource request`);
-    const hold = await readInstallHold(query);
-    if (hold) throw new InstallHeldError(hold);
     const run = await query<{ status: string; item_id: string | null }>(
       'SELECT status, item_id FROM remote_agent_workflow_runs WHERE id = $1',
       [id]
     );
     const status = run.rows[0]?.status;
+    // Checked before the hold, so a start cancelled while it waits for the lift stops waiting.
     if (status !== 'pending') throw new Error(`Run '${id}' is ${status ?? 'missing'}, not pending`);
+    const hold = await readInstallHold(query);
+    if (hold) throw new InstallHeldError(hold);
     const itemId = run.rows[0]?.item_id;
     const blocker = resourceStartBlocker(
       await resourceStartOccupancy(query, input.resource, capacity),
@@ -298,7 +299,7 @@ export async function acceptStartReceipt(
   return getDatabase().withTransaction(query => insertStartReceipt(query, input));
 }
 
-function parseStoredJson(value: unknown): unknown {
+export function parseStoredJson(value: unknown): unknown {
   return typeof value === 'string' ? JSON.parse(value) : value;
 }
 
