@@ -209,7 +209,7 @@ function formatTranscriptRow(row: WorkflowEvent, state: TranscriptRenderState): 
     case 'node_complete':
       return nodeLine.completed(step, row.duration_ms);
     case 'node_error':
-      return nodeLine.failed(step, row.error ?? '');
+      return nodeLine.failed(step, row.error ?? '', row.execution);
     case 'node_skipped':
       return formatNodeSkipped(row, step);
     case 'node_suspended':

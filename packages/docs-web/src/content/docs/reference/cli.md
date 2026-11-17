@@ -775,7 +775,8 @@ These are audit facts. They never name who answered, and nothing routes on them.
 - **Reason** is why a run that ended needs a look, in up to two short lines: for a failed
   outcome, what the `returns:` node said (its first lines, or its text fields as `key: text`);
   for a failed run, the first line of its first failed node's error, falling back to the
-  run's own error when no failed-node error is available, including launch failures. `workflow get` prints
+  run's own error when no failed-node error is available, including launch failures. A failed
+  node's recorded kind leads its line, as in `(schema_unmet) the answer was rejected`. `workflow get` prints
   it as `Reason:` under the status and carries it as `reason` in `--json`; both are omitted
   when the record holds no reason text. The full value stays in `terminal_record`.
 
@@ -795,7 +796,7 @@ invocations. Resuming unfinished work keeps its invocation identity.
 `nodes` holds each loop body node once, with its latest round. For a run that entered a
 `loop_group`, `--verbose` also prints a `Rounds:` block, and `--json --verbose` adds
 `loop_rounds`: one entry per round, in order, each with its `loop_group_path` (frames
-outermost first, iterations from 1) and the body nodes it reached, with `state`, `error`,
+outermost first, iterations from 1) and the body nodes it reached, with `state`, `error`, `failure_kind` (a failed node's recorded kind),
 `started_at` (the invocation's first attempt), `duration_ms` (every attempt's recorded duration summed,
 so a retry counts, the wait between attempts does not; absent until the last attempt ends),
 `output` (bounded as stored, with `output_truncated`): a completed node's output, or the
@@ -932,6 +933,9 @@ For both commands, `--json --verbose` adds a `nodes` array. Nodes are ordered by
 first appearance of each node in the deterministically ordered event stream. Every
 entry includes `nodeId` and `state`; nodes with a start event include the original ISO
 `startedAt`, and terminal nodes with both start and end events include `durationMs`.
+A failed node includes `failureKind`, the recorded kind a `retry.on_error` policy targets
+(such as `schema_unmet`), and the text views print it before the error as
+`Error:  (schema_unmet) ...`.
 Completed nodes with recorded output include `output` (the full persisted text),
 `outputTruncated` (whether persistence truncated it), and `outputPreview` (the first
 200 characters followed by ASCII `...` when longer). These fields also apply to
@@ -2719,7 +2723,7 @@ A binding can also [map its item from its event](/guides/workflow-triggers/#put-
 
 A continuation started with `--adopt <run-id>` or `--supersedes <run-id>` and no `--item` belongs to the item of the run it continues, so a fix round or a rerun stays in the item's history. `--item <key>` names another item instead, and a continuation of a run with no item has none. `--supersedes` can name a run of another project by its full id; that run's item cannot be inherited, so the continuation is refused before it starts unless it passes `--item`. The same holds when the continuation has no registered project. A continuation of a run with no item starts in every case.
 
-A run started with no item, and no run to inherit one from, has none. One item is worked by at most one run of a workflow at a time: a start of a workflow on an item waits, or is skipped or refused, while another run of that workflow on the item is not terminal. See [one run of a workflow per item](/guides/workflow-triggers/#one-run-of-a-workflow-per-item). `archon workflow runs --item <key>` reads an item: its runs, open questions, and answers with rulings. Each run carries its `cause`: the run whose end started it, the run whose asks settling started it, the run and node that fired it, the trigger source that started it, or `null` for a start by hand. `GET /api/items?project=<project>&key=<key>` is the same read over HTTP. `workflow wait`, `cancel` and `abandon` also accept `--item <key>` and never choose between an item's runs: `wait` reports every run that settled, and `cancel` and `abandon` refuse when more than one run applies unless `--all-runs` is passed.
+A run started with no item, and no run to inherit one from, has none. One item is worked by at most one run of a workflow at a time: a start of a workflow on an item waits, or is skipped or refused, while another run of that workflow on the item is not terminal. See [one run of a workflow per item](/guides/workflow-triggers/#one-run-of-a-workflow-per-item). `archon workflow runs --item <key>` reads an item: its runs, open questions, and answers with rulings. Each run carries its `cause`: the run whose end started it, the run whose asks settling started it, the run and node that fired it, the trigger source that started it, or `null` for a start by hand, and `hasResult`: whether it completed with a readable `returns:` value, which `archon workflow get <id> --json` shows at `terminal_record.returns.value` and a later run on the item reads through a [`result_of` input](/reference/workflow-language/#reading-an-earlier-runs-result). `GET /api/items?project=<project>&key=<key>` is the same read over HTTP. `workflow wait`, `cancel` and `abandon` also accept `--item <key>` and never choose between an item's runs: `wait` reports every run that settled, and `cancel` and `abandon` refuse when more than one run applies unless `--all-runs` is passed.
 
 `archon workflow items` reads every item of the project that had a run in a window, a page at a time ([`workflow items`](#workflow-items)).
 

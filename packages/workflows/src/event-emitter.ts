@@ -1,5 +1,5 @@
 import type { ApprovalContext } from './schemas/workflow-run';
-import type { NodeExecutionMetadata } from './schemas/node-execution';
+import type { NodeExecutionMetadata, NodeFailureKind } from './schemas/node-execution';
 /**
  * WorkflowEventEmitter - typed event emitter for workflow execution observability.
  *
@@ -47,6 +47,8 @@ interface WorkflowFailedEvent {
   runId: string;
   workflowName: string;
   error: string;
+  /** The recorded kind of the node this failure happened at, from its terminal record. */
+  failureKind?: NodeFailureKind;
 }
 
 interface LoopIterationStartedEvent {

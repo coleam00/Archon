@@ -5341,6 +5341,7 @@ export interface components {
                 | 'timeout'
                 | 'exec_failed'
                 | 'output_contract'
+                | 'schema_unmet'
                 | 'max_iterations'
                 | 'child_failed'
                 | 'cancelled'
@@ -5355,6 +5356,7 @@ export interface components {
                   | 'rate_limited'
                   | 'overloaded'
                   | 'transient'
+                  | 'schema_unmet'
                   | 'unknown';
                 retryAfterMs?: number;
                 /** Format: date-time */
@@ -5968,6 +5970,7 @@ export interface components {
           required?: boolean;
           default?: unknown;
           description?: string;
+          result_of?: string;
         };
       };
       returns?: string;
@@ -6004,7 +6007,7 @@ export interface components {
         max_attempts: number;
         delay_ms?: number;
         /** @enum {string} */
-        on_error?: 'transient' | 'all';
+        on_error?: 'transient' | 'schema_unmet' | 'all';
       };
       hooks?: {
         PreToolUse?: {
@@ -6977,6 +6980,7 @@ export interface components {
                   | 'timeout'
                   | 'exec_failed'
                   | 'output_contract'
+                  | 'schema_unmet'
                   | 'max_iterations'
                   | 'child_failed'
                   | 'cancelled'
@@ -6991,6 +6995,7 @@ export interface components {
                     | 'rate_limited'
                     | 'overloaded'
                     | 'transient'
+                    | 'schema_unmet'
                     | 'unknown';
                   retryAfterMs?: number;
                   /** Format: date-time */
@@ -7954,6 +7959,7 @@ export interface components {
           /** @enum {string|null} */
           owner: 'reachable' | 'unreachable' | 'unknown' | null;
         } | null;
+        hasResult: boolean;
       }[];
       queued: {
         requestId: string;
@@ -8511,6 +8517,7 @@ export interface components {
             /** @enum {string|null} */
             owner: 'reachable' | 'unreachable' | 'unknown' | null;
           } | null;
+          hasResult: boolean;
         }[];
         queued: {
           requestId: string;
@@ -9442,6 +9449,7 @@ export interface components {
               | 'timeout'
               | 'exec_failed'
               | 'output_contract'
+              | 'schema_unmet'
               | 'max_iterations'
               | 'child_failed'
               | 'cancelled'
@@ -9720,6 +9728,21 @@ export interface components {
             state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
             error?: string;
             /** @enum {string} */
+            failure_kind?:
+              | 'fatal'
+              | 'transient'
+              | 'unknown'
+              | 'rate_limited'
+              | 'overloaded'
+              | 'timeout'
+              | 'exec_failed'
+              | 'output_contract'
+              | 'schema_unmet'
+              | 'max_iterations'
+              | 'child_failed'
+              | 'cancelled'
+              | 'config';
+            /** @enum {string} */
             reason?:
               | 'prior_success'
               | 'when_condition'
@@ -9908,6 +9931,21 @@ export interface components {
           state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
           error?: string;
           /** @enum {string} */
+          failure_kind?:
+            | 'fatal'
+            | 'transient'
+            | 'unknown'
+            | 'rate_limited'
+            | 'overloaded'
+            | 'timeout'
+            | 'exec_failed'
+            | 'output_contract'
+            | 'schema_unmet'
+            | 'max_iterations'
+            | 'child_failed'
+            | 'cancelled'
+            | 'config';
+          /** @enum {string} */
           reason?:
             | 'prior_success'
             | 'when_condition'
@@ -10022,6 +10060,21 @@ export interface components {
             /** @enum {string} */
             state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
             error?: string;
+            /** @enum {string} */
+            failure_kind?:
+              | 'fatal'
+              | 'transient'
+              | 'unknown'
+              | 'rate_limited'
+              | 'overloaded'
+              | 'timeout'
+              | 'exec_failed'
+              | 'output_contract'
+              | 'schema_unmet'
+              | 'max_iterations'
+              | 'child_failed'
+              | 'cancelled'
+              | 'config';
             /** @enum {string} */
             reason?:
               | 'prior_success'

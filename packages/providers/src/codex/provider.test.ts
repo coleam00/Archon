@@ -8,7 +8,7 @@ import { existsSync } from 'fs';
 import { mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import type { NativeTool, MessageChunk, SendQueryOptions } from '../types';
+import type { NativeTool, MessageChunk, ResultChunk, SendQueryOptions } from '../types';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -52,6 +52,7 @@ import * as pluginProcess from '@archon/paths/plugin-process';
 import { TOOL_FREE_THREAD_CONFIG } from './turn-params';
 import type { CodexErrorInfo } from './protocol/v2/CodexErrorInfo';
 import type { ServerNotification } from './protocol/ServerNotification';
+import type { ThreadItem } from './protocol/v2/ThreadItem';
 
 const trackTempRoot = trackTempRoots();
 
@@ -89,6 +90,24 @@ async function streamOf(
   }
   expect(chunks.at(-1)).toEqual({ type: 'settled' });
   return chunks.slice(0, -1);
+}
+
+type CollabItem = Extract<ThreadItem, { type: 'collabAgentToolCall' }>;
+
+/** Codex's v1 `spawn_agent` item: `receiverThreadIds` names the new thread once it completes. */
+function collabSpawn(status: CollabItem['status'], receiverThreadIds: string[] = []): CollabItem {
+  return {
+    type: 'collabAgentToolCall',
+    id: 'spawn-1',
+    tool: 'spawnAgent',
+    status,
+    senderThreadId: THREAD_ID,
+    receiverThreadIds,
+    prompt: null,
+    model: null,
+    reasoningEffort: null,
+    agentsStates: {},
+  };
 }
 
 function resultOf(chunks: MessageChunk[]): Extract<MessageChunk, { type: 'result' }> {
@@ -862,6 +881,316 @@ describe('CodexProvider', () => {
       expect(resultOf(chunks).tokens).toBeUndefined();
     });
 
+    // Codex reports a subagent's usage on the subagent's own thread and turn, as
+    // `codex app-server` 0.166.0 does for a `spawn_agent` child.
+    test('a turn counts the usage of the subagents it spawned, and of no other thread', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          itemStarted(subAgentActivity('started')),
+          itemCompleted(subAgentActivity('started')),
+          tokenUsage({ input: 100, output: 10, cached: 80 }),
+          // A forked subagent: its first total starts from the parent's running total.
+          tokenUsage(
+            { input: 550, output: 25, cached: 440 },
+            { input: 50, output: 5, cached: 40 },
+            'child-turn',
+            'child-thread'
+          ),
+          tokenUsage(
+            { input: 620, output: 29, cached: 500 },
+            { input: 70, output: 4, cached: 60 },
+            'child-turn',
+            'child-thread'
+          ),
+          tokenUsage({ input: 999, output: 999 }, undefined, 'other-turn', 'unrelated-thread'),
+          itemStarted(subAgentActivity('completed')),
+          itemCompleted(subAgentActivity('completed')),
+        ],
+      });
+      expect(resultOf(chunks).tokens).toEqual({
+        input: 100 + 120,
+        output: 10 + 9,
+        cacheRead: 80 + 100,
+        cacheWrite: 0,
+      });
+      expect(chunks.filter(c => c.type === 'warning')).toEqual([]);
+    });
+
+    /** A turn on another thread: `started`, or `completed` with its own `turn/completed`. */
+    function otherTurn(
+      status: 'started' | 'completed',
+      threadId = 'child-thread',
+      turnId = 'child-turn'
+    ): ServerNotification {
+      if (status === 'completed') return turnCompleted('completed', null, turnId, threadId);
+      const running = turnCompleted('inProgress', null, turnId, threadId);
+      if (running.method !== 'turn/completed') throw new Error('unreachable');
+      return { method: 'turn/started', params: running.params };
+    }
+
+    /** Each result's tokens; a result without tokens fails the test. */
+    async function tokensOf(
+      notifications: ServerNotification[]
+    ): Promise<NonNullable<ResultChunk['tokens']>[]> {
+      const chunks = await streamOf({ notifications, completion: null });
+      return chunks.flatMap(c => {
+        if (c.type !== 'result') return [];
+        if (!c.tokens) throw new Error('a result reported no tokens');
+        return [c.tokens];
+      });
+    }
+
+    test('a thread spawned through Codex’s v1 tool counts like a v2 subagent', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          itemStarted(collabSpawn('inProgress')),
+          itemCompleted(collabSpawn('completed', ['child-thread'])),
+          otherTurn('started'),
+          tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn', 'child-thread'),
+          otherTurn('completed'),
+          tokenUsage({ input: 100, output: 10 }),
+        ],
+      });
+      expect(resultOf(chunks).tokens).toMatchObject({ input: 140, output: 14 });
+    });
+
+    // Codex orders one thread's notifications but not one thread's against another's.
+    test('a v1 subagent counts whichever thread Codex delivers first', async () => {
+      const parent = [tokenUsage({ input: 100, output: 10 }), turnCompleted('completed')];
+      const child = [
+        otherTurn('started'),
+        tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn', 'child-thread'),
+        otherTurn('completed'),
+      ];
+      const spawn = itemCompleted(collabSpawn('completed', ['child-thread']));
+      for (const order of [
+        [spawn, ...parent, ...child],
+        [spawn, child[0], ...parent, ...child.slice(1)],
+        [...child, spawn, ...parent],
+      ]) {
+        const tokens = await tokensOf(order);
+        expect(tokens.reduce((sum, t) => sum + t.input, 0)).toBe(140);
+        expect(tokens.reduce((sum, t) => sum + t.output, 0)).toBe(14);
+      }
+    });
+
+    test('a v1 subagent keeps the usage its thread reported before the spawn named it', async () => {
+      const tokens = await tokensOf([
+        otherTurn('started'),
+        tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn', 'child-thread'),
+        itemCompleted(collabSpawn('completed', ['child-thread'])),
+        tokenUsage(
+          { input: 70, output: 7 },
+          { input: 30, output: 3 },
+          'child-turn',
+          'child-thread'
+        ),
+        otherTurn('completed'),
+        tokenUsage({ input: 100, output: 10 }),
+        turnCompleted('completed'),
+      ]);
+      expect(tokens).toMatchObject([{ input: 170, output: 17 }]);
+    });
+
+    test('a v1 spawn by a subagent the parent has not yet named counts once it is named', async () => {
+      const tokens = await tokensOf([
+        itemCompleted(
+          { ...collabSpawn('completed', ['grandchild']), senderThreadId: 'child-thread' },
+          'child-thread',
+          'child-turn'
+        ),
+        otherTurn('started', 'grandchild', 'grandchild-turn'),
+        tokenUsage({ input: 20, output: 2 }, undefined, 'grandchild-turn', 'grandchild'),
+        otherTurn('completed', 'grandchild', 'grandchild-turn'),
+        itemCompleted(collabSpawn('completed', ['child-thread'])),
+        otherTurn('started'),
+        otherTurn('completed'),
+        tokenUsage({ input: 100, output: 10 }),
+        turnCompleted('completed'),
+      ]);
+      expect(tokens).toMatchObject([{ input: 120, output: 12 }]);
+    });
+
+    test('a v1 subagent on a later turn when the parent completes holds the node open', async () => {
+      const tokens = await tokensOf([
+        itemCompleted(collabSpawn('completed', ['child-thread'])),
+        otherTurn('started'),
+        otherTurn('completed'),
+        otherTurn('started', 'child-thread', 'child-turn-2'),
+        tokenUsage({ input: 100, output: 10 }),
+        turnCompleted('completed'),
+        tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn-2', 'child-thread'),
+        otherTurn('completed', 'child-thread', 'child-turn-2'),
+      ]);
+      expect(tokens.reduce((sum, t) => sum + t.input, 0)).toBe(140);
+    });
+
+    // Codex resets a thread's cumulative total when its context overflows.
+    test('a subagent’s usage after its thread’s total resets adds to what it used before', async () => {
+      const tokens = await tokensOf([
+        itemCompleted(collabSpawn('completed', ['child-thread'])),
+        otherTurn('started'),
+        tokenUsage(
+          { input: 550, output: 55 },
+          { input: 50, output: 5 },
+          'child-turn',
+          'child-thread'
+        ),
+        otherTurn('completed'),
+        otherTurn('started', 'child-thread', 'child-turn-2'),
+        tokenUsage({ input: 100, output: 10 }),
+        turnCompleted('completed'),
+        tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn-2', 'child-thread'),
+        otherTurn('completed', 'child-thread', 'child-turn-2'),
+      ]);
+      expect(tokens.reduce((sum, t) => sum + t.input, 0)).toBe(100 + 50 + 40);
+      expect(tokens.reduce((sum, t) => sum + t.output, 0)).toBe(10 + 5 + 4);
+    });
+
+    test('a v2 subagent keeps the usage its thread reported before its activity named it', async () => {
+      const tokens = await tokensOf([
+        tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn', 'child-thread'),
+        itemStarted(subAgentActivity('started')),
+        itemCompleted(subAgentActivity('completed')),
+        tokenUsage({ input: 100, output: 10 }),
+        turnCompleted('completed'),
+      ]);
+      expect(tokens).toMatchObject([{ input: 140, output: 14 }]);
+    });
+
+    test('a v2 subagent adopts the v1 and v2 spawns it made before its activity named it', async () => {
+      const childItem = (item: ThreadItem): ServerNotification =>
+        itemCompleted(item, 'child-thread', 'child-turn');
+      const tokens = await tokensOf([
+        childItem({
+          ...collabSpawn('completed', ['v1-grandchild']),
+          senderThreadId: 'child-thread',
+        }),
+        childItem(subAgentActivity('started', 'v2-grandchild')),
+        tokenUsage({ input: 20, output: 2 }, undefined, 'g1-turn', 'v1-grandchild'),
+        otherTurn('started', 'v1-grandchild', 'g1-turn'),
+        otherTurn('completed', 'v1-grandchild', 'g1-turn'),
+        tokenUsage({ input: 30, output: 3 }, undefined, 'g2-turn', 'v2-grandchild'),
+        childItem(subAgentActivity('completed', 'v2-grandchild')),
+        itemStarted(subAgentActivity('started')),
+        itemCompleted(subAgentActivity('completed')),
+        tokenUsage({ input: 100, output: 10 }),
+        turnCompleted('completed'),
+      ]);
+      expect(tokens).toMatchObject([{ input: 150, output: 15 }]);
+    });
+
+    // The grandchild outlives its ancestors; its start reaches Archon after or before its parent's.
+    test('a v2 grandchild counts its later usage whether its start precedes its parent', async () => {
+      const childItem = (item: ThreadItem): ServerNotification =>
+        itemCompleted(item, 'child-thread', 'child-turn');
+      const grandchildStart = [
+        childItem(subAgentActivity('started', 'grandchild')),
+        tokenUsage({ input: 20, output: 2 }, undefined, 'g-turn', 'grandchild'),
+      ];
+      const child = [itemStarted(subAgentActivity('started'))];
+      const rest = [
+        itemCompleted(subAgentActivity('completed')),
+        tokenUsage({ input: 100, output: 10 }),
+        turnCompleted('completed'),
+        tokenUsage({ input: 50, output: 5 }, { input: 30, output: 3 }, 'g-turn', 'grandchild'),
+        childItem(subAgentActivity('completed', 'grandchild')),
+      ];
+      const sums: number[][] = [];
+      for (const order of [
+        [...child, ...grandchildStart, ...rest],
+        [...grandchildStart, ...child, ...rest],
+      ]) {
+        const tokens = await tokensOf(order);
+        sums.push([
+          tokens.reduce((sum, t) => sum + t.input, 0),
+          tokens.reduce((sum, t) => sum + t.output, 0),
+        ]);
+      }
+      expect(sums).toEqual([
+        [150, 15],
+        [150, 15],
+      ]);
+    });
+
+    test('a v2 subagent’s own turns do not hold the node open', async () => {
+      const tokens = await tokensOf([
+        itemStarted(subAgentActivity('started')),
+        otherTurn('started'),
+        itemCompleted(subAgentActivity('completed')),
+        tokenUsage({ input: 100, output: 10 }),
+        turnCompleted('completed'),
+      ]);
+      expect(tokens).toMatchObject([{ input: 100, output: 10 }]);
+    });
+
+    test('a later result carries the usage subagents report after the first, and repeats its output', async () => {
+      const { provider, server } = providerWith({
+        notifications: [
+          itemStarted(subAgentActivity('started')),
+          itemCompleted(subAgentActivity('started')),
+          tokenUsage({ input: 40, output: 4, cached: 30 }, undefined, TURN_ID, 'child-thread'),
+          tokenUsage({ input: 100, output: 10, cached: 80 }),
+          agentMessage('{"summary":"done"}'),
+          turnCompleted('completed'),
+        ],
+        completion: null,
+      });
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', '/workspace', undefined, {
+        outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+      })) {
+        chunks.push(chunk);
+        if (chunk.type === 'result' && chunks.filter(c => c.type === 'result').length === 1) {
+          const process = server.processes[0];
+          const later = { input: 90, output: 9, cached: 70 };
+          // Codex re-sends an unchanged snapshot; it adds nothing.
+          process.send(tokenUsage(later, undefined, TURN_ID, 'child-thread'));
+          process.send(tokenUsage(later, undefined, TURN_ID, 'child-thread'));
+          process.send(itemStarted(subAgentActivity('completed')));
+          process.send(itemCompleted(subAgentActivity('completed')));
+        }
+      }
+      const results = chunks.filter(
+        (c): c is Extract<MessageChunk, { type: 'result' }> => c.type === 'result'
+      );
+      expect(results.map(({ tokens, structuredOutput }) => ({ tokens, structuredOutput }))).toEqual(
+        [
+          {
+            tokens: { input: 100 + 40, output: 10 + 4, cacheRead: 80 + 30, cacheWrite: 0 },
+            structuredOutput: { summary: 'done' },
+          },
+          {
+            tokens: { input: 90 - 40, output: 9 - 4, cacheRead: 70 - 30, cacheWrite: 0 },
+            structuredOutput: { summary: 'done' },
+          },
+        ]
+      );
+      expect(results[1].sessionId).toBe(results[0].sessionId);
+      expect(chunks.at(-1)).toEqual({ type: 'settled' });
+    });
+
+    test('a failed turn counts the usage its subagents report before its held result', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          itemStarted(subAgentActivity('started')),
+          tokenUsage({ input: 40, output: 4, cached: 30 }, undefined, TURN_ID, 'child-thread'),
+          tokenUsage({ input: 100, output: 10, cached: 80 }),
+          turnCompleted('failed', turnError('other', 'parent failed')),
+          tokenUsage({ input: 90, output: 9, cached: 70 }, undefined, TURN_ID, 'child-thread'),
+          itemCompleted(subAgentActivity('completed')),
+        ],
+        completion: null,
+      });
+      expect(resultOf(chunks).failure).toBeDefined();
+      expect(resultOf(chunks).tokens).toEqual({
+        input: 100 + 90,
+        output: 10 + 9,
+        cacheRead: 80 + 70,
+        cacheWrite: 0,
+      });
+    });
+
     test('initializes, then starts a thread and a turn with Archon’s settings', async () => {
       const { provider, server } = providerWith();
       await run(provider, {
@@ -1586,6 +1915,49 @@ describe('CodexProvider', () => {
         expect(result.tokens).toMatchObject({ input: 150, output: 15 });
         expect(result.resumed).toBeUndefined();
         expect(chunks.at(-1)).toEqual({ type: 'settled' });
+      });
+
+      test('the final result adds the usage the tool turn’s subagents reported after its result', async () => {
+        const { provider } = providerWith(
+          scripted(
+            {
+              notifications: [
+                itemStarted(subAgentActivity('started')),
+                ...(toolTurn.notifications ?? []),
+                turnCompleted('completed'),
+                tokenUsage({ input: 40, output: 4 }, undefined, TURN_ID, 'child-thread'),
+                itemCompleted(subAgentActivity('completed')),
+              ],
+              completion: null,
+            },
+            finalTurn
+          )
+        );
+        const result = resultOf(await run(provider, options('glm-5.3')));
+        expect(result.tokens).toMatchObject({ input: 100 + 40 + 50, output: 10 + 4 + 5 });
+      });
+
+      // A v2 catalog keeps its collaboration tools on the final turn, so it can spawn too.
+      test('a final turn that reports two results counts the tool turn’s tokens once', async () => {
+        const { provider } = providerWith(
+          scripted(toolTurn, {
+            notifications: [
+              itemStarted(subAgentActivity('started')),
+              ...(finalTurn.notifications ?? []),
+              turnCompleted('completed'),
+              tokenUsage({ input: 20, output: 2 }, undefined, TURN_ID, 'child-thread'),
+              itemCompleted(subAgentActivity('completed')),
+            ],
+            completion: null,
+          })
+        );
+        const results = (await run(provider, options('glm-5.3'))).filter(
+          (c): c is Extract<MessageChunk, { type: 'result' }> => c.type === 'result'
+        );
+        expect(results.map(r => r.tokens)).toEqual([
+          { input: 100 + 50, output: 10 + 5, cacheRead: 0, cacheWrite: 0 },
+          { input: 20, output: 2, cacheRead: 0, cacheWrite: 0 },
+        ]);
       });
 
       test('a failed tool turn is the result, and no final turn runs', async () => {

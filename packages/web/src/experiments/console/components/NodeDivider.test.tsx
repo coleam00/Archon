@@ -129,3 +129,22 @@ describe('NodeDivider fan-out qualifier', () => {
     expect(html).not.toContain('did not complete');
   });
 });
+
+describe('NodeDivider failure', () => {
+  test('a failed node shows its recorded failure kind beside its error', () => {
+    const html = renderToStaticMarkup(
+      <StreamContextProvider value={{ runStartedAt: '2026-10-02T09:59:00.000Z' }}>
+        <NodeDivider
+          nodeId="check"
+          nodeName="check"
+          status="failed"
+          durationMs={null}
+          timestamp="2026-10-02T10:00:00.000Z"
+          error="output did not meet its schema"
+          failureKind="schema_unmet"
+        />
+      </StreamContextProvider>
+    );
+    expect(html).toContain('(schema_unmet) output did not meet its schema');
+  });
+});

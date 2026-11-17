@@ -72,7 +72,7 @@ The same tree works under `~/.archon/workflows/` for home-scoped workflows. Exis
 | `budget` | Ceiling on the run's total work and spend. See [Run budgets](#run-budgets). |
 | `persist_sessions` | Default for every AI node's `persist_session`. See [Persistent sessions](#persistent-sessions-across-re-runs). |
 | `requires` | `[github]` refuses the run before any work unless the triggering user has connected a GitHub identity. Enforced only when per-user GitHub is enabled (GitHub App mode with `TOKEN_ENCRYPTION_KEY`). `github` is the only value. |
-| `inputs`, `returns` | The workflow's signature, including the outcome a run completes with (`returns: { node, outcome }`). See [Workflow signature](#workflow-signature-inputs-returns-and-inputs). |
+| `inputs`, `returns` | The workflow's signature, including the outcome a run completes with (`returns: { node, outcome }`) and inputs filled from an earlier run's result (`result_of`). See [Workflow signature](#workflow-signature-inputs-returns-and-inputs). |
 | `tags` | Free-form labels carried on the parsed workflow. The engine gives them no meaning. |
 | `deprecated` | `{ message }` announces removal at every run start. See [Deprecating a workflow](#deprecating-a-workflow). |
 
@@ -867,7 +867,7 @@ YAML declares the engine-visible coordination condition; computation stays in a 
 
 **Deterministic nodes** (`bash:`, `script:`) do **not** auto-retry: they run exactly once unless you add an explicit `retry:` block. This keeps side-effectful scripts (deploys, `gh` mutations, external CLIs) from being silently re-run on a transient-looking failure; opt in per node when re-running is safe. `loop_group:` does not accept `retry:`; configure retries on its body nodes.
 
-A `loop:` policy retries the failed iteration, without advancing `max_iterations` or replaying earlier iterations. Its retry budget resets after each successful iteration. Without a declaration, it keeps the same defaults as other AI nodes. Loops accept only omitted `on_error` or `transient`; `on_error: all` is rejected, so unknown and fatal failures and output-contract failures never gain retries.
+A `loop:` policy retries the failed iteration, without advancing `max_iterations` or replaying earlier iterations. Its retry budget resets after each successful iteration. Without a declaration, it keeps the same defaults as other AI nodes. Loops accept omitted `on_error`, `transient` or `schema_unmet`; `on_error: all` is rejected, so unknown, fatal and output-contract failures never gain retries. With `on_error: schema_unmet`, an iteration whose output did not meet its schema runs again, and transient failures still retry as under `transient`; unknown failures are not retried.
 
 To enable or customise retry, add a `retry:` block:
 
@@ -885,6 +885,13 @@ nodes:
     retry:
       max_attempts: 4       # 4 retries = 5 total attempts
       on_error: all         # Retry even non-transient errors (use with caution)
+
+  - id: check
+    prompt: "Check the change and report a verdict"
+    output_format: { type: object, properties: { verdict: { type: string } }, required: [verdict] }
+    retry:
+      max_attempts: 1
+      on_error: schema_unmet  # Also retry a final output that did not meet its schema
 
   - id: iterate
     retry:
@@ -911,16 +918,17 @@ nodes:
 |-------|------|--------------------|-------------|-------------|
 | `max_attempts` | number | `2` | 1–5 | Number of retry attempts (not including the initial attempt). `1` = one retry (2 total attempts). No default on `bash:`/`script:`: omitting `retry:` means a single attempt |
 | `delay_ms` | number | `3000` | 0–60000 on loops; 1000–60000 otherwise | Base delay in ms before the first retry. Doubles each attempt (exponential backoff) |
-| `on_error` | `'transient'` \| `'all'` | `'transient'` | | Which errors trigger a retry. Loops accept only `'transient'` or omission. `'transient'` = transient, rate-limited and capacity failures and timeouts only. `'all'` = also unknown failures, including any non-zero `bash:`/`script:` exit (FATAL failures such as auth, config errors and cancellation are never retried regardless) |
+| `on_error` | `'transient'` \| `'schema_unmet'` \| `'all'` | `'transient'` | | Which errors trigger a retry; each value retries everything the one before it does. Loops accept `'transient'`, `'schema_unmet'` or omission. `'transient'` = transient, rate-limited and capacity failures and timeouts only. `'schema_unmet'` = also a final output that did not meet its `output_format` schema, without retrying unknown failures; it keeps the transient retries and does not mean "only this class". `'all'` = also unknown failures, including any non-zero `bash:`/`script:` exit (FATAL failures such as auth, config errors and cancellation are never retried regardless) |
 
 ### Error Classification
 
-Archon sorts a failed attempt into one of three buckets before deciding whether to retry. The bucket comes from the kind of failure Archon recorded, never from the error message. For a provider error, the provider picks the bucket through the typed failure class it reports on its result, taken from its SDK's structured signals (error codes, HTTP status fields, typed exceptions), never from the error text:
+Archon sorts a failed attempt into one of four buckets before deciding whether to retry. The bucket comes from the kind of failure Archon recorded, never from the error message. For a provider error, the provider picks the bucket through the typed failure class it reports on its result, taken from its SDK's structured signals (error codes, HTTP status fields, typed exceptions), never from the error text:
 
 | Bucket | Provider failure classes | Retried by default? |
 |--------|--------------------------|---------------------|
 | **FATAL** | `auth`, `quota_exhausted`, `budget_exceeded`, `misconfigured` | Never (even with `on_error: all`) |
 | **TRANSIENT** | `transient`, `rate_limited`, `overloaded` (rate limits and capacity get longer retry budgets) | Yes |
+| **SCHEMA_UNMET** | `schema_unmet`: the provider's own structured-output attempts ended without output meeting the schema | No (unless `on_error: schema_unmet` or `all`) |
 | **UNKNOWN** | `unknown` | No (unless `on_error: all`) |
 
 A `quota_exhausted` failure is never retried in the same window, but when the provider reports when the limit resets, the run [waits until that reset](/reference/configuration/#workflow-attention-and-continuation-settings) instead of failing.
@@ -935,13 +943,13 @@ Claude's typed `overloaded` code and Codex's `serverOverloaded` map to `overload
 
 Every built-in provider reports a typed class:
 
-- **Claude** reports every class, from its SDK's error codes, HTTP status, process-exit fields and the reason Claude Code gives when it refuses to start. A sign-in the organization rejects is `auth`. A configuration problem is `misconfigured`: an invalid proxy URL, a CLI below the minimum version, invalid managed settings, a provider the managed settings disallow, an unusable temp or working directory, a missing shell tool, bypass permissions as root, an unknown model, a Claude Code executable that is missing or cannot launch, an unreadable MCP config file, a declared MCP server that cannot connect, a declared skill Claude cannot reach, a named plugin that is not installed or that Claude Code cannot list, or a session whose loaded plugins do not match the node's `plugins:`.
+- **Claude** reports every class, from its SDK's error codes, result subtypes, HTTP status, process-exit fields and the reason Claude Code gives when it refuses to start. A sign-in the organization rejects is `auth`. A configuration problem is `misconfigured`: an invalid proxy URL, a CLI below the minimum version, invalid managed settings, a provider the managed settings disallow, an unusable temp or working directory, a missing shell tool, bypass permissions as root, an unknown model, a Claude Code executable that is missing or cannot launch, an unreadable MCP config file, a declared MCP server that cannot connect, a declared skill Claude cannot reach, a named plugin that is not installed or that Claude Code cannot list, or a session whose loaded plugins do not match the node's `plugins:`. Claude reports `schema_unmet` when its SDK gives up on structured output (result subtype `error_max_structured_output_retries`).
 - **Codex** reports a failed turn from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with `resetAt` when Codex reports a full window), `rate_limited`, `overloaded` for capacity exhaustion, `transient` for a dropped connection or a Codex process that exits mid-turn, and `budget_exceeded` for Codex's session budget. It reports `misconfigured` when its binary cannot be found or run (a bad `CODEX_BIN_PATH` or `codexBinaryPath`, no binary in a compiled install, a file that is not executable or built for another architecture), when the Codex process exits before answering anything (a binary without `app-server`, or one that rejects a flag; its stderr is the evidence), or when its MCP config file cannot be read. A workflow node is also `misconfigured` when a declared MCP server cannot connect, when a named plugin is not installed, when its `mcp:` file reuses a server name from the Codex config, or when Codex reports a live MCP server the node did not declare. Every other failure is `unknown`, including a thread that can no longer be resumed.
 - **Pi** reports `misconfigured` when a node has no model, the model ref is malformed, or the model is not in Pi's catalog, and `auth` when it has no credentials for the model's provider. A failed Pi turn reaches Archon only as a stop reason and message text, so those failures are `unknown`. That includes a used-up usage limit: a Pi run that hits one fails instead of waiting for the reset.
 - **OpenCode** reports `auth` (the SDK's `ProviderAuthError`, or HTTP 401/403) and `rate_limited` (HTTP 429). Every other OpenCode failure is `unknown`.
 - **Copilot** reports `misconfigured` when its MCP config file cannot be read. Its SDK exposes every other failure only as a message string, so those are `unknown`.
 
-Set `on_error: all` on a node that should retry `unknown` failures.
+Set `on_error: schema_unmet` on a node that should retry a final output that did not meet its schema, and `on_error: all` on one that should also retry `unknown` failures.
 
 #### Failures the engine detects
 
@@ -952,7 +960,7 @@ Archon puts a failure it detects itself in a bucket by its kind:
 | A timeout: an AI node's `idle_timeout`, or a `bash:`/`script:` node's `timeout` | TRANSIENT | Yes. Each retry of a hung AI node can wait another full `idle_timeout` |
 | An AI provider stream that ends without any output | TRANSIENT | Yes |
 | A `bash:`/`script:` node that exits non-zero or cannot start | UNKNOWN | No (unless `on_error: all`). What the script printed does not matter |
-| An AI node's structured output that fails its `output_format` after reasks | UNKNOWN | No (unless `on_error: all`) |
+| An AI node's or `loop:` iteration's structured output that fails its `output_format` after reasks, or no schema-valid structured output at all | SCHEMA_UNMET | No (unless `on_error: schema_unmet` or `all`) |
 | A `bash:`/`script:` node's stdout that fails its `output_format` | no bucket | Never |
 | A config error: a missing command file, a bad input reference, an `output_format` that cannot compile | FATAL | Never |
 | A cancelled node | FATAL | Never |
@@ -1710,6 +1718,63 @@ holds every link from or to the item, each with its `direction` and the `other` 
 ended link stays with `ended` set, and the engine acts on no link. Like
 `state`, it runs on the host: a container-isolated node cannot call it.
 
+### Reading an earlier run's result
+
+A stage that needs what an earlier run on its item returned declares it as an input, naming
+the workflow:
+
+```yaml
+name: merge
+inputs:
+  build:
+    result_of: build    # the latest completed run of `build` on this run's item
+  review:
+    result_of: review
+returns: { node: decide, outcome: verdict }
+nodes:
+  - id: decide
+    prompt: |
+      The build returned $INPUTS.build. The last review returned $INPUTS.review.
+      ...
+```
+
+When a run starts, after any wait for its [resource](/guides/workflow-triggers/#workflows-that-declare-a-resource) slot, the engine fills each
+`result_of` input the run was not supplied:
+
+- The value is the result the latest **completed** run of that workflow on the item returned:
+  the value its `returns:` node's `output_format` certified, or the text of an untyped
+  `returns:` node. It is the value `archon workflow get <id> --json` shows at
+  `terminal_record.returns.value`. "Latest" is the run that completed last.
+- A failed, cancelled, paused or running run has no result, even when its `returns:` node
+  completed. When there is no completed run of the workflow on the item, or the latest one has
+  no readable result (it declares no `returns:`, its `returns:` node was skipped), the value is
+  `null`. The engine never falls back to an older run; a node that needs an older one reads
+  the item's runs itself. The start says on the run's conversation which run each input read,
+  or why it is `null`, so a misspelled workflow name shows as "no completed run".
+- A run on the item that the engine cannot read fails the starting run, naming that run: it
+  may be the latest one, so no value is read in its place. An unreadable terminal record fails
+  the starting run too.
+- The value is read from the database, not the run's artifacts directory, so it reads the same
+  on every host that shares the database. A typed result is stored whole whatever its size.
+  An untyped `returns:` node's text past the 32 KiB node output cap is kept whole only in a
+  file on the host that ran it, so it reads `null` on every host; declare `output_format` on
+  the `returns:` node to make a large result readable.
+- A supplied value wins, as it does over a `default:`: `--input`, a parent's `with:`, or a
+  [run-ended binding](/guides/workflow-triggers/)'s mapping. A stage a run-ended binding starts
+  needs no `{ "result" }` mapping to read the ended run's result: that run completed before
+  the stage starts, so it is the latest one, unless a later run of the same workflow completed
+  first.
+- The value is resolved once, written into the run's `$INPUTS`, and kept on resume.
+- A run with no item is refused before it does any work, unless every `result_of` input is
+  supplied. A `workflow:` child carries no item, so its parent passes the value through
+  `with:`.
+- `result_of` with `default:` or `required: true` is contradictory, and the input is dropped at
+  load with a warning. A dry run has no item and previews an unsupplied `result_of` input as
+  `null`.
+
+`archon workflow runs --item <key>` shows, for each run, `hasResult`: whether a reader would
+get a value from it.
+
 ## Reading a project's items over a window
 
 `items()` reads the items of the run's project that had a run started in a window, each as
@@ -2154,9 +2219,11 @@ nodes:
     depends_on: [synthesize]
 ```
 
-- **`inputs:`**: a map of input name → `{ required?, default?, description? }`. `required: true`
+- **`inputs:`**: a map of input name → `{ required?, default?, description?, result_of? }`. `required: true`
   and `default:` are mutually exclusive (a required input has no default; declaring both drops
-  the key at load with a warning). Values come from `with:` on the `include:`/`workflow:` node
+  the key at load with a warning). `result_of: <workflow>` fills an unsupplied input with what
+  the latest completed run of that workflow on the run's item returned, and excludes both
+  (see [Reading an earlier run's result](#reading-an-earlier-runs-result)). Values come from `with:` on the `include:`/`workflow:` node
   that references this workflow, or, for a direct run, from `--input name=value` on the CLI or
   the run form in the web console (see [Running a workflow that declares
   inputs](#running-a-workflow-that-declares-inputs)). Whichever channel supplies them, the same

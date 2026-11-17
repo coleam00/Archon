@@ -7,7 +7,10 @@ import {
   readNodeRecordEvent,
   type ReadNodeRecordEvent,
 } from '@archon/workflows/node-record-reader';
-import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
+import type {
+  NodeExecutionMetadata,
+  NodeFailureKind,
+} from '@archon/workflows/schemas/node-execution';
 import {
   describeUnfinishedFanOut,
   fanOutSlotOutcomeLabel,
@@ -38,6 +41,8 @@ export interface NodeSummary {
   output?: string;
   outputTruncated?: boolean;
   error?: string;
+  /** Why the node failed, as recorded: the name a `retry.on_error` policy targets. */
+  failureKind?: NodeFailureKind;
   exitCode?: number;
   /** Set when the failure is "a live child run blocks this node"; abandoning it unblocks. */
   blockedOnChildRunId?: string;
@@ -263,6 +268,7 @@ function failedNodeSummary(
     startedAt: existing?.startedAt,
     durationMs: nodeDurationMs(record, createdAt, startTime),
     error: data.error ?? 'Unknown error',
+    ...(data.failure_kind === undefined ? {} : { failureKind: data.failure_kind }),
     ...(isExecNodeRecord(record) ? execFailureFields(data) : {}),
     ...(data.blocked_on_child_run_id === undefined
       ? {}
@@ -431,6 +437,7 @@ function roundNodeSummary(node: LoopRoundNode): NodeSummary {
   if (node.duration_ms !== undefined) summary.durationMs = node.duration_ms;
   if (node.output !== undefined) summary.outputPreview = previewOutput(node.output);
   if (node.error !== undefined) summary.error = node.error;
+  if (node.failure_kind !== undefined) summary.failureKind = node.failure_kind;
   if (node.cause !== undefined) summary.cause = node.cause;
   if (node.fan_out_outcome !== undefined) summary.fanOutOutcome = node.fan_out_outcome;
   return summary;
@@ -458,7 +465,9 @@ function formatNodeDetails(node: NodeSummary): string[] {
     lines.push(`Output: ${node.outputPreview}`);
   }
   if (node.error !== undefined) {
-    lines.push(`Error:  ${node.error}`);
+    // The recorded kind is the name a `retry.on_error` policy targets, so it is shown.
+    const kind = node.failureKind === undefined ? '' : `(${node.failureKind}) `;
+    lines.push(`Error:  ${kind}${node.error}`);
   }
   lines.push(...formatFanOutOutcome(node.fanOutOutcome));
   if (node.sessionIds !== undefined) {

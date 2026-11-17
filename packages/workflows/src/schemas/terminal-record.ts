@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { fanOutOutcomeSchema } from './fan-out-outcome';
 import { nodeArtifactSchema } from './node-artifact';
+import { nodeFailureKindSchema } from './node-execution';
 import {
   nodeStateSchema,
   nodeSkipReasonSchema,
@@ -69,6 +70,8 @@ export const runNodeStateSchema = z.object({
   node_id: z.string(),
   state: nodeStateSchema,
   error: z.string().optional(),
+  /** Why a failed node failed, as recorded: the name a `retry.on_error` policy targets. */
+  failure_kind: nodeFailureKindSchema.optional(),
   reason: nodeSkipReasonSchema.optional(),
   cause: skipCauseSchema.optional(),
   /** A `workflow:` fan-out node's per-slot record; the node's state says nothing about its children. */

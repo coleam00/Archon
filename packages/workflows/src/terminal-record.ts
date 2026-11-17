@@ -198,6 +198,7 @@ function foldNodeRecord(
             node_id: nodeId,
             state: 'failed',
             ...(typeof data.error === 'string' ? { error: data.error } : {}),
+            ...(data.failure_kind !== undefined ? { failure_kind: data.failure_kind } : {}),
           },
           data.fan_out_outcome
         )
@@ -482,6 +483,13 @@ export function firstFailedNodeEvent<E extends TerminalRecordEvent>(
   return undefined;
 }
 
+/** The per-node state of a record's `first_failed_node`, when it has one. */
+export function firstFailedNodeState(
+  record: Pick<TerminalRecord, 'first_failed_node' | 'nodes'>
+): TerminalRecord['nodes'][number] | undefined {
+  return record.nodes.find(node => node.node_id === record.first_failed_node);
+}
+
 /** The failure kind a `node_failed` event recorded; undefined when it recorded none. */
 export function recordedFailureKind(event: TerminalRecordEvent): NodeFailureKind | undefined {
   const kind = nodeFailureKindSchema.safeParse(readNodeRecordData(event.data).failure_kind);
@@ -534,11 +542,16 @@ export function failedOutcomeReason(record: TerminalRecord | null): string[] {
 /**
  * Why a run that ended needs a look, for a reader of that one run: the failed-outcome
  * reason, or for a failed run the first line of its first failed node's error, or else of
- * the run's own. Error text is whatever a command or provider printed, so it stays out of
- * the attention stream, which uses structured failure facts instead.
+ * the run's own, led by that node's recorded failure kind. Error text is whatever a
+ * command or provider printed, so it stays out of the attention stream, which uses
+ * structured failure facts instead.
  */
 export function terminalReason(record: TerminalRecord | null): string[] {
   if (record?.status !== 'failed') return failedOutcomeReason(record);
-  const failed = record.nodes.find(node => node.node_id === record.first_failed_node);
-  return boundedReason([firstLine(failed?.error ?? record.error ?? '') ?? '']);
+  const failed = firstFailedNodeState(record);
+  const reason = boundedReason([firstLine(failed?.error ?? record.error ?? '') ?? '']);
+  const kind = failed?.failure_kind;
+  return kind === undefined
+    ? reason
+    : reason.map((line, i) => (i === 0 ? `(${kind}) ${line}` : line));
 }

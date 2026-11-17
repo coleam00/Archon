@@ -289,6 +289,7 @@ describe('reading an item', () => {
         awaitingExecution: null,
         spend: { usd: 0.42, inputTokens: 1200, outputTokens: 300 },
         heldBehind: null,
+        hasResult: false,
       },
       {
         id: 'second',
@@ -301,6 +302,7 @@ describe('reading an item', () => {
         awaitingExecution: null,
         spend: { usd: null, inputTokens: null, outputTokens: null },
         heldBehind: null,
+        hasResult: false,
       },
     ]);
     // The children's questions are the item's, under their own run ids, oldest first; the

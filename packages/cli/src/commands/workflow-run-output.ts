@@ -3,6 +3,7 @@ import { toolCallDisplayName } from '@archon/provider-contract';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import { providerEventEnvelopeSchema } from '@archon/workflows/schemas/provider-event';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
+import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
 import { readNodeEmitterEvent } from '@archon/workflows/node-event-write';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { deadlineWaitCursor, resumeCursorMatches } from '@archon/workflows/store';
@@ -31,7 +32,13 @@ export const nodeLine = {
   started: (name: string, detail = ''): string => `[${name}] Started${detail}`,
   completed: (name: string, durationMs?: number): string =>
     `[${name}] Completed${durationMs === undefined ? '' : ` (${formatDuration(durationMs)})`}`,
-  failed: (name: string, error: string): string => `[${name}] Failed: ${error}`,
+  // The recorded failure kind is the name a `retry.on_error` policy targets, so it is shown.
+  failed: (name: string, error: string, execution?: NodeExecutionMetadata): string => {
+    // A transcript row is unvalidated JSON, so a row without a lifecycle prints no kind.
+    const lifecycle = execution?.lifecycle as NodeExecutionMetadata['lifecycle'] | undefined;
+    const kind = lifecycle?.status === 'failed' ? lifecycle.failureKind : undefined;
+    return `[${name}] Failed${kind === undefined ? '' : ` (${kind})`}: ${error}`;
+  },
   skipped: (name: string, why: string): string => `[${name}] Skipped (${why})`,
 };
 
@@ -48,7 +55,7 @@ function nodeEventLine(event: WorkflowEmitterEvent): string | undefined {
     case 'node_completed':
       return nodeLine.completed(event.nodeName, event.duration);
     case 'node_failed':
-      return nodeLine.failed(event.nodeName, event.error);
+      return nodeLine.failed(event.nodeName, event.error, event.execution);
     case 'node_skipped':
       return nodeLine.skipped(event.nodeName, formatSkipCause(event.cause));
     case 'node_skipped_prior_success':

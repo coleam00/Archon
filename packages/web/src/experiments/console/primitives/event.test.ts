@@ -461,10 +461,14 @@ describe('foldNodeRuns', () => {
   test('a failed node carries its error; a node that failed and then completed does not', () => {
     const events = [
       node('boom', 'node_started', { created_at: at('0') }),
-      node('boom', 'node_failed', { created_at: at('1'), data: { error: 'exit 1: no key' } }),
+      node('boom', 'node_failed', {
+        created_at: at('1'),
+        data: { error: 'exit 1: no key', failure_kind: 'schema_unmet' },
+      }),
     ];
     expect(foldNodeRuns(events, [state('boom', 'failed')])[0]).toMatchObject({
       error: 'exit 1: no key',
+      failureKind: 'schema_unmet',
     });
     const retried = [
       ...events,
@@ -475,6 +479,7 @@ describe('foldNodeRuns', () => {
     ];
     expect(foldNodeRuns(retried, [state('boom', 'completed')])[0]).toMatchObject({
       error: null,
+      failureKind: null,
       output: { text: 'ok' },
     });
   });
