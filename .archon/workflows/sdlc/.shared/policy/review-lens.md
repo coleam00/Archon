@@ -9,7 +9,7 @@ file after it, and where the two conflict, the project's line wins.
   checkout, not even to revert: sibling reviewers read it at the same time, and the
   engine fails a reviewer that leaves it changed.
 - **Scratch.** Try a mutation in a scratch worktree, made with the command your prompt
-  gives; the workflow removes it. Before running anything there, install its
+  gives; Archon removes it when you finish. Before running anything there, install its
   dependencies with the project's own package manager in locked mode, never updating a
   lockfile. Any other scratch file you write, such as a probe script, a note or
   captured output, goes under the run's artifacts directory, never in the checkout.

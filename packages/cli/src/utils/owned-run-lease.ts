@@ -4,6 +4,7 @@ import {
   TerminalStatusWriteError,
 } from '@archon/workflows/terminal-status-write';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { RunOwnerLease } from '@archon/workflows/store';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 
 /** Worktree setup or execution starts the exact-run lease, whichever comes first. */
@@ -47,6 +48,12 @@ export class OwnedRunLease {
       this.unregisterPreparation = undefined;
       this.prepareTermination = undefined;
     };
+  }
+
+  /** The store's proof that this process holds the run; resume never runs before `start`. */
+  ownerLease(): RunOwnerLease {
+    if (!this.liveOwner) throw new Error('Run lease has not started');
+    return this.liveOwner.lease;
   }
 
   isStopRequested(): boolean {

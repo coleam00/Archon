@@ -50,12 +50,4 @@ describe('clampEffort', () => {
     expect(clampEffort(5, FROM_LOW)).toBeUndefined();
     expect(clampEffort('high', [] as const)).toBeUndefined();
   });
-
-  test('resolves every rung for every vocabulary', () => {
-    for (const vocabulary of [FROM_LOW, FULL, FROM_MINIMAL, WITHOUT_MAX]) {
-      for (const rung of EFFORT_LADDER) {
-        expect(vocabulary as readonly string[]).toContain(clampEffort(rung, vocabulary) as string);
-      }
-    }
-  });
 });

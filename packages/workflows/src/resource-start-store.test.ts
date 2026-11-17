@@ -309,3 +309,15 @@ test('an item held for a workflow blocks its starts whatever the capacity, and a
     )
   ).toEqual(['first-k3', 'other-workflow', 'no-item']);
 });
+
+test('two read-only copies of one handed-off commit hold no checkout of each other', () => {
+  const copy = (): PreparedWorkflowLaunch => {
+    const base = launch(false);
+    return {
+      ...base,
+      execution: { ...base.execution, isolation: { kind: 'worktree', fromBranch: 'c'.repeat(40) } },
+    };
+  };
+  const held = heldCheckouts([{ id: 'first-check', launch: copy() }]);
+  expect(resourceStartBlocker({ ...slot(), heldCheckouts: held }, copy(), 'host', null)).toBeNull();
+});

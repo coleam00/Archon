@@ -92,42 +92,37 @@ test('connected login invalidates and completes once, then stops polling', async
   expect(timers).toHaveLength(0);
 });
 
-test.each(['unmount', 'provider change'] as const)(
-  'ignores an in-flight connected poll after %s',
-  async cancellation => {
-    const poll = Promise.withResolvers<Response>();
-    const request = mock((input: RequestInfo | URL) =>
-      String(input).endsWith('/start')
-        ? Promise.resolve(Response.json({ sessionId: 'session-1', mode: 'manual', expiresIn: 600 }))
-        : poll.promise
-    );
-    globalThis.fetch = Object.assign(request, { preconnect: originalFetch.preconnect });
-    const invalidate = spyOn(cache, 'invalidate');
-    const onDone = mock(() => undefined);
-    mountLogin(onDone);
-    await settle();
-    await advancePollInterval();
-    expect(request.mock.calls.map(([url]) => String(url))).toEqual([
-      '/api/auth/providers/claude/oauth/start',
-      '/api/auth/providers/claude/oauth/poll',
-    ]);
+// Unmount runs every cleanup, so the provider-change case (only the polling effect's
+// cleanup) is the stricter check of the same staleness guard.
+test('ignores an in-flight connected poll after provider change', async () => {
+  const poll = Promise.withResolvers<Response>();
+  const request = mock((input: RequestInfo | URL) =>
+    String(input).endsWith('/start')
+      ? Promise.resolve(Response.json({ sessionId: 'session-1', mode: 'manual', expiresIn: 600 }))
+      : poll.promise
+  );
+  globalThis.fetch = Object.assign(request, { preconnect: originalFetch.preconnect });
+  const invalidate = spyOn(cache, 'invalidate');
+  const onDone = mock(() => undefined);
+  mountLogin(onDone);
+  await settle();
+  await advancePollInterval();
+  expect(request.mock.calls.map(([url]) => String(url))).toEqual([
+    '/api/auth/providers/claude/oauth/start',
+    '/api/auth/providers/claude/oauth/poll',
+  ]);
 
-    if (cancellation === 'unmount') {
-      for (const cleanup of cleanups.splice(0)) cleanup();
-    } else {
-      // A provider change cleans up the polling effect without unmounting the hook.
-      const cleanup = cleanups.pop();
-      expect(cleanup).toBeDefined();
-      cleanup?.();
-    }
-    poll.resolve(Response.json({ status: 'connected' }));
-    await settle();
-    await advancePollInterval();
-    await advancePollInterval();
+  // A provider change cleans up the polling effect without unmounting the hook.
+  const cleanup = cleanups.pop();
+  expect(cleanup).toBeDefined();
+  cleanup?.();
+  poll.resolve(Response.json({ status: 'connected' }));
+  await settle();
+  await advancePollInterval();
+  await advancePollInterval();
 
-    expect(invalidate).not.toHaveBeenCalled();
-    expect(onDone).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(timers).toHaveLength(0);
-  }
-);
+  expect(invalidate).not.toHaveBeenCalled();
+  expect(onDone).not.toHaveBeenCalled();
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(timers).toHaveLength(0);
+});

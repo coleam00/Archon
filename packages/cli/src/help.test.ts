@@ -139,6 +139,8 @@ Commands:
   project config <id|name>   Show a project's merged config with secrets removed (env key names only)
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
+  pack graph <pack>          Show a pack's stages, their outcomes and the run-ended arrows between them,
+                             each active in this install or declared and inactive (--json for the read)
   pack bindings <pack>       Write a pack's recommended trigger bindings as files for one repository;
                              registers and schedules nothing. Needs --repo, --host, --run-as and --out
   chat <message>             Send a message to the orchestrator
@@ -152,7 +154,9 @@ Commands:
   workflow get <run-id>      Show detail for a single run (any status)
   workflow artifacts <run-id> [path] List a run's artifact files, or print one
   workflow logs <run-id>     Print or follow a run's JSONL transcript
-  workflow wait <run-id>     Block until the run ends or needs attention
+  workflow wait <run-id> | --item <key>
+                             Block until the run ends or needs attention
+                             With --item: until any live run on the item does; names the run
   workflow attention [<run-id>|ask:<id>]
                              List, count or stream the attention queue, or read the item one run or ask stands for
                              (defaults to the current project)
@@ -161,8 +165,12 @@ Commands:
   workflow resume <run-id>   Resume a failed, paused or killed run from completed nodes
   workflow wake [--watch] [--json] Wake due continuations across this install
   workflow signal <full-run-id> Signal and wake an event wait; use --occurrence for an exact match
-  workflow cancel <run-id>   Stop a running workflow (stops an owning process first)
-  workflow abandon <run-id>  Mark a run cancelled, stopping a live owner first
+  workflow cancel <run-id> | --item <key>
+                             Stop a running workflow (stops an owning process first)
+                             With --item: the item's running run; refuses when several are
+  workflow abandon <run-id> | --item <key>
+                             Mark a run cancelled, stopping a live owner first
+                             With --item: the item's pending, running or paused run; refuses when several are
   workflow end-turn <run-id> Record a request to end stalled tools or reported work
   workflow respond <run-id> <decision> [text]
                              Resolve a paused gate with any of its declared decisions
@@ -243,8 +251,8 @@ Options:
   --from, --from-branch <name> Create new branch from specific start point
   --base-branch <name>       Initial repository registration only; omit to follow the remote default. Use --base for a run override.
   --base <branch>            Per-dispatch base override for epic slices (worktree cut-from + PR target)
-  --workflow-source <path>   Read the workflow, its commands and scripts from this directory
-                             instead of --cwd (which stays the workspace the run acts on)
+  --workflow-source <path>   Read the workflow, its commands and scripts from this checkout root
+                             (<path>/.archon/workflows) instead of --cwd (which stays the workspace the run acts on)
   --no-worktree              Run on branch directly without worktree isolation
   --folder                   Register the current directory (with or without git) as a folder project and run in place
   --container                Run a folder project in container isolation
@@ -281,7 +289,7 @@ Options:
                              is not terminal (with or without a resource:)
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
-  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow link': the item the link is from
+  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on
   --no-item                  For 'trigger fire': start the run on no item instead of inheriting the firing run's item
   --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded
   --limit <n>                For 'workflow runs': max rows (default 20)
@@ -316,6 +324,7 @@ Examples:
   archon workflow wait <run-id> --json
   archon workflow resume <run-id>
   archon workflow cancel <run-id>
+  archon workflow cancel --item issue-42
   archon workflow runs --open
   archon workflow run archon-review --adopt <run-id> "Review the changes"
   archon skill add

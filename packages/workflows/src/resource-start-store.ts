@@ -9,6 +9,7 @@ import {
 import type { z } from 'zod';
 import type {
   PreparedWorkflowLaunch,
+  QueuedItemStart,
   ResourceStartBindingIntent,
   ResourceStartDisposition,
   ResourceStartIntent,
@@ -158,13 +159,17 @@ export interface ResourceStartRequestInspection {
 }
 
 /**
- * A start request as the item read lists it. It reads no joined run status: a blocker
- * whose stored status this binary cannot read must not fail the read of the item.
+ * A refused (`skipped`) start request as the item read lists it, with the run it recorded
+ * as its blocker. It reads no joined run status and parses no full launch: a row this
+ * binary cannot read in full must not fail the read of the item. `workflow` is null when
+ * the stored launch does not read.
  */
-export type ItemStartRequest = Pick<
-  ResourceStartRequestInspection,
-  'id' | 'resource' | 'status' | 'blocker' | 'launch'
->;
+export interface SkippedItemStart {
+  requestId: string;
+  workflow: string | null;
+  resource: string;
+  blockerRunId: string | null;
+}
 
 /** An admitted start whose run has not begun, and the host whose executor runs it. */
 export interface AwaitingExecution {
@@ -570,7 +575,7 @@ export interface IResourceStartStore {
   ): Promise<
     Pick<
       StartReceiptInspection,
-      'id' | 'sourceInstanceId' | 'deliveryId' | 'outcome' | 'reason' | 'receivedAt'
+      'id' | 'sourceInstanceId' | 'deliveryId' | 'itemKey' | 'outcome' | 'reason' | 'receivedAt'
     >[]
   >;
   /**
@@ -585,10 +590,10 @@ export interface IResourceStartStore {
   }): Promise<PendingStartBindingInspection[]>;
   getResourceStartRequest(id: string): Promise<ResourceStartRequestInspection | null>;
   /**
-   * The start requests that name item `itemId` and have no run: queued ones that wait, and
-   * skipped ones that were refused. Oldest first. A store without items returns none.
+   * The start requests on item `itemId` that were refused (`skipped`), oldest first. A
+   * store without items returns none.
    */
-  listItemStartRequests(itemId: string): Promise<ItemStartRequest[]>;
+  listSkippedItemStarts(itemId: string): Promise<SkippedItemStart[]>;
   /**
    * The runs that hold their item (`holdsItem`) while a later start of their workflow on
    * it waits: a queued start request, or a pending hand start that holds nothing. A holder
@@ -596,6 +601,8 @@ export interface IResourceStartStore {
    */
   listWaitedItemHolders(): Promise<AttentionRead<WorkflowRun>[]>;
   listQueuedResourceStartsForHost(hostId: string): Promise<QueuedResourceStartInspection[]>;
+  /** The starts on item `itemId` whose status is `queued`, in queue order. */
+  listQueuedItemStarts(itemId: string): Promise<QueuedItemStart[]>;
   withdrawQueuedResourceStart(id: string): Promise<PreparedWorkflowLaunch | null>;
   claimStartBindingPreparation(input: {
     receiptId: string;

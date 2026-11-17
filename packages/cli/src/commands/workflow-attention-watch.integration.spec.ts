@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * `archon workflow attention --watch` as its own process against a real SQLite store.
  *

@@ -1,7 +1,11 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
-import { getTerminalRecord, terminalReason } from '@archon/workflows/terminal-record';
+import {
+  buildLoopRounds,
+  getTerminalRecord,
+  terminalReason,
+} from '@archon/workflows/terminal-record';
 import { runThroughput, type RunThroughput } from '@archon/workflows/throughput';
 import { buildNodeSummaries, listRunEvents } from './workflow-node-summaries';
 import { writeJsonLine } from '../utils/stdout';
@@ -19,8 +23,9 @@ import {
  *
  * Unlike `status` (active runs only), this resolves one run regardless of
  * status — so an agent can answer "did the review pass?" for a completed/failed
- * run. `--verbose` adds the per-node summary; `--json` emits the raw run plus a
- * `nodes` array when verbose (`--events` selects raw event rows instead).
+ * run. `--verbose` adds the per-node summary and each loop round; `--json` emits the
+ * raw run plus `nodes` and, for a run that looped, `loop_rounds` when verbose
+ * (`--events` selects raw event rows instead).
  *
  * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
@@ -142,12 +147,19 @@ async function writeWorkflowGetJson(
         terminal_record: terminalRecord,
         ...why,
         nodes: buildNodeSummaries(events),
+        ...loopRoundsField(run, events),
         // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
         // named field rather than leaving the caller to scan raw events.
         ...(parseWarnings.length > 0 ? { parseWarnings } : {}),
       };
   await writeJsonLine(output);
   return 0;
+}
+
+/** A run that looped carries `loop_rounds`; one that did not reads as before. */
+function loopRoundsField(run: WorkflowRun, events: WorkflowEventRow[]) {
+  const rounds = buildLoopRounds(run, events);
+  return rounds.length > 0 ? { loop_rounds: rounds } : {};
 }
 
 async function readGetHistory(

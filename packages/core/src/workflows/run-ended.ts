@@ -26,10 +26,28 @@ import {
 } from '@archon/workflows/schemas/resource-start';
 import type { WorkflowItem, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowDeps } from '@archon/workflows/deps';
-import { declaredOutcome } from '@archon/workflows/completed-outcome';
+import { declaredOutcome, outcomeValues } from '@archon/workflows/completed-outcome';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import type { EndedCheckout } from './ended-checkout';
+import { getArchonHome } from '@archon/paths';
+
+/** `ARCHON_HOME/triggers`: where run-ended trigger files are read from. */
+export function getTriggersPath(): string {
+  return join(getArchonHome(), 'triggers');
+}
+
+/**
+ * A trigger file in the triggers directory cannot be read as a binding. The message names
+ * the file and what is wrong, so a reader can show it to the operator who owns the file.
+ */
+export class TriggerFileError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'TriggerFileError';
+  }
+}
 
 /** A trigger file whose binding the end of a run starts. */
 export interface RunEndedBinding {
@@ -62,7 +80,7 @@ export async function readRunEndedBindings(directory: string): Promise<RunEndedB
     // would collide on it and the second start would replay as the first.
     const other = bySource.get(binding.sourceInstanceId);
     if (other)
-      throw new Error(
+      throw new TriggerFileError(
         `Trigger files ${other} and ${binding.file} share sourceInstanceId '${binding.sourceInstanceId}'; each run-ended binding needs its own`
       );
     bySource.set(binding.sourceInstanceId, binding.file);
@@ -77,20 +95,25 @@ async function readRunEndedFile(file: string): Promise<RunEndedBinding | undefin
   try {
     value = JSON.parse(await readFile(file, 'utf8')) as unknown;
   } catch (error) {
-    throw new Error(`Trigger file ${file} is not readable JSON: ${(error as Error).message}`, {
-      cause: error,
-    });
+    throw new TriggerFileError(
+      `Trigger file ${file} is not readable JSON: ${(error as Error).message}`,
+      {
+        cause: error,
+      }
+    );
   }
   if (value === null || typeof value !== 'object' || !('on' in value)) return undefined;
   const parsed = triggerConfigSchema.safeParse(value);
   if (!parsed.success)
-    throw new Error(
+    throw new TriggerFileError(
       `Trigger file ${file} is invalid: ${parsed.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`
     );
   const { on, sourceInstanceId, binding } = parsed.data;
   if (!on) return undefined;
   if (!isAbsolute(binding.launch.cwd))
-    throw new Error(`Trigger file ${file} is invalid: binding.launch.cwd must be absolute`);
+    throw new TriggerFileError(
+      `Trigger file ${file} is invalid: binding.launch.cwd must be absolute`
+    );
   return { file, sourceInstanceId, binding, runEnded: on.runEnded };
 }
 
@@ -104,7 +127,7 @@ export function runEndedBindingProblems(
 ): string[] {
   const problems: string[] = [];
   const form = ended.outcomeForm;
-  const values = form.kind === 'enum' ? form.values : ['succeeded', 'failed'];
+  const values = outcomeValues(form);
   if (!values.includes(runEnded.outcome))
     problems.push(
       `outcome '${runEnded.outcome}' is not one '${runEnded.workflowName}' completes with (${values.map(value => `'${value}'`).join(', ')})`
@@ -149,6 +172,11 @@ export interface RunEndedStartsDependencies {
    * path is gone (see `launchProjectKey`).
    */
   projectKeyOf: (cwd: string) => Promise<string | null>;
+  /**
+   * The checkout the ended run left, for a binding with `checkout: "ended-run"`. Read at
+   * most once per completion, and only when such a binding matches.
+   */
+  endedCheckout: (run: WorkflowRun) => Promise<EndedCheckout>;
   now?: () => Date;
 }
 
@@ -172,6 +200,7 @@ export function createRunEndedStarts(
     const item = await dependencies.getItem(run.item_id);
     if (!item) throw new Error(`Run '${run.id}' names item '${run.item_id}', which is missing`);
     const receipts: SourceReceiptAcceptance[] = [];
+    let checkout: Promise<EndedCheckout> | undefined;
     for (const candidate of candidates) {
       // A binding that launches in another project is not about this item, even when a
       // workflow there has the same name.
@@ -180,7 +209,16 @@ export function createRunEndedStarts(
       if (problems.length > 0)
         throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
       if (candidate.runEnded.outcome !== ended.outcome.value) continue;
-      receipts.push(receiptFor(candidate, ended, item, dependencies.now?.() ?? new Date()));
+      if (candidate.runEnded.checkout !== undefined) checkout ??= dependencies.endedCheckout(run);
+      receipts.push(
+        receiptFor(
+          candidate,
+          ended,
+          item,
+          candidate.runEnded.checkout === undefined ? undefined : await checkout,
+          dependencies.now?.() ?? new Date()
+        )
+      );
     }
     return receipts;
   };
@@ -199,7 +237,7 @@ export function launchProjectKey(
 }
 
 /** The project a binding launches in; a failure to resolve it names the file. */
-async function bindingProjectKey(
+export async function bindingProjectKey(
   candidate: RunEndedBinding,
   dependencies: Pick<RunEndedStartsDependencies, 'projectKeyOf'>
 ): Promise<string | null> {
@@ -217,19 +255,29 @@ function receiptFor(
   candidate: RunEndedBinding,
   ended: RunEndedFacts,
   item: WorkflowItem,
+  checkout: EndedCheckout | undefined,
   now: Date
 ): SourceReceiptAcceptance {
   const mapped = mappedInputs(candidate.runEnded, ended);
+  const inputs = 'inputs' in mapped ? mapped.inputs : {};
+  const refused =
+    'missing' in mapped
+      ? mapped.missing
+      : checkout && 'refused' in checkout
+        ? `Checkout: ${checkout.refused}`
+        : undefined;
+  const handoff = checkout && 'handoff' in checkout ? checkout.handoff : undefined;
   // Computed as `trigger fire` computes it, over the binding alone.
   const bindingRevision = createHash('sha256')
     .update(JSON.stringify(candidate.binding))
     .digest('hex');
+  const content = refused ?? inputs;
   const receipt = {
     id: randomUUID(),
     sourceInstanceId: candidate.sourceInstanceId,
     deliveryId: ended.run.id,
     contentDigest: createHash('sha256')
-      .update(JSON.stringify('inputs' in mapped ? mapped.inputs : mapped.missing))
+      .update(JSON.stringify(handoff && refused === undefined ? [content, handoff] : content))
       .digest('hex'),
     receivedAt: now.toISOString(),
     occurredAt: null,
@@ -240,26 +288,37 @@ function receiptFor(
     },
     itemKey: item.key,
   };
-  if ('missing' in mapped)
+  if (refused !== undefined)
     return sourceReceiptAcceptanceSchema.parse({
       receipt,
       outcome: 'unmatched',
       // On the receipt as well as its binding, so `trigger list` shows why nothing started.
-      reason: `${candidate.file}: ${mapped.missing}; '${candidate.binding.launch.workflowName}' was not started`,
+      reason: `${candidate.file}: ${refused}; '${candidate.binding.launch.workflowName}' was not started`,
       bindings: [],
       evaluatedBindings: [
         {
           bindingId: candidate.binding.bindingId,
           bindingRevision,
           status: 'rejected',
-          reason: mapped.missing,
+          reason: refused,
         },
       ],
     });
   const binding: ResourceStartBindingIntent = {
     ...candidate.binding,
     bindingRevision,
-    ...(Object.keys(mapped.inputs).length > 0 ? { eventInputs: mapped.inputs } : {}),
+    ...(Object.keys(inputs).length > 0 ? { eventInputs: inputs } : {}),
+    // `launch.isolation` names the branch for an older binary, which reads no hand-off: it
+    // runs the stage on that branch or fails to check it out, never on the base branch.
+    ...(handoff
+      ? {
+          launch: {
+            ...candidate.binding.launch,
+            isolation: { kind: 'worktree' as const, branch: handoff.branch },
+          },
+          checkoutFrom: handoff,
+        }
+      : {}),
   };
   return sourceReceiptAcceptanceSchema.parse({ receipt, outcome: 'matched', bindings: [binding] });
 }
@@ -272,7 +331,8 @@ function declaredInputNames(workflow: Pick<ResolvedWorkflow, 'inputs' | 'pack'>)
 /**
  * Every problem with a run-ended binding, read against the workflows of the project it
  * launches in: the ended workflow exists and declares the outcome and every input the
- * binding reads, and the started workflow exists and declares every input it maps. The
+ * binding reads, and the started workflow exists and declares every input it maps. With
+ * `checkout: "ended-run"`, neither workflow may be pinned in place. The
  * check a run gets before it starts; `runEndedTriggerCheck` reports it with the rest.
  */
 export async function runEndedBindingCheck(
@@ -299,11 +359,21 @@ export async function runEndedBindingCheck(
         declaredInputs: declaredInputNames(ended),
       })
     );
+  // A folder project leaves no worktree either; that is known only when a start is
+  // prepared, which refuses it then, naming it.
+  if (runEnded.checkout !== undefined && ended?.worktree?.enabled === false)
+    problems.push(
+      `workflow '${ended.name}' runs in place (worktree.enabled: false), so it leaves no checkout for checkout: ended-run`
+    );
   const target = resolveWorkflowName(binding.launch.workflowName, workflows);
   if (!target) {
     problems.push(`workflow '${binding.launch.workflowName}' is not in this project`);
     return problems;
   }
+  if (runEnded.checkout !== undefined && target.worktree?.enabled === false)
+    problems.push(
+      `workflow '${target.name}' runs in place (worktree.enabled: false), so it cannot take the ended run's checkout`
+    );
   const declared = declaredInputNames(target);
   for (const name of Object.keys(runEnded.inputs ?? {}))
     if (!declared.includes(name))
@@ -367,7 +437,7 @@ export async function runEndedTriggerCheck(
  * stage or an undeclared input is refused before the run does any work.
  */
 export function createRunEndedPreflight(
-  dependencies: Omit<RunEndedStartsDependencies, 'now'> &
+  dependencies: Omit<RunEndedStartsDependencies, 'now' | 'endedCheckout'> &
     Pick<WorkflowDeps, 'loadConfig' | 'providers'>
 ): (run: WorkflowRun) => Promise<void> {
   return async run => {

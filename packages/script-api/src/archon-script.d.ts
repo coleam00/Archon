@@ -2039,6 +2039,7 @@ declare module 'archon:script' {
       readonly cause: {
         readonly kind: 'run_ended';
         readonly runId: string;
+        readonly sourceInstanceId: string;
       } | {
         readonly kind: 'run_fired';
         readonly runId: string;
@@ -2059,11 +2060,24 @@ declare module 'archon:script' {
         readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
       } | null;
     }>;
-    readonly starts: ReadonlyArray<{
+    readonly queued: ReadonlyArray<{
       readonly requestId: string;
-      readonly workflow: string;
+      readonly workflow: string | null;
       readonly resource: string;
-      readonly status: 'queued' | 'skipped';
+      readonly hostId: string;
+      readonly queuedAt: string;
+      readonly ahead: number;
+      readonly heldBehind: {
+        readonly runId: string;
+        readonly workflow: string;
+        readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
+      } | null;
+    }>;
+    readonly skipped: ReadonlyArray<{
+      readonly requestId: string;
+      readonly workflow: string | null;
+      readonly resource: string;
       readonly heldBehind: {
         readonly runId: string;
         readonly workflow: string;

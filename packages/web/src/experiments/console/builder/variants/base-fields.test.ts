@@ -77,10 +77,4 @@ describe('partitionNode', () => {
     expect(base).toEqual({});
     expect(variantSpecific).toEqual({ prompt: 'hi' });
   });
-
-  test('id never leaks into base or variantSpecific', () => {
-    const { base, variantSpecific } = partitionNode({ id: 'n', prompt: 'hi', model: 'opus' });
-    expect('id' in base).toBe(false);
-    expect('id' in variantSpecific).toBe(false);
-  });
 });

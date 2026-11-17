@@ -1,15 +1,17 @@
 /**
- * The text of an item read (`workflow runs --item`): its runs, its starts with no run,
- * links, open questions, and answers with rulings, each oldest first. Built from the same
- * `ItemRead` that `--json` prints.
+/**
+ * The text of an item read (`workflow runs --item`): its runs, its starts waiting to start
+ * and its refused starts, links, open questions, and answers with rulings, each oldest
+ * first. Built from the same `ItemRead` that `--json` prints.
  */
 import type {
   ItemAnswer,
   ItemHeldBehind,
+  ItemQueuedStart,
   ItemRead,
   ItemReadLink,
   ItemRun,
-  ItemStart,
+  ItemSkippedStart,
 } from '@archon/workflows/item-read';
 import { answererText, attentionItemLines } from './workflow-attention-text';
 
@@ -79,17 +81,11 @@ function heldBehindLines(verb: string, held: ItemHeldBehind): string[] {
   return lines;
 }
 
-function startLines(start: ItemStart): string[] {
+function skippedLines(start: ItemSkippedStart): string[] {
   const lines = [
-    `  ${start.requestId.slice(0, 8)}  ${start.status.padEnd(9)}  ${start.workflow} · resource ${start.resource}`,
+    `  ${start.requestId}  ${start.workflow ?? '(launch unreadable)'}  on ${start.resource}, skipped`,
   ];
-  if (start.heldBehind)
-    lines.push(
-      ...heldBehindLines(
-        start.status === 'queued' ? 'waits behind' : 'refused, held by',
-        start.heldBehind
-      )
-    );
+  if (start.heldBehind) lines.push(...heldBehindLines('refused, held by', start.heldBehind));
   return lines;
 }
 
@@ -112,6 +108,34 @@ function runLines(run: ItemRun): string[] {
         run.heldBehind
       )
     );
+  return lines;
+}
+
+/**
+ * One start waiting for capacity. The request id prints in full: it is what
+ * `archon trigger inspect` and `archon trigger withdraw` take.
+ */
+function queuedLines(start: ItemQueuedStart): string[] {
+  const waits =
+    start.ahead === 0
+      ? `next for a free slot on host ${start.hostId}`
+      : `${String(start.ahead)} ahead on host ${start.hostId}`;
+  const lines = [
+    `  ${start.requestId}  ${start.workflow ?? '(launch unreadable)'}  on ${start.resource}, ${waits}, queued ${minute(start.queuedAt)}`,
+  ];
+  if (start.heldBehind) lines.push(...heldBehindLines('waits behind', start.heldBehind));
+  return lines;
+}
+
+/** The item's starts with no run: those waiting to start, then any that were refused. */
+function startSectionLines(read: ItemRead): string[] {
+  const lines = ['', 'Waiting to start:'];
+  if (read.queued.length === 0) lines.push('  none');
+  for (const start of read.queued) lines.push(...queuedLines(start));
+  if (read.skipped.length > 0) {
+    lines.push('', 'Refused starts:');
+    for (const start of read.skipped) lines.push(...skippedLines(start));
+  }
   return lines;
 }
 
@@ -151,10 +175,7 @@ export function itemReadLines(read: ItemRead): string[] {
   const lines = [`Item ${read.item.key} (${read.item.projectKey})`, '', 'Runs:'];
   if (read.runs.length === 0) lines.push('  none');
   for (const run of read.runs) lines.push(...runLines(run));
-  if (read.starts.length > 0) {
-    lines.push('', 'Starts with no run yet:');
-    for (const start of read.starts) lines.push(...startLines(start));
-  }
+  lines.push(...startSectionLines(read));
   lines.push('', 'Links:');
   // Active links first; an ended one stays readable below them.
   const active = read.links.filter(link => link.ended === null);

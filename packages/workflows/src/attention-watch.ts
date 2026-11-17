@@ -1,6 +1,7 @@
 /**
  * The attention queue as a stream (#3050), across runs including those started later.
- * Unreadable run deliveries may be omitted after a `degraded` warning.
+ * Unreadable run deliveries may be omitted after a `degraded` warning, and an open ask
+ * whose row turns unreadable stays open rather than reading as resolved.
  *
  * Queue items reflect the current row; lifecycle lines follow committed events so
  * transitions survive even when the row has already moved on. Out-of-process runs are
@@ -455,6 +456,8 @@ export async function watchAttentionQueue(
   for (const report of degraded) {
     await emit({ type: report.type, reason: report.reason, cursor: start });
   }
+  // Runs with an unreadable row, already reported: a reconcile warns again only for a new one.
+  let unreadableAskRuns = new Set(degraded.map(report => report.runId));
   await emit({ type: 'ready', cursor: start });
 
   // 2. Arm liveness for every run already running in scope.
@@ -651,13 +654,17 @@ export async function watchAttentionQueue(
   const reconcileItemsWithoutRun = async (): Promise<void> => {
     if (source.itemsWithoutRun === undefined) return;
     const cursor = position();
-    const now = new Map(
-      splitAttentionRead(await source.itemsWithoutRun())
-        .values.filter(inQuery)
-        .map(item => [item.ref, item])
-    );
+    const read = splitAttentionRead(await source.itemsWithoutRun());
+    const now = new Map(read.values.filter(inQuery).map(item => [item.ref, item]));
+    const unreadable = new Set(read.degraded.map(report => report.runId));
+    if ([...unreadable].some(runId => !unreadableAskRuns.has(runId)))
+      await emit({ type: 'degraded', reason: 'run_unreadable', cursor });
+    unreadableAskRuns = unreadable;
     for (const prev of [...open.values()])
       if (!isHeldByRun(prev) && !now.has(prev.ref)) {
+        // A degraded row names only its run, so any open ask of that run may be the one
+        // that cannot be read: the watch cannot say it closed.
+        if (prev.askedIn !== undefined && unreadable.has(prev.askedIn.runId)) continue;
         await emit({
           type: 'resolved',
           cursor,

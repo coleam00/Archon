@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { WorkflowNotResumableError, WorkflowResourceBusyError } from '@archon/workflows/store';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { afterEach, expect, spyOn, test } from 'bun:test';

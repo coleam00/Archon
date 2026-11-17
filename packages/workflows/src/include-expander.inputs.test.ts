@@ -1,6 +1,13 @@
 import { describe, test, expect } from 'bun:test';
 import { expandWorkflowIncludes } from './include-expander';
-import { wf, mapOf, nodeById, composedInputs, inlinePrompt } from './include-expander.fixtures';
+import {
+  wf,
+  mapOf,
+  nodeById,
+  composedBindings,
+  composedInputs,
+  inlinePrompt,
+} from './include-expander.fixtures';
 
 describe('expandWorkflowIncludes — with input mapping', () => {
   test('inlines literals, preserves caller refs, and still namespaces internal refs', () => {
@@ -703,5 +710,73 @@ describe("expandWorkflowIncludes — an included block's raw reads of its pack s
   test('a raw read of a name that is not a pack setting is not this check', () => {
     const { errors } = expand([{ id: 'shell', bash: 'echo "$INPUTS_MOOD"' }]);
     expect(errors).toHaveLength(0);
+  });
+});
+
+describe('expandWorkflowIncludes — a binding directive in with: (#5760)', () => {
+  const directive = { from: '$a.output', if_skipped: null };
+
+  test('reaches an AI prompt and a bash env through nested includes, with its producer namespaced', () => {
+    const inner = wf(
+      'inner',
+      [
+        { id: 'p', prompt: 'y=[$INPUTS.y]' },
+        { id: 'b', bash: 'echo $INPUTS.y' },
+      ],
+      { inputs: { y: {} } }
+    );
+    const middle = wf('middle', [{ id: 'm', include: 'inner', with: { y: '$INPUTS.x' } }], {
+      inputs: { x: {} },
+    });
+    // The directive's producer is a sibling inside a block that is itself included, so
+    // the outermost level must rename `a` inside the directive too.
+    const top = wf('top', [
+      { id: 'a', bash: 'echo a' },
+      {
+        id: 'use',
+        include: 'middle',
+        depends_on: ['a'],
+        trigger_rule: 'all_done',
+        with: { x: directive },
+      },
+    ]);
+    const root = wf('root', [{ id: 't', include: 'top' }]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(inner, middle, top, root));
+    expect(errors).toEqual([]);
+    const flat = workflows.get('root')!;
+    const namespaced = { from: '$t__a.output', if_skipped: null };
+    const prompt = nodeById(flat, 't__use__m__p');
+    expect(inlinePrompt(prompt)).toBe('y=[$INPUTS.x]');
+    expect(composedBindings(prompt)).toEqual({ x: namespaced });
+    expect(composedInputs(nodeById(flat, 't__use__m__b'))?.y).toEqual(namespaced);
+  });
+
+  test('a surface substituted at load refuses it, naming the node and field', () => {
+    const block = wf('blk', [{ id: 'n', prompt: 'work', systemPrompt: 'Mode $INPUTS.x' }], {
+      inputs: { x: {} },
+    });
+    const parent = wf('parent', [
+      { id: 'a', bash: 'echo a' },
+      { id: 'use', include: 'blk', depends_on: ['a'], with: { x: directive } },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors.find(e => e.filename === 'parent')?.error).toContain(
+      "input 'x' is a binding directive, which resolves at run time, but included node 'n' reads it in 'systemPrompt'"
+    );
+  });
+
+  test('a producer the include does not depend on fails the load', () => {
+    const block = wf('blk', [{ id: 'n', bash: 'echo $INPUTS.x' }], { inputs: { x: {} } });
+    const parent = wf('parent', [
+      { id: 'a', bash: 'echo a' },
+      { id: 'use', include: 'blk', with: { x: directive } },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors.find(e => e.filename === 'parent')?.error).toContain(
+      "binding 'with.x' references '$a.output', which is not an upstream dependency"
+    );
   });
 });

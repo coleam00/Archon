@@ -24,7 +24,7 @@ import {
 import { terminalFacts } from './attention-watch-events';
 import type { AttentionWatchOptions } from './engine-port';
 import { createFileWorkflowStore } from './file-store';
-import { splitAttentionRead } from './schemas/attention-degraded';
+import { splitAttentionRead, type AttentionRead } from './schemas/attention-degraded';
 import type { ApprovalContext, WorkflowWaitContext } from './schemas/workflow-run';
 import {
   executionClaim,
@@ -1791,5 +1791,38 @@ test('an item no run holds is listed, read by its ref, streamed and resolved, wi
     ['attention', 'answer'],
     ['attention', 'answer'],
     ['resolved', 'nothing'],
+  ]);
+});
+
+test('an open ask whose row turns unreadable stays open, with one degraded line', async () => {
+  const store = await makeStore();
+  const project = { key: '_cwd/alpha', codebaseId: null, name: 'alpha' };
+  const ask: AttentionQueueItemWithoutRun = {
+    kind: 'attention',
+    ref: 'ask:1',
+    project,
+    revision: 1,
+    labels: {},
+    pausedAt: '2026-11-13T00:00:00.000Z',
+    message: 'Ship the fix?',
+    form: 'approval',
+    options: [{ id: 'approve' }, { id: 'reject' }],
+    askedIn: { runId: 'r1', workflow: 'w' },
+  };
+  const later = { ...ask, ref: 'ask:2', askedIn: { runId: 'r2', workflow: 'w' } };
+  const unreadable = { type: 'degraded', reason: 'run_unreadable', runId: 'r1' } as const;
+  let asks: AttentionRead<AttentionQueueItemWithoutRun>[] = [ask];
+  const stream = await watch(store, {}, { ...host, itemsWithoutRun: async () => asks });
+  asks = [unreadable];
+  await stream.next(line => line.type === 'degraded');
+  asks = [unreadable, later];
+  await stream.next(line => line.type === 'attention' && line.item.ref === 'ask:2');
+  await stream.close();
+
+  expect(stream.lines.map(line => line.type)).toEqual([
+    'attention',
+    'ready',
+    'degraded',
+    'attention',
   ]);
 });

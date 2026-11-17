@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * A run's outcome is written once, by the write that completes it (#5660), against a real
  * SQLite store with every run in its own process.

@@ -16,7 +16,7 @@ import type {
   ResourceBlocker,
   ResourceStartRequestInspection,
   QueuedResourceStartInspection,
-  ItemStartRequest,
+  SkippedItemStart,
 } from '@archon/workflows/resource-start-store';
 import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 export { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
@@ -27,6 +27,7 @@ export type {
 } from '@archon/workflows/resource-start-store';
 import type {
   PreparedWorkflowLaunch,
+  QueuedItemStart,
   ResourceStartBindingIntent,
   ResourceStartDisposition,
   ResourceStartIntent,
@@ -36,6 +37,7 @@ import {
   sourceReceiptInputSchema,
   preparedWorkflowLaunchSchema,
   resourceStartBindingIntentSchema,
+  checkoutHandoffSchema,
 } from '@archon/workflows/schemas/resource-start';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDialect } from './connection';
@@ -58,6 +60,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { ensureItem } from './items';
 import { WorkflowStatusReadError } from './workflow-run-reads';
 import { insertStartReceipt } from './start-receipt-writes';
+import { toHydratedTimestamp } from './timestamps';
 
 interface RequestRow {
   id: string;
@@ -294,8 +297,26 @@ function parseStoredJson(value: unknown): unknown {
 }
 
 /** Reverses `storableIntent` in `./start-receipt-writes`. */
-function readStoredIntent(intent: unknown, eventInputNames: unknown): ResourceStartBindingIntent {
-  const stored = resourceStartBindingIntentSchema.parse(parseStoredJson(intent));
+function readStoredIntent(
+  intent: unknown,
+  eventInputNames: unknown,
+  checkoutFrom: unknown
+): ResourceStartBindingIntent {
+  const stored = withEventInputs(
+    resourceStartBindingIntentSchema.parse(parseStoredJson(intent)),
+    eventInputNames
+  );
+  // A malformed hand-off throws like a malformed intent: read as absent, the start would
+  // run on the branch with no commit pin.
+  return checkoutFrom == null
+    ? stored
+    : { ...stored, checkoutFrom: checkoutHandoffSchema.parse(parseStoredJson(checkoutFrom)) };
+}
+
+function withEventInputs(
+  stored: ResourceStartBindingIntent,
+  eventInputNames: unknown
+): ResourceStartBindingIntent {
   if (eventInputNames == null) return stored;
   const names = new Set(z.array(z.string()).parse(parseStoredJson(eventInputNames)));
   for (const name of names)
@@ -347,7 +368,10 @@ function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
     status: row.preparation_status as StartBindingInspection['status'],
     ownerId: typeof row.preparation_owner === 'string' ? row.preparation_owner : null,
     error: typeof row.preparation_error === 'string' ? row.preparation_error : null,
-    intent: row.intent == null ? null : readStoredIntent(row.intent, row.event_input_names),
+    intent:
+      row.intent == null
+        ? null
+        : readStoredIntent(row.intent, row.event_input_names, row.checkout_from),
     requestStatus,
     disposition: requestDisposition,
   };
@@ -397,7 +421,7 @@ export async function listStartReceipts(
 ): Promise<
   Pick<
     StartReceiptInspection,
-    'id' | 'sourceInstanceId' | 'deliveryId' | 'outcome' | 'reason' | 'receivedAt'
+    'id' | 'sourceInstanceId' | 'deliveryId' | 'itemKey' | 'outcome' | 'reason' | 'receivedAt'
   >[]
 > {
   const receiptLimit = validateStartReceiptLimit(limit);
@@ -413,17 +437,19 @@ export async function listStartReceipts(
     id: string;
     source_instance_id: string;
     delivery_id: string | null;
+    item_key: string | null;
     outcome: StartReceiptInspection['outcome'];
     reason: string | null;
     received_at: string | Date;
   }>(
-    `SELECT id, source_instance_id, delivery_id, outcome, reason, received_at FROM remote_agent_start_receipts ORDER BY ${receivedAtOrder} DESC, id DESC LIMIT $1`,
+    `SELECT id, source_instance_id, delivery_id, item_key, outcome, reason, received_at FROM remote_agent_start_receipts ORDER BY ${receivedAtOrder} DESC, id DESC LIMIT $1`,
     [receiptLimit]
   );
   return result.rows.map(row => ({
     id: row.id,
     sourceInstanceId: row.source_instance_id,
     deliveryId: row.delivery_id,
+    itemKey: row.item_key,
     outcome: row.outcome,
     reason: row.reason,
     receivedAt: row.received_at instanceof Date ? row.received_at.toISOString() : row.received_at,
@@ -495,23 +521,25 @@ export async function getResourceStartRequest(
   return result.rows[0] ? inspectRequest(result.rows[0]) : null;
 }
 
-export async function listItemStartRequests(itemId: string): Promise<ItemStartRequest[]> {
-  const result = await getDatabase().query<RequestRow>(
-    `SELECT * FROM remote_agent_resource_start_requests
-      WHERE item_id = $1 AND status IN ('queued', 'skipped')
+export async function listSkippedItemStarts(itemId: string): Promise<SkippedItemStart[]> {
+  const result = await getDatabase().query<{
+    id: string;
+    resource_key: string;
+    blocker_kind: string | null;
+    blocker_run_id: string | null;
+    launch: unknown;
+  }>(
+    `SELECT id, resource_key, blocker_kind, blocker_run_id, launch
+       FROM remote_agent_resource_start_requests
+      WHERE item_id = $1 AND status = 'skipped'
       ORDER BY queue_position`,
     [itemId]
   );
   return result.rows.map(row => ({
-    id: String(row.id),
-    resource: String(row.resource_key),
-    status: row.status,
-    blocker:
-      (row.blocker_kind === 'run' || row.blocker_kind === 'request') &&
-      typeof row.blocker_run_id === 'string'
-        ? { kind: row.blocker_kind, id: row.blocker_run_id }
-        : null,
-    launch: preparedWorkflowLaunchSchema.parse(parseStoredJson(row.launch)),
+    requestId: row.id,
+    workflow: storedWorkflowName(row.launch),
+    resource: row.resource_key,
+    blockerRunId: row.blocker_kind === 'run' ? row.blocker_run_id : null,
   }));
 }
 
@@ -588,6 +616,48 @@ export async function listQueuedResourceStartsForHost(
       };
     }
   });
+}
+
+const storedWorkflowNameSchema = z.object({ run: z.object({ workflow_name: z.string() }) });
+
+/** The launch's workflow name, or null when the stored launch does not read. */
+function storedWorkflowName(launch: unknown): string | null {
+  try {
+    const parsed = storedWorkflowNameSchema.safeParse(parseStoredJson(launch));
+    return parsed.success ? parsed.data.run.workflow_name : null;
+  } catch {
+    // Malformed JSON: the item read reports the start without its workflow.
+    return null;
+  }
+}
+
+export async function listQueuedItemStarts(itemId: string): Promise<QueuedItemStart[]> {
+  const result = await getDatabase().query<{
+    id: string;
+    resource_key: string;
+    host_id: string;
+    launch: unknown;
+    created_at: string | Date;
+    ahead: number | string;
+  }>(
+    `SELECT r.id, r.resource_key, r.host_id, r.launch, r.created_at,
+       (SELECT COUNT(*) FROM remote_agent_resource_start_requests q
+         WHERE q.resource_key = r.resource_key AND q.host_id = r.host_id
+           AND q.status = 'queued' AND q.queue_position < r.queue_position) AS ahead
+       FROM remote_agent_resource_start_requests r
+      WHERE r.item_id = $1 AND r.status = 'queued'
+      ORDER BY r.queue_position`,
+    [itemId]
+  );
+  return result.rows.map(row => ({
+    requestId: row.id,
+    workflow: storedWorkflowName(row.launch),
+    resource: row.resource_key,
+    hostId: row.host_id,
+    queuedAt: toHydratedTimestamp(row.created_at).toISOString(),
+    // Postgres returns COUNT(*) as a string.
+    ahead: Number(row.ahead),
+  }));
 }
 
 export async function withdrawQueuedResourceStart(

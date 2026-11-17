@@ -17,7 +17,18 @@ const read: ItemRead = {
       heldBehind: null,
     },
   ],
-  starts: [],
+  queued: [
+    {
+      requestId: 'b6f1c2d4-0000-4000-8000-000000000001',
+      workflow: 'review',
+      resource: 'build',
+      hostId: 'host',
+      queuedAt: '2026-11-01T09:35:00.000Z',
+      ahead: 12,
+      heldBehind: null,
+    },
+  ],
+  skipped: [],
   questions: [
     {
       kind: 'awaiting_response',
@@ -170,17 +181,9 @@ test('a start held behind a run whose owner is gone prints both actions on that 
     ...read,
     // No run carries the holder, so only the start's own line can name it.
     runs: [],
-    starts: [
-      {
-        requestId: 'req-queued',
-        workflow: 'deliver',
-        resource: 'build',
-        status: 'queued',
-        heldBehind,
-      },
-    ],
+    queued: [{ ...read.queued[0]!, requestId: 'req-queued', workflow: 'deliver', heldBehind }],
   }).join('\n');
-  expect(text).toContain('req-queu');
+  expect(text).toContain('req-queued');
   expect(text).toContain(`waits behind run ${holder.slice(0, 8)}`);
   expect(text).toContain(`archon workflow resume ${holder}`);
   expect(text).toContain(`archon workflow abandon ${holder}`);
@@ -201,6 +204,23 @@ test('a start refused for a held item keeps naming the run that held it', () => 
     ],
   }).join('\n');
   expect(text).toContain(`refused, held by run ${holder.slice(0, 8)}`);
+});
+
+test('an item read prints a start waiting for capacity with the id that withdraws it', () => {
+  const lines = itemReadLines(read);
+  const section = lines.slice(lines.indexOf('Waiting to start:') + 1, lines.indexOf('Links:'));
+  expect(section).toHaveLength(2);
+  expect(section[0]).toContain('b6f1c2d4-0000-4000-8000-000000000001');
+  expect(section[0]).toContain('build');
+  expect(section[0]).toContain('12 ahead on host host');
+  // The host that must drain the start shows when it is next, too.
+  const next = itemReadLines({
+    ...read,
+    queued: read.queued.map(start => ({ ...start, ahead: 0 })),
+  });
+  expect(next.find(line => line.includes('b6f1c2d4'))).toContain('on host host');
+  const empty = itemReadLines({ ...read, queued: [] });
+  expect(empty[empty.indexOf('Waiting to start:') + 1]).toBe('  none');
 });
 
 test('an item read prints each link with the other item, kind and direction', () => {

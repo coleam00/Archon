@@ -7,7 +7,7 @@ import { type NodeExecutionRecord } from '../../../schemas/node-execution';
 import { NodeEventWriteError, recordNodeState } from '../../../node-event-write';
 import type { DagNode, LoopGroupNode, NodeOutput } from '../../../schemas';
 import { nodeInvocationKey } from '../../../node-record-reader';
-import { resolvedBodyNodes } from '../../../graph-plan';
+import { loopBodyStepNamePrefix, resolvedBodyNodes } from '../../../graph-plan';
 import { type ModelAliasPreset, type TierName } from '../../../model-validation';
 import { getLog } from '../../log';
 import { RunSourceUnreadableError } from '../../node-source';
@@ -207,7 +207,7 @@ async function executeLoopGroupBody(
     node,
     bodyNodes,
     stepName,
-    bodyStepNamePrefix: `${stepName}.`,
+    bodyStepNamePrefix: loopBodyStepNamePrefix(stepName),
     directBodyIds: new Set(bodyNodes.map(n => n.id)),
     msgContext,
     execution,
@@ -317,7 +317,7 @@ async function readInterruptedIteration(
       ctx,
       node,
       bodyNodes,
-      bodyStepNamePrefix: `${stepName}.`,
+      bodyStepNamePrefix: loopBodyStepNamePrefix(stepName),
     },
     unfinished.invocation.id
   );

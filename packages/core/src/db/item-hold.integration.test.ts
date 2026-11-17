@@ -249,19 +249,19 @@ describe('one run of a workflow per item', () => {
       String(item?.projectKey),
       'issue-1'
     );
-    expect(read?.starts).toEqual([
-      {
+    expect(read?.queued).toEqual([
+      expect.objectContaining({
         requestId: queued.runId,
         workflow: 'build',
         resource: 'builds',
-        status: 'queued',
         heldBehind: { runId: holder, workflow: 'build', status: 'running', owner: 'unreachable' },
-      },
+      }),
+    ]);
+    expect(read?.skipped).toEqual([
       {
         requestId: skipped.runId,
         workflow: 'build',
         resource: 'builds',
-        status: 'skipped',
         heldBehind: { runId: holder, workflow: 'build', status: 'running', owner: 'unreachable' },
       },
     ]);
@@ -308,12 +308,11 @@ describe('one run of a workflow per item', () => {
     });
     const item = await store.getItem(String((await getWorkflowRun(holder))?.item_id));
     const read = await readItem(source(), String(item?.projectKey), 'issue-1');
-    expect(read?.starts).toEqual([
+    expect(read?.skipped).toEqual([
       {
         requestId: skipped.runId,
         workflow: 'build',
         resource: 'builds',
-        status: 'skipped',
         heldBehind: { runId: holder, workflow: 'build', status: 'running', owner: 'unreachable' },
       },
     ]);
@@ -568,8 +567,8 @@ describe('one run of a workflow per item', () => {
       [holder]
     );
     const read = await readItem(source(), String(item?.projectKey), 'issue-1');
-    expect(read?.starts).toEqual([
-      expect.objectContaining({ requestId: queued.runId, status: 'queued' }),
+    expect(read?.queued).toEqual([
+      expect.objectContaining({ requestId: queued.runId, heldBehind: null }),
     ]);
     expect(read?.degraded).toEqual([{ type: 'degraded', reason: 'run_unreadable', runId: holder }]);
   });

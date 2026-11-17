@@ -12,9 +12,11 @@ import { providerEventRecordSchema as engineProviderEventRecordSchema } from '@a
  * Zod schemas for workflow API endpoints.
  */
 import { z } from '@hono/zod-openapi';
+import { loopRoundSchema } from '@archon/workflows/schemas/loop-rounds';
 import { openAttentionQueueCountsSchema } from '@archon/workflows/attention-counts';
 import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import { packGraphSchema } from '@archon/workflows/pack-graph';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
 import {
   attentionWatchLevelSchema,
@@ -236,7 +238,11 @@ export const workflowRunDetailSchema = z
       terminal_record: terminalRecordSchema.nullable(),
       nodes: z.array(runNodeStateSchema).openapi({
         description:
-          "The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far.",
+          "The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. A loop body node holds its latest round.",
+      }),
+      loop_rounds: z.array(loopRoundSchema).optional().openapi({
+        description:
+          'Each round of each loop_group the run has entered, in order: the body nodes it reached, with state, timing and output. Absent when the run ran no loop.',
       }),
     }),
     events: z.array(workflowEventSchema),
@@ -436,6 +442,9 @@ export const itemReadQuerySchema = z.object({
   project: z.string().min(1),
   key: z.string().min(1),
 });
+
+/** GET /api/packs/{pack}/graph response: the pack's stages and run-ended arrows. */
+export const packGraphResponseSchema = packGraphSchema.meta({ id: 'PackGraph' });
 
 /** GET /api/items response: the item, its runs, open questions and answers. */
 export const itemReadResponseSchema = itemReadSchema.meta({ id: 'ItemRead' });

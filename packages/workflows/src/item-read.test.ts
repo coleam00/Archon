@@ -1,8 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
+import type { StoredItemAsk } from './schemas/item-ask';
 import type { ItemLink } from './schemas/item-link';
-import type { ResourceStartRequestInspection } from './resource-start-store';
-import type { PreparedWorkflowLaunch } from './schemas/resource-start';
 import type { ItemRuling } from './schemas/item-ruling';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { WorkflowItem, WorkflowRun } from './schemas/workflow-run';
@@ -181,7 +180,8 @@ const source: ItemReadSource = {
     listItemRulings: async id => (id === item.id ? rulings : []),
     listItemLinks: async id => (id === item.id ? links : []),
     getResourceStartRequest: async () => null,
-    listItemStartRequests: async () => [],
+    listSkippedItemStarts: async () => [],
+    listQueuedItemStarts: async () => [],
     getStartReceipt: async id =>
       id === SECOND_RECEIPT
         ? {
@@ -202,6 +202,67 @@ const source: ItemReadSource = {
 };
 
 describe('reading an item', () => {
+  test('a set with an unreadable ask row does not read as settled; a readable set does, with its run gone', async () => {
+    const act = { via: 'cli', by: null, fromRun: null } as const;
+    const stored = (
+      id: string,
+      runId: string,
+      at: string,
+      closed: 'answered' | 'withdrawn'
+    ): StoredItemAsk => ({
+      id,
+      itemId: item.id,
+      runId,
+      workflowName: 'deliver',
+      position: 0,
+      ask: {
+        question: `Ask ${id}?`,
+        context: 'Context.',
+        options: [
+          { id: 'keep', does: 'Keep it.', cost: 'None.' },
+          { id: 'drop', does: 'Drop it.', cost: 'None.' },
+        ],
+        recommendation: { option: 'keep', why: 'Cheaper.' },
+        artifacts: [],
+      },
+      openedAt: '2026-11-01T12:00:00.000Z',
+      closed:
+        closed === 'answered'
+          ? { as: 'answered', answer: { decision: 'keep', text: '' }, act: { ...act, at } }
+          : { as: 'withdrawn', act: { ...act, at } },
+    });
+    const unreadable = { type: 'degraded', reason: 'run_unreadable', runId: 'open-set' } as const;
+    const withAsks: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        // 'settled-set' has no run row: its run was deleted, and its asks stay on the item.
+        listItemAsks: async () => [
+          stored('a1', 'open-set', '2026-11-01T12:10:00.000Z', 'answered'),
+          unreadable,
+          stored('b1', 'settled-set', '2026-11-01T12:20:00.000Z', 'answered'),
+          stored('b2', 'settled-set', '2026-11-01T12:30:00.000Z', 'withdrawn'),
+        ],
+      },
+    };
+    const read = await readItem(withAsks, item.projectKey, item.key);
+    const asks = read?.answers.filter(
+      answer => answer.kind === 'ask' || answer.kind === 'asks_settled'
+    );
+    expect(asks?.map(answer => [answer.kind, answer.runId])).toEqual([
+      ['ask', 'open-set'],
+      ['ask', 'settled-set'],
+      ['ask', 'settled-set'],
+      ['asks_settled', 'settled-set'],
+    ]);
+    expect(asks?.at(-1)).toMatchObject({
+      at: '2026-11-01T12:30:00.000Z',
+      answered: 1,
+      withdrawn: 1,
+    });
+    expect(read?.degraded).toEqual([unreadable]);
+  });
+
   test('lists its own runs, and the questions and answers of their whole tree, oldest first', async () => {
     const read = await readItem(source, item.projectKey, item.key);
     expect(read?.item).toEqual(item);
@@ -224,7 +285,7 @@ describe('reading an item', () => {
         outcome: null,
         startedAt: '2026-11-01T11:00:00.000Z',
         completedAt: null,
-        cause: { kind: 'run_ended', runId: 'first' },
+        cause: { kind: 'run_ended', runId: 'first', sourceInstanceId: 'review-after-deliver' },
         awaitingExecution: null,
         heldBehind: null,
       },
@@ -296,12 +357,54 @@ describe('reading an item', () => {
     expect(await readItem(empty, item.projectKey, item.key)).toEqual({
       item,
       runs: [],
-      starts: [],
+      queued: [],
+      skipped: [],
       questions: [],
       answers: rulings,
       links: [],
       degraded: [],
     });
+  });
+
+  test('a start admitted while the item is read is listed once, as a run', async () => {
+    const admitted: WorkflowRun = { ...first, id: 'admitted', status: 'pending', metadata: {} };
+    // One start, either queued or admitted, never both. Admission lands right after the
+    // second store read (the first resolves the item), whichever read that is, so a read
+    // that takes the runs before the queue sees the start in neither.
+    let reads = 0;
+    let isAdmitted = false;
+    const read = async <T>(value: () => T): Promise<T> => {
+      const result = value();
+      if (++reads === 2) isAdmitted = true;
+      return result;
+    };
+    const racing: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        getItemRuns: () =>
+          read(() => ({ item, runs: isAdmitted ? [admitted] : [], descendantIds: [] })),
+        listQueuedItemStarts: () =>
+          read(() =>
+            isAdmitted
+              ? []
+              : [
+                  {
+                    requestId: 'admitted',
+                    workflow: 'deliver',
+                    resource: 'build',
+                    hostId: 'host',
+                    queuedAt: '2026-11-01T11:05:00.000Z',
+                    ahead: 0,
+                  },
+                ]
+          ),
+      },
+    };
+    const result = await readItem(racing, item.projectKey, item.key);
+    expect(isAdmitted).toBe(true);
+    expect(result?.runs.map(run => run.id)).toEqual(['admitted']);
+    expect(result?.queued).toEqual([]);
   });
 
   test('links read from this item: outgoing to what it points at, incoming from what points at it', async () => {
@@ -395,25 +498,13 @@ describe('reading an item', () => {
       status: 'pending',
       started_at: new Date('2026-11-01T12:01:00Z'),
     });
-    const request = (
-      id: string,
-      workflow: string,
-      fields: Partial<ResourceStartRequestInspection>
-    ): ResourceStartRequestInspection => ({
-      id,
+    const queued = (requestId: string, workflow: string) => ({
+      requestId,
+      workflow,
       resource: 'build',
       hostId: 'host',
-      overlap: 'queue',
-      status: 'queued',
-      runStatus: null,
-      blocker: null,
-      blockerRunStatus: null,
-      launch: {
-        version: 2,
-        run: { id, workflow_name: workflow, codebase_id: 'c', user_message: '', metadata: {} },
-        execution: { cwd: '/repo', conversationId: 'c', isolation: { kind: 'in-place' } },
-      } satisfies PreparedWorkflowLaunch,
-      ...fields,
+      queuedAt: '2026-11-01T12:02:00.000Z',
+      ahead: 0,
     });
     const held: ItemReadSource = {
       ...source,
@@ -425,14 +516,17 @@ describe('reading an item', () => {
           runs: [first, second, waiting, review],
           descendantIds: [],
         }),
-        listItemStartRequests: async () => [
-          request('queued-deliver', 'deliver', {}),
-          request('queued-review', 'review', {}),
-          request('skipped-deliver', 'deliver', {
-            status: 'skipped',
-            overlap: 'skip',
-            blocker: { kind: 'run', id: 'second' },
-          }),
+        listQueuedItemStarts: async () => [
+          queued('queued-deliver', 'deliver'),
+          queued('queued-review', 'review'),
+        ],
+        listSkippedItemStarts: async () => [
+          {
+            requestId: 'skipped-deliver',
+            workflow: 'deliver',
+            resource: 'build',
+            blockerRunId: 'second',
+          },
         ],
       },
     };
@@ -449,10 +543,12 @@ describe('reading an item', () => {
       ['waiting', behindSecond],
       ['review', null],
     ]);
-    expect(read?.starts.map(start => [start.requestId, start.status, start.heldBehind])).toEqual([
-      ['queued-deliver', 'queued', behindSecond],
-      ['queued-review', 'queued', null],
-      ['skipped-deliver', 'skipped', behindSecond],
+    expect(read?.queued.map(start => [start.requestId, start.heldBehind])).toEqual([
+      ['queued-deliver', behindSecond],
+      ['queued-review', null],
+    ]);
+    expect(read?.skipped.map(start => [start.requestId, start.heldBehind])).toEqual([
+      ['skipped-deliver', behindSecond],
     ]);
     // The lost owner is reported on the starts held behind it, not as an open question.
     expect(read?.questions).toEqual([]);

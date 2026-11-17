@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { spawn } from 'node:child_process';
 import * as processTools from '@archon/paths/plugin-process';
 import { multiAttentionWorkflows } from '../test-support/multi-attention-fixture';

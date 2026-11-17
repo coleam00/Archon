@@ -1,9 +1,11 @@
 /**
  * The read of one item (`workflow runs --item`): its runs, its starts that have no run yet,
  * the questions open in its runs, the answers recorded in them with the rulings recorded
- * on the item, each oldest first, and the links from and to it. A start waiting or refused
- * because another run of its workflow works the item names that run (`item-hold`).
- * Where the item stands is left to the reader; this computes no position and stores nothing.
+ * on the item, each oldest first, and the links from and to it. Its starts still waiting
+ * are listed with the queue order recorded for them, and its refused starts beside them. A
+ * start waiting or refused because another run of its workflow works the item names that
+ * run (`item-hold`). Where the item stands is left to the reader; this computes no stage
+ * and stores nothing.
  */
 import { z } from 'zod';
 import {
@@ -18,6 +20,7 @@ import {
   attentionDegradedSchema,
   splitAttentionRead,
   type AttentionDegraded,
+  type IdentifiedAttentionDegraded,
 } from './schemas/attention-degraded';
 import { itemActFields } from './schemas/item-act';
 import {
@@ -41,14 +44,21 @@ import {
   attentionAnswerSchema,
   displayedRunOutcome,
   workflowItemSchema,
+  type WorkflowItem,
   type WorkflowRun,
 } from './schemas/workflow-run';
 import type { WorkflowEventRow } from './schemas/workflow-event';
-import { readResourceStartReceiptId, startCause, startCauseSchema } from './schemas/resource-start';
+import {
+  queuedItemStartSchema,
+  type QueuedItemStart,
+  readResourceStartReceiptId,
+  startCause,
+  startCauseSchema,
+} from './schemas/resource-start';
 import type { IWorkflowStore } from './store';
 import {
   awaitingExecution,
-  type ItemStartRequest,
+  type SkippedItemStart,
   type ResourceStartRequestInspection,
 } from './resource-start-store';
 import { holdsItem, itemHolder, itemHolders } from './item-hold';
@@ -100,19 +110,28 @@ export const itemRunSchema = z.object({
 export type ItemRun = z.infer<typeof itemRunSchema>;
 
 /**
- * A start on the item that has no run: `queued` waits for admission, `skipped` was refused
- * (its binding's `overlap: skip`). `heldBehind` names the run of its workflow on the item a
- * queued start waits behind now, or that a skipped start was refused for; null when it
- * waits for, or was refused for, capacity or its checkout instead.
+ * A start on the item still waiting for admission, which has no run yet. `heldBehind`
+ * names the run of its workflow that holds the item now, when one does; null when it
+ * waits for capacity or its checkout only, or its workflow does not read.
  */
-export const itemStartSchema = z.object({
-  requestId: z.string(),
-  workflow: z.string(),
-  resource: z.string(),
-  status: z.enum(['queued', 'skipped']),
+export const itemQueuedStartSchema = queuedItemStartSchema.extend({
   heldBehind: itemHeldBehindSchema.nullable(),
 });
-export type ItemStart = z.infer<typeof itemStartSchema>;
+export type ItemQueuedStart = z.infer<typeof itemQueuedStartSchema>;
+
+/**
+ * A start on the item that was refused (its binding's `overlap: skip`) and has no run.
+ * `heldBehind` names the run of its workflow on the item it was refused for; null when it
+ * was refused for capacity or its checkout instead. `workflow` is null when the stored
+ * launch does not read.
+ */
+export const itemSkippedStartSchema = z.object({
+  requestId: z.string(),
+  workflow: z.string().nullable(),
+  resource: z.string(),
+  heldBehind: itemHeldBehindSchema.nullable(),
+});
+export type ItemSkippedStart = z.infer<typeof itemSkippedStartSchema>;
 
 /**
  * Where an answer was recorded. A field the event row does not carry is null, so an older
@@ -135,7 +154,9 @@ const answerFields = {
  * of that run's set closed, with how many were answered and withdrawn: `answered: 0` means
  * nothing was. Both read from the item's ask rows, not from run events, so they stay on the
  * item after the run that left the asks is deleted; `runId` names that run, `node` and
- * `occurrence` are null. A set that a newer one replaced before it closed never settles.
+ * `occurrence` are null. A set that a newer one replaced before it closed never settles. A
+ * set with an ask row that cannot be read does not settle in the read either; `degraded`
+ * names its run.
  */
 export const itemAnswerSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -197,15 +218,18 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * An item and what is recorded about it. `runs` are the item's own readable runs; a
  * `workflow:` child is left to `workflow get` on its parent. `questions` and `answers` come from the
  * whole run tree, because a question is often asked inside a child; each names the run
- * that holds it. `degraded` names each part that could not be read: one of the item's own
- * runs, a paused run the queue could not read (`run_unreadable`, by `runId`), a ruling
+ * that holds it. `queued` are the item's starts still waiting, which have no run yet;
+ * `archon trigger withdraw <requestId>` withdraws one. `skipped` are its refused starts.
+ * `degraded` names each part that could not be read: one of the item's own runs, a paused
+ * run the queue could not read (`run_unreadable`, by `runId`), a ruling
  * (`ruling_unreadable`, by `rulingId`), or a link (`link_unreadable`, by `linkId`). The rest
  * still reads.
  */
 export const itemReadSchema = z.object({
   item: workflowItemSchema,
   runs: z.array(itemRunSchema),
-  starts: z.array(itemStartSchema),
+  queued: z.array(itemQueuedStartSchema),
+  skipped: z.array(itemSkippedStartSchema),
   questions: z.array(attentionQueueItemSchema),
   answers: z.array(itemAnswerSchema),
   links: z.array(itemReadLinkSchema),
@@ -230,7 +254,8 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'listItemAsks'
       | 'getStartReceipt'
       | 'getResourceStartRequest'
-      | 'listItemStartRequests'
+      | 'listQueuedItemStarts'
+      | 'listSkippedItemStarts'
     >;
 }
 
@@ -317,12 +342,15 @@ async function itemHolds(source: ItemReadSource, itemId: string, runs: readonly 
         ? holderOf(run.id, run.workflow_name)
         : null;
     },
-    startHeldBehind: (start: ItemStartRequest) => {
-      const workflow = start.launch.run.workflow_name;
-      if (start.status === 'queued') return holderOf(start.id, workflow);
-      // A skipped start keeps the blocker it was refused for.
-      const blocker = start.blocker?.kind === 'run' ? byId.get(start.blocker.id) : undefined;
-      return blocker?.workflow_name === workflow ? describe(blocker.id) : null;
+    /** A queued start waits behind its workflow's holder now, not the blocker it stored. */
+    queuedHeldBehind: (start: QueuedItemStart) =>
+      start.workflow === null ? null : holderOf(start.requestId, start.workflow),
+    /** A skipped start keeps the blocker it was refused for. */
+    skippedHeldBehind: (start: SkippedItemStart) => {
+      const blocker = start.blockerRunId === null ? undefined : byId.get(start.blockerRunId);
+      return blocker !== undefined && blocker.workflow_name === start.workflow
+        ? describe(blocker.id)
+        : null;
     },
   };
 }
@@ -365,6 +393,27 @@ function readLink(itemId: string, link: ItemLink): ItemReadLink {
   return { ...rest, direction: outgoing ? 'outgoing' : 'incoming', other: outgoing ? to : from };
 }
 
+/**
+ * The item `key` names in project `projectKey` and its own runs, in start order: the one
+ * read of an item's runs, for the item read and for every verb that acts on an item.
+ * `degraded` names each own run whose row could not be read. Null when there is no such item.
+ */
+export async function readItemRuns(
+  store: Pick<IWorkflowStore, 'getItemRuns'>,
+  projectKey: string,
+  key: string
+): Promise<{
+  item: WorkflowItem;
+  runs: WorkflowRun[];
+  degraded: IdentifiedAttentionDegraded[];
+  descendantIds: string[];
+} | null> {
+  const found = await store.getItemRuns(projectKey, key);
+  if (found === null) return null;
+  const { values, degraded } = splitAttentionRead(found.runs);
+  return { item: found.item, runs: values, degraded, descendantIds: found.descendantIds };
+}
+
 function distinctByRun(reports: readonly AttentionDegraded[]): AttentionDegraded[] {
   return reports.filter(
     (report, index) => reports.findIndex(other => other.runId === report.runId) === index
@@ -394,15 +443,17 @@ function askAnswer({ id, runId, ask, closed }: StoredItemAsk): ItemAnswer | null
 
 /**
  * The answers and settled sets the item's asks hold: one entry per answered or withdrawn
- * ask, and one `asks_settled` per set whose asks all closed that way, at its last close.
+ * ask, and one `asks_settled` per set whose asks all closed that way and all read, at its
+ * last close. `unreadable` names the sets with a row that could not be read: any of those
+ * rows may be an open ask, so the read cannot say the set settled.
  */
-function askAnswers(asks: readonly StoredItemAsk[]): ItemAnswer[] {
+function askAnswers(asks: readonly StoredItemAsk[], unreadable: ReadonlySet<string>): ItemAnswer[] {
   const sets = new Map<string, StoredItemAsk[]>();
   for (const ask of asks) sets.set(ask.runId, [...(sets.get(ask.runId) ?? []), ask]);
   return [...sets].flatMap(([runId, set]) => {
     const closes = set.map(askAnswer).filter(answer => answer?.kind === 'ask');
     const [first] = closes;
-    if (first === undefined || closes.length < set.length) return closes;
+    if (first === undefined || closes.length < set.length || unreadable.has(runId)) return closes;
     const answered = closes.filter(close => !close.withdrawn).length;
     const settled: ItemAnswer = {
       kind: 'asks_settled',
@@ -427,9 +478,14 @@ export async function readItem(
   projectKey: string,
   key: string
 ): Promise<ItemRead | null> {
-  const found = await source.store.getItemRuns(projectKey, key);
+  const resolved = await readItemRuns(source.store, projectKey, key);
+  if (resolved === null) return null;
+  // Queued starts first, then the runs: a start admitted between the two reads then shows
+  // in both (its run id is its request id), and is listed once as a run, never in neither.
+  const waiting = await source.store.listQueuedItemStarts(resolved.item.id);
+  const found = await readItemRuns(source.store, projectKey, key);
   if (found === null) return null;
-  const own = splitAttentionRead(found.runs);
+  const own = { values: found.runs, degraded: found.degraded };
   const tree = new Set([
     ...own.values.map(run => run.id),
     ...own.degraded.map(report => report.runId),
@@ -462,23 +518,23 @@ export async function readItem(
   const answers = [
     ...[...events.values()].flat().map(itemAnswer),
     ...rulings,
-    ...askAnswers(asks.values),
+    ...askAnswers(asks.values, new Set(asks.degraded.map(report => report.runId))),
   ]
     // Stable, so rows that tie on `at` keep their store order: append order within a run,
     // recording order among rulings, and a set's last answer before its settle.
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const holds = await itemHolds(source, found.item.id, own.values);
-  const starts: ItemStart[] = [];
-  for (const start of await source.store.listItemStartRequests(found.item.id)) {
-    if (start.status !== 'queued' && start.status !== 'skipped') continue;
-    starts.push({
-      requestId: start.id,
-      workflow: start.launch.run.workflow_name,
+  const queued: ItemQueuedStart[] = [];
+  for (const start of waiting.filter(start => !tree.has(start.requestId)))
+    queued.push({ ...start, heldBehind: (await holds.queuedHeldBehind(start)) ?? null });
+  const skipped: ItemSkippedStart[] = [];
+  for (const start of await source.store.listSkippedItemStarts(found.item.id))
+    skipped.push({
+      requestId: start.requestId,
+      workflow: start.workflow,
       resource: start.resource,
-      status: start.status,
-      heldBehind: (await holds.startHeldBehind(start)) ?? null,
+      heldBehind: (await holds.skippedHeldBehind(start)) ?? null,
     });
-  }
   return {
     item: found.item,
     runs: await Promise.all(
@@ -486,7 +542,8 @@ export async function readItem(
         itemRun(source, run, holds.request(run.id), (await holds.runHeldBehind(run)) ?? null)
       )
     ),
-    starts,
+    queued,
+    skipped,
     questions,
     answers,
     links,
