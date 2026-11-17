@@ -872,9 +872,10 @@ A completed run's record has `result_commit`: `{ "held": true, "commit": "<sha>"
 the checkout was clean at that commit when the run's `returns:` node completed and when the
 run completed, the commit its result holds at, or `{ "held": false, "reason": ... }` with
 `dirty`, `not_git`, `unavailable`, `unborn`, `moved` (a later node moved the checkout to
-another commit, or a `mutates_checkout: false` run ended on a commit other than its start), `concurrent` (another node of its layer ran beside the `returns:` node) or
-`unobserved` (no `returns:` node completed in the pass that completed the
-run). Runs
+another commit, or a `mutates_checkout: false` run ended on a commit other than its
+start), `concurrent` (another node of its layer ran, or could still start, beside the
+`returns:` node) or `unobserved` (no `returns:` node completed in the pass that completed the
+run, or a `mutates_checkout: false` run has no git commit recorded for its start). Runs
 completed before it was recorded have none and hold at no commit. See [the result that holds
 at this run's commit](/reference/workflow-language/#the-result-that-holds-at-this-runs-commit).
 

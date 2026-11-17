@@ -353,7 +353,9 @@ nodes:
       const approval = JSON.parse(process.env.INPUTS_APPROVAL ?? 'null');
       if (approval === null) {
         const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-        const reviews = (item()?.runs ?? []).filter(run => run.workflow === 'review' && run.status === 'completed');
+        const reviews = (item()?.runs ?? [])
+          .filter(run => run.workflow === 'review' && run.status === 'completed')
+          .sort((a, b) => String(a.completedAt).localeCompare(String(b.completedAt)));
         const heldAt = reviews.at(-1)?.resultCommit ?? 'no commit';
         emit({ landed: null, message: \`the latest review holds at \${heldAt}, the change is now at \${head}\` });
       } else if (approval.result.verdict !== 'approve') {

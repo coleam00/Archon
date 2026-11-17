@@ -257,3 +257,12 @@ test('an item read prints each link with the other item, kind and direction', ()
   expect(line('link-out')).not.toContain('ended');
   expect(section.some(row => row.includes('link-lost'))).toBe(true);
 });
+
+test('a result that holds at a commit prints it even when the result is not readable', () => {
+  const text = itemReadLines({
+    ...read,
+    runs: read.runs.map(run => ({ ...run, id: 'run-truncated', hasResult: false })),
+  }).join('\n');
+  expect(text).toContain('result: holds at a1b2c3d4e5f6');
+  expect(text).not.toContain('archon workflow get run-truncated');
+});

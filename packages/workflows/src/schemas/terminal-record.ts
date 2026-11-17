@@ -50,10 +50,10 @@ export const RESULT_COMMIT_METADATA_KEY = 'result_commit';
  * tracked change or an untracked file), `not_git`, `unavailable` (the engine could not read
  * the checkout, or its backend), `unborn` (no commit yet), `moved` (the checkout moved to
  * another commit after the `returns:` node completed, or a run that takes no path lock is
- * not on the commit it started on), `concurrent` (the `returns:` node ran
- * beside other nodes, which may have moved the checkout while it judged), `unobserved` (no
+ * not on the commit it started on), `concurrent` (the `returns:` node ran,
+ * or could have run, beside other nodes, which may have moved the checkout while it judged), `unobserved` (no
  * `returns:` node completed in the pass that completed the run: none is declared, or a
- * resume replayed it).
+ * resume replayed it; or a run that takes no path lock has no git start commit recorded).
  */
 export const resultCommitSchema = z.discriminatedUnion('held', [
   z.object({ held: z.literal(true), commit: gitObjectIdSchema }),

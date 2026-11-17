@@ -90,8 +90,9 @@ export interface ReturnsCheckout {
  * result was given at. A node of a loop body or fan-out instance (a non-empty step prefix)
  * is never the run's `returns:` node, and a node replayed from an earlier pass is never
  * sampled: its checkout then is not observed. When another node of its concurrent phase
- * was `dispatched` too, it is not sampled either: that sibling may have moved the checkout
- * while it judged, and the engine cannot tell that commit from one the node made itself.
+ * `mayRun` (it was dispatched, or its admission has not yet settled), it is not sampled
+ * either: that sibling may have moved the checkout while it judged, and the engine cannot
+ * tell that commit from one the node made itself.
  */
 export async function observeReturnsCheckout(
   ctx: {
@@ -102,11 +103,11 @@ export async function observeReturnsCheckout(
   },
   nodeId: string,
   output: { state: string },
-  dispatched: ReadonlySet<string> | undefined
+  mayRun: ReadonlySet<string> | undefined
 ): Promise<void> {
   const held = ctx.returnsCheckout;
   if (held?.nodeId !== nodeId || ctx.stepNamePrefix !== '' || output.state !== 'completed') return;
-  held.observed = [...(dispatched ?? [])].some(id => id !== nodeId)
+  held.observed = [...(mayRun ?? [])].some(id => id !== nodeId)
     ? { concurrent: true }
     : { sample: await sampleCheckout(ctx.cwd, ctx.execContext) };
 }

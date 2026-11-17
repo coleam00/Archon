@@ -144,7 +144,7 @@ async function runLayerPhase(
       : undefined;
   // Mixed checkout guards still require sequential execution within each phase.
   const sequential = serializeLayer && layer.some(isCheckoutGuarded);
-  const dispatched = sequential ? undefined : new Set<string>();
+  const mayRun = sequential ? undefined : new Set(layer.map(node => node.id));
   const nodeThunks = layer.map(
     (node, index): (() => Promise<LayerNodeResult>) =>
       async (): Promise<LayerNodeResult> => {
@@ -161,7 +161,7 @@ async function runLayerPhase(
         };
         try {
           const admitted = await admitNode(nodeCtx, node);
-          if (admitted === undefined) dispatched?.add(node.id);
+          if (admitted !== undefined) mayRun?.delete(node.id);
           if (admitted !== undefined) {
             await releaseAdmittedScratch(
               nodeCtx,
@@ -180,7 +180,7 @@ async function runLayerPhase(
               )
             ));
           if (admitted === undefined)
-            await observeReturnsCheckout(nodeCtx, node.id, result.output, dispatched);
+            await observeReturnsCheckout(nodeCtx, node.id, result.output, mayRun);
           if (result.output.state === 'failed') nodeCtx.interactionAdmission?.failed(node.id);
           return result;
         } catch (error) {
