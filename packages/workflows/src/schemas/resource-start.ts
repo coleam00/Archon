@@ -335,6 +335,13 @@ export const checkoutHandoffSchema = z
   .strict();
 export type CheckoutHandoff = z.infer<typeof checkoutHandoffSchema>;
 
+/** The checkout a run left when it ended, read for a binding that takes it: the hand-off, or why there is none. */
+export const endedCheckoutSchema = z.union([
+  z.object({ handoff: checkoutHandoffSchema }).strict(),
+  z.object({ refused: z.string().min(1) }).strict(),
+]);
+export type EndedCheckout = z.infer<typeof endedCheckoutSchema>;
+
 /**
  * Run metadata key of a run started on a hand-off, and the lane it got: `continue` works
  * on the hand-off's branch (a stage that mutates its checkout), `copy` works in a checkout
@@ -360,6 +367,43 @@ export function readCheckoutHandoff(run: {
   if (!parsed.success)
     throw new Error(`Run '${run.id}' has an invalid ${CHECKOUT_HANDOFF_METADATA_KEY}`);
   return parsed.data;
+}
+
+/**
+ * Run metadata key of a run that completed leaving asks while an asks-settled binding
+ * with `checkout: "asking-run"` matched it: the checkout it left, read at completion, and
+ * the worktree that holds it (the run's own, or for a run that worked on a copy, the one
+ * its source left). The settling transaction and the started run's execution each refuse
+ * the hand-off when that worktree is gone, so the checkout is never recreated.
+ */
+export const ASKS_CHECKOUT_METADATA_KEY = 'asks_checkout';
+
+export const asksCheckoutSchema = z.union([
+  z.object({ handoff: checkoutHandoffSchema, worktree: z.string().min(1) }).strict(),
+  z.object({ refused: z.string().min(1) }).strict(),
+]);
+export type AsksCheckout = z.infer<typeof asksCheckoutSchema>;
+
+/** The metadata that records an asking run's checkout. */
+export function asksCheckoutMetadata(checkout: AsksCheckout): Record<string, AsksCheckout> {
+  return { [ASKS_CHECKOUT_METADATA_KEY]: checkout };
+}
+
+/**
+ * The checkout an asking run recorded, or undefined when it recorded none. A value that
+ * does not parse reads as a refusal, not a throw: this runs inside the transaction that
+ * closes an ask, and a throw there would refuse the operator's answer.
+ */
+export function readAsksCheckout(run: {
+  id: string;
+  metadata: Readonly<Record<string, unknown>>;
+}): AsksCheckout | undefined {
+  const value = run.metadata[ASKS_CHECKOUT_METADATA_KEY];
+  if (value === undefined) return undefined;
+  const parsed = asksCheckoutSchema.safeParse(value);
+  return parsed.success
+    ? parsed.data
+    : { refused: `run '${run.id}' has an invalid recorded ${ASKS_CHECKOUT_METADATA_KEY}` };
 }
 
 export const resourceStartBindingIntentSchema = z
@@ -410,8 +454,9 @@ export const resourceStartBindingIntentSchema = z
      */
     itemKey: itemKeySchema.optional(),
     /**
-     * The checkout a run-ended binding with `checkout: "ended-run"` hands the started run,
-     * recorded when the ended run completed. Preparation decides the lane from it, not from
+     * The checkout a run-ended binding with `checkout: "ended-run"` or an asks-settled
+     * binding with `checkout: "asking-run"` hands the started run, recorded when the ended
+     * or asking run completed. Preparation decides the lane from it, not from
      * `launch.isolation`, which names the branch only for older binaries. Operator configs
      * omit this field. The SQL store never writes it into the `intent` column; see
      * `storableIntent` in core's start-receipt-writes.
@@ -546,6 +591,12 @@ export const asksSettledTriggerSchema = z
     workflowName: z.string().min(1),
     settled: z.enum(['answered', 'withdrawn', 'any']),
     inputs: z.record(z.string().min(1), asksSettledInputSourceSchema).optional(),
+    /**
+     * `asking-run`: the started run works in the checkout the asking run left, on its
+     * branch at the commit it ended on, or is refused naming why. The checkout is read
+     * when the asking run completes, not when its asks settle.
+     */
+    checkout: z.literal('asking-run').optional(),
   })
   .strict();
 export type AsksSettledTrigger = z.infer<typeof asksSettledTriggerSchema>;
@@ -599,15 +650,20 @@ export const triggerConfigSchema = z
     message: 'An on binding maps no item: its start is on the item of the run its event names',
     path: ['item'],
   })
-  // The engine picks the lane of a start on the ended run's checkout; a fixed one here
+  // The engine picks the lane of a start on another run's checkout; a fixed one here
   // would contradict it.
-  .refine(
-    config =>
-      config.on?.runEnded?.checkout === undefined ||
-      config.binding.launch.isolation.kind === 'default',
-    {
-      message: 'With on.runEnded.checkout, binding.launch.isolation must be { "kind": "default" }',
-      path: ['binding', 'launch', 'isolation'],
-    }
-  );
+  .superRefine((config, context) => {
+    const field =
+      config.on?.runEnded?.checkout !== undefined
+        ? 'on.runEnded.checkout'
+        : config.on?.asksSettled?.checkout !== undefined
+          ? 'on.asksSettled.checkout'
+          : undefined;
+    if (field !== undefined && config.binding.launch.isolation.kind !== 'default')
+      context.addIssue({
+        code: 'custom',
+        message: `With ${field}, binding.launch.isolation must be { "kind": "default" }`,
+        path: ['binding', 'launch', 'isolation'],
+      });
+  });
 export type TriggerConfig = z.infer<typeof triggerConfigSchema>;

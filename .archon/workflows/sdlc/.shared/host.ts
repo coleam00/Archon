@@ -64,3 +64,15 @@ export function listRuns(limit: number): Record<string, unknown>[] {
   }
   return value.runs.filter(isObject);
 }
+
+/**
+ * Record on an issue's engine item that its change merged (`archon workflow merged`), so
+ * the item metrics in `.shared/item-metrics.json` can count it. Returns why it was not
+ * recorded, or null: an issue whose runs were never on an item has none to record on.
+ */
+export function recordItemMerge(item: string, change: string, commit: string | null, at: string): string | null {
+  const args = ['workflow', 'merged', '--item', item, '--change', change, '--at', at, '--json'];
+  if (commit !== null) args.push('--commit', commit);
+  const result = Bun.spawnSync([...archonCommand(), ...args], { env: process.env, stdout: 'pipe', stderr: 'pipe' });
+  return result.exitCode === 0 ? null : result.stdout.toString().trim() || result.stderr.toString().trim();
+}
