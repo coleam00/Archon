@@ -294,16 +294,13 @@ export class ItemTracker {
     const facts = await itemFacts(tracked, itemKey);
     if (!facts) return;
     const { itemId, runs, comments } = facts;
-    let prUrl: Promise<string | undefined> | undefined;
-    const proposed = (): Promise<string | undefined> =>
-      (prUrl ??= proposedChange(runs.map(run => run.id)));
     const write = (comment: TrackerComment): Promise<boolean> =>
       this.writeComment(tracked, itemId, subject, comment);
     if (owedRuns.length > 0) {
       const body = renderItemStatus(
         runs,
         facts.unreadableRuns,
-        await proposed(),
+        await proposedChange(runs.map(run => run.id)),
         this.config.includeUsage
       );
       if (!(await write({ marker: ITEM_STATUS_MARKER, body }))) return;
@@ -311,9 +308,13 @@ export class ItemTracker {
     }
     for (const { comment, row } of comments)
       if (await write(comment)) await this.record(tracked, row);
-    const owed = await this.resultOwed(tracked, itemKey);
-    const result = owed === undefined ? undefined : await finalResult(owed, facts);
-    if (result && (await write(renderResult(result, await proposed(), this.config.includeUsage))))
+    if ((await this.resultOwed(tracked, itemKey)) === undefined) return;
+    // Read again: a run can start, end and open an ask while the writes above are awaited.
+    const current = await itemFacts(tracked, itemKey);
+    const result = current && (await finalResult(current));
+    if (!current || !result) return;
+    const change = await proposedChange(current.runs.map(run => run.id));
+    if (await write(renderResult(result, change, this.config.includeUsage)))
       await this.record(tracked, { runId: result.id, key: TRACKER_RESULT_KEY });
   }
 
@@ -534,21 +535,27 @@ async function openQuestionRows(tracked: Tracked): Promise<TrackerRow[]> {
 }
 
 /**
- * The owed result's run, when the work on the item is over: every run on it is readable
+ * The run that ended last, when the work on the item is over: every run on it is readable
  * and has ended, no ask is open, and no run's end started a next stage that has no run
- * yet.
+ * yet. Runs come in start order, so runs that end in the same second (SQLite's
+ * resolution) resolve to the later start.
  */
-async function finalResult(
-  runId: string,
-  { runs, unreadableRuns, openAsks, unreadableAsk }: ItemFacts
-): Promise<WorkflowRun | undefined> {
-  const run = runs.find(candidate => candidate.id === runId);
-  if (!run || unreadableRuns > 0 || unreadableAsk || openAsks.length > 0) return undefined;
-  if (runs.some(other => !isTerminalRunStatus(other.status))) return undefined;
+async function finalResult({
+  runs,
+  unreadableRuns,
+  openAsks,
+  unreadableAsk,
+}: ItemFacts): Promise<WorkflowRun | undefined> {
+  if (unreadableRuns > 0 || unreadableAsk || openAsks.length > 0) return undefined;
+  if (runs.some(run => !isTerminalRunStatus(run.status))) return undefined;
   // Any ended run can own the owed stage: with overlapping runs, the one that ended last
   // need not be the one that started last.
-  if (await runEndStageOwed(runs.map(other => other.id))) return undefined;
-  return run;
+  if (await runEndStageOwed(runs.map(run => run.id))) return undefined;
+  const ended = (run: WorkflowRun): number => (run.completed_at ?? run.started_at).getTime();
+  return runs.reduce<WorkflowRun | undefined>(
+    (last, run) => (last && ended(last) > ended(run) ? last : run),
+    undefined
+  );
 }
 
 /**

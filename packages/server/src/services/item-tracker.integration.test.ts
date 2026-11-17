@@ -168,11 +168,13 @@ async function endRun(
   runId: string,
   status: 'completed' | 'failed' | 'running' | 'paused',
   outcome: string | null = null,
-  metadata: Record<string, unknown> = {}
+  metadata: Record<string, unknown> = {},
+  endedAt: Date = new Date()
 ): Promise<void> {
+  const ended = status === 'completed' || status === 'failed' ? endedAt.toISOString() : null;
   await getDatabase().query(
-    'UPDATE remote_agent_workflow_runs SET status = $1, completed_outcome = $2, metadata = $3 WHERE id = $4',
-    [status, outcome, JSON.stringify(metadata), runId]
+    'UPDATE remote_agent_workflow_runs SET status = $1, completed_outcome = $2, metadata = $3, completed_at = $4 WHERE id = $5',
+    [status, outcome, JSON.stringify(metadata), ended, runId]
   );
 }
 
@@ -718,6 +720,46 @@ test('a run that ends after the scan read it as live still gets its result', asy
   expect(newComments(fake)).toEqual([
     expect.stringContaining('the `implement` stage completed with outcome `delivered`.'),
   ]);
+});
+
+test('when two stages end within one scan, the result shows the one that ended last', async () => {
+  const fake = fakeForge();
+  const tracker = await activeTracker(fake.forge);
+  const implement = await startRun('issue-7', 'implement');
+  const docs = await startRun('issue-7', 'docs');
+  await tracker.scan();
+  await endRun(docs, 'completed', 'written', {}, new Date('2026-11-17T10:00:00.000Z'));
+  await endRun(implement, 'completed', 'delivered', {}, new Date('2026-11-17T10:05:00.000Z'));
+  await tracker.scan();
+  expect(newComments(fake)).toEqual([
+    expect.stringContaining('the `implement` stage completed with outcome `delivered`.'),
+  ]);
+});
+
+test('a run that starts, ends and leaves an ask while the status is written holds the result back', async () => {
+  const fake = fakeForge();
+  let late = true;
+  const forge: ItemTrackerForge = {
+    ...fake.forge,
+    upsertComment: async request => {
+      const response = await fake.forge.upsertComment(request);
+      if (late && request.marker === ITEM_STATUS_MARKER) {
+        late = false;
+        const review = await startRun('issue-7', 'review');
+        await endRun(review, 'completed', 'asked');
+        await leaveAsk(review);
+      }
+      return response;
+    },
+  };
+  const tracker = await activeTracker(forge);
+  const plan = await startRun('issue-7', 'plan');
+  await endRun(plan, 'completed', 'ready');
+  await tracker.scan();
+  expect(late).toBe(false);
+  expect(newComments(fake)).toEqual([]);
+  await tracker.scan();
+  expect(newComments(fake)).toEqual([expect.stringContaining('Keep the old flag?')]);
 });
 
 test('a result held back by an open ask is posted once the ask is withdrawn', async () => {

@@ -90,11 +90,12 @@ export async function listTrackerCandidateRuns(
 }
 
 /**
- * Items whose final result is owed, with the run whose end it shows: no run on the item
- * is live, and the item's latest `terminal` row has no `result` row after it. A run that
- * resumes and is shown ending again gets a later `terminal` row, so its result is owed
- * again. Every item of `projectKey`, or only `itemKey`. Whether the work is over (no open
- * ask, no next stage on its way) the caller decides from the item's facts, and the
+ * Items whose final result is owed, with the run of their latest `terminal` row: no run
+ * on the item is live, and that row has no `result` row after it. A run that resumes and
+ * is shown ending again gets a later `terminal` row, so its result is owed again. Every
+ * item of `projectKey`, or only `itemKey`. The ledger orders rows as they were recorded,
+ * not as runs ended, so which run the result shows, and whether the work is over (no
+ * open ask, no next stage on its way), the caller decides from the item's facts. The
  * result stays owed until it is posted.
  */
 export async function listTrackerResultsOwed(
