@@ -385,12 +385,14 @@ export async function watchAttentionQueue(
     waiters.get(runId)?.controller.abort();
     waiters.delete(runId);
   };
+  const isWatched = (run: WorkflowRun, claim = executionClaim(run.metadata)): boolean =>
+    waiters.get(run.id)?.claim === claim || lost.get(run.id) === claim;
   const arm = (run: WorkflowRun, project: ProjectRef | null): void => {
     const watchOwner = host.ownerLoss;
     if (watchOwner === undefined || closed) return;
     const runId = run.id;
     const claim = executionClaim(run.metadata);
-    if (waiters.get(runId)?.claim === claim || lost.get(runId) === claim) return;
+    if (isWatched(run, claim)) return;
     disarm(runId);
     const controller = new AbortController();
     const { signal } = controller;
@@ -460,7 +462,8 @@ export async function watchAttentionQueue(
   let unreadableAskRuns = new Set(degraded.map(report => report.runId));
   await emit({ type: 'ready', cursor: start });
 
-  // 2. Arm liveness for every run already running in scope.
+  // 2. Arm liveness for every run running in scope, at start and on every caught-up read:
+  // a claim commits no event, and an owner can die before it writes its first one.
   const armRunning = async (): Promise<void> => {
     if (host.ownerLoss === undefined) return;
     for (let offset = 0; ; offset += RUNNING_PAGE_LIMIT) {
@@ -470,6 +473,7 @@ export async function watchAttentionQueue(
         offset,
       });
       for (const run of page.runs) {
+        if (closed || isWatched(run)) continue;
         const project = await runProject(source, run);
         if (isInAttentionScope(project, scope)) arm(run, project);
       }
@@ -789,6 +793,7 @@ export async function watchAttentionQueue(
       },
       onCaughtUp: async () => {
         await reconcileItemsWithoutRun();
+        await armRunning();
         if (Date.now() - lastLineAt >= bookmarkIntervalMs)
           emit({ type: 'bookmark', cursor: position() });
       },

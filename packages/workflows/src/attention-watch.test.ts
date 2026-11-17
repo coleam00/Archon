@@ -1434,6 +1434,25 @@ describe('watchAttentionQueue', () => {
     expect(portless.lines.filter(line => line.type === 'owner_lost')).toEqual([]);
   });
 
+  test('a run claimed after ready, before its first event, is still watched for owner loss', async () => {
+    const store = await makeStore();
+    const stream = await watch(
+      store,
+      { bookmarkIntervalMs: 0 },
+      { ...host, ownerLoss: async () => ({ observedStatus: 'running' }) }
+    );
+    try {
+      await stream.next(line => line.type === 'ready');
+      // A claim writes no event: an owner that dies here leaves nothing for the feed to deliver.
+      const runId = await running(store);
+      expect(await stream.next(ofRun(runId, 'owner_lost'))).toMatchObject({
+        observedStatus: 'running',
+      });
+    } finally {
+      await stream.close();
+    }
+  });
+
   test.each(['workflow_started', 'workflow_resumed', 'workflow_unpaused'] as const)(
     'replaying %s after owner loss does not watch the same claim again',
     async eventType => {
