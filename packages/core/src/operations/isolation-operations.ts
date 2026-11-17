@@ -12,7 +12,7 @@ import {
   cleanupMergedWorktrees,
   type CleanupOperationResult,
 } from '../services/cleanup/merged-sweep';
-import { getLiveRunBlocker } from '../services/cleanup/run-lock';
+import { getUseBlocker, useBlockerLogFields } from '../services/cleanup/run-lock';
 
 // Lazy logger — NEVER at module scope
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -76,15 +76,10 @@ async function reconcileGhosts(envs: readonly IsolationEnvironmentRow[]): Promis
         }
       );
       if (!exists) {
-        const liveRun = await getLiveRunBlocker(env.id);
-        if (liveRun) {
+        const inUse = await getUseBlocker(env.id);
+        if (inUse) {
           getLog().info(
-            {
-              envId: env.id,
-              path: env.working_path,
-              runId: liveRun.runId,
-              runStatus: liveRun.runStatus,
-            },
+            { envId: env.id, path: env.working_path, ...useBlockerLogFields(inUse) },
             'isolation.ghost_kept_for_live_run'
           );
           continue;

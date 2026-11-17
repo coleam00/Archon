@@ -9,7 +9,7 @@ import {
 } from '../../platforms/registry';
 import * as isolationEnvDb from '../../db/isolation-environments';
 import * as workflowDb from '../../db/workflows';
-import { getLiveRunBlocker, type LiveRunBlocker } from './run-lock';
+import { getUseBlocker, type UseBlocker } from './run-lock';
 import { getLog } from './log';
 import { createRunResourceRelease } from './run-verification-images';
 
@@ -131,9 +131,9 @@ export async function reapContainerEnvironments(
     // Same lock the worktree sweeps use. getRunByIsolationEnvId, which this replaced,
     // took the newest run row BEFORE filtering status, so a newer terminal run could
     // shadow an older claimable one and the container would be reaped underneath it.
-    let liveRun: LiveRunBlocker | null;
+    let liveRun: UseBlocker | null;
     try {
-      liveRun = await getLiveRunBlocker(row.id);
+      liveRun = await getUseBlocker(row.id);
     } catch (err) {
       report.errors.push({
         id: row.id,
