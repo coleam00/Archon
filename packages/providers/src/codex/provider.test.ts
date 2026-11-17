@@ -8,7 +8,7 @@ import { existsSync } from 'fs';
 import { mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import type { NativeTool, MessageChunk, SendQueryOptions } from '../types';
+import type { NativeTool, MessageChunk, ResultChunk, SendQueryOptions } from '../types';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -927,9 +927,16 @@ describe('CodexProvider', () => {
       return { method: 'turn/started', params: running.params };
     }
 
-    async function tokensOf(notifications: ServerNotification[]): Promise<unknown[]> {
+    /** Each result's tokens; a result without tokens fails the test. */
+    async function tokensOf(
+      notifications: ServerNotification[]
+    ): Promise<NonNullable<ResultChunk['tokens']>[]> {
       const chunks = await streamOf({ notifications, completion: null });
-      return chunks.flatMap(c => (c.type === 'result' ? [c.tokens] : []));
+      return chunks.flatMap(c => {
+        if (c.type !== 'result') return [];
+        if (!c.tokens) throw new Error('a result reported no tokens');
+        return [c.tokens];
+      });
     }
 
     test('a thread spawned through Codex’s v1 tool counts like a v2 subagent', async () => {
@@ -960,7 +967,7 @@ describe('CodexProvider', () => {
         [spawn, child[0], ...parent, ...child.slice(1)],
         [...child, spawn, ...parent],
       ]) {
-        const tokens = (await tokensOf(order)) as { input: number; output: number }[];
+        const tokens = await tokensOf(order);
         expect(tokens.reduce((sum, t) => sum + t.input, 0)).toBe(140);
         expect(tokens.reduce((sum, t) => sum + t.output, 0)).toBe(14);
       }
@@ -1004,7 +1011,7 @@ describe('CodexProvider', () => {
     });
 
     test('a v1 subagent on a later turn when the parent completes holds the node open', async () => {
-      const tokens = (await tokensOf([
+      const tokens = await tokensOf([
         itemCompleted(collabSpawn('completed', ['child-thread'])),
         otherTurn('started'),
         otherTurn('completed'),
@@ -1013,13 +1020,13 @@ describe('CodexProvider', () => {
         turnCompleted('completed'),
         tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn-2', 'child-thread'),
         otherTurn('completed', 'child-thread', 'child-turn-2'),
-      ])) as { input: number }[];
+      ]);
       expect(tokens.reduce((sum, t) => sum + t.input, 0)).toBe(140);
     });
 
     // Codex resets a thread's cumulative total when its context overflows.
     test('a subagent’s usage after its thread’s total resets adds to what it used before', async () => {
-      const tokens = (await tokensOf([
+      const tokens = await tokensOf([
         itemCompleted(collabSpawn('completed', ['child-thread'])),
         otherTurn('started'),
         tokenUsage(
@@ -1034,7 +1041,7 @@ describe('CodexProvider', () => {
         turnCompleted('completed'),
         tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn-2', 'child-thread'),
         otherTurn('completed', 'child-thread', 'child-turn-2'),
-      ])) as { input: number; output: number }[];
+      ]);
       expect(tokens.reduce((sum, t) => sum + t.input, 0)).toBe(100 + 50 + 40);
       expect(tokens.reduce((sum, t) => sum + t.output, 0)).toBe(10 + 5 + 4);
     });
@@ -1093,7 +1100,7 @@ describe('CodexProvider', () => {
         [...child, ...grandchildStart, ...rest],
         [...grandchildStart, ...child, ...rest],
       ]) {
-        const tokens = (await tokensOf(order)) as { input: number; output: number }[];
+        const tokens = await tokensOf(order);
         sums.push([
           tokens.reduce((sum, t) => sum + t.input, 0),
           tokens.reduce((sum, t) => sum + t.output, 0),
