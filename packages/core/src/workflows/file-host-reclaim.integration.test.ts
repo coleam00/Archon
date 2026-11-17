@@ -105,6 +105,24 @@ async function createClaimant(
   proof: { envId: string; creationId: string }
 ): Promise<string | undefined> {
   if (claimant === 'none') return undefined;
+  if (claimant === 'handoff') {
+    // Admitted on a hand-off from a run that owns the checkout, before its lane is laid out.
+    const from = await createClaimant({ host, codebase, created, env }, 'completed', proof);
+    const admitted = await host.deps.store.createWorkflowRun({
+      workflow_name: 'next-stage',
+      user_message: '',
+      codebase_id: codebase.id,
+      metadata: {
+        checkout_handoff: {
+          runId: from,
+          branch: created.branchName,
+          commit: 'a'.repeat(40),
+          lane: 'continue',
+        },
+      },
+    });
+    return admitted.id;
+  }
   const row = await host.deps.store.createWorkflowRun({
     workflow_name: 'other',
     user_message: '',
@@ -127,7 +145,7 @@ async function createClaimant(
   return row.id;
 }
 
-test.each(['none', 'path', 'proof', 'partial-proof', 'env', 'completed'] as const)(
+test.each(['none', 'path', 'proof', 'partial-proof', 'env', 'completed', 'handoff'] as const)(
   'file abandonment reclaims its own checkout and respects a %s claimant without SQL',
   async claimant => {
     const { home, repo, host, codebase, created, creationId, env } = await fileHostWithWorktree();

@@ -102,14 +102,31 @@ describe('dagNodeSchema — include', () => {
     });
   });
 
-  // Include/workflow `with:` reads no directive, so a directive-shaped object would
-  // otherwise reach the child as data with its `if_skipped` never applied (#5734).
+  // A directive-shaped object in an include's or workflow node's `with:` is the binding
+  // directive (#5760): it loads, and a malformed one fails as on a command or script node.
   test.each([
-    ['include', { include: 'acme-review-block' }, { from: '$a.output.v', if_skipped: null }],
-    ['include', { include: 'acme-review-block' }, { outputs: 'review-report' }],
-    ['workflow', { workflow: 'child' }, { from: '$a.output.v', if_skipped: null }],
-  ])("%s rejects a directive-shaped 'with:' value, naming the key", (_kind, mode, x) => {
-    const error = validationError(dagNodeSchema.safeParse({ id: 'r', ...mode, with: { x } }));
+    ['include', { include: 'acme-review-block' }],
+    ['workflow', { workflow: 'child' }],
+  ])("%s reads a directive-shaped 'with:' value as the binding directive", (kind, mode) => {
+    const x = { from: '$a.output.v', if_skipped: null };
+    expect(dagNodeSchema.safeParse({ id: 'r', ...mode, with: { x } }).success).toBe(true);
+    const error = validationError(
+      dagNodeSchema.safeParse({ id: 'r', ...mode, with: { x: { from: 'alice' } } })
+    );
+    const issue = error.issues.find(i => i.path[0] === 'with' && i.path[1] === 'x');
+    expect(issue?.message).toBe(
+      `${kind} binding 'x': 'from' must be exactly one whole '$node.output[.a.b]' reference, got 'alice'`
+    );
+  });
+
+  test("include refuses a typed-outputs directive in 'with:', naming the key", () => {
+    const error = validationError(
+      dagNodeSchema.safeParse({
+        id: 'r',
+        include: 'acme-review-block',
+        with: { x: { outputs: 'review-report' } },
+      })
+    );
     const issue = error.issues.find(i => i.path[0] === 'with' && i.path[1] === 'x');
     expect(issue?.message).toContain("input 'x'");
   });

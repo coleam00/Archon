@@ -1,4 +1,5 @@
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 /** Shared handleMessage mocks and fixtures; importing registers the suites' module mocks. */
 import type { RunActor } from '../operations/run-authorization';
 import type { ProviderRegistry } from '@archon/provider-contract';
@@ -133,16 +134,17 @@ export const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
 
 export const mockLogger = createMockLogger();
 export const mockCloseRunLiveOwner = mock(() => Promise.resolve());
-const mockRunLiveOwner: RunLiveOwnerModule.RunLiveOwner = {
+const mockRunLiveOwner = (runId: string): RunLiveOwnerModule.RunLiveOwner => ({
+  lease: testRunOwnerLease(runId),
   close: mockCloseRunLiveOwner,
   isStopRequested: () => false,
   registerTerminationPreparation: () => () => undefined,
-};
-export const mockStartRunLiveOwner = mock<typeof RunLiveOwnerModule.startRunLiveOwner>(() =>
-  Promise.resolve(mockRunLiveOwner)
+});
+export const mockStartRunLiveOwner = mock<typeof RunLiveOwnerModule.startRunLiveOwner>(runId =>
+  Promise.resolve(mockRunLiveOwner(runId))
 );
 export const mockWithRunLiveOwner = mock<typeof RunLiveOwnerModule.withRunLiveOwner>(
-  async (_runId, _options, body) => body(mockRunLiveOwner)
+  async (runId, _options, body) => body(mockRunLiveOwner(runId))
 );
 mock.module('../services/run-live-owner', () => ({
   startRunLiveOwner: mockStartRunLiveOwner,

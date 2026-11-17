@@ -86,6 +86,9 @@ export class InMemoryStore implements IWorkflowStore {
   listQueuedResourceStartsForHost: IWorkflowStore['listQueuedResourceStartsForHost'] = async () => {
     throw new Error('Unexpected listQueuedResourceStartsForHost');
   };
+  listQueuedItemStarts: IWorkflowStore['listQueuedItemStarts'] = async () => {
+    throw new Error('Unexpected listQueuedItemStarts');
+  };
   withdrawQueuedResourceStart: IWorkflowStore['withdrawQueuedResourceStart'] = async () => {
     throw new Error('Unexpected withdrawQueuedResourceStart');
   };

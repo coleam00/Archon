@@ -2039,6 +2039,7 @@ declare module 'archon:script' {
       readonly cause: {
         readonly kind: 'run_ended';
         readonly runId: string;
+        readonly sourceInstanceId: string;
       } | {
         readonly kind: 'run_fired';
         readonly runId: string;
@@ -2052,6 +2053,14 @@ declare module 'archon:script' {
         readonly requestId: string;
         readonly hostId: string;
       } | null;
+    }>;
+    readonly queued: ReadonlyArray<{
+      readonly requestId: string;
+      readonly workflow: string | null;
+      readonly resource: string;
+      readonly hostId: string;
+      readonly queuedAt: string;
+      readonly ahead: number;
     }>;
     readonly questions: ReadonlyArray<{
       readonly kind: 'attention';

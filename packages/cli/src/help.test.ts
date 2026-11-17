@@ -139,6 +139,8 @@ Commands:
   project config <id|name>   Show a project's merged config with secrets removed (env key names only)
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
+  pack graph <pack>          Show a pack's stages, their outcomes and the run-ended arrows between them,
+                             each active in this install or declared and inactive (--json for the read)
   pack bindings <pack>       Write a pack's recommended trigger bindings as files for one repository;
                              registers and schedules nothing. Needs --repo, --host, --run-as and --out
   chat <message>             Send a message to the orchestrator
@@ -249,8 +251,8 @@ Options:
   --from, --from-branch <name> Create new branch from specific start point
   --base-branch <name>       Initial repository registration only; omit to follow the remote default. Use --base for a run override.
   --base <branch>            Per-dispatch base override for epic slices (worktree cut-from + PR target)
-  --workflow-source <path>   Read the workflow, its commands and scripts from this directory
-                             instead of --cwd (which stays the workspace the run acts on)
+  --workflow-source <path>   Read the workflow, its commands and scripts from this checkout root
+                             (<path>/.archon/workflows) instead of --cwd (which stays the workspace the run acts on)
   --no-worktree              Run on branch directly without worktree isolation
   --folder                   Register the current directory (with or without git) as a folder project and run in place
   --container                Run a folder project in container isolation

@@ -1278,6 +1278,8 @@ describe('workflowGetCommand', () => {
     await workflowGetCommand(createTestWorkflowHost(), 'run-skip-cause', false, true);
 
     expect(consoleSpy).toHaveBeenCalledWith('    - publish (upstream failed: validate)');
+    // A run with no loop reads as before: no Rounds block.
+    expect(consoleSpy).not.toHaveBeenCalledWith('  Rounds:');
   });
 
   // #3488 acceptance: the stored failure is command-free, so the CLI writes the abandon
@@ -2297,6 +2299,96 @@ describe('workflowGetCommand', () => {
     );
     expect(parsed.events).toBeUndefined();
     expect(parsed.transcript_path).toBeNull();
+    expect(parsed).not.toHaveProperty('loop_rounds');
+  });
+
+  it('reads each loop round in verbose JSON and text', async () => {
+    const { startNodeExecution, finishNodeExecution, newNodeInvocation } = await import(
+      '@archon/workflows/node-execution'
+    );
+    const { serializeNodeStateRecord } = await import(
+      '@archon/workflows/node-record-serialization'
+    );
+    const start = (iteration: number) =>
+      startNodeExecution({
+        runId: 'run-loop',
+        path: 'fix.check',
+        node: { id: 'check', kind: 'exec', runtime: 'sh', script: 'true' },
+        invocation: newNodeInvocation([{ groupId: 'fix', iteration }]),
+      });
+    const row = (iteration: number, record: ReturnType<typeof start>): WorkflowEventRow => ({
+      ...serializeNodeStateRecord(record),
+      id: `round-${String(iteration)}`,
+      step_index: null,
+      created_at: new Date().toISOString(),
+    });
+    const roundRow = (iteration: number, text?: string): WorkflowEventRow =>
+      row(
+        iteration,
+        finishNodeExecution(
+          start(iteration),
+          text === undefined
+            ? { status: 'failed', error: 'check failed' }
+            : { status: 'completed' },
+          { durationMs: iteration * 1000, ...(text === undefined ? {} : { output: { text } }) }
+        )
+      );
+    const longVerdict = `${'v'.repeat(200)}${'w'.repeat(50)}`;
+    // Rounds 1-3 ended (completed, completed, failed); round 4 is still in `check`.
+    const events = [
+      roundRow(1, longVerdict),
+      roundRow(2, 'second verdict'),
+      roundRow(3),
+      row(4, start(4)),
+    ];
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    const loopRun = {
+      id: 'run-loop',
+      checkout_baseline: null,
+      workflow_name: 'deliver',
+      status: 'running',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    };
+    // Queued per read, so a failed assertion leaves nothing queued for later tests.
+    const queueRead = () => {
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(loopRun);
+      (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce(events);
+    };
+
+    queueRead();
+    await workflowGetCommand(createTestWorkflowHost(), 'run-loop', true, true);
+    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+      loop_rounds: Array<{ nodes: Array<Record<string, unknown>> }>;
+    };
+    expect(parsed.loop_rounds.map(round => round.nodes[0]?.output)).toEqual([
+      longVerdict,
+      'second verdict',
+      undefined,
+      undefined,
+    ]);
+    expect(parsed.loop_rounds[3]?.nodes[0]?.state).toBe('running');
+    expect(parsed.loop_rounds[3]?.nodes[0]).not.toHaveProperty('duration_ms');
+
+    queueRead();
+    await workflowGetCommand(createTestWorkflowHost(), 'run-loop', false, true);
+    const calls: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    const rounds = calls.slice(calls.indexOf('  Rounds:'));
+    expect(rounds.filter(line => line.includes('fix round'))).toHaveLength(4);
+    const nodeLines = rounds.filter(line => line.includes('fix.check'));
+    expect(nodeLines).toHaveLength(4);
+    // Each round's node line carries its own duration and state mark.
+    expect(nodeLines[0]).toContain('1s');
+    expect(nodeLines[0]).toContain('✓');
+    expect(nodeLines[2]).toContain('3s');
+    expect(nodeLines[2]).toContain('✗');
+    expect(nodeLines[3]).toContain('◌');
+    expect(nodeLines[3]).toContain('running');
+    // A round's output is the same capped preview the Nodes block prints.
+    expect(rounds.some(line => line.includes(`${'v'.repeat(200)}...`))).toBe(true);
+    expect(rounds.some(line => line.includes(`${'v'.repeat(200)}w`))).toBe(false);
   });
 
   it('reads attribution and observed duration from a terminal row without a start-row join', async () => {

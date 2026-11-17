@@ -251,7 +251,7 @@ A timer file refuses `item`, since a tick is about no item, and so does a run-en
 
 A trigger file with `on.runEnded` starts its binding when a run of a named workflow completes with a named outcome on an [item](/reference/cli/#items). It is how one stage hands an item to the next with no node that fires anything: the hand-off is a file the deployment owns, the engine reads it at the moment a run completes, and the start goes through the same receipt, preparation, admission, capacity, overlap and queue order as any binding start.
 
-Save the file in `ARCHON_HOME/triggers/` (`~/.archon/triggers/` by default), for example `~/.archon/triggers/build-after-plan.json`:
+The file lives in `ARCHON_HOME/triggers/` (`~/.archon/triggers/` by default), for example as `~/.archon/triggers/build-after-plan.json`. Write it somewhere else first, for example as `build-after-plan.json`, and add it with `archon trigger add` as shown below the example, never by saving it there directly:
 
 ```json
 {
@@ -284,7 +284,13 @@ Save the file in `ARCHON_HOME/triggers/` (`~/.archon/triggers/` by default), for
 }
 ```
 
-A workflow pack can declare this hand-off as a [`run_ended:` binding](/reference/workflow-language/#pack-bindings); [`archon pack bindings`](/reference/cli/#pack-bindings) writes it, checked, to its `--out` directory for one repository; copying the file into this directory registers it.
+A workflow pack can declare this hand-off as a [`run_ended:` binding](/reference/workflow-language/#pack-bindings); [`archon pack bindings`](/reference/cli/#pack-bindings) writes it, checked, to its `--out` directory for one repository; `archon trigger add` registers it.
+
+```bash
+archon trigger add build-after-plan.json
+```
+
+`trigger add` copies the file into `ARCHON_HOME/triggers/` under a `.tmp` name and then renames it to its own name, replacing a file of that name. Every process that completes a run reads each `*.json` there, and a file that is not complete JSON fails that run, in any project on the install. The engine reads only names ending in `.json`, so a run that completes during the copy sees the old file or the whole new one, never part of one. To change a registered file, edit a copy elsewhere and add it again; do not edit it in place. `trigger add` does not check what the file says: run `archon trigger check` after it. A file that is completely written but invalid still fails the run that reads it.
 
 Every process that completes a run reads each `*.json` file in that directory that has `on`, at each completion, so a new file applies to the next run that ends and removing it turns the binding off. Archon reads these files only from the install's home, never from a repository. Bindings do not belong in workflow YAML. `archon trigger check` lists every run-ended binding that is active and checks it against the workflows of the project it launches in.
 
@@ -325,9 +331,99 @@ If the process dies after the commit, what is left depends on how far it got:
 - **Before the start was admitted**, the start waits as a pending binding until the next drain of its host: another run ending there, a `trigger fire`, `archon trigger drain --host <hostId>` or the server's loop. That drain starts exactly one run.
 - **After the start was admitted and before its executor was spawned**, the start's run exists as `pending` and holds its slot, but no process runs it. Nothing tells a dead process from a slow one, so no drain retries it. `archon workflow runs --item <key>` shows it as admitted and not started, with the command that runs it, and `archon trigger list` lists it under its receipt's `awaitingExecution`. Check it with `archon trigger inspect <request-id>`, then run it once with `archon trigger execute <request-id> --host <hostId>`. A second `trigger execute` of the same request is refused.
 
-`archon workflow runs --item <key> --json` lists the item's runs in the order they started, each with an `awaitingExecution` (above, `null` unless its start is admitted and not yet running) and a `cause`: `{"kind": "run_ended", "runId"}` for a start a run's end caused, `{"kind": "run_fired", "runId", "node"}` for one a node fired, `{"kind": "receipt", "receiptId", "sourceInstanceId"}` for any other trigger, or `null` for a start by hand. The receipt records the ended run as its `sourceActor` (`{"source": "archon-run-ended", "id": <run id>, "display": <outcome>}`) and uses the ended run's ID as its delivery ID. Start times on SQLite have one-second resolution; runs that start in the same second are listed in the order they were written.
+While a start waits for capacity it has no run yet. `archon workflow runs --item <key>` lists it under the item's starts waiting for capacity (`queued` in `--json`), with its request id, resource and how many queued starts of that resource and host are ahead of it, or, with none ahead, that it is next for a free slot, and the host that drains it; `archon trigger withdraw <request-id>` withdraws it.
+
+`archon workflow runs --item <key> --json` lists the item's runs in the order they started, each with an `awaitingExecution` (above, `null` unless its start is admitted and not yet running) and a `cause`: `{"kind": "run_ended", "runId", "sourceInstanceId"}` for a start a run's end caused, where `sourceInstanceId` is the trigger file's, `{"kind": "run_fired", "runId", "node"}` for one a node fired, `{"kind": "receipt", "receiptId", "sourceInstanceId"}` for any other trigger, or `null` for a start by hand. The receipt records the ended run as its `sourceActor` (`{"source": "archon-run-ended", "id": <run id>, "display": <outcome>}`) and uses the ended run's ID as its delivery ID. Start times on SQLite have one-second resolution; runs that start in the same second are listed in the order they were written.
 
 Run-ended bindings need the database store, as items do. With `store: files`, `archon trigger check` refuses any run-ended file, and such a file never fires: the file store refuses every run on an item, and a run with no item causes nothing.
+
+### See how a pack's stages connect
+
+`archon pack graph <pack> --json`, or `GET /api/packs/{pack}/graph?codebaseId=<id>`, reads a pack's stages and the run-ended arrows between them for one project. A drawing, a console view or an agent can build from it alone. A pack with stages `plan`, `build` and `ship`, whose `.pack/pack.yaml` declares `build-after-plan` and `ship-after-build`, with only the first file copied into the triggers directory:
+
+```json
+{
+  "pack": "factory",
+  "stages": [
+    {
+      "name": "plan",
+      "returns": "decide",
+      "outcome": {
+        "field": "outcome",
+        "form": "enum",
+        "values": [
+          { "value": "planned", "startsNothing": false },
+          { "value": "blocked", "startsNothing": true }
+        ]
+      },
+      "asks": true,
+      "nodes": [
+        { "id": "read", "kind": "agent", "dependsOn": [], "loopGroup": null, "blocks": [], "fanOut": null },
+        { "id": "decide", "kind": "agent", "dependsOn": ["read"], "loopGroup": null, "blocks": [], "fanOut": null }
+      ]
+    },
+    {
+      "name": "build",
+      "returns": "verdict",
+      "outcome": {
+        "field": "outcome",
+        "form": "enum",
+        "values": [
+          { "value": "built", "startsNothing": true },
+          { "value": "stuck", "startsNothing": true }
+        ]
+      },
+      "asks": false,
+      "nodes": [
+        { "id": "rounds", "kind": "loop_group", "dependsOn": [], "loopGroup": null, "blocks": [], "fanOut": null },
+        { "id": "rounds.implement", "kind": "agent", "dependsOn": [], "loopGroup": "rounds", "blocks": [], "fanOut": null },
+        {
+          "id": "rounds.review__check",
+          "kind": "agent",
+          "dependsOn": ["rounds.implement"],
+          "loopGroup": "rounds",
+          "blocks": [{ "include": "rounds.review", "workflow": "review-block" }],
+          "fanOut": null
+        },
+        { "id": "verdict", "kind": "exec", "dependsOn": ["rounds"], "loopGroup": null, "blocks": [], "fanOut": null }
+      ]
+    },
+    { "name": "ship", "returns": null, "outcome": null, "asks": false, "nodes": [] }
+  ],
+  "arrows": [
+    {
+      "from": { "stage": "plan", "outcome": "planned" },
+      "to": "build",
+      "active": true,
+      "declared": { "binding": "build-after-plan", "problems": [] },
+      "installed": {
+        "file": "/home/alice/.archon/triggers/factory-acme-widgets-build-after-plan-planned-1c9e0a7b33f2.json",
+        "sourceInstanceId": "factory-acme-widgets-build-after-plan-planned-1c9e0a7b33f2",
+        "problems": []
+      }
+    },
+    {
+      "from": { "stage": "build", "outcome": "built" },
+      "to": "ship",
+      "active": false,
+      "declared": { "binding": "ship-after-build", "problems": [] },
+      "installed": null
+    }
+  ],
+  "fanOutBlocks": [],
+  "discoveryErrors": []
+}
+```
+
+- A stage is a workflow of the pack. Its `outcome` is what its [`returns:`](/reference/workflow-language/) declares, read through an `include:` when the returns node is in an included block; a boolean outcome lists `succeeded` and `failed`.
+- `nodes` are the stage's nodes after includes are expanded, under the ids its runs record (`<include>__<id>`); `blocks` names the include each came from, outermost first. A `loop_group` is a node, and its body follows it: each body node has `loopGroup` set to the group's id, and its `id` and `dependsOn` are the step names its runs are recorded under (`<group>.<id>`, composing across nested groups, as in `rounds.review__check`). A body's included blocks are named the same way (`rounds.review`). An `include:` with `fan_out:` is one `compose_fan_out` node, because its width is known only at run time; its `fanOut.workflow` names its body in `fanOutBlocks`, which lists each such body's nodes once, including bodies a body fans out to.
+- An arrow is `active` when a trigger file launches it in this project. A declared arrow with no file is reported with `active: false`, not left out. `to` may be a workflow outside the pack. An active arrow's `installed.problems` is what `archon trigger check` reports as the check a run gets before it starts: when it is not empty, every run of `from.stage` on an item is refused before it starts, so the arrow starts nothing until the file is fixed. A file whose `launch.cwd` no longer exists is in no project, so the end of a run never starts it; it is shown with that problem because which project it was meant for cannot be known.
+- A declared binding that names a workflow which is not a stage as the pack loaded keeps the name as written, and its `declared.problems` says so. When that stage failed to load, its load error is in `discoveryErrors`; the rest of the graph is still read.
+- `startsNothing` marks an outcome no active arrow without problems leaves. With `asks: false` such an outcome ends in silence; whether that is right is the pack's call.
+- `discoveryErrors` lists every workflow that failed to load from the source the pack was read from. A stage that failed is missing from `stages`, so a non-empty list means the graph may be incomplete.
+- When the pack's workflows are not in the checkout, pass `--workflow-source <dir>` (`workflowSource=` on the API), the directory a binding's `launch.discoveryCwd` names. The arrows are still those of the checkout's project.
+
+To draw one item's path, read `archon workflow runs --item <key> --json` (or `GET /api/items`): each run's `workflow` is a stage, its `outcome` the value it ended with, and a `run_ended` cause names the run whose end started it (`runId`) and the arrow (`sourceInstanceId`, the arrow's `installed.sourceInstanceId`).
 
 ### Work in the checkout the ended run left
 
@@ -338,7 +434,7 @@ The binding's `launch.isolation` must be `{ "kind": "default" }`; the engine pic
 - A workflow that changes its checkout (the default) continues in the ended run's worktree, on its branch. If that worktree is gone and the branch survives, the branch is checked out again in a new worktree. Admission keys the start by the branch, so it waits for or is skipped behind another run on that branch by its overlap policy, as with an explicit `branch`.
 - A workflow with `mutates_checkout: false` gets a worktree of its own on a new branch cut at the ended run's commit. Checks run beside each other, and none of them is on the build's branch. When such a run ends, a binding with `checkout: "ended-run"` on its outcome hands on the branch and commit it was given, not its own branch.
 
-This loop uses three bindings in `ARCHON_HOME/triggers/`. `check` declares `mutates_checkout: false` and completes with `pass` or `return`:
+This loop uses three bindings in `ARCHON_HOME/triggers/`, each added with `archon trigger add`. `check` declares `mutates_checkout: false` and completes with `pass` or `return`:
 
 ```json
 { "version": 1, "sourceInstanceId": "check-after-build",
@@ -369,7 +465,7 @@ This loop uses three bindings in `ARCHON_HOME/triggers/`. `check` declares `muta
 
 The first `build` runs as usual, in a worktree on a new branch. Each later `build` works in that same worktree, sees every commit the builds before it made, and adds to them. Each `check` reads the commit the build before it ended on. `land` runs on the branch once a check passes. To pass inputs as well, add `inputs` beside `checkout`.
 
-The branch and commit are read when the run completes and recorded on the start's receipt, where `archon trigger inspect` shows them as `checkoutFrom`. A run whose worktree its end hands to a stage keeps that worktree: its terminal record says `retained` with reason `in_use`, where it would otherwise have been removed. Nothing removes it automatically after that; `archon isolation cleanup` does, once no run uses it. If cleanup removes it before the stage starts, the stage checks the branch out again, or is refused when the branch is gone too.
+The branch and commit are read when the run completes and recorded on the start's receipt, where `archon trigger inspect` shows them as `checkoutFrom`. A run whose worktree its end hands to a stage keeps that worktree: its terminal record says `retained` with reason `in_use`, where it would otherwise have been removed. Nothing removes it automatically after that. `archon isolation cleanup` and the scheduled sweep keep it while the stage waits, still being prepared or queued for its resource, and report why, for example `start request <id> handed this checkout by run <id> is queued`. `archon trigger withdraw <request-id>` withdraws a queued start. Cleanup can remove the worktree once no run uses it and no start waits for it: the stage has run, or was withdrawn, skipped or refused.
 
 A start never falls back to a fresh checkout of the base branch. It is refused instead:
 

@@ -184,25 +184,21 @@ export function createMockStore(): MockWorkflowStore {
     readWorkflowEventsAfter: mock<IWorkflowStore['readWorkflowEventsAfter']>(() => {
       throw new Error('Unexpected event feed read');
     }),
-    getStateDocument: mock<IWorkflowStore['getStateDocument']>(() => {
-      throw new Error('Unexpected getStateDocument');
-    }),
+    getStateDocument: mock<IWorkflowStore['getStateDocument']>(unexpected('getStateDocument')),
     putStateDocument: mock<IWorkflowStore['putStateDocument']>(unexpectedWrite),
     patchStateDocument: mock<IWorkflowStore['patchStateDocument']>(unexpectedWrite),
     deleteStateDocument: mock<IWorkflowStore['deleteStateDocument']>(unexpectedWrite),
     claimStateDocument: mock<IWorkflowStore['claimStateDocument']>(unexpectedWrite),
-    listStateRevisions: mock<IWorkflowStore['listStateRevisions']>(() => {
-      throw new Error('Unexpected listStateRevisions');
-    }),
-    listStateDocuments: mock<IWorkflowStore['listStateDocuments']>(() => {
-      throw new Error('Unexpected listStateDocuments');
-    }),
-    getStateDocuments: mock<IWorkflowStore['getStateDocuments']>(() => {
-      throw new Error('Unexpected getStateDocuments');
-    }),
-    pruneStateRevisions: mock<IWorkflowStore['pruneStateRevisions']>(() => {
-      throw new Error('Unexpected pruneStateRevisions');
-    }),
+    listStateRevisions: mock<IWorkflowStore['listStateRevisions']>(
+      unexpected('listStateRevisions')
+    ),
+    listStateDocuments: mock<IWorkflowStore['listStateDocuments']>(
+      unexpected('listStateDocuments')
+    ),
+    getStateDocuments: mock<IWorkflowStore['getStateDocuments']>(unexpected('getStateDocuments')),
+    pruneStateRevisions: mock<IWorkflowStore['pruneStateRevisions']>(
+      unexpected('pruneStateRevisions')
+    ),
     setToolCallAttention: mock<IWorkflowStore['setToolCallAttention']>(async () => true),
     admitResourceStart: mock<IWorkflowStore['admitResourceStart']>(
       unexpected('admitResourceStart')
@@ -227,6 +223,9 @@ export function createMockStore(): MockWorkflowStore {
     ),
     listQueuedResourceStartsForHost: mock<IWorkflowStore['listQueuedResourceStartsForHost']>(
       unexpected('listQueuedResourceStartsForHost')
+    ),
+    listQueuedItemStarts: mock<IWorkflowStore['listQueuedItemStarts']>(
+      unexpected('listQueuedItemStarts')
     ),
     withdrawQueuedResourceStart: mock<IWorkflowStore['withdrawQueuedResourceStart']>(
       unexpected('withdrawQueuedResourceStart')

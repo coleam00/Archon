@@ -21,6 +21,7 @@ mock.module('./connection', () => ({
 }));
 
 import { currentExecutionOwner, WorkflowNotResumableError } from '@archon/workflows/store';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 import { listResumableRunsByParentConversation, resumeWorkflowRun } from './workflow-run-resume';
 
 describe('workflow run resume', () => {
@@ -141,6 +142,7 @@ describe('workflow run resume', () => {
       await resumeWorkflowRun('workflow-run-123', {
         kind: 'ownerless',
         executionClaim: 'claim-1',
+        lease: testRunOwnerLease('workflow-run-123'),
       });
 
       const [updateQuery, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];

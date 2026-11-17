@@ -1,8 +1,10 @@
 /**
- * The text of an item read (`workflow runs --item`): its runs, links, open questions, and
- * answers with rulings, each oldest first. Built from the same `ItemRead` that `--json` prints.
+ * The text of an item read (`workflow runs --item`): its runs, starts waiting for capacity,
+ * links, open questions, and answers with rulings. Built from the same `ItemRead` that
+ * `--json` prints.
  */
 import type { ItemAnswer, ItemRead, ItemReadLink, ItemRun } from '@archon/workflows/item-read';
+import type { QueuedItemStart } from '@archon/workflows/schemas/resource-start';
 import { answererText, attentionItemLines } from './workflow-attention-text';
 
 /** A recorded time to the minute, or the stored text when it does not parse. */
@@ -72,6 +74,18 @@ function runLines(run: ItemRun): string[] {
 }
 
 /**
+ * One start waiting for capacity. The request id prints in full: it is what
+ * `archon trigger inspect` and `archon trigger withdraw` take.
+ */
+function queuedLine(start: QueuedItemStart): string {
+  const waits =
+    start.ahead === 0
+      ? `next for a free slot on host ${start.hostId}`
+      : `${String(start.ahead)} ahead on host ${start.hostId}`;
+  return `  ${start.requestId}  ${start.workflow ?? '(launch unreadable)'}  on ${start.resource}, ${waits}, queued ${minute(start.queuedAt)}`;
+}
+
+/**
  * One link, read from the item it is printed under: `→` points at what this item depends
  * on, is part of or duplicates; `←` names an item that points at this one.
  */
@@ -107,6 +121,9 @@ export function itemReadLines(read: ItemRead): string[] {
   const lines = [`Item ${read.item.key} (${read.item.projectKey})`, '', 'Runs:'];
   if (read.runs.length === 0) lines.push('  none');
   for (const run of read.runs) lines.push(...runLines(run));
+  lines.push('', 'Waiting for capacity:');
+  if (read.queued.length === 0) lines.push('  none');
+  for (const start of read.queued) lines.push(queuedLine(start));
   lines.push('', 'Links:');
   // Active links first; an ended one stays readable below them.
   const active = read.links.filter(link => link.ended === null);

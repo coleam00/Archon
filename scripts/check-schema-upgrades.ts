@@ -21,12 +21,18 @@
  *   bun run check:schema-upgrades              # default baselines (see below)
  *   bun run check:schema-upgrades v0.7.0 HEAD~50
  *
- * Connection: standard psql env vars (PGHOST/PGPORT/PGUSER/PGPASSWORD), or a
- * DATABASE_URL — its options are honoured but its database name is replaced,
- * since this script creates and drops its own scratch databases.
+ * Connection: the check creates and drops databases, so it only touches a server
+ * someone named for it, and exits 1 before any psql call otherwise. Name one
+ * with PGHOST, PGHOSTADDR, or a DATABASE_URL that carries a host (in the
+ * authority, or as a host/hostaddr parameter). A DATABASE_URL keeps its
+ * options; its database name is replaced. PGPORT, PGUSER, PGPASSWORD and a
+ * hostless DATABASE_URL do not name a server: on their own psql reaches the
+ * default local socket, which is whatever PostgreSQL happens to run on the
+ * machine. The package script passes `--no-env-file`, so a DATABASE_URL in
+ * `.env` is not taken as a name.
  */
 import { spawnSync } from 'child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { defaultBaselines, SCHEMA_REPO_PATH } from './schema-upgrade-baselines';
@@ -55,7 +61,8 @@ function git(...args: string[]): { ok: boolean; stdout: string } {
 
 /**
  * Connection target for one database. With DATABASE_URL set, the URI is passed
- * through with only its database name replaced, so `?sslmode=…` and the rest of
+ * through with only its database name replaced (path and any `dbname`
+ * parameter), so `?sslmode=…` and the rest of
  * the query string survive; otherwise psql reads the standard PG* env vars.
  *
  * One documented libpq shape is not supported: a comma-separated multi-host URI
@@ -75,6 +82,9 @@ function connectionFor(db: string): string {
     );
   }
   u.pathname = `/${db}`;
+  // A `dbname` parameter overrides the path in libpq, which would apply the
+  // schema to a database this script did not create.
+  u.searchParams.delete('dbname');
   return u.toString();
 }
 
@@ -192,6 +202,36 @@ function drop(db: string): void {
 
 function dbNameFor(ref: string): string {
   return `archon_upgrade_${ref.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`;
+}
+
+/**
+ * Why the run must not start, or undefined when a server is named: PGHOST,
+ * PGHOSTADDR, or a DATABASE_URL with a host in its authority or as a
+ * `host`/`hostaddr` parameter. A URI `URL` cannot parse passes here;
+ * connectionFor() refuses it before any psql call.
+ */
+function unnamedServerError(): string | undefined {
+  if (process.env.PGHOST || process.env.PGHOSTADDR) return undefined;
+  const fix =
+    'This check creates and drops databases, so it only runs on a scratch server you name:\n' +
+    '  PGHOST=<host or socket dir> PGUSER=<user> bun run check:schema-upgrades\n' +
+    '  DATABASE_URL=postgres://<user>@<host>:<port>/postgres bun run check:schema-upgrades';
+  const url = process.env.DATABASE_URL;
+  if (!url) return `No PostgreSQL server was named.\n${fix}`;
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (u.hostname || u.searchParams.get('host') || u.searchParams.get('hostaddr')) return undefined;
+  return `DATABASE_URL names no host, so psql would use the default local socket.\n${fix}`;
+}
+
+const unnamed = unnamedServerError();
+if (unnamed) {
+  console.error(unnamed);
+  process.exit(1);
 }
 
 const requested = process.argv.slice(2).filter(a => !a.startsWith('-'));

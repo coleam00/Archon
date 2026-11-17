@@ -1,5 +1,6 @@
 // @archon-test-isolated
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 import type { RunActor } from '../operations/run-authorization';
 import type { ProviderRegistry } from '@archon/provider-contract';
 mock.module('../workflows/branch-launch-source', () => ({
@@ -417,17 +418,18 @@ mock.module('./dispatch/background', () => ({
 
 // The real live owner opens a socket and a lock file keyed by the run id, and every dispatch
 // here shares 'prepared-run-id'. On Windows that socket is a machine-global named pipe.
-const mockRunLiveOwner: RunLiveOwnerModule.RunLiveOwner = {
+const mockRunLiveOwner = (runId: string): RunLiveOwnerModule.RunLiveOwner => ({
+  lease: testRunOwnerLease(runId),
   close: () => Promise.resolve(),
   isStopRequested: () => false,
   registerTerminationPreparation: () => () => undefined,
-};
+});
 const realRunLiveOwner = { ...(await import('../services/run-live-owner')) };
 mock.module('../services/run-live-owner', () => ({
   ...realRunLiveOwner,
-  startRunLiveOwner: mock(() => Promise.resolve(mockRunLiveOwner)),
+  startRunLiveOwner: mock((runId: string) => Promise.resolve(mockRunLiveOwner(runId))),
   withRunLiveOwner: mock<typeof RunLiveOwnerModule.withRunLiveOwner>(
-    async (_runId, _options, body) => body(mockRunLiveOwner)
+    async (runId, _options, body) => body(mockRunLiveOwner(runId))
   ),
 }));
 

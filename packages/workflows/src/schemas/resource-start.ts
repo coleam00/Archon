@@ -143,7 +143,8 @@ export const RUN_ENDED_SOURCE_ACTOR = 'archon-run-ended';
  * that fired, or another source (a schedule, a webhook, an operator's fire).
  */
 export const startCauseSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('run_ended'), runId: z.string() }),
+  /** `sourceInstanceId` is the run-ended arrow that started the run (see `pack-graph`). */
+  z.object({ kind: z.literal('run_ended'), runId: z.string(), sourceInstanceId: z.string() }),
   z.object({ kind: z.literal('run_fired'), runId: z.string(), node: z.string().nullable() }),
   z.object({ kind: z.literal('receipt'), receiptId: z.string(), sourceInstanceId: z.string() }),
 ]);
@@ -155,7 +156,8 @@ export function startCause(receipt: {
   sourceActor: SourceReceiptInput['sourceActor'];
 }): StartCause {
   const actor = receipt.sourceActor;
-  if (actor?.source === RUN_ENDED_SOURCE_ACTOR) return { kind: 'run_ended', runId: actor.id };
+  if (actor?.source === RUN_ENDED_SOURCE_ACTOR)
+    return { kind: 'run_ended', runId: actor.id, sourceInstanceId: receipt.sourceInstanceId };
   if (actor?.source === RUN_SOURCE_ACTOR)
     return { kind: 'run_fired', runId: actor.id, node: actor.display ?? null };
   return { kind: 'receipt', receiptId: receipt.id, sourceInstanceId: receipt.sourceInstanceId };
@@ -205,6 +207,12 @@ export const resourceStartIntentSchema = z
   .strict();
 export type ResourceStartIntent = z.infer<typeof resourceStartIntentSchema>;
 
+/** What a queued or skipped start waits behind: a run holding the slot, or a request ahead. */
+const resourceBlockerSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('run'), id: z.string().uuid() }),
+  z.object({ kind: z.literal('request'), id: z.string().uuid() }),
+]);
+
 export const resourceStartDispositionSchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('admitted'),
@@ -214,20 +222,33 @@ export const resourceStartDispositionSchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('queued'),
     requestId: z.string().uuid(),
-    blocker: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('run'), id: z.string().uuid() }),
-      z.object({ kind: z.literal('request'), id: z.string().uuid() }),
-    ]),
+    blocker: resourceBlockerSchema,
   }),
   z.object({
     status: z.literal('skipped'),
     requestId: z.string().uuid(),
-    blocker: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('run'), id: z.string().uuid() }),
-      z.object({ kind: z.literal('request'), id: z.string().uuid() }),
-    ]),
+    blocker: resourceBlockerSchema,
   }),
 ]);
+/**
+ * A start on an item still waiting for capacity, as the item read lists it. What it waits
+ * behind is `ahead`: the queued starts of the same resource and host with an earlier queue
+ * position, read when the item is read; at 0 it waits for a free slot on `resource`. A drain
+ * admits one host's requests in queue order. It is queue order, not a promise; a start whose
+ * checkout is held is passed over. The blocker a request recorded when it queued is not
+ * listed: drains do not refresh it, so it soon names a start that has ended.
+ * `workflow` is null when the stored launch does not read.
+ */
+export const queuedItemStartSchema = z.object({
+  requestId: z.string(),
+  workflow: z.string().nullable(),
+  resource: z.string(),
+  hostId: z.string(),
+  queuedAt: z.string().datetime(),
+  ahead: z.number().int().nonnegative(),
+});
+export type QueuedItemStart = z.infer<typeof queuedItemStartSchema>;
+
 export const resourceStartRequestStatusSchema = z.union([
   ...resourceStartDispositionSchema.options.map(option => option.shape.status),
   z.literal('withdrawn'),

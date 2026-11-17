@@ -27,6 +27,19 @@ export const operatorHelp: HelpGroup = {
     },
     {
       command: 'pack',
+      subcommand: 'graph',
+      spec: 'pack graph <pack>',
+      description:
+        "Show a pack's stages, their outcomes and the run-ended arrows between them,\neach active in this install or declared and inactive (--json for the read)",
+      scopedFlags: [
+        {
+          spec: '--workflow-source <dir>',
+          description: "Where the pack's workflows are found when it is not in the checkout",
+        },
+      ],
+    },
+    {
+      command: 'pack',
       subcommand: 'bindings',
       spec: 'pack bindings <pack>',
       description:
@@ -112,6 +125,12 @@ export const operatorHelp: HelpGroup = {
       subcommand: 'drain',
       spec: 'trigger drain --host <host-id>',
       description: 'Prepare persisted bindings and admit eligible queued work',
+    },
+    {
+      command: 'trigger',
+      subcommand: 'add',
+      spec: 'trigger add <file>',
+      description: 'Place a trigger file in ARCHON_HOME/triggers without exposing a partial copy',
     },
     {
       command: 'trigger',

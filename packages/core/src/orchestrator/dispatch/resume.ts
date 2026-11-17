@@ -4,7 +4,11 @@ import { inspectResumableRun } from '@archon/workflows/run-resume';
 import { assertRunCredentials } from '@archon/workflows/run-preflight';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { checkedResumeCursor } from '@archon/workflows/store';
+import {
+  checkedResumeCursor,
+  leasedResumeCursor,
+  type RunOwnerLease,
+} from '@archon/workflows/store';
 import { spellWorkflowCommand, type WorkflowDeps } from '@archon/workflows/deps';
 import * as workflowDb from '../../db/workflows';
 import { startRunLiveOwner, withRunLiveOwner } from '../../services/run-live-owner';
@@ -48,7 +52,7 @@ export async function continueForegroundResume(
   const resumeOwner = await startRunLiveOwner(resumableRun.id);
   let resumeOwnerClosed = false;
   try {
-    const admission = await admitResume(scope, input, deps, engine);
+    const admission = await admitResume(scope, input, deps, engine, resumeOwner.lease);
     if (admission === undefined) return;
     if (admission.accepted) {
       await admission.settled;
@@ -67,7 +71,8 @@ async function admitResume(
   scope: DispatchScope,
   input: ForegroundResumeInput,
   deps: WorkflowDeps,
-  engine: InProcessWorkflowEngine
+  engine: InProcessWorkflowEngine,
+  lease: RunOwnerLease
 ): Promise<WorkflowResumeAdmission | undefined> {
   const { platform, conversationId, conversation, codebase, userId, options } = scope;
   const { workflow, resumableRun } = input;
@@ -101,7 +106,7 @@ async function admitResume(
       },
       run: resumableRun,
       // A running run got here only through `resumeWorkflow` (`detectContinuation`).
-      cursor: checkedResumeCursor(resumableRun),
+      cursor: leasedResumeCursor(checkedResumeCursor(resumableRun), lease),
       options: {
         codebaseId: codebase.id,
         source: scope.source,

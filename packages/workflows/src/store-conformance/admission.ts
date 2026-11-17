@@ -24,6 +24,7 @@ import {
   schedule,
   running,
   rejection,
+  testRunOwnerLease,
 } from './fixtures';
 
 export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarness): void {
@@ -65,9 +66,14 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
       expect(await rejection(store.resumeWorkflowRun(id))).toBeInstanceOf(
         WorkflowNotResumableError
       );
-      expect((await store.resumeWorkflowRun(id, ownerlessResumeCursor(before))).status).toBe(
-        'running'
-      );
+      expect(
+        (
+          await store.resumeWorkflowRun(
+            id,
+            ownerlessResumeCursor(before, testRunOwnerLease(before.id))
+          )
+        ).status
+      ).toBe('running');
       // Capacity two: the resumed run holds one slot, so one more start fits and the next queues.
       expect(await store.admitResourceStart(start('queue', 'host', 2))).toMatchObject({
         status: 'admitted',
