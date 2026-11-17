@@ -11,7 +11,10 @@ import {
   type WorktreeSetupExecutor,
 } from '@archon/isolation';
 import {
+  readAsksCheckout,
   readCheckoutHandoff,
+  readResourceStartReceiptId,
+  startCause,
   type CheckoutHandoff,
   type CheckoutHandoffRunMetadata,
   type PreparedWorkflowLaunch,
@@ -21,6 +24,7 @@ import type { OwnedWorktree, WorkflowRun } from '@archon/workflows/schemas/workf
 import { adoptRegisteredWorktree, resolveWorkflowAdoption } from '../operations/workflow-adoption';
 import { ensureIsolationConfigured } from '../orchestrator/dispatch/isolation-resolver';
 import type { Codebase } from '../schemas/codebase';
+import { askingWorktreeGone } from './asks-settled';
 import type { WorkflowHost } from './host-store';
 import { createRegisteredWorktree, type RegisteredWorktreeInput } from './registered-worktree';
 
@@ -135,6 +139,40 @@ async function worktreeLane(
 }
 
 /**
+ * Refuse a hand-off whose branch is gone or moved off the commit the source run ended on.
+ * Both lanes check it: a `copy` would otherwise start on a commit its branch has left.
+ */
+async function assertBranchAtHandoff(codebase: Codebase, handoff: CheckoutHandoff): Promise<void> {
+  // Every worktree of a repository shares its branch refs, so the tip read in the
+  // repository is the one a reused worktree has checked out.
+  let tip: string;
+  try {
+    tip = (
+      await execFileAsync(
+        'git',
+        [
+          '-C',
+          codebase.default_cwd,
+          'rev-parse',
+          '--verify',
+          `refs/heads/${handoff.branch}^{commit}`,
+        ],
+        { timeout: 10000 }
+      )
+    ).stdout.trim();
+  } catch (error) {
+    throw new Error(
+      `Branch '${handoff.branch}' that run '${handoff.runId}' handed on could not be read: ${(error as Error).message}; its hand-off is refused.`,
+      { cause: error }
+    );
+  }
+  if (tip !== handoff.commit)
+    throw new Error(
+      `Branch '${handoff.branch}' is at ${tip.slice(0, 12)} but run '${handoff.runId}' ended at ${handoff.commit.slice(0, 12)}; its hand-off is refused.`
+    );
+}
+
+/**
  * Lay out a `continue` hand-off: the worktree the source run left, or its branch checked
  * out again when that worktree is gone. Refused when the branch is gone or has moved off
  * the commit the source run ended on, so a start never runs on work it was not handed and
@@ -171,25 +209,7 @@ async function continueLane(
     throw new Error(
       `Run '${handoff.runId}' handed on branch '${handoff.branch}', but its checkout is now on '${branch ?? 'no branch'}'; its hand-off is refused.`
     );
-  // Every worktree of a repository shares its branch refs, so the tip read in the
-  // repository is the one a reused worktree has checked out.
-  const tip = (
-    await execFileAsync(
-      'git',
-      [
-        '-C',
-        codebase.default_cwd,
-        'rev-parse',
-        '--verify',
-        `refs/heads/${handoff.branch}^{commit}`,
-      ],
-      { timeout: 10000 }
-    )
-  ).stdout.trim();
-  if (tip !== handoff.commit)
-    throw new Error(
-      `Branch '${handoff.branch}' is at ${tip.slice(0, 12)} but run '${handoff.runId}' ended at ${handoff.commit.slice(0, 12)}; its hand-off is refused.`
-    );
+  await assertBranchAtHandoff(codebase, handoff);
   if (lane.kind === 'reuse-worktree') {
     const env = await adoptRegisteredWorktree(host.records.isolation, lane, codebase.default_cwd);
     return { cwd: env.working_path, envId: env.id };
@@ -213,6 +233,31 @@ async function continueLane(
     envId: created.envId,
     ...(created.ownedWorktree ? { ownedWorktree: created.ownedWorktree } : {}),
   };
+}
+
+/**
+ * A start its asks' answers caused takes the asking run's checkout only while the worktree
+ * that holds it is still there: settling checked it, and a start that runs later checks it
+ * again, so neither lane recreates it from the branch. Other hand-offs may recreate it.
+ */
+async function assertAskingWorktree(
+  host: WorkflowHost,
+  run: Pick<WorkflowRun, 'metadata'>
+): Promise<void> {
+  const receiptId = readResourceStartReceiptId(run.metadata);
+  const receipt = receiptId ? await host.deps.store.getStartReceipt(receiptId) : null;
+  const cause = receipt ? startCause(receipt) : null;
+  if (cause?.kind !== 'asks_settled') return;
+  const asking = await host.deps.store.getWorkflowRun(cause.runId);
+  const recorded = asking ? readAsksCheckout(asking) : undefined;
+  const gone =
+    recorded === undefined || !('handoff' in recorded)
+      ? `run '${cause.runId}', which left the asks, no longer records the checkout it handed on`
+      : askingWorktreeGone(cause.runId, recorded);
+  if (gone !== undefined)
+    throw new Error(
+      `${gone}; its hand-off is refused. Run '${asking?.workflow_name ?? 'the asking workflow'}' again on the item.`
+    );
 }
 
 export interface ExecutionLane {
@@ -239,8 +284,10 @@ export async function executionLane(
   const { run, lane, codebase, platformType, setupExecutor } = input;
   const userId = run.user_id ?? undefined;
   const handoff = readCheckoutHandoff(run);
+  if (handoff) await assertAskingWorktree(host, run);
   if (handoff?.lane === 'continue')
     return continueLane(host, handoff, codebase, platformType, userId, setupExecutor);
+  if (handoff?.lane === 'copy') await assertBranchAtHandoff(codebase, handoff);
   if (lane.kind === 'in-place') return { cwd: input.cwd };
   return worktreeLane(
     host,

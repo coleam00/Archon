@@ -190,6 +190,22 @@ describe('parsePackDeclaration bindings', () => {
     });
   });
 
+  it("reads an asks-settled binding that takes the asking run's checkout and its answers", () => {
+    const declared = parsePackDeclaration(
+      `bindings:\n  build-again:\n    workflow: build\n    resource: build\n    overlap: queue\n    asks_settled: { workflow: build, settled: answered, checkout: asking-run }\n    inputs:\n      decisions: { answers: true }\n      issue: { input: issue }\n`,
+      'p/.pack/pack.yaml'
+    );
+    expect(declared.bindings?.['build-again']).toEqual({
+      workflow: 'build',
+      resource: 'build',
+      resource_scope: 'repo',
+      overlap: 'queue',
+      isolation: { kind: 'default' },
+      asks_settled: { workflow: 'build', settled: 'answered', checkout: 'asking-run' },
+      inputs: { decisions: { answers: true }, issue: { input: 'issue' } },
+    });
+  });
+
   it.each([
     [timer('    inputs:\n      other: { binding: missing }\n'), "names unknown binding 'missing'"],
     [
@@ -198,7 +214,15 @@ describe('parsePackDeclaration bindings', () => {
     ],
     [
       timer('    inputs:\n      v: { result: /verdict }\n'),
-      'only a run-ended binding has an ended run',
+      'only a run-ended or asks-settled binding has a run to read',
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done }\n    inputs:\n      d: { answers: true }\n',
+      'only an asks-settled binding has them',
+    ],
+    [
+      '  build:\n    workflow: build\n    resource: build\n    overlap: queue\n    isolation: { kind: worktree }\n    asks_settled: { workflow: build, settled: answered, checkout: asking-run }\n',
+      "binding 'build' is invalid at 'isolation'",
     ],
     [
       '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: [done, done] }\n',

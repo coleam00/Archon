@@ -1846,11 +1846,15 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
 
   const run = async (
     store: MockWorkflowStore,
-    options: { asks?: boolean; workflowRun?: WorkflowRun } = {}
+    options: {
+      asks?: boolean;
+      workflowRun?: WorkflowRun;
+      asksCheckout?: WorkflowDeps['asksCheckout'];
+    } = {}
   ): Promise<void> => {
     await executeDagWorkflow(
       dagOptions({
-        deps: createMockDeps(store),
+        deps: { ...createMockDeps(store), asksCheckout: options.asksCheckout },
         conversationId: 'conv-asks',
         cwd: testDir,
         workflow: {
@@ -1969,6 +1973,48 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
     const workflow = { name: 'asks-wf', returns: 'decide', result: { asks: 'asks' } };
     const skipped = new Map([['decide', { state: 'skipped', output: '' } as NodeOutput]]);
     expect(readCompletedAsks(workflow, { parent_run_id: null }, skipped)).toEqual({ kind: 'none' });
+  });
+
+  it('records the checkout it leaves for the asks-settled bindings that take it', async () => {
+    const recorded = (store: MockWorkflowStore): unknown =>
+      (store.completeWorkflowRun.mock.calls[0]?.[2] as Record<string, unknown>).asks_checkout;
+    const handoff = { runId: 'asks-run', branch: 'archon/plan', commit: 'b'.repeat(40) };
+    const worktree = '/worktrees/plan';
+
+    mockStructuredResult({ summary: 'done', asks: [anAsk] });
+    const taken = createMockStore();
+    await run(taken, { asksCheckout: async () => ({ handoff, worktree }) });
+    expect(recorded(taken)).toEqual({ handoff, worktree });
+
+    // No binding takes it, or the run leaves no asks to settle: nothing is read or recorded.
+    const untaken = createMockStore();
+    await run(untaken, { asksCheckout: async () => undefined });
+    expect(recorded(untaken)).toBeUndefined();
+    mockStructuredResult({ summary: 'done', asks: [] });
+    const reads: string[] = [];
+    const noAsks = createMockStore();
+    await run(noAsks, {
+      asksCheckout: async ended => {
+        reads.push(ended.id);
+        return { handoff, worktree };
+      },
+    });
+    expect(reads).toEqual([]);
+    expect(recorded(noAsks)).toBeUndefined();
+  });
+
+  it('fails the run naming the reason when its asks-settled triggers cannot be read', async () => {
+    mockStructuredResult({ summary: 'done', asks: [anAsk] });
+    const store = createMockStore();
+    await run(store, {
+      asksCheckout: async () => {
+        throw new Error('Trigger file /home/triggers/build.json is not readable JSON');
+      },
+    });
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun.mock.calls[0]?.[1]).toContain(
+      'Trigger file /home/triggers/build.json is not readable JSON'
+    );
   });
 
   it('opens no asks from a workflow: child, whose asks stay data in its result', async () => {

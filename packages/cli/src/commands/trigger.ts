@@ -61,6 +61,12 @@ export { spawnAdmitted } from '../utils/spawn-admitted';
 type TimerTriggerConfig = TriggerConfig & {
   schedule: NonNullable<TriggerConfig['schedule']>;
 };
+/** The input names a binding maps, for a message that tells the operator what to pass. */
+function mappedNames(inputs: Readonly<Record<string, unknown>> | undefined): string {
+  const names = Object.keys(inputs ?? {});
+  return names.length === 0 ? 'it maps none' : names.join(', ');
+}
+
 function isTimerConfig(config: TriggerConfig): config is TimerTriggerConfig {
   return config.schedule !== undefined;
 }
@@ -208,21 +214,19 @@ async function requestingSourceActor(
 async function inheritedItemKey(
   host: WorkflowHost,
   sourceActor: SourceReceiptInput['sourceActor'],
-  start: { cwd: string; recorded: boolean }
+  cwd: string
 ): Promise<string | undefined> {
   const caller = requestingRun(sourceActor);
-  // A recorded delivery replays with the item of its first acceptance, so only a new
-  // start is judged.
-  if (!caller || start.recorded) return undefined;
+  if (!caller) return undefined;
   const root =
     (await host.deps.store.getRunAncestry(caller.runId)).at(-1) ??
     (await host.deps.store.getWorkflowRun(caller.runId));
   const item = root?.item_id ? await host.deps.store.getItem(root.item_id) : null;
   if (!item) return undefined;
-  const project = await registeredProjectKeyForPath(start.cwd, host.records.codebases);
+  const project = await registeredProjectKeyForPath(cwd, host.records.codebases);
   if (project === null)
     throw new Error(
-      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start's checkout (${start.cwd}) is not a registered project, so it cannot be that item's project. The start cannot inherit the item: pass --item <key> to name its item there, or --no-item to start it on no item.`
+      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start's checkout (${cwd}) is not a registered project, so it cannot be that item's project. The start cannot inherit the item: pass --item <key> to name its item there, or --no-item to start it on no item.`
     );
   if (project !== item.projectKey)
     throw new Error(
@@ -239,27 +243,24 @@ function assertItemOptions(options: TriggerOptions): void {
 
 /**
  * The item a fire's start is on: `--item` first, none with `--no-item`, then the
- * binding's `item` mapping read from `--inputs`, then the calling run's item. A binding
- * that maps its item never inherits one, and a fire whose inputs cannot name the item is
- * refused before anything is recorded. A recorded delivery keeps its first acceptance's
- * item, so only `--item` and `--no-item` are read for it.
+ * binding's `item` mapping read from `--inputs`, then the calling run's item, read through
+ * `inherited` only when nothing before it decides. A binding that maps its item never
+ * inherits one, and a fire whose inputs cannot name the item is refused before anything
+ * is recorded. A recorded delivery keeps its first acceptance's item, so only `--item` and
+ * `--no-item` are read for it.
  */
-async function fireItemKey(
-  host: WorkflowHost,
-  fire: {
-    config: TriggerConfig;
-    explicit: string | undefined;
-    noItem: boolean;
-    eventInputs: Readonly<Record<string, unknown>> | undefined;
-    sourceActor: SourceReceiptInput['sourceActor'];
-    recorded: boolean;
-  }
-): Promise<string | undefined> {
-  const { config, recorded } = fire;
+export async function fireItemKey(fire: {
+  config: TriggerConfig;
+  explicit: string | undefined;
+  noItem: boolean;
+  eventInputs: Readonly<Record<string, unknown>> | undefined;
+  recorded: boolean;
+  inherited: () => Promise<string | undefined>;
+}): Promise<string | undefined> {
+  const { config } = fire;
   if (fire.noItem) return undefined;
-  if (fire.explicit !== undefined || recorded) return fire.explicit;
-  if (config.item === undefined)
-    return inheritedItemKey(host, fire.sourceActor, { cwd: config.binding.launch.cwd, recorded });
+  if (fire.explicit !== undefined || fire.recorded) return fire.explicit;
+  if (config.item === undefined) return fire.inherited();
   const inputs = fire.eventInputs ?? {};
   const mapped = mappedItemKey(
     config.item,
@@ -296,11 +297,15 @@ async function triggerFire(
   }
   assertItemOptions(options);
   const config = await loadFireConfig(options.config);
-  // A fire has no ended run to take the checkout from; starting the stage anyway would
+  // A fire has no ended or asking run to take the checkout from; starting the stage anyway would
   // cut it from the base branch, which is the one place this binding must never run.
   if (config.on?.runEnded?.checkout !== undefined)
     throw new Error(
       `${options.config} takes its checkout from the run that ended (on.runEnded.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on a run's checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <run-id> --item <key>, naming the run that holds the branch: after a read-only check, the run in the check's metadata.checkout_handoff.runId (archon workflow get <check-run-id> --json), not the check.`
+    );
+  if (config.on?.asksSettled?.checkout !== undefined)
+    throw new Error(
+      `${options.config} takes its checkout from the run that left the asks (on.asksSettled.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on that checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <holder-run-id> --item <key>, naming the run that holds the checkout: metadata.asks_checkout.handoff.runId in archon workflow get <asking-run-id> --json, which after a read-only asking stage is the run it was given, not the asking run. When asks_checkout records a refusal, or none, no checkout is left: run the asking workflow again on the item. Pass an --input <name>=<value> for each input the file maps (${mappedNames(config.on.asksSettled.inputs)}): --adopt carries the checkout, not the answers. Read the answers from archon workflow runs --item <key> --json (its answers of kind 'ask' for the asking run) and the asking run's inputs from archon workflow get <asking-run-id> --json.`
     );
   const sourceActor = await requestingSourceActor(host, env);
   // A redelivery keeps the binding snapshot of its first acceptance, so today's users
@@ -312,13 +317,13 @@ async function triggerFire(
     options.deliveryId !== undefined &&
     (await host.deps.store.hasStartReceiptForDelivery(config.sourceInstanceId, options.deliveryId));
   if (!recorded) await assertKnownRunAsUser(host, config);
-  const itemKey = await fireItemKey(host, {
+  const itemKey = await fireItemKey({
     config,
     explicit: options.item,
     noItem: options.noItem === true,
     eventInputs,
-    sourceActor,
     recorded,
+    inherited: () => inheritedItemKey(host, sourceActor, config.binding.launch.cwd),
   });
   const binding = {
     ...config.binding,

@@ -55,7 +55,7 @@ import { WorkflowEventBridge } from './adapters/web/workflow-bridge';
 import { DashboardEventPoller } from './adapters/web/dashboard-event-poller';
 import { PgNotifyListener } from './adapters/web/pg-notify-listener';
 import { AttentionRouter } from './services/attention-router';
-import { hostItemTrackerForge, ItemTracker } from './services/item-tracker';
+import { hostItemTrackerForge, ItemTracker } from '@archon/adapters/item-tracker/item-tracker';
 import { WebPushDestination } from './services/web-push';
 import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
 import { createServerResourceStartHost } from './services/resource-start-hosting';

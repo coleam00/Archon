@@ -56,7 +56,8 @@ if (command === 'forge') {
   else answer({ window: { since: 'a', until: 'b' }, items: [], next: null, args: args.slice(2) });
 } else if (command === 'trigger') {
   const inputs = readFileSync(args[args.indexOf('--inputs') + 1]!, 'utf8');
-  answer({ id: 'receipt-1', args: args.slice(2, 6), bindings: [{ disposition: { status: 'admitted', requestId: 'q', runId: inputs } }] });
+  writeFileSync(${JSON.stringify(join(root, 'trigger.json'))}, JSON.stringify(args.slice(2, -2)));
+  answer({ id: 'receipt-1', bindings: [{ disposition: { status: 'admitted', requestId: 'q', runId: inputs } }] });
 }
 `
   );
@@ -135,6 +136,17 @@ test('trigger.fire hands the binding its inputs in a stable order and returns th
     receiptId: 'receipt-1',
     disposition: { status: 'admitted', requestId: 'q', runId: '{"a":1,"b":2}' },
   });
+});
+
+test('trigger.fire names the item, declines one, or leaves the host to inherit it', () => {
+  const sent = (options: Parameters<typeof trigger.fire>[2]): unknown => {
+    trigger.fire('/bindings/next.json', {}, options);
+    return JSON.parse(readFileSync(join(root, 'trigger.json'), 'utf8'));
+  };
+  const config = ['--config', '/bindings/next.json'];
+  expect(sent({ item: 'item-2' })).toEqual([...config, '--item', 'item-2']);
+  expect(sent({ item: null })).toEqual([...config, '--no-item']);
+  expect(sent({})).toEqual(config);
 });
 
 test('notice sends its text after the labels, and a refusal is the host error', () => {

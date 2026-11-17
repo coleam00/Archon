@@ -54,6 +54,7 @@ import { writeJsonLine } from './utils/stdout';
 import { escapeRunJobIfRequested } from './utils/run-job-escape';
 import { rejectConfigOutsideRun } from './dispatch-guards';
 import { resolveCliExitCode } from './utils/workflow-exit-code';
+import { trackerExit } from './utils/tracker-exit';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 installPipeSafeConsole();
 
@@ -285,6 +286,8 @@ async function runParsedCommand({ values, positionals }: ParsedCliArgs): Promise
     return await reportCommandError(error as Error, json);
   } finally {
     if (showUpdateNotice) printUpdateNotice();
+    // Before the database closes: a run this process changed may owe its item's tracker.
+    await trackerExit.syncIfOwed(forgeTrustedEnv);
     // Flush queued telemetry events before the CLI process exits.
     // Short-lived CLI commands lose buffered events if shutdown() is skipped.
     await shutdownTelemetry();
@@ -391,6 +394,7 @@ async function dispatchCommand(base: CliRouteContext): Promise<number> {
 const NO_GIT_COMMANDS = [
   'state',
   'metrics',
+  'tracker',
   'trigger',
   'version',
   'help',
@@ -483,6 +487,8 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
       return await routes.runState(ctx);
     case 'metrics':
       return await routes.runMetrics(ctx);
+    case 'tracker':
+      return await routes.runTracker(ctx);
     case 'trigger':
       return await routes.runTrigger(ctx);
     case 'version':

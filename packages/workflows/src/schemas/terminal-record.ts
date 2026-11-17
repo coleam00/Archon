@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { gitObjectIdSchema } from './checkout-observation';
 import { fanOutOutcomeSchema } from './fan-out-outcome';
 import { nodeArtifactSchema } from './node-artifact';
 import { nodeFailureKindSchema } from './node-execution';
@@ -39,6 +40,38 @@ export const worktreeDispositionSchema = z.discriminatedUnion('disposition', [
   }),
 ]);
 export type WorktreeDisposition = z.infer<typeof worktreeDispositionSchema>;
+
+/** Run metadata key where a completed run's result commit waits for the record. */
+export const RESULT_COMMIT_METADATA_KEY = 'result_commit';
+/**
+ * The commit a completed run's result holds at (#5769): the commit its checkout was on when
+ * its `returns:` node completed, only when the checkout was clean at that commit then and
+ * still is when the run completes. A result that holds at no commit says why: `dirty` (a
+ * tracked change or an untracked file), `not_git`, `unavailable` (the engine could not read
+ * the checkout, or its backend), `unborn` (no commit yet), `moved` (HEAD moved after the
+ * `returns:` node completed, even to another commit and back, or a run that takes no path
+ * lock is not on the commit it started on or saw HEAD move since its first pass began), `concurrent` (the `returns:` node ran,
+ * or could have run, beside other nodes, which may have moved the checkout while it judged), `unobserved` (no
+ * `returns:` node completed in the pass that completed the run: none is declared, or a
+ * resume replayed it; HEAD or its branch keeps no reflog to show it did not move; or a run that takes no
+ * path lock has no git start commit or start mark recorded, as on a resume).
+ */
+export const resultCommitSchema = z.discriminatedUnion('held', [
+  z.object({ held: z.literal(true), commit: gitObjectIdSchema }),
+  z.object({
+    held: z.literal(false),
+    reason: z.enum([
+      'dirty',
+      'not_git',
+      'unavailable',
+      'unborn',
+      'moved',
+      'concurrent',
+      'unobserved',
+    ]),
+  }),
+]);
+export type ResultCommit = z.infer<typeof resultCommitSchema>;
 
 export const artifactManifestSchema = z.object({
   root: z.string().nullable(),
@@ -116,5 +149,10 @@ export const terminalRecordSchema = z.object({
    * run, only when that worktree is on the run's own generated branch.
    */
   worktree_disposition: worktreeDispositionSchema.optional(),
+  /**
+   * Present only on a completed run recorded since #5769. Absent means the result holds at
+   * no commit: a reader never takes another commit in its place.
+   */
+  result_commit: resultCommitSchema.optional(),
 });
 export type TerminalRecord = z.infer<typeof terminalRecordSchema>;

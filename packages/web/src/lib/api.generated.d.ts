@@ -5971,6 +5971,8 @@ export interface components {
           default?: unknown;
           description?: string;
           result_of?: string;
+          /** @enum {string} */
+          at?: 'checkout';
         };
       };
       returns?: string;
@@ -7960,6 +7962,7 @@ export interface components {
           owner: 'reachable' | 'unreachable' | 'unknown' | null;
         } | null;
         hasResult: boolean;
+        resultCommit: string | null;
       }[];
       queued: {
         requestId: string;
@@ -8518,6 +8521,7 @@ export interface components {
             owner: 'reachable' | 'unreachable' | 'unknown' | null;
           } | null;
           hasResult: boolean;
+          resultCommit: string | null;
         }[];
         queued: {
           requestId: string;
@@ -9923,6 +9927,25 @@ export interface components {
                   | 'check_failed';
                 detail?: string;
               };
+          result_commit?:
+            | {
+                /** @enum {boolean} */
+                held: true;
+                commit: string;
+              }
+            | {
+                /** @enum {boolean} */
+                held: false;
+                /** @enum {string} */
+                reason:
+                  | 'dirty'
+                  | 'not_git'
+                  | 'unavailable'
+                  | 'unborn'
+                  | 'moved'
+                  | 'concurrent'
+                  | 'unobserved';
+              };
         } | null;
         /** @description The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. A loop body node holds its latest round. */
         nodes: {
@@ -10592,10 +10615,16 @@ export interface components {
       }[];
       arrows: (
         | {
-            from: {
-              stage: string;
-              outcome: string;
-            };
+            from:
+              | {
+                  stage: string;
+                  outcome: string;
+                }
+              | {
+                  stage: string;
+                  /** @enum {string} */
+                  settled: 'answered' | 'withdrawn' | 'any';
+                };
             to: string;
             /** @enum {boolean} */
             active: true;
@@ -10610,10 +10639,16 @@ export interface components {
             };
           }
         | {
-            from: {
-              stage: string;
-              outcome: string;
-            };
+            from:
+              | {
+                  stage: string;
+                  outcome: string;
+                }
+              | {
+                  stage: string;
+                  /** @enum {string} */
+                  settled: 'answered' | 'withdrawn' | 'any';
+                };
             to: string;
             /** @enum {boolean} */
             active: false;
