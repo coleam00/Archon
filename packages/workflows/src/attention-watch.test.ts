@@ -1453,6 +1453,39 @@ describe('watchAttentionQueue', () => {
     }
   });
 
+  test('a running row whose project cannot be read does not keep the watch from other runs', async () => {
+    const store = await makeStore();
+    // The scan sees nothing until all three rows exist, so it meets them in one read.
+    let held = true;
+    const failing: IWorkflowStore = Object.create(store);
+    failing.listWorkflowRuns = async options => {
+      const page = await store.listWorkflowRuns(options);
+      return held ? { ...page, runs: [], total: 0 } : page;
+    };
+    failing.getCodebase = async id =>
+      id === 'unreadable'
+        ? Promise.reject(new Error('database unavailable'))
+        : store.getCodebase(id);
+    const stream = await watch(
+      failing,
+      { bookmarkIntervalMs: 0 },
+      { ...host, ownerLoss: async () => ({ observedStatus: 'running' }) }
+    );
+    try {
+      await stream.next(line => line.type === 'ready');
+      // Unreadable rows on both sides of the claim, whichever order the store lists them in.
+      await running(store, 'alpha', 'unreadable');
+      const runId = await running(store);
+      await running(store, 'alpha', 'unreadable');
+      held = false;
+      expect(await stream.next(ofRun(runId, 'owner_lost'))).toMatchObject({
+        observedStatus: 'running',
+      });
+    } finally {
+      await stream.close();
+    }
+  });
+
   test.each(['workflow_started', 'workflow_resumed', 'workflow_unpaused'] as const)(
     'replaying %s after owner loss does not watch the same claim again',
     async eventType => {

@@ -464,7 +464,9 @@ export async function watchAttentionQueue(
 
   // 2. Arm liveness for every run running in scope, at start and on every caught-up read:
   // a claim commits no event, and an owner can die before it writes its first one.
-  const armRunning = async (): Promise<void> => {
+  // A rescan skips a row whose project it cannot read and retries it next tick, so one
+  // unreadable row cannot keep later claims unwatched; at start the failure still stops it.
+  const armRunning = async (rescan = false): Promise<void> => {
     if (host.ownerLoss === undefined) return;
     for (let offset = 0; ; offset += RUNNING_PAGE_LIMIT) {
       const page = await store.listWorkflowRuns({
@@ -474,7 +476,17 @@ export async function watchAttentionQueue(
       });
       for (const run of page.runs) {
         if (closed || isWatched(run)) continue;
-        const project = await runProject(source, run);
+        let project: ProjectRef | null;
+        try {
+          project = await runProject(source, run);
+        } catch (error) {
+          if (!rescan) throw error;
+          getLog().warn(
+            { err: error as Error, runId: run.id },
+            'workflow.attention_watch_run_project_read_failed'
+          );
+          continue;
+        }
         if (isInAttentionScope(project, scope)) arm(run, project);
       }
       if (page.runs.length < RUNNING_PAGE_LIMIT || offset + RUNNING_PAGE_LIMIT >= page.total) break;
@@ -793,7 +805,7 @@ export async function watchAttentionQueue(
       },
       onCaughtUp: async () => {
         await reconcileItemsWithoutRun();
-        await armRunning();
+        await armRunning(true);
         if (Date.now() - lastLineAt >= bookmarkIntervalMs)
           emit({ type: 'bookmark', cursor: position() });
       },
