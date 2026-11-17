@@ -12,7 +12,11 @@ import {
 import type { ForgeAccessCheck } from '@archon/forge/dispatch';
 import type { ItemTrackerConfig } from '@archon/core/config/config-types';
 import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/connection';
-import { openItemAsksForCompletedRun } from '@archon/core/db/item-asks';
+import {
+  listItemAsks,
+  openItemAsksForCompletedRun,
+  withdrawItemAsk,
+} from '@archon/core/db/item-asks';
 import { recordItemRuling, withdrawItemRuling } from '@archon/core/db/item-rulings';
 import { ensureItemInProject } from '@archon/core/db/items';
 import { createWorkflowRun } from '@archon/core/db/workflows';
@@ -308,8 +312,8 @@ test('an item with no tracker reference gets nothing, and its ended runs are not
       )
     ).rows.length;
   const settled = await terminalRows();
-  // One terminal row per run, and the anchor that records the tracker as on.
-  expect(settled).toBe(5);
+  // A terminal and a result row per run, and the anchor that records the tracker as on.
+  expect(settled).toBe(9);
   await tracker.scan();
   expect(await terminalRows()).toBe(settled);
 });
@@ -657,33 +661,102 @@ test('a run that resumes after its result was posted replaces that result when i
   expect(comments[0]).toContain('the `implement` stage completed with outcome `delivered`.');
 });
 
-test('a run that resumes while its failed result is being written shows its new end', async () => {
+for (const written of ['status', 'result'] as const)
+  test(`a run that resumes and ends again while its ${written} comment is written shows its new end`, async () => {
+    const fake = fakeForge();
+    let run = '';
+    let resumed = false;
+    // The resume and the second end commit after the forge applied the write and before
+    // its row is recorded, so no scan sees the run live again.
+    const forge: ItemTrackerForge = {
+      ...fake.forge,
+      upsertComment: async request => {
+        const response = await fake.forge.upsertComment(request);
+        const marker = written === 'status' ? ITEM_STATUS_MARKER : 'archon-item-result';
+        if (!resumed && request.marker.includes(marker)) {
+          resumed = true;
+          await resumeRun(run);
+          await endRun(run, 'completed', 'delivered');
+        }
+        return response;
+      },
+    };
+    const tracker = await activeTracker(forge);
+    run = await startRun('issue-7', 'implement');
+    await endRun(run, 'failed');
+    await tracker.scan();
+    expect(resumed).toBe(true);
+    await tracker.scan();
+    expect(fake.status()?.body).toContain('| implement | completed | delivered |');
+    const comments = newComments(fake);
+    expect(comments.length).toBe(1);
+    expect(comments[0]).toContain('the `implement` stage completed with outcome `delivered`.');
+  });
+
+test('a run that ends after the scan read it as live still gets its result', async () => {
   const fake = fakeForge();
-  let run = '';
-  let resumed = false;
-  // The resume commits after the forge applied the result and before its row is recorded.
+  let late: string | undefined;
+  // Ends the run on issue 7 while the scan writes issue 6, after it read issue 7's runs.
   const forge: ItemTrackerForge = {
     ...fake.forge,
     upsertComment: async request => {
-      const response = await fake.forge.upsertComment(request);
-      if (!resumed && request.marker.includes('archon-item-result')) {
-        resumed = true;
-        await resumeRun(run);
+      if (late && request.subject.ref.number === 6) {
+        await endRun(late, 'completed', 'delivered');
+        late = undefined;
       }
-      return response;
+      return fake.forge.upsertComment(request);
     },
   };
   const tracker = await activeTracker(forge);
-  run = await startRun('issue-7', 'implement');
-  await endRun(run, 'failed');
+  await startRun('issue-6', 'plan');
+  late = await startRun('issue-7', 'implement');
   await tracker.scan();
-  expect(resumed).toBe(true);
+  expect(fake.calls[0]?.subject.ref.number).toBe(6);
+  expect(late).toBeUndefined();
   await tracker.scan();
-  await endRun(run, 'completed', 'delivered');
+  expect(fake.status()?.body).toContain('| implement | completed | delivered |');
+  expect(newComments(fake)).toEqual([
+    expect.stringContaining('the `implement` stage completed with outcome `delivered`.'),
+  ]);
+});
+
+test('a result held back by an open ask is posted once the ask is withdrawn', async () => {
+  const fake = fakeForge();
+  const tracker = await activeTracker(fake.forge);
+  const run = await startRun('issue-7', 'plan');
+  await endRun(run, 'completed', 'asked');
+  await leaveAsk(run);
+  await tracker.scan();
+  expect(newComments(fake).length).toBe(1);
+  const item = await ensureItemInProject(
+    getDatabase().query.bind(getDatabase()),
+    PROJECT,
+    'issue-7'
+  );
+  const [ask] = await listItemAsks(item);
+  if (!ask || 'type' in ask) throw new Error('expected a readable ask');
+  await withdrawItemAsk({ askId: ask.id, ...act });
   await tracker.scan();
   const comments = newComments(fake);
-  expect(comments.length).toBe(1);
-  expect(comments[0]).toContain('the `implement` stage completed with outcome `delivered`.');
+  expect(comments.length).toBe(2);
+  expect(comments[1]).toContain('the `plan` stage completed with outcome `asked`.');
+});
+
+test('a run that cannot be read keeps the item from reading as finished', async () => {
+  const fake = fakeForge();
+  const tracker = await activeTracker(fake.forge);
+  const plan = await startRun('issue-7', 'plan');
+  const unreadable = await startRun('issue-7', 'implement');
+  // A status this binary does not know, as a newer one could write.
+  await getDatabase().query(
+    "UPDATE remote_agent_workflow_runs SET status = 'drafting' WHERE id = $1",
+    [unreadable]
+  );
+  await endRun(plan, 'completed', 'ready');
+  await tracker.scan();
+  await tracker.scan();
+  expect(fake.status()?.body).toContain('could not read 1 of the stages on this item');
+  expect(newComments(fake)).toEqual([]);
 });
 
 test('a run that resumes and ends again between two scans shows its new end', async () => {

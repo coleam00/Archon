@@ -47,9 +47,14 @@ export type StatusRun = Pick<
   'workflow_name' | 'status' | 'outcome' | 'completed_outcome' | 'metadata'
 >;
 
-/** The one status comment of an item: its runs in start order, and where the change is proposed. */
+/**
+ * The one status comment of an item: its runs in start order, and where the change is
+ * proposed. `unreadableRuns` counts runs on the item that could not be read, so the
+ * comment does not claim no stage is in progress while one of them may be.
+ */
 export function renderItemStatus(
   runs: readonly StatusRun[],
+  unreadableRuns: number,
   proposedChange: string | undefined,
   includeUsage: boolean
 ): string {
@@ -67,7 +72,9 @@ export function renderItemStatus(
     ITEM_STATUS_MARKER,
     live
       ? '**Archon** is working on this item.'
-      : '**Archon** has no stage in progress on this item.',
+      : unreadableRuns > 0
+        ? `**Archon** could not read ${String(unreadableRuns)} of the stages on this item, so it cannot say whether one is in progress.`
+        : '**Archon** has no stage in progress on this item.',
     '',
     tableRow(header),
     tableRow(header.map(() => '---')),

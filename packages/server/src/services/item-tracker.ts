@@ -32,16 +32,15 @@ import {
   listTrackerCandidateRuns,
   listTrackerItemsOwingComments,
   listTrackerLedger,
+  listTrackerResultsOwed,
   recordTrackerBaseline,
   runEndStageOwed,
-  TRACKER_RESUMED_KEY,
-  TRACKER_STARTED_KEY,
-  TRACKER_TERMINAL_KEY,
+  TRACKER_RESULT_KEY,
   trackerAskKey,
   trackerRulingKey,
+  trackerStatusKey,
   type TrackerCandidateRun,
   type TrackerRow,
-  type TrackerStatusKey,
 } from '@archon/core/db/item-tracker';
 import {
   hasAnyAttentionNotice,
@@ -66,7 +65,6 @@ import {
 } from './item-tracker-render';
 
 const UPSERT_OPERATION = 'workitem.comment.upsert';
-const RESULT_KEY = 'result';
 
 /** The forge plugin contract as the tracker uses it. Production binds it to `@archon/forge/dispatch`. */
 export interface ItemTrackerForge {
@@ -206,20 +204,30 @@ export class ItemTracker {
 
   /**
    * Each item that may owe a write: one with a live run (it may have paused), a run whose
-   * status comment does not show its current state, or an ask or ruling not yet posted.
+   * status comment does not show its current state, an ask or ruling not yet posted, or
+   * a final result not yet posted.
    */
   private async scanProject(tracked: Tracked, repo: RepoRef): Promise<void> {
     const projectKey = tracked.project.project;
     const candidates = await listTrackerCandidateRuns(projectKey, tracked.destination);
     await this.anchor(tracked, candidates);
-    const owed = await owedRunsByItem(tracked, candidates);
+    const owed = new Map<string, TrackerCandidateRun[]>();
+    for (const run of candidates)
+      if (!run.shown) owed.set(run.itemKey, [...(owed.get(run.itemKey) ?? []), run]);
     const owingComments = await listTrackerItemsOwingComments(projectKey, tracked.destination);
+    const owingResults = (await listTrackerResultsOwed(projectKey, tracked.destination)).map(
+      owing => owing.itemKey
+    );
     const live = candidates.filter(run => !run.terminal).map(run => run.itemKey);
-    for (const itemKey of new Set([...owed.keys(), ...owingComments, ...live])) {
+    for (const itemKey of new Set([...owed.keys(), ...owingComments, ...owingResults, ...live])) {
       const subject = trackerSubject(tracked.project, repo, itemKey);
       const owedRuns = owed.get(itemKey) ?? [];
       if (subject) await this.writeItem(tracked, itemKey, subject, owedRuns);
-      else if (owedRuns.length > 0 || owingComments.includes(itemKey))
+      else if (
+        owedRuns.length > 0 ||
+        owingComments.includes(itemKey) ||
+        owingResults.includes(itemKey)
+      )
         await this.settleUnmapped(tracked, itemKey, owedRuns);
     }
   }
@@ -240,9 +248,9 @@ export class ItemTracker {
   }
 
   /**
-   * An item with no tracker subject gets nothing. Its ended runs, asks and rulings are
-   * recorded as shown, so the scan stays bounded and adding a key rule later cannot post
-   * on them.
+   * An item with no tracker subject gets nothing. Its ended runs, results, asks and
+   * rulings are recorded as shown, so the scan stays bounded and adding a key rule later
+   * cannot post on them.
    */
   private async settleUnmapped(
     tracked: Tracked,
@@ -253,17 +261,29 @@ export class ItemTracker {
     const rows: TrackerRow[] = [
       ...owedRuns
         .filter(run => run.terminal)
-        .map(run => ({ runId: run.id, key: TRACKER_TERMINAL_KEY })),
+        .map(run => ({ runId: run.id, key: trackerStatusKey('terminal', run.resumes) })),
       ...(facts ? facts.comments.map(comment => comment.row) : []),
     ];
     for (const row of rows) await this.record(tracked, row, true);
+    // Read after the status rows, which the result is owed from.
+    const owed = await this.resultOwed(tracked, itemKey);
+    if (owed) await this.record(tracked, { runId: owed, key: TRACKER_RESULT_KEY }, true);
+  }
+
+  private async resultOwed(tracked: Tracked, itemKey: string): Promise<string | undefined> {
+    const [owed] = await listTrackerResultsOwed(
+      tracked.project.project,
+      tracked.destination,
+      itemKey
+    );
+    return owed?.runId;
   }
 
   /**
    * Write what the item's tracker subject is owed: the status comment when a run's state
    * changed, a new comment for each question, ask and ruling not posted yet, and the
-   * result when the work is over. A run's status row is recorded only once its result,
-   * when it has one, is posted, so a failed result write is retried.
+   * result when the work is over. The result is owed from the status rows, so it is read
+   * after they are recorded, and stays owed until it is posted.
    */
   private async writeItem(
     tracked: Tracked,
@@ -274,45 +294,48 @@ export class ItemTracker {
     const facts = await itemFacts(tracked, itemKey);
     if (!facts) return;
     const { itemId, runs, comments } = facts;
-    const prUrl = owedRuns.length > 0 ? await proposedChange(runs.map(run => run.id)) : undefined;
+    let prUrl: Promise<string | undefined> | undefined;
+    const proposed = (): Promise<string | undefined> =>
+      (prUrl ??= proposedChange(runs.map(run => run.id)));
     const write = (comment: TrackerComment): Promise<boolean> =>
       this.writeComment(tracked, itemId, subject, comment);
-    if (
-      owedRuns.length > 0 &&
-      !(await write({
-        marker: ITEM_STATUS_MARKER,
-        body: renderItemStatus(runs, prUrl, this.config.includeUsage),
-      }))
-    )
-      return;
+    if (owedRuns.length > 0) {
+      const body = renderItemStatus(
+        runs,
+        facts.unreadableRuns,
+        await proposed(),
+        this.config.includeUsage
+      );
+      if (!(await write({ marker: ITEM_STATUS_MARKER, body }))) return;
+      await this.recordShown(tracked, owedRuns, runs);
+    }
     for (const { comment, row } of comments)
       if (await write(comment)) await this.record(tracked, row);
-    const result = await finalResult(owedRuns, facts);
-    if (result) {
-      if (!(await write(renderResult(result, prUrl, this.config.includeUsage)))) return;
-      await this.record(tracked, { runId: result.id, key: RESULT_KEY });
-    }
-    if (owedRuns.length > 0) await this.recordShown(tracked, owedRuns, runs);
+    const owed = await this.resultOwed(tracked, itemKey);
+    const result = owed === undefined ? undefined : await finalResult(owed, facts);
+    if (result && (await write(renderResult(result, await proposed(), this.config.includeUsage))))
+      await this.record(tracked, { runId: result.id, key: TRACKER_RESULT_KEY });
   }
 
   /**
-   * Record the state each run was shown in; an unreadable run, which the comment cannot
-   * show, is recorded in the state the candidate read saw so it is not retried.
+   * Record the state the status comment showed each owed run in, naming the resume count
+   * the candidate read saw. That read came before the comment's, so a resume it missed
+   * leaves the row naming an earlier end and the run owed. An unreadable run, which the
+   * comment cannot show, is recorded in the state the candidate read saw so it is not
+   * retried.
    */
   private async recordShown(
     tracked: Tracked,
     owedRuns: readonly TrackerCandidateRun[],
     runs: readonly WorkflowRun[]
   ): Promise<void> {
-    const shown = new Map<string, TrackerStatusKey>(
-      owedRuns.map(run => [run.id, statusKey(run.terminal)] as const)
-    );
-    for (const run of runs) shown.set(run.id, statusKey(isTerminalRunStatus(run.status)));
-    const latest = latestTrackerStatusKeys(
-      await listTrackerLedger([...shown.keys()], tracked.destination)
-    );
-    for (const [runId, key] of shown)
-      if (latest.get(runId) !== key) await this.record(tracked, { runId, key });
+    const statuses = new Map(runs.map(run => [run.id, run.status] as const));
+    for (const run of owedRuns) {
+      const status = statuses.get(run.id);
+      const terminal = status === undefined ? run.terminal : isTerminalRunStatus(status);
+      const key = trackerStatusKey(terminal ? 'terminal' : 'started', run.resumes);
+      await this.record(tracked, { runId: run.id, key });
+    }
   }
 
   /** A baseline row records a fact as shown without anything having been written. */
@@ -421,25 +444,6 @@ export class ItemTracker {
   }
 }
 
-/** The project's runs whose status comment does not show their current state, by item key. */
-async function owedRunsByItem(
-  tracked: Tracked,
-  candidates: readonly TrackerCandidateRun[]
-): Promise<Map<string, TrackerCandidateRun[]>> {
-  const latest = latestTrackerStatusKeys(
-    await listTrackerLedger(
-      candidates.map(run => run.id),
-      tracked.destination
-    )
-  );
-  const owedByItem = new Map<string, TrackerCandidateRun[]>();
-  for (const run of candidates) {
-    if (latest.get(run.id) === statusKey(run.terminal)) continue;
-    owedByItem.set(run.itemKey, [...(owedByItem.get(run.itemKey) ?? []), run]);
-  }
-  return owedByItem;
-}
-
 interface OwedComment {
   comment: TrackerComment;
   row: TrackerRow;
@@ -448,9 +452,11 @@ interface OwedComment {
 interface ItemFacts {
   itemId: string;
   runs: WorkflowRun[];
+  /** Runs on the item that could not be read; the status comment cannot show them. */
+  unreadableRuns: number;
   openAsks: StoredItemAsk[];
-  /** `runId|key` of every row the destination recorded on the item's runs. */
-  posted: Set<string>;
+  /** An ask on the item could not be read, so whether it is open is unknown. */
+  unreadableAsk: boolean;
   /** The question, ask and ruling comments not posted yet. */
   comments: OwedComment[];
 }
@@ -461,25 +467,18 @@ const postedKey = (row: TrackerRow): string => `${row.runId}|${row.key}`;
 async function itemFacts(tracked: Tracked, itemKey: string): Promise<ItemFacts | undefined> {
   const found = await getItemRuns(tracked.project.project, itemKey);
   if (!found) return undefined;
-  const { values: runs } = splitAttentionRead(found.runs);
+  const { values: runs, degraded: unreadable } = splitAttentionRead(found.runs);
   const [asks, rulings] = await Promise.all([
     listItemAsks(found.item.id),
     listItemRulings(found.item.id),
   ]);
-  const openAsks = splitAttentionRead(asks).values.filter(ask => ask.closed === null);
+  const readAsks = splitAttentionRead(asks);
+  const openAsks = readAsks.values.filter(ask => ask.closed === null);
   const ledger = await listTrackerLedger(
     [...new Set([...runs.map(run => run.id), ...openAsks.map(ask => ask.runId)])],
     tracked.destination
   );
-  const posted = new Set<string>();
-  for (const row of ledger) {
-    // A run that resumed or was shown live after its result was posted owes its result
-    // again. Both keys count: a resume committed while the result was being written
-    // lands before that result's row, and only the next `started` row follows it.
-    if (row.key === TRACKER_RESUMED_KEY || row.key === TRACKER_STARTED_KEY)
-      posted.delete(postedKey({ ...row, key: RESULT_KEY }));
-    posted.add(postedKey(row));
-  }
+  const posted = new Set(ledger.map(postedKey));
   const comments: OwedComment[] = [
     ...questionComments(runs),
     ...openAsks.map(ask => ({
@@ -498,7 +497,14 @@ async function itemFacts(tracked: Tracked, itemKey: string): Promise<ItemFacts |
       if (!postedKeys.has(key))
         comments.push({ comment: renderRuling(ruling), row: { runId: anchor, key } });
     }
-  return { itemId: found.item.id, runs, openAsks, posted, comments };
+  return {
+    itemId: found.item.id,
+    runs,
+    unreadableRuns: unreadable.length,
+    openAsks,
+    unreadableAsk: readAsks.degraded.length > 0,
+    comments,
+  };
 }
 
 /** The question each run paused at a gate or an attention wait asks. */
@@ -528,42 +534,21 @@ async function openQuestionRows(tracked: Tracked): Promise<TrackerRow[]> {
 }
 
 /**
- * The run whose end is the end of the work on the item, or undefined while work remains:
- * the last run in start order that just ended, when no run on the item is live, no ask is
- * open and no run's end started a next stage that has no run yet.
+ * The owed result's run, when the work on the item is over: every run on it is readable
+ * and has ended, no ask is open, and no run's end started a next stage that has no run
+ * yet.
  */
 async function finalResult(
-  owedRuns: readonly TrackerCandidateRun[],
-  { runs, openAsks, posted }: ItemFacts
+  runId: string,
+  { runs, unreadableRuns, openAsks, unreadableAsk }: ItemFacts
 ): Promise<WorkflowRun | undefined> {
-  const endedNow = new Set(owedRuns.filter(run => run.terminal).map(run => run.id));
-  const ended = runs.filter(run => endedNow.has(run.id));
-  const last = ended.at(-1);
-  if (!last || openAsks.length > 0) return undefined;
-  if (runs.some(run => !isTerminalRunStatus(run.status))) return undefined;
-  if (posted.has(postedKey({ runId: last.id, key: RESULT_KEY }))) return undefined;
+  const run = runs.find(candidate => candidate.id === runId);
+  if (!run || unreadableRuns > 0 || unreadableAsk || openAsks.length > 0) return undefined;
+  if (runs.some(other => !isTerminalRunStatus(other.status))) return undefined;
   // Any ended run can own the owed stage: with overlapping runs, the one that ended last
   // need not be the one that started last.
-  if (await runEndStageOwed(runs.map(run => run.id))) return undefined;
-  return last;
-}
-
-function statusKey(terminal: boolean): TrackerStatusKey {
-  return terminal ? TRACKER_TERMINAL_KEY : TRACKER_STARTED_KEY;
-}
-
-type LatestStatus = TrackerStatusKey | typeof TRACKER_RESUMED_KEY;
-
-/**
- * Each run's latest status row or resume; the ledger arrives in event order. A resume
- * matches neither status, so the run's status is owed again.
- */
-function latestTrackerStatusKeys(ledger: readonly TrackerRow[]): Map<string, LatestStatus> {
-  const latest = new Map<string, LatestStatus>();
-  for (const { runId, key } of ledger)
-    if (key === TRACKER_STARTED_KEY || key === TRACKER_TERMINAL_KEY || key === TRACKER_RESUMED_KEY)
-      latest.set(runId, key);
-  return latest;
+  if (await runEndStageOwed(runs.map(other => other.id))) return undefined;
+  return run;
 }
 
 /**
