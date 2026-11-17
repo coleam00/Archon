@@ -426,19 +426,21 @@ export type ResourceStartBindingIntent = z.infer<typeof resourceStartBindingInte
  * each remote's reason and remedy. Older binaries read this stored shape, so `reason` is a
  * string, not the engine's union, and unknown keys are stripped rather than refused.
  */
+const forgeRefusalFailureSchema = z.object({
+  /** The git remote's name, never its URL: a URL can carry a credential. */
+  remote: z.string().optional(),
+  reason: z.string(),
+  message: z.string(),
+  /** The declared capabilities the plugin does not advertise. */
+  unsupported: z.array(z.string()).readonly().optional(),
+  /** The operator's next step, from the plugin or forge, or the engine's own. */
+  remedy: z.string().optional(),
+});
+export type ForgeRefusalFailure = z.infer<typeof forgeRefusalFailureSchema>;
+
 export const forgeRefusalSchema = z.object({
   pack: z.string(),
-  failures: z
-    .array(
-      z.object({
-        remote: z.string().optional(),
-        reason: z.string(),
-        message: z.string(),
-        unsupported: z.array(z.string()).readonly().optional(),
-        remedy: z.string().optional(),
-      })
-    )
-    .readonly(),
+  failures: z.array(forgeRefusalFailureSchema).readonly(),
 });
 export type ForgeRefusal = z.infer<typeof forgeRefusalSchema>;
 

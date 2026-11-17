@@ -24,6 +24,7 @@ import { RUN_GITHUB_IDENTITY_HANDOFF_ENV } from '@archon/paths/github-token-env'
 import type { WorkflowEnvironment } from './deps';
 import { resolveWorkflowGithubEnvironment, type WorkflowGithubDeps } from './run-credential-env';
 import type { WorkflowPack } from './schemas/pack-settings';
+import type { ForgeRefusalFailure } from './schemas/resource-start';
 
 const log = createLogger('workflow.run-forge-access');
 
@@ -40,16 +41,10 @@ export type ForgeRequirementReason =
   | ForgeAccessRefusalKind
   | 'check_failed';
 
-export interface ForgeRequirementFailure {
-  /** The git remote's name, never its URL: a URL can carry a credential. */
-  readonly remote?: string;
-  readonly reason: ForgeRequirementReason;
-  readonly message: string;
-  /** The declared capabilities the plugin does not advertise. */
-  readonly unsupported?: readonly string[];
-  /** The operator's next step, from the plugin or forge, or the engine's own. */
-  readonly remedy?: string;
-}
+/** The stored failure, with `reason` narrowed to the reasons this engine produces. */
+export type ForgeRequirementFailure = Readonly<
+  Omit<ForgeRefusalFailure, 'reason'> & { reason: ForgeRequirementReason }
+>;
 
 export class ForgeRequirementError extends Error {
   constructor(
@@ -270,8 +265,9 @@ export function forgeCheckFailure(
     return {
       reason: 'check_failed',
       message: unansweredCheck(stdout, ended),
-      // The remote stays a placeholder: its URL can carry a credential, and this is stored.
-      remedy: `Run \`archon forge check --json --data '${JSON.stringify({ remote: '<url>', operations })}'\` in the project, with the remote's URL for <url>, to see what it reports.`,
+      // The remote stays a placeholder and goes in a file, not argv: its URL can carry a
+      // credential, and this remedy is stored.
+      remedy: `Write \`${JSON.stringify({ remote: '<url>', operations })}\` to a private file, with the remote's URL for <url>, and run \`archon forge check --json --data-file <file>\` in the project to see what it reports.`,
     };
   }
   if (answer.data.ok) return undefined;

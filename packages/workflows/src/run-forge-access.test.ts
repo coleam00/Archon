@@ -227,12 +227,12 @@ describe('forgeCheckFailure', () => {
     const stopped = forgeCheckFailure('', { exitCode: null, signalCode: 'SIGTERM' }, ops);
     expect(stopped).toMatchObject({ reason: 'check_failed' });
     expect(stopped?.message).toContain('SIGTERM');
-    for (const stdout of ['', 'token=ghp_secret not json'])
-      expect(forgeCheckFailure(stdout, exited(3), ops)).toMatchObject({ reason: 'check_failed' });
+    expect(forgeCheckFailure('', exited(3), ops)).toMatchObject({ reason: 'check_failed' });
     const garbled = forgeCheckFailure('token=ghp_secret not json', exited(3), ops);
     expect(garbled?.message).toContain('3');
     expect(JSON.stringify(garbled)).not.toContain('ghp_secret');
-    expect(garbled?.remedy).toContain('archon forge check');
+    expect(garbled).toMatchObject({ reason: 'check_failed' });
+    expect(garbled?.remedy).toContain('--data-file');
     expect(garbled?.remedy).toContain('pr.view');
   });
 });
