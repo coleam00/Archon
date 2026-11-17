@@ -27,7 +27,29 @@ export const DEFAULT_NODE_MAX_RETRIES = 2;
 export const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
 
 /** Which failures a node's retry policy re-runs; `transient` when `retry.on_error` is absent. */
-type RetryOnError = NonNullable<StepRetryConfig['on_error']>;
+export type RetryOnError = NonNullable<StepRetryConfig['on_error']>;
+
+/**
+ * Whether a node's `on_error` selects this retry class. The one decision both the node
+ * retry loop and a `loop:` iteration's retry read, so the two cannot disagree. `on_error`
+ * is a ladder: `transient` selects the transient, rate-limit and capacity classes;
+ * `schema_unmet` adds a final output that did not meet its schema; `all` adds `unknown`.
+ * `fatal` is never selected.
+ */
+export function onErrorSelects(retryClass: RetryClass, onError: RetryOnError): boolean {
+  switch (retryClass) {
+    case 'fatal':
+      return false;
+    case 'transient':
+    case 'rate_limited':
+    case 'overloaded':
+      return true;
+    case 'schema_unmet':
+      return onError !== 'transient';
+    case 'unknown':
+      return onError === 'all';
+  }
+}
 
 /**
  * Get effective retry config for a DAG node.
@@ -73,10 +95,9 @@ export function getExplicitNodeRetryConfig(
  *
  * Shared by {@link runNodeRetryLoop} for every node type so the retry decision
  * cannot drift. The class comes from {@link retryClassOf}: the kind recorded where
- * the node failed decides, never its error text. `on_error` is a ladder: `transient`
- * retries the transient, rate-limit and capacity classes; `schema_unmet` adds a final
- * output that did not meet its schema; `all` adds `unknown`. Fatal failures (credentials,
- * quota and spend windows, config errors, cancellation) are never retried.
+ * the node failed decides, never its error text, and {@link onErrorSelects} decides
+ * whether the node's `on_error` re-runs it. Fatal failures (credentials, quota and
+ * spend windows, config errors, cancellation) are never retried.
  */
 export function retryableFailureClass(
   output: NodeOutput,
@@ -90,10 +111,7 @@ export function retryableFailureClass(
   // in the type: its stdout is deterministically wrong, so no class re-runs it.
   if (output.retryable === false) return undefined;
   const retryClass = retryClassOf(output.failureKind);
-  if (retryClass === 'fatal') return undefined;
-  if (retryClass === 'schema_unmet' && onError === 'transient') return undefined;
-  if (retryClass === 'unknown' && onError !== 'all') return undefined;
-  return retryClass;
+  return onErrorSelects(retryClass, onError) ? retryClass : undefined;
 }
 
 /**

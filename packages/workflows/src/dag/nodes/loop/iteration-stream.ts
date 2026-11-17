@@ -212,9 +212,9 @@ async function runReaskAttempts(
     // ── Structured-output gate for this attempt ───────────────────────────
     // No `output_format` declared: one attempt, nothing to validate.
     if (!wantsStructured) return reply(attempt, undefined);
-    const verdict = await gateStructuredAttempt(run, state, i, attempt, reask, maxReasks);
+    const verdict = await gateStructuredAttempt(run, state, i, attempt, reask, maxReasks, retry);
     if (verdict.kind === 'accepted') return reply(attempt, verdict.payload);
-    if (verdict.kind === 'failed') return verdict;
+    if (verdict.kind === 'failed' || verdict.kind === 'retry') return verdict;
     reask.attempt++;
     reask.errors = verdict.errors;
   }

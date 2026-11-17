@@ -867,7 +867,7 @@ YAML declares the engine-visible coordination condition; computation stays in a 
 
 **Deterministic nodes** (`bash:`, `script:`) do **not** auto-retry: they run exactly once unless you add an explicit `retry:` block. This keeps side-effectful scripts (deploys, `gh` mutations, external CLIs) from being silently re-run on a transient-looking failure; opt in per node when re-running is safe. `loop_group:` does not accept `retry:`; configure retries on its body nodes.
 
-A `loop:` policy retries the failed iteration, without advancing `max_iterations` or replaying earlier iterations. Its retry budget resets after each successful iteration. Without a declaration, it keeps the same defaults as other AI nodes. Loops accept only omitted `on_error` or `transient`; `on_error: schema_unmet` and `on_error: all` are rejected, so unknown, fatal, schema-unmet and output-contract failures never gain retries. A loop iteration whose output misses its schema is still recorded as `schema_unmet`. A body node inside a `loop_group:` takes the ordinary node policy and can opt in.
+A `loop:` policy retries the failed iteration, without advancing `max_iterations` or replaying earlier iterations. Its retry budget resets after each successful iteration. Without a declaration, it keeps the same defaults as other AI nodes. Loops accept omitted `on_error`, `transient` or `schema_unmet`; `on_error: all` is rejected, so unknown, fatal and output-contract failures never gain retries. With `on_error: schema_unmet`, an iteration whose output did not meet its schema runs again.
 
 To enable or customise retry, add a `retry:` block:
 
@@ -918,7 +918,7 @@ nodes:
 |-------|------|--------------------|-------------|-------------|
 | `max_attempts` | number | `2` | 1–5 | Number of retry attempts (not including the initial attempt). `1` = one retry (2 total attempts). No default on `bash:`/`script:`: omitting `retry:` means a single attempt |
 | `delay_ms` | number | `3000` | 0–60000 on loops; 1000–60000 otherwise | Base delay in ms before the first retry. Doubles each attempt (exponential backoff) |
-| `on_error` | `'transient'` \| `'schema_unmet'` \| `'all'` | `'transient'` | | Which errors trigger a retry; each value retries everything the one before it does. Loops accept only `'transient'` or omission. `'transient'` = transient, rate-limited and capacity failures and timeouts only. `'schema_unmet'` = also a final output that did not meet its `output_format` schema. `'all'` = also unknown failures, including any non-zero `bash:`/`script:` exit (FATAL failures such as auth, config errors and cancellation are never retried regardless) |
+| `on_error` | `'transient'` \| `'schema_unmet'` \| `'all'` | `'transient'` | | Which errors trigger a retry; each value retries everything the one before it does. Loops accept `'transient'`, `'schema_unmet'` or omission. `'transient'` = transient, rate-limited and capacity failures and timeouts only. `'schema_unmet'` = also a final output that did not meet its `output_format` schema. `'all'` = also unknown failures, including any non-zero `bash:`/`script:` exit (FATAL failures such as auth, config errors and cancellation are never retried regardless) |
 
 ### Error Classification
 
@@ -960,7 +960,7 @@ Archon puts a failure it detects itself in a bucket by its kind:
 | A timeout: an AI node's `idle_timeout`, or a `bash:`/`script:` node's `timeout` | TRANSIENT | Yes. Each retry of a hung AI node can wait another full `idle_timeout` |
 | An AI provider stream that ends without any output | TRANSIENT | Yes |
 | A `bash:`/`script:` node that exits non-zero or cannot start | UNKNOWN | No (unless `on_error: all`). What the script printed does not matter |
-| An AI node's or `loop:` iteration's structured output that fails its `output_format` after reasks, or no schema-valid structured output at all | SCHEMA_UNMET | No (unless `on_error: schema_unmet` or `all`; a `loop:` cannot opt in) |
+| An AI node's or `loop:` iteration's structured output that fails its `output_format` after reasks, or no schema-valid structured output at all | SCHEMA_UNMET | No (unless `on_error: schema_unmet` or `all`) |
 | A `bash:`/`script:` node's stdout that fails its `output_format` | no bucket | Never |
 | A config error: a missing command file, a bad input reference, an `output_format` that cannot compile | FATAL | Never |
 | A cancelled node | FATAL | Never |

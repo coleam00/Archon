@@ -28,5 +28,6 @@ export type StepRetryConfig = z.infer<typeof stepRetryConfigSchema>;
 
 export const loopRetryConfigSchema = stepRetryConfigSchema.extend({
   delay_ms: retryDelaySchema.min(0, "'retry.delay_ms' must not be negative").optional(),
-  on_error: z.literal('transient').optional(),
+  // A loop iteration never retries `unknown`; every other value is the node's own.
+  on_error: stepRetryConfigSchema.shape.on_error.unwrap().exclude(['all']).optional(),
 });

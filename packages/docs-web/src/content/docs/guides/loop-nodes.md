@@ -608,7 +608,7 @@ nodes:
 
 `max_attempts` is required when declaring `retry:` and accepts integers 1–5, counting retries after the initial attempt. `delay_ms` accepts 0–60000 on loops and defaults to 3000 when omitted. Zero skips ordinary transient retry waits. The budget resets for each iteration; retries do not consume `max_iterations`.
 
-Only `on_error: transient` or omission is supported on loops; `schema_unmet` and `all` are load errors. Unknown, fatal, schema-unmet and output-contract failures are not retried by this policy. Structured-output reasks have their own separate budget.
+Loops support `on_error: transient`, `on_error: schema_unmet` or omission; `all` is a load error. `schema_unmet` also retries an iteration whose output did not meet its `output_format` schema. Unknown, fatal and output-contract failures are not retried by this policy. Structured-output reasks have their own separate budget.
 
 Rate limits and capacity retain the shared AI-node exceptions: at least five retries, regardless of `max_attempts`. Rate limits wait around 45 seconds with ±50% jitter and keep the larger budget for the rest of the iteration. Capacity waits use centers of 45, 90, 180, 300 and 300 seconds with ±50% jitter; its larger budget applies only while the current failure is capacity. `delay_ms: 0` does not bypass either schedule. See [Retry Configuration](/reference/workflow-language/#retry-configuration).
 

@@ -4,6 +4,7 @@ import type { NodeFailureKind } from '../../../schemas/node-execution';
 import { validateStructuredOutput } from '../../../structured-output';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { retryClassOf, getRetryDelayMs, effectiveRetryMaxRetries } from '../../../executor-shared';
+import { onErrorSelects } from '../../retry';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { rejectedArtifactPointer } from '../../node-output';
@@ -61,7 +62,7 @@ export async function retryOrFail(
   failure: IterationFailure,
   retry: IterationRetry
 ): Promise<AttemptVerdict> {
-  if (await tryIterationTransientRetry(run, i, failure, retry)) return { kind: 'retry' };
+  if (await tryIterationRetry(run, i, failure, retry)) return { kind: 'retry' };
   return failed(
     await failLoopNode(
       run.ctx,
@@ -81,7 +82,7 @@ export async function retryOrFail(
   );
 }
 
-async function tryIterationTransientRetry(
+async function tryIterationRetry(
   run: LoopRun,
   i: number,
   failure: IterationFailure,
@@ -90,8 +91,7 @@ async function tryIterationTransientRetry(
   const { ctx, node } = run;
   const retryClass = retryClassOf(failure.failureKind);
   if (retryClass === 'rate_limited') retry.sawRateLimit = true;
-  if (retryClass !== 'transient' && retryClass !== 'rate_limited' && retryClass !== 'overloaded')
-    return false;
+  if (!onErrorSelects(retryClass, run.retryConfig.onError)) return false;
   const message = failure.error;
   const maxRetries = effectiveRetryMaxRetries(
     run.retryConfig.maxRetries,
@@ -115,7 +115,7 @@ async function tryIterationTransientRetry(
   await safeSendMessage(
     ctx.platform,
     ctx.conversationId,
-    `⚠️ Loop \`${node.id}\` iteration ${String(i)} failed with ${retryClass === 'overloaded' ? 'a provider capacity error' : 'a transient error'} (attempt ${String(retry.attempt + 1)}/${String(maxRetries + 1)}). Retrying in ${String(Math.round(delayMs / 1000))}s...`,
+    `⚠️ Loop \`${node.id}\` iteration ${String(i)} failed with ${iterationRetryKind(retryClass)} (attempt ${String(retry.attempt + 1)}/${String(maxRetries + 1)}). Retrying in ${String(Math.round(delayMs / 1000))}s...`,
     run.msgContext
   );
   await ctx.deps.store.createWorkflowEvent({
@@ -133,6 +133,12 @@ async function tryIterationTransientRetry(
   });
   await waitForNodeRetry(ctx.deps.store, ctx.workflowRun.id, node.id, delayMs);
   return true;
+}
+
+function iterationRetryKind(retryClass: ReturnType<typeof retryClassOf>): string {
+  if (retryClass === 'overloaded') return 'a provider capacity error';
+  if (retryClass === 'schema_unmet') return 'output that did not meet its schema';
+  return 'a transient error';
 }
 
 /** A stream that ended cancelled, empty or unsettled; undefined when it finished. */
@@ -247,6 +253,7 @@ function unsettledFailure(
 type StructuredVerdict =
   | { kind: 'accepted'; payload: unknown }
   | { kind: 'reask'; errors: string[] }
+  | { kind: 'retry' }
   | IterationFailed;
 
 export async function gateStructuredAttempt(
@@ -255,7 +262,8 @@ export async function gateStructuredAttempt(
   i: number,
   attempt: StreamedAttempt,
   reask: Reask,
-  maxReasks: number
+  maxReasks: number,
+  retry: IterationRetry
 ): Promise<StructuredVerdict> {
   const { ctx, node } = run;
   // An idle timeout, operator cutoff or user abort is a genuine failure, not a validation
@@ -263,11 +271,14 @@ export async function gateStructuredAttempt(
   const canReask = reask.attempt < maxReasks && !attempt.cutOff && !attempt.abort.signal.aborted;
 
   if (attempt.structured !== undefined) {
-    return gateStructuredPayload(run, state, i, attempt.structured, {
-      canReask,
-      nextReask: reask.attempt + 1,
-      maxReasks,
-    });
+    return gateStructuredPayload(
+      run,
+      state,
+      i,
+      attempt.structured,
+      { canReask, nextReask: reask.attempt + 1, maxReasks },
+      retry
+    );
   }
 
   // No structured payload at all (prose / refusal / parse miss / timeout).
@@ -278,22 +289,21 @@ export async function gateStructuredAttempt(
   if (canReask) return { kind: 'reask', errors: ['no JSON object was found in the response'] };
   // Report the real cause: a timeout produces no payload either, and calling
   // that "the model replied with prose" would send the author down the wrong path.
+  const cutOff = attempt.cutOff;
+  const timedOut = cutOff?.kind === 'idle_timeout';
+  const error = timedOut
+    ? `Loop node '${node.id}' iteration ${String(i)}: timed out before producing the required structured output.${formatWatchdogResetDiagnostic(cutOff.lastReset)}`
+    : `Loop node '${node.id}' iteration ${String(i)}: output_format declared but the provider returned no schema-valid structured output. The model likely replied with prose, refused, or emitted unparseable JSON.`;
+  if (!timedOut && (await tryIterationRetry(run, i, { failureKind: 'schema_unmet', error }, retry)))
+    return { kind: 'retry' };
   return failed(
-    await failLoopNode(
-      ctx,
-      node.id,
-      state,
-      attempt.cutOff?.kind === 'idle_timeout'
-        ? `Loop node '${node.id}' iteration ${String(i)}: timed out before producing the required structured output.${formatWatchdogResetDiagnostic(attempt.cutOff.lastReset)}`
-        : `Loop node '${node.id}' iteration ${String(i)}: output_format declared but the provider returned no schema-valid structured output. The model likely replied with prose, refused, or emitted unparseable JSON.`,
-      {
-        failureKind: attempt.cutOff?.kind === 'idle_timeout' ? 'timeout' : 'schema_unmet',
-        output: state.lastOutput,
-        ...loopSpend(state),
-        loopIterations: i,
-        data: { iteration: i },
-      }
-    )
+    await failLoopNode(ctx, node.id, state, error, {
+      failureKind: timedOut ? 'timeout' : 'schema_unmet',
+      output: state.lastOutput,
+      ...loopSpend(state),
+      loopIterations: i,
+      data: { iteration: i },
+    })
   );
 }
 
@@ -302,7 +312,8 @@ async function gateStructuredPayload(
   state: LoopState,
   i: number,
   structured: unknown,
-  reask: { canReask: boolean; nextReask: number; maxReasks: number }
+  reask: { canReask: boolean; nextReask: number; maxReasks: number },
+  retry: IterationRetry
 ): Promise<StructuredVerdict> {
   const { ctx, node } = run;
   const failStructured = async (
@@ -374,8 +385,8 @@ async function gateStructuredPayload(
     );
     return { kind: 'reask', errors: validation.errors };
   }
-  return failStructured(
-    `Loop node '${node.id}' iteration ${String(i)}: output_format declared but the provider's structured output failed schema validation: ${validation.errors.join('; ')}`,
-    'schema_unmet'
-  );
+  const error = `Loop node '${node.id}' iteration ${String(i)}: output_format declared but the provider's structured output failed schema validation: ${validation.errors.join('; ')}`;
+  if (await tryIterationRetry(run, i, { failureKind: 'schema_unmet', error }, retry))
+    return { kind: 'retry' };
+  return failStructured(error, 'schema_unmet');
 }
