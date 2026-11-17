@@ -5172,6 +5172,17 @@ export interface components {
                   cachePartial?: true;
                   total?: number;
                   cost?: number;
+                  calls?: {
+                    responseId?: string;
+                    provider?: string;
+                    model?: string;
+                    input: number;
+                    output: number;
+                    cacheRead?: number;
+                    cacheWrite?: number;
+                  }[];
+                  /** @enum {boolean} */
+                  callsPartial?: true;
                 };
               }
             | {
@@ -6548,6 +6559,17 @@ export interface components {
           cachePartial?: true;
           total?: number;
           cost?: number;
+          calls?: {
+            responseId?: string;
+            provider?: string;
+            model?: string;
+            input: number;
+            output: number;
+            cacheRead?: number;
+            cacheWrite?: number;
+          }[];
+          /** @enum {boolean} */
+          callsPartial?: true;
         } | null;
         signaledCostUsd?: number | null;
         execution?: {
@@ -6787,6 +6809,17 @@ export interface components {
                     cachePartial?: true;
                     total?: number;
                     cost?: number;
+                    calls?: {
+                      responseId?: string;
+                      provider?: string;
+                      model?: string;
+                      input: number;
+                      output: number;
+                      cacheRead?: number;
+                      cacheWrite?: number;
+                    }[];
+                    /** @enum {boolean} */
+                    callsPartial?: true;
                   };
                 }
               | {
@@ -7826,6 +7859,11 @@ export interface components {
               kind: 'run_ended';
               runId: string;
               sourceInstanceId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'asks_settled';
+              runId: string;
             }
           | {
               /** @enum {string} */
@@ -10059,6 +10097,8 @@ export interface components {
         [key: string]: string;
       };
       structuredOutput: 'enforced' | 'best-effort' | false;
+      /** @enum {string} */
+      structuredOutputCorrection?: 'fresh-session' | 'same-session';
       requiresAllPropertiesRequired: boolean;
       envInjection: boolean;
       costControl: boolean;

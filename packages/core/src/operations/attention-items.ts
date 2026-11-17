@@ -16,6 +16,7 @@ import {
   type RunAttentionQueueItem,
 } from '@archon/workflows/attention-queue';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
+import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import type { RecordSurface } from '@archon/workflows/schemas/record-surface';
 import {
   attentionAnswerProblem,
@@ -68,8 +69,16 @@ export type AttentionItemAnswerResult =
     }
   /** The ask already has this answer: nothing changed. */
   | { kind: 'unchanged'; item: AttentionQueueItemWithoutRun }
-  /** An ask was answered; `settled` when it was the last open ask of its run's set. */
-  | { kind: 'ask_answered'; item: AttentionQueueItemWithoutRun; settled: boolean }
+  /**
+   * An ask was answered; `settled` when it was the last open ask of its run's set, and
+   * `startReceipts` the starts that settlement caused.
+   */
+  | {
+      kind: 'ask_answered';
+      item: AttentionQueueItemWithoutRun;
+      settled: boolean;
+      startReceipts: readonly SourceReceiptAcceptance[];
+    }
   | {
       kind: 'answered';
       item: Answerable;
@@ -195,7 +204,12 @@ async function answerAsk(
     case 'not_found':
       return { kind: 'unknown' };
     case 'closed':
-      return { kind: 'ask_answered', item, settled: result.settled };
+      return {
+        kind: 'ask_answered',
+        item,
+        settled: result.settled,
+        startReceipts: result.startReceipts,
+      };
     case 'unchanged':
       return { kind: 'unchanged', item };
     case 'refused':
@@ -215,8 +229,13 @@ export type AttentionItemWithdrawResult =
   | { kind: 'refused'; closedAs: 'answered' | 'replaced' }
   /** The ask was already withdrawn: nothing changed. */
   | { kind: 'unchanged'; item: AttentionQueueItemWithoutRun }
-  /** `settled` when it was the last open ask of its run's set. */
-  | { kind: 'withdrawn'; item: AttentionQueueItemWithoutRun; settled: boolean };
+  /** `settled` when it was the last open ask of its run's set; see `ask_answered`. */
+  | {
+      kind: 'withdrawn';
+      item: AttentionQueueItemWithoutRun;
+      settled: boolean;
+      startReceipts: readonly SourceReceiptAcceptance[];
+    };
 
 /**
  * Withdraw the ask `ref` names: it closes unanswered. Held to the rule an answer is, and
@@ -240,7 +259,12 @@ export async function withdrawAttentionItem(
     case 'not_found':
       return { kind: 'unknown' };
     case 'closed':
-      return { kind: 'withdrawn', item: found.item, settled: result.settled };
+      return {
+        kind: 'withdrawn',
+        item: found.item,
+        settled: result.settled,
+        startReceipts: result.startReceipts,
+      };
     case 'unchanged':
       return { kind: 'unchanged', item: found.item };
     case 'refused':

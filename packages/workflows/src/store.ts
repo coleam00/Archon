@@ -278,7 +278,10 @@ export interface IWorkflowStore
   /**
    * Answer an open ask. The same answer to an answered ask is `unchanged`; any other close
    * stands and the answer is `refused`. The write that closes the last open ask of its set
-   * records `asks_settled` on the run that left them, once.
+   * records `asks_settled` on the run that left them, once, and in the same transaction
+   * writes the starts that settlement causes (asks-settled bindings), returned as the
+   * result's `startReceipts`. A binding that cannot be read refuses a settling close,
+   * naming the file, and nothing is recorded.
    */
   answerItemAsk(
     input: { askId: string; answer: AttentionAnswer } & ItemAskActInput

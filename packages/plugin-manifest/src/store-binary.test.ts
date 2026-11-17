@@ -54,6 +54,7 @@ test.each([...MAINTAINED_PROVIDER_IDS])(
             ),
             backgroundWork: 'none',
             sessionFork: undefined,
+            structuredOutputCorrection: undefined,
             knownToolNames: undefined,
             renamedTools: undefined,
           },

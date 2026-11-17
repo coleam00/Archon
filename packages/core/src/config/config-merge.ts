@@ -229,6 +229,7 @@ export function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig):
   }
 
   if (global.attentionNotices) result.attentionNotices = global.attentionNotices;
+  if (global.itemTracker) result.itemTracker = global.itemTracker;
 
   // Concurrency preferences
   if (global.concurrency?.maxConversations) {

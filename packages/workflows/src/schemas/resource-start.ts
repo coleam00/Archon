@@ -139,12 +139,21 @@ export const RUN_SOURCE_ACTOR = 'archon-run';
 export const RUN_ENDED_SOURCE_ACTOR = 'archon-run-ended';
 
 /**
- * What caused a start, read from its receipt's source actor: a run that ended, a node
- * that fired, or another source (a schedule, a webhook, an operator's fire).
+ * `sourceActor.source` of a receipt the settlement of a run's asks caused (an
+ * asks-settled binding): `id` is the run that left the asks and `display` how the set
+ * settled, `answered` or `withdrawn`.
+ */
+export const ASKS_SETTLED_SOURCE_ACTOR = 'archon-asks-settled';
+
+/**
+ * What caused a start, read from its receipt's source actor: a run that ended, the asks a
+ * run left settling, a node that fired, or another source (a schedule, a webhook, an
+ * operator's fire).
  */
 export const startCauseSchema = z.discriminatedUnion('kind', [
   /** `sourceInstanceId` is the run-ended arrow that started the run (see `pack-graph`). */
   z.object({ kind: z.literal('run_ended'), runId: z.string(), sourceInstanceId: z.string() }),
+  z.object({ kind: z.literal('asks_settled'), runId: z.string() }),
   z.object({ kind: z.literal('run_fired'), runId: z.string(), node: z.string().nullable() }),
   z.object({ kind: z.literal('receipt'), receiptId: z.string(), sourceInstanceId: z.string() }),
 ]);
@@ -158,6 +167,7 @@ export function startCause(receipt: {
   const actor = receipt.sourceActor;
   if (actor?.source === RUN_ENDED_SOURCE_ACTOR)
     return { kind: 'run_ended', runId: actor.id, sourceInstanceId: receipt.sourceInstanceId };
+  if (actor?.source === ASKS_SETTLED_SOURCE_ACTOR) return { kind: 'asks_settled', runId: actor.id };
   if (actor?.source === RUN_SOURCE_ACTOR)
     return { kind: 'run_fired', runId: actor.id, node: actor.display ?? null };
   return { kind: 'receipt', receiptId: receipt.id, sourceInstanceId: receipt.sourceInstanceId };
@@ -515,14 +525,41 @@ export const runEndedTriggerSchema = z
 export type RunEndedTrigger = z.infer<typeof runEndedTriggerSchema>;
 
 /**
+ * Where an asks-settled binding reads one input of the stage it starts: what a run-ended
+ * binding reads from the run that left the asks, or `{answers: true}` for the settled set
+ * itself, each ask with its question, how it closed and who closed it.
+ */
+export const asksSettledInputSourceSchema = z.union([
+  ...runEndedInputSourceSchema.options,
+  z.object({ answers: z.literal(true) }).strict(),
+]);
+export type AsksSettledInputSource = z.infer<typeof asksSettledInputSourceSchema>;
+
+/**
+ * `on.asksSettled` of a trigger file: the binding starts when the asks a run of
+ * `workflowName` left on an item are settled, in the project the binding launches in.
+ * `answered` matches a set with at least one answer, `withdrawn` one whose every ask was
+ * withdrawn, `any` either.
+ */
+export const asksSettledTriggerSchema = z
+  .object({
+    workflowName: z.string().min(1),
+    settled: z.enum(['answered', 'withdrawn', 'any']),
+    inputs: z.record(z.string().min(1), asksSettledInputSourceSchema).optional(),
+  })
+  .strict();
+export type AsksSettledTrigger = z.infer<typeof asksSettledTriggerSchema>;
+
+/**
  * A trigger file: the binding, and what starts it. With `schedule` a clock fires it; with
- * `on.runEnded` the end of a run does; with neither it is fire-only, and nothing but
- * `trigger fire` starts it. A `schedule` or `on` that is present must be complete, so a
- * half-written one is never fire-only.
+ * `on` the end of a run (`runEnded`) or the settling of a run's asks (`asksSettled`) does,
+ * exactly one of them; with neither it is fire-only, and nothing but `trigger fire` starts
+ * it. A `schedule` or `on` that is present must be complete, so a half-written one is
+ * never fire-only.
  *
  * `item` names a fire-only binding's item from a field of the fire's `--inputs`. It sits
  * beside `binding`, not in it, because the launch intent is what the store persists. A
- * timer tick and a run's end are about no event the file could map.
+ * timer tick, a run's end and a settled set are about no event the file could map.
  */
 export const triggerConfigSchema = z
   .object({
@@ -538,11 +575,20 @@ export const triggerConfigSchema = z
       .object({ intervalSeconds: z.number().int().positive(), runAtLoad: z.boolean() })
       .strict()
       .optional(),
-    on: z.object({ runEnded: runEndedTriggerSchema }).strict().optional(),
+    on: z
+      .object({
+        runEnded: runEndedTriggerSchema.optional(),
+        asksSettled: asksSettledTriggerSchema.optional(),
+      })
+      .strict()
+      .refine(on => (on.runEnded === undefined) !== (on.asksSettled === undefined), {
+        message: 'on has exactly one of runEnded or asksSettled',
+      })
+      .optional(),
   })
   .strict()
   .refine(config => config.schedule === undefined || config.on === undefined, {
-    message: 'A trigger has either a schedule or on.runEnded, not both',
+    message: 'A trigger has either a schedule or on, not both',
     path: ['on'],
   })
   .refine(config => config.item === undefined || config.schedule === undefined, {
@@ -550,14 +596,14 @@ export const triggerConfigSchema = z
     path: ['item'],
   })
   .refine(config => config.item === undefined || config.on === undefined, {
-    message: "A run-ended binding maps no item: its start is on the ended run's item",
+    message: 'An on binding maps no item: its start is on the item of the run its event names',
     path: ['item'],
   })
   // The engine picks the lane of a start on the ended run's checkout; a fixed one here
   // would contradict it.
   .refine(
     config =>
-      config.on?.runEnded.checkout === undefined ||
+      config.on?.runEnded?.checkout === undefined ||
       config.binding.launch.isolation.kind === 'default',
     {
       message: 'With on.runEnded.checkout, binding.launch.isolation must be { "kind": "default" }',

@@ -2041,6 +2041,9 @@ declare module 'archon:script' {
         readonly runId: string;
         readonly sourceInstanceId: string;
       } | {
+        readonly kind: 'asks_settled';
+        readonly runId: string;
+      } | {
         readonly kind: 'run_fired';
         readonly runId: string;
         readonly node: string | null;

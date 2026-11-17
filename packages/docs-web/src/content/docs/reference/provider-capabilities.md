@@ -70,6 +70,7 @@ for the background-start admission and observation cutoff rules.
 | Inline sub-agents (`agents:`) | ✅ | ❌ | ✅¹ | ❌ | ✅ |
 | Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort |
+| Structured-output correction (Archon asks again on a schema miss) | — | same session | — | fresh session | fresh session |
 | Env injection (`env:`) | ✅ | ✅ | ❌ | ✅ | ✅ |
 | Spend limit (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Cost reporting (`costUsd`) | ✅ | ❌ | ✅ | ✅ | ❌ |
@@ -96,8 +97,12 @@ for the background-start admission and observation cutoff rules.
 - **✅¹ (superscript)** — supported, but with semantics that differ from the headline
   meaning of the axis — see [Caveats](#caveats).
 - **Structured output** — `enforced` (the SDK/backend grammar-constrains decoding),
-  `best-effort` (the model is asked for the schema, then validated + re-asked up to 3×),
-  or ❌ (unsupported). See [AI Assistants → Structured output guarantees](/getting-started/ai-assistants/#structured-output-guarantees).
+  `best-effort` (the model is asked for the schema, then validated), or ❌ (unsupported).
+- **Structured-output correction** — whether Archon asks again, up to 3×, when an answer
+  is missing or fails its schema: `same session` continues the thread the answer ended in,
+  so the agent keeps its work; `fresh session` re-runs the prompt plus the errors in a
+  throwaway session; — means Archon does not ask again (Claude retries inside its SDK).
+  See [AI Assistants → Structured output guarantees](/getting-started/ai-assistants/#structured-output-guarantees).
 - **In-process native tools** — the provider can register Archon `NativeTool`s for a
   turn. It gates auto-injection of Archon's `invoke_workflow`, `register_project` and
   `attention` tools into every chat, and of `manage_run` into project-scoped chat. Providers without it

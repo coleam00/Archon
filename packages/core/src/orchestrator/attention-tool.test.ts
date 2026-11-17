@@ -95,7 +95,7 @@ function harness(
   const answerItemAsk = mock<IWorkflowStore['answerItemAsk']>(async input => {
     const stored = asks.find(candidate => candidate.id === input.askId);
     if (stored === undefined) return { kind: 'not_found' };
-    return { kind: 'closed', ask: stored, settled: true };
+    return { kind: 'closed', ask: stored, settled: true, startReceipts: [] };
   });
   const queue: AttentionToolContext['queue'] = {
     store: {
