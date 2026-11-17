@@ -446,8 +446,8 @@ function otherThreadOf(observation: TurnObservation, threadId: string): OtherThr
  * signal. A v1 spawn submits the child's first input, so a v1 subagent is live until a turn
  * on its thread has completed, and again while a later one runs. A `sendInput` holds nothing:
  * Codex completes its item before reporting whether the input was submitted, so a failed
- * submission would hold the node until cancellation. A turn it starts after the parent
- * completes is not counted.
+ * submission would hold the node until cancellation. A turn it starts after observation has
+ * ended is not counted; one it starts while other live work holds observation open is.
  */
 function hasLiveWork(observation: TurnObservation): boolean {
   if (observation.liveTasks.size > 0) return true;

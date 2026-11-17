@@ -48,7 +48,8 @@ for its v1 `spawn_agent`, the turns of the spawned thread, and unified-exec proc
 through `commandExecution` items with source `unifiedExecStartup`. Idle thread status is
 not evidence that this work has ended. A v1 `send_input` that starts a turn on an idle
 subagent holds nothing: Codex reports no delivered-input signal, so that turn counts only
-if it starts before the parent turn completes.
+if it starts before observation ends, which is when the parent turn has completed and no
+other subagent work holds the node open.
 See [Streaming event mapping](/contributing/adding-a-community-provider/#streaming-event-mapping)
 for the background-start admission and observation cutoff rules.
 
