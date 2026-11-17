@@ -44,7 +44,7 @@ import { runLayers } from './dag/run-layers';
 import { publishContainerPause, type ContainerPauseReceipt } from './dag/pause';
 import { restoreRunState, type RestoredRunState } from './dag/resume-state';
 import { failRun, finishRun, skipIfStatusChanged } from './dag/run-terminal';
-import { readCheckoutMark } from './checkout-observation';
+import { readCheckoutMark } from './checkout-mark';
 import type { ReturnsCheckout } from './run-result';
 import {
   announceContainerRun,

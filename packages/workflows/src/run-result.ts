@@ -9,7 +9,8 @@ import { jsonValueSchema, type JsonValue } from './output-ref';
 import { safeSendMessage, sendCriticalMessage } from './platform-messages';
 import type { RunPhase } from './executor-shared';
 import type { ExecutionContext } from '@archon/provider-contract';
-import { readCheckoutMark, sampleCheckout, type CheckoutSample } from './checkout-observation';
+import { readCheckoutMark } from './checkout-mark';
+import { sampleCheckout, type CheckoutSample } from './checkout-observation';
 import type {
   ResolvedWorkflow,
   WorkflowExecutionResult,

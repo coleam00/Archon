@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { readCheckoutMark } from './checkout-observation';
+import { readCheckoutMark } from './checkout-mark';
 import {
   latestResultsOnItem,
   observeReturnsCheckout,

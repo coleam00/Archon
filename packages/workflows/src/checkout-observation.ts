@@ -54,7 +54,7 @@ const REPOSITORY_SELECTORS = new Set([
  * Run git read-only. Repository-selecting variables are dropped so the observation reads
  * the checkout at `cwd`, not whatever repository the engine process happened to inherit.
  */
-function runGit(cwd: string, args: string[], input?: Buffer): Promise<GitResult> {
+export function runGit(cwd: string, args: string[], input?: Buffer): Promise<GitResult> {
   const env: NodeJS.ProcessEnv = {
     ...Object.fromEntries(
       Object.entries(process.env).filter(([key]) => !REPOSITORY_SELECTORS.has(key))
@@ -89,12 +89,12 @@ function runGit(cwd: string, args: string[], input?: Buffer): Promise<GitResult>
   });
 }
 
-function text(buffer: Buffer): string {
+export function text(buffer: Buffer): string {
   return buffer.toString('utf8').trim();
 }
 
 /** The checkout's own marker walk: a directory with no `.git` in any ancestor is not Git. */
-function hasGitMarker(cwd: string): boolean {
+export function hasGitMarker(cwd: string): boolean {
   let dir: string;
   try {
     dir = realpathSync(cwd);
@@ -743,35 +743,6 @@ function splitRecords(output: Buffer): string[] {
     start = stop + 1;
   }
   return records;
-}
-
-/**
- * A fingerprint of every move HEAD has made in this checkout: the reflog of HEAD and of
- * the branch it is on (a ref update that bypasses HEAD logs only to the branch). Two equal
- * marks mean nothing moved HEAD between them, which two equal commit samples cannot show:
- * a checkout moved to another commit and back reads the same commit twice. Null when the
- * moves cannot be seen: a container backend, a failed read, or a checkout whose HEAD keeps
- * no reflog (`core.logAllRefUpdates` off). A caller treats null as "may have moved".
- */
-export async function readCheckoutMark(
-  cwd: string,
-  execContext: ExecutionContext
-): Promise<string | null> {
-  if (execContext.kind === 'container' || !hasGitMarker(cwd)) return null;
-  const format = '--format=%H %gs';
-  const head = await runGit(cwd, ['reflog', 'show', format, 'HEAD', '--']);
-  if (head.code !== 0 || head.stdout.length === 0) return null;
-  const symbolic = await runGit(cwd, ['symbolic-ref', '-q', 'HEAD']);
-  // Exit 1 is a detached HEAD, which has no branch; anything else is a failed read.
-  if (symbolic.code !== 0 && symbolic.code !== 1) return null;
-  const ref = symbolic.code === 0 ? text(symbolic.stdout) : '';
-  const branch = ref === '' ? null : await runGit(cwd, ['reflog', 'show', format, ref, '--']);
-  if (branch !== null && branch.code !== 0) return null;
-  return createHash('sha256')
-    .update(head.stdout)
-    .update(`\0${ref}\0`)
-    .update(branch?.stdout ?? '')
-    .digest('hex');
 }
 
 /**
