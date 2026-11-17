@@ -195,21 +195,19 @@ async function requestingSourceActor(
 async function inheritedItemKey(
   host: WorkflowHost,
   sourceActor: SourceReceiptInput['sourceActor'],
-  start: { cwd: string; recorded: boolean }
+  cwd: string
 ): Promise<string | undefined> {
   const caller = requestingRun(sourceActor);
-  // A recorded delivery replays with the item of its first acceptance, so only a new
-  // start is judged.
-  if (!caller || start.recorded) return undefined;
+  if (!caller) return undefined;
   const root =
     (await host.deps.store.getRunAncestry(caller.runId)).at(-1) ??
     (await host.deps.store.getWorkflowRun(caller.runId));
   const item = root?.item_id ? await host.deps.store.getItem(root.item_id) : null;
   if (!item) return undefined;
-  const project = await registeredProjectKeyForPath(start.cwd, host.records.codebases);
+  const project = await registeredProjectKeyForPath(cwd, host.records.codebases);
   if (project === null)
     throw new Error(
-      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start's checkout (${start.cwd}) is not a registered project, so it cannot be that item's project. The start cannot inherit the item: pass --item <key> to name its item there, or --no-item to start it on no item.`
+      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start's checkout (${cwd}) is not a registered project, so it cannot be that item's project. The start cannot inherit the item: pass --item <key> to name its item there, or --no-item to start it on no item.`
     );
   if (project !== item.projectKey)
     throw new Error(
@@ -226,27 +224,24 @@ function assertItemOptions(options: TriggerOptions): void {
 
 /**
  * The item a fire's start is on: `--item` first, none with `--no-item`, then the
- * binding's `item` mapping read from `--inputs`, then the calling run's item. A binding
- * that maps its item never inherits one, and a fire whose inputs cannot name the item is
- * refused before anything is recorded. A recorded delivery keeps its first acceptance's
- * item, so only `--item` and `--no-item` are read for it.
+ * binding's `item` mapping read from `--inputs`, then the calling run's item, read through
+ * `inherited` only when nothing before it decides. A binding that maps its item never
+ * inherits one, and a fire whose inputs cannot name the item is refused before anything
+ * is recorded. A recorded delivery keeps its first acceptance's item, so only `--item` and
+ * `--no-item` are read for it.
  */
-async function fireItemKey(
-  host: WorkflowHost,
-  fire: {
-    config: TriggerConfig;
-    explicit: string | undefined;
-    noItem: boolean;
-    eventInputs: Readonly<Record<string, unknown>> | undefined;
-    sourceActor: SourceReceiptInput['sourceActor'];
-    recorded: boolean;
-  }
-): Promise<string | undefined> {
-  const { config, recorded } = fire;
+export async function fireItemKey(fire: {
+  config: TriggerConfig;
+  explicit: string | undefined;
+  noItem: boolean;
+  eventInputs: Readonly<Record<string, unknown>> | undefined;
+  recorded: boolean;
+  inherited: () => Promise<string | undefined>;
+}): Promise<string | undefined> {
+  const { config } = fire;
   if (fire.noItem) return undefined;
-  if (fire.explicit !== undefined || recorded) return fire.explicit;
-  if (config.item === undefined)
-    return inheritedItemKey(host, fire.sourceActor, { cwd: config.binding.launch.cwd, recorded });
+  if (fire.explicit !== undefined || fire.recorded) return fire.explicit;
+  if (config.item === undefined) return fire.inherited();
   const inputs = fire.eventInputs ?? {};
   const mapped = mappedItemKey(
     config.item,
@@ -299,13 +294,13 @@ async function triggerFire(
     options.deliveryId !== undefined &&
     (await host.deps.store.hasStartReceiptForDelivery(config.sourceInstanceId, options.deliveryId));
   if (!recorded) await assertKnownRunAsUser(host, config);
-  const itemKey = await fireItemKey(host, {
+  const itemKey = await fireItemKey({
     config,
     explicit: options.item,
     noItem: options.noItem === true,
     eventInputs,
-    sourceActor,
     recorded,
+    inherited: () => inheritedItemKey(host, sourceActor, config.binding.launch.cwd),
   });
   const binding = {
     ...config.binding,
