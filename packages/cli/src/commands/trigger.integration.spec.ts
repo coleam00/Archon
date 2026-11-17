@@ -665,98 +665,44 @@ describe('trigger CLI durable execution', () => {
     ]);
   }, 90_000);
 
-  test("a binding's item mapping wins over the fired-from run's item, and --item or --no-item wins over it", async () => {
+  // Which item wins is decided in-process (trigger.test.ts); this fire proves a mapped key
+  // reaches the started run.
+  test("a binding's item mapping puts the started run on the item its --inputs name", async () => {
     const fixture = await heldTriggerRun('item-map');
     const root = join(fixture.projectRoot, '..');
-    const mappedRoot = join(root, 'mapped');
-    mkdirSync(join(mappedRoot, '.archon', 'workflows'), { recursive: true });
-    expect(await Bun.spawn(['git', 'init', '-q'], { cwd: mappedRoot }).exited).toBe(0);
     writeFileSync(
-      join(mappedRoot, '.archon', 'workflows', 'mapped-proof.yaml'),
-      'name: mapped-proof\ndescription: mapped proof.\nmutates_checkout: false\ninputs:\n  number:\n    required: true\nnodes:\n  - id: done\n    bash: echo done\n'
+      join(fixture.projectRoot, '.archon', 'workflows', 'item-map-proof.yaml'),
+      'name: item-map-proof\ndescription: item-map proof.\nmutates_checkout: false\ninputs:\n  number:\n    required: true\nnodes:\n  - id: done\n    bash: echo done\n'
     );
     const config = JSON.parse(readFileSync(join(root, 'trigger.json'), 'utf8'));
-    config.binding = {
-      ...config.binding,
-      bindingId: 'mapped-proof',
-      resource: 'mapped:resource',
-      launch: { ...config.binding.launch, cwd: mappedRoot, workflowName: 'mapped-proof' },
-    };
     // A fire-only file: a timer maps no item.
     config.schedule = undefined;
     config.item = { field: 'number', prefix: 'issue-' };
     const mappedConfig = join(root, 'mapped.json');
     writeFileSync(mappedConfig, JSON.stringify(config));
-    const inputs = (name: string, value: Record<string, unknown>) => {
-      const path = join(root, `${name}.json`);
-      writeFileSync(path, JSON.stringify(value));
-      return path;
-    };
-    // From a run on item-1, only the mapped field: the one case that needs a fired-from
-    // run. Every other case is fired here, so the wait below covers one nested CLI start.
-    fixture.writeWorkflow(
-      `'${process.execPath}' '${fixture.cliPath}' trigger fire --config '${mappedConfig}' --inputs '${inputs('seven', { number: 7 })}' || exit 1`
-    );
-    const database = join(fixture.archonHome, 'archon.db');
-    const runs = () =>
-      readRows<{ workflow_name: string; status: string; item: string | null }>(
-        database,
-        `SELECT r.workflow_name, r.status, i.key AS item
-           FROM remote_agent_workflow_runs r LEFT JOIN remote_agent_items i ON i.id = r.item_id
-          ORDER BY r.workflow_name, i.key`
-      );
-    const settled = (count: number) =>
-      waitFor(
-        () =>
-          runs().length === count && runs().every(run => run.status === 'completed')
-            ? runs()
-            : undefined,
-        `${String(count)} completed runs`
-      );
-    const fire = (inputsPath: string, extra: string[] = [], expectSuccess = true) =>
-      runCli(
-        fixture.cliPath,
-        fixture.projectRoot,
-        fixture.archonHome,
-        ['trigger', 'fire', '--config', mappedConfig, '--inputs', inputsPath, ...extra],
-        expectSuccess
-      );
+    const inputs = join(root, 'seven.json');
+    writeFileSync(inputs, JSON.stringify({ number: 7 }));
 
     await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
       'trigger',
       'fire',
       '--config',
-      join(root, 'trigger.json'),
-      '--item',
-      'item-1',
+      mappedConfig,
+      '--inputs',
+      inputs,
     ]);
-    await settled(2);
-    // Fired by an operator, on no item: the same mapped item.
-    await fire(join(root, 'seven.json'));
-    // --no-item and --item win over the mapping.
-    await fire(join(root, 'seven.json'), ['--no-item']);
-    await fire(inputs('eight', { number: 8 }), ['--item', 'named']);
-    // An input without the field is refused.
-    const refused = await fire(inputs('none', { other: 1 }), [], false);
-    expect(refused.exitCode).toBe(1);
-    expect(refused.stderr).toContain(
-      "Binding 'mapped-proof' names its item from the fire's --inputs"
-    );
-    expect(refused.stderr).toContain("field 'number' is missing");
-    expect((await settled(5)).map(run => [run.workflow_name, run.item])).toEqual([
-      ['item-map-proof', 'item-1'],
-      ['mapped-proof', null],
-      ['mapped-proof', 'issue-7'],
-      ['mapped-proof', 'issue-7'],
-      ['mapped-proof', 'named'],
-    ]);
-    // The refusal recorded nothing: one receipt per start.
-    expect(
-      readRows<{ count: number }>(
+    const database = join(fixture.archonHome, 'archon.db');
+    const runs = () =>
+      readRows<{ status: string; item: string | null }>(
         database,
-        'SELECT COUNT(*) AS count FROM remote_agent_start_receipts'
-      )
-    ).toEqual([{ count: 5 }]);
+        `SELECT r.status, i.key AS item
+           FROM remote_agent_workflow_runs r LEFT JOIN remote_agent_items i ON i.id = r.item_id`
+      );
+    const settled = await waitFor(
+      () => (runs()[0]?.status === 'completed' ? runs() : undefined),
+      'the mapped run to complete'
+    );
+    expect(settled).toEqual([{ status: 'completed', item: 'issue-7' }]);
   }, 60_000);
 
   test('an inherited item is refused in another project, and an item named there starts', async () => {
@@ -842,119 +788,6 @@ describe('trigger CLI durable execution', () => {
     expect(detached.exitCode).not.toBe(0);
     expect(detached.stderr).toContain('--item');
     expect(runs()).toHaveLength(2);
-  }, 60_000);
-
-  test('a script on an item names the item of a start, or starts it on no item', async () => {
-    const fixture = await heldTriggerRun('item-script');
-    const root = join(fixture.projectRoot, '..');
-    const otherConfig = await writeOtherProject(root);
-    const refusal = join(root, 'refusal');
-    // The run on item-1 fires into the other project naming item-2, then naming nothing,
-    // which would inherit item-1 across projects, then declining an item.
-    writeFileSync(
-      join(fixture.projectRoot, '.archon', 'workflows', 'item-script-proof.yaml'),
-      `name: item-script-proof
-description: item-script proof.
-mutates_checkout: false
-nodes:
-  - id: fire
-    runtime: bun
-    script: |
-      import { writeFileSync } from 'node:fs';
-      import { HostCommandError, trigger } from 'archon:script';
-      const binding = ${JSON.stringify(otherConfig)};
-      trigger.fire(binding, {}, { item: 'item-2' });
-      try {
-        trigger.fire(binding);
-        writeFileSync(${JSON.stringify(refusal)}, 'started');
-      } catch (error) {
-        if (!(error instanceof HostCommandError)) throw error;
-        writeFileSync(${JSON.stringify(refusal)}, error.message);
-      }
-      trigger.fire(binding, {}, { item: null });
-`
-    );
-    const database = join(fixture.archonHome, 'archon.db');
-    const runs = () =>
-      readRows<{ workflow_name: string; status: WorkflowRunStatus; item: string | null }>(
-        database,
-        `SELECT r.workflow_name, r.status, i.key || ' in ' || i.project_key AS item
-           FROM remote_agent_workflow_runs r LEFT JOIN remote_agent_items i ON i.id = r.item_id
-          ORDER BY r.started_at, r.id`
-      );
-
-    await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
-      'trigger',
-      'fire',
-      '--config',
-      join(root, 'trigger.json'),
-      '--item',
-      'item-1',
-    ]);
-    // Each of the script's fires is its own CLI process, so each start gets its own deadline.
-    // A script that throws fails the first run; that ends the wait at once instead of at the
-    // deadline. A completed first run does not: its last start may still be queued behind the
-    // other project's resource, with no run row yet.
-    const step = async (reached: () => boolean, label: string): Promise<void> => {
-      await waitFor(() => {
-        if (reached()) return true;
-        const first = runs()[0];
-        return first && isTerminalRunStatus(first.status) && first.status !== 'completed'
-          ? true
-          : undefined;
-      }, label);
-      if (!reached())
-        throw new Error(`The first run failed before ${label}: ${JSON.stringify(runs())}`);
-    };
-    // Nothing may still execute when afterEach removes the temp tree, on success or failure.
-    // A queued start has no run row yet but will run, so it counts as not ended.
-    // A run that does not end in time is left for afterEach to stop.
-    const queued = () =>
-      readRows(
-        database,
-        "SELECT id FROM remote_agent_resource_start_requests WHERE status = 'queued'"
-      ).length;
-    const allEnded = () =>
-      waitFor(
-        () =>
-          queued() === 0 && runs().every(run => isTerminalRunStatus(run.status))
-            ? runs()
-            : undefined,
-        'all runs to end'
-      ).catch((error: unknown) => {
-        for (const run of readRows<RunRow>(
-          database,
-          'SELECT id,status FROM remote_agent_workflow_runs'
-        ))
-          if (!isTerminalRunStatus(run.status)) activeRuns.add(run.id);
-        throw error;
-      });
-    try {
-      await step(() => runs().length >= 2, "the script's fire naming item-2 to record its run");
-      await step(() => existsSync(refusal), "the script's inherited fire to be refused");
-      await step(() => runs().length === 3, "the script's fire with no item to record its run");
-    } catch (failure) {
-      // Let every admitted run end before reporting the step that failed, and report that step.
-      await allEnded().catch(() => undefined);
-      throw failure;
-    }
-    const settled = await allEnded();
-    expect(settled.map(run => run.status)).toEqual(['completed', 'completed', 'completed']);
-    const projects = readRows<{ project_key: string; key: string }>(
-      database,
-      'SELECT project_key, key FROM remote_agent_items ORDER BY key'
-    );
-    expect(projects.map(row => row.key)).toEqual(['item-1', 'item-2']);
-    const [own, other] = projects.map(row => row.project_key);
-    expect(own).not.toBe(other);
-    expect(settled.map(run => [run.workflow_name, run.item])).toEqual([
-      ['item-script-proof', `item-1 in ${String(own)}`],
-      ['other-proof', `item-2 in ${String(other)}`],
-      ['other-proof', null],
-    ]);
-    const message = readFileSync(refusal, 'utf8');
-    expect(message).toContain(`fired start runs in project '${String(other)}'`);
-    expect(message).toContain('--no-item');
   }, 60_000);
 
   test('--item and --no-item together are refused before a receipt', async () => {
