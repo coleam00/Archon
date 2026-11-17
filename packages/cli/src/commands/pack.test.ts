@@ -352,6 +352,7 @@ describe('archon pack bindings: run-ended', () => {
 
     expect(existsSync(join(root, 'home', 'triggers'))).toBe(false);
     const bindings = await readRunEndedBindings(out);
+    expect(bindings.map(entry => entry.runEnded.outcome).sort()).toEqual(['blocked', 'planned']);
     const printed = logSpy.mock.calls.flat().join('\n');
     for (const entry of bindings) expect(printed).toContain(`archon trigger add '${entry.file}'`);
     for (const entry of bindings) {
