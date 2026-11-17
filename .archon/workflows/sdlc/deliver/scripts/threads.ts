@@ -23,7 +23,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { artifactsDir, emit, forge, input, refuse } from 'archon:script';
 import { type PrRecord, type QualifiedPr } from '../../.shared/identity.ts';
-import { nullableJson, record } from '../../.shared/inputs.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 
 interface ThreadComment {
@@ -52,34 +52,23 @@ interface PrThreads {
   readonly threads: readonly Thread[];
 }
 
-/** The threads through `pr.threads`, which reads every page itself. */
+/** The threads through `pr.threads`, which reads every page itself, as `threads.json` lists them. */
 function readThreads(pr: QualifiedPr): PrThreads {
-  const ref = { repo: pr.repo, number: pr.number };
   const view = viewPr(pr);
-  const value = forge('pr.threads', { ref });
-  if (!Array.isArray(value?.threads)) throw new Error('forge pr.threads returned no thread list');
-  const threads = value.threads.map((raw): Thread => {
-    const node = record(raw);
-    if (typeof node?.id !== 'string' || typeof node.resolved !== 'boolean') {
-      throw new Error('forge pr.threads returned a thread without its id and resolution');
-    }
-    const comments = Array.isArray(node.comments) ? node.comments.map(item => record(item) ?? {}) : [];
-    return {
-      id: node.id,
-      resolved: node.resolved,
-      outdated: node.outdated === true,
-      path: typeof node.path === 'string' ? node.path : '',
-      line: typeof node.line === 'number' ? node.line : null,
-      comments: comments.map(comment => {
-        const login = record(comment.author)?.login;
-        return {
-          author: typeof login === 'string' && login !== '' ? login : null,
-          body: typeof comment.body === 'string' ? comment.body : '',
-          url: typeof comment.url === 'string' ? comment.url : '',
-        };
-      }),
-    };
-  });
+  const threads = forge('pr.threads', { ref: { repo: pr.repo, number: pr.number } }).threads.map(
+    (thread): Thread => ({
+      id: thread.id,
+      resolved: thread.resolved,
+      outdated: thread.outdated,
+      path: thread.path ?? '',
+      line: thread.line,
+      comments: thread.comments.map(comment => ({
+        author: comment.author?.login || null,
+        body: comment.body,
+        url: comment.url,
+      })),
+    })
+  );
   return { open: view.pr.state === 'open', draft: view.pr.is_draft, threads };
 }
 

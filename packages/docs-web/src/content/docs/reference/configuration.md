@@ -174,7 +174,7 @@ The other blocks, `tiers`, `aliases`, `workflows`, `streaming`, `attentionNotice
 
 ## Provider concurrency caps
 
-`concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default database-wide caps. A provider without an entry has no admission cap unless Pi has `assistants.pi.maxConcurrent` configured. For Pi, the stricter of these two caps applies across plugin processes. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.
+`concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default database-wide caps. A provider without an entry has no admission cap unless Pi has `assistants.pi.maxConcurrent` configured. For Pi, the stricter of `concurrency.providers.pi` and `assistants.pi.maxConcurrent` applies, and this admission is the only cap that enforces either. Both are read from `~/.archon/config.yaml` at every attempt, so a changed value takes effect without a restart. A value in a repository `.archon/config.yaml` is validated but caps nothing. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.
 
 - **Attempts, not runs.** One attempt holds one slot from the moment the provider starts until its stream has closed. Retry backoff between attempts holds no slot. A rate limit is retried with backoff as before; it never lowers the cap.
 - **Waiting.** An attempt that finds the cap full waits and checks again about once a second. Cancelling the run stops the wait without starting the attempt. Until queue visibility lands, a waiting node looks idle, and a wait longer than the node's `idle_timeout` ends the node like any other idle node.
@@ -214,11 +214,11 @@ Run config accepts settings whose consumers still execute after the run is dispa
 - `worktree` and `container` already affected isolation.
 - `botName`, `streaming`, `paths`, and `concurrency` are process-scoped or have no per-run consumer.
 - `recommendedWorkflows` is listing-only.
-- `assistants.pi.env` and `assistants.pi.maxConcurrent` are install settings rather than per-run settings. Pi concurrency is enforced at host admission for process providers; bundled Pi also retains its in-process semaphore.
+- `assistants.pi.env` and `assistants.pi.maxConcurrent` are install settings rather than per-run settings. Pi concurrency is enforced by provider admission; see [Provider concurrency caps](#provider-concurrency-caps).
 
 Unknown keys, unregistered providers, invalid effort values, and alias names without `@` also fail instead of being ignored. CLI accepts a local path; the HTTP run API accepts inline validated content and never a caller-selected server path.
 
-Fresh runs seal the normalized layer before recording it. The sealed layer exposes its source label and configured key paths, not plaintext `env` or raw provider-default values. The separate launch AI record stores resolved profiles and credential-free provider defaults. A continuation restores that sealed layer without rereading the original file, and child workflows inherit it. Detached CLI launches also transfer the already-validated sealed layer to the child instead of rereading the caller's file. This is why `--config` cannot be supplied with `--resume`.
+Fresh runs seal the normalized layer before recording it. The sealed layer exposes its source label and configured key paths, not plaintext `env` or raw provider-default values. The separate launch AI record stores resolved profiles and credential-free provider defaults. A continuation restores that sealed layer without rereading the original file, and child workflows inherit it. Detached CLI launches also transfer the already-validated sealed layer to the child instead of rereading the caller's file. This is why a resume takes no `--config`.
 
 ## Repository Configuration
 

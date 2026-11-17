@@ -85,17 +85,6 @@ describe('keep-awake pairing', () => {
 });
 
 describe('resume', () => {
-  it('does not look for a resumable run on its own', async () => {
-    // Resume detection lives at the caller, so two back-to-back executions of the same
-    // workflow at the same cwd cannot cross-leak.
-    const findSpy = mock(async () => makeRun({ id: 'stale-prior', status: 'failed' }));
-    const store = makeStore({ findResumableRun: findSpy });
-    await startWorkflow({ store });
-    expect(findSpy).not.toHaveBeenCalled();
-    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
-    expect(store.createWorkflowRun).toHaveBeenCalledTimes(1);
-  });
-
   it('runs the DAG with the prior completed nodes the caller supplies', async () => {
     const options = resumeOf(makeRun({ id: 'resumed-run' }), [
       ['node-a', { output: 'a-output' }],

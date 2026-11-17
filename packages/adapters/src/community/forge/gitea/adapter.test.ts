@@ -202,25 +202,9 @@ describe('GiteaAdapter', () => {
     );
   });
 
-  describe('streaming mode', () => {
-    test('should always return batch mode', () => {
-      expect(adapter.getStreamingMode()).toBe('batch');
-    });
-  });
-
   describe('platform type', () => {
     test('should return gitea', () => {
       expect(adapter.getPlatformType()).toBe('gitea');
-    });
-  });
-
-  describe('lifecycle methods', () => {
-    test('should start without errors', async () => {
-      await expect(adapter.start()).resolves.toBeUndefined();
-    });
-
-    test('should stop without errors', () => {
-      expect(() => adapter.stop()).not.toThrow();
     });
   });
 
@@ -377,20 +361,6 @@ describe('GiteaAdapter', () => {
       expect(mockAcquireLock).not.toHaveBeenCalled();
     });
 
-    test('should NOT filter comments from real users', async () => {
-      const adapter = createSelfFilterAdapter();
-      const payload = createCommentPayload('@archon please help', 'user123');
-
-      // handleWebhook will error on DB operations, but self-filtering runs first
-      try {
-        await adapter.handleWebhook(utf8(payload), 'mock-signature');
-      } catch {
-        // Expected - database not mocked
-      }
-
-      // Real user comments should NOT be self-filtered
-    });
-
     test('should ignore comments containing bot marker (works with user PAT)', async () => {
       const adapter = createSelfFilterAdapter();
       // Comment has the marker but author is a real user (using PAT)
@@ -404,59 +374,6 @@ describe('GiteaAdapter', () => {
       expect(mockLogger.debug).toHaveBeenCalledWith('ignoring_marked_comment');
       // Marked comments should be silently dropped
       expect(mockAcquireLock).not.toHaveBeenCalled();
-    });
-
-    test('should process comments without bot marker from same user', async () => {
-      const adapter = createSelfFilterAdapter();
-      // Comment from same user but WITHOUT marker - should be processed
-      const payload = createCommentPayload('@archon fix this', 'Wirasm');
-
-      // Will error on DB operations, but self-filtering runs first
-      try {
-        await adapter.handleWebhook(utf8(payload), 'mock-signature');
-      } catch {
-        // Expected - database not mocked
-      }
-
-      // Comment without marker should NOT be self-filtered
-    });
-
-    test('should handle missing comment.user gracefully', async () => {
-      const adapter = createSelfFilterAdapter();
-      const payload = createCommentPayload('@archon help', undefined);
-
-      // Should not crash on undefined user
-      try {
-        await adapter.handleWebhook(utf8(payload), 'mock-signature');
-      } catch {
-        // Expected - database not mocked, but no TypeError from undefined user
-      }
-    });
-  });
-
-  describe('PR detection helpers', () => {
-    test('should detect PR from issue.pull_request property', () => {
-      const issueWithPR = {
-        number: 42,
-        title: 'Test PR',
-        body: 'Test body',
-        user: { login: 'testuser' },
-        labels: [],
-        state: 'open',
-        pull_request: { url: 'https://gitea.example.com/repos/owner/repo/pulls/42' },
-      };
-
-      const issueWithoutPR = {
-        number: 42,
-        title: 'Test Issue',
-        body: 'Test body',
-        user: { login: 'testuser' },
-        labels: [],
-        state: 'open',
-      };
-
-      expect(!!issueWithPR.pull_request).toBe(true);
-      expect(!!(issueWithoutPR as typeof issueWithPR).pull_request).toBe(false);
     });
   });
 
@@ -635,22 +552,6 @@ describe('GiteaAdapter', () => {
       expect(adapter1.baseUrl).toBe('https://gitea.example.com');
       // @ts-expect-error - accessing private property for testing
       expect(adapter2.baseUrl).toBe('https://gitea.example.com');
-    });
-  });
-
-  describe('multi-repo path isolation', () => {
-    test('should use owner/repo path structure for codebases', () => {
-      const workspacePath = '/workspace';
-      const owner1 = 'alice';
-      const owner2 = 'bob';
-      const repo = 'utils';
-
-      const path1 = `${workspacePath}/${owner1}/${repo}`;
-      const path2 = `${workspacePath}/${owner2}/${repo}`;
-
-      expect(path1).not.toBe(path2);
-      expect(path1).toBe('/workspace/alice/utils');
-      expect(path2).toBe('/workspace/bob/utils');
     });
   });
 

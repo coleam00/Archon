@@ -1,5 +1,6 @@
 // @archon-test-isolated
 import { makeRun } from '../../test/orchestrator-agent-fixtures';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, realpath } from 'node:fs/promises';
@@ -93,6 +94,7 @@ const mockCloseRunLiveOwner = mock(() => {
 const mockStartRunLiveOwner = mock<typeof RunLiveOwnerModule.startRunLiveOwner>(runId => {
   runLiveOwnerCalls.push(`start:${runId}`);
   return Promise.resolve({
+    lease: testRunOwnerLease(runId),
     close: mockCloseRunLiveOwner,
     isStopRequested: () => false,
     registerTerminationPreparation: () => () => undefined,
@@ -177,6 +179,7 @@ const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
     codebase_id: 'cb-1',
     status: 'pending',
     outcome: null,
+    completed_outcome: null,
     user_message: 'run it',
     metadata: {},
     active_phase_started_at: null,
@@ -231,7 +234,6 @@ mock.module('../../utils/workflow-source-root', () => ({
 
 mock.module('../../services/cleanup-service', () => ({
   getWorktreeStatusBreakdown: mock(() => Promise.resolve({ active: 0, stale: 0, merged: 0 })),
-  STALE_THRESHOLD_DAYS: 7,
 }));
 
 // Mock @archon/isolation — shared resolve mock so tests can control return values
@@ -255,6 +257,7 @@ const {
 } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
   generatedTaskBranch,
+  refuseUnappliedStartPoint: mock(async () => undefined),
   getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({
     state: 'NONE',
   })),
@@ -397,7 +400,6 @@ mock.module('@archon/workflows/router', () => ({
   suggestWorkflowNames: mock<typeof import('@archon/workflows/router').suggestWorkflowNames>(
     () => []
   ),
-  findWorkflow: mock(() => undefined),
   // Statically imported by the background dispatch path; a named import must link even
   // when the test never exercises it.
   resolveWorkflowName: mock(() => undefined),

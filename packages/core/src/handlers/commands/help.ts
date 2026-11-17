@@ -23,7 +23,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 - \`${cmd('status')}\` — Show all active workflows
 - \`${cmd('get <id>')}\` — Show one run, whatever its status
 - \`${cmd('cancel [id]')}\` — Cancel a running workflow (default: the one in this conversation)
-- \`${cmd('resume <id>')}\` — Resume a failed or paused run
+- \`${cmd('resume <id>')}\` — Resume a failed, paused or killed run
 - \`${cmd('abandon <id>')}\` — Abandon a running, failed, or paused run
 - \`${cmd('approve <id>')}\` — Approve a paused gate
 - \`${cmd('reject <id>')}\` — Reject a paused gate

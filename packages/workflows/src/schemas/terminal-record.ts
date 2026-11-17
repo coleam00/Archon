@@ -80,6 +80,11 @@ export const terminalRecordSchema = z.object({
   run_id: z.string(),
   status: terminalStatusSchema,
   outcome: workflowRunOutcomeSchema.nullable(),
+  /**
+   * The run's `completed_outcome` when the record was written: the outcome a completed run
+   * completed with, named outcomes included. Absent from records written before it existed.
+   */
+  completed_outcome: z.string().min(1).nullable().optional(),
   error: z.string().nullable(),
   first_failed_node: z.string().nullable(),
   nodes: z.array(runNodeStateSchema),

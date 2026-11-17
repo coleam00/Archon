@@ -35,6 +35,7 @@ export const detailFixture: Detail = {
       at: '2026-10-05T10:01:00Z',
     },
     outcome: 'failed',
+    completed_outcome: 'failed',
     user_message: '',
     metadata: {},
     started_at: '2026-10-05T10:00:00Z',

@@ -282,16 +282,16 @@ export async function createFileWorkflowStore(
         view => view.resolveAndCancelApprovalGate(id, events, cancellation, expected),
         await observedRun(id)
       ),
-    completeWorkflowRun: async (id, completion, metadata) =>
+    completeWorkflowRun: async (id, completion, metadata, result) =>
       write(
         [id],
-        view => view.completeWorkflowRun(id, completion, metadata),
+        view => view.completeWorkflowRun(id, completion, metadata, result),
         await observedRun(id)
       ),
     failWorkflowRun: async (id, error, options) =>
       write([id], view => view.failWorkflowRun(id, error, options), await observedRun(id)),
-    cancelWorkflowRun: async (id, event) =>
-      write([id], view => view.cancelWorkflowRun(id, event), await observedRun(id)),
+    cancelWorkflowRun: async (id, event, options) =>
+      write([id], view => view.cancelWorkflowRun(id, event, options), await observedRun(id)),
     cancelFanOutRun: async (id, reason) =>
       write([id], view => view.cancelFanOutRun(id, reason), await observedRun(id)),
     cancelResumableRunsForConversation: async (id, assertMayCancel) =>
@@ -347,15 +347,43 @@ export async function createFileWorkflowStore(
     getRunAncestry: id => query('all', view => view.getRunAncestry(id)),
     getActiveWorkflowRunByPath: (path, self) =>
       query('all', view => view.getActiveWorkflowRunByPath(path, self)),
-    findResumableRun: (name, path) => query('all', view => view.findResumableRun(name, path)),
     findWorkflowRunsByIdPrefix: (prefix, codebase) =>
       query('all', view => view.findWorkflowRunsByIdPrefix(prefix, codebase)),
     findAdoptingRuns: id => query('all', view => view.findAdoptingRuns(id)),
     findOpenWorkRuns: options => query('all', view => view.findOpenWorkRuns(options)),
-    listItemRuns: async () => {
+    getItemRuns: async () => {
       throw new FileStoreUnsupportedError('items');
     },
     getItem: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    listItemRulings: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    recordItemRuling: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    withdrawItemRuling: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    listItemLinks: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    recordItemLink: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    endItemLink: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    // An ask belongs to an item, and this store holds none, so it holds no asks: the
+    // readers see an empty set rather than a failure that would break every queue read.
+    listOpenItemAsks: async () => [],
+    listItemAsks: async () => [],
+    getItemAsk: async () => null,
+    answerItemAsk: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    withdrawItemAsk: async () => {
       throw new FileStoreUnsupportedError('items');
     },
     listWorkflowRuns: async options => {

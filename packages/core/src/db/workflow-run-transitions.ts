@@ -6,6 +6,7 @@
 
 import {
   CANCELLED_REASON_METADATA_KEY,
+  EXECUTION_OWNER_METADATA_KEY,
   initialRunMetadata,
   mutableRunMetadata,
   SUBRUN_METADATA_KEYS,
@@ -16,6 +17,7 @@ import {
   sourceReleaseMetadata,
   DETACHED_LAUNCH_METADATA_KEY,
   EXECUTION_CLAIM_METADATA_KEY,
+  currentExecutionOwner,
   sourceReleasedEvent,
   type FanOutCancelReason,
   type SourceReleaseWrite,
@@ -48,6 +50,8 @@ import {
   observeRunTerminalArtifacts,
 } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
+import { insertStartReceipt } from './start-receipt-writes';
+import { openItemAsksForCompletedRun } from './item-asks';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
 
@@ -193,7 +197,8 @@ export async function createWorkflowRun(data: WorkflowRunInsert): Promise<Workfl
  *
  * `workingPath` is stamped by the claim itself on a row created without one
  * (`run --detach`), so the check and the claimant lookup see the checkout the
- * run is about to use. An existing path is never replaced.
+ * run is about to use. An existing path is never replaced. The same update records
+ * this process as the run's execution owner (`currentExecutionOwner`).
  */
 export async function claimPendingWorkflowRun(
   id: string,
@@ -203,7 +208,8 @@ export async function claimPendingWorkflowRun(
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs
           SET status = 'running', last_activity_at = ${getDialect().now()},
-              working_path = COALESCE(working_path, CAST($2 AS TEXT))
+              working_path = COALESCE(working_path, CAST($2 AS TEXT)),
+              metadata = ${getDialect().jsonMerge('metadata', 3)}
         WHERE id = $1 AND status = 'pending'
           AND NOT EXISTS (
             SELECT 1 FROM remote_agent_isolation_environments e
@@ -224,7 +230,11 @@ export async function claimPendingWorkflowRun(
                WHERE q.id = $1 AND q.status = 'admitted'
             )
           )`,
-      [id, workingPath ?? null]
+      [
+        id,
+        workingPath ?? null,
+        JSON.stringify({ [EXECUTION_OWNER_METADATA_KEY]: currentExecutionOwner() }),
+      ]
     );
     if (claimed.rowCount !== 1) return null;
     const selected = await query<WorkflowRunRow>(
@@ -243,7 +253,7 @@ export async function claimPendingWorkflowRun(
  * instead of continuing a stale run.
  *
  * The status set is exactly what the two resume lookups can return —
- * findResumableRunByParentConversation ('failed'/'paused') and
+ * listResumableRunsByParentConversation ('failed'/'paused') and
  * getPausedWorkflowRun ('paused'). `pending` and `running` are deliberately NOT
  * matched: neither lookup can ever return them, so leaving them alone cannot
  * cause the stale continuation this exists to prevent, while cancelling them
@@ -333,26 +343,33 @@ export async function cancelResumableRunsForConversation(
 export async function completeWorkflowRun(
   id: string,
   completion: { duration_ms: number },
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>,
+  result?: Parameters<IWorkflowStore['completeWorkflowRun']>[3]
 ): Promise<void> {
   validateWorkflowWaitMetadata(metadata);
   const dialect = getDialect();
-  let result: Awaited<ReturnType<IDatabase['query']>>;
+  const outcome = result?.outcome;
+  // The only write of either outcome column (#5660), in the UPDATE that completes the run.
+  const outcomeValues = [
+    outcome?.kind === 'boolean' ? outcome.value : null,
+    outcome?.value ?? null,
+  ];
+  let written: Awaited<ReturnType<IDatabase['query']>>;
   try {
     const artifacts = await observeRunTerminalArtifacts(id);
-    result = await getDatabase().withTransaction(async query => {
+    written = await getDatabase().withTransaction(async query => {
       const update = metadata
         ? await query(
             `UPDATE remote_agent_workflow_runs
-             SET status = 'completed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge('metadata', 2)}
+             SET status = 'completed', completed_at = ${dialect.now()}, outcome = $2, completed_outcome = $3, metadata = ${dialect.jsonMerge('metadata', 4)}
              WHERE id = $1 AND status = 'running'`,
-            [id, JSON.stringify(mutableRunMetadata(metadata))]
+            [id, ...outcomeValues, JSON.stringify(mutableRunMetadata(metadata))]
           )
         : await query(
             `UPDATE remote_agent_workflow_runs
-             SET status = 'completed', completed_at = ${dialect.now()}
+             SET status = 'completed', completed_at = ${dialect.now()}, outcome = $2, completed_outcome = $3
              WHERE id = $1 AND status = 'running'`,
-            [id]
+            [id, ...outcomeValues]
           );
       if ((update.rowCount ?? 0) > 0) {
         await insertTerminalWorkflowEvent(
@@ -364,6 +381,10 @@ export async function completeWorkflowRun(
           },
           artifacts
         );
+        // The starts this end causes commit with it, and only when this write won.
+        for (const receipt of result?.startReceipts ?? []) await insertStartReceipt(query, receipt);
+        // The asks it leaves open with it too, replacing its workflow's open set on the item.
+        if (result?.asks !== undefined) await openItemAsksForCompletedRun(query, id, result.asks);
       }
       return update;
     });
@@ -372,7 +393,7 @@ export async function completeWorkflowRun(
     getLog().error({ err }, 'db.workflow_run_complete_failed');
     throw new Error(`Failed to complete workflow run: ${err.message}`);
   }
-  if (result.rowCount === 0) {
+  if (written.rowCount === 0) {
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_complete_no_match');
     throw new Error(`Workflow run not found or not in running state (id: ${id})`);
   }
@@ -483,7 +504,8 @@ export async function failWorkflowRun(
 
 export async function cancelWorkflowRun(
   id: string,
-  event?: WorkflowCancellationEventDetails
+  event?: WorkflowCancellationEventDetails,
+  options?: { pendingOnly?: true }
 ): Promise<{ cancelled: boolean }> {
   const dialect = getDialect();
   let result: Awaited<ReturnType<IDatabase['query']>>;
@@ -493,7 +515,7 @@ export async function cancelWorkflowRun(
       const update = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'cancelled', completed_at = ${dialect.now()}
-         WHERE id = $1 AND status NOT IN (${CANCELLATION_NOOP_WORKFLOW_STATUSES.map((_, index) => `$${index + 2}`).join(', ')})`,
+         WHERE id = $1 AND status NOT IN (${CANCELLATION_NOOP_WORKFLOW_STATUSES.map((_, index) => `$${index + 2}`).join(', ')})${options?.pendingOnly ? " AND status = 'pending'" : ''}`,
         [id, ...CANCELLATION_NOOP_WORKFLOW_STATUSES]
       );
       if ((update.rowCount ?? 0) > 0) {

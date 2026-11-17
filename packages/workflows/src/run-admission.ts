@@ -1,9 +1,8 @@
 import { CONTAINER_ISOLATION_MARKER, ISOLATION_ENV_ID_METADATA_KEY } from './schemas/run-metadata';
 import { isWorkflowExecutionInterruption } from './execution-interruption';
-import { executionClaim } from './store';
+import { currentExecutionOwner, executionClaim } from './store';
 import { formatDuration } from '@archon/paths/duration';
 import { captureWorkflowTerminal, createLogger } from '@archon/paths';
-import { hostname } from 'os';
 import { recordCheckoutSample, sampleCheckout, type CheckoutSample } from './checkout-observation';
 import { gatherDescendantRunIds } from './child-runs';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
@@ -26,11 +25,11 @@ import {
   readSubrunMetadata,
   runAttention,
   runInputsMetadata,
-  type ExecutionOwnerRecord,
 } from './schemas';
 import type { CheckoutSharedEventData } from './schemas/workflow-event';
 import { ContinuedItemProjectError, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
+import { refusePendingStart } from './start-refusal';
 import { holdWorkflowResource } from './resource-hold';
 import { workflowPathPriorityTime } from './workflow-path-lock';
 
@@ -65,15 +64,6 @@ export async function admitWorkflowRun(
 ): Promise<RunPhase<AdmittedRun>> {
   const { preCreatedRun, priorCompletedNodes } = opts;
   const execContext = opts.execContext ?? { kind: 'host' };
-  // This process is the one executing the run, whether it created the row, claimed a
-  // row a launcher pre-created, or resumed one. `abandon` shows this record when no
-  // owner answers (#2325).
-  const uid = process.getuid?.();
-  const executionOwner: ExecutionOwnerRecord = {
-    host: hostname(),
-    pid: process.pid,
-    ...(uid === undefined ? {} : { uid }),
-  };
 
   if (preCreatedRun && priorCompletedNodes !== undefined) {
     await notifyResumingRun(platform, conversationId, workflow.name, priorCompletedNodes);
@@ -92,8 +82,7 @@ export async function admitWorkflowRun(
       userMessage,
       origin,
       opts,
-      dispatch,
-      executionOwner
+      dispatch
     );
     if (created.stopped) return created;
     workflowRun = created.value;
@@ -115,7 +104,9 @@ export async function admitWorkflowRun(
     checkoutBaselineSample = claimed.value;
   }
 
-  if (preCreatedRun) {
+  // A continuation's row already says everything this process adds: the store's resume
+  // recorded this process as its owner. A fresh pre-created row still needs its invocation.
+  if (preCreatedRun && !dispatch.isContinuation) {
     const stamped = await stampPreCreatedRun(
       deps,
       platform,
@@ -123,8 +114,7 @@ export async function admitWorkflowRun(
       cwd,
       preCreatedRun,
       opts,
-      dispatch,
-      executionOwner
+      dispatch
     );
     if (stamped.stopped) return stamped;
     workflowRun = stamped.value;
@@ -164,8 +154,7 @@ async function createWorkflowRunRow(
   userMessage: string,
   origin: WorkflowRunOrigin | undefined,
   opts: ExecuteWorkflowOptions,
-  dispatch: RunDispatch,
-  executionOwner: ExecutionOwnerRecord
+  dispatch: RunDispatch
 ): Promise<RunPhase<WorkflowRun>> {
   const { preparedSource, codebaseId, issueContext, adoptedFromRunId, continuationMode } = opts;
   const { prepared, runSource } = dispatch;
@@ -187,7 +176,9 @@ async function createWorkflowRunRow(
           ? { [CONTINUATION_METADATA_KEY]: { mode: continuationMode ?? CONTINUATION_MODES.adopt } }
           : {}),
         ...freshInvocationMetadata(opts, dispatch),
-        [EXECUTION_OWNER_METADATA_KEY]: executionOwner,
+        // `abandon` shows this record when no owner answers (#2325). The pending claim
+        // records it again, in the update that makes the run `running`.
+        [EXECUTION_OWNER_METADATA_KEY]: currentExecutionOwner(),
       },
       ...(adoptedFromRunId ? { adopted_from_run_id: adoptedFromRunId } : {}),
       ...(opts.item === undefined ? {} : { item_key: opts.item }),
@@ -229,6 +220,23 @@ async function createWorkflowRunRow(
 }
 
 /**
+ * Refuse a pending row before the claim, for every reason `refusePendingStart` decides,
+ * and tell the conversation why.
+ */
+async function refuseRunBeforeClaim(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflow: ResolvedWorkflow,
+  workflowRun: WorkflowRun
+): Promise<WorkflowExecutionResult | undefined> {
+  const reason = await refusePendingStart(deps, workflow, workflowRun);
+  if (reason === undefined) return undefined;
+  await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${reason}`);
+  return { success: false, workflowRunId: workflowRun.id, error: reason };
+}
+
+/**
  * Take the workflow's resource slot, win execution ownership of a pending row, then sample
  * the checkout the run starts from.
  */
@@ -242,6 +250,14 @@ async function claimPendingRun(
   execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
   { onExecutionClaimed, noWait }: ExecuteWorkflowOptions
 ): Promise<RunPhase<CheckoutSample>> {
+  const notStarted = await refuseRunBeforeClaim(
+    deps,
+    platform,
+    conversationId,
+    workflow,
+    workflowRun
+  );
+  if (notStarted) return { stopped: true, result: notStarted };
   const refused = await holdWorkflowResource(
     deps,
     platform,
@@ -303,18 +319,13 @@ async function stampPreCreatedRun(
   cwd: string,
   preCreatedRun: WorkflowRun,
   opts: ExecuteWorkflowOptions,
-  dispatch: RunDispatch,
-  executionOwner: ExecutionOwnerRecord
+  dispatch: RunDispatch
 ): Promise<RunPhase<WorkflowRun>> {
-  const { isContinuation } = dispatch;
-  const invocationMetadata: Record<string, unknown> = {
-    ...(!isContinuation ? freshInvocationMetadata(opts, dispatch, preCreatedRun.metadata) : {}),
-    [EXECUTION_OWNER_METADATA_KEY]: executionOwner,
-  };
+  const invocationMetadata = freshInvocationMetadata(opts, dispatch, preCreatedRun.metadata);
   try {
     await deps.store.updateWorkflowRun(preCreatedRun.id, {
       metadata: invocationMetadata,
-      ...(!isContinuation && preCreatedRun.working_path === null ? { working_path: cwd } : {}),
+      ...(preCreatedRun.working_path === null ? { working_path: cwd } : {}),
     });
   } catch (error) {
     const err = error as Error;
@@ -352,7 +363,7 @@ async function stampPreCreatedRun(
     stopped: false,
     value: {
       ...preCreatedRun,
-      working_path: preCreatedRun.working_path ?? (isContinuation ? null : cwd),
+      working_path: preCreatedRun.working_path ?? cwd,
       metadata: {
         ...preCreatedRun.metadata,
         ...invocationMetadata,

@@ -129,8 +129,7 @@
       "src/community/pi/event-bridge-text.test.ts"
     ],
     [
-      "src/community/pi/extension-error-broker.test.ts",
-      "src/community/pi/semaphore.test.ts"
+      "src/community/pi/extension-error-broker.test.ts"
     ],
     [
       "src/community/pi/options-translator.test.ts"
@@ -242,9 +241,6 @@
     ],
     [
       "src/community/opencode/runtime-cancellation.test.ts"
-    ],
-    [
-      "src/community/opencode/session.test.ts"
     ],
     [
       "src/shared/structured-output.test.ts"

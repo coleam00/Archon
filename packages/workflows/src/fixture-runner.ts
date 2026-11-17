@@ -46,7 +46,6 @@ import {
   type DryRunStubs,
 } from './dry-run';
 import type { WorkflowWithSource } from './schemas/workflow';
-import { workflowRunOutcomeSchema } from './schemas';
 import type { WorkflowConfig } from './deps';
 import type { ResolvedAiProfile } from './model-validation';
 import { resolveTopLevelInputs } from './utils/workflow-requirements';
@@ -73,7 +72,9 @@ function getLog(): ReturnType<typeof createLogger> {
 export const fixtureDeclarationSchema = z
   .object({
     expect: z.enum(['completed', 'failed', 'paused', 'cancelled']).default('completed'),
-    authored: workflowRunOutcomeSchema.optional(),
+    // The outcome the run completes with: `succeeded`/`failed` for a boolean
+    // `returns.outcome`, the value itself for an enum one.
+    authored: z.string().min(1).optional(),
     // A single node id, or the exact set of failed entries when one failure
     // implies another — a node failing inside a loop_group fails the group
     // too, so that shape is always two entries and was inexpressible before.
@@ -280,7 +281,7 @@ export interface FixtureCheckResult {
   readonly workflow: string;
   readonly expect: DryRunResult['outcome'];
   readonly outcome?: DryRunResult['outcome'];
-  readonly authoredOutcome?: DryRunResult['authoredOutcome'];
+  readonly completedOutcome?: DryRunResult['completedOutcome'];
   readonly pass: boolean;
   readonly failureReason?: string;
   readonly nodeFailures?: readonly Pick<
@@ -632,8 +633,8 @@ function fixtureOutcomeFailure(
       );
     }
   }
-  if (declaration.authored !== undefined && result.authoredOutcome !== declaration.authored) {
-    return `expected authored outcome ${declaration.authored}, dry-run reported ${result.authoredOutcome ?? 'undeclared'}`;
+  if (declaration.authored !== undefined && result.completedOutcome !== declaration.authored) {
+    return `expected authored outcome ${declaration.authored}, dry-run reported ${result.completedOutcome ?? (result.declaresOutcome ? 'none' : 'undeclared')}`;
   }
   return undefined;
 }
@@ -742,7 +743,7 @@ async function checkFixture(
     return {
       ...base,
       outcome: result.outcome,
-      authoredOutcome: result.authoredOutcome,
+      completedOutcome: result.completedOutcome,
       nodeFailures: result.trace
         .filter(entry => entry.state === 'failed')
         .map(({ nodeId, reason }) => ({ nodeId, reason })),
@@ -778,7 +779,7 @@ export function formatFixtureReport(report: FixtureReport): string {
     lines.push(`${mark} ${r.fixture} → ${r.workflow}`);
     if (r.outcome !== undefined) {
       lines.push(`    Simulation outcome: ${r.outcome}`);
-      lines.push(`    Authored outcome: ${r.authoredOutcome ?? 'undeclared'}`);
+      lines.push(`    Authored outcome: ${r.completedOutcome ?? 'none'}`);
     }
     if (r.failureReason) lines.push(`    ${r.failureReason}`);
     lines.push(...(r.nodeFailures ?? []).map(({ nodeId, reason }) => `    ${nodeId}: ${reason}`));

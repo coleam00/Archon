@@ -97,9 +97,10 @@ mock.module('@archon/paths', () => ({
 }));
 
 export const mockGetDefaultBranch = mock(async () => 'main');
+export const mockGetDefaultRemote = mock(async (): Promise<string | null> => 'origin');
 mock.module('@archon/git', () => ({
   getDefaultBranch: mockGetDefaultBranch,
-  getDefaultRemote: mock(async () => 'origin'),
+  getDefaultRemote: mockGetDefaultRemote,
   toRepoPath: mock((p: string) => p),
   // The checkout baseline of a container run probes the container through here. Tests use
   // container ids that do not exist, so answer the way a real `docker exec` would.
@@ -143,6 +144,8 @@ export function resetExecutorMocks(): void {
   mockCaptureWorkflowTerminal.mockClear();
   mockGetDefaultBranch.mockClear();
   mockGetDefaultBranch.mockImplementation(async () => 'main');
+  mockGetDefaultRemote.mockClear();
+  mockGetDefaultRemote.mockImplementation(async () => 'origin');
   mockExecuteDagWorkflow.mockClear();
   mockExecuteDagWorkflow.mockImplementation(async () => undefined);
 }
@@ -179,6 +182,7 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     listPendingStartBindings: mock(unexpected('listPendingStartBindings')),
     getResourceStartRequest: mock(unexpected('getResourceStartRequest')),
     listQueuedResourceStartsForHost: mock(unexpected('listQueuedResourceStartsForHost')),
+    listQueuedItemStarts: mock(unexpected('listQueuedItemStarts')),
     withdrawQueuedResourceStart: mock(unexpected('withdrawQueuedResourceStart')),
     claimStartBindingPreparation: mock(unexpected('claimStartBindingPreparation')),
     completeStartBindingPreparation: mock(unexpected('completeStartBindingPreparation')),
@@ -200,8 +204,19 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     cancelResumableRunsForConversation: mock(unexpected('cancelResumableRunsForConversation')),
     deleteWorkflowNodeSessions: mock(unexpected('deleteWorkflowNodeSessions')),
     findOpenWorkRuns: mock(unexpected('findOpenWorkRuns')),
-    listItemRuns: mock(unexpected('listItemRuns')),
+    getItemRuns: mock(unexpected('getItemRuns')),
     getItem: mock(unexpected('getItem')),
+    listItemRulings: mock(unexpected('listItemRulings')),
+    recordItemRuling: mock(unexpected('recordItemRuling')),
+    withdrawItemRuling: mock(unexpected('withdrawItemRuling')),
+    listItemLinks: mock(unexpected('listItemLinks')),
+    recordItemLink: mock(unexpected('recordItemLink')),
+    endItemLink: mock(unexpected('endItemLink')),
+    listOpenItemAsks: mock(unexpected('listOpenItemAsks')),
+    listItemAsks: mock(unexpected('listItemAsks')),
+    getItemAsk: mock(unexpected('getItemAsk')),
+    answerItemAsk: mock(unexpected('answerItemAsk')),
+    withdrawItemAsk: mock(unexpected('withdrawItemAsk')),
     findAdoptingRuns: mock(unexpected('findAdoptingRuns')),
     deleteOldWorkflowRuns: mock(unexpected('deleteOldWorkflowRuns')),
     listWorkflowEvents: mock(unexpected('listWorkflowEvents')),
@@ -229,7 +244,6 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     createWorkflowEvent: mock(async () => undefined),
     persistWorkflowEvent: mock(async () => undefined),
     persistWorkflowEventIfRunning: mock(async () => ({ persisted: true })),
-    findResumableRun: mock(async () => null),
     listProviderEvents: mock(async () => []),
     getDagResumeSnapshot: mock(async () => ({
       completedNodeOutputs: new Map(),
@@ -346,6 +360,7 @@ export function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     codebase_id: null,
     status: 'running',
     outcome: null,
+    completed_outcome: null,
     user_message: 'test message',
     metadata: {},
     active_phase_started_at: null,

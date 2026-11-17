@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
-import { executionClaim, WorkflowNotResumableError, type IWorkflowStore } from '../store';
+import {
+  executionClaim,
+  ownerlessResumeCursor,
+  WorkflowNotResumableError,
+  type IWorkflowStore,
+  type OwnerlessResumeCursor,
+} from '../store';
 import { TERMINAL_WORKFLOW_STATUSES, readSourceRelease } from '../schemas/workflow-run';
 import type { WorkflowStoreHarness } from '../store-conformance';
 import {
@@ -12,6 +18,7 @@ import {
   running,
   types,
   rejection,
+  testRunOwnerLease,
 } from './fixtures';
 import { assertWorkflowClaimRace } from './races';
 import { describeResumeTransitionConformance } from './resume-transition';
@@ -226,13 +233,80 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
       );
       expect(await types(store, run.id)).toContain('source_released');
     });
-    test('only stale running runs can resume; completed and cancelled runs refuse', async () => {
+    test('a running run resumes only with an ownerless cursor on its current claim', async () => {
       const run = await running(store);
+      await harness.backdate(run.id, { last_activity_at: new Date(Date.now() - 2 * 86_400_000) });
+      // Old activity is not evidence that the owner is gone.
       expect(await rejection(store.resumeWorkflowRun(run.id))).toBeInstanceOf(
         WorkflowNotResumableError
       );
-      await harness.backdate(run.id, { last_activity_at: new Date(Date.now() - 2 * 86_400_000) });
-      expect((await store.resumeWorkflowRun(run.id)).status).toBe('running');
+      const read = await store.getWorkflowRun(run.id);
+      if (!read) throw new Error('run missing');
+      const cursor = ownerlessResumeCursor(read, testRunOwnerLease(read.id));
+      const resumed = await store.resumeWorkflowRun(run.id, cursor);
+      expect(resumed.status).toBe('running');
+      expect(executionClaim(resumed.metadata)).not.toBe(cursor.executionClaim);
+      // The cursor was read before that resume, so it no longer matches.
+      expect(await rejection(store.resumeWorkflowRun(run.id, cursor))).toBeInstanceOf(
+        WorkflowNotResumableError
+      );
+      expect(
+        (
+          await store.resumeWorkflowRun(
+            run.id,
+            ownerlessResumeCursor(resumed, testRunOwnerLease(resumed.id))
+          )
+        ).status
+      ).toBe('running');
+      await store.failWorkflowRun(run.id, 'failed');
+      expect(
+        await rejection(
+          store.resumeWorkflowRun(
+            run.id,
+            ownerlessResumeCursor(resumed, testRunOwnerLease(resumed.id))
+          )
+        )
+      ).toBeInstanceOf(WorkflowNotResumableError);
+    });
+    test('an ownerless resume needs a held live-owner lease for that run', async () => {
+      const run = await running(store);
+      const check = { kind: 'ownerless' as const, executionClaim: executionClaim(run.metadata) };
+      const refused: OwnerlessResumeCursor[] = [
+        // A careless caller that bypasses the type and never opened the endpoint.
+        check as OwnerlessResumeCursor,
+        { ...check, lease: testRunOwnerLease('another-run') },
+        { ...check, lease: testRunOwnerLease(run.id, { held: false }) },
+      ];
+      for (const cursor of refused) {
+        const error = await rejection(store.resumeWorkflowRun(run.id, cursor));
+        // A programming error, not a lost race a caller would quietly accept.
+        expect(error).toBeInstanceOf(Error);
+        expect(error).not.toBeInstanceOf(WorkflowNotResumableError);
+        const after = await store.getWorkflowRun(run.id);
+        expect(after?.status).toBe('running');
+        expect(executionClaim(after?.metadata ?? {})).toBe(check.executionClaim);
+      }
+      const resumed = await store.resumeWorkflowRun(run.id, {
+        ...check,
+        lease: testRunOwnerLease(run.id),
+      });
+      expect(executionClaim(resumed.metadata)).not.toBe(check.executionClaim);
+    });
+    test('one of concurrent ownerless resumes of a running run wins', async () => {
+      const run = await running(store);
+      const cursor = ownerlessResumeCursor(run, testRunOwnerLease(run.id));
+      const results = await eight(() =>
+        store.resumeWorkflowRun(run.id, cursor).then(
+          () => 'resumed',
+          (error: unknown) => error
+        )
+      );
+      expect(results.filter(result => result === 'resumed')).toHaveLength(1);
+      for (const result of results)
+        if (result !== 'resumed') expect(result).toBeInstanceOf(WorkflowNotResumableError);
+    });
+    test('completed and cancelled runs refuse resume', async () => {
+      const run = await running(store);
       await store.completeWorkflowRun(run.id, { duration_ms: 1 });
       expect(await rejection(store.resumeWorkflowRun(run.id))).toBeInstanceOf(
         WorkflowNotResumableError
@@ -347,22 +421,6 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
       expect((await store.getActiveWorkflowRunByPath(path))?.id).toBe(first.id);
       await store.cancelWorkflowRun(first.id);
       expect(await store.getActiveWorkflowRunByPath(path)).toBeNull();
-    });
-    test('resumable lookup chooses newest matching run and includes stale running', async () => {
-      const first = await running(store, { working_path: '/resume' });
-      await store.failWorkflowRun(first.id, 'old');
-      await harness.backdate(first.id, { started_at: new Date(Date.now() - 600_000) });
-      const second = await running(store, { working_path: '/resume' });
-      await store.pauseWorkflowRun(second.id, approval);
-      await running(store, { workflow_name: 'other', working_path: '/resume' });
-      await running(store, { working_path: '/other' });
-      expect((await store.findResumableRun('conformance', '/resume'))?.id).toBe(second.id);
-      await store.cancelWorkflowRun(second.id);
-      expect((await store.findResumableRun('conformance', '/resume'))?.id).toBe(first.id);
-      await store.resumeWorkflowRun(first.id);
-      expect(await store.findResumableRun('conformance', '/resume')).toBeNull();
-      await harness.backdate(first.id, { last_activity_at: new Date(Date.now() - 2 * 86_400_000) });
-      expect((await store.findResumableRun('conformance', '/resume'))?.id).toBe(first.id);
     });
   });
 }

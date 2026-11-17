@@ -66,18 +66,6 @@ describe('workflow run writes', () => {
       ]);
     });
 
-    test('updates authored outcome without touching lifecycle columns', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-
-      await updateWorkflowRun('workflow-run-123', { outcome: 'succeeded' });
-
-      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).toContain('outcome = $1');
-      expect(query).not.toContain('status =');
-      expect(query).not.toContain('completed_at');
-      expect(params).toEqual(['succeeded', 'workflow-run-123']);
-    });
-
     // output_root (#2200) is the durable pointer to a run's storage tree. It is
     // write-once at the DB layer via COALESCE so a caller that forgets the
     // null-guard cannot repoint a run mid-life and orphan its artifacts.
@@ -99,18 +87,15 @@ describe('workflow run writes', () => {
       await updateWorkflowRun('workflow-run-123', {
         status: 'running',
         metadata: { step: 'plan' },
-        outcome: 'failed',
         output_root: '/root/x',
       });
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain('status = $1');
-      expect(query).toContain('outcome = $3');
-      expect(query).toContain('output_root = COALESCE(output_root, $4)');
+      expect(query).toContain('output_root = COALESCE(output_root, $3)');
       expect(params).toEqual([
         'running',
         JSON.stringify({ step: 'plan' }),
-        'failed',
         '/root/x',
         'workflow-run-123',
       ]);
@@ -236,17 +221,18 @@ describe('workflow run writes', () => {
     test('deletes events then run within a transaction for terminal run', async () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([{ status: 'completed' }])) // SELECT guard
+        .mockResolvedValueOnce(createQueryResult([{ open: 0 }])) // open asks guard
         .mockResolvedValueOnce(createQueryResult([], 1)) // events DELETE
         .mockResolvedValueOnce(createQueryResult([], 1)); // run DELETE
 
       await deleteWorkflowRun('run-123');
 
-      expect(mockQuery).toHaveBeenCalledTimes(3);
+      expect(mockQuery).toHaveBeenCalledTimes(4);
       const [selectSql] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(selectSql).toContain('SELECT status');
-      const [eventsSql] = mockQuery.mock.calls[1] as [string, unknown[]];
+      const [eventsSql] = mockQuery.mock.calls[2] as [string, unknown[]];
       expect(eventsSql).toContain('remote_agent_workflow_events');
-      const [runsSql] = mockQuery.mock.calls[2] as [string, unknown[]];
+      const [runsSql] = mockQuery.mock.calls[3] as [string, unknown[]];
       expect(runsSql).toContain('remote_agent_workflow_runs');
     });
 

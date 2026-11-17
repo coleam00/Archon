@@ -22,6 +22,7 @@ import {
   nodeDockerCalls,
   dagOptions,
   makeWorkflowRun,
+  nodeExecCalls,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { type RunChildWorkflowFn } from '../../child-run';
@@ -83,8 +84,9 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
         })
       );
 
-      expect(execSpy).toHaveBeenCalledTimes(1);
-      const [cmd, args, opts] = execSpy.mock.calls[0] as [
+      const nodeCalls = nodeExecCalls(execSpy.mock.calls);
+      expect(nodeCalls).toHaveLength(1);
+      const [cmd, args, opts] = nodeCalls[0] as [
         string,
         string[],
         { env: NodeJS.ProcessEnv; input?: string },
@@ -179,7 +181,7 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
         { env: NodeJS.ProcessEnv },
       ];
       expect(cmd).toBe('uv');
-      expect(args).toEqual(['run', 'python', '-c', "import os; print(os.environ['ARGUMENTS'])"]);
+      expect(args.slice(-3)).toEqual(['python', '-c', "import os; print(os.environ['ARGUMENTS'])"]);
       expect(opts.env.ARGUMENTS).toBe('py-message');
       expect(opts.env.CONTEXT).toBe('ISSUE #42 body text');
       expect(opts.env.EXTERNAL_CONTEXT).toBe('ISSUE #42 body text');

@@ -251,6 +251,7 @@ export function createInMemoryWorkflowStore(
     listQueuedResourceStartsForHost: admit(
       admission.listQueuedResourceStartsForHost.bind(admission)
     ),
+    listQueuedItemStarts: admit(admission.listQueuedItemStarts.bind(admission)),
     withdrawQueuedResourceStart: admit(admission.withdrawQueuedResourceStart.bind(admission)),
     claimStartBindingPreparation: admit(admission.claimStartBindingPreparation.bind(admission)),
     completeStartBindingPreparation: admit(
@@ -323,20 +324,20 @@ export function createInMemoryWorkflowStore(
         run => run.id === id,
         view => view.resolveAndCancelApprovalGate(id, gateEvents, cancellation, expected)
       ),
-    completeWorkflowRun: (id, completion, metadata) =>
+    completeWorkflowRun: (id, completion, metadata, result) =>
       terminalWrite(
         run => run.id === id,
-        view => view.completeWorkflowRun(id, completion, metadata)
+        view => view.completeWorkflowRun(id, completion, metadata, result)
       ),
     failWorkflowRun: (id, error, options) =>
       terminalWrite(
         run => run.id === id,
         view => view.failWorkflowRun(id, error, options)
       ),
-    cancelWorkflowRun: (id, details) =>
+    cancelWorkflowRun: (id, details, options) =>
       terminalWrite(
         run => run.id === id,
-        view => view.cancelWorkflowRun(id, details)
+        view => view.cancelWorkflowRun(id, details, options)
       ),
     cancelFanOutRun: (id, reason) =>
       terminalWrite(
@@ -390,13 +391,23 @@ export function createInMemoryWorkflowStore(
     getRunAncestry: id => write(view => view.getRunAncestry(id)),
     getActiveWorkflowRunByPath: (path, self) =>
       write(view => view.getActiveWorkflowRunByPath(path, self)),
-    findResumableRun: (name, path) => write(view => view.findResumableRun(name, path)),
     findWorkflowRunsByIdPrefix: (prefix, codebase) =>
       write(view => view.findWorkflowRunsByIdPrefix(prefix, codebase)),
     findAdoptingRuns: id => write(view => view.findAdoptingRuns(id)),
     findOpenWorkRuns: options => write(view => view.findOpenWorkRuns(options)),
-    listItemRuns: unsupported,
+    getItemRuns: unsupported,
     getItem: unsupported,
+    listItemRulings: unsupported,
+    recordItemRuling: unsupported,
+    withdrawItemRuling: unsupported,
+    listItemLinks: unsupported,
+    recordItemLink: unsupported,
+    endItemLink: unsupported,
+    listOpenItemAsks: async () => [],
+    listItemAsks: async () => [],
+    getItemAsk: async () => null,
+    answerItemAsk: unsupported,
+    withdrawItemAsk: unsupported,
     listWorkflowRuns: options => write(view => view.listWorkflowRuns(options)),
     listDueWorkflowContinuations: (now, limit) =>
       write(view => view.listDueWorkflowContinuations(now, limit)),

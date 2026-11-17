@@ -48,6 +48,7 @@ mock.module('../../db/connection', () => ({
   getDatabaseType: () => 'sqlite',
 }));
 const isolationDb = await import('../../db/isolation-environments');
+const envUsersDb = await import('../../db/isolation-env-users');
 const { claimPendingWorkflowRun } = await import('../../db/workflows');
 const { cleanupStaleWorktrees, onConversationClosed, runScheduledCleanup } = await import(
   '../cleanup-service'
@@ -259,6 +260,7 @@ beforeEach(async () => {
     codebase_id: codebaseId,
     status: 'cancelled',
     outcome: null,
+    completed_outcome: null,
     user_message: '',
     metadata: { owned_worktree: { envId: env.id, creationId: created.metadata.creationId } },
     active_phase_started_at: null,
@@ -1769,11 +1771,11 @@ describe('cleanup retires only the registration it observed', () => {
       VALUES ($1, 'github', $1, $2, $3, $4)`,
       [conversationId, codebaseId, env.id, env.working_path]
     );
-    const readLiveRun = isolationDb.getLiveRunOwningEnv;
+    const readUse = envUsersDb.getEnvUse;
     let replacement: IsolationEnvironmentRow | undefined;
-    const racing = spyOn(isolationDb, 'getLiveRunOwningEnv').mockImplementation(async (...args) => {
+    const racing = spyOn(envUsersDb, 'getEnvUse').mockImplementation(async (...args) => {
       replacement ??= await reRegister();
-      return readLiveRun(...args);
+      return readUse(...args);
     });
     const destroy = spyOn(getIsolationProvider(), 'destroy');
     try {
@@ -1797,11 +1799,11 @@ describe('cleanup retires only the registration it observed', () => {
 
   test('scheduled missing-path cleanup refuses a registration replaced after selection', async () => {
     await git(repo, 'worktree', 'remove', env.working_path);
-    const getLiveRun = isolationDb.getLiveRunOwningEnv;
+    const readUse = envUsersDb.getEnvUse;
     let replacement: IsolationEnvironmentRow | undefined;
-    const racing = spyOn(isolationDb, 'getLiveRunOwningEnv').mockImplementation(async id => {
+    const racing = spyOn(envUsersDb, 'getEnvUse').mockImplementation(async id => {
       replacement = await reRegister();
-      return getLiveRun(id);
+      return readUse(id);
     });
     const destroy = spyOn(getIsolationProvider(), 'destroy');
     try {

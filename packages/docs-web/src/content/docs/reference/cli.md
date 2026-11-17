@@ -15,7 +15,7 @@ sidebar:
 
 Install Archon and add a provider; see the [Quickstart](/getting-started/quick-start/). From a source checkout, run `bun run cli` in the repository, or `bun link` inside `packages/cli` to put `archon` on your PATH; see [Installation](/getting-started/installation/#from-source).
 
-The `workflow` subcommands, except `attention`, `test`, `wake` and `signal`, plus `isolation`, `complete`, `validate` and `setup --scope project`, run inside a git repository; a subdirectory resolves to the repository root. A non-git directory also works when it is a registered [folder project](/guides/multi-repo-projects/), or on first use with `--folder`, which registers it and runs in place. Every other command works from any directory. See [Working directory](#working-directory) for how the project is resolved.
+The `workflow` subcommands, except `attention`, `test`, `wake` and `signal`, plus `complete`, `validate` and `setup --scope project`, run inside a git repository; a subdirectory resolves to the repository root. A non-git directory also works when it is a registered [folder project](/guides/multi-repo-projects/), or on first use with `--folder`, which registers it and runs in place. Every other command works from any directory. See [Working directory](#working-directory) for how the project is resolved.
 
 ## Setup and maintenance
 
@@ -51,7 +51,7 @@ archon doctor
 
 Doctor does not check forge access for the bundled SDLC pack. Run `archon workflow run archon-forge-check` from the checkout for that; it names the credential source it used or says why it refused. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
 
-Without a resolved default provider, doctor checks discoverable workflows using the runtime provider resolver. If a workflow needs a default, doctor fails and names `archon ai default <provider>` and `archon setup`. Workflows that explicitly select their providers remain supported without a default. When discovery succeeds and no workflow needs a provider (including an empty workflow set), a healthy empty provider inventory is skipped. Otherwise, no registered providers fails and prints `archon provider add <claude|codex|pi>`. Discovery errors and broken installed plugins still fail. Stale maintained plugins fail with their installed and CLI versions and the reinstall command.
+Without a resolved default provider, doctor checks discoverable workflows using the runtime provider resolver. If a workflow needs a default, doctor fails and names `archon ai default <provider>` and `archon setup`. Workflows that explicitly select their providers remain supported without a default. When every workflow file loads and no workflow needs a provider (including an empty workflow set), a healthy empty provider inventory is skipped. Otherwise, no registered providers fails and prints `archon provider add <claude|codex|pi>`. The Workflow files check discovers workflows whether or not a default provider is set and fails naming each file that does not load. Broken installed plugins still fail. Stale maintained plugins fail with their installed and CLI versions and the reinstall command.
 
 The AI credentials check uses each connected credential the way a database-store run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant only if the credential it refreshed is still stored). It prints one line per credential and fails when one cannot be used (it cannot be read, the vendor rejected the refresh, or the refresh replaced the refresh token and the new grant could not be saved), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable or a concurrent credential change superseded the refresh. Run doctor again to verify the replacement. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it.
 
@@ -209,7 +209,7 @@ A relative path resolves from the invoking directory before the repository root.
 | Key | Meaning |
 | --- | --- |
 | `fixture.expect` | Simulation outcome: `completed` (the default), `failed`, `paused` or `cancelled` |
-| `fixture.authored` | Optional authored outcome expectation: `succeeded` or `failed`. A mismatch or an undeclared verdict fails the fixture |
+| `fixture.authored` | Optional authored outcome expectation: `succeeded` or `failed` for a boolean outcome, or the value of a named one. A mismatch or an undeclared outcome fails the fixture |
 | `fixture.fail-node` | Required when `expect: failed`. A node id, or a list naming the exact failed set (a loop body failure is the node and its group) |
 | `fixture.reached` | Nodes that must complete or be stubbed |
 | `fixture.inputs` | Values for the workflow's declared inputs |
@@ -347,26 +347,25 @@ A real run prints a JSON payload only with `--detach`. Without it, `--json` supp
 
 | Flag | Effect |
 |------|--------|
-| `--workflow-source <path>` | Read the workflow, its commands, and its scripts from this directory instead of `--cwd`. Lets an **uncommitted** workflow in one checkout run against a different checkout, repository, or folder project, with no commit, push, or merge. Fresh runs only; rejected with `--resume`, because a resumed run executes the source it already captured. See [Running a workflow from another checkout](#running-a-workflow-from-another-checkout). Repo config is not part of the source: the run reads `.archon/config.yaml` from the launch checkout (`--cwd`); see [Where a run reads `.archon/config.yaml`](/reference/configuration/#where-a-run-reads-archonconfigyaml). |
+| `--workflow-source <path>` | Read the workflow, its commands, and its scripts from this checkout root instead of `--cwd`. `<path>` is the directory that contains `.archon/`: Archon reads `<path>/.archon/workflows`, `.archon/commands`, and `.archon/scripts`. For a pack, pass the checkout that holds `.archon/workflows/<pack>`, not the pack folder. The named workflow must be found there, or the run is refused before it starts. Lets an **uncommitted** workflow in one checkout run against a different checkout, repository, or folder project, with no commit, push, or merge. Fresh runs only: a resumed run executes the source it already captured. See [Running a workflow from another checkout](#running-a-workflow-from-another-checkout). Repo config is not part of the source: the run reads `.archon/config.yaml` from the launch checkout (`--cwd`); see [Where a run reads `.archon/config.yaml`](/reference/configuration/#where-a-run-reads-archonconfigyaml). |
 | `--branch`, `-b <name>` | Branch name for the worktree; reuses a healthy active task worktree registered in Archon for the project and branch, or a usable checkout at the configured target path. If another path holds the branch and was not reused, check for a live Archon run before freeing it and retrying. A worktree created for a named branch is never removed when the run ends; `isolation cleanup --merged` removes it |
-| `--from <branch>`, `--from-branch <branch>` | Start point for the new worktree only. Unlike `--base`, it does not change the PR target. |
-| `--base-branch <name>` | Choose the project base branch on first registration only. Omit to follow the remote default at use time; no prompt. Rejected for folder projects, existing projects, resume/adoption/supersedes, and dry runs. A reachable remote must advertise the branch. With `--base`, this flag stores the project choice while `--base` overrides only this dispatch. |
+| `--from <branch>`, `--from-branch <branch>` | Start point for the new worktree only. An existing worktree whose history lacks it is refused, not reused; see [Where the run executes](#where-the-run-executes). Unlike `--base`, it does not change the PR target. |
+| `--base-branch <name>` | Choose the project base branch on first registration only. Omit to follow the remote default at use time; no prompt. Rejected for folder projects, existing projects, adoption/supersedes, dry runs, and every subcommand other than `workflow run`. A reachable remote must advertise the branch. With `--base`, this flag stores the project choice while `--base` overrides only this dispatch. |
 | `--base <branch>` | Per-dispatch base override, inherited by fresh shared-checkout children. Sets **both** the worktree cut-from **and** the PR target (`$BASE_BRANCH`), and outranks `worktree.baseBranch` in config plus the codebase default; see [Base branch precedence](#base-branch-precedence) below. The branch **must already exist on the remote**; a missing one is a hard error, not a fallback. Combine with `--from` to drive the two separately. Rejected with `--no-worktree`, `--folder`, and workflows pinning `worktree.enabled: false`. |
 | `--project <id\|name>` | Bind a fresh run to an existing registered repository by ID or exact name (for example `owner/repo`); see `archon project list`. Folder projects are unsupported. See `archon workflow run --help` for incompatible flags. |
 | `--no-worktree` | Run directly in the live checkout, without isolation |
 | `--folder` | Register the current directory, git or not, as a folder project on first use and run in place, without a worktree. Rejects `--branch`, `--from` and `--base`. |
-| `--container` | Run a **folder project** inside an overlay-isolated Docker container instead of in place (writes land in an overlay, not the live root, until an approval-gated write-back). Folder-only; a repo project errors. Requires the runner image (`bun run build:runner-image`). Normal gate pauses `docker stop` the container; `--resume`/`approve`/`reject` rediscover and restart it after resume admission. Failed resume setup marks the run failed. Failed setup or suspension can leave its container running and consuming resources; see [Pause economics](/guides/container-isolation/#pause-economics). See the [Container isolation guide](/guides/container-isolation/) and [configuration](/reference/configuration/#container-isolation-folder-projects). |
-| `--input <name>=<value>` | Supply one value for the workflow's declared `inputs:`. **Repeat the flag per input.** Splits on the first `=`, so the value may itself contain `=`; `--input name=` supplies an empty string. Omitted inputs take their declared `default:`. A missing **required** input or an **undeclared** name is refused before any worktree, clone, or AI cost, through the same contract a composing `with:` map goes through. Works with `--dry-run` (inputs resolve exactly as in a real run). Rejected with `--resume` (a resume replays the inputs recorded on the run). See [Running a workflow that declares inputs](/reference/workflow-language/#running-a-workflow-that-declares-inputs). |
-| `--model <name>=<spec>` | Rebind one `small`, `medium`, `large`, or `@alias` for this run. **Repeat the flag per binding.** An Archon agent prefix selects that agent (`codex/gpt-6.1-sol`); another valid vendor/model ref selects Pi (`openai/gpt-5.6`); an unqualified model keeps the binding's current provider, so binding an `@alias` no config defines (one a workflow's model preference list names, such as `@reviewer`) needs a prefixed model, a tier, or another alias; a tier or alias RHS copies that preset. Unspecified names keep their user → repo → global → built-in values. Literal `model:` pins and nodes that never reference the rebound name do not change. Bare `--model <spec>` is invalid, there is no run-wide `--provider`, and the flag is rejected with `--resume`. Works with `--dry-run`. |
-| `--config <path>` | Load one sparse YAML config layer for this fresh run. Relative paths resolve from the directory named by `--cwd`, even when it is a repository subdirectory. Values in the file override persistent config and user AI preferences; explicit `--model` flags then replace only their named bindings. Works with `--dry-run` and `--detach`; the parent validates and seals the layer before handing it to a detached child, so later file edits cannot change that launch. Rejected with `--resume` because a continuation restores the sealed layer recorded when the run started. |
-| `--config-from-run <run-id>` | Start this fresh run with the run config layer the named run was started with, as if its `--config` file were passed again. A run started without `--config` contributes nothing, so the new run uses the install's config alone. Use it when one workflow launches another to continue the same work, so the continuation keeps the provider configuration it started on. Exclusive with `--config`, and rejected with `--resume`. Works with `--detach`. |
-| `--resume` | Select the newest eligible run by start time for this workflow name and working path: a failed or paused run, or a `running` run whose last activity timestamp is missing or more than one day old. With a SQL store, a `running` run is excluded while its resource-start request is `admitted`; see [trigger inspection](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). Resume skips completed nodes and reuses the run's recorded AI configuration. Missing or old activity does not prove the owner is gone; verify that before resuming a `running` run. Rejected with `--branch`. Prefer [`workflow resume <run-id>`](#workflow-resume) when you hold the id of a failed or paused run. |
+| `--container` | Run a **folder project** inside an overlay-isolated Docker container instead of in place (writes land in an overlay, not the live root, until an approval-gated write-back). Folder-only; a repo project errors. Requires the runner image (`bun run build:runner-image`). Normal gate pauses `docker stop` the container; `workflow resume`/`approve`/`reject` rediscover and restart it after resume admission. Failed resume setup marks the run failed. Failed setup or suspension can leave its container running and consuming resources; see [Pause economics](/guides/container-isolation/#pause-economics). See the [Container isolation guide](/guides/container-isolation/) and [configuration](/reference/configuration/#container-isolation-folder-projects). |
+| `--input <name>=<value>` | Supply one value for the workflow's declared `inputs:`. **Repeat the flag per input.** Splits on the first `=`, so the value may itself contain `=`; `--input name=` supplies an empty string. Omitted inputs take their declared `default:`. A missing **required** input or an **undeclared** name is refused before any worktree, clone, or AI cost, through the same contract a composing `with:` map goes through. Works with `--dry-run` (inputs resolve exactly as in a real run). A continuation (`workflow resume`, `approve`, `reject`, `respond`, `answer`) keeps the inputs recorded on the run and refuses `--input`. See [Running a workflow that declares inputs](/reference/workflow-language/#running-a-workflow-that-declares-inputs). |
+| `--model <name>=<spec>` | Rebind one `small`, `medium`, `large`, or `@alias` for this run. **Repeat the flag per binding.** An Archon agent prefix selects that agent (`codex/gpt-6.1-sol`); another valid vendor/model ref selects Pi (`openai/gpt-5.6`); an unqualified model keeps the binding's current provider, so binding an `@alias` no config defines (one a workflow's model preference list names, such as `@reviewer`) needs a prefixed model, a tier, or another alias; a tier or alias RHS copies that preset. Unspecified names keep their user → repo → global → built-in values. Literal `model:` pins and nodes that never reference the rebound name do not change. Bare `--model <spec>` is invalid and there is no run-wide `--provider`. A resume keeps the run's own bindings. Works with `--dry-run`. |
+| `--config <path>` | Load one sparse YAML config layer for this fresh run. Relative paths resolve from the directory named by `--cwd`, even when it is a repository subdirectory. Values in the file override persistent config and user AI preferences; explicit `--model` flags then replace only their named bindings. Works with `--dry-run` and `--detach`; the parent validates and seals the layer before handing it to a detached child, so later file edits cannot change that launch. A continuation restores the sealed layer recorded when the run started instead. |
+| `--config-from-run <run-id>` | Start this fresh run with the run config layer the named run was started with, as if its `--config` file were passed again. A run started without `--config` contributes nothing, so the new run uses the install's config alone. Use it when one workflow launches another to continue the same work, so the continuation keeps the provider configuration it started on. Exclusive with `--config`. Works with `--detach`. |
 | `--adopt <run-id>` | Start a new run in a terminal run's exact worktree or branch, with `adopted_from_run_id` provenance and `$ADOPTED_RUN_DIR` access. Inherits its recorded AI configuration; conflicting AI config or model overrides are rejected. A unique run-id prefix resolves within the launch project; ambiguous prefixes fail with candidate IDs unless `--chat-project-id` scopes selection. With that flag, use a longer prefix or full ID. Adoption never infers a run from workflow name or prompt text. |
 | `--supersedes <run-id>` | Start in a fresh estate while recording that this run replaces a terminal prior run. Accepts a unique prefix within the launch project; ambiguous prefixes fail with candidate IDs unless `--chat-project-id` scopes selection. With that flag, use a longer prefix or full ID. Full IDs select the exact run, including another project unless `--chat-project-id` restricts selection. Unlike `--adopt`, it inherits no checkout. |
-| `--item <key>` | Name the [item](#items) this fresh run belongs to. Without it, a run started with `--adopt` or `--supersedes` belongs to the item of the run it continues. Rejected with `--resume`: a resumed run keeps its own. |
+| `--item <key>` | Name the [item](#items) this fresh run belongs to. Without it, a run started with `--adopt` or `--supersedes` belongs to the item of the run it continues. A resumed run keeps its own. |
 | `--quiet`, `-q` | Suppress the progress lines on stderr |
 | `--verbose`, `-v` | Also print tool calls (name and duration) in the progress lines, and debug logs |
-| `--detach` | Run in a detached background child and return before completion. Human output names the transcript and the child's log file; the `--json` acknowledgement carries `runId`, `transcriptPath` (the run's JSONL transcript) and `logPath` (the child process's stdout and stderr). Follow execution with [`workflow logs <run-id> --follow`](#workflow-logs) and wait for the next terminal or gate transition with [`workflow wait <run-id>`](#workflow-wait). `approve`, `reject`, `respond` and `resume` accept it too; see [Detached control verbs](#detached-control-verbs). |
+| `--detach` | Run in a detached background child and return before completion. Human output names the transcript and the child's log file; the `--json` acknowledgement carries `runId`, `transcriptPath` (the run's JSONL transcript) and `logPath` (the child process's stdout and stderr). Follow execution with [`workflow logs <run-id> --follow`](#workflow-logs) and wait for the next terminal or gate transition with [`workflow wait <run-id>`](#workflow-wait). A refusal the launch can decide from current state is the command's result, before the acknowledgement: a registered `--branch` worktree on another branch or without `--from` in its history, a broken run-ended binding for an `--item` run, or a workflow that declares `returns.asks` started without `--item`. A failure the child meets later, such as creating the worktree or waiting for a resource, is recorded on the run; read it with `workflow get <run-id>`. `approve`, `reject`, `respond` and `resume` accept it too; see [Detached control verbs](#detached-control-verbs). |
 | `--no-wait` | Refuse to start, naming the resource, when the workflow declares a `resource:` that is full. Without it the run waits as `pending`, prints `Waiting for resource '<name>'`, and starts when a slot frees. See [Workflows that declare a resource](/guides/workflow-triggers/#workflows-that-declare-a-resource) for where the capacity comes from. |
 | `--conversation-id <id>` | Correlation id for the run's messages. It creates no conversation and no `persist_session` scope. |
 | `--dry-run` | Simulate deterministic DAG control flow in memory. Creates no run, worktree, session, event, artifact, or provider request. |
@@ -395,7 +394,7 @@ With `--branch <name>`:
 - If the branch already exists but no worktree holds it, checks it out at its current head: the local branch, or `<remote>/<branch>` when that contains the local branch (the local branch is fast-forwarded to it). It never resets an existing branch to the base.
 - Fails before any work if the local branch and `<remote>/<branch>` have diverged. Reconcile them, or delete the local branch to start from the remote one.
 - To start fresh from the base, delete the branch (`git branch -D <name>`, and the remote branch if there is one) or choose another name.
-- If a new worktree must be created, `--from` is rejected when the branch already exists, locally or on the remote. Reusing an existing worktree leaves its checkout unchanged and ignores `--from`; healthy registered reuse warns that `--from` was not applied.
+- If a new worktree must be created, `--from` is rejected when the branch already exists, locally or on the remote. Reusing an existing worktree, registered or found at the target path, leaves its checkout unchanged, so `--from` must already be in its history: its HEAD or an ancestor of it. `--from` resolves in the repository, as it does on creation, so `--from HEAD` means the repository's HEAD, not the worktree's. Otherwise the run is refused before it starts, naming the worktree, its base (where its history meets `--from`, or that they share none) and the requested start point, and nothing is changed. Omit `--from` to continue in the worktree, or remove the worktree and delete the branch to start fresh from `--from`. For a registered worktree, `--detach` makes this refusal its result (exit 1, `{ "ok": false, "error" }` under `--json`). For a checkout found only at the target path, the detached child makes it and records it on the run, read with `workflow get`.
 
 `--no-worktree` runs in the target directory with no isolation and cannot be combined with `--branch`, `--from` or `--base`.
 
@@ -429,11 +428,13 @@ archon workflow run archon-implement \
   "implement the plan"
 ```
 
+`--workflow-source` takes a checkout root, the directory that contains `.archon/`. The workflow named on the command line must resolve from that directory's `.archon/workflows` (a pack in `.archon/workflows/<pack>/` counts). If it does not, the run is refused before it starts. The error names the directory searched, and the scope the name would otherwise have resolved from when another scope has it. Archon never silently runs a bundled, global, or installed workflow of the same name in its place. Commands, scripts, and `include:` or `workflow:` children the named workflow uses may still resolve from your home-scoped or bundled source as usual, so a source can override some of a pack's files only if it holds the pack's named workflow. A run that resolves from the source records `project` as its `metadata.dispatch.source`.
+
 Every run freezes its workflow source when it starts, whether or not you pass this flag. That means the source directory's `.archon/workflows`, `.archon/commands`, and `.archon/scripts`, plus your home-scoped `~/.archon/` source and Archon's own bundled defaults. Everything a static `include:` can reach is frozen together, so an included global or bundled workflow cannot change shape under a run either. That freeze is what makes the rest predictable:
 
 - **The target stays clean.** Nothing from the source checkout is written into it, so its `git status` and its validators only ever see its own files.
 - **A run does not change shape while it is running.** Edit, move, or delete the source checkout after a run starts and a resume still executes what the run began with. Start a new run to pick up the edits.
-- **Resume needs no source path.** Every continuation (`archon workflow resume <run-id>`, `archon workflow run <name> --resume`, `approve` and `reject`) loads the run's own captured source, which is why `--workflow-source` is refused alongside `--resume`.
+- **Resume needs no source path.** Every continuation (`archon workflow resume <run-id>`, `approve` and `reject`) loads the run's own captured source.
 
 The capture lives at `~/.archon/workspaces/<project>/workflow-source/runs/<run-id>/`, beside the run's artifacts, and is kept as long as the run's other output. It is not inside `$ARTIFACTS_DIR`, which is the run's output channel. Its manifest records a content digest and the source-resolution settings, and the run row stores both too. Archon hashes the full capture during discovery, on resume and before every later command, named script or composed-source read, and refuses the read, and any container dispatch, when the capture changed. Start a fresh run to execute the current workflow.
 
@@ -490,9 +491,9 @@ A workflow's declared `inputs:` resolve exactly as in a real run: omitted inputs
 
 With `--exec-code`, child processes inherit Archon's process environment, then apply file-configured `env`, registered-project environment values, and per-run `env` overrides from `--config`, in that order (later values win). Node input variables and engine-owned variables such as `ARTIFACTS_DIR` take precedence over those layers. Registered-project values come from the project resolved for the invocation's working directory. See [configuration](/reference/configuration/) for file configuration and [managed environment variables](/reference/security/#secrets-handling) for stored credentials. Executable fixtures use the same layers, without per-run CLI overrides.
 
-By default, bash and script nodes are never executed. `--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects. An executed node that declares `output_format` is certified exactly as in a real run: stdout must be one JSON document that satisfies the schema, and downstream `$node.output.field` references read that certified value. Executed nodes receive `$ARTIFACTS_DIR` and `$STATE_DIR` under an ephemeral per-simulation directory in `~/.archon/temp/` (honoring `ARCHON_HOME`), created before the first executed node and removed when the simulation ends. A dry run writes nothing inside the repository, and a simulation that executes nothing creates no directory at all. An attention wait pauses the simulation where a real run would pause, unless the stub file gives that wait node a stub; the stub then stands in for its answer and must match the form's output, for example `review: { decision: approve, text: "" }`. Deprecated `approval:` nodes auto-complete unless `--pause-at-gates` is set. Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, `--resume`, and `--detach`.
+By default, bash and script nodes are never executed. `--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects. An executed node that declares `output_format` is certified exactly as in a real run: stdout must be one JSON document that satisfies the schema, and downstream `$node.output.field` references read that certified value. Executed nodes receive `$ARTIFACTS_DIR` and `$STATE_DIR` under an ephemeral per-simulation directory in `~/.archon/temp/` (honoring `ARCHON_HOME`), created before the first executed node and removed when the simulation ends. A dry run writes nothing inside the repository, and a simulation that executes nothing creates no directory at all. An attention wait pauses the simulation where a real run would pause, unless the stub file gives that wait node a stub; the stub then stands in for its answer and must match the form's output, for example `review: { decision: approve, text: "" }`. Deprecated `approval:` nodes auto-complete unless `--pause-at-gates` is set. Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, and `--detach`.
 
-The ordered trace records each node as completed, stubbed, skipped, failed, or paused, including its reason, resolved text, and safe output. The result reports two independent facts. `outcome` is the simulation execution result (`completed`, `failed`, `paused`, or `cancelled`) and still controls the CLI exit code. `authoredOutcome` is `succeeded`, `failed`, or `null`, derived only when the workflow declares `returns:` plus a boolean `outcome_field:` and the return node has a schema-valid structured result supplied by a stub or produced by code executed with `--exec-code`. Generated placeholders from `--default-stubs` or an unstubbed `all_done` node do not invent an authored verdict. A completed simulation can therefore report a failed authored outcome. Human output labels these as `Simulation outcome:` and `Authored outcome:`; simulation JSON always includes both fields. `--stubs-init --json` does not run a simulation and instead returns a scaffold acknowledgement with `workflow`, `stubsPath`, and `nodeCount`.
+The ordered trace records each node as completed, stubbed, skipped, failed, or paused, including its reason, resolved text, and safe output. The result reports two independent facts. `outcome` is the simulation execution result (`completed`, `failed`, `paused`, or `cancelled`) and still controls the CLI exit code. `completedOutcome` is the outcome the run would complete with, or `null`: set only when the simulation completed, the workflow declares `returns: { node, outcome }`, and the return node has a schema-valid structured result supplied by a stub or produced by code executed with `--exec-code`. It is `succeeded` or `failed` for a boolean outcome and the value for a named one; `authoredOutcome` carries the boolean form only, as the run row's `outcome` column would, and `declaresOutcome` says whether the workflow declares one. Generated placeholders from `--default-stubs` or an unstubbed `all_done` node do not invent an outcome. A completed simulation can therefore report a failed outcome. Human output labels these as `Simulation outcome:` and `Authored outcome:`; simulation JSON always includes the fields. `--stubs-init --json` does not run a simulation and instead returns a scaffold acknowledgement with `workflow`, `stubsPath`, and `nodeCount`.
 
 Every node that takes an AI turn also reports the provider and model it will run on and where each value came from, using the executor's own resolution. This answers what a node in a composed workflow runs on, since a composed workflow runs with the configuration its own file declares:
 
@@ -560,15 +561,15 @@ and against a workflow pinning `worktree.enabled: false`. None of these create a
 worktree, so the flag could only move the PR target, which would report a base
 no worktree was ever cut from.
 
-**When an existing worktree is adopted**, by `--branch` reusing a healthy Archon
-registration or a usable checkout at the configured target path, or by `--resume`
-continuing a prior run, the cut-from is already fixed, so `--base` changes only the PR target. Archon warns in both cases.
+**When an existing worktree is adopted** by `--branch` reusing a healthy Archon
+registration or a usable checkout at the configured target path, the cut-from is already
+fixed, so `--base` changes only the PR target. Archon warns.
 
 **A continuation keeps the base it started with.** A run records its resolved
-`$BASE_BRANCH` when it starts, and every continuation of it (`--resume`, an approved
+`$BASE_BRANCH` when it starts, and every continuation of it (`workflow resume`, an approved
 gate, or the automatic resume of a parent whose sub-run gate was approved) reports that
 value rather than re-running levels 2--4 against whatever config and git say later.
-Passing `--base` again still retargets the PR, as above. A run started before Archon
+Continuations refuse `--base`. A run started before Archon
 recorded this re-resolves through levels 2--4 and logs
 `workflow.dispatch_not_recorded_resolving_live` when it does.
 
@@ -636,7 +637,8 @@ archon workflow runs --throughput      # effective output tok/s by run and model
 archon workflow runs --throughput --json --verbose
 archon workflow runs --all             # list across all projects
 archon workflow runs --open            # failed runs nothing has adopted or superseded
-archon workflow runs --item issue-42   # every run of one item, oldest first
+archon workflow runs --item issue-42   # one item: its runs, links, open questions, answers and rulings
+archon workflow runs --item-of <run-id> --json  # the item a run belongs to
 ```
 
 `--throughput` adds effective output throughput per listed run and an aggregate grouped
@@ -650,7 +652,11 @@ reads events in batches of up to 20 runs; without the flag, listing costs are un
 Unreadable history or invalid typed execution metadata fails the opted-in request rather
 than returning a partial report.
 
-`--item <key>` lists every run of one [item](#items) in the current project, in the order they started, and ignores the other filters. It needs a registered project; `--json` prints `{ runs, total }`.
+`--item <key>` reads one [item](#items) in the current project and ignores the other filters. It prints these sections: the item's runs (id, workflow, status, authored outcome, start and end), oldest first; its starts still waiting for capacity, in queue order, each with its full request id (what `trigger inspect` and `trigger withdraw` take), workflow, resource, and what it waits behind: how many queued starts of that resource and host are ahead of it, or, with none ahead, a free slot on the resource; the host that drains it; and when it queued; its [links](#workflow-link), active ones first, each with its id, its kind and an arrow for its direction (`this item depends_on → issue-3` for a link from this item, `← issue-9 duplicate_of this item` for a link to it), and ended ones after them, marked with who ended them and when; then, oldest first, the questions open in those runs or their sub-runs and the asks open on the item, and the answers recorded in them (attention answers and gate decisions, with the run, node, time and surface) together with the item's [rulings](#workflow-rule) (text, time, surface, who when they said, and when it was withdrawn). A sub-run is not listed as a run; its question or answer names its own run id, and `workflow get` on the parent shows it. The read reports recorded facts only; it computes no stage for the item. A start's count ahead is queue order, not a promise: a start whose checkout is held is passed over. It needs a registered project.
+
+`--json` prints `{ item, runs, queued, questions, answers, links, degraded }`: `item` is `{ id, projectKey, key }`; each run is `{ id, workflow, status, outcome, startedAt, completedAt }`; each queued start is `{ requestId, workflow, resource, hostId, queuedAt, ahead }`, where `ahead` is read when the item is read and `workflow` is null when the stored launch does not read; each question is the attention queue item `workflow attention --json` lists; each answer has `kind` `attention` (with `answer`, `by`, `fromRun`) or `gate` (with `decision`, and `text` for its comment or rejection reason), and `runId`, `node`, `occurrence`, `at`, `via`, null where the row does not record them; or `kind` `ruling`, with `id`, `text`, `at`, `via`, `by`, `fromRun` and `withdrawn` (null, or `{ at, via, by, fromRun }`), and no run. Each link is `{ id, kind, direction, other, at, via, by, fromRun, ended }` in recording order: `direction` is `outgoing` when this item is the one that depends on, is part of, or is a duplicate of `other`, and `incoming` when `other` points at this item; `other` is `{ id, projectKey, key }`; `ended` is null while the link is active, or `{ at, via, by, fromRun }`. An [ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) a completed run left reads as `kind` `ask`, with its `ref`, the `question` it asked, `answer` (null for a withdrawal), `chosen` (the chosen option's `id` and what it `does`, or null), `withdrawn`, `by` and `fromRun`, and `runId` naming the run that left it; `kind` `asks_settled` records that the last open ask of that run's set closed, with `answered` and `withdrawn` counts, at the time of that close; a set with an ask row that could not be read does not settle, and `degraded` names its run. Both are read from the item's asks, so they stay after the run that left them is deleted. Open asks on the item are among its questions. `degraded` names each part that could not be read: a run in the item's tree, one of its own runs or a paused child (`reason: "run_unreadable"`, `runId`), a ruling (`reason: "ruling_unreadable"`, `rulingId`), or a link (`reason: "link_unreadable"`, `linkId`); the rest of the item still reads. An item named with no run yet reads with empty sections but for its queued starts, rulings and links; a key nothing has named exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "item": "<key>" }`.
+
+`--item-of <run-id>` reads the item a run belongs to, the item of its top-level run when it is a `workflow:` sub-run, in whichever project the run is. It prints the same read as `--item`. A run on no item, or one the store does not know, exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "run": "<run-id>" }`. It is the host command behind the `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to) export.
 
 With the SQL store, the recent-run list rejects the entire result if a returned row or a
 status-count group contains an unsupported persisted status; it never returns a partial
@@ -698,7 +704,7 @@ Show detail for a single run by ID, regardless of status (unlike `status`, which
 ```bash
 archon workflow get <run-id>
 archon workflow get <run-id> --json
-archon workflow get <run-id> --verbose   # add the per-node summary
+archon workflow get <run-id> --verbose   # add the per-node summary and loop rounds
 archon workflow get <run-id> --json --verbose
 archon workflow get <run-id> --throughput
 archon workflow get <run-id> --throughput --json
@@ -761,9 +767,11 @@ These are audit facts. They never name who answered, and nothing routes on them.
 
 - **Execution status** (`pending`, `running`, `paused`, `completed`, `failed`, or `cancelled`)
   controls terminality, resume and cancellation, filters, and CLI exit behavior.
-- **Authored outcome** (`succeeded` or `failed`) is the workflow's declared verdict from
-  `outcome_field`. Human output labels it separately when present. JSON always carries it as the
-  nullable `outcome` field beside `status`.
+- **Authored outcome** is the outcome a completed run declared through `returns.outcome`:
+  `succeeded` or `failed` for a boolean, the value for a named outcome. Only the write that
+  completes the run records it, so a run that has not completed shows none. Human output labels
+  it separately when present. JSON carries it as the nullable `completed_outcome` field beside
+  `status`, and the boolean form also as the older nullable `outcome` field.
 - **Reason** is why a run that ended needs a look, in up to two short lines: for a failed
   outcome, what the `returns:` node said (its first lines, or its text fields as `key: text`);
   for a failed run, the first line of its first failed node's error, falling back to the
@@ -772,10 +780,9 @@ These are audit facts. They never name who answered, and nothing routes on them.
   when the record holds no reason text. The full value stays in `terminal_record`.
 
 The axes may disagree without either being rewritten: `completed` with authored outcome `failed`
-means execution finished normally but the workflow judged the work unsuccessful; `failed` or
-`paused` with authored outcome `succeeded` records a successful verdict before execution later
-failed or paused. A null outcome means the workflow did not declare one, the selected node has not
-authored it yet, or the run predates the field. In that case human output keeps its status-only
+means execution finished normally but the workflow judged the work unsuccessful. A null outcome
+means the workflow did not declare one, the run has not completed, or the run predates the field.
+What the `returns:` node said before a later failure or pause stays in its `node_completed` event. In that case human output keeps its status-only
 presentation. Except on an [execution handoff](#workflow-run-name-message), foreground
 `workflow run` uses the same labels when an outcome exists, and its exit code follows execution
 success or failure. A handoff reports only the observed status and has the exit meaning described above.
@@ -784,6 +791,18 @@ Verbose JSON node summaries include `execution` for newly recorded work. It iden
 invocation, attempt, provider, requested model and any model the provider reported. Inner retries
 share an invocation; each retry has its own attempt. A new loop-group iteration creates new body
 invocations. Resuming unfinished work keeps its invocation identity.
+
+`nodes` holds each loop body node once, with its latest round. For a run that entered a
+`loop_group`, `--verbose` also prints a `Rounds:` block, and `--json --verbose` adds
+`loop_rounds`: one entry per round, in order, each with its `loop_group_path` (frames
+outermost first, iterations from 1) and the body nodes it reached, with `state`, `error`,
+`started_at` (the invocation's first attempt), `duration_ms` (every attempt's recorded duration summed,
+so a retry counts, the wait between attempts does not; absent until the last attempt ends),
+`output` (bounded as stored, with `output_truncated`): a completed node's output, or the
+stdout a failed `bash:` or `script:` node recorded, and a completed node's `structured_output`. A round still running lists the node it is in;
+nodes it has not reached are absent. A nested loop's rounds are separate entries whose path
+extends the outer round's. The field is absent for a run that ran no loop, and under `--events`.
+The API's `GET /api/workflows/runs/{runId}` serves the same rounds as `run.loop_rounds`.
 
 The run's starting checkout appears as `checkout_baseline` in JSON and as the `Start:` line
 in human output. The engine observes it once, right after the run wins its execution claim
@@ -797,7 +816,7 @@ started. Node execution records carry the same observation as `invocation.checko
 
 Pressing Ctrl-C on a foreground run stops it without losing it. The process that owns the
 run records why it stopped, and the run stays `failed`, which is the resumable status: it is
-still found by `workflow run <name> --resume` and accepted by `workflow resume <run-id>`.
+accepted by `workflow resume <run-id>`.
 For a `failed` run, human output adds a `Stopped:` line naming the interrupt and the
 signal, above the usual `Error:` line. JSON carries the same fact as `metadata.stop_reason`, an object with the
 categorical `reason` and the `signal` that arrived. Resuming the run clears it, so a run
@@ -1047,6 +1066,19 @@ archon workflow wait <run-id> --json --timeout 900
 
 There is no default timeout. Pass `--timeout <seconds>` when the host needs an upper bound.
 
+`archon workflow wait --item <key>` waits on an [item](#items) instead of one run. It
+watches every run on the item that has not ended at call time, plus every run that starts
+on the item while it waits, and returns when the first of them reports something, as
+`workflow wait <run-id>` would for that run. Runs that had already ended are history and
+do not end the wait, unless one is resumed in place while waiting; it is then watched
+too, and reported even when it has already ended again by the time the wait looks. Each result names its run: one line per run, or
+under `--json` one `{ "ok", "action": "wait", "item", "results": [...] }` document whose
+`results` hold exactly what `workflow wait <run-id> --json` prints for each run, and whose
+`ok` is false when the exit status is `1`. Runs that reported together are all listed. An
+item with no live run is refused rather than waited on (`reason: "no_run"`, exit `1`,
+listing the item's runs). Exit codes are as above: `0` when a run reported, `3` when the
+timeout passed with every watched run still live.
+
 Exit codes describe the command, not the run:
 
 | Exit | Meaning |
@@ -1144,6 +1176,7 @@ archon workflow attention --json --all --count-by label:class
 archon workflow attention --json --count-by label:class --since 30d
 archon workflow attention --json --count-by answerer --since 30d
 archon workflow attention <run-id> --json                          # one item
+archon workflow attention ask:<id> --json                          # one ask a completed run left
 archon workflow attention --watch --json --all                     # what needs someone, as it happens
 archon workflow attention --watch --json --label stage=merge       # one queue's questions
 archon workflow attention --watch --notices --json                 # also runs that ended or resumed, and notices
@@ -1170,7 +1203,9 @@ origin data can instead make a single read fail. Batch lists omit a parent block
 unreadable paused descendant and report that child through `degraded`; if the descendant
 is not paused, they report the affected paused parent instead. An absent parent does not
 mean its block has cleared. An unknown run id prints `error: "not_found"` and
-exits `1`. The item shape is described in the [Operate page](/getting-started/operate/#queue-items).
+exits `1`. With an ask's ref (`ask:<id>`) it prints `{ ok, action, ref, item }`: the open
+ask, or null once it was answered, withdrawn or replaced; an unknown ref prints
+`error: "not_found"` and exits `1`. The item shape is described in the [Operate page](/getting-started/operate/#queue-items).
 
 Batch list and count reads add an optional `degraded` array when a paused row or a descendant
 needed to project its attention item cannot be read. Each entry has the shape
@@ -1201,7 +1236,9 @@ labels, the question's first line, the recommendation and its reason, each optio
 it does, and the commands that answer that occurrence, including the `--recommended` form
 when a recommendation exists; a failed run, a lost owner and an unreadable item name the run and the reason a failed outcome gave, and the
 command that shows more; the close of an ask is one line. The list prints the same blocks,
-and `workflow attention <run-id>` prints the whole message. Read the watch unfiltered: a
+and `workflow attention <run-id>` prints the whole message. An open ask a completed run left
+is headed by its ref, `open ask`, its project and item key, and when it opened, and prints
+its whole question and context in every form, since its run is no longer paused. Read the watch unfiltered: a
 filter in the pipe can hold lines until the watch ends. Scope and `--label` work as for the list;
 `--sort`, `--count-by` and a run id are refused. See
 [Stream the queue](/getting-started/operate/#stream-the-queue).
@@ -1233,7 +1270,7 @@ run ID, without error text. Read the full error with `archon workflow get <run-i
 ([fields](/getting-started/operate/#the-full-protocol-for-programs)).
 Repeated run-projection failures send an identifier-free `degraded` line with
 `reason: "run_unreadable"` and the last handled `cursor`, without exiting. Independent
-readable deliveries can continue while unreadable deliveries are omitted. Store-wide
+readable deliveries can continue while unreadable deliveries are omitted. An open ask whose row turns unreadable stays open, with one `degraded` line, rather than reading as `resolved`. Store-wide
 projection outages retain the cursor and retry. Check the operator log and reconnect
 after repair to refresh the open set; replay from before the gap for historical transitions.
 Later bookmarks do not establish repaired coverage.
@@ -1278,6 +1315,75 @@ not running (`run_not_running`), and, with no `reason`, when a label is not `key
 it is not called from a workflow node: it reads
 `WORKFLOW_ID` and `ARCHON_NODE_EXECUTION` from the node's environment, and the two must
 name the same run. Put the text after `--` when it may start with a dash.
+
+### `workflow rule`
+
+Record a ruling on an item of the current project: a decision made about the item without
+a question having been asked, such as "leave the chat readers for a follow-up". Every later
+read of the item shows it with the answers, and a run on the item can read it through
+[`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to). The engine
+stores the text and never reads it.
+
+```bash
+archon workflow rule --item issue-42 --as triage-agent -- "Leave the chat readers for a follow-up"
+archon workflow rule --withdraw <ruling-id>
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--item <key>` | The item the ruling is on, in the project the working directory belongs to, as [`runs --item`](#workflow-runs) finds it. A key nothing has named yet is written as a new item, as a start would write it |
+| `--withdraw <ruling-id>` | Withdraw a ruling instead. The ruling stays in the item read with `withdrawn` set; a ruling is withdrawn once. Under [`--chat-project-id`](#global-options) the ruling must be on an item of the selected project; without it the id alone names the ruling, in any project |
+| `--as <name>` | The name you declare for yourself, recorded as a claim nothing checks |
+| `--json` | Print the ruling as the item read lists it, or `{ ok: false, error }` |
+
+The text goes after `--`, and must not be blank. Called from inside a workflow node, the
+ruling records the node's run and node as `fromRun`, read from the node's environment. The
+command prints the ruling's id. It exits 1 for blank text, for a directory with no
+registered project, for a ruling id that names no ruling (`error: "not_found"`), for one
+already withdrawn (`error: "already_withdrawn"`), and under `--chat-project-id` for one on
+another project's item (`error: "outside_project"`), which stays as it was. Rulings need the database store.
+`POST /api/items/rulings` and `POST /api/items/rulings/{rulingId}/withdraw` do the same over
+HTTP; see the [API reference](/reference/api/).
+
+### `workflow link`
+
+Record a link from one item of the current project to another, or end one. A link is a
+directed relation the engine stores and reports; it gives the kinds no meaning, and ranks,
+holds or starts nothing because of a link. Both items' reads show it
+([`runs --item`](#workflow-runs)), and a run on either item can read it through
+[`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to).
+
+```bash
+archon workflow link --item issue-42 --kind depends_on --to issue-17
+archon workflow link --item issue-42 --kind part_of --to order-3 --as triage-agent
+archon workflow link --end <link-id>
+```
+
+| Kind | Read from `--item` to `--to` |
+| --- | --- |
+| `depends_on` | `--item` waits for `--to` |
+| `part_of` | `--item` is a piece of the whole `--to` |
+| `duplicate_of` | `--item` goes away; `--to` stays |
+
+| Flag | Effect |
+| --- | --- |
+| `--item <key>` | The item the link is from, in the project the working directory belongs to, as [`runs --item`](#workflow-runs) finds it |
+| `--kind <kind>` | `depends_on`, `part_of` or `duplicate_of` |
+| `--to <key>` | The item the link points at, in the same project |
+| `--end <link-id>` | End a link instead. The link stays in both items' reads with `ended` set; a link is ended once. Under [`--chat-project-id`](#global-options) the link must be from an item of the selected project; without it the id alone names the link, in any project |
+| `--as <name>` | The name you declare for yourself, recorded as a claim nothing checks |
+| `--json` | Print the link as `{ id, kind, from, to, at, via, by, fromRun, ended, created }`, or `{ ok: false, error }` |
+
+A key nothing has named yet is written as a new item, as a start would write it. Recording a
+link that is already active, with the same kind from the same item to the same item, leaves
+the one link and prints `already recorded` (`created: false`); the opposite direction is a
+different link. Once a link is ended, recording it again writes a new link. Called from
+inside a workflow node, the link records the node's run and node as `fromRun`. The command
+prints the link's id. It exits 1 for a kind outside the three (`error: "unknown_kind"`), for
+a link from an item to itself (`error: "self_link"`), for a directory with no registered
+project, for a link id that names no link (`error: "not_found"`), for one already ended
+(`error: "already_ended"`), and under `--chat-project-id` for one from another project's
+item (`error: "outside_project"`), which stays as it was. Links need the database store.
 
 ### `workflow attention label`
 
@@ -1365,6 +1471,38 @@ it; `archon serve` or [`workflow wake`](#workflow-wake) continues it. The HTTP e
 is `POST /api/workflows/runs/<run-id>/answer` with
 `{ occurrence, choose?, recommended?, text?, as? }`, where `recommended: true` takes the
 place of `choose`.
+
+#### Answering by ref
+
+`--ref <ref>` takes the place of `<run-id> --occurrence <id>`: it answers the item the
+[attention queue](#workflow-attention) lists under that `ref`, through the same answer
+operation the API and the chat tool use. It is the only way to answer an
+[ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) a completed run
+left, which has no paused run to name. For an item a paused run holds the ref works too, and
+the run is not continued from here. `--withdraw <ref>` closes an ask unanswered.
+
+```bash
+archon workflow answer --ref ask:<id> --choose keep --as planner --json   # answer an ask
+archon workflow answer --ref ask:<id> --recommended --text "Agreed"       # accept its recommendation
+archon workflow answer --ref ask:<id> --choose other --text "Split it"   # none of its options
+archon workflow answer --withdraw ask:<id> --json                         # withdraw an ask
+```
+
+An ask is a `select` question that also offers `other`, answered with text. Who may answer or
+withdraw it is the rule of the run that left it: its starter, or an admin; the operator always.
+`--as` and `fromRun` are recorded as for any answer. The same answer to an answered ask, or a
+second withdrawal, changes nothing; a different answer to an answered ask, withdrawing an
+answered one, or either on an ask a newer run replaced, is refused. The write that closes the
+last open ask of a run's set records `asks_settled` once.
+
+`--json` prints `{ ok: true, ref, action, settled?, unchanged? }`: `action` is `answer` or
+`withdraw`, `settled` is true when this write settled the set, and `unchanged: true` when
+nothing changed. An answer to a run-held item prints `runId`, `cancelled` and `continues`
+instead of `settled`. A refusal exits 1 and prints `{ ok: false, error, message }`, where
+`error` is `unknown` (nothing the caller may answer has the ref), `closed`, `moved`,
+`takes_no_answer`, `already_answered`, `already_withdrawn`, `already_replaced`, `not_an_ask`
+(a `--withdraw` of an item a paused run holds) or `error`. The HTTP equivalents are
+`POST /api/attention/answer` and `POST /api/attention/withdraw`.
 
 `approve`, `reject` and `respond <option>` also answer an attention wait, as shorthand:
 `approve [text]` answers a `message` wait with its text, and otherwise each verb chooses
@@ -1455,7 +1593,7 @@ A reject that cancels a managed container run reclaims its container once no exe
 
 ### `workflow resume`
 
-Resume a failed or paused run by id. Nodes that completed in the earlier attempt are skipped.
+Resume a run by id: a failed or paused run, or a run its killed process left `running`. Nodes that completed in the earlier attempt are skipped. Resume never picks a run for you; find the id with `archon workflow runs` (`--item <key>` narrows it to one item).
 
 ```bash
 archon workflow resume <run-id>
@@ -1467,7 +1605,13 @@ With `--json` the command validates that the run is resumable, reports its state
 
 `--detach` hands the resume to a background child that runs it without `--json`, so the run does continue, outside your shell. The acknowledgement carries `continues: true` and is sent only after the engine accepts the resume and clears the old pause. An immediate `workflow wait` can therefore report a new pause, even repeated attention at the same node, but never the cleared one. See [Detached control verbs](#detached-control-verbs).
 
-Prefer this exact-ID form when you hold the id of a failed or paused run. It rejects all `running` runs, including stale orphans. `workflow run <name> --resume` answers a different question: the newest eligible run by start time for that workflow name and working path, which is a failed or paused run or a `running` run whose last activity timestamp is missing or more than one day old. With a SQL store, a `running` run whose resource-start request is `admitted` is excluded from name-based selection; use `archon trigger inspect <run-id>` and the [trigger recovery guidance](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). Missing or old activity does not prove the owner is gone. After verifying that the owner is gone, use `archon workflow run <name> --resume` from the run's recorded working path to select the newest eligible run for that name and path. From another worktree, name-based selection does not find that run.
+**A run still marked `running`.** A process that is killed (a closed terminal, a `kill`, a crashed server) leaves its run `running`. Resume asks whether an owner still answers for it, the way [`workflow cancel`](#workflow-cancel) does, and acts on the answer rather than on how old the run's activity is:
+
+- **No owner answers on this host**: the run resumes from its completed nodes. A run admitted through a resource keeps the slot it already holds.
+- **An owner answers** (the run, or the root run of a sub-run, is still executing): resume refuses, names the owner's host and pid, and leaves the run unchanged. To resume it, wait for that process to exit or stop that process yourself, then run resume again. [`workflow cancel`](#workflow-cancel) is not that step: it ends the run as `cancelled`, and resume refuses a cancelled run.
+- **The recorded owner ran on another host or as another user**: this host cannot ask it, so resume refuses and leaves the run unchanged. Resume it from that host and user, or [`workflow abandon`](#workflow-abandon) it if its process is gone.
+
+Two resumes of the same run cannot both start it. The first one admitted changes the run's execution claim and records its own process as the run's owner in the same update, so a second resume is refused whether it read the run before that update or after, on this host or another.
 
 ### `workflow cancel`
 
@@ -1509,7 +1653,22 @@ who owns the run:
 ```bash
 archon workflow cancel <run-id>
 archon workflow cancel <run-id> --json
+archon workflow cancel --item <key> [--all-runs]
 ```
+
+With `--item <key>`, cancel acts on the [item's](#items) run that is `running`, through
+the same path as `workflow cancel <run-id>`, so a live owner is handled the same way.
+Archon never chooses between runs: when several runs on the item are running, cancel
+refuses and lists them; name one by id, or pass `--all-runs` to cancel each in start
+order. With `--all-runs`, one run's failure does not stop the rest, every run is
+reported, and the command exits `1` if any failed. Cancel also refuses an item with no
+running run, and an item one of whose runs cannot be read, since that run may be the one
+to act on. Under `--json` the command prints one
+`{ "ok", "action": "cancel", "item", "results": [...] }` document whose `results` hold
+exactly what the run-id form prints for each run. A refusal prints
+`{ "ok": false, "action", "item", "reason", "error", "runs"? }`, where `reason` is
+`no_project`, `not_found`, `unreadable`, `no_run` or `several_runs`, and `runs` lists the
+runs to choose from.
 
 When cancel refuses, it exits nonzero. Under `--json` it also prints `{ "ok": false, "error": ... }`.
 `workflow resume` and `workflow abandon` follow the same contract, so a script or bash node can
@@ -1598,7 +1757,12 @@ this host:
 ```bash
 archon workflow abandon <run-id>
 archon workflow abandon <run-id> --json
+archon workflow abandon --item <key> [--all-runs]
 ```
+
+`--item <key>` works as it does for [`workflow cancel`](#workflow-cancel), for the item's
+run that is `pending`, `running` or `paused`. A failed run, or a cancelled run whose
+worktree removal you are retrying, is abandoned by id.
 
 `--json` adds an `owner` object: `{ "outcome": "stopped", "pid": … }`, or
 `{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
@@ -1748,10 +1912,10 @@ archon workflow cleanup 30     # Custom threshold
 
 ### `workflow reset-sessions`
 
-Delete a workflow's persisted per-node AI sessions: the cross-run memory kept by nodes that opt in with `persist_session` (or workflow-level `persist_sessions: true`). Use it when a workflow should forget its earlier conversation.
+Delete a workflow's persisted per-node AI sessions: the cross-run memory kept by nodes that opt in with `persist_session` (or workflow-level `persist_sessions: true`) or `context: same`. Use it when a workflow should forget its earlier conversation. A `context: same` node's sessions are scoped `item:<item_id>`, and its `--node` id is the node's path (`<group>.<node>` inside a `loop_group`).
 
 ```bash
-archon workflow reset-sessions <workflow-name> --scope <key>      # one scope, usually a conversation UUID
+archon workflow reset-sessions <workflow-name> --scope <key>      # one scope: a conversation UUID, or item:<item_id>
 archon workflow reset-sessions <workflow-name> --yes              # every scope
 archon workflow reset-sessions <workflow-name> --node <id> --yes  # one node, every scope
 archon workflow reset-sessions <workflow-name> --scope <key> --json
@@ -1950,6 +2114,12 @@ age or merge state. The scheduled sweep and chat `/worktree cleanup` apply the s
 run lock. Stale environments with quiet conversations still pass the activity filter;
 the run lock is what keeps them on disk.
 
+A start a run's end handed its worktree (`checkout: "ended-run"`, see
+[workflow triggers](/guides/workflow-triggers/)) keeps that worktree the same way while
+it waits: still being prepared, or queued for its resource. Its run then keeps it once
+admitted. The skip reason names the start; `archon trigger withdraw <request-id>`
+withdraws a queued one. A start that was withdrawn, skipped or refused keeps nothing.
+
 A **failed** run keeps its environment only until its outcome is settled:
 
 - `--merged` (and the server's scheduled merged cleanup) removes it once Git integration
@@ -2092,6 +2262,52 @@ The explicit lease refuses deletion if the tip changes after inspection. It cann
 detect a same-commit republish, so delete only while no one is reusing or publishing
 that branch. If ownership is uncertain, leave the remote branch in place.
 
+### `isolation cleanup schedule`
+
+Install a host timer that runs `isolation cleanup --merged` on an install that runs no
+server. A server already sweeps merged worktrees on its cleanup schedule, so do not
+install the timer beside one. Nothing installs it but this command:
+
+```bash
+archon isolation cleanup schedule install --interval 21600 --json
+archon isolation cleanup schedule status --json
+archon isolation cleanup schedule remove --json
+```
+
+The interval is a positive integer in seconds, defaulting to 21600 (6 hours, the server's
+default). The job runs at load and then every interval, from the Archon home, and records
+an absolute executable, `ARCHON_HOME`, and the installing shell's `PATH`, which must
+contain `git` and `gh`. There is one job per install: one pass covers every project
+registered there, and launchd never starts a pass while the previous one runs.
+Reinstalling identical configuration verifies that its launchd job is registered; to
+change the interval, executable or `PATH`, remove it and install again. `install`
+refuses a file-store install, because merged cleanup needs the database. `status`
+reports whether the job is installed and whether launchd has it loaded.
+
+`isolation` commands act on every registered project, so they run from any directory,
+including one that is not a git repository. launchd discards the job's output; read its
+last exit status with `launchctl print gui/$(id -u)/<label>`, where `<label>` is the
+plist file name `status` reports, without `.plist`. Native installation is macOS-only;
+see [workflow trigger scheduling](/guides/workflow-triggers/#macos-scheduling-limits)
+for login, sleep, and environment caveats.
+
+On Linux, use a systemd user service with `Type=oneshot`,
+`ExecStart=/absolute/path/to/archon isolation cleanup --merged`,
+`WorkingDirectory=` and `Environment=ARCHON_HOME=` set to the Archon home, and an
+`Environment=PATH=...` that contains `git` and `gh`. Pair it with a timer that sets
+`OnBootSec=5min` and `OnUnitActiveSec=6h`, and enable it with
+`systemctl --user enable --now <name>.timer`. With cron instead:
+
+```cron
+0 */6 * * * cd /absolute/path/to/.archon && ARCHON_HOME=/absolute/path/to/.archon PATH=/usr/local/bin:/usr/bin:/bin /absolute/path/to/archon isolation cleanup --merged
+```
+
+On Windows Task Scheduler, select the absolute Archon executable, set arguments to
+`isolation cleanup --merged`, repeat the task every 6 hours, and select "Do not start a
+new instance" if it is already running. Use the Archon home as the working directory,
+and set `ARCHON_HOME` and a `PATH` that contains `git` and `gh` in the task's environment
+or in a wrapper that sets them.
+
 ### `complete <branch> [branch2 ...]`
 
 Remove a branch's worktree and local branch, and mark its isolation environment as destroyed.
@@ -2107,7 +2323,8 @@ archon complete feature-auth --force  # skip the uncommitted-change, live-run, o
 
 Without `--force`, completion refuses an environment a workflow run can still claim, the
 same live-run lock `/worktree remove` applies: a running, pending or paused run, or a
-failed run that can still be resumed. Unlike `isolation cleanup`, completion never
+failed run that can still be resumed, or a start handed its worktree that still waits.
+Unlike `isolation cleanup`, completion never
 releases a failed run's lock by merge state or age. If that lookup fails, completion
 refuses rather than skipping the check. A failed open-PR query warns and skips that
 check; it does not bypass the other safety checks.
@@ -2399,19 +2616,48 @@ Start workflows from deployment bindings and inspect durable resource admission;
 
 When a binding fails launch preparation, `trigger fire` exits nonzero and prints the refusal (with `--json`, in `error`). The stored receipt keeps only the failed stage, for example `launch_preparation_failed`. `trigger whoami` prints the Archon user ID of your CLI identity, for a binding's `runAsUserId`.
 
+`trigger add <file>` places one trigger file in `ARCHON_HOME/triggers/` under its own name, replacing a file of that name, and prints `{"added": <path>}`. It copies the file under a `.tmp` name, which the engine does not read, and renames it into place, so a run that completes meanwhile never reads part of it. It refuses a name that does not end in `.json`, because the engine would never read it, and does not check the file's contents; run `trigger check` after it. Remove a file from the directory to turn it off.
+
+`trigger check` lists every run-ended binding that is active: each file in `ARCHON_HOME/triggers/` with `on.runEnded`. For each it prints the file, source, binding, host, the workflow and outcome it starts after, and its `problems`, from checking it against the workflows of the project it launches in: the ended workflow exists and declares that outcome and every input the binding reads from it, and the started workflow exists and declares every input the binding maps. For a binding with `checkout: "ended-run"`, neither workflow may pin `worktree.enabled: false`. It also reports what no run is refused for: a `launch.cwd` that does not exist (the binding never starts), a binding that starts the workflow whose end fires it (a loop), and two files that bind the same outcome to the same stage in one project (the stage starts once per file). It exits nonzero when any binding has a problem or a file cannot be read. See [start a stage when a run on an item ends](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends).
+
+A CLI process that ends a run starts the starts its own completion wrote, each on the host its binding names, so a hand `workflow run` needs no trigger host for the next stage to start. It drains a host's queue only when it serves that host: `trigger execute --host <hostId>` drains `<hostId>`, and any other command drains the host `ARCHON_TRIGGER_HOST` names when it is set.
+
+`trigger list` prints each receipt with `itemKey`, the item the start named or null, and `awaitingExecution`: its starts that are admitted but whose run no executor has claimed, as `{requestId, hostId}`. One that stays there was admitted by a process that died before spawning its executor; run it once with `trigger execute <requestId> --host <hostId>`.
+
 Run from inside a workflow node, `trigger fire` records the calling run and node as the receipt's `sourceActor` (`{source: "archon-run", id: <run id>, display: <node path>}`); outside a run it records none. A set `WORKFLOW_ID` makes `fire` act as a call from that node: it then requires a matching `ARCHON_NODE_EXECUTION`, and refuses a run the opened store does not know before a receipt is written, so a shell left with a stale `WORKFLOW_ID` fails instead of firing. `trigger inspect <request-id>` and `workflow get <run-id> --json` always carry the requesting run, as `requestedBy` and `requested_by` (`{runId, nodePath}`, or `null` when no run asked for the start), and the plain `workflow get` view prints a `Requested by` line when there is one. The started run still acts as its binding's `runAsUserId`; the requesting run is provenance only.
 
 #### Items
 
 An item is the durable thing runs are about: a key within a project, such as an issue reference. The engine gives the key no meaning and never parses it; it is 1 to 200 characters. `trigger fire --item <key>` and `workflow run --item <key>` name the item of the run they start, and that run's `item_id` points at it. The item is created the first time a start or run names it, before a queued start is admitted; naming the same key again in the same project is the same item, and the same key in another project is a different one.
 
-A `trigger fire` from inside a run that names no item inherits that run's item, so follow-up starts stay on it; from inside a `workflow:` sub-run it inherits the item of the top-level run. Inheritance stays inside the item's project. When the binding starts its run in another project, the fire is refused before anything is recorded or started, with a message that names both projects: pass `--item <key>` to name the item in that project. A named item is always accepted, and names the item with that key in the started run's own project.
+A `trigger fire` from inside a run that names no item inherits that run's item, so follow-up starts stay on it; from inside a `workflow:` sub-run it inherits the item of the top-level run. Inheritance stays inside the item's project. When the binding starts its run in another project, the fire is refused before anything is recorded or started, with a message that names both projects: pass `--item <key>` to name the item in that project, or `--no-item` to start it on none. A named item is always accepted, and names the item with that key in the started run's own project. `--no-item` starts the run on no item, from inside a run or outside one; it cannot be combined with `--item`. A [script](/guides/script-nodes/#the-script-api) passes the same choice as `trigger.fire`'s `item` option.
 
 A continuation started with `--adopt <run-id>` or `--supersedes <run-id>` and no `--item` belongs to the item of the run it continues, so a fix round or a rerun stays in the item's history. `--item <key>` names another item instead, and a continuation of a run with no item has none. `--supersedes` can name a run of another project by its full id; that run's item cannot be inherited, so the continuation is refused before it starts unless it passes `--item`. The same holds when the continuation has no registered project. A continuation of a run with no item starts in every case.
 
-A run started with no item, and no run to inherit one from, has none. `archon workflow runs --item <key>` lists an item's runs.
+A run started with no item, and no run to inherit one from, has none. `archon workflow runs --item <key>` reads an item: its runs, open questions, and answers with rulings. Each run carries its `cause`: the run whose end started it, the run and node that fired it, the trigger source that started it, or `null` for a start by hand. `GET /api/items?project=<project>&key=<key>` is the same read over HTTP. `workflow wait`, `cancel` and `abandon` also accept `--item <key>` and never choose between an item's runs: `wait` reports every run that settled, and `cancel` and `abandon` refuse when more than one run applies unless `--all-runs` is passed.
+
+A ruling is a decision recorded on the item without a question having been asked ([`workflow rule`](#workflow-rule)). It is a fact about the item, like an answer, and needs no run: recording one on a key nothing has named writes the item. Withdrawing a ruling keeps the record and marks it withdrawn. A workflow reads its item's answers and rulings through `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to); the engine passes them to no node on its own.
+
+A link is a directed relation from one item to another: `depends_on`, `part_of` or `duplicate_of` ([`workflow link`](#workflow-link)). Only accepted links are recorded. Both items' reads show it, with its direction. Ending a link keeps the record with who ended it and when. The engine stores and reports links and acts on none of them; what a link means for an item is for a reading node to judge.
 
 Items need the database store and a registered project. With `store: files`, or in a directory with no project, naming an item fails.
+
+### `pack graph`
+
+Show how a pack's stages connect in this install: each stage with the outcomes it can end with and its nodes, and every [run-ended arrow](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends) between them.
+
+```bash
+archon pack graph <pack> [--cwd <checkout>] [--workflow-source <dir>] [--json]
+```
+
+- `<pack>` is discovered from `--cwd` as `pack bindings` discovers it, and the arrows are those of that checkout's project. With `--workflow-source`, the pack is discovered from there instead, as a binding's `launch.discoveryCwd` discovers it; the arrows are still those of `--cwd`'s project.
+- Each active arrow is checked as a run is checked before it starts. A file that check refuses is shown as `[active, refused: <problem>]`: every run of its ended stage on an item is refused until the file is fixed. A file whose `launch.cwd` no longer exists is shown refused too, because the end of a run never starts it.
+- A declared binding that names a workflow which did not load as a stage is shown with that problem after its arrow, and the load error is listed with the other workflows that failed to load.
+- An arrow the pack declares as a [`run_ended:` binding](/reference/workflow-language/#pack-bindings) is `active` when a trigger file in `ARCHON_HOME/triggers/` launches it in this project, and declared and inactive when none does. A trigger file the pack does not declare is an active arrow with `declared: null`.
+- Each outcome value has `startsNothing` when no active arrow without problems leaves it. The text output lists those, and marks the ones whose stage declares no `asks` as ending in silence.
+- `--json` prints the read, the same shape as [`GET /api/packs/{pack}/graph`](/reference/api/#workflows). The guide shows [the shape and how to draw an item's path with it](/guides/workflow-triggers/#see-how-a-packs-stages-connect).
+
+Workflows that failed to load are listed after the graph, because a stage among them is missing from it. An invalid trigger file fails the command, as it fails item runs. With `store: files`, any run-ended file in the triggers directory is refused, as `trigger check` refuses it.
 
 ### `pack bindings`
 
@@ -2423,19 +2669,22 @@ archon pack bindings <pack> \
   --host <host-id> \
   --run-as <user-id> \
   --out <dir> \
-  [--cwd <checkout>] [--only <id,...>] [--force]
+  [--cwd <checkout>] [--config <file>] [--workflow-source <dir>] \
+  [--only <id,...>] [--force]
 ```
 
-- `<pack>` is the pack's folder name (`sdlc`), or `<owner>.<name>` for an installed pack. It is discovered from `--cwd` as a run there would find it, so a project's copy of a pack wins over the bundled one.
+- `<pack>` is the pack's folder name (`sdlc`), or `<owner>.<name>` for an installed pack. It is discovered from `--cwd` as a run there would find it, so a project's copy of a pack wins over the bundled one. With `--workflow-source`, it is discovered from there instead.
 - `--repo` is the repository the bindings act on, such as `github.com/acme/widgets`.
 - `--host` is the execution host the starts are assigned to: the server's `ARCHON_TRIGGER_HOST`, or the host you pass to `trigger drain`.
 - `--run-as` is the Archon user the runs act as; `archon trigger whoami` prints yours. The command does not check that the user exists; `trigger schedule install` and a webhook delivery do.
 - `--cwd` is the checkout the runs launch in (default: the current directory). It is written as an absolute path.
-- `--out` is where the files go. Each is named `<pack>-<owner>-<name>-<binding id>-<digest>.json`, where the digest is of the pack, repository host and path, and binding ID, so two packs or repositories never share a name. That name without `.json` is its binding ID and a timer's `sourceInstanceId`.
+- `--config` is a [run config](#per-run-config-files) file every written binding launches with, written as `launch.configSource`. It is how model aliases reach a start without the pack naming a model. The file is loaded once before anything is written, so a bad path fails here.
+- `--workflow-source` is the directory the pack's workflows are discovered from when the pack does not live in the checkout, written as `launch.discoveryCwd`, as `workflow run --workflow-source` uses it.
+- `--out` is where the files go. Each is named `<pack>-<owner>-<name>-<binding id>-<digest>.json`, where the digest is of the pack, repository host and path, and binding ID, so two packs or repositories never share a name. That name without `.json` is its binding ID and its `sourceInstanceId`.
 - `--only` writes the listed bindings. A binding whose input names another binding's file needs that binding listed too, or its file already in `--out`.
 - `--force` replaces existing files. Without it, one existing file refuses the whole set and nothing is written.
 
-A timer binding is written as a complete `trigger fire --config` file. A fire-only binding is the same file without `schedule`; the command lists it under its own heading with the `trigger fire` command that starts it, and `trigger schedule install` refuses it. An event binding is written as one object for the `bindings` array of the GitHub source plugin's `config`, in the file `ARCHON_WEBHOOK_SOURCES` names, because the plugin reads bindings only from there. The plugin accepts `github.com` repositories, so the command refuses to write an event binding for another host. Every file is checked against the schema of the loader that will read it before any is written. `--json` prints `{"pack", "written": [{"id", "kind", "path"}]}`, where `kind` is `timer`, `event` or `fire`.
+A timer binding is written as a complete `trigger fire --config` file. A fire-only binding is the same file without `schedule`; the command lists it under its own heading with the `trigger fire` command that starts it, and `trigger schedule install` refuses it. An event binding is written as one object for the `bindings` array of the GitHub source plugin's `config`, in the file `ARCHON_WEBHOOK_SOURCES` names, because the plugin reads bindings only from there. The plugin accepts `github.com` repositories, so the command refuses to write an event binding for another host. A [run-ended binding](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends) is written as one trigger file per outcome it declares, named `<pack>-<owner>-<name>-<binding id>-<outcome>-<digest>.json`. The command prints the `trigger add` that registers each and runs none of them: the engine reads `ARCHON_HOME/triggers/` at every completion, so a file added there is active at once, `archon trigger check` lists it, and deleting it turns it off. Because one invalid file there fails item runs on the whole install, every run-ended file is checked as `trigger check` checks it (the ended workflow declares the outcome and every input read from it, the started workflow declares every input mapped to it, `launch.cwd` exists, and the binding does not start the workflow whose end fires it) before any file is written. A duplicate of a file already in the triggers directory, or of one in another checkout of the same project, is left to `trigger check`, which reads the install's projects, and the command refuses run-ended bindings on `store: files`. Every file is checked against the schema of the loader that will read it before any is written. `--json` prints `{"pack", "written": [{"id", "kind", "path"}]}`, where `kind` is `timer`, `event`, `fire` or `run_ended`, and a `run_ended` entry also has its `outcome`.
 
 ```bash
 archon pack bindings sdlc --repo github.com/acme/widgets --host build-host-1 \
@@ -2470,7 +2719,7 @@ These flags apply to every command. Command-specific flags are described under t
 | `--help`, `-h` | Show help, scoped to the command and subcommand you name |
 | `--version`, `-V` | Show version information (`-v` also works when it is the only argument) |
 
-`--chat-project-id <registered-project-id>` scopes every run lookup to that project, for example `archon workflow get <run-id> --chat-project-id <id> --json`. Copilot and OpenCode chat receive it in their CLI instructions. Every full ID or prefix must match exactly one run in the project before the command reads or changes it, and launches and continuations must belong to it; use `/setproject` to change projects. Run lists, status, open work and attention list, count and watch use the project, subject to each command's directory check, and reject `--all` or an attention `--project` naming another project. An empty or unregistered scope fails instead of falling back to install-wide queries. The scope comes only from the argument, so the working directory and Archon env files cannot change, clear or supply it; `ARCHON_WORKFLOW_CODEBASE_ID` no longer selects a project. Without the argument, full run IDs keep their install-wide operator behavior and short prefixes resolve from the current project. It scopes run lookup, not process permissions.
+`--chat-project-id <registered-project-id>` scopes every run lookup to that project, for example `archon workflow get <run-id> --chat-project-id <id> --json`. Copilot and OpenCode chat receive it in their CLI instructions. Every full ID or prefix must match exactly one run in the project before the command reads or changes it, and launches and continuations must belong to it; use `/setproject` to change projects. Run lists, status, open work and attention list, count and watch use the project, subject to each command's directory check, and reject `--all` or an attention `--project` naming another project. `workflow rule` records on the selected project's items, and `--withdraw` refuses a ruling on another project's item. An empty or unregistered scope fails instead of falling back to install-wide queries. The scope comes only from the argument, so the working directory and Archon env files cannot change, clear or supply it; `ARCHON_WORKFLOW_CODEBASE_ID` no longer selects a project. Without the argument, full run IDs keep their install-wide operator behavior and short prefixes resolve from the current project. It scopes run lookup, not process permissions.
 
 ### Logs
 

@@ -25,6 +25,32 @@ export function describeGatesAndTerminalsConformance(getHarness: () => WorkflowS
       store = harness.store;
     });
 
+    test.each([
+      ['a boolean', { kind: 'boolean', value: 'failed' }, undefined, 'failed', 'failed'],
+      ['an enum', { kind: 'enum', value: 'built' }, { node_counts: { total: 1 } }, null, 'built'],
+      ['no', undefined, { node_counts: { total: 1 } }, null, null],
+    ] as const)(
+      'completion writes %s outcome in the write that completes the run, and its terminal record (#5660)',
+      async (_label, outcome, metadata, legacy, completed) => {
+        const run = await running(store);
+        await store.completeWorkflowRun(
+          run.id,
+          { duration_ms: 1 },
+          metadata,
+          outcome === undefined ? undefined : { outcome }
+        );
+        expect(await store.getWorkflowRun(run.id)).toMatchObject({
+          status: 'completed',
+          outcome: legacy,
+          completed_outcome: completed,
+        });
+        const [event] = await store.listWorkflowEvents(run.id);
+        expect(terminalRecordSchema.parse(event?.data.terminal_record)).toMatchObject({
+          outcome: legacy,
+          completed_outcome: completed,
+        });
+      }
+    );
     test('gate resolution has one winner and no loser events', async () => {
       await assertWorkflowGateRace(store);
     });

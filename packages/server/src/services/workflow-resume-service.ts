@@ -12,7 +12,7 @@ import { createLogger } from '@archon/paths';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import { spellWorkflowCommand, type IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowResumeCursor } from '@archon/workflows/store';
+import type { ResumeRequestCursor } from '@archon/workflows/store';
 
 const log = createLogger('workflow-resume-service');
 const CONTINUATION_SCAN_INTERVAL_MS = 5_000;
@@ -113,7 +113,7 @@ export async function resumeWorkflowRunFromServer(
   run: WorkflowRun,
   actorUserId?: string,
   target: WorkflowResumeTarget = { kind: 'headless' },
-  cursor?: WorkflowResumeCursor
+  cursor?: ResumeRequestCursor
 ): Promise<ServerResumeOutcome> {
   try {
     const admission = await admitFromServer(host, run, async () => target, cursor, actorUserId);
@@ -137,7 +137,7 @@ async function admitFromServer(
   host: WorkflowHost,
   run: WorkflowRun,
   resolveTarget: WorkflowResumeDestinationResolver,
-  cursor?: WorkflowResumeCursor,
+  cursor?: ResumeRequestCursor,
   actorUserId?: string
 ): Promise<ContinuationAdmission> {
   let destination: WorkflowResumeDestination | undefined;

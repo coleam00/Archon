@@ -86,6 +86,9 @@ export class InMemoryStore implements IWorkflowStore {
   listQueuedResourceStartsForHost: IWorkflowStore['listQueuedResourceStartsForHost'] = async () => {
     throw new Error('Unexpected listQueuedResourceStartsForHost');
   };
+  listQueuedItemStarts: IWorkflowStore['listQueuedItemStarts'] = async () => {
+    throw new Error('Unexpected listQueuedItemStarts');
+  };
   withdrawQueuedResourceStart: IWorkflowStore['withdrawQueuedResourceStart'] = async () => {
     throw new Error('Unexpected withdrawQueuedResourceStart');
   };
@@ -139,10 +142,37 @@ export class InMemoryStore implements IWorkflowStore {
   deleteWorkflowNodeSessions: IWorkflowStore['deleteWorkflowNodeSessions'] = () => {
     throw new Error('Unexpected deleteWorkflowNodeSessions');
   };
-  listItemRuns: IWorkflowStore['listItemRuns'] = async () => {
+  getItemRuns: IWorkflowStore['getItemRuns'] = async () => {
     throw new Error('not used');
   };
   getItem: IWorkflowStore['getItem'] = async () => {
+    throw new Error('not used');
+  };
+  listItemRulings: IWorkflowStore['listItemRulings'] = async () => {
+    throw new Error('not used');
+  };
+  recordItemRuling: IWorkflowStore['recordItemRuling'] = async () => {
+    throw new Error('not used');
+  };
+  withdrawItemRuling: IWorkflowStore['withdrawItemRuling'] = async () => {
+    throw new Error('not used');
+  };
+  listItemLinks: IWorkflowStore['listItemLinks'] = async () => {
+    throw new Error('not used');
+  };
+  recordItemLink: IWorkflowStore['recordItemLink'] = async () => {
+    throw new Error('not used');
+  };
+  endItemLink: IWorkflowStore['endItemLink'] = async () => {
+    throw new Error('not used');
+  };
+  listOpenItemAsks: IWorkflowStore['listOpenItemAsks'] = async () => [];
+  listItemAsks: IWorkflowStore['listItemAsks'] = async () => [];
+  getItemAsk: IWorkflowStore['getItemAsk'] = async () => null;
+  answerItemAsk: IWorkflowStore['answerItemAsk'] = async () => {
+    throw new Error('not used');
+  };
+  withdrawItemAsk: IWorkflowStore['withdrawItemAsk'] = async () => {
     throw new Error('not used');
   };
   findOpenWorkRuns: IWorkflowStore['findOpenWorkRuns'] = async () => {
@@ -184,6 +214,7 @@ export class InMemoryStore implements IWorkflowStore {
       codebase_id: data.codebase_id ?? null,
       status: 'pending',
       outcome: null,
+      completed_outcome: null,
       user_message: data.user_message,
       metadata: data.metadata ?? {},
       active_phase_started_at: null,
@@ -290,7 +321,6 @@ export class InMemoryStore implements IWorkflowStore {
     const r = this.runs.get(id);
     if (r) {
       if (updates.status) r.status = updates.status;
-      if (updates.outcome) r.outcome = updates.outcome;
       if (updates.metadata) r.metadata = { ...r.metadata, ...updates.metadata };
       // Write-once, mirroring the real store's COALESCE (#2200): a row must report the
       // output location it actually recorded, or a reader that resolves artifacts through
@@ -316,7 +346,12 @@ export class InMemoryStore implements IWorkflowStore {
   getWorkflowRunStatus = (id: string): Promise<WorkflowRun['status'] | null> =>
     Promise.resolve(this.runs.get(id)?.status ?? null);
 
-  completeWorkflowRun: IWorkflowStore['completeWorkflowRun'] = (id, _completion, metadata) => {
+  completeWorkflowRun: IWorkflowStore['completeWorkflowRun'] = (
+    id,
+    _completion,
+    metadata,
+    result
+  ) => {
     const r = this.runs.get(id);
     // Mirror the real store's CAS guard (`WHERE status = 'running'`): a run cancelled
     // mid-flight (e.g. a fan-out sibling cooperatively cancelled) must NOT be flipped
@@ -325,6 +360,9 @@ export class InMemoryStore implements IWorkflowStore {
       r.status = 'completed';
       r.completed_at = new Date();
       if (metadata) r.metadata = { ...r.metadata, ...metadata };
+      const outcome = result?.outcome;
+      r.outcome = outcome?.kind === 'boolean' ? outcome.value : null;
+      r.completed_outcome = outcome?.value ?? null;
     }
     return Promise.resolve();
   };
@@ -403,9 +441,14 @@ export class InMemoryStore implements IWorkflowStore {
   releaseWritebackClaim = (): Promise<void> => Promise.resolve();
 
   // Both cancels write their terminal event in the same step, as the SQL transitions do.
-  cancelWorkflowRun: IWorkflowStore['cancelWorkflowRun'] = (id, event) => {
+  cancelWorkflowRun: IWorkflowStore['cancelWorkflowRun'] = (id, event, options) => {
     const r = this.runs.get(id);
-    if (r && r.status !== 'completed' && r.status !== 'cancelled') {
+    if (
+      r &&
+      r.status !== 'completed' &&
+      r.status !== 'cancelled' &&
+      (!options?.pendingOnly || r.status === 'pending')
+    ) {
       r.status = 'cancelled';
       r.completed_at = new Date();
       const { step_name, ...data } = event ?? {};
@@ -467,7 +510,6 @@ export class InMemoryStore implements IWorkflowStore {
   upsertWorkflowRunNodeSession: IWorkflowStore['upsertWorkflowRunNodeSession'] = () =>
     Promise.resolve();
   upsertWorkflowNodeSession = (): Promise<void> => Promise.resolve();
-  findResumableRun = (): Promise<null> => Promise.resolve(null);
 
   // --- test helpers ---
   /** Mimic approveWorkflow for a standard approval gate: write node_completed for

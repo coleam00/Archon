@@ -9,6 +9,7 @@ import {
   cancelByOperator,
   describeAbandonOwner,
   recordAbandoned,
+  rootRunIdOf,
   stopLiveOwner,
   type AbandonOwnerOutcome,
   type AbandonWorkflowResult,
@@ -77,6 +78,11 @@ async function confirmedRunContainer(
   return envId;
 }
 
+/** Only a running run has live work for cancel to stop. */
+export function isCancellableRun(run: Pick<WorkflowRun, 'status'>): boolean {
+  return run.status === 'running';
+}
+
 /**
  * Cancel a running run, the same way on every surface.
  *
@@ -95,7 +101,7 @@ export async function cancelWorkflow(
 ): Promise<CancelWorkflowResult> {
   const run = await ctx.getRunOrThrow(runId, 'operations.workflow_cancel_lookup_failed');
   await ctx.assertMayAct(run, actor, 'cancel');
-  if (run.status !== 'running') {
+  if (!isCancellableRun(run)) {
     throw new CancelRefusedError(
       'not_running',
       `Cannot cancel run with status '${run.status}'. Only a running run has live work to stop; ` +
@@ -169,11 +175,6 @@ async function cancelWithoutOwner(
         'If its process is gone, abandon the run to release it.',
     ].join('\n')
   );
-}
-
-/** The top of `runId`'s `parent_run_id` chain; undefined when no ancestor row remains. */
-async function rootRunIdOf(ctx: OperationContext, runId: string): Promise<string | undefined> {
-  return (await ctx.store.getRunAncestry(runId)).at(-1)?.id;
 }
 
 async function cooperativeCancel(

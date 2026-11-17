@@ -54,9 +54,10 @@ inputs:
       capacity and overlap policy, at most once per run. Empty starts nothing; the
       next build-queue run takes the item.
 
-returns: outcome
-# False only when a run that claimed nothing found stored items no pickup can act on.
-outcome_field: healthy
+# The run completes with where it left its item: the stage intake recorded on the work
+# item. A pass that claimed no item completes `idle`; one that also found stored items
+# no pickup can act on fails at the outcome node, naming them.
+returns: { node: outcome, outcome: outcome }
 
 # Read-only: runs in the launch checkout beside any other run, and creates no worktree.
 worktree:
@@ -127,10 +128,11 @@ nodes:
       properties:
         path: { type: string, enum: [idle, quiet, closed, outside, triage] }
         item: { type: [integer, 'null'] }
-        stage: { type: [string, 'null'] }
+        outcome:
+          type: string
+          enum: [new, needs_maintainer, investigate, plan, deliver, continue, split, needs_contract, blocked, close, idle]
         trust: { type: [string, 'null'] }
         promoted: { type: boolean }
         labels: { type: array, items: { type: string } }
         summary: { type: string }
-        healthy: { type: boolean }
-      required: [path, item, stage, trust, promoted, labels, summary, healthy]
+      required: [path, item, outcome, trust, promoted, labels, summary]

@@ -114,6 +114,7 @@ for (const source of [
       workflow_name: 'deliver',
       status: 'paused',
       outcome: null,
+      completed_outcome: null,
       origin: null,
       conversation_id: source.endsWith('-origin') ? 'origin' : null,
       parent_conversation_id: source.endsWith('-origin') ? 'origin' : null,

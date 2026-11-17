@@ -140,7 +140,9 @@ function workflowFieldTravelsTo(
   if (nodeKey === 'model') return workflowModelTravelsTo(scope, node);
   // `persist_session` only means something on a node that takes an AI turn and can
   // resume one, and never inside a loop_group body (see pushWorkflowScopeOntoNodes).
-  if (nodeKey === 'persist_session') return !insideLoopGroup && isPersistableNode(node);
+  // A `context: same` node carries its own cross-run continuity and refuses both.
+  if (nodeKey === 'persist_session')
+    return !insideLoopGroup && isPersistableNode(node) && node.context !== 'same';
   return true;
 }
 
@@ -196,10 +198,10 @@ const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
   // primarySink and `inputs` validates the caller's `with:`. Warning "dropped" would be
   // misleading.
   'returns',
-  // Run-owned like `returns`: an included file's authored outcome is not
-  // propagated to its composer, while the top-level workflow keeps its own
+  // Run-owned like `returns`, which declares it: an included file's result contract is
+  // not propagated to its composer, while the top-level workflow keeps its own
   // declaration through flattening.
-  'outcome_field',
+  'result',
   'inputs',
   // #1764: unioned into the composing workflow's own requirement set, not dropped.
   'requires',

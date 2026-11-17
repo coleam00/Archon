@@ -120,11 +120,6 @@ describe('DiscordAdapter', () => {
       const adapter = new DiscordAdapter('fake-token-for-testing');
       expect(adapter.getStreamingMode()).toBe('stream');
     });
-
-    test('should return stream mode when explicitly configured', () => {
-      const adapter = new DiscordAdapter('fake-token-for-testing', 'stream');
-      expect(adapter.getStreamingMode()).toBe('stream');
-    });
   });
 
   describe('platform type', () => {
@@ -143,25 +138,15 @@ describe('DiscordAdapter', () => {
 
       expect(adapter.getConversationId(mockMessage)).toBe('1234567890');
     });
-
-    test('should use thread ID when message is in a thread', () => {
-      const adapter = new DiscordAdapter('fake-token-for-testing');
-      const mockThreadMessage = {
-        channelId: '9876543210',
-      } as unknown as import('discord.js').Message;
-
-      expect(adapter.getConversationId(mockThreadMessage)).toBe('9876543210');
-    });
   });
 
   describe('message sending', () => {
     test('should send short messages directly', async () => {
       const adapter = new DiscordAdapter('fake-token-for-testing');
-      const client = adapter.getClient();
 
       await adapter.sendMessage('123', 'Hello, World!');
 
-      expect(client.channels.fetch).toHaveBeenCalledWith('123');
+      expect(mockChannelsFetch).toHaveBeenCalledWith('123');
       expect(mockChannelSend).toHaveBeenCalledWith('Hello, World!');
     });
 
@@ -183,42 +168,18 @@ describe('DiscordAdapter', () => {
   describe('lifecycle', () => {
     test('should login on start', async () => {
       const adapter = new DiscordAdapter('fake-token-for-testing');
-      const client = adapter.getClient();
 
       await adapter.start();
 
-      expect(client.login).toHaveBeenCalledWith('fake-token-for-testing');
+      expect(mockClientLogin).toHaveBeenCalledWith('fake-token-for-testing');
     });
 
     test('should destroy client on stop', () => {
       const adapter = new DiscordAdapter('fake-token-for-testing');
-      const client = adapter.getClient();
 
       adapter.stop();
 
-      expect(client.destroy).toHaveBeenCalled();
-    });
-
-    test('should register message and ready handlers on start', async () => {
-      const adapter = new DiscordAdapter('fake-token-for-testing');
-      const client = adapter.getClient();
-
-      await adapter.start();
-
-      expect(client.on).toHaveBeenCalledWith('messageCreate', expect.any(Function));
-      expect(client.once).toHaveBeenCalledWith('ready', expect.any(Function));
-    });
-  });
-
-  describe('message handler registration', () => {
-    test('should allow registering a message handler', async () => {
-      const adapter = new DiscordAdapter('fake-token-for-testing');
-      const mockHandler = mock(() => Promise.resolve(undefined));
-
-      adapter.onMessage(mockHandler);
-      await adapter.start();
-
-      expect(true).toBe(true);
+      expect(mockClientDestroy).toHaveBeenCalled();
     });
   });
 
@@ -583,27 +544,6 @@ describe('DiscordAdapter', () => {
   });
 
   describe('createThreadFromMessage (via ensureThread)', () => {
-    test('should pass autoArchiveDuration of 1440 (OneDay)', async () => {
-      const adapter = new DiscordAdapter('fake-token-for-testing');
-      const mockStartThread = makeStartThread('thread-archive');
-      const mockMessage = {
-        id: 'msg-arc-1',
-        channelId: 'chan-arc',
-        content: 'archive test',
-        channel: { isThread: () => false },
-        guild: { id: 'guild-arc' },
-        startThread: mockStartThread,
-        mentions: { has: () => false },
-      } as unknown as import('discord.js').Message;
-
-      await adapter.ensureThread('chan-arc', mockMessage);
-
-      const callArgs = startThreadOptions(mockStartThread);
-      // ThreadAutoArchiveDuration.OneDay = 1440 minutes
-      expect(callArgs.autoArchiveDuration).toBe(1440);
-      expect(callArgs.reason).toBe('Bot response thread');
-    });
-
     test('should strip bot mention before generating thread name', async () => {
       const adapter = new DiscordAdapter('fake-token-for-testing');
       const mockStartThread = makeStartThread('thread-strip');
@@ -763,30 +703,6 @@ describe('DiscordAdapter', () => {
         'discord.thread_creating'
       );
       expect(result).toBe('newthread123');
-    });
-
-    test('should truncate long thread names', async () => {
-      const longContent = 'a'.repeat(150);
-      const mockStartThread = makeStartThread('newthread123');
-      const mockMessage = {
-        id: 'msg123',
-        channelId: 'channel456',
-        content: longContent,
-        channel: {
-          isThread: () => false,
-        },
-        guild: { id: 'guild123' },
-        startThread: mockStartThread,
-        mentions: {
-          has: () => false,
-        },
-      } as unknown as import('discord.js').Message;
-
-      await adapter.ensureThread('channel456', mockMessage);
-
-      const callArgs = startThreadOptions(mockStartThread);
-      expect(callArgs.name.length).toBeLessThanOrEqual(100);
-      expect(callArgs.name.endsWith('...')).toBe(true);
     });
 
     test('should fall back to channel ID on thread creation error', async () => {

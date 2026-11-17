@@ -65,10 +65,7 @@ export interface IsolationResolverDeps {
     makeRoom: (codebaseId: string, repoPath: string) => Promise<{ removedCount: number }>;
     getBreakdown: (codebaseId: string, repoPath: string) => Promise<WorktreeStatusBreakdown>;
   };
-  staleThresholdDays?: number;
 }
-
-const DEFAULT_STALE_THRESHOLD_DAYS = 14;
 
 async function resolveCanonicalPath(
   codebase: NonNullable<ResolveRequest['codebase']>
@@ -204,18 +201,10 @@ function creationMethod(
 export class IsolationResolver {
   private readonly store: IIsolationStore;
   private readonly provider: IIsolationProvider;
-  private readonly staleThresholdDays: number;
 
   constructor(deps: IsolationResolverDeps) {
     this.store = deps.store;
     this.provider = deps.provider;
-    this.staleThresholdDays = deps.staleThresholdDays ?? DEFAULT_STALE_THRESHOLD_DAYS;
-
-    if (this.staleThresholdDays <= 0) {
-      throw new Error(
-        `staleThresholdDays must be positive, got ${String(this.staleThresholdDays)}`
-      );
-    }
   }
 
   /**

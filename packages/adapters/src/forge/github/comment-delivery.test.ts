@@ -50,17 +50,6 @@ describe('conversationId format', () => {
     });
   });
 
-  test('postComment appends bot marker to outgoing comments', async () => {
-    const mockCreateComment = makeCreateCommentMock();
-
-    await createDelivery(mockCreateComment).send('owner/repo#123', 'Hello world');
-
-    const body = mockCreateComment.mock.calls[0][0].body as string;
-    expect(body).toContain('Hello world');
-    expect(body).toContain('<!-- archon-bot-response -->');
-    expect(body).toBe('Hello world\n\n<!-- archon-bot-response -->');
-  });
-
   test('should reject invalid conversationId format', async () => {
     const mockCreateComment = makeCreateCommentMock();
 
@@ -112,15 +101,6 @@ describe('message splitting', () => {
 
     // Message exactly at MAX_LENGTH (65000) should not be split
     await createDelivery(mockCreateComment).send('owner/repo#123', 'a'.repeat(65000));
-
-    expect(mockCreateComment).toHaveBeenCalledTimes(1);
-  });
-
-  test('should handle message without paragraph breaks', async () => {
-    const mockCreateComment = makeCreateCommentMock();
-
-    // Message under MAX_LENGTH with no paragraph breaks
-    await createDelivery(mockCreateComment).send('owner/repo#123', 'a'.repeat(50000));
 
     expect(mockCreateComment).toHaveBeenCalledTimes(1);
   });

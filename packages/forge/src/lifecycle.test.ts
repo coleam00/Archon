@@ -177,24 +177,6 @@ describe('mutation evidence at the dispatch boundary', () => {
   });
 });
 
-test('mutationTarget names the repository for a create and the pull request otherwise', () => {
-  expect(mutationTarget(edit)).toEqual(ref);
-  expect(
-    mutationTarget({
-      operationId: 'create',
-      op: 'pr.create',
-      repo: ref.repo,
-      headRepo: ref.repo,
-      head: 'feature',
-      headRevision: 'headsha',
-      base: 'dev',
-      title: 'A title',
-      body: 'A body',
-      draft: true,
-    })
-  ).toEqual(ref.repo);
-});
-
 test('the audit record keeps a digest of authored content, never the content', async () => {
   const result = await dispatch(
     { operationId: 'view-1', op: 'pr.view', selector: { kind: 'number', ref } },
@@ -483,6 +465,30 @@ test('a plugin without draft conversion refuses without executing the operation'
     ok: false,
     error: { kind: 'unsupported_op' },
     mutation: { op: 'pr.draft', outcome: 'refused' },
+  });
+});
+
+test('a plugin without review submission refuses it by name without running', async () => {
+  const discovery = await discoverPlugins({
+    config: {
+      plugins: [{ plugin: 'mutator', command: process.execPath, args: [fixture] }],
+      scanPath: false,
+    },
+  });
+  for (const plugin of discovery.byHost.values()) plugin.command = '/missing-operation-executable';
+  const review = {
+    operationId: 'review-1',
+    op: 'pr.review.submit',
+    ref,
+    commit: 'a'.repeat(40),
+    key: 'run-1',
+    summary: 'A summary.',
+    comments: [],
+  } satisfies ForgeRequest;
+  expect((await dispatchForge(review, { discovery })).response).toMatchObject({
+    ok: false,
+    error: { kind: 'unsupported_op' },
+    mutation: { op: 'pr.review.submit', outcome: 'refused' },
   });
 });
 

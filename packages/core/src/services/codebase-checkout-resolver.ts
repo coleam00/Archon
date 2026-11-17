@@ -1,6 +1,6 @@
 import type { Codebase } from '../types';
 import { resolve, relative, isAbsolute, sep } from 'node:path';
-import { canonicalizeProjectPath } from '@archon/paths';
+import { canonicalizeProjectPath, projectKeyForCodebase } from '@archon/paths';
 import {
   findRepoRoot,
   CanonicalRepoPathUnavailableError,
@@ -114,7 +114,7 @@ export async function resolveCodebaseForPath(
   if (exact?.kind === 'folder') return { codebase: exact, repoRoot: null };
   // Repository roots always come from Git: runs record this string as their working
   // path, and on Windows it differs from the canonical `default_cwd` (separators,
-  // 8.3 short names), so returning `cwd` would hide runs from `--resume`.
+  // 8.3 short names), so returning `cwd` would mismatch the runs recorded there.
   const repoRoot = await findRepoRoot(cwd);
   if (exact) return { codebase: exact, repoRoot };
   const parent = await deps.findCodebaseByPathPrefix(cwd);
@@ -136,4 +136,17 @@ export async function resolveCodebaseForPath(
     codebase: repoRoot ? await findCodebaseForCheckoutPath(repoRoot, deps) : parent,
     repoRoot,
   };
+}
+
+/**
+ * The key of the project registered at `cwd`, or null when none is registered there yet.
+ * Resource-start preparation resolves `cwd` the same way and registers an unknown checkout
+ * as a new project, so null is never a project that already exists.
+ */
+export async function registeredProjectKeyForPath(
+  cwd: string,
+  deps: Parameters<typeof resolveCodebaseForPath>[1]
+): Promise<string | null> {
+  const { codebase } = await resolveCodebaseForPath(cwd, deps);
+  return codebase ? projectKeyForCodebase(codebase, codebase.default_cwd) : null;
 }

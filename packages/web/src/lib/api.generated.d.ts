@@ -1920,6 +1920,158 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/attention/answer': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Answer an attention queue item by its ref */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['AnswerAttentionItemBody'];
+        };
+      };
+      responses: {
+        /** @description Answered, or the item already had this answer */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['AttentionItemActionResponse'];
+          };
+        };
+        /** @description Bad request: the answer does not fit the item */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Nothing the caller may answer has this ref */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The item is closed, moved, takes no answer, or was answered differently */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/attention/withdraw': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Withdraw an ask a completed run left, by its ref */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['WithdrawAttentionItemBody'];
+        };
+      };
+      responses: {
+        /** @description Withdrawn, or already withdrawn */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['AttentionItemActionResponse'];
+          };
+        };
+        /** @description The ref names an item a paused run holds, which is answered, not withdrawn */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Nothing the caller may withdraw has this ref */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The ask was already answered or replaced */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/runs/{runId}/attention': {
     parameters: {
       query?: never;
@@ -2038,6 +2190,226 @@ export interface paths {
           };
         };
         /** @description The write names an occurrence the run is no longer paused at */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/items': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Read an item: its runs, open questions and answers, oldest first */
+    get: {
+      parameters: {
+        query: {
+          project: string;
+          key: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description The item */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ItemRead'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description No item under that key in the project */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/items/rulings': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Record a ruling on an item: a decision made without a question being asked */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['RecordItemRulingBody'];
+        };
+      };
+      responses: {
+        /** @description The ruling as recorded */
+        201: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ItemRuling'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Only the operator or an admin may record a ruling */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/items/rulings/{rulingId}/withdraw': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Withdraw a ruling; the record stays and says it was withdrawn */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          rulingId: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['WithdrawItemRulingBody'];
+        };
+      };
+      responses: {
+        /** @description The ruling, now withdrawn */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ItemRuling'];
+          };
+        };
+        /** @description Bad request, an unknown project, or a ruling outside the named project */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Only the operator or an admin may withdraw a ruling */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description No ruling with that id */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The ruling was already withdrawn */
         409: {
           headers: {
             [name: string]: unknown;
@@ -3389,6 +3761,86 @@ export interface paths {
         };
         /** @description Codebase not found */
         404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/packs/{pack}/graph': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** A pack's stages, outcomes and run-ended arrows, each active or declared */
+    get: {
+      parameters: {
+        query: {
+          /** @description The codebase whose project the pack is discovered from and its arrows launch in */
+          codebaseId: string;
+          /** @description An absolute directory the pack's workflows are discovered from instead of the codebase, as a binding's launch.discoveryCwd names it */
+          workflowSource?: string;
+        };
+        header?: never;
+        path: {
+          /** @description The pack key: its folder name */
+          pack: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['PackGraph'];
+          };
+        };
+        /** @description workflowSource is not an absolute path */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Codebase not found, or no workflow of the pack was found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description A trigger file in the install cannot be read, or the store cannot hold run-ended bindings; the error names the file */
+        422: {
           headers: {
             [name: string]: unknown;
           };
@@ -5395,11 +5847,15 @@ export interface components {
           allowLocalBinding?: boolean;
           httpProxyPort?: number;
           socksProxyPort?: number;
+        } & {
+          [key: string]: unknown;
         };
         filesystem?: {
           allowWrite?: string[];
           denyWrite?: string[];
           denyRead?: string[];
+        } & {
+          [key: string]: unknown;
         };
         ignoreViolations?: {
           [key: string]: string[];
@@ -5410,6 +5866,8 @@ export interface components {
         ripgrep?: {
           command: string;
           args?: string[];
+        } & {
+          [key: string]: unknown;
         };
       } & {
         [key: string]: unknown;
@@ -5442,11 +5900,14 @@ export interface components {
         };
       };
       returns?: string;
-      outcome_field?: string;
       deprecated?: {
         message: string;
       };
       nodes: components['schemas']['DagNode'][];
+      result?: {
+        outcome?: string;
+        asks?: string;
+      };
     };
     DagNode: {
       id: string;
@@ -5458,7 +5919,7 @@ export interface components {
       model?: string | string[];
       provider?: string;
       context?:
-        | ('fresh' | 'shared')
+        | ('fresh' | 'shared' | 'same')
         | {
             resume: string;
           };
@@ -5668,11 +6129,15 @@ export interface components {
           allowLocalBinding?: boolean;
           httpProxyPort?: number;
           socksProxyPort?: number;
+        } & {
+          [key: string]: unknown;
         };
         filesystem?: {
           allowWrite?: string[];
           denyWrite?: string[];
           denyRead?: string[];
+        } & {
+          [key: string]: unknown;
         };
         ignoreViolations?: {
           [key: string]: string[];
@@ -5683,6 +6148,8 @@ export interface components {
         ripgrep?: {
           command: string;
           args?: string[];
+        } & {
+          [key: string]: unknown;
         };
       } & {
         [key: string]: unknown;
@@ -5934,6 +6401,7 @@ export interface components {
       status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
       /** @enum {string|null} */
       outcome: 'succeeded' | 'failed' | null;
+      completed_outcome: string | null;
       user_message: string;
       metadata: components['schemas']['WorkflowRunMetadata'];
       started_at: string;
@@ -6047,6 +6515,7 @@ export interface components {
           [key: string]: {
             sessionId: string;
             provider: string;
+            model?: string;
           };
         };
         bodySessionCursorAncestry?: {
@@ -6054,6 +6523,7 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+              model?: string;
             };
           };
         };
@@ -6634,6 +7104,7 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+              model?: string;
             };
           };
           bodySessionCursorAncestry?: {
@@ -6641,6 +7112,7 @@ export interface components {
               [key: string]: {
                 sessionId: string;
                 provider: string;
+                model?: string;
               };
             };
           };
@@ -6664,6 +7136,7 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+              model?: string;
             };
           };
           bodySessionCursorAncestry?: {
@@ -6671,6 +7144,7 @@ export interface components {
               [key: string]: {
                 sessionId: string;
                 provider: string;
+                model?: string;
               };
             };
           };
@@ -6698,6 +7172,7 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+              model?: string;
             };
           };
           bodySessionCursorAncestry?: {
@@ -6705,6 +7180,7 @@ export interface components {
               [key: string]: {
                 sessionId: string;
                 provider: string;
+                model?: string;
               };
             };
           };
@@ -6824,6 +7300,7 @@ export interface components {
             label?: string;
             does?: string;
             value?: unknown;
+            cost?: string;
           }[];
           /** @enum {boolean} */
           other?: true;
@@ -6832,6 +7309,17 @@ export interface components {
             why: string;
             /** @enum {string} */
             confidence?: 'low' | 'medium' | 'high';
+          };
+          context?: string;
+          artifacts?: {
+            /** @enum {string} */
+            type: 'archon_artifact';
+            run_id: string;
+            path: string;
+          }[];
+          askedIn?: {
+            runId: string;
+            workflow: string;
           };
         }
       | {
@@ -7003,6 +7491,26 @@ export interface components {
             };
           }[];
         };
+    AttentionItemActionResponse: {
+      ref: string;
+      /** @enum {string} */
+      action: 'answer' | 'withdraw';
+      unchanged: boolean;
+      settled?: boolean;
+      runId?: string;
+      continues?: boolean;
+      cancelled?: boolean;
+    };
+    AnswerAttentionItemBody: {
+      ref: string;
+      choose?: string[];
+      /** @enum {boolean} */
+      recommended?: true;
+      text?: string;
+    };
+    WithdrawAttentionItemBody: {
+      ref: string;
+    };
     AttentionQueueItemResponse: {
       item:
         | {
@@ -7051,6 +7559,7 @@ export interface components {
               label?: string;
               does?: string;
               value?: unknown;
+              cost?: string;
             }[];
             /** @enum {boolean} */
             other?: true;
@@ -7059,6 +7568,17 @@ export interface components {
               why: string;
               /** @enum {string} */
               confidence?: 'low' | 'medium' | 'high';
+            };
+            context?: string;
+            artifacts?: {
+              /** @enum {string} */
+              type: 'archon_artifact';
+              run_id: string;
+              path: string;
+            }[];
+            askedIn?: {
+              runId: string;
+              workflow: string;
             };
           }
         | {
@@ -7205,6 +7725,506 @@ export interface components {
       };
       unset?: string[];
     };
+    ItemRead: {
+      item: {
+        id: string;
+        projectKey: string;
+        key: string;
+      };
+      runs: {
+        id: string;
+        workflow: string;
+        /** @enum {string} */
+        status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        outcome: string | null;
+        /** Format: date-time */
+        startedAt: string;
+        /** Format: date-time */
+        completedAt: string | null;
+        cause:
+          | {
+              /** @enum {string} */
+              kind: 'run_ended';
+              runId: string;
+              sourceInstanceId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'run_fired';
+              runId: string;
+              node: string | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'receipt';
+              receiptId: string;
+              sourceInstanceId: string;
+            }
+          | unknown;
+        awaitingExecution: {
+          requestId: string;
+          hostId: string;
+        } | null;
+      }[];
+      queued: {
+        requestId: string;
+        workflow: string | null;
+        resource: string;
+        hostId: string;
+        /** Format: date-time */
+        queuedAt: string;
+        ahead: number;
+      }[];
+      questions: (
+        | {
+            /** @enum {string} */
+            kind: 'attention';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            run?: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+              node: string;
+              occurrence: string;
+            };
+            message: string;
+            /** @enum {string} */
+            form: 'message' | 'approval' | 'select' | 'multi_select';
+            options: {
+              id: string;
+              label?: string;
+              does?: string;
+              value?: unknown;
+              cost?: string;
+            }[];
+            /** @enum {boolean} */
+            other?: true;
+            recommendation?: {
+              option: string;
+              why: string;
+              /** @enum {string} */
+              confidence?: 'low' | 'medium' | 'high';
+            };
+            context?: string;
+            artifacts?: {
+              /** @enum {string} */
+              type: 'archon_artifact';
+              run_id: string;
+              path: string;
+            }[];
+            askedIn?: {
+              runId: string;
+              workflow: string;
+            };
+          }
+        | {
+            /** @enum {string} */
+            kind: 'awaiting_response';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            run: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+              node: string;
+              occurrence: string;
+            };
+            message: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'usage_limit';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            run: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+              node: string;
+            };
+            /** Format: date-time */
+            resetAt: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'unreadable';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            run: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+            };
+            /** @enum {string} */
+            reason:
+              | 'malformed_tool_call_attention'
+              | 'malformed_gate'
+              | 'unrecognized_gate_type'
+              | 'child_pointer_missing'
+              | 'child_run_missing'
+              | 'child_chain_too_deep'
+              | 'source_release_not_continued';
+            detail: string;
+          }
+      )[];
+      answers: (
+        | {
+            /** @enum {string} */
+            kind: 'attention';
+            runId: string;
+            node: string | null;
+            occurrence: string | null;
+            at: string;
+            via: string | null;
+            answer:
+              | {
+                  text: string;
+                }
+              | {
+                  decision: string;
+                  text: string;
+                }
+              | {
+                  decisions: string[];
+                  text: string;
+                }
+              | unknown;
+            by:
+              | {
+                  declared: string;
+                }
+              | {
+                  userId: string;
+                }
+              | unknown;
+            fromRun: {
+              runId: string;
+              nodePath: string;
+            } | null;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'gate';
+            runId: string;
+            node: string | null;
+            occurrence: string | null;
+            at: string;
+            via: string | null;
+            decision: string | null;
+            text: string | null;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'ruling';
+            id: string;
+            text: string;
+            /** Format: date-time */
+            at: string;
+            via: string;
+            by:
+              | {
+                  declared: string;
+                }
+              | {
+                  userId: string;
+                }
+              | unknown;
+            fromRun: {
+              runId: string;
+              nodePath: string;
+            } | null;
+            withdrawn: {
+              /** Format: date-time */
+              at: string;
+              via: string;
+              by:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
+              fromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
+            } | null;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'ask';
+            runId: string;
+            node: string | null;
+            occurrence: string | null;
+            at: string;
+            via: string | null;
+            ref: string;
+            question: string;
+            answer:
+              | {
+                  text: string;
+                }
+              | {
+                  decision: string;
+                  text: string;
+                }
+              | {
+                  decisions: string[];
+                  text: string;
+                }
+              | unknown;
+            chosen: {
+              id: string;
+              does: string;
+            } | null;
+            withdrawn: boolean;
+            by:
+              | {
+                  declared: string;
+                }
+              | {
+                  userId: string;
+                }
+              | unknown;
+            fromRun: {
+              runId: string;
+              nodePath: string;
+            } | null;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'asks_settled';
+            runId: string;
+            node: string | null;
+            occurrence: string | null;
+            at: string;
+            via: string | null;
+            answered: number;
+            withdrawn: number;
+          }
+      )[];
+      links: {
+        id: string;
+        /** @enum {string} */
+        kind: 'depends_on' | 'part_of' | 'duplicate_of';
+        /** @enum {string} */
+        direction: 'outgoing' | 'incoming';
+        other: {
+          id: string;
+          projectKey: string;
+          key: string;
+        };
+        /** Format: date-time */
+        at: string;
+        via: string;
+        by:
+          | {
+              declared: string;
+            }
+          | {
+              userId: string;
+            }
+          | unknown;
+        fromRun: {
+          runId: string;
+          nodePath: string;
+        } | null;
+        ended: {
+          /** Format: date-time */
+          at: string;
+          via: string;
+          by:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              }
+            | unknown;
+          fromRun: {
+            runId: string;
+            nodePath: string;
+          } | null;
+        } | null;
+      }[];
+      degraded: (
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'run_unreadable';
+            runId?: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'ruling_unreadable';
+            rulingId: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'link_unreadable';
+            linkId: string;
+          }
+      )[];
+    };
+    ItemRuling: {
+      /** @enum {string} */
+      kind: 'ruling';
+      id: string;
+      text: string;
+      /** Format: date-time */
+      at: string;
+      via: string;
+      by:
+        | {
+            declared: string;
+          }
+        | {
+            userId: string;
+          }
+        | unknown;
+      fromRun: {
+        runId: string;
+        nodePath: string;
+      } | null;
+      withdrawn: {
+        /** Format: date-time */
+        at: string;
+        via: string;
+        by:
+          | {
+              declared: string;
+            }
+          | {
+              userId: string;
+            }
+          | unknown;
+        fromRun: {
+          runId: string;
+          nodePath: string;
+        } | null;
+      } | null;
+    };
+    RecordItemRulingBody: {
+      project: string;
+      key: string;
+      text: string;
+      as?: string;
+    };
+    WithdrawItemRulingBody: {
+      project?: string;
+      as?: string;
+    };
     AttentionStreamLine: (
       | {
           /** @enum {string} */
@@ -7265,6 +8285,7 @@ export interface components {
                   label?: string;
                   does?: string;
                   value?: unknown;
+                  cost?: string;
                 }[];
                 /** @enum {boolean} */
                 other?: true;
@@ -7273,6 +8294,17 @@ export interface components {
                   why: string;
                   /** @enum {string} */
                   confidence?: 'low' | 'medium' | 'high';
+                };
+                context?: string;
+                artifacts?: {
+                  /** @enum {string} */
+                  type: 'archon_artifact';
+                  run_id: string;
+                  path: string;
+                }[];
+                askedIn?: {
+                  runId: string;
+                  workflow: string;
                 };
               }
             | {
@@ -7467,6 +8499,24 @@ export interface components {
               parentRunId: string | null;
               occurrence: string | null;
               /** @enum {string} */
+              reason: 'replaced';
+              replacedByRunId: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'resolved';
+              cursor: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              ref: string;
+              runId?: string;
+              workflow: string | null;
+              parentRunId: string | null;
+              occurrence: string | null;
+              /** @enum {string} */
               reason: 'no_longer_listed';
             }
         )
@@ -7500,8 +8550,7 @@ export interface components {
           parentRunId: string | null;
           /** @enum {string} */
           status: 'completed' | 'failed' | 'cancelled';
-          /** @enum {string|null} */
-          outcome: 'succeeded' | 'failed' | null;
+          outcome: string | null;
           cause: {
             node: string;
             /** @enum {string|null} */
@@ -7695,6 +8744,7 @@ export interface components {
       /** @enum {string} */
       status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
       outcome: components['schemas']['WorkflowRunOutcome'];
+      completed_outcome: string | null;
       user_message: string;
       metadata: components['schemas']['WorkflowRunMetadata'];
       started_at: string;
@@ -7781,6 +8831,7 @@ export interface components {
           status: 'completed' | 'failed' | 'cancelled';
           /** @enum {string|null} */
           outcome: 'succeeded' | 'failed' | null;
+          completed_outcome?: string | null;
           error: string | null;
           first_failed_node: string | null;
           nodes: {
@@ -7970,7 +9021,7 @@ export interface components {
                 detail?: string;
               };
         } | null;
-        /** @description The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. */
+        /** @description The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. A loop body node holds its latest round. */
         nodes: {
           node_id: string;
           /** @enum {string} */
@@ -8079,6 +9130,128 @@ export interface components {
                 }
             )[];
           };
+        }[];
+        /** @description Each round of each loop_group the run has entered, in order: the body nodes it reached, with state, timing and output. Absent when the run ran no loop. */
+        loop_rounds?: {
+          loop_group_path: {
+            groupId: string;
+            iteration: number;
+          }[];
+          nodes: {
+            node_id: string;
+            /** @enum {string} */
+            state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+            error?: string;
+            /** @enum {string} */
+            reason?:
+              | 'prior_success'
+              | 'when_condition'
+              | 'when_condition_parse_error'
+              | 'trigger_rule'
+              | 'timeout';
+            cause?:
+              | {
+                  /** @enum {string} */
+                  kind: 'condition';
+                  expr: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'condition_parse_error';
+                  expr: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'timeout';
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'upstream_failed';
+                  origin: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'upstream_skipped';
+                  origin: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
+                };
+            fan_out_outcome?: {
+              tally: {
+                total: number;
+                completed: number;
+                failed: number;
+                not_started: number;
+                cancelled_by_engine: number;
+                cancelled_by_workflow: number;
+                cancelled_out_of_band: number;
+                cancelled_unattributed: number;
+              };
+              slots: (
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome: 'completed';
+                    child_run_id: string;
+                  }
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome: 'failed';
+                    child_run_id: string;
+                    error?: string;
+                  }
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome: 'not_started';
+                    error: string;
+                  }
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome:
+                      | 'cancelled_by_engine'
+                      | 'cancelled_by_workflow'
+                      | 'cancelled_out_of_band'
+                      | 'cancelled_unattributed';
+                    child_run_id: string;
+                    /** @enum {string} */
+                    cancel_reason?:
+                      | 'approval_rejected'
+                      | 'operator'
+                      | 'halt_node'
+                      | 'precondition_failed'
+                      | 'conversation_reset'
+                      | 'fan_out';
+                  }
+              )[];
+            };
+            /** Format: date-time */
+            started_at?: string;
+            duration_ms?: number;
+            output?: string;
+            output_truncated?: boolean;
+            structured_output?: unknown;
+          }[];
         }[];
       };
       events: components['schemas']['WorkflowEvent'][];
@@ -8452,6 +9625,91 @@ export interface components {
         pack: string;
         /** @enum {string} */
         source: 'project' | 'bundled' | 'global' | 'installed';
+        error: string;
+      }[];
+    };
+    PackGraph: {
+      pack: string;
+      stages: {
+        name: string;
+        returns: string | null;
+        outcome: {
+          field: string;
+          /** @enum {string} */
+          form: 'enum' | 'boolean';
+          values: {
+            value: string;
+            startsNothing: boolean;
+          }[];
+        } | null;
+        asks: boolean;
+        nodes: {
+          id: string;
+          kind: string;
+          dependsOn: string[];
+          loopGroup: string | null;
+          blocks: {
+            include: string;
+            workflow: string;
+          }[];
+          fanOut: {
+            workflow: string;
+          } | null;
+        }[];
+      }[];
+      arrows: (
+        | {
+            from: {
+              stage: string;
+              outcome: string;
+            };
+            to: string;
+            /** @enum {boolean} */
+            active: true;
+            declared: {
+              binding: string;
+              problems: string[];
+            } | null;
+            installed: {
+              file: string;
+              sourceInstanceId: string;
+              problems: string[];
+            };
+          }
+        | {
+            from: {
+              stage: string;
+              outcome: string;
+            };
+            to: string;
+            /** @enum {boolean} */
+            active: false;
+            declared: {
+              binding: string;
+              problems: string[];
+            };
+            installed: unknown;
+          }
+      )[];
+      fanOutBlocks: {
+        workflow: string;
+        nodes: {
+          id: string;
+          kind: string;
+          dependsOn: string[];
+          loopGroup: string | null;
+          blocks: {
+            include: string;
+            workflow: string;
+          }[];
+          fanOut: {
+            workflow: string;
+          } | null;
+        }[];
+      }[];
+      discoveryErrors: {
+        filename: string;
+        workflowName: string | null;
         error: string;
       }[];
     };

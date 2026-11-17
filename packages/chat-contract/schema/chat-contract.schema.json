@@ -619,6 +619,10 @@
             "error": {
               "type": "string"
             },
+            "completedOutcome": {
+              "type": "string",
+              "minLength": 1
+            },
             "authoredOutcome": {
               "type": "string",
               "enum": [
@@ -806,6 +810,10 @@
                 "failed",
                 "cancelled"
               ]
+            },
+            "completedOutcome": {
+              "type": "string",
+              "minLength": 1
             },
             "authoredOutcome": {
               "type": "string",

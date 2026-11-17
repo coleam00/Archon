@@ -11,7 +11,7 @@ import {
   mockDiscoverWorkflowsWithConfig,
   mockDispatchBackgroundWorkflow,
   mockExecuteWorkflow,
-  mockFindResumableRunByParentConversation,
+  mockListResumableRunsByParentConversation,
   mockGetCodebase,
   mockGetOrCreateConversation,
   mockHandleCommand,
@@ -26,7 +26,7 @@ import { handleMessage } from '../orchestrator-agent';
 import type { setupRoutingTests } from './workflow-dispatch-adoption';
 export function registerLaunchInputTests(fixture: ReturnType<typeof setupRoutingTests>) {
   test('foreground_resume_detected: falls through to fresh run when hydration returns null', async () => {
-    // When findResumableRunByParentConversation returns a run but
+    // When listResumableRunsByParentConversation returns a run but
     // hydrateResumableRun finds nothing worth resuming (zero completed nodes,
     // no interactive-loop state), the orchestrator must NOT throw — it sends
     // a user-visible notice and starts a fresh run on the same worktree.
@@ -37,13 +37,13 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
       Promise.resolve(makeCodebase({ default_branch: 'develop' }))
     );
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'empty-prior-run',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
     mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
@@ -88,8 +88,8 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(makeResumableRun({ id: 'empty-config-run', status: 'paused' }))
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([makeResumableRun({ id: 'empty-config-run', status: 'paused' })])
     );
     mockInspectResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
@@ -130,13 +130,13 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'empty-prior-run',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
     mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
@@ -217,13 +217,13 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'empty-prior-run',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
     mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
@@ -532,8 +532,8 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(makeResumableRun({ id: 'paused-run', status: 'paused' }))
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([makeResumableRun({ id: 'paused-run', status: 'paused' })])
     );
 
     await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {

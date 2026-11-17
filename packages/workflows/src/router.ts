@@ -1,14 +1,12 @@
 import type { WorkflowDefinition } from './schemas';
 import { levenshtein } from './utils/fuzzy-match';
 
-export function findWorkflow<T extends Pick<WorkflowDefinition, 'name'>>(
+export function resolveWorkflowName<T extends Pick<WorkflowDefinition, 'name'>>(
   name: string,
   workflows: readonly T[]
 ): T | undefined {
   return workflows.find(w => w.name === name);
 }
-
-export { findWorkflow as resolveWorkflowName };
 
 /** Human-facing hints only; suggestions never select a workflow. */
 export function suggestWorkflowNames(

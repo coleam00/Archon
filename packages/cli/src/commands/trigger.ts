@@ -2,29 +2,39 @@ import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { createHash, randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
-import { mkdir, open, readFile, rm } from 'node:fs/promises';
-import { isAbsolute, join, resolve } from 'node:path';
+import { readFile, rm } from 'node:fs/promises';
+import { isAbsolute, resolve } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import { getArchonHome } from '@archon/paths';
 import {
   drainResourceStartHost,
-  registeredStartProjectKey,
   ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
+import {
+  getTriggersPath,
+  readRunEndedBindings,
+  runEndedTriggerCheck,
+} from '@archon/core/workflows/run-ended';
+import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
 import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
 import {
   collectCredentialValues,
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
-import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
+import {
+  awaitingExecution,
+  SourceReceiptDigestConflictError,
+  type AwaitingExecution,
+} from '@archon/workflows/resource-start-store';
 import {
   resourceStartBindingIntentSchema,
   RUN_SOURCE_ACTOR,
   requestingRun,
+  triggerConfigSchema,
   type SourceReceiptInput,
+  type TriggerConfig,
 } from '@archon/workflows/schemas/resource-start';
 import { assertItemKey, readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
@@ -35,41 +45,24 @@ import {
   DETACHED_RUN_OWNER_ENV,
 } from '../utils/detached-run-control';
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
+import { addTriggerFile } from '../triggers/add-trigger-file';
 import { installMacosNativeSchedule, removeMacosNativeSchedule } from '../triggers/native-schedule';
 import { resolveCliUserId } from './auth';
 import { readCallingNode } from '../utils/calling-node';
 import { requestedBy } from '../utils/requested-by';
 
-/**
- * The file `trigger fire --config` reads. Without `schedule` the binding is fire-only:
- * nothing but `trigger fire` starts it, and `trigger schedule install` refuses it. A
- * `schedule` that is present must be complete, so a half-written one is never fire-only.
- */
-export const triggerFireConfigSchema = z
-  .object({
-    version: z.literal(1),
-    sourceInstanceId: z.string().min(1),
-    binding: resourceStartBindingIntentSchema.omit({ eventInputs: true }),
-    schedule: z
-      .object({ intervalSeconds: z.number().int().positive(), runAtLoad: z.boolean() })
-      .strict()
-      .optional(),
-  })
-  .strict();
+export { spawnAdmitted } from '../utils/spawn-admitted';
 
-type TriggerFireConfig = z.infer<typeof triggerFireConfigSchema>;
 /** A configuration a clock can start. One without `schedule` is fire-only and is not this. */
-type TimerTriggerConfig = TriggerFireConfig & {
-  schedule: NonNullable<TriggerFireConfig['schedule']>;
+type TimerTriggerConfig = TriggerConfig & {
+  schedule: NonNullable<TriggerConfig['schedule']>;
 };
-function isTimerConfig(config: TriggerFireConfig): config is TimerTriggerConfig {
+function isTimerConfig(config: TriggerConfig): config is TimerTriggerConfig {
   return config.schedule !== undefined;
 }
 
-async function loadFireConfig(path: string): Promise<TriggerFireConfig> {
-  const value = triggerFireConfigSchema.safeParse(
-    JSON.parse(await readFile(path, 'utf8')) as unknown
-  );
+async function loadFireConfig(path: string): Promise<TriggerConfig> {
+  const value = triggerConfigSchema.safeParse(JSON.parse(await readFile(path, 'utf8')) as unknown);
   if (!value.success)
     throw new Error(
       `Invalid trigger configuration fields: ${value.error.issues.map(issue => issue.path.join('.')).join(', ')}`
@@ -79,43 +72,9 @@ async function loadFireConfig(path: string): Promise<TriggerFireConfig> {
   return value.data;
 }
 
-async function assertKnownRunAsUser(host: WorkflowHost, config: TriggerFireConfig): Promise<void> {
+async function assertKnownRunAsUser(host: WorkflowHost, config: TriggerConfig): Promise<void> {
   if (!(await host.records.users.getUserById(config.binding.runAsUserId)))
     throw new Error('Trigger binding names an unknown run-as user.');
-}
-
-/** Hand one admitted request to a detached `trigger execute` process with its own log. */
-export async function spawnAdmitted(
-  host: WorkflowHost,
-  requestId: string,
-  hostId: string
-): Promise<void> {
-  const request = await host.deps.store.getResourceStartRequest(requestId);
-  if (request?.status !== 'admitted') throw new Error('The admitted start request is unavailable.');
-  const [executable, ...prefix] = cliProgramArguments();
-  const logDirectory = join(getArchonHome(), 'logs');
-  await mkdir(logDirectory, { recursive: true });
-  const log = await open(join(logDirectory, `trigger-run-${requestId}.log`), 'a', 0o600);
-  try {
-    const child = spawn(
-      executable,
-      [...prefix, 'trigger', 'execute', requestId, '--host', hostId],
-      {
-        cwd: request.launch.execution.cwd,
-        detached: true,
-        stdio: ['ignore', log.fd, log.fd],
-        windowsHide: true,
-        env: { ...process.env, ARCHON_HOME: getArchonHome(), [DETACHED_RUN_OWNER_ENV]: '1' },
-      }
-    );
-    await new Promise<void>((resolveSpawn, reject) => {
-      child.once('error', reject);
-      child.once('spawn', resolveSpawn);
-    });
-    child.unref();
-  } finally {
-    await log.close();
-  }
 }
 
 /**
@@ -157,6 +116,7 @@ type TriggerOptions = {
   deliveryId?: string;
   inputs?: string;
   item?: string;
+  noItem?: boolean;
 };
 
 type TriggerDispatch = (requestId: string, hostId: string) => Promise<void>;
@@ -170,12 +130,38 @@ async function triggerWhoami(host: WorkflowHost): Promise<void> {
   await writeJsonLine({ runAsUserId: user.id, cliIdentity: cliId });
 }
 
+/**
+ * Each receipt, with `awaitingExecution`: its starts that are admitted but whose run no
+ * executor has claimed. One stays there when the process that admitted it died before it
+ * spawned the executor; `archon trigger execute <requestId> --host <hostId>` runs it once.
+ */
 async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise<void> {
+  const receipts = await host.deps.store.listStartReceipts(
+    options.limit === undefined ? undefined : Number(options.limit)
+  );
   await writeJsonLine(
-    await host.deps.store.listStartReceipts(
-      options.limit === undefined ? undefined : Number(options.limit)
+    await Promise.all(
+      receipts.map(async receipt => ({
+        ...receipt,
+        awaitingExecution: await receiptAwaitingExecution(host, receipt.id),
+      }))
     )
   );
+}
+
+async function receiptAwaitingExecution(
+  host: WorkflowHost,
+  receiptId: string
+): Promise<AwaitingExecution[]> {
+  const bindings = (await host.deps.store.getStartReceipt(receiptId))?.bindings ?? [];
+  const awaiting: AwaitingExecution[] = [];
+  for (const binding of bindings) {
+    if (binding.requestStatus !== 'admitted' || !binding.disposition) continue;
+    const request = await host.deps.store.getResourceStartRequest(binding.disposition.requestId);
+    const waiting = awaitingExecution(request);
+    if (waiting) awaiting.push(waiting);
+  }
+  return awaiting;
 }
 
 /**
@@ -217,16 +203,33 @@ async function inheritedItemKey(
     (await host.deps.store.getWorkflowRun(caller.runId));
   const item = root?.item_id ? await host.deps.store.getItem(root.item_id) : null;
   if (!item) return undefined;
-  const project = await registeredStartProjectKey(host, start.cwd);
+  const project = await registeredProjectKeyForPath(start.cwd, host.records.codebases);
   if (project === null)
     throw new Error(
-      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start's checkout (${start.cwd}) is not a registered project, so it cannot be that item's project. The start cannot inherit the item: pass --item <key> to name its item there.`
+      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start's checkout (${start.cwd}) is not a registered project, so it cannot be that item's project. The start cannot inherit the item: pass --item <key> to name its item there, or --no-item to start it on no item.`
     );
   if (project !== item.projectKey)
     throw new Error(
-      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start runs in project '${project}'. An item belongs to one project, so the start cannot inherit it: pass --item <key> to name its item there.`
+      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start runs in project '${project}'. An item belongs to one project, so the start cannot inherit it: pass --item <key> to name its item there, or --no-item to start it on no item.`
     );
   return item.key;
+}
+
+function assertItemOptions(options: TriggerOptions): void {
+  if (options.item === undefined) return;
+  if (options.noItem) throw new Error('--item and --no-item are mutually exclusive.');
+  assertItemKey(options.item);
+}
+
+/** The item the fired start is on: `--item`, none with `--no-item`, else the caller's. */
+async function firedItemKey(
+  host: WorkflowHost,
+  options: TriggerOptions,
+  sourceActor: SourceReceiptInput['sourceActor'],
+  start: { cwd: string; recorded: boolean }
+): Promise<string | undefined> {
+  if (options.noItem) return undefined;
+  return options.item ?? (await inheritedItemKey(host, sourceActor, start));
 }
 
 async function triggerFire(
@@ -251,8 +254,14 @@ async function triggerFire(
       );
     }
   }
-  if (options.item !== undefined) assertItemKey(options.item);
+  assertItemOptions(options);
   const config = await loadFireConfig(options.config);
+  // A fire has no ended run to take the checkout from; starting the stage anyway would
+  // cut it from the base branch, which is the one place this binding must never run.
+  if (config.on?.runEnded.checkout !== undefined)
+    throw new Error(
+      `${options.config} takes its checkout from the run that ended (on.runEnded.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on a run's checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <run-id> --item <key>, naming the run that holds the branch: after a read-only check, the run in the check's metadata.checkout_handoff.runId (archon workflow get <check-run-id> --json), not the check.`
+    );
   const sourceActor = await requestingSourceActor(host, env);
   // A redelivery keeps the binding snapshot of its first acceptance, so today's users
   // must not turn a recorded delivery into a failure; the store answers replay or
@@ -263,9 +272,10 @@ async function triggerFire(
     options.deliveryId !== undefined &&
     (await host.deps.store.hasStartReceiptForDelivery(config.sourceInstanceId, options.deliveryId));
   if (!recorded) await assertKnownRunAsUser(host, config);
-  const itemKey =
-    options.item ??
-    (await inheritedItemKey(host, sourceActor, { cwd: config.binding.launch.cwd, recorded }));
+  const itemKey = await firedItemKey(host, options, sourceActor, {
+    cwd: config.binding.launch.cwd,
+    recorded,
+  });
   const binding = {
     ...config.binding,
     ...(eventInputs !== undefined ? { eventInputs } : {}),
@@ -540,7 +550,53 @@ async function installTimer(
     archonHome: getArchonHome(),
     path: process.env.PATH ?? '',
     schedule: config.schedule,
+    removeCommand: `archon trigger schedule remove --config ${configPath}`,
   });
+}
+
+/**
+ * List every run-ended binding that is active (each `on.runEnded` file in the triggers
+ * directory) and check it against the workflows of the project it launches in: the
+ * ended workflow declares the outcome and every input the binding reads from it, and
+ * the started workflow exists and declares every input the binding maps. A run on an
+ * item whose end could fire such a binding is refused before it starts, by the same check.
+ * It also reports what a run is not refused for: a `launch.cwd` that does not exist, a
+ * binding that starts the workflow that ended, and two files that start the same stage.
+ */
+async function checkTriggers(host: WorkflowHost): Promise<void> {
+  const checked = [];
+  const bindings = await readRunEndedBindings(getTriggersPath());
+  // The file store has no items, so a run-ended binding can never start anything there.
+  if (host.deps.credentialStore === 'files' && bindings.length > 0)
+    throw new FileStoreUnsupportedError(
+      `Run-ended triggers (${bindings.map(entry => entry.file).join(', ')})`
+    );
+  const problems = await runEndedTriggerCheck(bindings, {
+    ...host.deps,
+    projectKeyOf: cwd => registeredProjectKeyForPath(cwd, host.records.codebases),
+  });
+  for (const [index, entry] of bindings.entries()) {
+    checked.push({
+      file: entry.file,
+      sourceInstanceId: entry.sourceInstanceId,
+      bindingId: entry.binding.bindingId,
+      hostId: entry.binding.hostId,
+      runEnded: entry.runEnded,
+      workflowName: entry.binding.launch.workflowName,
+      cwd: entry.binding.launch.cwd,
+      problems: problems[index],
+    });
+  }
+  await writeJsonLine({ directory: getTriggersPath(), runEnded: checked });
+  const broken = checked.filter(entry => entry.problems.length > 0).length;
+  if (broken > 0)
+    throw new Error(`${String(broken)} run-ended binding(s) have problems; see "problems" above.`);
+}
+
+async function addTrigger(args: string[]): Promise<void> {
+  const [file, ...rest] = args;
+  if (file === undefined || rest.length > 0) throw new Error('Usage: archon trigger add <file>');
+  await writeJsonLine({ added: await addTriggerFile(resolve(file), getTriggersPath()) });
 }
 
 export interface TriggerDependencies {
@@ -565,6 +621,10 @@ export async function triggerCommand(
       return triggerWhoami(host);
     case 'list':
       return triggerList(host, options);
+    case 'add':
+      return addTrigger(args);
+    case 'check':
+      return checkTriggers(host);
     case 'fire':
       return triggerFire(host, options, dispatch, dependencies.env ?? process.env);
     case 'drain':
@@ -581,7 +641,7 @@ export async function triggerCommand(
       return scheduleTrigger(host, args, options);
     default:
       throw new Error(
-        'Usage: archon trigger <fire|drain|execute|list|inspect|withdraw|recover-preparation|schedule|whoami>'
+        'Usage: archon trigger <fire|drain|execute|list|add|check|inspect|withdraw|recover-preparation|schedule|whoami>'
       );
   }
 }

@@ -68,8 +68,8 @@ Bun's `mock.module()` is process-global and irreversible — `mock.restore()` do
 - Never add `afterAll(() => mock.restore())` for `mock.module()` cleanup — it has no effect
 - Use `spyOn()` for internal modules that other test files import directly (e.g., `spyOn(git, 'checkout')`) — `spy.mockRestore()` DOES work for spies
 - Never `mock.module()` a module path that another test file also `mock.module()`s with a different implementation
-- When adding a new test file with `mock.module()` to `packages/core`, make its first line exactly `// @archon-test-isolated` so it runs in its own process. Core discovers its tests, and discovery fails on a file that calls `mock.module()` without the marker. A file that mocks through a helper needs the marker too; discovery cannot see that call
-- In the other packages, give the file its own entry in `testGroups` in the package's `package.json`, or its own `bun test` step for a package still using a `&&` chain
+- When adding a new test file with `mock.module()`, make its first line exactly `// @archon-test-isolated`. A package discovers the tests no `testGroups` selector names: a marked file runs in its own process, and discovery fails on a file that calls `mock.module()` without the marker. A file that mocks through a helper needs the marker too; discovery cannot see that call
+- `testGroups` in a package's `package.json` pin the files their selectors name into fixed processes, and the marker does not change that. A selector is a substring match, so a directory selector such as `src/` covers every new file under it. In those packages a new mocking test shares that group's process until the selector is narrowed to leave it out; a second entry naming the file does not help, because the directory group still runs it. A test no selector names needs no entry
 - A package's `testConcurrency` in `package.json` runs that many `testGroups` at once, each still in its own process; leave it out to run groups one at a time
 - Full package runs start groups slowest first, by the times in `scripts/test-weights.json`. Requested runs start groups in resolver order. CI splits slow shards into parts with `ARCHON_TEST_PART=<index>/<count>`, using the same times; `ARCHON_TEST_PART=1/2 bun run test` in a package runs that part locally. A new group with no recorded time counts as one second, so refresh the file with `bun scripts/update-test-weights.ts <run-id>` when one part of a shard finishes well after its sibling
 
@@ -112,8 +112,7 @@ running the suite.
 Within a package, substring selectors expand to matching files and retain the package's
 isolation groups. Every selected group runs, even after another group fails; the command
 returns nonzero if any group fails. A full run without arguments still stops admitting
-groups after a failure. Discovery errors, including selected files outside explicit
-`testGroups`, stop the request before any group starts.
+groups after a failure. Discovery errors stop the request before any group starts.
 
 Test options are forwarded to each group. Name filters (`-t` or `--test-name-pattern`)
 are supported only when the request selects one isolation group, preserving Bun's native

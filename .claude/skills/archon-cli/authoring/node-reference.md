@@ -15,8 +15,7 @@ inputs:                      # declared signature; callers pass via --input name
   work:
     default: ""
     description: Optional work override; prompts read $ARGUMENTS explicitly for fallback
-returns: implement           # which node's output is the workflow's terminal output
-outcome_field: green         # persist one authored boolean beside run status (e.g. green/ready/rooted)
+returns: { node: implement, outcome: green }  # result node; `outcome` names a required boolean or string enum
 worktree:
   enabled: true              # pin worktree isolation. Bounds git files ONLY —
                              # not ~/.archon, env vars, database, or sessions
@@ -70,6 +69,12 @@ Session context is explicit when it matters:
 - `context: fresh` always starts clean. Use it for independent verification.
 - `context: shared` explicitly inherits the ambient session in a sequential
   layer. It is invalid where parallel structure makes that ancestry ambiguous.
+- `context: same` continues the session the node itself last had: its previous
+  round in a `loop_group`, else the newest one it left on the run's item in an earlier
+  run (forked), else fresh. One node can build in round one and fix in round two, and a
+  stage run again on the item picks up where it left off. Parallel layers and
+  `fresh_context` do not reset it. A session from another provider or model is not
+  continued, and the run says so. Not combinable with `persist_session`.
 - `context: { resume: plan }` forks the named completed upstream node's session.
   Use it when one exact ancestry matters; the provider must support session forks.
   Inside a `loop_group` body the source can be an enclosing node, whose session the

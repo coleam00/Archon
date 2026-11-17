@@ -20,11 +20,6 @@ import type { CreateAgentSessionResult } from '@earendil-works/pi-coding-agent';
 import type { Api, Model } from '@earendil-works/pi-ai';
 import { PiProvider } from './provider';
 describe('PiProvider models', () => {
-  test('reports a failure when no model is configured', async () => {
-    const { failure } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
-    expect(failure?.evidence).toContain('Pi provider requires a model');
-  });
-
   test('preflight freezes the native default for the same model used by sendQuery', async () => {
     process.env.GEMINI_API_KEY = 'fixture-key';
     mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({

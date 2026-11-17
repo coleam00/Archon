@@ -98,7 +98,10 @@ export async function runPack({
   cwd,
   json,
 }: CliRouteContext): Promise<number> {
-  const { packCommand } = await loadRoute(() => import('../commands/pack'));
+  // The graph resolves each run-ended file's project from the codebase records.
+  const { packCommand } = await loadRoute(() => import('../commands/pack'), {
+    database: subcommand === 'graph' && (await usesDatabaseStore()),
+  });
   const text = (name: string): string | undefined => {
     const value = values[name];
     return typeof value === 'string' ? value : undefined;
@@ -109,6 +112,8 @@ export async function runPack({
     host: text('host'),
     runAs: text('run-as'),
     out: text('out'),
+    config: text('config'),
+    workflowSource: text('workflow-source'),
     only: text('only'),
     force: values.force === true,
     json,
@@ -181,8 +186,15 @@ export async function runTrigger({
   const { triggerCommand, spawnAdmitted } = await loadRoute(() => import('../commands/trigger'), {
     database: await usesDatabaseStore(),
   });
-  const { createCliWorkflowHost } = await import('../utils/workflow-host');
-  const host = await createCliWorkflowHost(true);
+  const { createCliWorkflowHost, cliOwnTriggerHost } = await import('../utils/workflow-host');
+  // A `trigger execute` process serves the host it runs for, so the run it ends admits
+  // that host's next start.
+  const host = await createCliWorkflowHost(
+    true,
+    cliOwnTriggerHost(
+      subcommand === 'execute' && typeof values.host === 'string' ? values.host : undefined
+    )
+  );
   await triggerCommand(
     host,
     subcommand,
@@ -194,6 +206,7 @@ export async function runTrigger({
       deliveryId: typeof values['delivery-id'] === 'string' ? values['delivery-id'] : undefined,
       inputs: typeof values.inputs === 'string' ? values.inputs : undefined,
       item: typeof values.item === 'string' ? values.item : undefined,
+      noItem: values['no-item'] === true,
       limit: typeof values.limit === 'string' ? values.limit : undefined,
       yes: values.yes === true,
     },
@@ -333,6 +346,15 @@ export async function runIsolation({
   values,
   json,
 }: CliRouteContext): Promise<number> {
+  if (subcommand === 'cleanup' && positionals[2] === 'schedule') {
+    // The timer commands never open the store, but install refuses a file-store install:
+    // the merged cleanup is SQL-only, so every pass it schedules would fail.
+    const { isolationCleanupScheduleCommand } = await loadRoute(
+      () => import('../commands/isolation-schedule'),
+      { providers: false, database: positionals[3] === 'install' }
+    );
+    return await isolationCleanupScheduleCommand(positionals.slice(3), values);
+  }
   const { isolationListCommand, isolationCleanupCommand, isolationCleanupMergedCommand } =
     await loadRoute(() => import('../commands/isolation'), { database: true });
   switch (subcommand) {

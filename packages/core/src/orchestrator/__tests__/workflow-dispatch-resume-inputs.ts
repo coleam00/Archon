@@ -10,7 +10,7 @@ import {
   mockCloseRunLiveOwner,
   mockDispatchBackgroundWorkflow,
   mockExecuteWorkflow,
-  mockFindResumableRunByParentConversation,
+  mockListResumableRunsByParentConversation,
   mockGetCodebase,
   mockGetOrCreateConversation,
   mockHandleCommand,
@@ -40,14 +40,14 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     mockHandleCommand.mockReturnValueOnce(
       Promise.resolve(fixture.makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'implicit-resume-1',
           working_path: '/repos/test-repo/worktrees/paused',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
 
     const platform = makeForegroundPlatform();
@@ -83,14 +83,24 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     expect(await workflowStartRefusal(start)).toContain("requires input 'diff'");
 
     prepare();
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'implicit-resume-1',
           working_path: '/repos/test-repo/worktrees/paused',
           status: 'paused',
-        })
-      )
+        }),
+      ])
+    );
+    expect(await workflowStartRefusal(start)).toBeUndefined();
+
+    // With several open runs the dispatch lists them, so admission must not refuse first.
+    prepare();
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
+        makeResumableRun({ id: 'open-run-a', status: 'paused' }),
+        makeResumableRun({ id: 'open-run-b', status: 'failed' }),
+      ])
     );
     expect(await workflowStartRefusal(start)).toBeUndefined();
 
@@ -116,14 +126,14 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     mockHandleCommand.mockReturnValueOnce(
       Promise.resolve(fixture.makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'implicit-resume-2',
           working_path: '/repos/test-repo/worktrees/paused',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
 
     const platform = makeForegroundPlatform();
@@ -146,14 +156,14 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'implicit-model-resume',
           working_path: '/repos/test-repo/worktrees/paused',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
 
     const platform = makeForegroundPlatform();
@@ -178,14 +188,14 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'implicit-config-resume',
           working_path: '/repos/test-repo/worktrees/paused',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
 
     const platform = makeForegroundPlatform();
@@ -240,14 +250,14 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     mockHandleCommand.mockReturnValueOnce(
       Promise.resolve(fixture.makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'nothing-to-resume-1',
           working_path: '/repos/test-repo/worktrees/paused',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
     // Nothing worth resuming → the fresh-run fallthrough.
     mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
@@ -333,14 +343,14 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     mockHandleCommand.mockReturnValueOnce(
       Promise.resolve(fixture.makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'failed-prior-1',
           working_path: '/repos/test-repo/worktrees/failed',
           status: 'failed',
-        })
-      )
+        }),
+      ])
     );
 
     const platform = makeForegroundPlatform();
@@ -383,14 +393,14 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'web-noninteractive-resume-1',
           working_path: '/repos/test-repo/worktrees/web-feature',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
 
     const platform = { ...makePlatform(), getPlatformType: mock(() => 'matrix-chat') };
@@ -429,14 +439,14 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'chat-resume-run-1',
           working_path: '/repos/test-repo/worktrees/chat-feature',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
 
     const platform = {
@@ -475,7 +485,7 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     };
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
-    expect(mockFindResumableRunByParentConversation).toHaveBeenCalledWith(
+    expect(mockListResumableRunsByParentConversation).toHaveBeenCalledWith(
       'test-workflow',
       'conv-1-db',
       'codebase-1'

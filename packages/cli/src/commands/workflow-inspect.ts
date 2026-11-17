@@ -11,6 +11,7 @@ import type {
   UnknownOwnerLiveness,
 } from '@archon/core/services/run-attention-watch';
 import {
+  displayedRunOutcome,
   isApprovalContext,
   isScheduledWorkflowResume,
   isWorkflowWaitContext,
@@ -36,6 +37,7 @@ import { printRequestedBy, type RequestedBy } from '../utils/requested-by';
 import {
   formatFanOutOutcome,
   fetchVerboseEvents,
+  printLoopRounds,
   printVerboseNodes,
 } from './workflow-node-summaries';
 
@@ -54,7 +56,8 @@ export async function printStatusRun(
   if (attention?.kind === 'stalled_tool_calls') console.log(formatToolAttention(attention));
   if (attention?.kind === 'usage_limit')
     console.log(usageLimitWaitLine(attention.nodeId, attention.resumeAt));
-  if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
+  const outcome = displayedRunOutcome(run);
+  if (outcome !== null) console.log(`  Authored outcome: ${outcome}`);
   console.log(`  Age:    ${age}`);
   if (notice !== undefined) {
     // The run's own latest account of what it is doing or did.
@@ -105,29 +108,24 @@ export async function writeWaitOutcome(
   result: RunWaitResult,
   json: boolean | undefined
 ): Promise<void> {
-  if (result.kind === 'not_found') {
-    if (json) {
-      await writeJsonLine({ ok: false, runId, action: 'wait', error: 'not_found' });
-    } else {
-      console.log(formatWaitOutcome(resolvedId, result));
-    }
-    return;
-  }
+  if (json) await writeJsonLine(waitOutcomePayload(runId, resolvedId, result));
+  else console.log(formatWaitOutcome(resolvedId, result));
+}
 
-  if (json) {
-    await writeJsonLine({
-      ok: true,
-      action: 'wait',
-      runId: resolvedId,
-      result: result.kind,
-      ...(result.kind === 'attention' ? { attention: result.attention } : {}),
-      ...(result.kind === 'deadline' || result.kind === 'owner_lost'
-        ? { observedStatus: result.observedStatus }
-        : {}),
-    });
-  } else {
-    console.log(formatWaitOutcome(resolvedId, result));
-  }
+/** The `--json` value `workflow wait` prints for one run: `runId` is the id as the caller gave it. */
+export function waitOutcomePayload(runId: string, resolvedId: string, result: RunWaitResult) {
+  if (result.kind === 'not_found')
+    return { ok: false, runId, action: 'wait', error: 'not_found' } as const;
+  return {
+    ok: true,
+    action: 'wait',
+    runId: resolvedId,
+    result: result.kind,
+    ...(result.kind === 'attention' ? { attention: result.attention } : {}),
+    ...(result.kind === 'deadline' || result.kind === 'owner_lost'
+      ? { observedStatus: result.observedStatus }
+      : {}),
+  } as const;
 }
 
 /**
@@ -459,7 +457,8 @@ export function printRunDetail(
   console.log(`  Start:  ${describeCheckoutBaseline(run.checkout_baseline)}`);
   console.log(`  Transcript: ${transcriptPath ?? '(unavailable)'}`);
   console.log(`  Status: ${run.status}`);
-  if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
+  const outcome = displayedRunOutcome(run);
+  if (outcome !== null) console.log(`  Authored outcome: ${outcome}`);
   printReason(terminalRecord);
   console.log(`  Age:    ${formatAge(run.started_at)}`);
   for (const line of formatRunUsage(run.metadata)) console.log(line);
@@ -485,6 +484,7 @@ export function printRunDetail(
       for (const w of parseWarnings) console.log(`    - ${w}`);
     }
     printVerboseNodes(events);
+    printLoopRounds(run, events);
   }
 }
 

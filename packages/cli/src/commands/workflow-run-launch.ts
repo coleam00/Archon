@@ -1,5 +1,5 @@
 import type { OwnedRunLease } from '../utils/owned-run-lease';
-import { getIsolationProvider, recordWorktreeAdoption } from '@archon/isolation';
+import { recordWorktreeAdoption } from '@archon/isolation';
 import type {
   ExecutionContext,
   IsolationEnvironmentRow,
@@ -49,18 +49,17 @@ import {
   folderRunsInContainer,
   prepareFolderExecution,
   resolveRunCodebase,
-  warnBaseOverrideOnReuse,
   warnOnReusedWorktree,
   type FolderExecution,
 } from './workflow-isolation';
 import { assertContainerRunCredentials, runExecutesInContainer } from './workflow-native-auth';
 import {
   buildNoResumableRunError,
-  buildResumeLookupFailureError,
   resolveContinuationDeclaration,
   type ContinuationDeclaration,
 } from './workflow-run-preflight';
 import { launchDetachedRun } from './workflow-detach';
+import { refuseUnreusableBranchWorktree, reusedBranchWorktree } from './workflow-branch-reuse';
 import {
   prepareLaneAiConfiguration,
   type LaneConfigSource,
@@ -71,8 +70,9 @@ import {
 /**
  * Preflight before handing execution to a detached child. Refusals must reach the
  * caller before `Started`, rather than disappearing into the child's log (#2872).
- * The parent creates a queryable run; worktree provisioning and execution belong
- * to the child, which revalidates against the live checkout.
+ * The parent creates a queryable run and makes the refusals a read of current state can
+ * decide; creating the worktree and executing belong to the child, which revalidates
+ * against the live checkout.
  */
 export async function launchDetachedOwnedRun(
   request: OwnedRunRequest,
@@ -109,18 +109,7 @@ export async function launchDetachedOwnedRun(
   const declaration = await resolveContinuationDeclaration(host, options, detachCodebase);
   if (declaration && 'lane' in declaration) admission.aiConfigurationRun = declaration.adoptedRun;
   const adoptionLane = declaration && 'lane' in declaration ? declaration.lane : undefined;
-  if (
-    detachCodebase?.kind !== 'folder' &&
-    adoptionLane?.kind !== 'checkout-branch' &&
-    (!admission.wantsIsolation || adoptionLane?.kind === 'reuse-worktree')
-  ) {
-    await assertInheritedWorkflowExecutionCwd(
-      host,
-      adoptionLane?.kind === 'reuse-worktree'
-        ? adoptionLane.environment.working_path
-        : (admission.continuationRun?.working_path ?? cwd)
-    );
-  }
+  await refuseDetachedWorkspace(request, admission, adoptionLane, detachCodebase, detachIsFolder);
   const prepared = await prepareLaneAiConfiguration(
     request,
     admission,
@@ -143,7 +132,6 @@ export async function launchDetachedOwnedRun(
     workflow: admission.workflow,
     isContinuation: admission.isContinuation,
     continuationRun: admission.continuationRun,
-    resumeLookupError: admission.resumeLookupError,
     cliUserId: admission.cliUserId,
     codebase: detachCodebase,
     isFolder: detachIsFolder,
@@ -154,6 +142,34 @@ export async function launchDetachedOwnedRun(
     resolvedInputs: admission.resolvedInputs,
     runConfig: admission.runConfig,
   });
+}
+
+/**
+ * The workspace refusals the child's lane would make, read before the fork. The child's
+ * adoption binding forces isolation on for checkout-branch and off for reuse-worktree;
+ * the same decision picks the check here.
+ */
+async function refuseDetachedWorkspace(
+  { host, cwd, options }: OwnedRunRequest,
+  admission: OwnedRunAdmission,
+  adoptionLane: AdoptionLane | undefined,
+  codebase: Codebase | null,
+  isFolder: boolean
+): Promise<void> {
+  const isolates =
+    adoptionLane?.kind === 'checkout-branch' ||
+    (admission.wantsIsolation && adoptionLane?.kind !== 'reuse-worktree');
+  if (isolates) {
+    if (!isFolder) await refuseUnreusableBranchWorktree(host, codebase, options);
+    return;
+  }
+  if (codebase?.kind === 'folder') return;
+  await assertInheritedWorkflowExecutionCwd(
+    host,
+    adoptionLane?.kind === 'reuse-worktree'
+      ? adoptionLane.environment.working_path
+      : (admission.continuationRun?.working_path ?? cwd)
+  );
 }
 
 function detachedLaneConfig(
@@ -235,7 +251,7 @@ export interface ForegroundLaunch {
    */
   readonly codebaseDefaultBranch: string | undefined;
   readonly continuation: LaunchContinuation;
-  /** The prior run `--resume` continues; the executor performs no implicit resume detection. */
+  /** The prior run a resume continues; the executor performs no implicit resume detection. */
   readonly resumable: WorkflowRun | null;
   /**
    * Branch of the prior run's worktree, from the isolation record the resume path
@@ -405,7 +421,7 @@ async function bindAdoptionLane(
   }
 }
 
-/** Handle --resume: bind the prior run and reuse its worktree. */
+/** Handle a resume: bind the prior run and reuse its worktree. */
 async function bindResumableRun(
   request: OwnedRunRequest,
   admission: OwnedRunAdmission,
@@ -419,9 +435,6 @@ async function bindResumableRun(
       'Cannot resume: Not in a git repository.\n' +
         'Either run from a git repo or use /clone first.'
     );
-  }
-  if (admission.resumeLookupError) {
-    throw buildResumeLookupFailureError(admission.resumeLookupError);
   }
   // Located during selection, because the graph this run executes had to be chosen from it.
   const resumable = admission.continuationRun;
@@ -455,10 +468,6 @@ async function bindResumableRun(
   console.log(`Working path: ${workspace.workingCwd}`);
   console.log('');
 
-  // --resume adopts the prior run's worktree, so --base is half-applied here exactly as
-  // it is on --branch reuse: the cut-from is already fixed, but flagBase still rides
-  // opts.baseOverride into $BASE_BRANCH.
-  if (admission.flagBase) warnBaseOverrideOnReuse(workspace.workingCwd, admission.flagBase);
   return { resumable, resumeBranch: matchingEnv?.branch_name };
 }
 
@@ -604,21 +613,16 @@ async function provisionWorktree(
   // Configure isolation with repo config loader (same as orchestrator)
   configureWorktreeIsolation();
 
-  const existingEnv = launch.existingBranchEnv;
-  if (existingEnv && (await getIsolationProvider().healthCheck(existingEnv.working_path))) {
-    const actualBranch = await git.getCurrentBranchStrict(
-      git.toWorktreePath(existingEnv.working_path)
-    );
-    if (actualBranch !== branchIdentifier) {
-      throw new Error(
-        `Cannot reuse worktree at '${existingEnv.working_path}': expected branch ` +
-          `'${branchIdentifier}', found '${actualBranch ?? 'detached HEAD'}'.`
-      );
-    }
+  const existingEnv = await reusedBranchWorktree(
+    launch.existingBranchEnv,
+    codebase,
+    branchIdentifier,
+    options.fromBranch
+  );
+  if (existingEnv) {
     await warnOnReusedWorktree(
       existingEnv,
       codebase,
-      options,
       admission.flagBase,
       launch.codebaseDefaultBranch
     );

@@ -155,10 +155,4 @@ describe('git utilities', () => {
       });
     });
   });
-
-  describe('isProjectScopedWorktreeBase (deprecated)', () => {
-    test('returns true for a local non-workspace path (new two-layout model)', () => {
-      expect(git.isProjectScopedWorktreeBase(repo('/workspace/my-repo'))).toBe(true);
-    });
-  });
 });

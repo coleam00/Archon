@@ -221,6 +221,7 @@ const { generatedTaskBranch, VerificationImageInventoryError, VERIFICATION_IMAGE
   await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
   generatedTaskBranch,
+  refuseUnappliedStartPoint: mock(async () => undefined),
   VerificationImageInventoryError,
   VERIFICATION_IMAGE_RUN_LABEL,
   dockerCli: mock(async () => ({ stdout: '', stderr: '' })),
@@ -249,6 +250,11 @@ export const mockListByCodebaseWithAge =
   mock<typeof IsolationEnvironmentDb.listByCodebaseWithAge>();
 export const mockListActiveContainerEnvironments =
   mock<typeof IsolationEnvironmentDb.listActiveContainerEnvironments>();
+// The real settlement list, read before the module is mocked, so the mocks below cannot
+// drift from the statuses production derives from the workflow-run schema.
+const { SETTLEABLE_WORKFLOW_STATUSES } = await import('../../db/isolation-env-users');
+const isSettleable = (status: string): boolean =>
+  (SETTLEABLE_WORKFLOW_STATUSES as readonly string[]).includes(status);
 mock.module('../../db/isolation-environments', () => ({
   listAllActiveWithCodebase: mockListAllActiveWithCodebase,
   updateStatus: mock(() => Promise.resolve()),
@@ -258,13 +264,34 @@ mock.module('../../db/isolation-environments', () => ({
     remove: Parameters<typeof IsolationEnvironmentDb.withWorktreeRegistration>[1]
   ) => remove(() => mockMarkWorktreeDestroyed(env)),
   getLiveRunOwningEnv: mockGetLiveRunOwningEnv,
-  isSettleableRunStatus: (status: string) => status === 'failed',
+  isSettleableRunStatus: isSettleable,
   getById: mockGetById,
   listByCodebase: mockListByCodebase,
   listByCodebaseWithAge: mockListByCodebaseWithAge,
   countActiveByCodebase: mock(() => Promise.resolve(0)),
   listActiveContainerEnvironments: mockListActiveContainerEnvironments,
   createIsolationStore: () => ({}),
+}));
+
+export const mockGetWaitingHandoffOfEnv =
+  mock<() => Promise<import('../../db/isolation-env-users').WaitingHandoff | null>>();
+// getEnvUse in one read; tests drive its runs through mockGetLiveRunOwningEnv, called as
+// the separate reads were: the released owner is asked for only behind a failed owner.
+mock.module('../../db/isolation-env-users', () => ({
+  getEnvUse: async (
+    envId: string,
+    release?: import('../../db/isolation-env-users').FailedRunRelease
+  ) => {
+    const owner = await mockGetLiveRunOwningEnv(envId);
+    const releasedOwner =
+      release && owner && isSettleable(owner.status)
+        ? await mockGetLiveRunOwningEnv(envId, release)
+        : null;
+    return { owner, releasedOwner, handoff: await mockGetWaitingHandoffOfEnv() };
+  },
+  liveRunOwnerSql: mock(),
+  runOwnsEnvSql: mock(),
+  SETTLEABLE_WORKFLOW_STATUSES,
 }));
 
 export const mockGetWorkflowRun = mock<typeof WorkflowDb.getWorkflowRun>(async () => null);
@@ -344,6 +371,7 @@ export function resetCleanupMocks(): void {
   mockListAllActiveWithCodebase.mockReset().mockResolvedValue([]);
   mockMarkWorktreeDestroyed.mockReset().mockResolvedValue(undefined);
   mockGetLiveRunOwningEnv.mockReset().mockResolvedValue(null);
+  mockGetWaitingHandoffOfEnv.mockReset().mockResolvedValue(null);
   mockGetById.mockReset().mockResolvedValue(null);
   mockListByCodebase.mockReset().mockResolvedValue([]);
   mockListByCodebaseWithAge.mockReset().mockResolvedValue([]);

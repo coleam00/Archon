@@ -40,10 +40,6 @@ export {
 export { validateProjectPackSettings } from './pack-settings';
 export { discoverAvailableCommands, validateCommand } from './validator/commands';
 export { discoverAvailableScripts, validateScript } from './validator/scripts';
-// Levenshtein distance and fuzzy matching live in ./utils/fuzzy-match so lean modules can
-// reuse them without the validator's heavy deps. Re-exported to preserve this module's
-// public surface for existing importers (e.g. the CLI's validate command).
-export { levenshtein, findSimilar } from './utils/fuzzy-match';
 
 /**
  * Validate a workflow's external resource references (Level 3).

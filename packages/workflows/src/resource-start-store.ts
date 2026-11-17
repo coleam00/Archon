@@ -9,6 +9,7 @@ import {
 import type { z } from 'zod';
 import type {
   PreparedWorkflowLaunch,
+  QueuedItemStart,
   ResourceStartBindingIntent,
   ResourceStartDisposition,
   ResourceStartIntent,
@@ -26,7 +27,7 @@ import {
   type WorkflowRunStatus,
 } from './schemas/workflow-run';
 import type { WorkflowResource } from './schemas/resource-name';
-import type { ResumeRefusal, WorkflowResumeCursor } from './store';
+import type { ResumeClaimCursor, ResumeRefusal } from './store';
 
 export function skippedFireNotice(
   receipt: Pick<SourceReceiptInput, 'deliveryId' | 'sourceActor'>,
@@ -153,6 +154,30 @@ export interface ResourceStartRequestInspection {
   blocker: Extract<ResourceStartDisposition, { status: 'queued' }>['blocker'] | null;
   blockerRunStatus: WorkflowRunStatus | null;
   launch: PreparedWorkflowLaunch;
+}
+
+/** An admitted start whose run has not begun, and the host whose executor runs it. */
+export interface AwaitingExecution {
+  requestId: string;
+  hostId: string;
+}
+
+/**
+ * The start `request` holds when it is admitted but its run has not begun: no executor has
+ * claimed it. Normally that lasts a moment. If the process that admitted it died before it
+ * spawned the executor, it stays so until an operator runs it once with
+ * `archon trigger execute <requestId> --host <hostId>`. Nothing tells a dead admitter from
+ * a slow one, so this is reported, never acted on. A hand start's request is claimed by the
+ * process that made it, so it is never this.
+ */
+export function awaitingExecution(
+  request: Pick<ResourceStartRequestInspection, 'id' | 'hostId' | 'status' | 'runStatus'> | null
+): AwaitingExecution | null {
+  return request?.status === 'admitted' &&
+    request.runStatus === 'pending' &&
+    request.hostId !== DIRECT_START_HOST_ID
+    ? { requestId: request.id, hostId: request.hostId }
+    : null;
 }
 
 export function validateStartReceiptLimit(limit = 50): number {
@@ -351,15 +376,24 @@ function runnableQueue(slot: ResourceSlotOccupancy): QueuedStart[] {
   return validQueuedStarts(slot).filter(start => checkoutHolder(slot, start.launch) === undefined);
 }
 
-/** What keeps a new start request for `launch` from being admitted now. */
+/**
+ * What keeps a new start request for `launch`, made by `hostId`, from being admitted now.
+ *
+ * An older request of the same host that could run keeps FIFO even when a slot is free:
+ * that host is acting now, and its own queue goes first. An older request of another host
+ * is waiting only for that host to drain it. It holds no slot and blocks nothing; it keeps
+ * its place and takes the next free slot when its host drains. So a hand start (which no
+ * queued request shares a host with) takes any free slot, and on a busy resource can
+ * delay queued work.
+ */
 export function resourceStartBlocker(
   slot: ResourceSlotOccupancy,
-  launch: PreparedWorkflowLaunch
+  launch: PreparedWorkflowLaunch,
+  hostId: string
 ): ResourceBlocker | null {
   readAdmissionCheckoutGuard(launch);
   if (slot.queueError) throw slot.queueError;
-  // An older request that could run keeps FIFO even when a slot is free.
-  const older = runnableQueue(slot)[0];
+  const older = runnableQueue(slot).find(start => start.hostId === hostId);
   if (older) return { kind: 'request', id: older.id };
   const holder = checkoutHolder(slot, launch);
   if (holder !== undefined) return { kind: 'run', id: holder };
@@ -370,9 +404,10 @@ export function resourceStartBlocker(
 }
 
 /**
- * The queued requests a drain by `hostId` admits now, in order. It stops at the first
- * request that could run but belongs to another host: FIFO order is per resource, not
- * per host. A request admitted here holds its checkout for the rest of the drain.
+ * The queued requests a drain by `hostId` admits now, in order. A request of another
+ * host is passed over: it waits only for its own host's drain and blocks no other host
+ * (see `resourceStartBlocker`). A request admitted here holds its checkout for the rest
+ * of the drain.
  */
 export function drainableStarts(slot: ResourceSlotOccupancy, hostId: string): QueuedStart[] {
   const free = slot.capacity - slot.holders.length - slot.waiters.length;
@@ -381,7 +416,7 @@ export function drainableStarts(slot: ResourceSlotOccupancy, hostId: string): Qu
   for (const start of validQueuedStarts(slot)) {
     if (admitted.length >= free) break;
     if (checkoutHolder({ ...slot, heldCheckouts: held }, start.launch) !== undefined) continue;
-    if (start.hostId !== hostId) break;
+    if (start.hostId !== hostId) continue;
     admitted.push(start);
     for (const checkout of checkoutKeys(start.launch, undefined, slot.reusableCheckouts))
       held.set(checkout, start.id);
@@ -432,7 +467,7 @@ export function resourceResumeBlocker(
  */
 export function resumeRefusal(
   run: Pick<WorkflowRun, 'status' | 'metadata'>,
-  cursor: WorkflowResumeCursor | undefined
+  cursor: ResumeClaimCursor | undefined
 ): ResumeRefusal {
   if (run.status !== 'paused') return 'failed';
   const wait = pendingWorkflowWaitDeadline(run);
@@ -489,16 +524,23 @@ export interface IResourceStartStore {
   ): Promise<
     Pick<
       StartReceiptInspection,
-      'id' | 'sourceInstanceId' | 'deliveryId' | 'outcome' | 'reason' | 'receivedAt'
+      'id' | 'sourceInstanceId' | 'deliveryId' | 'itemKey' | 'outcome' | 'reason' | 'receivedAt'
     >[]
   >;
-  /** Damaged receipts are reported as entries beside the bindings; `limit` counts bindings only. */
+  /**
+   * Damaged receipts are reported as entries beside the bindings; `limit` counts bindings only.
+   * `receiptIds` selects only those receipts' bindings, before the limit applies, and reports
+   * no damaged entries: a caller starting known receipts must not lose them behind a backlog.
+   */
   listPendingStartBindings(options: {
     hostId: string;
     limit?: number;
+    receiptIds?: readonly string[];
   }): Promise<PendingStartBindingInspection[]>;
   getResourceStartRequest(id: string): Promise<ResourceStartRequestInspection | null>;
   listQueuedResourceStartsForHost(hostId: string): Promise<QueuedResourceStartInspection[]>;
+  /** The starts on item `itemId` whose status is `queued`, in queue order. */
+  listQueuedItemStarts(itemId: string): Promise<QueuedItemStart[]>;
   withdrawQueuedResourceStart(id: string): Promise<PreparedWorkflowLaunch | null>;
   claimStartBindingPreparation(input: {
     receiptId: string;

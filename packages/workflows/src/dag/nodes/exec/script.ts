@@ -1,5 +1,4 @@
 import { scriptInvocation } from '../../../script-invocation';
-import { scriptApiPreload } from '../../../script-api/preload';
 import {
   hostSpawnFailure,
   isSubprocessTimeout,
@@ -222,7 +221,7 @@ function resolveScriptInvocation(
       runtime,
       { kind: 'inline', code: finalScript },
       node.deps,
-      scriptApiPreload(runtime, ctx.artifactsDir)
+      ctx.artifactsDir
     );
   }
   if (namedScripts instanceof Error) {
@@ -243,7 +242,7 @@ function resolveScriptInvocation(
     scriptDef.runtime,
     { kind: 'file', path: scriptDef.path },
     node.deps,
-    scriptApiPreload(scriptDef.runtime, ctx.artifactsDir)
+    ctx.artifactsDir
   );
 }
 

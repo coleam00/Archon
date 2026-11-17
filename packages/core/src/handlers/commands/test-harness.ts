@@ -113,6 +113,7 @@ export function makeWorkflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowR
     codebase_id: null,
     status: 'running',
     outcome: null,
+    completed_outcome: null,
     user_message: 'test request',
     metadata: {},
     active_phase_started_at: null,
@@ -430,6 +431,7 @@ const { generatedTaskBranch, VerificationImageInventoryError, VERIFICATION_IMAGE
   await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
   generatedTaskBranch,
+  refuseUnappliedStartPoint: mock(async () => undefined),
   getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({
     state: 'NONE',
   })),
@@ -449,9 +451,6 @@ mock.module('@archon/isolation', () => ({
     providerType: 'worktree',
     create: mockIsolationCreate,
     destroy: mockIsolationDestroy,
-    get: mock(() => Promise.resolve(null)),
-    list: mock(() => Promise.resolve([])),
-    adopt: mock(() => Promise.resolve(null)),
     healthCheck: mock(() => Promise.resolve(true)),
   }),
   // Loaded transitively via the orchestrator → child-isolation-resolver (PR-A).
@@ -484,7 +483,7 @@ mock.module('../../services/run-owner-stop', () => ({
 }));
 
 export const mockReclaimContainerEnv = mock(async () => undefined);
-export const mockGetLiveRunBlocker = mock<typeof CleanupRunLock.getLiveRunBlocker>(() =>
+export const mockGetUseBlocker = mock<typeof CleanupRunLock.getUseBlocker>(() =>
   Promise.resolve(null)
 );
 export const mockGetWorktreeStatusBreakdown = mock<
@@ -506,7 +505,8 @@ mock.module('../../services/cleanup-service', () => ({
   getWorktreeStatusBreakdown: mockGetWorktreeStatusBreakdown,
 }));
 mock.module('../../services/cleanup/run-lock', () => ({
-  getLiveRunBlocker: mockGetLiveRunBlocker,
+  getUseBlocker: mockGetUseBlocker,
+  useBlockerLogFields: () => ({}),
   getCleanupRunLock: mock(),
   toUnpushedLock: mock(),
   countUnpushedCommits: mock(),
@@ -588,8 +588,8 @@ export function clearAllMocks(): void {
   mockIsolationEnvDbCreate.mockClear();
   mockIsolationEnvDbGet.mockClear();
   mockMarkWorktreeDestroyed.mockClear();
-  mockGetLiveRunBlocker.mockReset();
-  mockGetLiveRunBlocker.mockResolvedValue(null);
+  mockGetUseBlocker.mockReset();
+  mockGetUseBlocker.mockResolvedValue(null);
   // Cleanup service mocks
   mockCleanupMergedWorktrees.mockClear();
   mockCleanupStaleWorktrees.mockClear();

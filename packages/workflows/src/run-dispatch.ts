@@ -6,7 +6,7 @@ import type { IWorkflowPlatform, WorkflowConfig, WorkflowDeps } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
 import { safeSendMessage } from './platform-messages';
 import { type RunPhase } from './executor-shared';
-import { validateRunBudgetShape, validateWorkflowOutcomeDeclaration } from './loader/contracts';
+import { validateRunBudgetShape, validateWorkflowResultContract } from './loader/contracts';
 import { hasRunModelOverrides, runOverrideAppliesToRef, selectModelRef } from './model-validation';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from './run-ai-configuration';
 import { isFolderCodebase } from './run-paths';
@@ -212,7 +212,7 @@ function refuseInvalidDispatch(
   opts: ExecuteWorkflowOptions,
   isContinuation: boolean
 ): void {
-  const outcomeDeclarationError = validateWorkflowOutcomeDeclaration(workflow);
+  const outcomeDeclarationError = validateWorkflowResultContract(workflow);
   if (outcomeDeclarationError !== null) {
     throw new Error(`Invalid workflow '${workflow.name}': ${outcomeDeclarationError}`);
   }
@@ -371,9 +371,8 @@ async function resolveBaseBranch(
   // recorded at its start, then an already resolved checkout base, repo config, the codebase default,
   // then git auto-detection.
   // The override must outrank config so `--base` reports the same branch the
-  // worktree was cut from (WorktreeProvider applies the same order); it also outranks the
-  // record, because re-passing `--base` to a resume is a deliberate retarget of THIS
-  // continuation (the CLI warns that only that half of it applies).
+  // worktree was cut from (WorktreeProvider applies the same order). A continuation keeps
+  // its recorded base: the CLI refuses `--base` on every subcommand that continues a run.
   // If detection fails, leave empty — substituteWorkflowVariables throws only if $BASE_BRANCH is referenced.
   const overrideBaseBranch = opts.baseOverride?.trim();
   if (overrideBaseBranch) return overrideBaseBranch;
@@ -388,7 +387,10 @@ async function resolveBaseBranch(
   try {
     const repoPath = toRepoPath(cwd);
     const remote = config.remote?.trim() || (await getDefaultRemote(repoPath));
-    if (!remote) throw new Error('Set worktree.remote to select a git remote.');
+    // No remote to detect from is the normal state of a local repository. Like a folder
+    // project, $BASE_BRANCH stays unresolved; a worktree run refuses earlier, when it
+    // cannot choose a remote to cut from.
+    if (!remote) return '';
     return await getDefaultBranch(repoPath, remote);
   } catch (error) {
     // Intentional fallback: auto-detection failure is non-fatal.

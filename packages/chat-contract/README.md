@@ -42,8 +42,12 @@ only `user` and `unidentified`; it is a host type, never a plugin-supplied actor
 Plugin message persistence is always owned by core.
 
 `ChatRunEvent` is a presentation projection: workflow start, node state, approval
-pending (including authored decisions, pause identity and the persisted authored
-outcome), and terminal status with authored outcome and cost. Engine events and database rows stay on the host.
+pending (including authored decisions and pause identity), and terminal status with
+outcome and cost. Engine events and database rows stay on the host.
+A terminal event or notice of a run that completed with a declared outcome carries
+`completedOutcome`: `succeeded` or `failed` for a boolean outcome, or the value of a
+named one. `authoredOutcome` carries the boolean form only, for plugins that predate
+`completedOutcome`. A paused run has no outcome, so `approval_pending` carries none.
 The host routes events only to the plugin owning the run's conversation.
 
 `ChatAttentionNotice` goes to an install-level route the operator configured, not to

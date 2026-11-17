@@ -12,26 +12,7 @@ import type {
   WebhookSourceRequest,
   WebhookSourceResult,
 } from '@archon/workflows/webhook-source-plugin';
-
-function isJsonPointer(pointer: string): boolean {
-  return (pointer === '' || pointer.startsWith('/')) && !/~(?:[^01]|$)/.test(pointer);
-}
-
-function resolveJsonPointer(value: JsonValue, pointer: string): JsonValue | undefined {
-  if (!isJsonPointer(pointer)) return undefined;
-  if (pointer === '') return value;
-  let current: JsonValue | undefined = value;
-  for (const token of pointer.slice(1).split('/')) {
-    const key = token.replace(/~1/g, '/').replace(/~0/g, '~');
-    if (Array.isArray(current)) {
-      if (!/^(0|[1-9][0-9]*)$/.test(key)) return undefined;
-      current = current[Number(key)];
-    } else if (current !== null && typeof current === 'object' && Object.hasOwn(current, key)) {
-      current = current[key];
-    } else return undefined;
-  }
-  return current;
-}
+import { isJsonPointer, resolveJsonPointer } from '@archon/workflows/json-pointer';
 
 function decodeSigningSecret(secret: string | undefined): Buffer {
   const encoded = secret?.startsWith('whsec_') ? secret.slice(6) : '';
@@ -65,7 +46,7 @@ function verifySignature(request: WebhookSourceRequest, secret: Buffer): boolean
 }
 
 const bindingSchema = resourceStartBindingIntentSchema
-  .omit({ bindingRevision: true, eventInputs: true })
+  .omit({ bindingRevision: true, eventInputs: true, checkoutFrom: true })
   .extend({
     inputMapping: z.record(
       z.string().min(1),

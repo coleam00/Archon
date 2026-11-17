@@ -9,24 +9,33 @@ import {
 import { isOutputFormatEnforced } from '../schemas/node-ignored-fields';
 import { declaredFieldsFromSchema, outputFieldConstraints } from '../output-ref';
 import { compileOutputSchema } from '../structured-output';
+import { stringEnumValues } from '../completed-outcome';
+import { itemAsksJsonSchema } from '../schemas/item-ask';
+import { isDeepStrictEqual } from 'node:util';
 
 /**
- * Validate the run-level authored-outcome declaration against its selected node.
+ * Validate the result contract (`returns: { node, outcome, asks }`) against its selected node.
  *
  * Include aliases are deliberately deferred: `parseWorkflow` can only see the
  * `include:` directive, while `expandWorkflowIncludes` owns rebinding that alias
  * to the flattened child's declared return. The expander calls this same helper
  * on the final flat workflow, where every selected node is executable.
  */
-export function validateWorkflowOutcomeDeclaration(
-  workflow: Pick<WorkflowDefinition, 'returns' | 'outcome_field'> & {
+export function validateWorkflowResultContract(
+  workflow: Pick<WorkflowDefinition, 'name' | 'returns' | 'result'> & {
     readonly nodes: readonly (DagNode | IncludeDirective)[];
   }
 ): string | null {
-  const field = workflow.outcome_field;
-  if (field === undefined) return null;
+  const field = workflow.result?.outcome;
+  const asks = workflow.result?.asks;
+  if (field === undefined && asks === undefined) return null;
   if (workflow.returns === undefined) {
-    return `Workflow declares outcome_field: '${field}' without returns: — authored outcome must select a result node explicitly`;
+    return field !== undefined
+      ? `Workflow declares returns.outcome: '${field}' without a returns node`
+      : `Workflow declares returns.asks: '${asks}' without a returns node`;
+  }
+  if (field !== undefined && field === asks) {
+    return `Workflow returns.asks: '${asks}' names the same property as returns.outcome; an outcome and the asks are different values`;
   }
 
   const selectedNode = workflow.nodes.find(node => node.id === workflow.returns);
@@ -34,40 +43,117 @@ export function validateWorkflowOutcomeDeclaration(
     return `Workflow declares returns: '${workflow.returns}' but no top-level node has that id`;
   }
   if (isIncludeDirective(selectedNode)) return null;
-  if (isLoopGroupNode(selectedNode)) {
-    return `Workflow outcome_field: '${field}' cannot select loop_group node '${workflow.returns}' because loop_group output_format is ignored and its runtime output is raw text; select a schema-enforced collector node instead`;
-  }
-  if (isWorkflowNode(selectedNode) && selectedNode.fan_out !== undefined) {
-    return `Workflow outcome_field: '${field}' cannot select fan-out workflow node '${workflow.returns}' because its runtime output is an aggregate array; select a collector node with a required boolean output instead`;
-  }
-  if (isComposeFanOutNode(selectedNode)) {
-    return `Workflow outcome_field: '${field}' cannot select composed fan-out node '${workflow.returns}' because its runtime output is an aggregate array; select a collector node with a required boolean output instead`;
-  }
+  return (
+    (field === undefined
+      ? null
+      : (selectedNodeShapeError(
+          `Workflow returns.outcome: '${field}'`,
+          workflow.returns,
+          selectedNode,
+          'a required outcome property'
+        ) ??
+        validateOutcomeFieldSchema(
+          workflow.name,
+          `Workflow returns.outcome: '${field}'`,
+          workflow.returns,
+          field,
+          selectedNode.output_format
+        ))) ??
+    (asks === undefined
+      ? null
+      : (selectedNodeShapeError(
+          `Workflow returns.asks: '${asks}'`,
+          workflow.returns,
+          selectedNode,
+          'an object output_format'
+        ) ??
+        validateAsksFieldSchema(
+          `Workflow returns.asks: '${asks}'`,
+          workflow.returns,
+          asks,
+          selectedNode
+        )))
+  );
+}
 
-  return validateOutcomeFieldSchema(workflow.returns, field, selectedNode.output_format);
+/** Why the returns node cannot carry a property the engine reads: its output is no object it declares. */
+function selectedNodeShapeError(
+  subject: string,
+  nodeId: string,
+  node: DagNode,
+  needs: string
+): string | null {
+  if (isLoopGroupNode(node)) {
+    return `${subject} cannot select loop_group node '${nodeId}' because loop_group output_format is ignored and its runtime output is raw text; select a schema-enforced collector node instead`;
+  }
+  if (isWorkflowNode(node) && node.fan_out !== undefined) {
+    return `${subject} cannot select fan-out workflow node '${nodeId}' because its runtime output is an aggregate array; select a collector node with ${needs} instead`;
+  }
+  if (isComposeFanOutNode(node)) {
+    return `${subject} cannot select composed fan-out node '${nodeId}' because its runtime output is an aggregate array; select a collector node with ${needs} instead`;
+  }
+  return null;
+}
+
+/**
+ * The asks property is the engine's: the node declares an object output, and the property
+ * is either absent (the loader adds it) or exactly the engine's schema, which it is after
+ * the loader added it and this check runs again on the expanded or dispatched workflow.
+ */
+function validateAsksFieldSchema(
+  subject: string,
+  nodeId: string,
+  field: string,
+  node: DagNode
+): string | null {
+  const schema = node.output_format;
+  if (schema === undefined || !isOutputFormatEnforced(node)) {
+    return `${subject} selects node '${nodeId}', but that node declares no output_format the engine enforces; give it an object output_format`;
+  }
+  if (!outputFieldConstraints(schema, field).object) {
+    return `${subject} requires node '${nodeId}' output_format to declare type: object`;
+  }
+  const properties = schema.properties;
+  const declared =
+    properties !== null && typeof properties === 'object' && !Array.isArray(properties)
+      ? (properties as Record<string, unknown>)[field]
+      : undefined;
+  if (declared !== undefined && !isDeepStrictEqual(declared, itemAsksJsonSchema())) {
+    return `${subject} on node '${nodeId}': the engine defines this property; remove it from output_format`;
+  }
+  return null;
 }
 
 function validateOutcomeFieldSchema(
+  workflowName: string,
+  subject: string,
   nodeId: string,
   field: string,
   schema: DagNode['output_format']
 ): string | null {
   if (schema === undefined) {
-    return `Workflow outcome_field: '${field}' selects node '${nodeId}', but that node declares no output_format`;
+    return `${subject} selects node '${nodeId}', but that node declares no output_format`;
   }
   const constraints = outputFieldConstraints(schema, field);
   if (!constraints.object) {
-    return `Workflow outcome_field: '${field}' requires node '${nodeId}' output_format to declare type: object`;
+    return `${subject} requires node '${nodeId}' output_format to declare type: object`;
   }
   const declared = declaredFieldsFromSchema(schema);
   if (!declared?.includes(field)) {
-    return `Workflow outcome_field: '${field}' is not declared in node '${nodeId}' output_format properties${declared && declared.length > 0 ? ` (declared: ${declared.join(', ')})` : ''}`;
+    return `${subject} is not declared in node '${nodeId}' output_format properties${declared && declared.length > 0 ? ` (declared: ${declared.join(', ')})` : ''}`;
   }
   if (!constraints.required) {
-    return `Workflow outcome_field: '${field}' must be listed in node '${nodeId}' output_format.required`;
+    return `${subject} must be listed in node '${nodeId}' output_format.required`;
   }
-  if (!constraints.boolean) {
-    return `Workflow outcome_field: '${field}' on node '${nodeId}' must explicitly declare type: boolean`;
+  if (constraints.boolean) return null;
+  const values = stringEnumValues(schema, field);
+  if (values === undefined) {
+    return `${subject} on node '${nodeId}' must declare type: boolean, or type: string with a non-empty enum of strings`;
+  }
+  // An outcome is a name an operator and a later stage read. An empty one says nothing,
+  // and admitting it would make every reader special-case '' against "no outcome".
+  if (values.includes('')) {
+    return `Workflow '${workflowName}' returns.outcome: '${field}' on node '${nodeId}' declares an empty string in its enum; an outcome must be a name, so give it one`;
   }
   return null;
 }

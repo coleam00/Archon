@@ -1,3 +1,4 @@
+import { makeContinuationRun } from '../test-support/workflow-continuation-fixture';
 import {
   mockFolderBackendPrepare,
   recordCapturedSourceCalls,
@@ -52,17 +53,14 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
     });
   });
 
-  it('executes the graph the run froze on `run <name> --resume`, not the one in the checkout', () =>
+  it('executes the graph the continued run froze, not the one in the checkout', () =>
     recordCapturedSourceCalls(async capturedSourceOwnerCalls => {
-      // The name form names its run indirectly, so it used to reach the resumable row only
-      // after the graph was already chosen from live discovery — while the executor still
-      // fed that graph the frozen commands and scripts. Two vintages in one run, on the one
-      // resume form that never carried a run object.
+      // Choosing the graph from live discovery while the executor feeds it the frozen
+      // commands and scripts would run two vintages in one run.
       const { executeWorkflow } = await import('@archon/workflows/executor');
       const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
       const conversationDb = await import('@archon/core/db/conversations');
       const codebaseDb = await import('@archon/core/db/codebases');
-      const workflowDb = await import('@archon/core/db/workflows');
       const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
 
       const frozen = makeTestResolvedWorkflow({ name: 'review-block', description: 'frozen' });
@@ -84,11 +82,6 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
       mockResolveContinuationWorkflow
         .mockResolvedValueOnce(frozenContinuation)
         .mockResolvedValueOnce(frozenContinuation);
-      (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-        id: 'run-prior',
-        working_path: null,
-        workflow_name: 'review-block',
-      });
       (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
         preCreatedRun: { id: 'run-prior', workflow_name: 'review-block' },
         priorCompletedNodes: new Map([['node-a', 'done']]),
@@ -109,6 +102,12 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
       try {
         await workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'review-block', 'go', {
           resume: true,
+          continuationRun: makeContinuationRun({
+            id: 'run-prior',
+            working_path: null,
+            workflow_name: 'review-block',
+            codebase_id: null,
+          }),
         });
       } finally {
         discoverMock.mockResolvedValue({ workflows: [], errors: [] });

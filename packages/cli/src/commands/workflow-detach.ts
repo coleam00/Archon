@@ -18,6 +18,7 @@ import { sealWorkflowRunConfig } from '@archon/core/config';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import type { PreparedRunAiConfiguration } from '@archon/workflows/run-preflight';
+import { refusePendingStart } from '@archon/workflows/start-refusal';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import {
@@ -41,11 +42,7 @@ import {
   type RunDestination,
   type WorkflowRunOptions,
 } from './workflow-shared';
-import {
-  buildNoResumableRunError,
-  buildResumeLookupFailureError,
-  type ContinuationDeclaration,
-} from './workflow-run-preflight';
+import { buildNoResumableRunError, type ContinuationDeclaration } from './workflow-run-preflight';
 import {
   DETACHED_RESUME_RECEIPT_ENV,
   DETACHED_RESUME_RECEIPT_FD,
@@ -444,7 +441,6 @@ export interface DetachedLaunch {
   workflow: ResolvedWorkflow;
   isContinuation: boolean;
   continuationRun: WorkflowRun | undefined;
-  resumeLookupError: Error | undefined;
   cliUserId: string | undefined;
   codebase: Codebase | null;
   isFolder: boolean;
@@ -527,7 +523,6 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
     userMessage,
     workflow,
     continuationRun,
-    resumeLookupError,
     cliUserId,
     codebase: detachCodebase,
     prepared: detachedPrepared,
@@ -535,7 +530,6 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
     declaration: continuationDeclaration,
   } = launch;
   if (launch.isContinuation) {
-    if (resumeLookupError) throw buildResumeLookupFailureError(resumeLookupError);
     if (!continuationRun) throw buildNoResumableRunError(workflowName, cwd);
     return { detachedRunId: continuationRun.id };
   }
@@ -545,12 +539,13 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
   // the stamps the executor only writes when IT creates the row. `working_path` is
   // the one field this process cannot know — the child cuts the worktree — so it
   // stays null until the child fills it in (write-once in the store).
+  // No reserved id: this process's own capture is discarded on the way out, and
+  // reusing its id would point the child's capture at a directory this process is
+  // about to reclaim. The row's generated id is what the child files under.
+  const launchToken = crypto.randomUUID();
+  let created: WorkflowRun;
   try {
-    // No reserved id: this process's own capture is discarded on the way out, and
-    // reusing its id would point the child's capture at a directory this process is
-    // about to reclaim. The row's generated id is what the child files under.
-    const launchToken = crypto.randomUUID();
-    const created = await host.deps.store.createWorkflowRun({
+    created = await host.deps.store.createWorkflowRun({
       workflow_name: workflow.name,
       origin: {
         userId: cliUserId,
@@ -575,12 +570,18 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
       ...(continuationDeclaration ? { adopted_from_run_id: continuationDeclaration.runId } : {}),
       ...(launch.options.item === undefined ? {} : { item_key: launch.options.item }),
     });
-    return { detachedRunId: created.id, launchedRunId: created.id, launchToken };
   } catch (error) {
     throw new Error(
       `Failed to create the workflow run: ${(withItemHint(error) as Error).message}\nNothing was started.`
     );
   }
+  // Every refusal admission would make on this row (a broken run-ended binding, asks
+  // with no item) is made here, before the fork, so the caller hears it instead of an
+  // acknowledgement. Read on the created row, which carries the item the store resolved
+  // from --item; the child's admission checks again before its claim (#5783).
+  const refusal = await refusePendingStart(host.deps, workflow, created);
+  if (refusal) throw new Error(`${refusal}\nNothing was started.`);
+  return { detachedRunId: created.id, launchedRunId: created.id, launchToken };
 }
 
 /** The arguments the child gets on top of this process's argv. */

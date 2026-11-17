@@ -75,10 +75,14 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
    below), it's treated as inline code. Otherwise it's treated as a named-script
    reference.
 3. **Dispatch.**
-   - `runtime: bun` + inline → `bun --no-env-file -e '<code>'`
-   - `runtime: bun` + named  → `bun --no-env-file run <path>`
-   - `runtime: uv` + inline  → `uv run [--with dep ...] python -c '<code>'`
-   - `runtime: uv` + named   → `uv run [--with dep ...] <path>`
+   - `runtime: bun` + inline → `bun --no-env-file --preload=<file> -` (code on stdin)
+   - `runtime: bun` + named  → `bun --no-env-file run --preload=<file> <path>`
+   - `runtime: uv` + inline  → `uv run --no-project --isolated --project <run dir> [--with dep ...] python -c '<code>'`
+   - `runtime: uv` + named   → `uv run --no-project --isolated --project <run dir> [--with dep ...] <path>`
+
+   The preload file provides the `archon:script` module. `<run dir>` is an empty
+   directory Archon keeps in the run's artifact directory; see
+   [Dependencies](#dependencies-uv-only) for why.
 4. **Capture.** `stdout` (with the trailing newline stripped) becomes
    `$nodeId.output`. On a successful run, `stderr` is logged as a warning and
    posted to the conversation but does **not** fail the node. A non-zero exit
@@ -260,6 +264,7 @@ Archon provides the `archon:script` module to every `runtime: bun` script: named
 | `outcomes()` | The engine's listing of what each node of the run has recorded (`$NODE_OUTCOMES_FILE`) |
 | `trigger.fire(binding, inputs, options)` | Fires a trigger binding (`archon trigger fire`) and returns the admission its request got |
 | `notice(text, labels)` | Tells whoever watches attention with `--notices` what the run did (`archon workflow notice`). The run does not pause |
+| `item()` | The [item](/reference/cli/#items) the run belongs to (`archon workflow runs --item-of`): its runs, open questions, and answers with rulings, oldest first, and its links; `null` when the run is on no item. See [Reading the item a run belongs to](/reference/workflow-language/#reading-the-item-a-run-belongs-to) |
 
 Write `input('<name>')` with a string literal. Archon checks at load that every input a script reads is provided, and it reads `input('pr-number')` in the node's own script the way it reads `process.env.INPUTS_PR_NUMBER`. A computed name, or a read inside an imported module, is not checked.
 
@@ -284,6 +289,8 @@ Every function that calls the host throws `HostCommandError` when the CLI gives 
 
 **State writes.** `state.put`, `patch` and `delete` return `{ ok: true, revision }`, or `{ ok: false, conflict }` when the store refused the write: `revision_moved`, `lease_held` or `lease_not_held`. Their options are `ifRevision`, `lease: 'take' | 'release'` and `held`, which are the CLI's `--if-revision`, `--lease`, `--release-lease` and `--held`. `state.claim(candidates)` returns `{ claimed, skipped }`; `claimed` is null when nothing could be taken.
 
+**Firing a binding.** `trigger.fire(binding, inputs, { deliveryId, item })` runs `archon trigger fire` with the same refusals. `item: '<key>'` puts the started run on that [item](/reference/cli/#items) in the run's own project (`--item`); `item: null` starts it on no item (`--no-item`). Leave `item` out and a fire from a run on an item inherits that item, which is refused when the binding starts its run in another project; the call then throws `HostCommandError` with the CLI's message.
+
 **Notices.** `notice('Merged pull request 7', { kind: 'merged', pr: '7' })` records one line about what the run did; a reader of `archon workflow attention --watch --notices` sees it, and `--notices --since 24h` lists it later. Call it when something real happened, not on a pass that found nothing to do. The text is one line of at most 300 characters and a run may emit 50; past a bound the call throws `HostCommandError`, so catch it where a refused notice must not fail the node. See [Notices](/getting-started/operate/#notices-what-the-work-did).
 
 **Types in an editor.** `archon script types --out archon-script.d.ts` writes the module's declaration: every export above, and the request and result type of every forge operation. Include that file in the `tsconfig.json` that covers your scripts, and a wrong operation name, request field or result field is a compile error. The file describes the Archon that wrote it, so write it again after an upgrade; `--check` exits 1 when it is stale.
@@ -294,7 +301,7 @@ The preload only makes the module resolve. A script still reads its inputs from 
 
 **Where it sits.** The script API is the author-facing entry of Archon's SDK family: what code running inside a workflow calls. It has no dependencies and speaks only the CLI wire. The host-facing entry, for a program that embeds the engine to define, run, govern and query workflows, is separate and is not part of this module. Every export of `archon:script` is public contract; the declaration `archon script types` writes is the complete list.
 
-**Container runs.** A script in a [container execution](/guides/container-isolation/) imports the module the same way, and `input`, `emit`, `refuse`, `outcomes` and the accessors work. A container run does not receive `ARCHON_CLI_COMMAND`, so `forge`, `state`, `trigger.fire` and `notice` throw `HostCommandError` there.
+**Container runs.** A script in a [container execution](/guides/container-isolation/) imports the module the same way, and `input`, `emit`, `refuse`, `outcomes` and the accessors work. A container run does not receive `ARCHON_CLI_COMMAND`, so `forge`, `state`, `trigger.fire`, `notice` and `item` throw `HostCommandError` there.
 
 ### Frozen source integrity
 
@@ -341,6 +348,15 @@ a per-run ephemeral environment:
   the field, or switch to `uv` if you need explicit dependency management.
 - **No persistent environment** — each run is isolated; there is no `requirements.txt`
   or lockfile to maintain.
+- **The target repository's uv project does not apply** — a uv node runs outside
+  any `pyproject.toml` in the checkout. It writes no `.venv` or `uv.lock` into the
+  checkout, and ignores the repository's project dependencies, its `[tool.uv]` or
+  `uv.toml` settings, its `.python-version`, and packages installed in an existing
+  `.venv`. On a host run, your own uv config (for example `~/.config/uv/uv.toml`)
+  still applies. A [container run](/guides/container-isolation/) does not see the
+  host's uv config or environment, so an index or setting its `deps` need must
+  come from the image. The script still runs with the checkout as its working
+  directory.
 
 ## Output and Data Flow
 
@@ -461,7 +477,8 @@ and bash nodes.
 `--no-env-file`, so variables in the target repo's `.env` do **not** leak into
 the script. Archon-managed env (from `~/.archon/.env` and `<repo>/.archon/.env`)
 passes through normally. `uv`-launched Python subprocesses do not auto-load
-`.env` at all. See [Security Model](/reference/security/#target-repo-env-isolation)
+`.env` at all, and a uv node does not join the target repository's uv project
+(see [Dependencies](#dependencies-uv-only)). See [Security Model](/reference/security/#target-repo-env-isolation)
 for the full story.
 
 ## Validation

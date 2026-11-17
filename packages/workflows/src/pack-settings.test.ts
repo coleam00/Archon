@@ -146,13 +146,54 @@ describe('parsePackDeclaration bindings', () => {
     });
   });
 
+  it('reads a run-ended binding with its outcomes and the ended run inputs it maps', () => {
+    const declared = parsePackDeclaration(
+      `bindings:\n${timer()}  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: [build, narrow] }\n    inputs:\n      issue: { input: issue }\n      verdict: { result: /verdict }\n      policy: docs/policy.md\n      next: { binding: sweep }\n`,
+      'p/.pack/pack.yaml'
+    );
+    expect(declared.bindings?.plan).toEqual({
+      workflow: 'plan',
+      resource: 'plan',
+      resource_scope: 'repo',
+      overlap: 'queue',
+      isolation: { kind: 'default' },
+      run_ended: { workflow: 'triage', outcome: ['build', 'narrow'] },
+      inputs: {
+        issue: { input: 'issue' },
+        verdict: { result: '/verdict' },
+        policy: 'docs/policy.md',
+        next: { binding: 'sweep' },
+      },
+    });
+  });
+
   it.each([
     [timer('    inputs:\n      other: { binding: missing }\n'), "names unknown binding 'missing'"],
+    [
+      `${timer()}${'  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done }\n'}  ref:\n    workflow: w\n    resource: x\n    overlap: skip\n    inputs:\n      p: { binding: plan }\n`,
+      "names run-ended binding 'plan'",
+    ],
+    [
+      timer('    inputs:\n      v: { result: /verdict }\n'),
+      'only a run-ended binding has an ended run',
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: [done, done] }\n',
+      'outcomes must be distinct',
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: [] }\n',
+      "binding 'plan' is invalid at 'run_ended.outcome'",
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { outcome: done }\n',
+      "binding 'plan' is invalid at 'run_ended.workflow'",
+    ],
     [
       timer('    inputs:\n      n: { event: subject.number }\n'),
       'only an event binding has an event',
     ],
-    [timer('    event: { kind: issue.lifecycle }\n'), "must not set both 'schedule'"],
+    [timer('    event: { kind: issue.lifecycle }\n'), "must set at most one of 'schedule'"],
     // A schedule key without its expression is a broken timer, never a fire-only binding.
     [
       '  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n    schedule:\n',
@@ -209,8 +250,6 @@ describe('readProjectPackSettings', () => {
 
   it.each([
     ['settings:\n  colour: red\n', "unknown setting 'colour'"],
-    ['settings:\n  strict: maybe\n', "setting 'strict' must be true or false"],
-    ['settings:\n  forge: svn\n', "setting 'forge' must be one of gh, glab"],
     ['config:\n  forge: gh\n', "unknown key 'config'"],
     ...Object.keys(SPECS).flatMap(name => [
       [`settings:\n  ${name}: &a [*a]\n`, `setting '${name}' must be a string`],

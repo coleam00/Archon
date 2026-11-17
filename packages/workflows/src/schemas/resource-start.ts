@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isJsonPointer } from '../json-pointer';
 import { jsonValueSchema } from '../output-ref';
 import { itemKeySchema, workflowRunOriginSchema } from './workflow-run';
 import {
@@ -131,6 +132,37 @@ export function readResourceStartReceiptId(
  */
 export const RUN_SOURCE_ACTOR = 'archon-run';
 
+/**
+ * `sourceActor.source` of a receipt the end of a run caused (a run-ended binding): `id`
+ * is the ended run and `display` the outcome it completed with, when that is not empty.
+ */
+export const RUN_ENDED_SOURCE_ACTOR = 'archon-run-ended';
+
+/**
+ * What caused a start, read from its receipt's source actor: a run that ended, a node
+ * that fired, or another source (a schedule, a webhook, an operator's fire).
+ */
+export const startCauseSchema = z.discriminatedUnion('kind', [
+  /** `sourceInstanceId` is the run-ended arrow that started the run (see `pack-graph`). */
+  z.object({ kind: z.literal('run_ended'), runId: z.string(), sourceInstanceId: z.string() }),
+  z.object({ kind: z.literal('run_fired'), runId: z.string(), node: z.string().nullable() }),
+  z.object({ kind: z.literal('receipt'), receiptId: z.string(), sourceInstanceId: z.string() }),
+]);
+export type StartCause = z.infer<typeof startCauseSchema>;
+
+export function startCause(receipt: {
+  id: string;
+  sourceInstanceId: string;
+  sourceActor: SourceReceiptInput['sourceActor'];
+}): StartCause {
+  const actor = receipt.sourceActor;
+  if (actor?.source === RUN_ENDED_SOURCE_ACTOR)
+    return { kind: 'run_ended', runId: actor.id, sourceInstanceId: receipt.sourceInstanceId };
+  if (actor?.source === RUN_SOURCE_ACTOR)
+    return { kind: 'run_fired', runId: actor.id, node: actor.display ?? null };
+  return { kind: 'receipt', receiptId: receipt.id, sourceInstanceId: receipt.sourceInstanceId };
+}
+
 /** The run and node that requested a start, or null when the source was not a run. */
 export function requestingRun(
   actor: SourceReceiptInput['sourceActor']
@@ -175,6 +207,12 @@ export const resourceStartIntentSchema = z
   .strict();
 export type ResourceStartIntent = z.infer<typeof resourceStartIntentSchema>;
 
+/** What a queued or skipped start waits behind: a run holding the slot, or a request ahead. */
+const resourceBlockerSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('run'), id: z.string().uuid() }),
+  z.object({ kind: z.literal('request'), id: z.string().uuid() }),
+]);
+
 export const resourceStartDispositionSchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('admitted'),
@@ -184,20 +222,33 @@ export const resourceStartDispositionSchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('queued'),
     requestId: z.string().uuid(),
-    blocker: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('run'), id: z.string().uuid() }),
-      z.object({ kind: z.literal('request'), id: z.string().uuid() }),
-    ]),
+    blocker: resourceBlockerSchema,
   }),
   z.object({
     status: z.literal('skipped'),
     requestId: z.string().uuid(),
-    blocker: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('run'), id: z.string().uuid() }),
-      z.object({ kind: z.literal('request'), id: z.string().uuid() }),
-    ]),
+    blocker: resourceBlockerSchema,
   }),
 ]);
+/**
+ * A start on an item still waiting for capacity, as the item read lists it. What it waits
+ * behind is `ahead`: the queued starts of the same resource and host with an earlier queue
+ * position, read when the item is read; at 0 it waits for a free slot on `resource`. A drain
+ * admits one host's requests in queue order. It is queue order, not a promise; a start whose
+ * checkout is held is passed over. The blocker a request recorded when it queued is not
+ * listed: drains do not refresh it, so it soon names a start that has ended.
+ * `workflow` is null when the stored launch does not read.
+ */
+export const queuedItemStartSchema = z.object({
+  requestId: z.string(),
+  workflow: z.string().nullable(),
+  resource: z.string(),
+  hostId: z.string(),
+  queuedAt: z.string().datetime(),
+  ahead: z.number().int().nonnegative(),
+});
+export type QueuedItemStart = z.infer<typeof queuedItemStartSchema>;
+
 export const resourceStartRequestStatusSchema = z.union([
   ...resourceStartDispositionSchema.options.map(option => option.shape.status),
   z.literal('withdrawn'),
@@ -225,6 +276,47 @@ export const sourceReceiptInputSchema = z
   })
   .strict();
 export type SourceReceiptInput = z.infer<typeof sourceReceiptInputSchema>;
+
+/**
+ * A checkout one run hands the next: `branch` at `commit`, kept in the estate of run
+ * `runId`. That is the ended run, or, when the ended run worked on a copy, the run the
+ * copy was taken from, so a check's end hands on the build's branch and not its own.
+ */
+export const checkoutHandoffSchema = z
+  .object({
+    runId: z.string().min(1),
+    branch: z.string().min(1),
+    commit: z.string().regex(/^[0-9a-f]{40,64}$/, 'Expected a full commit id'),
+  })
+  .strict();
+export type CheckoutHandoff = z.infer<typeof checkoutHandoffSchema>;
+
+/**
+ * Run metadata key of a run started on a hand-off, and the lane it got: `continue` works
+ * on the hand-off's branch (a stage that mutates its checkout), `copy` works in a checkout
+ * of its own cut at the hand-off's commit (a stage with `mutates_checkout: false`).
+ */
+export const CHECKOUT_HANDOFF_METADATA_KEY = 'checkout_handoff';
+export const checkoutHandoffRunMetadataSchema = checkoutHandoffSchema
+  .extend({ lane: z.enum(['continue', 'copy']) })
+  .strict();
+export type CheckoutHandoffRunMetadata = z.infer<typeof checkoutHandoffRunMetadataSchema>;
+
+/**
+ * The hand-off a run was started on, or undefined when it was not. A value that does not
+ * parse throws: reading it as no hand-off would start the run somewhere it was not given.
+ */
+export function readCheckoutHandoff(run: {
+  id: string;
+  metadata: Readonly<Record<string, unknown>> | null | undefined;
+}): CheckoutHandoffRunMetadata | undefined {
+  const value = run.metadata?.[CHECKOUT_HANDOFF_METADATA_KEY];
+  if (value === undefined) return undefined;
+  const parsed = checkoutHandoffRunMetadataSchema.safeParse(value);
+  if (!parsed.success)
+    throw new Error(`Run '${run.id}' has an invalid ${CHECKOUT_HANDOFF_METADATA_KEY}`);
+  return parsed.data;
+}
 
 export const resourceStartBindingIntentSchema = z
   .object({
@@ -263,9 +355,17 @@ export const resourceStartBindingIntentSchema = z
      * a workflow that declares them, so untrusted event content never fills the
      * passthrough of a workflow without `inputs:`. Operator configs omit this field. The
      * SQL store never writes it into the `intent` column, which older binaries parse
-     * strictly; see `storableIntent` in core's resource-starts.
+     * strictly; see `storableIntent` in core's start-receipt-writes.
      */
     eventInputs: z.record(z.string(), jsonValueSchema).optional(),
+    /**
+     * The checkout a run-ended binding with `checkout: "ended-run"` hands the started run,
+     * recorded when the ended run completed. Preparation decides the lane from it, not from
+     * `launch.isolation`, which names the branch only for older binaries. Operator configs
+     * omit this field. The SQL store never writes it into the `intent` column; see
+     * `storableIntent` in core's start-receipt-writes.
+     */
+    checkoutFrom: checkoutHandoffSchema.optional(),
   })
   .strict();
 export type ResourceStartBindingIntent = z.infer<typeof resourceStartBindingIntentSchema>;
@@ -336,3 +436,67 @@ export const sourceReceiptAcceptanceSchema = z
     }
   });
 export type SourceReceiptAcceptance = z.infer<typeof sourceReceiptAcceptanceSchema>;
+
+/**
+ * Where a run-ended binding reads one input of the stage it starts: a JSON Pointer into
+ * the ended run's result (its `returns:` node output), or one of the ended run's own
+ * inputs by name. Data only: no expression, and nothing here names a workflow.
+ */
+export const runEndedInputSourceSchema = z.union([
+  z.object({ result: z.string().refine(isJsonPointer, 'Invalid JSON Pointer') }).strict(),
+  z.object({ input: z.string().min(1) }).strict(),
+]);
+export type RunEndedInputSource = z.infer<typeof runEndedInputSourceSchema>;
+
+/**
+ * `on.runEnded` of a trigger file: the binding starts when a run of `workflowName`
+ * completes with `outcome` on an item, in the project the binding launches in.
+ */
+export const runEndedTriggerSchema = z
+  .object({
+    workflowName: z.string().min(1),
+    outcome: z.string(),
+    inputs: z.record(z.string().min(1), runEndedInputSourceSchema).optional(),
+    /**
+     * `ended-run`: the started run works in the checkout the ended run left, on its branch
+     * at the commit it ended on, or is refused naming why.
+     */
+    checkout: z.literal('ended-run').optional(),
+  })
+  .strict();
+export type RunEndedTrigger = z.infer<typeof runEndedTriggerSchema>;
+
+/**
+ * A trigger file: the binding, and what starts it. With `schedule` a clock fires it; with
+ * `on.runEnded` the end of a run does; with neither it is fire-only, and nothing but
+ * `trigger fire` starts it. A `schedule` or `on` that is present must be complete, so a
+ * half-written one is never fire-only.
+ */
+export const triggerConfigSchema = z
+  .object({
+    version: z.literal(1),
+    sourceInstanceId: z.string().min(1),
+    binding: resourceStartBindingIntentSchema.omit({ eventInputs: true, checkoutFrom: true }),
+    schedule: z
+      .object({ intervalSeconds: z.number().int().positive(), runAtLoad: z.boolean() })
+      .strict()
+      .optional(),
+    on: z.object({ runEnded: runEndedTriggerSchema }).strict().optional(),
+  })
+  .strict()
+  .refine(config => config.schedule === undefined || config.on === undefined, {
+    message: 'A trigger has either a schedule or on.runEnded, not both',
+    path: ['on'],
+  })
+  // The engine picks the lane of a start on the ended run's checkout; a fixed one here
+  // would contradict it.
+  .refine(
+    config =>
+      config.on?.runEnded.checkout === undefined ||
+      config.binding.launch.isolation.kind === 'default',
+    {
+      message: 'With on.runEnded.checkout, binding.launch.isolation must be { "kind": "default" }',
+      path: ['binding', 'launch', 'isolation'],
+    }
+  );
+export type TriggerConfig = z.infer<typeof triggerConfigSchema>;

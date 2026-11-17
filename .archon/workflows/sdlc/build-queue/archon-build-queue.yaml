@@ -70,9 +70,8 @@ inputs:
       capacity and overlap policy, at most once per decision. Empty starts no
       follow-up; the next queue run picks the item up.
 
-returns: apply
 # False only when a run that claimed nothing found stored items no pickup can act on.
-outcome_field: healthy
+returns: { node: apply, outcome: healthy }
 
 nodes:
   - id: start
@@ -238,6 +237,7 @@ nodes:
       pull_request: { from: "$facts.output.pull_request" }
       continues: "$facts.output.continues"
       lane: "$INPUTS.build_lane"
+      ci: "$INPUTS.ci"
     output_format:
       type: object
       properties:
@@ -358,6 +358,7 @@ nodes:
       ending: { from: "$ship.output", if_skipped: null }
       reviewed: "$checkout.output.reviewed"
       at_cap: "$facts.output.at_cap"
+      ci: "$INPUTS.ci"
     output_format:
       type: object
       properties:

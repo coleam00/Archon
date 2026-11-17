@@ -72,7 +72,7 @@ The same tree works under `~/.archon/workflows/` for home-scoped workflows. Exis
 | `budget` | Ceiling on the run's total work and spend. See [Run budgets](#run-budgets). |
 | `persist_sessions` | Default for every AI node's `persist_session`. See [Persistent sessions](#persistent-sessions-across-re-runs). |
 | `requires` | `[github]` refuses the run before any work unless the triggering user has connected a GitHub identity. Enforced only when per-user GitHub is enabled (GitHub App mode with `TOKEN_ENCRYPTION_KEY`). `github` is the only value. |
-| `inputs`, `returns`, `outcome_field` | The workflow's signature. See [Workflow signature](#workflow-signature-inputs-returns-and-inputs). |
+| `inputs`, `returns` | The workflow's signature, including the outcome a run completes with (`returns: { node, outcome }`). See [Workflow signature](#workflow-signature-inputs-returns-and-inputs). |
 | `tags` | Free-form labels carried on the parsed workflow. The engine gives them no meaning. |
 | `deprecated` | `{ message }` announces removal at every run start. See [Deprecating a workflow](#deprecating-a-workflow). |
 
@@ -108,7 +108,7 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 | `depends_on` | string[] | `[]` | Node IDs that must complete before this node runs |
 | `when` | string | unset | Condition expression. Node is skipped if false. See [Condition Syntax](#when-condition-syntax) |
 | `trigger_rule` | string | `all_success` | Join semantics when multiple upstreams exist. Distinct from a fan-out node's [`fan_out.join`](#the-four-fields), which reduces one node's N children and defaults to `all_done` |
-| `context` | `'fresh'` \| `'shared'` \| `{ resume: node-id }` | unset | `fresh` = new session; `shared` = inherit the ambient prior session in a sequential layer; `resume` = fork the exact completed upstream node's session. Parallel layers require named resume or fresh context |
+| `context` | `'fresh'` \| `'shared'` \| `'same'` \| `{ resume: node-id }` | unset | `fresh` = new session; `shared` = inherit the ambient prior session in a sequential layer; `same` = continue the session this node itself last had, in its previous loop round or an earlier run on the same item (see [Continuing a node's own session](#continuing-a-nodes-own-session)); `resume` = fork the exact completed upstream node's session. Parallel layers require named resume, `same`, or fresh context |
 | `idle_timeout` | number | unset | Kill node after this many milliseconds without a provider chunk. Any chunk counts as progress, thinking included. Open tool calls and reported live background work suspend the timer until a result arrives. After a result, silence counts toward this timeout while waiting for turn settlement, even if work remains live; a timeout fails the node as incomplete. A new running wake turn or newly started tool or subtask restores live-work protection until its next result |
 | `retry` | object | unset | Per-node retry configuration. See [Retry Configuration](#retry-configuration) |
 | `mutates_checkout` | boolean | unset | `false` asserts this node leaves the git checkout untouched. The engine compares before/after Git status and content fingerprints of Git-visible dirty and individually listed untracked paths, excluding the run's artifacts, state, and log directories. It fails the node naming changed paths, including edits to already-dirty files and additions inside already-untracked directories. Dirty checkout cost scales with the visible dirty/untracked bytes read. This observation does not prevent writes or detect changes restored before the final snapshot; ignored paths and recursive submodule contents are not fingerprinted. Enforced on `command`, `prompt`, `bash`, and `script` nodes; the check is skipped outside a git repository or when Git or required filesystem reads fail. This includes Git status output exceeding the subprocess buffer limit (1 MiB on stdout or stderr); a large untracked tree can skip the entire assertion, even when those paths would be excluded from fingerprinting. A layer whose parallel nodes all declare it still runs in parallel, and a violation there also names the guarded siblings that ran in the same layer, since the change may not be the failing node's alone. Since one snapshot covers the whole checkout, every guarded node running when the write lands fails, not only the writer. A layer that mixes guarded nodes with any node that isn't checkout-guarded (a node of another kind, or one without `mutates_checkout: false`) runs one node at a time, so a sibling's write is never blamed on a guarded node. Distinct from the workflow-level [`mutates_checkout`](#running-sub-runs-side-by-side), which controls the path lock |
@@ -216,7 +216,7 @@ nodes:
 
 `synthesize` forks the exact provider session produced by `scope`; the parallel lenses do not change that ancestry. The source must be a transitively upstream command, prompt, or plain `loop:` node, and the consumer must be a command or prompt node. The source may be an `include:` node: the reference then names the node the included workflow returns (its `returns:` node, or its first sink when it declares none), exactly as `$<includeId>.output` does. That node must be a command, prompt, or plain `loop:` node, or the workflow fails to load with both ids named. An include with `fan_out:` runs one instance per item and has no single session, so it is not a source. Inside a `loop_group` body, the source takes one of two forms:
 
-- **An enclosing ancestor** that completes before entry into the group: a command, prompt, or plain `loop:` node outside the body. The first owner turn forks that source; later iterations continue the private branch with the same session ID. Fresh reviewers and `fresh_context: true` leave that branch intact. Terminal body attention waits and other durable waits, and the deprecated interactive gates and terminal body approvals, restore its provider-tagged cursor. A missing cursor snapshot, lost session, or changed session ID fails rather than silently starting over. Failure resume still restarts the group at iteration 1. See [Named owner sessions](/guides/loop-nodes/#named-owner-sessions) for an example.
+- **An enclosing ancestor** that completes before entry into the group: a command, prompt, or plain `loop:` node outside the body. The first owner turn forks that source; later iterations continue the private branch with the same session ID. Fresh reviewers and `fresh_context: true` leave that branch intact. Terminal body attention waits and other durable waits, and the deprecated interactive gates and terminal body approvals, restore its provider-tagged cursor. A missing cursor snapshot, lost session, or changed session ID fails rather than silently starting over. A [failure resume](/guides/loop-nodes/#resume) continues in the iteration the group stopped in, but no cursor is persisted for it, so the first owner turn after it forks the source again. See [Named owner sessions](/guides/loop-nodes/#named-owner-sessions) for an example.
 - **An upstream node in the same body**: each iteration's consumer forks that iteration's session of the source. It never continues an earlier iteration's branch. A nested group's pause between the source and the consumer resumes within the paused iteration, which re-runs the source, so the consumer forks the re-run source. A terminal body attention wait compares the question on the first answer and may ask again in the same iteration; after one re-ask, it accepts the next answer even if the question changes again. Once an answer is accepted, `until_bash` determines whether the group completes or starts the next iteration. See [Same-iteration sessions](/guides/loop-nodes/#same-iteration-sessions).
 
 Scalar `context: shared` is only for ambient session threading through a sequential layer. It is rejected on a node in a structurally parallel layer because there is no single unambiguous ambient lineage there. Use named resume as above, or add dependencies to serialize the nodes. This remains a structural rule when sibling `when:` conditions appear mutually exclusive: Archon constructs the parallel layer before evaluating those conditions.
@@ -230,6 +230,47 @@ This is an exact, immutable fork contract:
 - Run resume restores these private handles for completed nodes, so a pause or process restart does not lose declared ancestry. Each node's full session ID is recorded on its node record; transcripts and logs carry at most an eight-character preview.
 
 This is separate from `persist_session`: `{ resume: source }` selects ancestry within one governed run, while `persist_session` continues the same node across separate workflow invocations. If both apply to a consumer, the named source wins for the current invocation and the resulting branch is still saved for its next invocation.
+
+### Continuing a node's own session
+
+`context: same` continues the session the node itself last had, so one node can build in round one and fix what a check returned in round two, or pick up again when a later run on the same item starts its stage again. Fresh stays the default; each node opts in.
+
+```yaml
+nodes:
+  - id: deliver
+    loop_group:
+      max_iterations: 4
+      until_bash: 'checks=$checks.output; [ "$checks" = PASS ]'
+      nodes:
+        - id: build
+          prompt: |
+            Build $ARGUMENTS. The last checks reported:
+            $LOOP_PREV.checks.output
+          context: same
+        - id: checks
+          bash: ./scripts/check.sh
+          depends_on: [build]
+```
+
+The node reads, in order:
+
+1. **Its own earlier round in this loop invocation.** Round two continues round one's session in place: it is the same run and the same node.
+2. **Otherwise, the run's item.** The newest session this workflow and node left on the run's item, in whichever run, is forked. The earlier run's session stays as it was, so two runs never append to one session. The node's path names it (`deliver.build` inside the group above), so a differently named node, or the same name in another workflow, never shares it.
+3. **Otherwise, a fresh session.** This includes a run with no item, and every run on the file store, which has no items. Inside a loop, such a node still continues between rounds.
+
+The session is the node's own:
+
+- It never takes the shared sequential cursor, so it does not continue another node's session.
+- A parallel layer, `fresh_context: true` on the loop, and the start of a composed block do not reset it. Nodes that run side by side each continue their own session.
+- A default-context node after it in a sequential layer still forks its session, as it would any node's. Set that node to `context: fresh` if it should start clean.
+
+Every round writes its session under the item, so a later run, or a [failure resume](/guides/loop-nodes/#resume) that restarts mid-loop, continues the newest round. A pause inside the loop (an attention wait, a durable wait, an approval) keeps the cursor, and the next round continues it.
+
+A recorded session that ran on another provider or model than the node now resolves to is not continued. The node starts fresh, the run records a `node_session_not_continued` event with `reason: provider_changed` or `model_changed` and both pairs, and posts a notice naming them. A provider without `sessionFork` continues between rounds but starts fresh across runs, with `reason: no_fork`. Sessions are kept one per provider, and a store may record their time to the second, so two providers' sessions can tie as the newest; neither is then provably the last, and the node starts fresh with `reason: ambiguous`. A provider without `sessionResume` cannot use `same`: the workflow fails to load when the provider is written in the file, and the node fails when it runs otherwise. A failed lookup runs the node fresh and posts a notice.
+
+`same` is a different thing from `shared` and from `persist_session`. `shared` continues the previous sequential node's session in this run. `persist_session` continues a node across runs launched from one conversation; `same` continues it across runs on one item, which a CLI or trigger run has too. A node cannot declare both.
+
+A node that keeps its session keeps its earlier reasoning too. A reviewer that continues its own session may defend findings it made in an earlier round, where a fresh one would look again. Choose per node.
 
 ### Claude SDK Advanced Options
 
@@ -260,6 +301,8 @@ The ladder is the union of every provider's vocabulary. Codex accepts all eight 
     filesystem:
       denyWrite: ['/etc', '/usr']
 ```
+
+Archon type-checks the keys shown here and hands any other Claude sandbox setting, at any level of the block, to Claude as written. Archon does not catch a misspelled key.
 
 **settingSources** controls which filesystem setting sources a capable provider discovers. For Claude these are the project's `CLAUDE.md` and `.claude/` skills, commands and agents, and the user-level `~/.claude/`. For skills it controls eligibility, not activation: `skills:` selects the exact active set, and each declared skill must exist under an enabled source. Fewer sources give a leaner context and a faster node start:
 
@@ -1000,17 +1043,17 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 
 **How to resume:**
 
-- **CLI**: `archon workflow run <name> --resume` selects the newest eligible run by start time for `(workflow_name, cwd)`: a failed or paused run, or a `running` run whose last activity timestamp is missing or more than one day old. With a SQL store, a `running` run is excluded while its resource-start request is `admitted`; see [trigger inspection and recovery](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). See the [CLI reference](/reference/cli/#workflow-resume) for detailed eligibility. Use `archon workflow resume <run-id>` to target a specific failed or paused run; this exact-ID command rejects all `running` runs. Missing or old activity does not prove the owner is gone; verify that before resuming a `running` run.
-- **Chat**: Approving or rejecting a _paused_ workflow continues it from where it left off (the platform already knows the run id). For a prior **failed** (or stale `running`) run, `/workflow run <name>` does **not** silently resume: it shows a prompt offering three choices: resume it, abandon it and run fresh, or start fresh anyway. Pass `--force` to skip the prompt: `/workflow run <name> --force <args>` always starts a fresh run.
+- **CLI**: `archon workflow resume <run-id>` continues that run: a failed or paused one, or one its killed process left `running`. Find the id with `archon workflow runs`. See the [CLI reference](/reference/cli/#workflow-resume) for what it checks before resuming a `running` run.
+- **Chat**: Approving or rejecting a _paused_ workflow continues it from where it left off (the platform already knows the run id). For a prior **failed** run, `/workflow run <name>` does **not** silently resume: it shows a prompt offering three choices: resume it, abandon it and run fresh, or start fresh anyway. Pass `--force` to skip the prompt: `/workflow run <name> --force <args>` always starts a fresh run. Each failed or paused run of that workflow in the conversation is a candidate to continue, except a run waiting for attention or a run with no working path, which never counts. When two or more candidates remain, `/workflow run <name>` continues none of them: it lists them with the `/workflow resume <id>` command for each, and `--force` to start fresh.
 - **Web UI**: Open the failed run in the console and use **Resume** in the run detail action bar.
 
 **What happens on resume:**
 
-1. The CLI / orchestrator looks up the resumable run, loads its `node_completed` events and private addressable-session handles, then transitions the row back to `running`.
+1. The CLI / orchestrator takes the run it was named, loads its `node_completed` events and private addressable-session handles, then transitions the row back to `running`.
 2. Completed nodes are skipped; only failed and not-yet-run nodes are executed. Failed nodes are retried when the failures are what stopped the run: resuming a **failed** run, or continuing after a provider-limit pause or a released source. A run that paused at a node that waits on purpose (an attention, time or event wait, an approval gate, or a child it is blocked on) instead replays the failures from before that pause when it continues, so a node the run had already moved past does not run again.
 3. You receive a platform message like: `Resuming workflow — skipping 3 already-completed node(s).`
 
-**Crashed servers / orphaned runs**: Archon does **not** auto-fail `running` rows on server startup, because that would kill workflows actively executing in another process (CLI, adapter). If a server crash leaves a row stuck as `running`, it remains visible in the console run list. To continue it, first verify that its owner is gone. When it meets the eligibility rules above, use `archon workflow run <name> --resume` from its recorded working path; this selects the newest eligible run for that name and path. `archon workflow resume <run-id>` rejects all `running` runs, including stale orphans. Do not cancel or abandon it before resuming: both mark it `cancelled`, which cannot be resumed.
+**Crashed servers / orphaned runs**: Archon does **not** auto-fail `running` rows on server startup, because that would kill workflows actively executing in another process (CLI, adapter). If a server crash leaves a row stuck as `running`, it remains visible in the console run list. To continue it, run `archon workflow resume <run-id>`: it resumes the run when no owner answers for it on this host, and refuses, naming the owner, when one does. Do not cancel or abandon it before resuming: both mark it `cancelled`, which cannot be resumed.
 
 To stop or discard a run instead:
 
@@ -1117,7 +1160,7 @@ To continue a node's conversation outside Archon, read its session id from `arch
 
 ### `context: fresh` overrides
 
-A node with `context: fresh` skips persistence (and in-run threading). The explicit "always fresh" intent wins over `persist_session`.
+A node with `context: fresh` skips persistence (and in-run threading). The explicit "always fresh" intent wins over `persist_session`. A `context: same` node also takes no workflow-level `persist_sessions` default: it carries its own cross-run continuity, scoped to the run's item (see [Continuing a node's own session](#continuing-a-nodes-own-session)).
 
 `context: { resume: source }` also wins over the consumer's saved cross-run session for that invocation. After the exact named fork succeeds, its new branch is saved normally when `persist_session` applies.
 
@@ -1233,6 +1276,8 @@ is the YAML-coordinates / code-computes split. A skipped producer with **no**
 binding, producer, and fix named: a binding never silently resolves to `''`.
 `if_skipped` is literal data, so reference-looking text there is neither substituted nor
 validated as an output reference.
+The same directive works in an include's or a `workflow:` node's `with:` (see
+[Passing values into an included block](#passing-values-into-an-included-block)).
 
 `if_skipped` covers a producer that completed as **skipped**, including an exec node that
 ran until an opted-in timeout. A producer that **failed** always fails the binding too,
@@ -1630,6 +1675,41 @@ This is an **authoring** concern, not an engine one. Options, in order of prefer
 Put the state write in a `script:` node, not in an AI node's Write tool. A `script:` node is
 a guarantee; a prompt instructing an AI node to append is a convention it may not follow.
 
+## Reading the item a run belongs to
+
+A run on an [item](/reference/cli/#items) can read what is recorded about it: the item's
+runs, the questions open in them, and the answers to them together with the item's
+[rulings](/reference/cli/#workflow-rule), the decisions an operator recorded without a
+question being asked, and the item's [links](/reference/cli/#workflow-link) to other items.
+A ruling given to one run reaches every later run on the item this way, whichever workflow
+it is. The engine adds none of it to a prompt; a workflow that
+wants it reads it in a `script:` node and hands it on like any other output:
+
+```yaml
+nodes:
+  - id: rulings
+    runtime: bun
+    script: |
+      import { emit, item } from 'archon:script';
+      const read = item();
+      emit({
+        rulings: (read?.answers ?? []).flatMap(answer =>
+          answer.kind === 'ruling' && answer.withdrawn === null ? [answer.text] : []
+        ),
+      });
+  - id: review
+    depends_on: [rulings]
+    prompt: |
+      Review the change. These rulings on the item stand: $rulings.output.rulings
+```
+
+`item()` reads the item of the run's top-level run, so a `workflow:` child reads its
+parent's item. It returns `null` for a run on no item. A withdrawn ruling stays in the
+list with `withdrawn` set; what a ruling means is for the reading node to judge. `links`
+holds every link from or to the item, each with its `direction` and the `other` item; an
+ended link stays with `ended` set, and the engine acts on no link. Like
+`state`, it runs on the host: a container-isolated node cannot call it.
+
 ## Durable state documents
 
 Use `archon state` for a standing agent's small JSON ledger, cursor or index when updates
@@ -1800,7 +1880,7 @@ and then removed from the definition, so nothing can fall back to an outer file'
 | `provider`, `model`, `effort`, `fallbackModel`, `betas`, `sandbox`, `persist_sessions` | **Travel** with the workflow, onto its own nodes. A node's own value always wins. |
 | `requires` | **Unions** into the composing workflow, so a missing capability refuses the run at invocation instead of failing mid-block. |
 | `inputs`, `returns` | **Consumed** by composition: `inputs:` validates the caller's `with:`, `returns:` selects `$includeId.output`. |
-| `outcome_field` | **Owned by the workflow being run.** An included workflow's declaration does not propagate to its composer. A top-level composer may declare its own field relative to its own `returns:`; an include alias is rebound before that contract is validated. |
+| `returns.outcome` | **Owned by the workflow being run.** An included workflow's declaration does not propagate to its composer. A top-level composer may declare its own outcome in its own `returns:`; an include alias is rebound before that contract is validated. |
 | `worktree`, `container`, `budget` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
 | `mutates_checkout` | **Run-owned.** It is dropped with the same warning, including under `include:` + `fan_out:`, whose instances run inside the composing run. |
 | `webSearchMode` | **Dropped, and this one is a real gap.** It is the only workflow-level field with no per-node counterpart, so there is nowhere for it to travel. Set it on the top-level workflow, where it then applies to every node in the run. |
@@ -1810,10 +1890,11 @@ Two consequences worth knowing:
 - **A composition can span providers.** Parent on Claude, one composed block on Pi, another
   on Codex, all in one run: each resolves independently. `archon workflow run <name>
   --dry-run` prints each node's effective provider and model and where the value came from.
-- **A composed workflow's entry node starts a fresh session**, exactly as it would if you
-  ran that file on its own, even when the preceding node used the same provider. Set
-  `context: shared` on the entry node if you deliberately want the caller's thread to
-  continue into the block.
+- **A composed workflow's first AI node starts a fresh session**, exactly as it would if
+  you ran that file on its own, even when the preceding node used the same provider. That
+  holds when the block starts with a `bash:` or `script:` node too: the first AI node
+  after it is still fresh. Set `context: shared` on that node if you deliberately want the
+  caller's thread to continue into the block.
 
 ### How expansion works
 
@@ -1900,6 +1981,42 @@ depends on whether the block declares `inputs:` (see
 [Workflow Signature](#workflow-signature-inputs-returns-and-inputs)): a block with no
 `inputs:` ignores unrecognized keys; a block that declares `inputs:` rejects an undeclared
 key at load.
+
+An object value is a literal, with two exceptions. An object with exactly the shape
+`{ from, if_skipped }` (`if_skipped` optional) is the binding directive, with the same
+rules as on a command or script node (see
+[Reading across a skipped branch](#reading-across-a-skipped-branch)): `from` must be one
+whole `$node.output[.field]` reference, so a plain `{ from: alice }` is a load error. It
+reads the producer's value with its type when the producer ran, `if_skipped` when it was
+skipped, and fails the reading node when it failed. As on a command node, the include must
+list the producer in `depends_on` and use a `trigger_rule` that lets the block start when
+the producer was skipped, such as `all_done`:
+
+```yaml
+  - id: review
+    include: review-block
+    depends_on: [fix]
+    trigger_rule: all_done
+    with:
+      fixes: { from: $fix.output.summary, if_skipped: null }
+```
+
+The directive resolves at run time, so the block can read the input only where a run-time
+value can go: a `command:` or `script:` node's `with:` value that is exactly
+`$INPUTS.<name>`, a `workflow:` node's or nested include's `with:`, the
+`INPUTS_<UPPER_SNAKE>` env var of a `bash:` or `script:` node or a `loop:` or `loop_group:`
+`until_bash:` check, and an AI node's prompt or command body. Any other surface that names the input, such as `when:`, `systemPrompt:`, a
+`loop:` prompt, or an approval message, is substituted at load, so it is a load error that
+names the node and field.
+
+The second exception is `{ outputs }` with an optional `if_unreadable`: only a script
+node's own `with:` reads it (see
+[Binding every output of a type](#binding-every-output-of-a-type)), so here it is a load
+error naming the input. Any other object, such as `{ from: alice, to: bob }`, stays a
+literal. A directive-shaped object always means the directive; there is no escape for
+passing one as data. Only a top-level value is read this way, so the same object nested
+inside an array or another object (`[{ from: alice }]`, `{ user: { from: alice } }`)
+passes as a literal. The same rules hold for a `workflow:` node's `with:`.
 
 Substitution applies everywhere the value could reach the model, including inside Markdown
 code fences and inline code spans: `$INPUTS.<name>` has no documentation-only meaning, so a
@@ -1990,8 +2107,7 @@ inputs:
     description: the diff to review
   style:
     default: strict
-returns: synthesize          # the node whose output IS this block's result
-outcome_field: green         # required boolean field that authors this run's verdict
+returns: { node: synthesize, outcome: green }   # the result node, and the outcome it decides
 nodes:
   - id: gather
     prompt: Gather context for $INPUTS.diff (style $INPUTS.style).
@@ -2020,60 +2136,144 @@ nodes:
   lenient behavior: supplied keys **pass through unvalidated**: they are recorded on the run
   and still resolve as `$INPUTS.<name>` / `INPUTS_<UPPER_SNAKE>`, they are simply never checked
   against a declaration, because there isn't one.
-- **`returns:`**: the **node id** whose output IS the workflow's result. It selects by id, so
-  it works for any node type and even a **non-sink** node (a node other nodes depend on). For an
-  `include:` block, `$blk.output` resolves to the `returns:` node; `depends_on: [blk]` still
-  waits on every terminal node. For a `workflow:` sub-run child, the child's terminal output
-  (threaded back as `$node.output`) becomes the `returns:` node's output.
-- **`outcome_field:`**: an optional, explicit authored verdict relative to `returns:`. The
-  selected node must declare an object `output_format` (`type: object`) whose `properties`
-  declares the field, whose `required` guarantees its presence, and whose field schema
-  guarantees `type: boolean`; otherwise the workflow fails to load. Declarations and
-  guarantees may come from the root or through `allOf`, `anyOf`, or `oneOf`.
-  Root and `allOf` constraints combine; every `anyOf`/`oneOf` alternative except
-  literal `false` must supply each guarantee unless an enclosing constraint already
-  supplies it. Only literal `false` is exempt: the loader does not detect other
-  impossible branches such as `{not: {}}`. A `true` branch adds no constraint.
-  It cannot select a `loop_group` (which returns raw text) or a fan-out `workflow:` node
-  (which returns an aggregate array); add a structured collector node after either one.
-  Exact `true` is persisted as `outcome: succeeded`, exact `false` as `outcome: failed`.
-  This is independent from engine lifecycle `status`: a run may be `completed / failed-outcome`,
-  `failed / succeeded-outcome`, or `paused / succeeded-outcome`. Status still controls terminality,
-  resume, cancellation, filtering, automation, and CLI exit codes. A workflow with no declaration,
-  a selected node that has not completed, and historical runs read as `outcome: null`, never as
-  failure. Resume preserves an authored outcome until the selected node actually re-executes and
-  authors a replacement.
+- **`returns:`**: the **node id** whose output IS the workflow's result, written
+  `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field> }`. It selects by id, so it works for any node type
+  and even a **non-sink** node (a node other nodes depend on). For an `include:` block,
+  `$blk.output` resolves to the `returns:` node; `depends_on: [blk]` still waits on every
+  terminal node. For a `workflow:` sub-run child, the child's terminal output (threaded back as
+  `$node.output`) becomes the `returns:` node's output. Everything else the engine reads from
+  that output is a key of the object form; an unknown key fails the workflow at load.
+- **`returns.outcome`**: an optional property of the `returns:` node's output whose value is the
+  outcome the run completes with. The selected node must declare an object `output_format`
+  (`type: object`) whose `properties` declares the field and whose `required` guarantees its
+  presence; otherwise the workflow fails to load. The field takes one of two forms:
+  - **A boolean.** Its schema must guarantee `type: boolean`. Declarations and guarantees may
+    come from the root or through `allOf`, `anyOf`, or `oneOf`. Root and `allOf` constraints
+    combine; every `anyOf`/`oneOf` alternative except literal `false` must supply each
+    guarantee unless an enclosing constraint already supplies it. Only literal `false` is
+    exempt: the loader does not detect other impossible branches such as `{not: {}}`. A `true`
+    branch adds no constraint. Exact `true` completes the run with outcome `succeeded`, exact
+    `false` with `failed`.
+  - **A named outcome.** A root property declared `type: string` with a non-empty `enum` of
+    strings, such as `{ type: string, enum: [built, stop] }`. The run completes with the value
+    as it is. A string with no `enum` fails to load, and so does an `enum` with an empty
+    string among its values: an outcome is a name an operator and a later stage read.
+
+  It cannot select a `loop_group` (which returns raw text) or a fan-out `workflow:` node (which
+  returns an aggregate array); add a structured collector node after either one. The removed
+  `outcome_field:` key fails to load with a message naming `returns: { node, outcome }`.
+
+  The outcome is written once, in the write that completes the run, so a run that has an
+  outcome has ended. A failed, cancelled or paused run has none, even when its `returns:` node
+  completed; what that node said stays readable from its `node_completed` event (`archon
+  workflow get <run-id> --json --verbose --events`). If the node completed with a value its
+  declaration does not admit, the run fails naming the field instead of completing. A
+  completed run whose `returns:` node was skipped has none. The outcome is independent from
+  lifecycle `status`: a run may be `completed` with outcome `failed`. Status still controls
+  terminality, resume, cancellation, filtering, automation, and CLI exit codes.
+
+- **`returns.asks`**: a property of the `returns:` node's output, defined and required by the engine, that holds the
+  decisions the run leaves for an operator: its asks. See [Asks](#asks-decisions-a-run-leaves-on-its-item).
 
 An included workflow's outcome declaration never becomes the composer's outcome, and a
 `workflow:` child owns its outcome on its own run row; neither propagates implicitly to a parent.
-The REST run list, detail, by-worker, and dashboard JSON expose nullable `outcome` beside `status`.
-CLI, console, chat, and adapter result surfaces show a non-null authored outcome separately from
+The run row carries two columns. `completed_outcome` holds the outcome of both forms, and is the
+one to read: when it is set, the run is over. `outcome` holds `succeeded` or `failed` for the
+boolean form only, for readers that predate `completed_outcome`; both are written by the same
+write. The REST run list, detail, by-worker, and dashboard JSON expose both beside `status`.
+CLI, console, chat, and adapter result surfaces show a non-null outcome separately from
 execution status. A foreground CLI execution handoff reports only its observed status, omitting
-authored outcome and usage; its zero exit does not prove completion. Use `archon workflow wait <run-id>`
+the outcome and usage; its zero exit does not prove completion. Use `archon workflow wait <run-id>`
 to await a terminal or gate transition and `archon workflow get <run-id>` to inspect the current result.
-See [CLI handoff behavior](/reference/cli/#workflow-run-name-message). When `outcome` is null, result
-surfaces retain the normal status-only presentation. A dry run
-reports the same declaration separately as nullable `authoredOutcome`, derived from the declared
-return node's schema-valid stub (a structured value or JSON string), or its schema-certified
-`bash:` / `script:` output with `--exec-code`. Its existing `outcome` remains the simulation result
-and continues to control CLI exit codes and fixture `expect` checks. Fixtures can independently
-assert the authored verdict with `fixture.authored: succeeded` or `failed`. Generated placeholder
-stubs, including tolerated `all_done` joins, never author a verdict.
+See [CLI handoff behavior](/reference/cli/#workflow-run-name-message). When no outcome is set, result
+surfaces retain the normal status-only presentation. A dry run reports the same values as nullable
+`completedOutcome` and `authoredOutcome` (the boolean form only), set only when the simulation
+completed, derived from the declared return node's schema-valid stub (a structured value or JSON
+string), or its schema-certified `bash:` / `script:` output with `--exec-code`. Its existing
+`outcome` remains the simulation result and continues to control CLI exit codes and fixture
+`expect` checks. Fixtures can independently assert the outcome with `fixture.authored`:
+`succeeded` or `failed` for the boolean form, the value for a named outcome. Generated
+placeholder stubs, including tolerated `all_done` joins, never decide an outcome.
 
-### Deterministic checks and authored outcomes
+### Asks: decisions a run leaves on its item
+
+A stage that needs a decision it cannot make finishes its work and leaves an ask, instead of
+pausing mid-run. `returns: { node: decide, asks: asks }` names the property of the returns
+node's output that holds them. Nothing is inferred from a field's name: a workflow that does
+not declare `asks` keeps an `asks` field as ordinary data.
+
+The engine owns the ask schema (`packages/workflows/src/schemas/item-ask.ts`). Leave the
+property out of the node's `output_format`: when the workflow is resolved, the engine adds its
+schema there, so the provider call, output validation and a dry run all see it. The engine adds
+the property to the node's `required` too, and every field of an ask is required, because a
+provider in OpenAI strict mode (Codex) refuses an optional property. An empty list means there
+is nothing to decide, so a `bash:` or `script:` returns node emits `"asks": []` when it leaves
+none. An ask holds:
+
+- `question`: one sentence that can be answered by picking an option.
+- `context`: what is at stake and why it came up.
+- `options`: at least two, each with a kebab-case `id`, what it `does` and what it `cost`s.
+  The id `other` is reserved: every ask also offers it, answered with text.
+- `recommendation`: `{ option, why }`; `option` must name one of the ask's options.
+- `artifacts`: [artifact pointers](#a-small-result-that-points-at-a-large-file) the operator
+  should read to decide; empty when there are none.
+
+The schema's descriptions are how a node learns what an ask is, with no line in its prompt:
+providers receive the output schema whole (`json_schema` on Claude, `outputSchema` on Codex).
+Pi has no native structured output; its best-effort path sends the whole schema, descriptions
+included, as the `structured_output` tool's parameters and in the prompt. A node of a workflow
+that declares no asks sees none of this. The property's description reads:
+
+> Decisions you leave for an operator. Leave one when finishing your work needs a decision that is not yours to make: the work can be read two ways that lead to different changes; doing it means giving up something the project holds to; or the right answer depends on where the project is going or what it costs someone else. Do not leave one for a choice you can make yourself (make it and say why), for something the project already decided, for something you can find out by reading or running, for a doubt rather than a decision, or to ask permission to do your work. If nobody would choose differently from you, it is not an ask. Leave every decision you need, not only the first. What happens after: when this run completes, each ask opens for an operator on the item the run is for. The operator answers it (choosing an option, accepting the recommendation, or saying what to do instead) or withdraws it. When every ask is answered or withdrawn, the set is settled and the engine records it on the item. A later completed run of this workflow on the same item replaces the asks still open. Work that depends on an open ask should wait for its answer, not build on your recommendation. Leave the list empty when there is nothing to decide.
+
+A pack can say more in its own prompt, such as which decisions its project wants to be asked.
+
+The workflow fails to load, naming `returns.asks`, when it declares asks without a returns
+node, when the returns node has no object `output_format` the engine enforces, when the node
+is a `loop_group` or a fan-out node, when `asks` names the same property as `outcome`, or when
+the node's `output_format` declares that property itself (`the engine defines this property;
+remove it from output_format`).
+
+What the engine does with them:
+
+- **They belong to an item.** A top-level run of a workflow that declares asks, started with no
+  item, is refused before any node runs and cancelled as `precondition_failed`: start it with
+  `--item <key>`. The file store holds no items, so it refuses the run before it starts.
+- **They open with the completion.** When the run completes, its asks open on its item in the
+  same write that completes the run. A run that fails or is cancelled opens none, even when its
+  returns node ran. A value that is not a list of asks fails the run at its end, naming the
+  path, such as `returns.asks 'asks' on node 'decide': [0].recommendation.option names 'z',
+  which is not one of the ask's options`.
+- **Only a top-level run opens them.** A `workflow:` child has no item of its own; its asks stay
+  data in the result it hands its parent.
+- **A newer set replaces the open one.** A later completed run of the same workflow on the same
+  item closes that workflow's open asks as `replaced`, even when it leaves none itself.
+- **They are answered by ref.** Open asks are listed in the attention queue with no run behind
+  them, next to paused runs, and answered or withdrawn by their ref (`archon workflow answer
+  --ref`/`--withdraw`, `POST /api/attention/answer`, `POST /api/attention/withdraw`, or the chat
+  tool). Who may answer is the rule of the run that left the ask: its starter, or an admin.
+- **The run stays while its asks are open.** Deleting a run that left open asks is refused, and
+  run cleanup skips it, until each ask is answered or withdrawn: the run's starter decides who
+  may answer. Once they are closed the run may go; the item keeps its asks, their answers and
+  the settled set, and `archon workflow runs --item` still reads them.
+- **A set settles once.** When every ask a run left is answered or withdrawn, the engine records
+  `asks_settled` on that run once, with how many were `answered` and `withdrawn`; `answered: 0`
+  means every ask was withdrawn. Settling records a fact and starts nothing: no trigger binds to
+  it yet.
+
+### Deterministic checks and run outcomes
 
 These are independent signals:
 
 - A deterministic check is an ordinary `bash:` or `script:` node. Exit zero completes the node;
   any other exit fails it and therefore affects lifecycle status. A named script read from captured
   source is also rejected if the run's full source capture no longer matches its pinned identity.
-- `outcome_field` records the workflow author's schema-declared boolean verdict. It does not control
-  lifecycle status. A succeeded outcome can remain on a run that later fails, and a failed outcome can
-  coexist with a completed run.
+- `returns.outcome` records the outcome the workflow's result declares. It does not control
+  lifecycle status, and a run carries it only once it has completed.
 
 There is no special verification node or verification status. Put a check in a deterministic node
-when its execution must govern success, and use `outcome_field` only when the workflow must record its
-own conclusion.
+when its execution must govern success, and use `returns.outcome` only when the workflow must record
+its own conclusion.
 
 ### Binding time: includes resolve at load, runs at runtime
 
@@ -2193,13 +2393,14 @@ the workflow's [pack settings](#pack-settings): it overrides the project's value
 run, and is checked against the setting's type.
 
 One consequence worth knowing on **chat, the run route, and the console**: the surfaces that reuse a
-conversation. Invoking a workflow there when a resumable run of it already exists in that
+conversation. Invoking a workflow there when exactly one resumable run of it exists in that
 conversation normally *continues that run* rather than starting a new one, without any resume vocabulary
-(see [DAG Resume on Failure](#dag-resume-on-failure)). New `inputs` values passed on such a call are
+(see [DAG Resume on Failure](#dag-resume-on-failure)). With more than one, it continues none and lists
+them so you can name one by id. New `inputs` values passed on such a call are
 **not applied**: the continued run keeps what it started with, and Archon says so, naming the
 values it ignored. To run fresh with different values, abandon the existing run first
 (`/workflow abandon <id>`) and invoke again. The CLI has no such implicit continuation: a plain
-`archon workflow run` always starts fresh, and `--input` with `--resume` is rejected outright.
+`archon workflow run` always starts fresh, and `archon workflow resume <run-id>` takes no `--input`.
 
 Adoption and supersede declarations are exceptions: if the dispatch would continue an existing run,
 Archon refuses the declaration before continuation or its fresh fallback. The refusal names the
@@ -2354,18 +2555,41 @@ bindings:
       actions: [opened]
     inputs:
       number: { event: subject.number }   # an event field; event bindings only
-  follow-up:                          # neither schedule nor event: fire-only
+  follow-up:                          # no schedule, event or run_ended: fire-only
     workflow: review-follow-up
     resource: follow-up
     overlap: queue
+  fix:
+    workflow: review-fix
+    resource: fix
+    overlap: queue
+    run_ended:                        # starts when a run of this pack's workflow ends
+      workflow: review-pull-request
+      outcome: [changes, blocked]     # one outcome, or a list: one file per outcome
+    inputs:
+      number: { input: number }       # one of the ended run's inputs; run-ended bindings only
+      findings: { result: /findings } # a JSON Pointer into the ended run's result
 ```
 
-A binding sets `schedule:` (a timer binding, written as a file
+A binding sets at most one of `schedule:` (a timer binding, written as a file
 `archon trigger fire --config` reads), `event:` (an entry for the GitHub source plugin's
-`bindings` array), or neither. With neither it is a
+`bindings` array) and `run_ended:`. With none it is a
 [fire-only binding](/guides/workflow-triggers/#start-a-binding-only-with-trigger-fire): the
 same file as a timer binding without a schedule, started only when a run or an operator fires
-it. Setting both is refused, and so is a `schedule:` or `event:` key with an invalid value.
+it. Setting more than one is refused, and so is a `schedule:`, `event:` or `run_ended:` key
+with an invalid value.
+
+A `run_ended:` binding is a
+[run-ended trigger file](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends):
+it starts its workflow on an item when a run of `run_ended.workflow`, a workflow of this pack,
+completes on that item with `run_ended.outcome`. `{ input: <name> }` and
+`{ result: <JSON Pointer> }` inputs read the ended run's inputs and result, as
+`on.runEnded.inputs` does; every other input is written as the start's own input.
+`archon pack bindings` writes one file per outcome, which the operator registers with
+`archon trigger add`, and refuses the whole set, writing nothing, when the ended workflow does not
+declare the outcome or an input read from it, or the started workflow does not declare an input
+mapped to it. A stage that needs both a clock and a hand-off declares two bindings with the
+same `workflow` and `resource`; they share the resource's slots and overlap policy.
 `capacity`, `overlap` and `isolation` mean what they mean in a
 [binding](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). The
 resource is written as `<pack>:<host>/<owner>/<name>:<resource>`, so bindings that declare the
@@ -2377,8 +2601,9 @@ binding's `capacity` applies to it. An omitted `capacity` means the workflow's d
 
 The declaration is validated when the pack loads, and an invalid one fails every workflow of
 the pack, naming the file and the binding. Beyond each binding's shape, a `{ binding: <id> }`
-input must name a declared timer or fire-only binding, and an `{ event: <field> }` input belongs to an
-event binding. Bindings sharing a resource need not agree on its capacity. An `event:` selector
+input must name a declared timer or fire-only binding, an `{ event: <field> }` input belongs to an
+event binding, and an `{ input: <name> }` or `{ result: <pointer> }` input to a run-ended
+binding. Bindings sharing a resource need not agree on its capacity. An `event:` selector
 and its fields are checked against the source plugin when a binding is generated, not at load.
 
 ## Launching a Separate Governed Run with `workflow:`
@@ -2431,8 +2656,11 @@ nodes:
 A `workflow:` node has **one** input channel per invocation: either the untyped `input:` string
 (delivered as the child's `$ARGUMENTS`) **or** the named `with:` map (delivered as the child's
 `$INPUTS.<name>`. See [Workflow Signature](#workflow-signature-inputs-returns-and-inputs)).
-Setting both on one node is a load error. Use `with:` when the child declares named `inputs:` or
-when its `command:` bodies need named values:
+Setting both on one node is a load error. Values follow the same rule as an include's `with:`:
+JSON literals, except that `{ from, if_skipped }` is the binding directive, resolved before the
+child starts (see
+[Passing values into an included block](#passing-values-into-an-included-block)). Use `with:`
+when the child declares named `inputs:` or when its `command:` bodies need named values:
 
 ```yaml
   - id: implement-qa
@@ -2760,8 +2988,9 @@ sends one notice. The node and the run still complete. The all-refused failure a
 applies, and its `node_failed` event carries the `not_started` slots.
 
 Read the record with `archon workflow get <run-id>` (see the [CLI reference](/reference/cli/#workflow-get)),
-from `run.nodes[].fan_out_outcome` on `GET /api/workflows/runs/{runId}`, or on the node's line
-in the console. It is not a `$node.*` reference: a downstream node that decides what the
+from `run.nodes[].fan_out_outcome` on `GET /api/workflows/runs/{runId}`, as `fan_out_outcome`
+on the node's `node_complete` or `node_error` line in the run's JSONL transcript (only when the
+outcome was settled, so not for an empty item list or a failure before every slot settled), or on the node's line in the console. It is not a `$node.*` reference: a downstream node that decides what the
 results are worth reads the `archon_failed` markers in `$<id>.output`, as below.
 
 ##### Why `all_done` is the default
@@ -3067,7 +3296,9 @@ The engine records terminal facts even when failure skips your reporting node. U
 The record preserves execution status, authored outcome, node states and skip causes,
 the selected `returns:` value when available, and an artifact manifest. Execution
 status and authored outcome remain independent; the engine does not infer a delivery
-verdict from filenames or output prose. Runs created before this support may have no
+verdict from filenames or output prose. `outcome` is the boolean form; `completed_outcome`
+is the outcome the run completed with, named outcomes included, and is absent from records
+written before it existed. Runs created before this support may have no
 record. Resumed active runs expose `null` until their next terminal transition. The same
 response's `run.nodes` carries the engine's node states for every run: the record's when it
 exists, otherwise the same fold over the events recorded so far. Active, resumed, and older
@@ -3093,7 +3324,6 @@ reflects the current pass instead of replaying a cached completion.
 name: failure-report
 description: Preserve an authored report after a node failure
 returns: report
-outcome_field: ok
 nodes:
   - id: fail
     bash: exit 1
@@ -3120,8 +3350,8 @@ nodes:
       required: [ok, summary]
 ```
 
-The run's status stays `failed`; the authored outcome follows the reporter's
-[`outcome_field:`](#workflow-signature-inputs-returns-and-inputs) (`ok: false` here).
+The run's status stays `failed`, so it has no [outcome](#workflow-signature-inputs-returns-and-inputs);
+the report (`ok: false` here) stays readable from the reporter's `node_completed` event.
 The reporter owns the result schema and validates the value it passes through. Bind only
 the composer: a [failed producer always fails a binding](#reading-across-a-skipped-branch),
 so if the composer itself fails, this reporter fails too. Cancellation runs no further
@@ -3379,7 +3609,7 @@ Node 'plan': 'interactive' is only honoured inside 'loop:' or 'loop_group:';
 
 An AI field on a node that runs no AI, such as `model:` on a `bash:` node, only warns.
 
-The check covers the workflow root, every node, the nested config blocks (`wait:`, the deprecated `approval:` and `approval.on_reject:`, `retry:`, `loop:`, `loop_group:`, `pi:`, each `agents:` entry, `worktree:`, `container:`) and every node in a `loop_group` body. Three blocks are exempt: `output_format:` is free-form JSON Schema, `sandbox:` passes unknown keys through, and `hooks:` already rejects an unknown key as an error.
+The check covers the workflow root, every node, the nested config blocks (`wait:`, the deprecated `approval:` and `approval.on_reject:`, `retry:`, `loop:`, `loop_group:`, `pi:`, each `agents:` entry, `worktree:`, `container:`) and every node in a `loop_group` body. Three blocks are exempt: `output_format:` is free-form JSON Schema, `sandbox:` passes every key it does not list, including those inside `network:` and `filesystem:`, to Claude unchanged, and `hooks:` already rejects an unknown key as an error.
 
 Dropped-key warnings appear in `archon validate workflows`, inline in `archon workflow list` (`parseWarnings` in `--json`), on stderr before `archon workflow run` starts, in chat `/workflow list`, and as a marker in the console's workflow picker. Every run that starts also records them as a `workflow_parse_warnings` event, which `archon workflow get <run-id> --verbose` shows. Chat and the console post them to the conversation at run start on a best-effort basis.
 

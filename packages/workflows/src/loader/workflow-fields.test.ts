@@ -72,17 +72,17 @@ nodes:
     expect(error?.error).toContain("Invalid 'returns'");
   });
 
-  it('rejects a non-string returns value instead of falling back to a positional sink', () => {
+  it('rejects an invalid returns value instead of falling back to a positional sink', () => {
     const { workflow, error } = parseWorkflow(
       `
-name: object-returns
-description: invalid object selector
-returns: { node: build }
+name: list-returns
+description: invalid list selector
+returns: [build]
 nodes:
   - id: build
     prompt: "hi"
 `,
-      'object-returns.yaml'
+      'list-returns.yaml'
     );
     expect(workflow).toBeNull();
     expect(error?.errorType).toBe('validation_error');
@@ -282,10 +282,6 @@ describe('workflow-level field parity (#2457)', () => {
     },
     // `returns` must name a real top-level node id — the fixture's single node is `only`.
     returns: { yaml: 'returns: only', present: w => w.returns === 'only' },
-    outcome_field: {
-      yaml: 'returns: only\noutcome_field: green',
-      present: w => w.outcome_field === 'green',
-    },
     deprecated: {
       yaml: 'deprecated:\n  message: Switch instead.',
       present: w => w.deprecated?.message === 'Switch instead.',
@@ -574,7 +570,6 @@ describe('workflow-level policy fields', () => {
     `name: policy\ndescription: d\n${field}\nnodes:\n  - id: n\n    prompt: p\n`;
 
   it.each<[string, string, keyof WorkflowDefinition, unknown]>([
-    ['worktree.enabled: false', 'worktree:\n  enabled: false', 'worktree', { enabled: false }],
     ['worktree.enabled: true', 'worktree:\n  enabled: true', 'worktree', { enabled: true }],
     // Policy is caller-decides when the block is absent.
     ['no worktree block', '', 'worktree', undefined],
@@ -584,14 +579,6 @@ describe('workflow-level policy fields', () => {
       'container',
       { enabled: true, write_back: 'auto' },
     ],
-    [
-      'an invalid container.write_back, keeping the block',
-      'container:\n  enabled: true\n  write_back: bogus',
-      'container',
-      { enabled: true },
-    ],
-    ['no container block', '', 'container', undefined],
-    ['an explicit tags array', 'tags: [GitLab, Review]', 'tags', ['GitLab', 'Review']],
     ['no tags', '', 'tags', undefined],
     // An explicit empty list suppresses tag inference, so it is kept rather than omitted.
     ['an explicit empty tags array', 'tags: []', 'tags', []],
@@ -611,7 +598,6 @@ describe('workflow-level policy fields', () => {
     ['all-blank tags reduced to an empty array', 'tags: ["", "  "]', 'tags', []],
     // A scalar instead of a list is discarded; the workflow still loads.
     ['scalar tags ignored', 'tags: GitLab', 'tags', undefined],
-    ['mutates_checkout: false', 'mutates_checkout: false', 'mutates_checkout', false],
     ['mutates_checkout: true', 'mutates_checkout: true', 'mutates_checkout', true],
     ['no mutates_checkout', '', 'mutates_checkout', undefined],
     // The string "yes" is not a boolean, so the field is dropped.

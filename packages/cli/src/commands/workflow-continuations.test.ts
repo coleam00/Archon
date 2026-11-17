@@ -11,6 +11,7 @@ function makeTestWorkflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun 
     codebase_id: null,
     status: 'paused',
     outcome: null,
+    completed_outcome: null,
     user_message: 'test',
     metadata: {},
     active_phase_started_at: null,
@@ -56,6 +57,7 @@ mock.module('../utils/stdout', () => ({ writeStdout }));
 mock.module('../triggers/native-schedule', () => ({
   installMacosNativeSchedule: install,
   removeMacosNativeSchedule: remove,
+  inspectMacosNativeSchedule: mock(async () => undefined),
 }));
 import { workflowContinuationCommand, workflowWakeScheduleCommand } from './workflow-continuations';
 

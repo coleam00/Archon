@@ -938,6 +938,45 @@ The resolved provider must match the source and
 support session resume and immutable forks. Missing context or a replacement owner
 session ID fails the node rather than starting a new conversation.
 
+### One node across rounds: `context: same`
+
+When the node that builds is also the node that fixes, it does not need a pre-loop
+source. `context: same` continues its own session from the previous round:
+
+```yaml
+nodes:
+  - id: corrections
+    loop_group:
+      max_iterations: 3
+      until_bash: 'ready=$review.output.done; [ "$ready" = true ]'
+      nodes:
+        - id: build
+          context: same
+          prompt: |
+            Implement the requested change, or correct what the review found:
+            $LOOP_PREV.review.output.findings
+        - id: review
+          depends_on: [build]
+          context: fresh
+          prompt: Review the change and report whether it is ready.
+          output_format:
+            type: object
+            properties:
+              done: { type: boolean }
+              findings: { type: string }
+            required: [done, findings]
+            additionalProperties: false
+```
+
+Round one starts fresh. Each later round continues `build`'s session in place, whatever
+`fresh_context` says, and whether `build` runs alone or beside other nodes; nodes side by
+side that each declare `same` each keep their own session. A pause inside the loop keeps
+the cursor. When the run has an item, every round's session is also recorded under it,
+so the next run's `build` on that item forks the last round's session in its first round,
+and a failure resume continues the newest round. See
+[Continuing a node's own session](/reference/workflow-language/#continuing-a-nodes-own-session)
+for the full order and what happens on a provider or model change.
+
 ### Same-iteration sessions
 
 A command or prompt in the body can also continue a session produced earlier in the
@@ -1002,9 +1041,18 @@ Suspension and failure have different recovery rules:
 - **Same-iteration sessions after a nested pause**: a nested group's pause between a
   same-body source and its consumer resumes within the paused iteration, which re-runs
   the source. The consumer forks the re-run, matching the `$source.output` it reads.
-- **Failure resume** (`/workflow resume <id>` after a crash/failure): there is
-  no persisted iteration cursor — the loop_group node restarts from
-  **iteration 1**. Per-body-node resume granularity is not supported in v1.
+- **Failure resume** (`/workflow resume <id>` after a crash/failure): the group
+  resumes in the iteration it stopped in, read from the run's body-node history. An
+  iteration whose body did not finish re-runs in full. One whose body finished re-runs
+  only its completion check, then the group goes on to the next iteration; in an
+  interactive group it re-runs in full, because its gate was never reached. Earlier
+  iterations stay done, and `$LOOP_PREV.*` reads the last completed one, restored the
+  same way as after a pause; if its history or full output cannot be restored, the
+  resume fails. Iterations already used count
+  against `max_iterations`, so a group that failed by running out of iterations fails
+  again without running one. With `fresh_context: false`, the re-entered iteration starts
+  a new session. A `context: same` node continues the newest round's session it recorded
+  under the run's item; a run without an item starts it fresh.
 
 ### What is NOT supported on loop_group nodes (v1)
 
@@ -1014,7 +1062,9 @@ Suspension and failure have different recovery rules:
   [`until_field`](#until_field).
 - `retry` (the loop manages its own iteration) — rejected at parse time.
 - Cross-run `persist_session` for body AI nodes. In-run iterations use the ambient
-  cursor governed by `fresh_context`, or explicit named owner cursors described above.
+  cursor governed by `fresh_context`, explicit named owner cursors, or `context: same`,
+  all described above. A `context: same` body node also continues across runs on the
+  same item.
 - Per-body-node resume (skip-to-failed-body-node) — the whole iteration re-runs.
 - `$LOOP_PREV.<id>.output[N]` history indexing — only the immediately prior
   iteration is reachable.
@@ -1075,9 +1125,10 @@ release did not record that output, so its first resumed iteration sees both as 
 
 By default a legacy interactive loop gates even on an iteration that met its completion
 condition. `signal_completes: true` completes the node on that iteration instead, so the
-gate appears only on iterations that did not complete. Setting it without
-`interactive: true` has no effect and emits a loader warning. Replace it with a terminal
-wait whose `when:` skips it on success, as in the second example under
+gate appears only on iterations that did not complete. Without `interactive: true` the
+flag has no effect, and the load warnings (`archon validate`) say to remove it. Replace
+the interactive shape with a terminal wait whose `when:` skips it on success, as in the
+second example under
 [Pausing to ask inside the body](#pausing-to-ask-inside-the-body).
 
 ## See Also

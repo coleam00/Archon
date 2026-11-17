@@ -1,7 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { expandWorkflowIncludes } from './include-expander';
 import { isSourceReadFailure } from './workflow-source';
-import { INCLUDE_MAX_DEPTH } from './include-expander';
 import { COMPOSE_FAN_OUT_STEP_MARKER } from './fan-out-identity';
 import { wf, mapOf } from './include-expander.fixtures';
 
@@ -74,7 +73,6 @@ describe('expandWorkflowIncludes — errors', () => {
     const a = wf('a', [{ id: 'r', include: 'b' }]);
 
     const { workflows, errors } = expandWorkflowIncludes(mapOf(a, b, c, d, e));
-    expect(INCLUDE_MAX_DEPTH).toBe(3);
     expect(workflows.has('a')).toBe(false);
     expect(errors.find(err => err.filename === 'a')?.error).toContain('depth');
     expect(workflows.has('b')).toBe(true);

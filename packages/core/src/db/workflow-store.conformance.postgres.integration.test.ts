@@ -15,8 +15,11 @@ import {
   makeSqlConformanceHarness,
   describeSqlStatusReadConformance,
 } from './workflow-store.conformance-harness';
+import { describeItemLinkConformance } from './item-links.conformance-harness';
+import { describeSqlItemAskConformance } from './item-asks.conformance';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
 import { getSchemaSQL } from './bundled-schema';
+import type { ItemAsk } from '@archon/workflows/schemas/item-ask';
 
 const baseUrl = process.env.ARCHON_TEST_PG_URL;
 describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
@@ -42,7 +45,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     };
     try {
       const harness = await makeSqlConformanceHarness(db, postgresDialect, 'postgresql', close);
-      return { ...harness, db };
+      return { ...harness, db, url: url.toString() };
     } catch (error) {
       await close();
       throw error;
@@ -315,6 +318,94 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   }
 
   describeSqlStatusReadConformance(makeHarness);
+  describeItemLinkConformance(makeHarness);
+  describeSqlItemAskConformance(makeHarness);
+  test('two completions of one workflow on one item that overlap leave one open set: the later one', async () => {
+    const harness = await makeHarness();
+    // Holding the item row FOR UPDATE parks each completion at its ask insert, whose
+    // foreign-key check needs the row. Without serialization both are parked after their
+    // replace has already run, so neither sees the other's set.
+    const gate = new Pool({ connectionString: harness.url, max: 1 });
+    let gateOpen = false;
+    try {
+      const { db, store } = harness;
+      const start = async () => {
+        const run = await store.createWorkflowRun({
+          workflow_name: 'plan',
+          user_message: '',
+          codebase_id: CONFORMANCE_CODEBASE_ID,
+          item_key: 'issue-1',
+        });
+        await store.claimPendingWorkflowRun(run.id);
+        return run.id;
+      };
+      const first = await start();
+      const second = await start();
+      const itemRow = await db.query<{ item_id: string }>(
+        'SELECT item_id FROM remote_agent_workflow_runs WHERE id = $1',
+        [first]
+      );
+      const itemId = itemRow.rows[0]?.item_id;
+      if (itemId === undefined) throw new Error('Missing item fixture');
+      const askOf = (question: string): ItemAsk => ({
+        question,
+        context: 'Two runs end together.',
+        options: [
+          { id: 'keep', does: 'Keep the flag.', cost: 'One more flag.' },
+          { id: 'drop', does: 'Drop the flag.', cost: 'Older configs break.' },
+        ],
+        recommendation: { option: 'keep', why: 'Nothing depends on dropping it.' },
+        artifacts: [],
+      });
+      const waiters = async (count: number) => {
+        for (let tries = 0; tries < 200; tries++) {
+          // Outside the gate: a transaction reads one pg_stat_activity snapshot throughout.
+          const waiting = await db.query<{ n: number }>(
+            `SELECT count(*)::int AS n FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'`
+          );
+          if ((waiting.rows[0]?.n ?? 0) >= count) return;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        throw new Error(`Expected ${count} completions waiting on a lock`);
+      };
+
+      await gate.query('BEGIN');
+      gateOpen = true;
+      await gate.query('SELECT id FROM remote_agent_items WHERE id = $1 FOR UPDATE', [itemId]);
+      // The first is parked before the second starts, so the second commits later.
+      const firstDone = store.completeWorkflowRun(first, { duration_ms: 1 }, undefined, {
+        asks: [askOf('First?')],
+      });
+      await waiters(1);
+      const secondDone = store.completeWorkflowRun(second, { duration_ms: 1 }, undefined, {
+        asks: [askOf('Second?')],
+      });
+      await waiters(2);
+      await gate.query('COMMIT');
+      gateOpen = false;
+      await Promise.all([firstDone, secondDone]);
+
+      const rows = await db.query<{
+        run_id: string;
+        closed_as: string | null;
+        replaced_by_run_id: string | null;
+      }>(
+        'SELECT run_id, closed_as, replaced_by_run_id FROM remote_agent_item_asks WHERE item_id = $1',
+        [itemId]
+      );
+      expect(rows.rows.filter(row => row.closed_as === null).map(row => row.run_id)).toEqual([
+        second,
+      ]);
+      expect(rows.rows.filter(row => row.run_id === first)).toEqual([
+        { run_id: first, closed_as: 'replaced', replaced_by_run_id: second },
+      ]);
+    } finally {
+      if (gateOpen) await gate.query('ROLLBACK');
+      await gate.end();
+      await harness.close();
+    }
+  });
   test('SQL attention reads report unreadable origins without losing valid rows or writing state', async () => {
     const harness = await makeHarness();
     try {

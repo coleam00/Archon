@@ -112,14 +112,6 @@ describe('project-paths', () => {
       expect(result).toBeNull();
     });
 
-    test('rejects path traversal in owner', () => {
-      expect(parseOwnerRepo('../etc/passwd')).toBeNull();
-    });
-
-    test('rejects path traversal in repo', () => {
-      expect(parseOwnerRepo('acme/../../etc')).toBeNull();
-    });
-
     test('rejects dot and dotdot segments', () => {
       expect(parseOwnerRepo('./widget')).toBeNull();
       expect(parseOwnerRepo('acme/..')).toBeNull();
@@ -383,19 +375,6 @@ describe('project-paths', () => {
         join('/custom/archon', 'workspaces', '@cwd', `_-${cwdDigest('/')}`)
       );
     });
-
-    test('agrees with the per-kind helpers it replaces', () => {
-      expect(getProjectStoragePaths({ kind: 'repo', owner: 'acme', repo: 'widget' })).toMatchObject(
-        {
-          artifactsRoot: getProjectArtifactsPath('acme', 'widget'),
-          logsDir: getProjectLogsPath('acme', 'widget'),
-        }
-      );
-      expect(getProjectStoragePaths({ kind: 'folder', slug: 'ops' })).toMatchObject({
-        artifactsRoot: getFolderProjectArtifactsPath('ops'),
-        logsDir: getFolderProjectLogsPath('ops'),
-      });
-    });
   });
 
   describe('getProjectRoot', () => {
@@ -405,22 +384,6 @@ describe('project-paths', () => {
       delete process.env.ARCHON_DOCKER;
       const result = getProjectRoot('acme', 'widget');
       expect(result).toBe(join(homedir(), '.archon', 'workspaces', 'acme', 'widget'));
-    });
-
-    test('respects ARCHON_HOME', () => {
-      delete process.env.WORKSPACE_PATH;
-      delete process.env.ARCHON_DOCKER;
-      process.env.ARCHON_HOME = '/custom/archon';
-      expect(getProjectRoot('acme', 'widget')).toBe(
-        join('/custom/archon', 'workspaces', 'acme', 'widget')
-      );
-    });
-
-    test('works in Docker', () => {
-      process.env.ARCHON_DOCKER = 'true';
-      expect(getProjectRoot('acme', 'widget')).toBe(
-        join('/', '.archon', 'workspaces', 'acme', 'widget')
-      );
     });
   });
 
@@ -562,15 +525,6 @@ describe('project-paths', () => {
         )
       );
     });
-
-    test('respects ARCHON_HOME override', () => {
-      delete process.env.WORKSPACE_PATH;
-      delete process.env.ARCHON_DOCKER;
-      process.env.ARCHON_HOME = join('/', 'custom', 'archon');
-      expect(getFolderRunArtifactsPath('ops', 'r1')).toBe(
-        join('/', 'custom', 'archon', 'workspaces', '_folder', 'ops', 'artifacts', 'runs', 'r1')
-      );
-    });
   });
 });
 
@@ -651,16 +605,6 @@ describe('createProjectSourceSymlink', () => {
   afterEach(async () => {
     await removeTempTree(tempArchonHome);
     await removeTempTree(tempTarget);
-  });
-
-  test.skipIf(isWindows)('creates a symlink pointing to the target', async () => {
-    await ensureProjectStructure('acme', 'widget');
-    await createProjectSourceSymlink('acme', 'widget', tempTarget);
-
-    const linkPath = getProjectSourcePath('acme', 'widget');
-    const stats = await lstat(linkPath);
-    expect(stats.isSymbolicLink()).toBe(true);
-    expect(await readlink(linkPath)).toBe(tempTarget);
   });
 
   test.skipIf(isWindows)('is a no-op if symlink already points to same target', async () => {

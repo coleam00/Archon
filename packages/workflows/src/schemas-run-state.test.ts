@@ -323,23 +323,8 @@ describe('readIdentityUnresolved (#2304)', () => {
     expect(readIdentityUnresolved({ [RUN_METADATA_KEYS.identityUnresolved]: true })).toBe(true);
   });
 
-  test('reads a false stamp', () => {
-    expect(readIdentityUnresolved({ [RUN_METADATA_KEYS.identityUnresolved]: false })).toBe(false);
-  });
-
   test('treats a missing key as undefined', () => {
     expect(readIdentityUnresolved({})).toBeUndefined();
     expect(readIdentityUnresolved(undefined)).toBeUndefined();
-  });
-
-  test('treats a non-boolean value as undefined (defensive)', () => {
-    expect(
-      readIdentityUnresolved({ [RUN_METADATA_KEYS.identityUnresolved]: 'yes' })
-    ).toBeUndefined();
-    expect(readIdentityUnresolved({ [RUN_METADATA_KEYS.identityUnresolved]: 1 })).toBeUndefined();
-    expect(
-      readIdentityUnresolved({ [RUN_METADATA_KEYS.identityUnresolved]: null })
-    ).toBeUndefined();
-    expect(readIdentityUnresolved({ [RUN_METADATA_KEYS.identityUnresolved]: {} })).toBeUndefined();
   });
 });

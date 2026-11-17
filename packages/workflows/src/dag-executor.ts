@@ -4,8 +4,8 @@
  * Runs one pass of a `nodes:`-based workflow: refuses it before any node runs when a node
  * could not work (`dag/capability-preflight`), restores what earlier passes left
  * (`dag/resume-state`), walks the topological layers (`dag/run-layers`), keeps the run's
- * usage, authored outcome and budget durable whatever happens to the pass, and ends it
- * (`dag/run-terminal`).
+ * usage and budget durable whatever happens to the pass, and ends it (`dag/run-terminal`).
+ * The run's outcome is written only by the completion write there.
  */
 
 import { createBoundaryErrorHistory } from './dag/skip-node';
@@ -19,7 +19,7 @@ import { releaseUnreadableRunSource } from './source-release';
 import { sourceReleaseNotice } from './deps';
 import type { ExecutionContext } from '@archon/provider-contract';
 import { resolveRunExecutionMode, type ContainerRunContext } from './container-context';
-import type { ResolvedWorkflow, WorkflowRunOutcome, WorkflowRunNodeSession } from './schemas';
+import type { ResolvedWorkflow, WorkflowRunNodeSession } from './schemas';
 import { CONTINUATION_RETRY_MS, executionClaim } from './store';
 import type { DagResumeSnapshot, PersistedNodeOutput, PriorFailedNode } from './store';
 import {
@@ -32,7 +32,6 @@ import {
   type RunBudgetLedger,
   type RunBudgetRefusal,
 } from './run-budget';
-import { outputRefText, resolveNodeOutputField } from './output-ref';
 import { logWorkflowError } from './logger';
 import { safeSendMessage } from './platform-messages';
 import { isTierName, selectModelRef } from './model-validation';
@@ -130,7 +129,6 @@ export async function executeDagWorkflow(
     priorCompletedNodes,
     priorNodeSessions
   );
-  const { nodeOutputs } = restored;
 
   getLog().info(
     {
@@ -143,39 +141,7 @@ export async function executeDagWorkflow(
     'dag_workflow_starting'
   );
 
-  // Persist the authored verdict as soon as the selected result is available,
-  // independently from every lifecycle branch below (#2618). The initial call
-  // covers a selected node rehydrated from node_completed events on resume; the
-  // awaited per-layer hook captures a fresh result before later work can pause or
-  // fail; and the unwind backstop covers a fatal throw while aggregating that layer.
-  // A same-value write is skipped, but a genuine re-execution may replace the
-  // prior verdict.
-  let persistedOutcome: WorkflowRunOutcome | null = workflowRun.outcome;
-  const persistAuthoredOutcome = async (): Promise<void> => {
-    const field = workflow.outcome_field;
-    const returns = workflow.returns;
-    if (field === undefined || returns === undefined) return;
-    const selectedOutput = nodeOutputs.get(returns);
-    if (selectedOutput?.state !== 'completed') return;
-
-    const resolution = resolveNodeOutputField(
-      selectedOutput,
-      returns,
-      field,
-      outputRefText(returns, field)
-    );
-    if (resolution.kind !== 'value' || typeof resolution.value !== 'boolean') {
-      throw new Error(
-        `Workflow outcome_field '${field}' on returns node '${returns}' did not resolve to a boolean`
-      );
-    }
-    const outcome: WorkflowRunOutcome = resolution.value ? 'succeeded' : 'failed';
-    if (outcome === persistedOutcome) return;
-    await deps.store.updateWorkflowRun(workflowRun.id, { outcome });
-    persistedOutcome = outcome;
-  };
-
-  const runCtx = await createRunContext(options, execContext, restored, persistAuthoredOutcome);
+  const runCtx = await createRunContext(options, execContext, restored);
   const { runBudget } = runCtx;
 
   /** Log both figures when the run total and its node events disagree; never fails the run. */
@@ -344,12 +310,11 @@ export async function executeDagWorkflow(
 
   /**
    * runLayers guards almost everything, but a failed durable write (terminal status or
-   * node event) escapes through its layer join. Persist both durable facts before rethrowing that
-   * exact value (including an exotic `throw undefined`). Usage is best-effort. An
-   * outcome write failure is secondary here: record it, but never let it mask the
-   * execution error already in flight. A run-budget refusal also escapes the join; it
-   * fails the run here instead of propagating. An unreadable source escapes it too; the
-   * run is released after persisting the settled usage and outcome, so it is returned.
+   * node event) escapes through its layer join. Persist the settled usage before rethrowing
+   * that exact value (including an exotic `throw undefined`). Usage is best-effort. A
+   * run-budget refusal also escapes the join; it fails the run here instead of
+   * propagating. An unreadable source escapes it too; it is returned, so the tail persists
+   * the settled usage and then releases the run.
    */
   const unwindRunLayers = async (
     error: unknown
@@ -363,14 +328,6 @@ export async function executeDagWorkflow(
     }
     if (error instanceof RunSourceUnreadableError) return error;
     await persistRunUsage();
-    try {
-      await persistAuthoredOutcome();
-    } catch (outcomeError) {
-      getLog().error(
-        { err: outcomeError as Error, workflowRunId: workflowRun.id },
-        'dag.authored_outcome_persist_failed_during_unwind'
-      );
-    }
     if (error instanceof RunBudgetRefusedError && runBudget !== undefined) {
       await failRunForBudget(runBudget, error.refusal);
       return 'budget_failed';
@@ -378,7 +335,6 @@ export async function executeDagWorkflow(
     throw error;
   };
 
-  await persistAuthoredOutcome();
   let sourceUnreadable: RunSourceUnreadableError | undefined;
   try {
     await runLayers(runCtx);
@@ -390,11 +346,7 @@ export async function executeDagWorkflow(
     await runCtx.toolAttention.refresh();
   }
 
-  // Normal return has no primary error to preserve, so a verdict persistence failure
-  // remains visible to the caller. These two small calls intentionally mirror the
-  // unwind path above; extracting a policy flag would hide which error owns the throw.
   await persistRunUsage();
-  await persistAuthoredOutcome();
   if (sourceUnreadable !== undefined) {
     return {
       kind: 'source_release',
@@ -460,8 +412,7 @@ async function preflightRun(
 async function createRunContext(
   options: ExecuteDagWorkflowOptions,
   execContext: ExecutionContext,
-  restored: RestoredRunState,
-  afterLayer: () => Promise<void>
+  restored: RestoredRunState
 ): Promise<RunLayersContext> {
   const {
     deps,
@@ -490,7 +441,8 @@ async function createRunContext(
     priorUsage,
     workflowSourceRoots,
   } = options;
-  const { nodeOutputs, persistScope, namedResumeSourceIds, nodeSessionHandles } = restored;
+  const { nodeOutputs, persistScope, itemScope, namedResumeSourceIds, nodeSessionHandles } =
+    restored;
   const workflowRef = selectModelRef(workflow.model, aiProfile);
   const workflowTier = workflowRef && isTierName(workflowRef) ? workflowRef : undefined;
   // A budget always seeds from the run's own rows, never from `priorUsage`: a re-driven
@@ -550,13 +502,13 @@ async function createRunContext(
     configuredCommandFolder,
     issueContext,
     persistScope,
+    itemScope,
     workflowPersistSessions: workflow.persist_sessions === true,
     // Scope-keyed persistence surface: without a scope key there is no durable
     // scope to mirror into or recover from, so the dir is dropped alongside it.
     scopeArtifactsDir: persistScope !== undefined ? scopeArtifactsDir : undefined,
     layers: workflow.plan.layers,
     nodeOutputs,
-    afterLayer,
     priorCompletedNodes,
     replayedFailures,
     nodeSessionHandles,

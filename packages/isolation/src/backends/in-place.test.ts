@@ -12,10 +12,6 @@ describe('InPlaceBackend', () => {
     },
   };
 
-  test('id is in-place', () => {
-    expect(backend.id).toBe('in-place');
-  });
-
   test('prepare returns the real folder cwd + host execution context', async () => {
     const prepared = await backend.prepare(req);
     // Must be the real folder path (NOT the '/workspace' docker sentinel).
@@ -23,11 +19,6 @@ describe('InPlaceBackend', () => {
     expect(prepared.execContext).toEqual({ kind: 'host' });
     // In-place creates no tracked environment row.
     expect(prepared.envId).toBeUndefined();
-  });
-
-  test('prepare cwd echoes codebase.defaultCwd (byte-identical to the pre-seam early-return)', async () => {
-    const prepared = await backend.prepare(req);
-    expect(prepared.cwd).toBe(req.codebase.defaultCwd);
   });
 
   test('destroy is a no-op (nothing tracked to tear down)', async () => {

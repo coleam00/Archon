@@ -52,7 +52,7 @@ import { installPipeSafeConsole } from './utils/safe-console';
 import { withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
 import { escapeRunJobIfRequested } from './utils/run-job-escape';
-import { rejectConfigOutsideRun, RESUME_RUN_CONFIG_CONFLICT } from './dispatch-guards';
+import { rejectConfigOutsideRun } from './dispatch-guards';
 import { resolveCliExitCode } from './utils/workflow-exit-code';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 installPipeSafeConsole();
@@ -343,14 +343,7 @@ async function decodeDetachedRunConfig({
     const { decodeWorkflowRunConfigHandoff } = await import(
       '@archon/core/config/run-config-handoff'
     );
-    const detachedRunConfig = decodeWorkflowRunConfigHandoff(detachedRunConfigPayload);
-    // Fail-fast for the decode step, not a second copy of the invariant: `workflow-run-admission.ts`
-    // still owns this rejection for every caller. A legitimately spawned detached child
-    // cannot reach it — the parent refuses to seal a config for a continuation before it
-    // forks — so this only fires on a hand-built `--internal-detached-run-config`, and
-    // saves it a database round-trip on the way to the same message.
-    if (values.resume) throw new Error(RESUME_RUN_CONFIG_CONFLICT);
-    return detachedRunConfig;
+    return decodeWorkflowRunConfigHandoff(detachedRunConfigPayload);
   }
   return undefined;
 }
@@ -411,6 +404,8 @@ const NO_GIT_COMMANDS = [
   'user',
   'ai',
   'project',
+  // Isolation commands act on every registered project and never read the working directory.
+  'isolation',
 ];
 
 function requiresGitRepo(command: string | undefined, subcommand: string | undefined): boolean {
@@ -544,6 +539,10 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
           return await workflowRoutes.runWorkflowEvent(route);
         case 'notice':
           return await workflowRoutes.runWorkflowNotice(route);
+        case 'rule':
+          return await workflowRoutes.runWorkflowRule(route);
+        case 'link':
+          return await workflowRoutes.runWorkflowLink(route);
         default:
           return await workflowRoutes.runUnknownWorkflowSubcommand(route);
       }

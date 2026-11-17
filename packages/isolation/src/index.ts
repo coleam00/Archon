@@ -12,11 +12,9 @@ export type {
   IsolationRequest,
   AdoptedWorktreeMetadata,
   CreatedWorktreeMetadata,
-  ObservedWorktreeMetadata,
   WorktreeCreationEnvironment,
   WorktreeMetadata,
   WorktreeEnvironment,
-  IsolatedEnvironment,
   DestroyOptions,
   WorktreeDestroyOptions,
   DestroyResult,
@@ -83,7 +81,7 @@ export {
 } from './errors';
 
 // --- Factory ---
-export { getIsolationProvider, configureIsolation, resetIsolationProvider } from './factory';
+export { getIsolationProvider, configureIsolation } from './factory';
 
 // --- Resolver ---
 export { IsolationResolver } from './resolver';
@@ -92,6 +90,7 @@ export type { IsolationResolverDeps } from './resolver';
 // --- Provider ---
 export { WorktreeProvider, resolveRepoLocalOverride } from './providers/worktree';
 export { generatedTaskBranch, isGeneratedTaskBranch } from './providers/worktree/branches';
+export { refuseUnappliedStartPoint } from './providers/worktree/adopt';
 
 // --- PR state lookup ---
 export { getPrState, getPrsForCommit } from './pr-state';

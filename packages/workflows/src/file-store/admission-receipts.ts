@@ -160,6 +160,8 @@ export function createReceiptOperations(
             id,
             sourceInstanceId,
             deliveryId,
+            // The file store refuses a receipt that names an item.
+            itemKey: null,
             outcome,
             reason,
             receivedAt,
@@ -171,17 +173,20 @@ export function createReceiptOperations(
         // pending bindings.
         const damaged: DamagedStartReceipt[] = [];
         const rows: { binding: Binding; createdAt: string }[] = [];
+        const wanted = options.receiptIds && new Set(options.receiptIds);
         for (const path of await documentPaths(root, 'receipts')) {
           let receipt: z.output<typeof receiptSchema>;
           try {
             receipt = receiptSchema.parse(await readJson(join(root, path)));
           } catch (error) {
+            if (wanted) continue;
             damaged.push({
               document: path,
               error: new Error(`Invalid start receipt document '${path}'`, { cause: error }),
             });
             continue;
           }
+          if (wanted && !wanted.has(receipt.id)) continue;
           for (const binding of receipt.bindings)
             rows.push({ binding, createdAt: receipt.createdAt });
         }

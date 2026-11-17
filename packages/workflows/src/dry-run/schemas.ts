@@ -85,7 +85,15 @@ export type DryRunTraceEntry = z.infer<typeof dryRunTraceEntrySchema>;
 export const dryRunResultSchema = z.object({
   workflow: z.string(),
   outcome: z.enum(['completed', 'failed', 'paused', 'cancelled']),
+  /** Whether the workflow declares `returns.outcome`. */
+  declaresOutcome: z.boolean(),
+  /** `outcome` as the run row would hold it: the boolean form only. */
   authoredOutcome: workflowRunOutcomeSchema.nullable(),
+  /**
+   * `completed_outcome` as the run row would hold it: set only when the simulation
+   * completed with a stubbed or executed returns value of the declared form.
+   */
+  completedOutcome: z.string().nullable(),
   trace: z.array(dryRunTraceEntrySchema),
   missingStubs: z.array(z.string()),
   /**

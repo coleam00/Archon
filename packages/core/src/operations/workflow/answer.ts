@@ -29,8 +29,19 @@ export type AttentionAnswerRequest =
   | { choose: readonly string[]; text?: string }
   | { recommended: true; text?: string };
 
+/**
+ * An answer that does not fit the form of the wait or ask it answers: the caller's
+ * mistake, refused before anything is recorded. Paused waits and item asks share it.
+ */
+export class AttentionAnswerInvalidError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AttentionAnswerInvalidError';
+  }
+}
+
 /** Why an answer that accepts the recommendation cannot: the wait has none to accept. */
-export class RecommendationRefusedError extends Error {
+export class RecommendationRefusedError extends AttentionAnswerInvalidError {
   constructor(
     readonly reason: 'form_takes_none' | 'none_recorded',
     message: string
@@ -101,7 +112,8 @@ export function assertAnswerable(run: WorkflowRun): OpenAttentionWait {
  * The answer `request` gives `wait`, validated against its form by
  * `attentionAnswerProblem`. An undeclared option is refused on every surface, and so is
  * the reserved `other` option without text. An answer accepting the recommendation is the
- * answer choosing the recommended option, so it passes the same validation.
+ * answer choosing the recommended option, so it passes the same validation. Every refusal
+ * is an `AttentionAnswerInvalidError`.
  */
 export function attentionAnswerFor(
   run: WorkflowRun,
@@ -113,7 +125,9 @@ export function attentionAnswerFor(
   const choose = 'recommended' in request ? [recommendedOption(run, wait)] : request.choose;
   const problem = attentionAnswerProblem(wait, { choose, text });
   if (problem !== undefined)
-    throw new Error(`Run ${run.id}'s attention wait (form '${form}') ${problem}`);
+    throw new AttentionAnswerInvalidError(
+      `Run ${run.id}'s attention wait (form '${form}') ${problem}`
+    );
   if (form === 'message') return { text };
   if (form === 'multi_select') return { decisions: [...choose], text };
   const [decision] = choose;

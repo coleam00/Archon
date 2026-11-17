@@ -49,6 +49,7 @@ export async function listWorkflowNodeSessions(scope: {
 
 export async function upsertWorkflowNodeSession(
   params: WorkflowNodeSessionKey & {
+    model: string | null;
     provider_session_id: string;
     last_run_id: string | null;
   }
@@ -58,10 +59,11 @@ export async function upsertWorkflowNodeSession(
   try {
     await pool.query(
       `INSERT INTO remote_agent_workflow_node_sessions
-         (workflow_name, node_id, scope_key, provider, provider_session_id, last_run_id, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, ${now}, ${now})
+         (workflow_name, node_id, scope_key, provider, model, provider_session_id, last_run_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, ${now}, ${now})
        ON CONFLICT (workflow_name, node_id, scope_key, provider)
        DO UPDATE SET provider_session_id = EXCLUDED.provider_session_id,
+                     model = EXCLUDED.model,
                      last_run_id = EXCLUDED.last_run_id,
                      updated_at = ${now}`,
       [
@@ -69,6 +71,7 @@ export async function upsertWorkflowNodeSession(
         params.node_id,
         params.scope_key,
         params.provider,
+        params.model,
         params.provider_session_id,
         params.last_run_id,
       ]

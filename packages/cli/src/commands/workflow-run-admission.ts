@@ -1,4 +1,5 @@
 import { rmSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
@@ -27,6 +28,7 @@ import {
   findWorkflowLoadError,
   type ResolvedWorkflow,
   type WorkflowLoadError,
+  type WorkflowSource,
   type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
@@ -91,11 +93,6 @@ export interface RunSelection extends RunSourceSlot {
    */
   readonly isContinuation: boolean;
   readonly continuationRun: WorkflowRun | undefined;
-  /**
-   * The resume path owns the actionable message for a database that cannot answer, and
-   * reports the codebase failure first. Nothing executes before it.
-   */
-  readonly resumeLookupError: Error | undefined;
   /** The row this process executes as: a detached launcher's pending row, later the setup run. */
   preCreatedRun: WorkflowRun | undefined;
   workflow: ResolvedWorkflow;
@@ -143,7 +140,7 @@ export async function selectRunWorkflow(request: OwnedRunRequest): Promise<RunSe
   const modelOverrides = options.modelAssignments
     ? parseRunModelAssignments(options.modelAssignments)
     : undefined;
-  const { continuationRun, resumeLookupError, continuation } = await locateContinuation(request);
+  const { continuationRun, continuation } = await locateContinuation(request);
   const isContinuation = options.resume === true || continuationRun !== undefined;
   const runConfig = await resolveLaunchRunConfig(host, options, cwd, isContinuation);
   const preCreatedRun = await claimDetachedRunRow(request);
@@ -165,14 +162,27 @@ export async function selectRunWorkflow(request: OwnedRunRequest): Promise<RunSe
       workflowName,
       workflowEntries.map(ws => ws.workflow)
     );
-  if (!workflow) throw workflowNotFoundError(workflowName, workflowEntries, errors);
+  if (!workflow) {
+    const error = workflowNotFoundError(workflowName, workflowEntries, errors);
+    throw isContinuation ? error : withSourceContext(error, options.discoveryCwd);
+  }
+  const workflowEntry = workflowEntries.find(ws => ws.workflow === workflow);
+  // An explicit --workflow-source that lacks the named workflow would otherwise run another
+  // scope's copy while recording the source as its origin (#5826). Commands, scripts and
+  // composed workflows may still resolve from other scopes; the named workflow may not.
+  if (
+    !isContinuation &&
+    options.discoveryCwd !== undefined &&
+    workflowEntry?.source !== 'project'
+  ) {
+    throw workflowNotInSourceError(workflowName, options.discoveryCwd, workflowEntry?.source);
+  }
   // Name the selection in the capture's manifest, now that it is known. The manifest is
   // outside the digest, so this records provenance without disturbing what was frozen.
   if (source.preparedSource) {
     await recordSelectedWorkflow(source.preparedSource.anchor.root, workflow.name);
   }
   assertDetachedRowWorkflow(preCreatedRun, workflow);
-  const workflowEntry = workflowEntries.find(ws => ws.workflow === workflow);
 
   // Keys this workflow's YAML declares that the engine drops (#2213). Written to
   // stderr, never stdout: in --json mode Pino is silenced and stdout must stay
@@ -181,7 +191,7 @@ export async function selectRunWorkflow(request: OwnedRunRequest): Promise<RunSe
   // dropped key can be a gate the author believes is protecting the run.
   emitParseWarnings(workflowEntry?.parseWarnings, workflow.name);
   emitDeprecationNotice(workflow);
-  assertInvocationFlags(options, isContinuation);
+  assertInvocationFlags(options);
 
   return {
     ...source,
@@ -189,7 +199,6 @@ export async function selectRunWorkflow(request: OwnedRunRequest): Promise<RunSe
     runConfig,
     isContinuation,
     continuationRun,
-    resumeLookupError,
     preCreatedRun,
     workflow,
     workflowEntry,
@@ -207,28 +216,15 @@ export async function selectRunWorkflow(request: OwnedRunRequest): Promise<RunSe
  * risk — a change to the shared path would silently not reach CLI resume, and that is
  * exactly the shape that produced the mixed-vintage and default-settings bugs.
  *
- * `run <name> --resume` is a continuation too, but it arrives as a flag rather than as a
- * run: its row is only located much further down, where it binds the worktree. That is
- * too late to choose the graph. Resolving it here is what makes every resume form — this
- * flag, `resume <id>`, approve, reject, parent auto-resume — reach the shared entry point
- * with a run in hand, and it also stops the id-based forms re-finding by name a run they
- * already identified exactly (#2645).
+ * Every resume form (`resume <id>`, approve, reject, answer, parent auto-resume) arrives
+ * with the run it continues already in hand; nothing here selects one.
  */
 async function locateContinuation(request: OwnedRunRequest): Promise<{
   continuationRun: WorkflowRun | undefined;
-  resumeLookupError: Error | undefined;
   continuation: ResolvedContinuation | undefined;
 }> {
-  const { host, cwd, workflowName, options } = request;
-  let resumeLookupError: Error | undefined;
-  let continuationRun = options.continuationRun;
-  if (continuationRun === undefined && options.resume === true) {
-    try {
-      continuationRun = (await host.deps.store.findResumableRun(workflowName, cwd)) ?? undefined;
-    } catch (error) {
-      resumeLookupError = error as Error;
-    }
-  }
+  const { host, cwd, options } = request;
+  const continuationRun = options.continuationRun;
 
   if (continuationRun) {
     await assertInheritedWorkflowCodebase(host, continuationRun.codebase_id);
@@ -244,7 +240,7 @@ async function locateContinuation(request: OwnedRunRequest): Promise<{
     continuationRun !== undefined
       ? await resolveContinuationWorkflow(host.deps, continuationRun, cwd)
       : undefined;
-  return { continuationRun, resumeLookupError, continuation };
+  return { continuationRun, continuation };
 }
 
 function matchesDetachedLaunch(
@@ -369,7 +365,10 @@ async function discoverRunWorkflows(
   if (workflowEntries.length === 0 && errors.length === 0) {
     // No manual cleanup here or anywhere else in this run: the owner reclaims
     // anything unadopted on the way out, which is the point of having one.
-    throw new Error('No workflows found in .archon/workflows/');
+    throw withSourceContext(
+      new Error('No workflows found in .archon/workflows/'),
+      options.discoveryCwd
+    );
   }
   return { workflowEntries, errors };
 }
@@ -386,6 +385,54 @@ function workflowNotFoundError(
     );
   }
   return unknownWorkflowError(workflowName, workflowEntries);
+}
+
+function workflowNotInSourceError(
+  workflowName: string,
+  sourceRoot: string,
+  resolvedScope: WorkflowSource | undefined
+): Error {
+  const root = resolve(sourceRoot);
+  const lines = [
+    `Workflow '${workflowName}' is not in --workflow-source ${root}: Archon looked in ` +
+      `${join(root, '.archon', 'workflows')} and found it only in the ${resolvedScope ?? 'another'} scope. ` +
+      'Nothing was started.',
+    ...checkoutRootHint(root),
+  ];
+  return new Error(lines.join('\n'));
+}
+
+/**
+ * Every refusal under an explicit --workflow-source names the directory searched, so a wrong
+ * path is visible whether or not the name exists in another scope.
+ */
+function withSourceContext(error: Error, sourceRoot: string | undefined): Error {
+  if (sourceRoot === undefined) return error;
+  const root = resolve(sourceRoot);
+  const lines = [
+    error.message,
+    '',
+    `--workflow-source ${root}: Archon looked in ${join(root, '.archon', 'workflows')}.`,
+    ...checkoutRootHint(root),
+  ];
+  return new Error(lines.join('\n'));
+}
+
+function checkoutRootHint(root: string): string[] {
+  const checkout = checkoutRootAbove(root);
+  return checkout === undefined
+    ? []
+    : [`--workflow-source takes the checkout root; did you mean ${checkout}?`];
+}
+
+/** The checkout whose `.archon/workflows` contains `path`, when the path sits inside one. */
+function checkoutRootAbove(path: string): string | undefined {
+  for (let dir = path; dirname(dir) !== dir; dir = dirname(dir)) {
+    if (basename(dir) === 'workflows' && basename(dirname(dir)) === '.archon') {
+      return dirname(dirname(dir));
+    }
+  }
+  return undefined;
 }
 
 function unknownWorkflowError(
@@ -418,9 +465,9 @@ export async function admitRunExecution(
   const pinnedEnabled = workflow.worktree?.enabled;
   assertWorktreePolicy(workflow, options);
 
-  // Default to worktree isolation unless --no-worktree or --resume. Workflow YAML
+  // Default to worktree isolation unless --no-worktree or a resume. Workflow YAML
   // `worktree.enabled` pins the decision — mismatches with CLI flags are rejected
-  // above, so by this point policy (if set) and flags agree. `--resume` reuses an
+  // above, so by this point policy (if set) and flags agree. A resume reuses its run's
   // existing worktree and takes precedence over the pinned policy. Decided here
   // (not at the worktree step) because --detach also needs it to decide whether to
   // pin a generated branch on the child.
@@ -441,7 +488,7 @@ export async function admitRunExecution(
   // --detach fork and any worktree/clone/AI cost — so a bad name, a missing required
   // input, or a malformed assignment costs nothing.
   //
-  // Skipped on --resume: the resumable run is not bound until the launch, and its inputs
+  // Skipped on a resume: the resumed run is not bound until the launch, and its inputs
   // were validated when its row was created. Re-gating with nothing supplied would make
   // every resume of a required-input run impossible.
   const resolvedInputs = options.resume ? undefined : resolveDeclaredInputs(workflow, options);

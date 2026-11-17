@@ -1,4 +1,5 @@
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 /** Shared handleMessage mocks and fixtures; importing registers the suites' module mocks. */
 import type { RunActor } from '../operations/run-authorization';
 import type { ProviderRegistry } from '@archon/provider-contract';
@@ -25,7 +26,7 @@ import {
   mockDeactivateSession,
   mockDeleteCodebase,
   mockDetachConversationProject,
-  mockFindResumableRunByParentConversation,
+  mockListResumableRunsByParentConversation,
   mockFindWorkflowRunsByIdPrefix,
   mockGetActiveSession,
   mockGetCodebase,
@@ -133,16 +134,17 @@ export const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
 
 export const mockLogger = createMockLogger();
 export const mockCloseRunLiveOwner = mock(() => Promise.resolve());
-const mockRunLiveOwner: RunLiveOwnerModule.RunLiveOwner = {
+const mockRunLiveOwner = (runId: string): RunLiveOwnerModule.RunLiveOwner => ({
+  lease: testRunOwnerLease(runId),
   close: mockCloseRunLiveOwner,
   isStopRequested: () => false,
   registerTerminationPreparation: () => () => undefined,
-};
-export const mockStartRunLiveOwner = mock<typeof RunLiveOwnerModule.startRunLiveOwner>(() =>
-  Promise.resolve(mockRunLiveOwner)
+});
+export const mockStartRunLiveOwner = mock<typeof RunLiveOwnerModule.startRunLiveOwner>(runId =>
+  Promise.resolve(mockRunLiveOwner(runId))
 );
 export const mockWithRunLiveOwner = mock<typeof RunLiveOwnerModule.withRunLiveOwner>(
-  async (_runId, _options, body) => body(mockRunLiveOwner)
+  async (runId, _options, body) => body(mockRunLiveOwner(runId))
 );
 mock.module('../services/run-live-owner', () => ({
   startRunLiveOwner: mockStartRunLiveOwner,
@@ -242,7 +244,7 @@ mock.module('@archon/workflows/router', () => ({
   suggestWorkflowNames: mock<typeof import('@archon/workflows/router').suggestWorkflowNames>(
     () => []
   ),
-  findWorkflow: mock((name: string, workflows: WorkflowDefinition[]) =>
+  resolveWorkflowName: mock((name: string, workflows: WorkflowDefinition[]) =>
     workflows.find(w => w.name === name)
   ),
 }));
@@ -491,7 +493,7 @@ mock.module('../db/workflows', () => ({
   getPausedWorkflowRun: mockGetPausedWorkflowRun,
   getWorkflowRun: mockGetWorkflowRunDb,
   getWorkflowRunForAttention: mockGetWorkflowRunDb,
-  findResumableRunByParentConversation: mockFindResumableRunByParentConversation,
+  listResumableRunsByParentConversation: mockListResumableRunsByParentConversation,
   updateWorkflowRun: mockUpdateWorkflowRun,
   resolveApprovalGate: mockResolveApprovalGate,
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
@@ -564,6 +566,7 @@ const { generatedTaskBranch, VerificationImageInventoryError, VERIFICATION_IMAGE
   await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
   generatedTaskBranch,
+  refuseUnappliedStartPoint: mock(async () => undefined),
   getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({
     state: 'NONE',
   })),
@@ -699,7 +702,7 @@ export function resetDispatchMocks(): void {
   mockFailPreparedRun.mockResolvedValue({ failed: true });
   mockExecuteWorkflow.mockClear();
   mockDispatchBackgroundWorkflow.mockClear();
-  mockFindResumableRunByParentConversation.mockClear();
+  mockListResumableRunsByParentConversation.mockClear();
   mockHydrateResumableRun.mockClear();
   mockInspectResumableRun.mockReset();
   mockInspectResumableRun.mockImplementation(() =>

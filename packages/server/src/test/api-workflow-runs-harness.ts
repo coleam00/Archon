@@ -360,8 +360,11 @@ type MockCodebase = {
 };
 export const mockGetCodebase = mock(async (_id: string) => null as null | MockCodebase);
 
+export const mockListCodebases = mock(
+  async (): Promise<unknown[]> => [{ default_cwd: '/tmp/project' }]
+);
 mock.module('@archon/core/db/codebases', () => ({
-  listCodebases: mock(async () => [{ default_cwd: '/tmp/project' }]),
+  listCodebases: mockListCodebases,
   getCodebase: mockGetCodebase,
   deleteCodebase: mock(async () => {}),
 }));
@@ -423,8 +426,83 @@ mock.module('@archon/core/db/workflows', () => ({
 
 export const mockCreateWorkflowEvent = mock(async (_event: unknown) => {});
 
+export const mockListEventsForRuns = mock(
+  async (runIds: readonly string[], _types: readonly string[]) =>
+    new Map<string, MockWorkflowEvent[]>(runIds.map(id => [id, []]))
+);
+export const mockGetItemRuns = mock<typeof import('@archon/core/db/items')['getItemRuns']>(
+  async () => null
+);
+const unusedItemWrite = mock(async () => {
+  throw new Error('Item writes are not used by the route tests');
+});
+export const mockGetItem = mock<typeof import('@archon/core/db/items')['getItem']>(
+  async () => null
+);
+mock.module('@archon/core/db/items', () => ({
+  getItemRuns: mockGetItemRuns,
+  getItem: mockGetItem,
+  ensureItem: unusedItemWrite,
+  ensureItemInProject: unusedItemWrite,
+  continuedItem: unusedItemWrite,
+}));
+// The item read lists the item's queued starts; without this it queries a real database.
+const realResourceStarts = { ...(await import('@archon/core/db/resource-starts')) };
+export const mockListQueuedItemStarts = mock<
+  typeof import('@archon/core/db/resource-starts')['listQueuedItemStarts']
+>(async () => []);
+mock.module('@archon/core/db/resource-starts', () => ({
+  ...realResourceStarts,
+  listQueuedItemStarts: mockListQueuedItemStarts,
+}));
+type ItemRulingsDb = typeof import('@archon/core/db/item-rulings');
+export const mockListItemRulings = mock<ItemRulingsDb['listItemRulings']>(async () => []);
+export const mockRecordItemRuling = mock<ItemRulingsDb['recordItemRuling']>(async () => {
+  throw new Error('Unexpected recordItemRuling');
+});
+export const mockWithdrawItemRuling = mock<ItemRulingsDb['withdrawItemRuling']>(async () => {
+  throw new Error('Unexpected withdrawItemRuling');
+});
+mock.module('@archon/core/db/item-rulings', () => ({
+  listItemRulings: mockListItemRulings,
+  recordItemRuling: mockRecordItemRuling,
+  withdrawItemRuling: mockWithdrawItemRuling,
+}));
+type ItemLinksDb = typeof import('@archon/core/db/item-links');
+mock.module('@archon/core/db/item-links', () => ({
+  listItemLinks: mock<ItemLinksDb['listItemLinks']>(async () => []),
+  recordItemLink: mock<ItemLinksDb['recordItemLink']>(async () => {
+    throw new Error('Unexpected recordItemLink');
+  }),
+  endItemLink: mock<ItemLinksDb['endItemLink']>(async () => {
+    throw new Error('Unexpected endItemLink');
+  }),
+}));
+
+type ItemAsksDb = typeof import('@archon/core/db/item-asks');
+export const mockListOpenItemAsks = mock<ItemAsksDb['listOpenItemAsks']>(async () => []);
+export const mockListItemAsks = mock<ItemAsksDb['listItemAsks']>(async () => []);
+export const mockGetItemAsk = mock<ItemAsksDb['getItemAsk']>(async () => null);
+export const mockAnswerItemAsk = mock<ItemAsksDb['answerItemAsk']>(async () => {
+  throw new Error('Unexpected answerItemAsk');
+});
+export const mockWithdrawItemAsk = mock<ItemAsksDb['withdrawItemAsk']>(async () => {
+  throw new Error('Unexpected withdrawItemAsk');
+});
+mock.module('@archon/core/db/item-asks', () => ({
+  openItemAsksForCompletedRun: mock(async () => {
+    throw new Error('Unexpected openItemAsksForCompletedRun');
+  }),
+  listOpenItemAsks: mockListOpenItemAsks,
+  listItemAsks: mockListItemAsks,
+  getItemAsk: mockGetItemAsk,
+  answerItemAsk: mockAnswerItemAsk,
+  withdrawItemAsk: mockWithdrawItemAsk,
+}));
+
 mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mockListWorkflowEvents,
+  listEventsForRuns: mockListEventsForRuns,
   createWorkflowEvent: mockCreateWorkflowEvent,
   listProviderEvents: mockListProviderEvents,
   PROVIDER_EVENT_ROW_TYPES,
@@ -520,6 +598,7 @@ export const MOCK_RUNNING_RUN = {
   codebase_id: 'cb-uuid-1',
   status: 'running',
   outcome: null,
+  completed_outcome: null,
   user_message: 'Deploy to staging',
   active_phase_started_at: null,
   started_at: NOW_DATE,

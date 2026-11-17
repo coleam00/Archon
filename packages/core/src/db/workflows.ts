@@ -44,8 +44,7 @@ export {
   listNotifiedTerminalRuns,
 } from './workflow-run-lists';
 export {
-  findResumableRun,
-  findResumableRunByParentConversation,
+  listResumableRunsByParentConversation,
   resumeWorkflowRun,
   recoverCancelledFanOutRun,
   releasePausedRunSlot,

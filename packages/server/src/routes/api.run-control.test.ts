@@ -289,8 +289,8 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     expect(response.status).toBe(404);
   });
 
-  test('returns 400 when run is not in failed status', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_RUNNING_RUN);
+  test('returns 400 with the refusal when the run cannot be resumed', async () => {
+    mockGetWorkflowRun.mockResolvedValue({ ...MOCK_RUNNING_RUN, status: 'completed' });
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-1/resume', {
       method: 'POST',
@@ -328,6 +328,34 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
     const cwd = mockExecuteWorkflow.mock.calls[0]?.[3];
     expect(cwd).toBe('/tmp/worktrees/run-uuid-4');
+  });
+
+  test('resumes a running run whose owner is gone pinned to the claim it checked', async () => {
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'conv-uuid-1',
+      platform_type: 'cli',
+      platform_conversation_id: 'cli-thread',
+    });
+    // No live owner endpoint exists for this id, so the operation finds the owner gone.
+    const runId = `run-killed-${crypto.randomUUID()}`;
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_RUNNING_RUN,
+      id: runId,
+      parent_conversation_id: null,
+      working_path: '/tmp/worktrees/run-killed',
+      metadata: { execution_claim: 'claim-checked' },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-killed/resume', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(200);
+    // The checked claim reaches the store with the live-owner lease the route opened.
+    const cursor = mockHydrateResumableRun.mock.calls[0]?.[2];
+    expect(cursor?.kind).toBe('ownerless');
+    if (cursor?.kind !== 'ownerless') throw new Error('expected an ownerless cursor');
+    expect(cursor.executionClaim).toBe('claim-checked');
+    expect(cursor.lease.runId).toBe(runId);
   });
 
   test('returns 409 with the refusal when the run resource is busy', async () => {

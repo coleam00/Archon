@@ -18,7 +18,7 @@ import {
 } from '@archon/core/operations/workflow-operations';
 import * as archonPaths from '@archon/paths';
 import { createLogger } from '@archon/paths';
-import type { WorkflowResumeCursor } from '@archon/workflows/store';
+import type { ResumeRequestCursor } from '@archon/workflows/store';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import {
   ContinuedItemProjectError,
@@ -41,12 +41,13 @@ export function getLog(): ReturnType<typeof createLogger> {
  * Default: creates worktree with auto-generated branch name (isolation by default).
  * --branch: explicit branch name for the worktree.
  * --no-worktree: opt out of isolation, run in live checkout.
- * --resume: reuse worktree from last failed run.
  * --from: override base branch (start-point for worktree).
  * --base: per-dispatch PR base + worktree cut-from override (wins over config).
  *
- * Mutually exclusive: --branch + --no-worktree, --resume + --branch,
- * --base + --no-worktree.
+ * Mutually exclusive: --branch + --no-worktree, --base + --no-worktree.
+ *
+ * `resume` with `continuationRun` is internal: `resume <id>`, approve, reject and answer
+ * continue the run they name through this command; no flag sets it.
  */
 export interface WorkflowRunOptions {
   branchName?: string;
@@ -94,12 +95,10 @@ export interface WorkflowRunOptions {
    * different graph. The whole run is passed, not just its capture path, because
    * `resolveContinuationWorkflow` needs the recorded digest to verify against.
    *
-   * Optional because `run <name> --resume` names the run indirectly; that form resolves the
-   * row itself, before discovery, and joins the same path. `resume` alone therefore never
-   * means live discovery.
+   * Every resume passes it; `resume` without it is refused, never live discovery.
    */
   continuationRun?: WorkflowRun;
-  continuationCursor?: WorkflowResumeCursor;
+  continuationCursor?: ResumeRequestCursor;
   quiet?: boolean;
   verbose?: boolean;
   /** Platform conversation ID (e.g. `cli-{ts}-{rand}`), NOT a DB UUID. */
@@ -262,7 +261,7 @@ export async function resolveRunTranscriptPath(
  * spelling, so the command is written here, where `archon workflow …` is what the operator
  * can actually type.
  */
-function cliRefusalText(error: unknown): string {
+export function cliRefusalText(error: unknown): string {
   return workflowOperationErrorMessage(error, CLI_WORKFLOW_SURFACE);
 }
 
@@ -300,7 +299,12 @@ export function withItemHint(error: unknown): unknown {
 }
 
 export function printJsonWriteError(runId: string, action: string, error: unknown): Promise<void> {
-  return writeJsonLine({ ok: false, runId, action, error: cliRefusalText(error) });
+  return writeJsonLine(jsonWriteError(runId, action, error));
+}
+
+/** The `{ ok: false }` value a write command reports for a run it could not act on. */
+export function jsonWriteError(runId: string, action: string, error: unknown) {
+  return { ok: false, runId, action, error: cliRefusalText(error) } as const;
 }
 
 export async function inheritedWorkflowCodebase(host: WorkflowHost, all?: boolean) {

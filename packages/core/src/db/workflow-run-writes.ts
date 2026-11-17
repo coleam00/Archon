@@ -15,7 +15,6 @@ import {
   validateWorkflowWaitMetadata,
   type ToolCallAttention,
   type WorkflowRun,
-  type WorkflowRunOutcome,
   type WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDialect, pool } from './connection';
@@ -99,7 +98,6 @@ export async function updateWorkflowRun(
   id: string,
   updates: Partial<Pick<WorkflowRun, 'metadata' | 'output_root'>> & {
     status?: Exclude<WorkflowRunStatus, 'completed' | 'failed' | 'cancelled'>;
-    outcome?: WorkflowRunOutcome;
     working_path?: string;
   }
 ): Promise<void> {
@@ -122,10 +120,6 @@ export async function updateWorkflowRun(
     const paramIndex = values.length + 1;
     values.push(JSON.stringify(mutableRunMetadata(updates.metadata)));
     setClauses.push(`metadata = ${dialect.jsonMerge('metadata', paramIndex)}`);
-  }
-  if (updates.outcome !== undefined) {
-    values.push(updates.outcome);
-    setClauses.push(`outcome = $${values.length}`);
   }
   if (updates.output_root !== undefined) {
     values.push(updates.output_root);
@@ -244,6 +238,17 @@ export async function updateWorkflowActivity(id: string): Promise<void> {
  * Delete terminal workflow runs older than the given number of days.
  * Returns the count of deleted runs.
  */
+/**
+ * A run that left asks still open on its item is kept: its events hold the record of the
+ * set (who answered, the settle), and its starter decides who may answer them. Cleanup
+ * deletes it once the set is closed. `id` is cast because `run_id` is TEXT and a run id
+ * is a UUID on PostgreSQL.
+ */
+const NO_OPEN_ASKS = `NOT EXISTS (
+  SELECT 1 FROM remote_agent_item_asks
+  WHERE remote_agent_item_asks.run_id = CAST(remote_agent_workflow_runs.id AS TEXT)
+    AND remote_agent_item_asks.closed_as IS NULL)`;
+
 export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }> {
   if (!Number.isInteger(olderThanDays) || olderThanDays < 0) {
     throw new Error(
@@ -260,6 +265,7 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
           WHERE status IN ('completed', 'failed', 'cancelled')
             AND started_at < ${cutoff}
             AND COALESCE(active_phase_started_at, started_at) < ${cutoff}
+            AND ${NO_OPEN_ASKS}
         )`,
         [olderThanDays]
       );
@@ -267,7 +273,8 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
         `DELETE FROM remote_agent_workflow_runs
          WHERE status IN ('completed', 'failed', 'cancelled')
            AND started_at < ${cutoff}
-           AND COALESCE(active_phase_started_at, started_at) < ${cutoff}`,
+           AND COALESCE(active_phase_started_at, started_at) < ${cutoff}
+           AND ${NO_OPEN_ASKS}`,
         [olderThanDays]
       );
       return { count: result.rowCount ?? 0 };
@@ -281,7 +288,9 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
 
 /**
  * Delete a workflow run and its associated events.
- * Only terminal runs (completed, failed, cancelled) can be deleted.
+ * Only terminal runs (completed, failed, cancelled) can be deleted, and not one that left
+ * asks still open: those asks would have no rule for who may answer them and no run to
+ * record the answer on.
  */
 export async function deleteWorkflowRun(id: string): Promise<void> {
   try {
@@ -297,6 +306,16 @@ export async function deleteWorkflowRun(id: string): Promise<void> {
       if (!TERMINAL_WORKFLOW_STATUSES.includes(check.rows[0].status as WorkflowRunStatus)) {
         throw new WorkflowRunGuardError(
           `Cannot delete workflow run in '${check.rows[0].status}' status — cancel it first`
+        );
+      }
+      const asks = await query<{ open: number | string }>(
+        'SELECT COUNT(*) AS open FROM remote_agent_item_asks WHERE run_id = $1 AND closed_as IS NULL',
+        [id]
+      );
+      const open = Number(asks.rows[0]?.open ?? 0);
+      if (open > 0) {
+        throw new WorkflowRunGuardError(
+          `Cannot delete workflow run ${id}: it left ${String(open)} open ask(s) on its item. Answer or withdraw them first (archon workflow answer --withdraw <ref>); archon workflow attention lists their refs.`
         );
       }
       await query('DELETE FROM remote_agent_workflow_events WHERE workflow_run_id = $1', [id]);

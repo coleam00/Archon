@@ -87,7 +87,7 @@ describe('cleanupContainerEnvironments', () => {
   });
 
   // The reaper reads the same lock the worktree sweeps use, so a failed run's
-  // container survives for `--resume` exactly as a paused one does.
+  // container survives for `workflow resume` exactly as a paused one does.
   test.each(['paused', 'failed'])('never reaps the container of a %s run', async status => {
     mockGetLiveRunOwningEnv.mockResolvedValue({ id: 'run-1', status });
     const report = await cleanupContainerEnvironments(7);

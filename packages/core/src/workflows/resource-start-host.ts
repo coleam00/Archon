@@ -1,6 +1,8 @@
-import type { QueuedResourceStartInspection } from '@archon/workflows/resource-start-store';
+import type {
+  PendingStartBindingInspection,
+  QueuedResourceStartInspection,
+} from '@archon/workflows/resource-start-store';
 import { createRunWorktreeSetupExecutor } from './worktree-setup';
-import type { WorktreeSetupExecutor } from '@archon/isolation';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import {
   prepareRunAiConfiguration,
@@ -22,11 +24,8 @@ import {
  * fence, and recovery stay behind the supplied store; nothing here declares an owner dead.
  */
 import { randomUUID } from 'node:crypto';
-import type { OwnedWorktree } from '@archon/workflows/schemas/workflow-run';
 import { resolve } from 'node:path';
-import { toBranchName, toRepoPath } from '@archon/git';
-import { getIsolationProvider, recordWorktreeAdoption } from '@archon/isolation';
-import { createLogger, canonicalizeProjectPath, projectKeyForCodebase } from '@archon/paths';
+import { createLogger, canonicalizeProjectPath } from '@archon/paths';
 import type { WorkflowEngineSubmitInput } from '@archon/workflows/engine-port';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
@@ -47,6 +46,8 @@ import {
   RESOURCE_START_METADATA_KEY,
   readResourceStartReceiptId,
   ADMISSION_CHECKOUT_GUARD_METADATA_KEY,
+  CHECKOUT_HANDOFF_METADATA_KEY,
+  type CheckoutHandoffRunMetadata,
   type PreparedWorkflowLaunch,
   type ResourceStartBindingIntent,
   type ResourceStartDisposition,
@@ -71,11 +72,10 @@ import { loadWorkflowRunConfigFile, unsealWorkflowRunConfig } from '../config/ru
 import type { Codebase } from '../schemas/codebase';
 import type { WorkflowHost } from './host-store';
 import { registerRepository } from '../handlers/clone';
-import { ensureIsolationConfigured } from '../orchestrator/dispatch/isolation-resolver';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
-import { createRegisteredWorktree, type RegisteredWorktreeInput } from './registered-worktree';
+import { executionLane, handoffIsolation } from './resource-start-lanes';
 
 const log = createLogger('resource-start-host');
 
@@ -99,19 +99,6 @@ async function findOrRegisterCodebase(host: WorkflowHost, cwd: string): Promise<
     throw new Error(`Cannot prepare a resource start from '${cwd}': register the project first.`);
   }
   return registered;
-}
-
-/**
- * The project a start from `cwd` runs in, or null when none is registered there yet.
- * Preparation resolves `cwd` the same way and registers an unknown checkout as a new
- * project, so null is never a project that already exists.
- */
-export async function registeredStartProjectKey(
-  host: WorkflowHost,
-  cwd: string
-): Promise<string | null> {
-  const { codebase } = await resolveCodebaseForPath(cwd, host.records.codebases);
-  return codebase ? projectKeyForCodebase(codebase, codebase.default_cwd) : null;
 }
 
 async function selectBindingWorkflow(
@@ -239,13 +226,15 @@ function bindingRunMetadata(
   sourceRecord: JsonValue,
   origin: ResourceStartRunMetadata,
   inputs: Record<string, JsonValue>,
-  preparedAi: PreparedRunAiConfiguration
+  preparedAi: PreparedRunAiConfiguration,
+  handoff: CheckoutHandoffRunMetadata | undefined
 ): Record<string, JsonValue> {
   return {
     [RUN_AI_CONFIGURATION_METADATA_KEY]: preparedAi.aiConfigurationSnapshot,
     [WORKFLOW_SOURCE_METADATA_KEY]: sourceRecord,
     [RESOURCE_START_METADATA_KEY]: { ...origin },
     [ADMISSION_CHECKOUT_GUARD_METADATA_KEY]: workflow.mutates_checkout !== false,
+    ...(handoff ? { [CHECKOUT_HANDOFF_METADATA_KEY]: { ...handoff } } : {}),
     ...authoredInputsMetadata(inputs),
     ...(preparedAi.runConfigMetadata
       ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: preparedAi.runConfigMetadata }
@@ -281,7 +270,15 @@ async function prepareBinding(
     const inputs = resolveBindingInputs(intent, workflow);
 
     const codebase = await findOrRegisterCodebase(host, cwd);
-    const isolation = resolveBindingIsolation(intent.launch.isolation, workflow, codebase);
+    let isolation: PreparedWorkflowLaunch['execution']['isolation'];
+    let handoff: CheckoutHandoffRunMetadata | undefined;
+    if (intent.checkoutFrom) {
+      const chosen = handoffIsolation(intent.checkoutFrom, workflow, codebase);
+      isolation = chosen.isolation;
+      handoff = { ...intent.checkoutFrom, lane: chosen.lane };
+    } else {
+      isolation = resolveBindingIsolation(intent.launch.isolation, workflow, codebase);
+    }
 
     source = await finalizeWorkflowSource(host.deps, source, {
       cwd,
@@ -311,7 +308,8 @@ async function prepareBinding(
           preparedWorkflowSourceRecord(source),
           origin,
           inputs,
-          preparedAi
+          preparedAi,
+          handoff
         ),
         ...(isolation.kind === 'in-place' ? { working_path: cwd } : {}),
       },
@@ -403,42 +401,90 @@ function receiptIdOfLaunch(launch: PreparedWorkflowLaunch | undefined): string |
 }
 
 /**
- * One host pass: prepare this host's pending receipt bindings, then admit its queued
- * requests while their slots have capacity. Every admitted request is handed to the
- * host. A damaged receipt is reported after the pass instead of stopping it. Safe to run concurrently with other hosts and processes: preparation and
- * admission are claimed atomically by the store.
+ * Prepare a page of this host's pending bindings, or all of `receiptIds` page by page (a
+ * page is read again until it brings nothing untried), and start each one admitted now.
+ * Failures are collected, not thrown; a failed binding is not retried here.
+ */
+async function preparePendingBindings(
+  host: ResourceStartHost,
+  failures: ResourceStartDrainFailure[],
+  receiptIds?: readonly string[]
+): Promise<void> {
+  const PAGE = 100;
+  const tried = new Set<string>();
+  const key = (binding: PendingStartBindingInspection) =>
+    'document' in binding ? binding.document : `${binding.receiptId}\n${binding.bindingId}`;
+  for (let offset = 0; offset < (receiptIds?.length ?? 1); ) {
+    const page = receiptIds?.slice(offset, offset + PAGE);
+    const query = { hostId: host.hostId, receiptIds: page, limit: PAGE };
+    const listed = await host.deps.store.listPendingStartBindings(query);
+    const fresh = listed.filter(binding => !tried.has(key(binding)));
+    for (const binding of fresh) {
+      tried.add(key(binding));
+      await preparePendingBinding(host, failures, binding);
+    }
+    if (!page || listed.length < PAGE || fresh.length === 0) offset += PAGE;
+  }
+}
+
+async function preparePendingBinding(
+  host: ResourceStartHost,
+  failures: ResourceStartDrainFailure[],
+  binding: PendingStartBindingInspection
+): Promise<void> {
+  if ('document' in binding) return void failures.push({ error: binding.error });
+  if (!binding.intent) return;
+  const { receiptId, bindingId } = binding;
+  const identity = { receiptId, bindingId, ownerId: randomUUID() };
+  if (!(await host.deps.store.claimStartBindingPreparation(identity))) return;
+  let disposition: ResourceStartDisposition;
+  try {
+    disposition = await prepareClaimedBinding(host, binding.intent, identity);
+  } catch (error) {
+    return void failures.push({ receiptId, error });
+  }
+  if (disposition.status === 'admitted')
+    await startAdmittedRequest(host, failures, disposition.requestId, receiptId);
+}
+
+async function startAdmittedRequest(
+  host: ResourceStartHost,
+  failures: ResourceStartDrainFailure[],
+  requestId: string,
+  receiptId: string | undefined
+): Promise<void> {
+  try {
+    await host.startAdmitted(requestId);
+  } catch (error) {
+    failures.push({ receiptId, error });
+  }
+}
+
+/**
+ * Prepare every binding of `receiptIds` on this host and start those admitted now, leaving
+ * the host's other work to its own drain: what an ending process does for the starts it caused.
+ */
+export async function startReceiptBindings(
+  host: ResourceStartHost,
+  receiptIds: ReadonlySet<string>
+): Promise<void> {
+  const failures: ResourceStartDrainFailure[] = [];
+  await preparePendingBindings(host, failures, [...receiptIds]);
+  if (failures.length > 0) throw new ResourceStartDrainError(failures);
+}
+
+/**
+ * One host pass: prepare a page of this host's pending receipt bindings, then admit its
+ * queued requests while their slots have capacity, handing each admitted one to the host.
+ * A damaged receipt is reported after the pass. Safe to run concurrently with other hosts
+ * and processes: the store claims preparation and admission atomically.
  */
 export async function drainResourceStartHost(host: ResourceStartHost): Promise<void> {
   const failures: ResourceStartDrainFailure[] = [];
-  const start = async (requestId: string, receiptId?: string): Promise<void> => {
-    try {
-      await host.startAdmitted(requestId);
-    } catch (error) {
-      failures.push({ receiptId, error });
-    }
-  };
+  const start = (requestId: string, receiptId?: string): Promise<void> =>
+    startAdmittedRequest(host, failures, requestId, receiptId);
 
-  for (const binding of await host.deps.store.listPendingStartBindings({ hostId: host.hostId })) {
-    if ('document' in binding) {
-      failures.push({ error: binding.error });
-      continue;
-    }
-    if (!binding.intent) continue;
-    const identity = {
-      receiptId: binding.receiptId,
-      bindingId: binding.bindingId,
-      ownerId: randomUUID(),
-    };
-    if (!(await host.deps.store.claimStartBindingPreparation(identity))) continue;
-    let disposition: ResourceStartDisposition;
-    try {
-      disposition = await prepareClaimedBinding(host, binding.intent, identity);
-    } catch (error) {
-      failures.push({ receiptId: binding.receiptId, error });
-      continue;
-    }
-    if (disposition.status === 'admitted') await start(disposition.requestId, binding.receiptId);
-  }
+  await preparePendingBindings(host, failures);
 
   const queued = await host.deps.store.listQueuedResourceStartsForHost(host.hostId);
   const drain = async (resource: string): Promise<void> => {
@@ -490,89 +536,6 @@ function queuedDrainResources(
     });
   }
   return [...new Set(queued.flatMap(request => ('error' in request ? [] : [request.resource])))];
-}
-
-type WorktreeLaneSpec = Extract<
-  PreparedWorkflowLaunch['execution']['isolation'],
-  { kind: 'worktree' }
->;
-
-interface WorktreeLane {
-  cwd: string;
-  envId: string;
-  cutFromCommit?: string;
-  ownedWorktree?: OwnedWorktree;
-}
-
-/** An explicit branch names one reusable checkout, so repeated starts share it. */
-async function adoptBranchWorktree(
-  host: WorkflowHost,
-  lane: WorktreeLaneSpec,
-  codebase: Codebase
-): Promise<WorktreeLane | undefined> {
-  if (!lane.branch) return undefined;
-  const existing = await host.records.isolation.findActiveByWorkflow(
-    codebase.id,
-    'task',
-    lane.branch
-  );
-  if (!existing || !(await getIsolationProvider().healthCheck(existing.working_path)))
-    return undefined;
-  await recordWorktreeAdoption(host.records.isolation, existing, codebase.default_cwd);
-  return { cwd: existing.working_path, envId: existing.id };
-}
-
-function worktreeLaneRequest(
-  lane: WorktreeLaneSpec,
-  codebase: Codebase,
-  identifier: string
-): RegisteredWorktreeInput['request'] {
-  const fromBranch = lane.fromBranch ? toBranchName(lane.fromBranch) : undefined;
-  const defaultBranch = codebase.default_branch?.trim();
-  return {
-    workflowType: 'task',
-    identifier: lane.branch ?? identifier,
-    taskBranch:
-      lane.branch || fromBranch
-        ? {
-            kind: 'new',
-            ...(lane.branch ? { branch: toBranchName(lane.branch) } : {}),
-            ...(fromBranch ? { fromBranch } : {}),
-          }
-        : undefined,
-    baseBranch: defaultBranch ? toBranchName(defaultBranch) : undefined,
-    baseOverride: lane.baseOverride ? toBranchName(lane.baseOverride) : undefined,
-    codebaseId: codebase.id,
-    codebaseName: codebase.name,
-    canonicalRepoPath: toRepoPath(codebase.default_cwd),
-    description: `Resource start: ${identifier}`,
-  };
-}
-
-async function worktreeLane(
-  host: WorkflowHost,
-  lane: WorktreeLaneSpec,
-  codebase: Codebase,
-  identifier: string,
-  platformType: string,
-  userId: string | undefined,
-  setupExecutor: WorktreeSetupExecutor
-): Promise<WorktreeLane> {
-  ensureIsolationConfigured();
-  const adopted = await adoptBranchWorktree(host, lane, codebase);
-  if (adopted) return adopted;
-  const created = await createRegisteredWorktree(host.records.isolation, {
-    request: worktreeLaneRequest(lane, codebase, identifier),
-    setupExecutor,
-    createdByPlatform: platformType,
-    ...(userId ? { createdByUserId: userId } : {}),
-  });
-  return {
-    cwd: created.env.workingPath,
-    envId: created.envId,
-    ...(created.ownedWorktree ? { ownedWorktree: created.ownedWorktree } : {}),
-    ...(created.cutFromCommit !== undefined ? { cutFromCommit: created.cutFromCommit } : {}),
-  };
 }
 
 export interface StartAdmittedResourceStartInput {
@@ -690,23 +653,14 @@ async function prepareAdmittedResourceSubmission(
   );
   await assertRunCredentials(deps, preparedAiConfiguration, { cwd: launch.execution.cwd });
   const lane = launch.execution.isolation;
-  const execution =
-    lane.kind === 'worktree'
-      ? await worktreeLane(
-          host,
-          lane,
-          codebase,
-          `${run.workflow_name}-${run.id.slice(0, 8)}`,
-          platform.getPlatformType(),
-          run.user_id ?? undefined,
-          createRunWorktreeSetupExecutor(host.deps, run, preparedAiConfiguration.config)
-        )
-      : {
-          cwd: launch.execution.cwd,
-          envId: undefined,
-          cutFromCommit: undefined,
-          ownedWorktree: undefined,
-        };
+  const execution = await executionLane(host, {
+    run,
+    lane,
+    codebase,
+    cwd: launch.execution.cwd,
+    platformType: platform.getPlatformType(),
+    setupExecutor: createRunWorktreeSetupExecutor(host.deps, run, preparedAiConfiguration.config),
+  });
   if (run.conversation_id)
     await host.records.conversations.updateConversation(run.conversation_id, {
       cwd: execution.cwd,

@@ -30,9 +30,8 @@ import { pathToFileURL } from 'node:url';
 import { sealWorkflowRunConfig } from '@archon/core/config';
 import {
   isContinueSubcommand,
-  rejectConfigOnContinue,
   rejectConfigOutsideRun,
-  rejectModelOnContinue,
+  rejectRunFlagsOnContinue,
 } from './dispatch-guards';
 import { loadCliEnv } from './load-cli-env';
 
@@ -462,22 +461,31 @@ describe('workflow model arguments', () => {
     ['workflow', 'respond', 'run-1', 'approve'],
     ['workflow', 'answer', 'run-1', '--occurrence', 'x'],
   ]) {
-    it(`rejects --model on ${args[0]} ${args[1]}`, () => {
+    it(`rejects run-only flags on ${args[0]} ${args[1]}`, () => {
       // Pure pre-dispatch argv guard — no I/O, so asserted in-process instead
       // of through a full interpreter startup. A defined message is what makes
       // main() print to stderr and exit 1.
-      const message = rejectModelOnContinue(args[1], 'large=opus');
       expect(isContinueSubcommand(args[1])).toBe(true);
-      expect(message).toBeDefined();
-      expect(message).toContain('--model cannot be used when continuing an existing workflow run');
-      expect(message).toContain('keeps the model bindings it started with');
+      for (const [values, flag, kept] of [
+        [{ model: 'large=opus' }, '--model', 'the model bindings'],
+        [{ input: ['ticket=1'] }, '--input', 'the inputs'],
+        [{ base: 'main' }, '--base', 'the base branch'],
+      ] as const) {
+        const message = rejectRunFlagsOnContinue(args[1], values);
+        expect(message).toContain(
+          `${flag} cannot be used when continuing an existing workflow run`
+        );
+        expect(message).toContain(`keeps ${kept} it started with`);
+      }
     });
   }
 
   it('does not classify fresh runs or queries as continuations', () => {
     for (const subcommand of ['run', 'list', 'attention', undefined]) {
       expect(isContinueSubcommand(subcommand)).toBe(false);
-      expect(rejectModelOnContinue(subcommand, 'large=foo')).toBeUndefined();
+      expect(
+        rejectRunFlagsOnContinue(subcommand, { model: 'large=foo', input: ['a=1'], base: 'main' })
+      ).toBeUndefined();
     }
   });
 });
@@ -675,7 +683,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
             );
             const message =
               flag === 'config'
-                ? 'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
+                ? 'Error: --config can only be used with workflow run, trigger fire, trigger schedule, or pack bindings.'
                 : 'Error: --config-from-run can only be used with workflow run.';
             expect(result.status, result.stderr).toBe(1);
             if (json) {
@@ -699,6 +707,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
     for (const subcommand of ['fire', 'schedule']) {
       expect(rejectConfigOutsideRun('trigger', subcommand, 'config.yaml')).toBeUndefined();
     }
+    expect(rejectConfigOutsideRun('pack', 'bindings', 'run.yaml')).toBeUndefined();
   });
 
   it('parses one local path', () => {
@@ -709,20 +718,6 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
       strict: true,
     });
     expect(parsed.values.config).toBe('./config.minimax.yaml');
-  });
-
-  it('rejects a new config on run --resume before reading it', () => {
-    // Pure pre-dispatch argv guard — no I/O, so asserted in-process.
-    const message = rejectConfigOnContinue(true, './does-not-exist.yaml');
-    expect(message).toBeDefined();
-    expect(message).toContain('--config cannot be used when continuing');
-  });
-
-  it('names --config-from-run when it is the flag passed on run --resume', () => {
-    expect(rejectConfigOnContinue(true, undefined, 'paused-run')).toBe(
-      'Error: --config-from-run cannot be used when continuing an existing workflow run. ' +
-        'The run keeps the config it started with.'
-    );
   });
 
   it('refuses --config-from-run on the trigger commands that take --config', () => {
@@ -738,7 +733,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
     // Pure pre-dispatch argv guard — no I/O, so asserted in-process.
     const message = rejectConfigOutsideRun('chat', undefined, './does-not-exist.yaml');
     expect(message).toBe(
-      'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
+      'Error: --config can only be used with workflow run, trigger fire, trigger schedule, or pack bindings.'
     );
   });
 
@@ -793,16 +788,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
     try {
       const result = spawnSync(
         process.execPath,
-        [
-          CLI_ENTRY,
-          'workflow',
-          'run',
-          'x',
-          '--dry-run',
-          '--resume',
-          '--internal-detached-run-config',
-          payload,
-        ],
+        [CLI_ENTRY, 'workflow', 'run', 'x', '--dry-run', '--internal-detached-run-config', payload],
         {
           cwd: repo,
           encoding: 'utf8',
@@ -818,7 +804,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
       );
       expect(result.status).toBe(1);
       expect(result.stderr).not.toContain('could not be decrypted');
-      expect(result.stderr).toContain('--resume and --config are mutually exclusive');
+      expect(result.stderr).toContain("Workflow 'x' not found");
     } finally {
       await removeTempTree(repo);
     }
@@ -902,7 +888,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
       // of through a full interpreter startup.
       const message = rejectConfigOutsideRun(args[0], args[1], './config.minimax.yaml');
       expect(message).toBe(
-        'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
+        'Error: --config can only be used with workflow run, trigger fire, trigger schedule, or pack bindings.'
       );
     });
   }
@@ -1752,7 +1738,9 @@ describe('pre-dispatch gates --json error envelope', () => {
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
-    expect(envelope().error).toContain('Directory does not exist: /does/not/exist');
+    // The path is printed as the platform resolves it (a drive letter on Windows), so only
+    // the refusal itself is asserted.
+    expect(envelope().error).toContain('Directory does not exist');
   });
 
   it('emits { ok: false } on stdout when outside a git repository', () => {
@@ -1886,20 +1874,6 @@ describe('workflow run flag conflicts', () => {
       'base with no-worktree',
       ['--no-worktree', '--base', 'main'],
       'Error: --base has no effect with --no-worktree.\nRemove --base or drop --no-worktree.',
-    ],
-    [
-      'resume with branch',
-      ['--resume', '--branch', 'b'],
-      'Error: --resume and --branch are mutually exclusive.\n' +
-        '  --resume reuses the existing worktree from the failed run.\n' +
-        '  Remove --branch when using --resume.',
-    ],
-    [
-      'workflow-source with resume',
-      ['--workflow-source', tmpdir(), '--resume'],
-      'Error: --workflow-source and --resume are mutually exclusive.\n' +
-        '  A resumed run executes the source it captured when it started.\n' +
-        '  Drop --workflow-source, or start a fresh run to pick up new source.',
     ],
     [
       'workflow-source with container',

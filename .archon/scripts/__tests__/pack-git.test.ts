@@ -5,12 +5,11 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { join } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import { urlRepo } from '../../workflows/sdlc/.shared/remote';
-import { scratchDir } from '../../workflows/sdlc/.shared/scratch';
 import { PR, forgePrRecord, gitCheckout, packScriptRunner, scriptApiPreload } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
@@ -42,7 +41,7 @@ describe('remote identity', () => {
 
 describe('the default branch snapshot', () => {
   it('returns no maintainers for a confirmed absent policy file', () => {
-    const cwd = gitCheckout({}, track);
+    const cwd = gitCheckout(track);
     const run = spawnSync(process.execPath, ['--preload', scriptApiPreload(), '-e', `
       import { readMaintainers } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/maintainers.ts', import.meta.url).href)};
       console.log(JSON.stringify([...readMaintainers(${JSON.stringify(PR.repo)})]));
@@ -52,7 +51,7 @@ describe('the default branch snapshot', () => {
   });
 
   it('fetches fresh objects when the remote advances at fetch without changing tracking refs or FETCH_HEAD', () => {
-    const cwd = gitCheckout({}, track);
+    const cwd = gitCheckout(track);
     const stale = git(cwd, 'rev-parse', 'refs/remotes/upstream/dev');
     git(cwd, 'fetch', '-q', 'upstream', 'dev');
     const fetchHead = readFileSync(join(cwd, '.git/FETCH_HEAD'), 'utf8');
@@ -91,7 +90,7 @@ describe('the default branch snapshot', () => {
 
   it.each(['switch before fetch', 'advance after fetch'])(
     'binds the default branch identity to the fetched snapshot: %s', change => {
-      const cwd = gitCheckout({}, track);
+      const cwd = gitCheckout(track);
       const remote = git(cwd, 'remote', 'get-url', 'upstream');
       const stale = git(cwd, 'rev-parse', 'refs/remotes/upstream/dev');
       const fresh = git(cwd, 'rev-parse', 'HEAD');
@@ -138,7 +137,7 @@ describe('the default branch snapshot', () => {
 // pushHead is publish-pr's push; a driver runs it alone against real git remotes.
 describe('pushHead', () => {
   it('pushes to the remote that holds the head repository, whatever it is named, and reads it back', () => {
-    const cwd = gitCheckout({}, track);
+    const cwd = gitCheckout(track);
     git(cwd, 'remote', 'add', 'origin', 'https://github.com/someone/fork.git');
     const run = runPackScript('../../scripts/__tests__/push-pr-head', { cwd, inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) } });
     expect(run.code).toBe(0);
@@ -146,7 +145,7 @@ describe('pushHead', () => {
   });
 
   it('refuses a push the remote rejects instead of skipping it', () => {
-    const cwd = gitCheckout({}, track);
+    const cwd = gitCheckout(track);
     git(cwd, 'push', '-q', 'upstream', 'feature');
     git(cwd, 'commit', '-q', '--allow-empty', '-m', 'local');
     git(cwd, 'checkout', '-q', '--detach', 'HEAD~2');
@@ -160,68 +159,10 @@ describe('pushHead', () => {
   });
 
   it('refuses when two remotes claim the same repository', () => {
-    const cwd = gitCheckout({}, track);
+    const cwd = gitCheckout(track);
     git(cwd, 'remote', 'add', 'mirror', `git@${PR.repo.host}:${PR.repo.path}.git`);
     const run = runPackScript('../../scripts/__tests__/push-pr-head', { cwd, inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) } });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('ambiguous');
-  });
-});
-
-describe('prune-scratch', () => {
-  it('removes a symlinked scratch directory as a link, leaving its target', () => {
-    const cwd = gitCheckout({}, track);
-    const artifacts = track(mkdtempSync(join(tmpdir(), 'archon-scratch-')));
-    const target = track(mkdtempSync(join(tmpdir(), 'archon-scratch-target-')));
-    writeFileSync(join(target, 'keep.txt'), 'kept');
-    // A junction needs no privilege on Windows; elsewhere the type is ignored.
-    mkdirSync(scratchDir(artifacts, ''), { recursive: true });
-    symlinkSync(target, scratchDir(artifacts, 'code'), 'junction');
-
-    const run = spawnSync(process.execPath, ['--preload', scriptApiPreload(), join(import.meta.dir, '../../workflows/sdlc/review/scripts/prune-scratch.ts')], {
-      cwd,
-      env: { ...process.env, ARTIFACTS_DIR: artifacts },
-      encoding: 'utf8',
-    });
-    expect(run.status).toBe(0);
-    expect(existsSync(scratchDir(artifacts, 'code'))).toBe(false);
-    expect(existsSync(join(target, 'keep.txt'))).toBe(true);
-  });
-
-  it("removes the review's scratch worktrees and nothing else, not even simplify's", () => {
-    const cwd = gitCheckout({}, track);
-    const artifacts = track(mkdtempSync(join(tmpdir(), 'archon-scratch-')));
-    const scratch = scratchDir(artifacts, 'code');
-    mkdirSync(scratch, { recursive: true });
-    git(cwd, 'worktree', 'add', '-q', '--detach', join(scratch, 'one'), 'HEAD');
-    const oneSpellings = [join(scratch, 'one'), realpathSync.native(join(scratch, 'one'))].map(path =>
-      path.split(sep).join('/')
-    );
-    const simplify = scratchDir(artifacts, 'simplify');
-    mkdirSync(simplify, { recursive: true });
-    git(cwd, 'worktree', 'add', '-q', '--detach', join(simplify, 'live'), 'HEAD');
-    const user = track(mkdtempSync(join(tmpdir(), 'archon-user-wt-')));
-    git(cwd, 'worktree', 'add', '-q', '--detach', join(user, 'mine'), 'HEAD');
-    writeFileSync(join(cwd, 'untracked.txt'), 'kept');
-
-    const run = spawnSync(process.execPath, ['--preload', scriptApiPreload(), join(import.meta.dir, '../../workflows/sdlc/review/scripts/prune-scratch.ts')], {
-      cwd,
-      env: { ...process.env, ARTIFACTS_DIR: artifacts },
-      encoding: 'utf8',
-    });
-    expect(run.status).toBe(0);
-    // git prints a worktree's long, forward-slash path; tmpdir() can be a symlink (macOS)
-    // or an 8.3 short name (Windows). Every path is compared in both spellings.
-    const slashes = (path: string): string => path.split(sep).join('/');
-    const spellings = (path: string): string[] => [slashes(path), slashes(realpathSync.native(path))];
-    const listed = git(cwd, 'worktree', 'list', '--porcelain')
-      .split('\n')
-      .filter(line => line.startsWith('worktree '))
-      .map(line => slashes(line.slice('worktree '.length)));
-    expect(listed.some(path => oneSpellings.includes(path))).toBe(false);
-    expect(listed.some(path => spellings(join(user, 'mine')).includes(path))).toBe(true);
-    expect(listed.some(path => spellings(join(simplify, 'live')).includes(path))).toBe(true);
-    expect(existsSync(scratch)).toBe(false);
-    expect(existsSync(join(cwd, 'untracked.txt'))).toBe(true);
   });
 });

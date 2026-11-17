@@ -5,7 +5,7 @@ import {
   type IWorkflowEngine,
   type WorkflowRunSubscription,
 } from '@archon/workflows/engine-port';
-import { WorkflowResourceBusyError } from '@archon/workflows/store';
+import { leasedResumeCursor, WorkflowResourceBusyError } from '@archon/workflows/store';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import { isTerminalRunStatus, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
@@ -269,7 +269,7 @@ async function driveRun(
 ): Promise<RunResult> {
   const { resumable } = launch;
   if (launch.request.options.resume && resumable) {
-    return resumeRun(launch, resumable, onExecutionClaimed, prepareExecution);
+    return resumeRun(launch, lease, resumable, onExecutionClaimed, prepareExecution);
   }
   return submitRun(launch, lease, commonRunOptions(launch, onExecutionClaimed));
 }
@@ -320,6 +320,7 @@ function commonRunOptions(
 
 async function resumeRun(
   launch: ForegroundLaunch,
+  lease: OwnedRunLease,
   resumable: WorkflowRun,
   onExecutionClaimed: OnExecutionClaimed,
   prepareExecution: Parameters<IWorkflowEngine['resume']>[0]['prepareExecution']
@@ -344,7 +345,7 @@ async function resumeRun(
       legacyWorkflow: admission.workflow,
       userMessage: request.userMessage,
       run: resumable,
-      cursor: request.options.continuationCursor,
+      cursor: leasedResumeCursor(request.options.continuationCursor, lease.ownerLease()),
       options: prepareAdmitted ? undefined : commonRunOptions(launch, onExecutionClaimed),
       ...(prepareAdmitted ? { prepareExecution: prepareAdmitted } : {}),
     });
@@ -399,8 +400,8 @@ function nothingToResumeError(launch: ForegroundLaunch, resumable: WorkflowRun):
   const { workflowName } = launch.request;
   // `--branch` is only runnable when the prior run used worktree isolation:
   // folder projects reject worktree options outright, and an in-place repo run
-  // cannot be relaunched onto the branch its own checkout holds. A stale-running
-  // orphan cannot be superseded until it is released, so name that step first.
+  // cannot be relaunched onto the branch its own checkout holds. A run still marked
+  // running cannot be superseded until it is released, so name that step first.
   const worktreeBranch = launch.isFolderCodebase ? undefined : launch.resumeBranch;
   const unblock = isTerminalRunStatus(resumable.status)
     ? ''

@@ -94,6 +94,7 @@ export const {
   createWorkflowOperations,
   AbandonOwnerNotStoppedError,
   CancelRefusedError,
+  ResumeRefusedError,
   describeAbandonOwner,
   assertAnswerable,
   assertApprovable,
@@ -192,6 +193,7 @@ export function makePausedRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun
     codebase_id: 'cb-1',
     status: 'paused',
     outcome: null,
+    completed_outcome: null,
     user_message: 'test',
     metadata: {
       approval: {

@@ -151,7 +151,7 @@ const UNSUPPORTED_PATH_CONTINUATION_SOURCE = String.raw`(?:\.(?=[\w.*\[])|\[|\?\
 
 /**
  * The canonical text of an output reference, for messages about a reference that was
- * parsed into parts (a `when:` atom, `outcome_field`). Template scanners already hold
+ * parsed into parts (a `when:` atom, `returns.outcome`). Template scanners already hold
  * the matched text and use that instead.
  */
 export function outputRefText(

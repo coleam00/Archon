@@ -44,10 +44,13 @@ test('local checkout occupancy takes precedence, including for read-only starts'
     expect(
       resourceStartBlocker(
         { ...slot(), heldCheckouts: local, foreignHeldCheckouts: foreign },
-        incoming
+        incoming,
+        'host'
       )
     ).toEqual({ kind: 'run', id: 'local' });
-  expect(resourceStartBlocker({ ...slot(), foreignHeldCheckouts: foreign }, readonly)).toBeNull();
+  expect(
+    resourceStartBlocker({ ...slot(), foreignHeldCheckouts: foreign }, readonly, 'host')
+  ).toBeNull();
 });
 test('foreign observations retain the first holder and match registration workflow identity at its path', () => {
   const foreign = heldCheckouts(
@@ -61,15 +64,21 @@ test('foreign observations retain the first holder and match registration workfl
     ]
   );
   for (const incoming of [launch(), launch(true, 'reusable')])
-    expect(resourceStartBlocker({ ...slot(), foreignHeldCheckouts: foreign }, incoming)).toEqual({
+    expect(
+      resourceStartBlocker({ ...slot(), foreignHeldCheckouts: foreign }, incoming, 'host')
+    ).toEqual({
       kind: 'run',
       id: 'oldest',
     });
   expect(
-    resourceStartBlocker({ ...slot(), foreignHeldCheckouts: foreign }, launch(true, 'elsewhere'))
+    resourceStartBlocker(
+      { ...slot(), foreignHeldCheckouts: foreign },
+      launch(true, 'elsewhere'),
+      'host'
+    )
   ).toBeNull();
 });
-test('drains reserve local checkouts even for read-only admissions and respect the foreign-host FIFO fence', () => {
+test('drains reserve local checkouts even for read-only admissions and pass over other hosts', () => {
   const readonly = launch(false),
     guarded = launch();
   const start = (id: string, launch: PreparedWorkflowLaunch, hostId = 'host') => ({
@@ -83,12 +92,30 @@ test('drains reserve local checkouts even for read-only admissions and respect t
     queue: [start('guarded', guarded), start('readonly', readonly), start('second', readonly)],
   };
   expect(drainableStarts(occupied, 'host').map(start => start.id)).toEqual(['readonly']);
+  // Another host's start waits only for its own drain and blocks this one.
   expect(
     drainableStarts(
       { ...slot(), queue: [start('other-host', guarded, 'other'), start('ours', readonly)] },
       'host'
-    )
-  ).toEqual([]);
+    ).map(start => start.id)
+  ).toEqual(['ours']);
+});
+
+test('a free slot goes to a new start before an older start of another host, never of its own', () => {
+  const queue = [{ id: 'older', hostId: 'other', launch: launch(false) }];
+  const free = { ...slot(), capacity: 1, queue };
+  // A hand start shares a host with no queued request, so it takes the free slot.
+  expect(resourceStartBlocker(free, launch(false), 'direct-start')).toBeNull();
+  expect(resourceStartBlocker(free, launch(false), 'other')).toEqual({
+    kind: 'request',
+    id: 'older',
+  });
+  // Waiting for a slot, order holds: a full slot blocks the new start whatever the host.
+  const full = { ...free, holders: [{ id: 'holder' }] };
+  expect(resourceStartBlocker(full, launch(false), 'direct-start')).toEqual({
+    kind: 'run',
+    id: 'holder',
+  });
 });
 
 test('failed resume ignores foreign-blocked promises but yields to runnable read-only ones', () => {
@@ -117,9 +144,11 @@ for (const guard of ['false', null]) {
         slot(),
         { ...slot(), heldCheckouts: heldCheckouts([{ id: 'local', launch: malformed }]) },
       ])
-        expect(() => resourceStartBlocker(occupied, malformed)).toThrow('expected a boolean');
+        expect(() => resourceStartBlocker(occupied, malformed, 'host')).toThrow(
+          'expected a boolean'
+        );
       expect(drainableStarts({ ...slot(), queue }, 'host')).toEqual([queue[1]!]);
-      expect(resourceStartBlocker({ ...slot(), queue }, launch())).toEqual({
+      expect(resourceStartBlocker({ ...slot(), queue }, launch(), 'host')).toEqual({
         kind: 'request',
         id: valid.run.id,
       });
@@ -154,7 +183,9 @@ test('local holders project registered path and branch aliases before and after 
       );
       for (const guard of [true, false]) {
         for (const incoming of [launch(guard), launch(guard, 'reusable')])
-          expect(resourceStartBlocker({ ...slot(), heldCheckouts: local }, incoming)).toEqual({
+          expect(
+            resourceStartBlocker({ ...slot(), heldCheckouts: local }, incoming, 'host')
+          ).toEqual({
             kind: 'run',
             id: 'local',
           });
@@ -204,13 +235,17 @@ test('unknown foreign checkout identity only blocks guarded shared checkouts', (
         ...occupied,
         foreignHeldCheckouts: heldCheckouts([{ id: 'known', working_path: '/shared' }]),
       },
-      launch()
+      launch(),
+      'host'
     )
   ).toEqual({ kind: 'run', id: 'known' });
   for (const incoming of [launch(), launch(true, 'explicit')])
-    expect(resourceStartBlocker(occupied, incoming)).toEqual({ kind: 'run', id: 'unknown' });
+    expect(resourceStartBlocker(occupied, incoming, 'host')).toEqual({
+      kind: 'run',
+      id: 'unknown',
+    });
   for (const incoming of [readOnly, branchless])
-    expect(resourceStartBlocker(occupied, incoming)).toBeNull();
+    expect(resourceStartBlocker(occupied, incoming, 'host')).toBeNull();
   const guarded = launch();
   const queue = [guarded, readOnly, branchless].map(launch => ({
     id: launch.run.id,
@@ -224,8 +259,19 @@ test('unknown foreign checkout identity only blocks guarded shared checkouts', (
     kind: 'request',
     id: readOnly.run.id,
   });
-  expect(resourceStartBlocker({ ...occupied, queue }, branchless)).toEqual({
+  expect(resourceStartBlocker({ ...occupied, queue }, branchless, 'host')).toEqual({
     kind: 'request',
     id: readOnly.run.id,
   });
+});
+test('two read-only copies of one handed-off commit hold no checkout of each other', () => {
+  const copy = (): PreparedWorkflowLaunch => {
+    const base = launch(false);
+    return {
+      ...base,
+      execution: { ...base.execution, isolation: { kind: 'worktree', fromBranch: 'c'.repeat(40) } },
+    };
+  };
+  const held = heldCheckouts([{ id: 'first-check', launch: copy() }]);
+  expect(resourceStartBlocker({ ...slot(), heldCheckouts: held }, copy(), 'host')).toBeNull();
 });

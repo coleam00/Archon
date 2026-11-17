@@ -10,7 +10,7 @@ import {
   readSourceRelease,
   reRunsOwnNodeOnResume,
 } from './schemas';
-import type { PersistedNodeOutput, PriorFailedNode, WorkflowResumeCursor } from './store';
+import type { PersistedNodeOutput, PriorFailedNode, ResumeClaimCursor } from './store';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -138,7 +138,7 @@ export async function inspectResumableRun(
 export async function hydrateResumableRun(
   deps: ResumeStoreDeps,
   candidate: WorkflowRun,
-  cursor?: WorkflowResumeCursor
+  cursor?: ResumeClaimCursor
 ): Promise<{
   preCreatedRun: WorkflowRun;
   priorCompletedNodes: Map<string, PersistedNodeOutput>;

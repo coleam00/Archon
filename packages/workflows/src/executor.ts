@@ -99,7 +99,7 @@ type ResumePayload =
  * so call sites stay readable as new options accrue.
  *
  * To resume a prior run, obtain the run, prior outputs, and prior usage from
- * `hydrateResumableRun` from `./run-resume` (or look up via `findResumableRun` and hydrate)
+ * `hydrateResumableRun` from `./run-resume`
  * and spread them in. The executor never queries the store for a prior run on
  * its own; that decision belongs at the call site.
  */

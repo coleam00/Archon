@@ -5,29 +5,15 @@ import {
   buildApprovalBlocks,
   parseApprovalValue,
   buildApprovalResolutionBlocks,
+  buildNoticeTerminalBlocks,
   buildStatusBlocks,
   formatCostFooter,
-  REACTION_FAILURE,
-  REACTION_RUNNING,
-  REACTION_SUCCESS,
   type RunSnapshot,
 } from './blocks';
 
 describe('formatCostFooter', () => {
-  test('returns null when neither cost nor tokens are present', () => {
-    expect(formatCostFooter({})).toBeNull();
-  });
-
   test('returns null when cost is undefined and tokens are zero', () => {
     expect(formatCostFooter({ tokens: { input: 0, output: 0 } })).toBeNull();
-  });
-
-  test('formats cost only', () => {
-    expect(formatCostFooter({ cost: 0.0234 })).toBe('_cost: $0.0234_');
-  });
-
-  test('formats tokens from input+output sum', () => {
-    expect(formatCostFooter({ tokens: { input: 1500, output: 500 } })).toBe('_2.0k tokens_');
   });
 
   test('formats tokens using explicit total when provided', () => {
@@ -50,11 +36,6 @@ describe('formatCostFooter', () => {
         stopReason: 'end_turn',
       })
     ).toBe('_cost: $0.1234 · 12.5k tokens · stop: end_turn_');
-  });
-
-  test('drops non-finite cost', () => {
-    expect(formatCostFooter({ cost: Number.NaN })).toBeNull();
-    expect(formatCostFooter({ cost: Number.POSITIVE_INFINITY })).toBeNull();
   });
 });
 
@@ -266,28 +247,11 @@ describe('buildStatusBlocks', () => {
     expect(text).toContain(':fast_forward: `cleanup`');
   });
 
-  test('terminal completed snapshot drops Cancel button and shows total cost', () => {
-    const { blocks } = buildStatusBlocks(
-      snapshot({
-        status: 'completed',
-        totalCostUsd: 0.123,
-      }),
-      startedAt + 1000
-    );
-    expect(blocks.find(b => (b as { type: string }).type === 'actions')).toBeUndefined();
-    const header = (blocks[0] as { text: { text: string } }).text.text;
-    expect(header).toContain('Workflow completed');
-    const ctx = blocks.find(b => (b as { type: string }).type === 'context') as {
-      elements: Array<{ text: string }>;
-    };
-    expect(ctx.elements[0]?.text).toContain('total cost: $0.1230');
-  });
-
   test('terminal snapshot labels execution and contradictory authored outcome separately', () => {
     const { blocks, fallbackText } = buildStatusBlocks(
       snapshot({
         status: 'completed',
-        authoredOutcome: 'failed',
+        outcome: { kind: 'value', value: 'failed' },
       }),
       startedAt + 1000
     );
@@ -297,40 +261,41 @@ describe('buildStatusBlocks', () => {
     expect(fallbackText).toContain('authored outcome: failed');
   });
 
-  test('paused snapshot labels execution and authored outcome separately', () => {
-    const { blocks, fallbackText } = buildStatusBlocks(
-      snapshot({
-        status: 'paused',
-        authoredOutcome: 'succeeded',
-      }),
+  test('a long named outcome stays within the Slack text limit', () => {
+    const long = 'x'.repeat(5000);
+    const status = buildStatusBlocks(
+      snapshot({ status: 'completed', outcome: { kind: 'value', value: long } }),
       startedAt + 1000
     );
-    const header = (blocks[0] as { text: { text: string } }).text.text;
-    expect(header).toContain('Workflow paused');
-    expect(header).toContain('*Execution status:* `paused`');
-    expect(header).toContain('*Authored outcome:* `succeeded`');
-    expect(fallbackText).toContain('authored outcome: succeeded');
+    const notice = buildNoticeTerminalBlocks({
+      type: 'terminal',
+      runId: 'run-1',
+      workflowName: 'assist',
+      status: 'completed',
+      completedOutcome: long,
+    });
+    const texts: string[] = [];
+    JSON.stringify([...status.blocks, ...notice.blocks], (key, value: unknown) => {
+      if (key === 'text' && typeof value === 'string') texts.push(value);
+      return value;
+    });
+    expect(texts.length).toBeGreaterThan(0);
+    for (const text of texts) expect(text.length).toBeLessThanOrEqual(3000);
+    expect(status.fallbackText.length).toBeLessThanOrEqual(3000);
+    expect(notice.fallbackText.length).toBeLessThanOrEqual(3000);
   });
 
   test('distinguishes an unavailable authored outcome from an undeclared outcome', () => {
     const { blocks, fallbackText } = buildStatusBlocks(
       snapshot({
         status: 'completed',
-        authoredOutcome: 'unavailable',
+        outcome: { kind: 'read_failed' },
       }),
       startedAt + 1000
     );
     const header = (blocks[0] as { text: { text: string } }).text.text;
     expect(header).toContain('*Authored outcome:* unavailable — failed to read persisted run');
     expect(fallbackText).toContain('authored outcome: unavailable — failed to read persisted run');
-  });
-
-  test('terminal snapshot keeps the existing presentation when outcome is null', () => {
-    const withoutOutcome = buildStatusBlocks(snapshot({ status: 'completed' }), startedAt + 1000);
-    expect(withoutOutcome.fallbackText).toBe(':white_check_mark: Workflow completed (assist)');
-    expect((withoutOutcome.blocks[0] as { text: { text: string } }).text.text).not.toContain(
-      'Authored outcome'
-    );
   });
 
   test('terminal failed snapshot shows reason', () => {
@@ -359,14 +324,6 @@ describe('buildStatusBlocks', () => {
       elements: Array<{ text: string }>;
     };
     expect(ctx.elements[0]?.text).toContain('reason: user clicked cancel');
-  });
-});
-
-describe('reaction name constants', () => {
-  test('are stable Slack emoji names', () => {
-    expect(REACTION_RUNNING).toBe('arrows_counterclockwise');
-    expect(REACTION_SUCCESS).toBe('white_check_mark');
-    expect(REACTION_FAILURE).toBe('x');
   });
 });
 

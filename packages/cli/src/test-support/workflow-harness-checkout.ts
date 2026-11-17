@@ -27,6 +27,10 @@ export const mockResolveFolderBackend = mock(() => ({
   releaseVerificationImages: mockFolderBackendReleaseImages,
 }));
 
+export const mockRefuseUnappliedStartPoint = mock(
+  async (_worktreePath: string, _branch: string, _fromBranch: string) => undefined
+);
+
 // Mock @archon/isolation (getIsolationProvider moved here from @archon/core)
 const {
   worktreeRegistrationMetadata,
@@ -76,6 +80,7 @@ mock.module('@archon/isolation', () => ({
     healthCheck: mock(() => Promise.resolve(true)),
   })),
   resolveFolderBackend: mockResolveFolderBackend,
+  refuseUnappliedStartPoint: mockRefuseUnappliedStartPoint,
 }));
 
 class MockCanonicalRepoPathUnavailableError extends Error {
@@ -104,8 +109,6 @@ mock.module('@archon/git', () => ({
     })
   ),
   CanonicalRepoPathUnavailableError: MockCanonicalRepoPathUnavailableError,
-  getRemoteUrl: mock(() => Promise.resolve(null)),
-  checkout: mock(() => Promise.resolve()),
   toRepoPath: mock((path: string) => path),
   toWorktreePath: mock((path: string) => path),
   toBranchName: mock((branch: string) => branch),

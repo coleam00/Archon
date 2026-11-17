@@ -97,7 +97,7 @@ A round recorded when its run was released before it decided has no verdicts on 
 
 A merged pull request is listed in `review_rounds_skipped`, with the reason, and counts in none of these when a round without verdicts has lost its run's artifacts, when its work item dropped the build rounds that may have carried it, or when it merged without a Ready review on record.
 
-Two measures are reported in the node's `not_available` output instead of recorded, because no record carries them: the share of merged pull requests later reverted or fixed by a follow-up, and the share of blocking findings on code the change did not modify. Neither is estimated from prose.
+Two measures are not recorded, because no record carries them: the share of merged pull requests later reverted or fixed by a follow-up, and the share of blocking findings on code the change did not modify. Neither is estimated from prose.
 
 These are scores, so they appear on the console's Details screen, not as overview cards. Compare them across a pack change, or by the model that ran the review's code lens:
 

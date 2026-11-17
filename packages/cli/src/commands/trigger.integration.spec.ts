@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -14,7 +15,10 @@ import { join, resolve } from 'node:path';
 import type { JsonValue } from '@archon/workflows/output-ref';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { triggerFireConfigSchema } from './trigger';
+import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
+import { itemReadSchema } from '@archon/workflows/item-read';
+import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
+import { itemLinkSchema } from '@archon/workflows/schemas/item-link';
 import { standardWebhooksSourceConfigSchema } from '@archon/adapters/sources/standard-webhooks/source-plugin';
 import {
   isTerminalRunStatus,
@@ -39,8 +43,12 @@ afterEach(async () => {
   for (const root of tempRoots.splice(0)) await removeTempTree(root);
 });
 
-async function waitFor<T>(read: () => T | undefined, label: string): Promise<T> {
-  const deadline = Date.now() + DEADLINE_MS;
+async function waitFor<T>(
+  read: () => T | undefined,
+  label: string,
+  deadlineMs = DEADLINE_MS
+): Promise<T> {
+  const deadline = Date.now() + deadlineMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
@@ -334,16 +342,18 @@ describe('trigger CLI durable execution', () => {
     expect((await invoke(['workflow', 'get', failed.id])).stdout).toContain(metadata.error);
   }, 30_000);
 
-  test('a start names an item, a start fired from inside that run inherits it, and the item lists its runs', async () => {
+  test('a start names an item, a start fired from inside that run inherits it, and the item reads its runs', async () => {
     const fixture = await heldTriggerRun('item');
     const configPath = join(fixture.projectRoot, '..', 'trigger.json');
     const fired = join(fixture.projectRoot, '..', 'fired');
-    // The first run fires one follow-up start and names no item for it.
+    const release = join(fixture.projectRoot, '..', 'release');
+    // The first run fires one follow-up start and names no item for it, then holds the
+    // slot until the test releases it, so the follow-up stays queued meanwhile.
     fixture.writeWorkflow(
-      `[ -e '${fired}' ] || { touch '${fired}'; '${process.execPath}' '${fixture.cliPath}' trigger fire --config '${configPath}'; }`
+      `[ -e '${fired}' ] || { touch '${fired}'; '${process.execPath}' '${fixture.cliPath}' trigger fire --config '${configPath}'; for _ in $(seq 600); do [ -e '${release}' ] && break; sleep 0.1; done; [ -e '${release}' ] || exit 1; }`
     );
-    const invoke = (args: string[]) =>
-      runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, args);
+    const invoke = (args: string[], expectSuccess?: boolean) =>
+      runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, args, expectSuccess);
     const runs = () =>
       readRows<{ id: string; status: string; item_key: string | null }>(
         join(fixture.archonHome, 'archon.db'),
@@ -361,9 +371,34 @@ describe('trigger CLI durable execution', () => {
 
     await invoke(['trigger', 'fire', '--config', configPath, '--item', 'item-1']);
     // The follow-up start shares the first run's checkout, so it waits for a drain.
+    const follow = await waitFor(
+      () => fixture.requests().find(request => request.status === 'queued'),
+      'the follow-up start to queue'
+    );
+    // While it waits, the item read lists it as queued, next for the slot the first run holds.
+    const queued = itemReadSchema.parse(
+      JSON.parse((await invoke(['workflow', 'runs', '--item', 'item-1', '--json'])).stdout)
+    );
+    expect(queued.queued).toEqual([
+      {
+        requestId: follow.id,
+        workflow: 'item-proof',
+        resource: 'item:resource',
+        hostId: fixture.hostId,
+        queuedAt: expect.any(String),
+        ahead: 0,
+      },
+    ]);
+    // Every receipt shows the item it named; the follow-up inherited the first's.
+    const listed = JSON.parse((await invoke(['trigger', 'list'])).stdout) as {
+      itemKey: string | null;
+    }[];
+    expect(listed.map(receipt => receipt.itemKey)).toEqual(['item-1', 'item-1']);
+    writeFileSync(release, '');
     await waitFor(() => runs().find(run => run.status === 'completed'), 'the first run to end');
     await invoke(['trigger', 'drain', '--host', fixture.hostId]);
     const started = await settled(2);
+    expect(started.map(run => run.id)).toContain(follow.id);
     expect(started.map(run => run.item_key)).toEqual(['item-1', 'item-1']);
 
     await invoke(['workflow', 'run', 'item-proof', '--no-worktree', '--item', 'item-2']);
@@ -371,20 +406,191 @@ describe('trigger CLI durable execution', () => {
     const all = await settled(4);
     expect(all.map(run => run.item_key).sort()).toEqual(['item-1', 'item-1', 'item-2', null]);
 
-    const listed = JSON.parse(
-      (await invoke(['workflow', 'runs', '--item', 'item-1', '--json'])).stdout
+    const database = join(fixture.archonHome, 'archon.db');
+    const read = itemReadSchema.parse(
+      JSON.parse((await invoke(['workflow', 'runs', '--item', 'item-1', '--json'])).stdout)
     );
-    expect(listed.total).toBe(2);
-    expect(listed.runs.map((run: { id: string }) => run.id).sort()).toEqual(
-      started.map(run => run.id).sort()
+    expect(read.item.key).toBe('item-1');
+    expect(read.runs.map(run => run.id).sort()).toEqual(started.map(run => run.id).sort());
+    expect(read.runs.every(run => run.status === 'completed')).toBe(true);
+    expect((await invoke(['workflow', 'runs', '--item', 'item-1'])).stdout).toContain(
+      'Item item-1'
     );
     // One row per item; the run with no item added none.
     expect(
-      readRows<{ key: string }>(
-        join(fixture.archonHome, 'archon.db'),
-        'SELECT key FROM remote_agent_items ORDER BY key'
-      )
+      readRows<{ key: string }>(database, 'SELECT key FROM remote_agent_items ORDER BY key')
     ).toEqual([{ key: 'item-1' }, { key: 'item-2' }]);
+    // A key nothing named is refused; an item named with no run yet reads as one.
+    const unknown = await invoke(['workflow', 'runs', '--item', 'item-9', '--json'], false);
+    expect(unknown.exitCode).toBe(1);
+    expect(JSON.parse(unknown.stdout)).toEqual({ ok: false, error: 'not_found', item: 'item-9' });
+    const textUnknown = await invoke(['workflow', 'runs', '--item', 'item-9'], false);
+    expect(textUnknown.exitCode).toBe(1);
+    expect(textUnknown.stderr).toContain("No item 'item-9'");
+    const writable = new Database(database);
+    try {
+      writable.run(
+        "INSERT INTO remote_agent_items (project_key, key) SELECT project_key, 'item-3' FROM remote_agent_items WHERE key = 'item-1'"
+      );
+    } finally {
+      writable.close();
+    }
+    const waiting = itemReadSchema.parse(
+      JSON.parse((await invoke(['workflow', 'runs', '--item', 'item-3', '--json'])).stdout)
+    );
+    expect(waiting).toMatchObject({
+      item: { key: 'item-3' },
+      runs: [],
+      queued: [],
+      questions: [],
+      answers: [],
+    });
+
+    // A ruling is recorded with no question asked, here on a key nothing has named yet.
+    const readJson = async (args: string[]) => JSON.parse((await invoke(args)).stdout) as unknown;
+    const ruling = itemRulingSchema.parse(
+      await readJson([
+        'workflow',
+        'rule',
+        '--item',
+        'item-new',
+        '--as',
+        'triage-agent',
+        '--json',
+        '--',
+        'leave the chat readers for a follow-up',
+      ])
+    );
+    expect(ruling).toMatchObject({
+      text: 'leave the chat readers for a follow-up',
+      by: { declared: 'triage-agent' },
+      via: 'cli',
+      withdrawn: null,
+    });
+    const fresh = itemReadSchema.parse(
+      await readJson(['workflow', 'runs', '--item', 'item-new', '--json'])
+    );
+    expect(fresh.runs).toEqual([]);
+    expect(fresh.answers).toEqual([ruling]);
+    // Any run of an item reads the item's rulings by its own id, as `archon:script` item() does.
+    await invoke(['workflow', 'rule', '--item', 'item-1', '--', 'do not accept an empty outcome']);
+    const ofRun = itemReadSchema.parse(
+      await readJson(['workflow', 'runs', '--item-of', started[0]?.id ?? '', '--json'])
+    );
+    expect(ofRun.item.key).toBe('item-1');
+    expect(
+      ofRun.answers.flatMap(answer => (answer.kind === 'ruling' ? [answer.text] : []))
+    ).toEqual(['do not accept an empty outcome']);
+    const noItem = await invoke(
+      ['workflow', 'runs', '--item-of', all.find(run => run.item_key === null)?.id ?? '', '--json'],
+      false
+    );
+    expect(noItem.exitCode).toBe(1);
+    expect(JSON.parse(noItem.stdout)).toMatchObject({ ok: false, error: 'not_found' });
+    // Withdrawn once; the record stays and says so.
+    const withdrawn = itemRulingSchema.parse(
+      await readJson(['workflow', 'rule', '--withdraw', ruling.id, '--json'])
+    );
+    expect(withdrawn.withdrawn).toMatchObject({ via: 'cli', by: null });
+    for (const [id, error] of [
+      [ruling.id, 'already_withdrawn'],
+      ['no-such-ruling', 'not_found'],
+    ] as const) {
+      const refused = await invoke(['workflow', 'rule', '--withdraw', id, '--json'], false);
+      expect(refused.exitCode).toBe(1);
+      expect(JSON.parse(refused.stdout)).toMatchObject({ ok: false, error });
+    }
+    expect(
+      itemReadSchema.parse(await readJson(['workflow', 'runs', '--item', 'item-new', '--json']))
+        .answers
+    ).toEqual([withdrawn]);
+    // Under a selected project, a ruling on another project's item is not withdrawn.
+    const scratch = new Database(database);
+    let codebaseId: string;
+    try {
+      scratch.run(
+        "INSERT INTO remote_agent_items (project_key, key) VALUES ('other/project', 'x')"
+      );
+      scratch.run(
+        `INSERT INTO remote_agent_item_rulings (id, item_id, text, via)
+         SELECT 'foreign-ruling', id, 'not yours', 'cli' FROM remote_agent_items WHERE key = 'x'`
+      );
+      codebaseId =
+        scratch.query<{ id: string }, []>('SELECT id FROM remote_agent_codebases').get()?.id ?? '';
+    } finally {
+      scratch.close();
+    }
+    const scoped = ['workflow', 'rule', '--withdraw', 'foreign-ruling', '--json'];
+    const outside = await invoke([...scoped, '--chat-project-id', codebaseId], false);
+    expect(outside.exitCode).toBe(1);
+    expect(JSON.parse(outside.stdout)).toMatchObject({ ok: false, error: 'outside_project' });
+    expect(
+      (
+        await invoke(
+          ['workflow', 'rule', '--withdraw', 'foreign-ruling', '--chat-project-id', codebaseId],
+          false
+        )
+      ).stderr
+    ).toContain('outside project');
+    // Without a selected project, a withdrawal by id is not scoped.
+    expect(itemRulingSchema.parse(await readJson(scoped)).withdrawn).not.toBeNull();
+
+    // A link is recorded from the CLI and read from both items.
+    const linkArgs = ['workflow', 'link', '--item', 'item-new', '--kind', 'depends_on'];
+    const recorded = itemLinkSchema.parse(
+      await readJson([...linkArgs, '--to', 'item-1', '--as', 'triage-agent', '--json'])
+    );
+    expect(recorded).toMatchObject({
+      kind: 'depends_on',
+      from: { key: 'item-new' },
+      to: { key: 'item-1' },
+      by: { declared: 'triage-agent' },
+      ended: null,
+    });
+    const readLinks = async (key: string) =>
+      itemReadSchema.parse(await readJson(['workflow', 'runs', '--item', key, '--json'])).links;
+    expect(await readLinks('item-new')).toMatchObject([
+      { id: recorded.id, direction: 'outgoing', other: { key: 'item-1' } },
+    ]);
+    expect(await readLinks('item-1')).toMatchObject([
+      { id: recorded.id, direction: 'incoming', other: { key: 'item-new' } },
+    ]);
+    // Recording it again leaves one link.
+    expect(await readJson([...linkArgs, '--to', 'item-1', '--json'])).toMatchObject({
+      id: recorded.id,
+      created: false,
+    });
+    expect(await readLinks('item-new')).toHaveLength(1);
+    // A self-link and an unknown kind are refused, saying why.
+    for (const [args, error] of [
+      [[...linkArgs, '--to', 'item-new'], 'self_link'],
+      [
+        ['workflow', 'link', '--item', 'item-new', '--kind', 'same_as', '--to', 'item-1'],
+        'unknown_kind',
+      ],
+    ] as const) {
+      const refused = await invoke([...args, '--json'], false);
+      expect(refused.exitCode).toBe(1);
+      expect(JSON.parse(refused.stdout)).toEqual({ ok: false, error });
+    }
+    const unknownKind = await invoke(
+      ['workflow', 'link', '--item', 'item-new', '--kind', 'same_as', '--to', 'item-1'],
+      false
+    );
+    expect(unknownKind.stderr).toContain('depends_on, part_of, duplicate_of');
+    // Ended once: the fact stays readable with who ended it, and is no longer active.
+    const endedLink = itemLinkSchema.parse(
+      await readJson(['workflow', 'link', '--end', recorded.id, '--as', 'alice', '--json'])
+    );
+    expect(endedLink).toMatchObject({
+      ...recorded,
+      ended: { via: 'cli', by: { declared: 'alice' } },
+    });
+    expect(await readLinks('item-1')).toMatchObject([
+      { id: recorded.id, ended: { by: { declared: 'alice' } } },
+    ]);
+    const again = await invoke(['workflow', 'link', '--end', recorded.id, '--json'], false);
+    expect(JSON.parse(again.stdout)).toEqual({ ok: false, error: 'already_ended' });
 
     // A continuation stays on the item of the run it continues; `--item` still wins, and
     // continuing a run with no item gives none. `--adopt` writes the same
@@ -415,22 +621,7 @@ describe('trigger CLI durable execution', () => {
   test('an inherited item is refused in another project, and an item named there starts', async () => {
     const fixture = await heldTriggerRun('item-cross');
     const root = join(fixture.projectRoot, '..');
-    const otherRoot = join(root, 'other');
-    mkdirSync(join(otherRoot, '.archon', 'workflows'), { recursive: true });
-    expect(await Bun.spawn(['git', 'init', '-q'], { cwd: otherRoot }).exited).toBe(0);
-    writeFileSync(
-      join(otherRoot, '.archon', 'workflows', 'other-proof.yaml'),
-      'name: other-proof\ndescription: other proof.\nmutates_checkout: false\nnodes:\n  - id: done\n    bash: echo done\n'
-    );
-    const config = JSON.parse(readFileSync(join(root, 'trigger.json'), 'utf8'));
-    config.binding = {
-      ...config.binding,
-      bindingId: 'other-proof',
-      resource: 'other:resource',
-      launch: { ...config.binding.launch, cwd: otherRoot, workflowName: 'other-proof' },
-    };
-    const otherConfig = join(root, 'other.json');
-    writeFileSync(otherConfig, JSON.stringify(config));
+    const otherConfig = await writeOtherProject(root);
     // The run fires into the other project with no item while that project is unregistered
     // and again once it is registered, and in between with an item named.
     const fire = `'${process.execPath}' '${fixture.cliPath}' trigger fire --config '${otherConfig}'`;
@@ -512,6 +703,141 @@ describe('trigger CLI durable execution', () => {
     expect(runs()).toHaveLength(2);
   }, 60_000);
 
+  test('a script on an item names the item of a start, or starts it on no item', async () => {
+    const fixture = await heldTriggerRun('item-script');
+    const root = join(fixture.projectRoot, '..');
+    const otherConfig = await writeOtherProject(root);
+    const refusal = join(root, 'refusal');
+    // The run on item-1 fires into the other project naming item-2, then naming nothing,
+    // which would inherit item-1 across projects, then declining an item.
+    writeFileSync(
+      join(fixture.projectRoot, '.archon', 'workflows', 'item-script-proof.yaml'),
+      `name: item-script-proof
+description: item-script proof.
+mutates_checkout: false
+nodes:
+  - id: fire
+    runtime: bun
+    script: |
+      import { writeFileSync } from 'node:fs';
+      import { HostCommandError, trigger } from 'archon:script';
+      const binding = ${JSON.stringify(otherConfig)};
+      trigger.fire(binding, {}, { item: 'item-2' });
+      try {
+        trigger.fire(binding);
+        writeFileSync(${JSON.stringify(refusal)}, 'started');
+      } catch (error) {
+        if (!(error instanceof HostCommandError)) throw error;
+        writeFileSync(${JSON.stringify(refusal)}, error.message);
+      }
+      trigger.fire(binding, {}, { item: null });
+`
+    );
+    const database = join(fixture.archonHome, 'archon.db');
+    const runs = () =>
+      readRows<{ workflow_name: string; status: WorkflowRunStatus; item: string | null }>(
+        database,
+        `SELECT r.workflow_name, r.status, i.key || ' in ' || i.project_key AS item
+           FROM remote_agent_workflow_runs r LEFT JOIN remote_agent_items i ON i.id = r.item_id
+          ORDER BY r.started_at, r.id`
+      );
+
+    await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
+      'trigger',
+      'fire',
+      '--config',
+      join(root, 'trigger.json'),
+      '--item',
+      'item-1',
+    ]);
+    // Each of the script's fires is its own CLI process, so each start gets its own deadline.
+    // A script that throws fails the first run; that ends the wait at once instead of at the
+    // deadline. A completed first run does not: its last start may still be queued behind the
+    // other project's resource, with no run row yet.
+    const step = async (reached: () => boolean, label: string): Promise<void> => {
+      await waitFor(() => {
+        if (reached()) return true;
+        const first = runs()[0];
+        return first && isTerminalRunStatus(first.status) && first.status !== 'completed'
+          ? true
+          : undefined;
+      }, label);
+      if (!reached())
+        throw new Error(`The first run failed before ${label}: ${JSON.stringify(runs())}`);
+    };
+    // Nothing may still execute when afterEach removes the temp tree, on success or failure.
+    // A queued start has no run row yet but will run, so it counts as not ended.
+    // A run that does not end in time is left for afterEach to stop.
+    const queued = () =>
+      readRows(
+        database,
+        "SELECT id FROM remote_agent_resource_start_requests WHERE status = 'queued'"
+      ).length;
+    const allEnded = () =>
+      waitFor(
+        () =>
+          queued() === 0 && runs().every(run => isTerminalRunStatus(run.status))
+            ? runs()
+            : undefined,
+        'all runs to end'
+      ).catch((error: unknown) => {
+        for (const run of readRows<RunRow>(
+          database,
+          'SELECT id,status FROM remote_agent_workflow_runs'
+        ))
+          if (!isTerminalRunStatus(run.status)) activeRuns.add(run.id);
+        throw error;
+      });
+    try {
+      await step(() => runs().length >= 2, "the script's fire naming item-2 to record its run");
+      await step(() => existsSync(refusal), "the script's inherited fire to be refused");
+      await step(() => runs().length === 3, "the script's fire with no item to record its run");
+    } catch (failure) {
+      // Let every admitted run end before reporting the step that failed, and report that step.
+      await allEnded().catch(() => undefined);
+      throw failure;
+    }
+    const settled = await allEnded();
+    expect(settled.map(run => run.status)).toEqual(['completed', 'completed', 'completed']);
+    const projects = readRows<{ project_key: string; key: string }>(
+      database,
+      'SELECT project_key, key FROM remote_agent_items ORDER BY key'
+    );
+    expect(projects.map(row => row.key)).toEqual(['item-1', 'item-2']);
+    const [own, other] = projects.map(row => row.project_key);
+    expect(own).not.toBe(other);
+    expect(settled.map(run => [run.workflow_name, run.item])).toEqual([
+      ['item-script-proof', `item-1 in ${String(own)}`],
+      ['other-proof', `item-2 in ${String(other)}`],
+      ['other-proof', null],
+    ]);
+    const message = readFileSync(refusal, 'utf8');
+    expect(message).toContain(`fired start runs in project '${String(other)}'`);
+    expect(message).toContain('--no-item');
+  }, 60_000);
+
+  test('--item and --no-item together are refused before a receipt', async () => {
+    const fixture = await heldTriggerRun('item-both');
+    const refused = await runCli(
+      fixture.cliPath,
+      fixture.projectRoot,
+      fixture.archonHome,
+      [
+        'trigger',
+        'fire',
+        '--config',
+        join(fixture.projectRoot, '..', 'trigger.json'),
+        '--item',
+        'x',
+        '--no-item',
+      ],
+      false
+    );
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain('--item and --no-item are mutually exclusive');
+    expect(fixture.runs()).toEqual([]);
+  });
+
   test.skipIf(process.platform === 'win32')(
     'published polling recipes distinguish delimiter collisions and replay on both hosts',
     async () => {
@@ -550,7 +876,7 @@ describe('trigger CLI durable execution', () => {
       const identity = JSON.parse(
         (await runCli(cliPath, projectRoot, archonHome, ['trigger', 'whoami'])).stdout
       ) as { runAsUserId: string };
-      const config = triggerFireConfigSchema.parse(JSON.parse(configJson));
+      const config = triggerConfigSchema.parse(JSON.parse(configJson));
       config.binding.runAsUserId = identity.runAsUserId;
       config.binding.launch.cwd = projectRoot;
       // The server recipe defers to the guide's Standard Webhooks source; only
@@ -1465,6 +1791,27 @@ nodes:
       }
     }
   }, 45_000);
+
+  /** A second git project with a fire-only binding into it, written next to the fixture's. */
+  async function writeOtherProject(root: string): Promise<string> {
+    const otherRoot = join(root, 'other');
+    mkdirSync(join(otherRoot, '.archon', 'workflows'), { recursive: true });
+    expect(await Bun.spawn(['git', 'init', '-q'], { cwd: otherRoot }).exited).toBe(0);
+    writeFileSync(
+      join(otherRoot, '.archon', 'workflows', 'other-proof.yaml'),
+      'name: other-proof\ndescription: other proof.\nmutates_checkout: false\nnodes:\n  - id: done\n    bash: echo done\n'
+    );
+    const config = JSON.parse(readFileSync(join(root, 'trigger.json'), 'utf8'));
+    config.binding = {
+      ...config.binding,
+      bindingId: 'other-proof',
+      resource: 'other:resource',
+      launch: { ...config.binding.launch, cwd: otherRoot, workflowName: 'other-proof' },
+    };
+    const otherConfig = join(root, 'other.json');
+    writeFileSync(otherConfig, JSON.stringify(config));
+    return otherConfig;
+  }
 
   /**
    * A trigger binding on a capacity-1 resource whose run holds its node in `sleep`, in a

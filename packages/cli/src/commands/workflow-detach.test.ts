@@ -5,6 +5,7 @@ import {
   mockStartRunLiveOwner,
   mockClaimDetachedRunProcessOwner,
   mockCreateWorkflowRun,
+  mockRefuseUnappliedStartPoint,
   spyOnJsonStdout,
   firstJsonPayload,
   type DetachedSpawnOptions,
@@ -177,6 +178,53 @@ describe('workflowRunCommand — detach', () => {
       expect(consoleSpy).toHaveBeenCalledWith(expect.stringMatching(/^Transcript: .*\.jsonl$/));
     }
   );
+
+  it("launches when the branch's worktree contains --from, after checking it before the fork", async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const isolationDb = await import('@archon/core/db/isolation-environments');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'env-1',
+      working_path: '/worktrees/feat',
+      provider: 'worktree',
+      branch_name: 'my-feature',
+      workflow_type: 'task',
+      workflow_id: 'my-feature',
+    });
+    (git.getCurrentBranchStrict as ReturnType<typeof mock>).mockResolvedValueOnce('my-feature');
+    mockRefuseUnappliedStartPoint.mockClear();
+    const child = createDetachedChildFixture();
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
+    const savedArgv = process.argv;
+    process.argv = ['bun', '/abs/cli.ts', 'workflow', 'run', 'assist', 'hello', '--detach'];
+    let spawnCallCount = 0;
+    try {
+      const commandPromise = workflowRunCommand(
+        createTestWorkflowHost(),
+        '/test/path',
+        'assist',
+        'hello',
+        { detach: true, branchName: 'my-feature', fromBranch: 'dev' }
+      );
+      await finishStartupWindow(commandPromise, spawnSpy);
+      spawnCallCount = spawnSpy.mock.calls.length;
+    } finally {
+      process.argv = savedArgv;
+      spawnSpy.mockRestore();
+    }
+
+    expect(mockRefuseUnappliedStartPoint).toHaveBeenCalledWith(
+      '/test/path',
+      '/worktrees/feat',
+      'my-feature',
+      'dev'
+    );
+    expect(spawnCallCount).toBe(1);
+    expect(consoleSpy).toHaveBeenCalledWith("Started 'assist' in the background.");
+  });
 
   it('resolves an adopted run prefix before passing it to the detached child', async () => {
     const adoptedRunId = '0b1ee8da-1111-2222-3333-444455556666';
@@ -541,61 +589,6 @@ describe('workflowRunCommand — detach', () => {
     expect(spawnCmd).not.toContain('--conversation-id');
   });
 
-  // #2872 — a continuation already owns a run row, so the ack names it without
-  // creating anything. `wait <run-id>` behind `run --resume --detach` needs the id
-  // just as much as behind a fresh launch.
-  it('--resume --detach acks the continuation run id without creating a row', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const workflowDb = await import('@archon/core/db/workflows');
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
-      errors: [],
-    });
-    (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-paused',
-      workflow_name: 'assist',
-      working_path: null,
-    });
-    mockCreateWorkflowRun.mockClear();
-
-    const child = createDetachedChildFixture();
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
-    const savedArgv = process.argv;
-    process.argv = [
-      'bun',
-      '/abs/cli.ts',
-      'workflow',
-      'run',
-      'assist',
-      'hello',
-      '--resume',
-      '--detach',
-      '--json',
-    ];
-
-    try {
-      const commandPromise = workflowRunCommand(
-        createTestWorkflowHost(),
-        '/test/path',
-        'assist',
-        'hello',
-        {
-          resume: true,
-          detach: true,
-          json: true,
-        }
-      );
-      await finishStartupWindow(commandPromise, spawnSpy);
-    } finally {
-      process.argv = savedArgv;
-      spawnSpy.mockRestore();
-    }
-
-    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as Record<string, unknown>;
-    expect(parsed.runId).toBe('run-paused');
-    expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
-  });
-
   it('--detach --json emits a structured ack', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const tempHome = testHome;
@@ -653,7 +646,7 @@ describe('workflowRunCommand — detach', () => {
     expect(spawnCmd[idIndex + 1]).toBe('run-detached-created');
   });
 
-  // #2872 R1 — the plain launch, with no --folder/--adopt/--supersedes/--resume, is the
+  // #2872 R1 — the plain launch, with no --folder/--adopt/--supersedes, is the
   // most common invocation and had no pre-flight refusal at all: an isolating run with
   // no project to isolate sailed past, printed `Started`, and died on the identical
   // check in the child.
@@ -1191,6 +1184,56 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
       expect.stringContaining('Detached run failed to start'),
       { exitReason: 'launch_failed', pendingLaunchToken: 'launch-token' }
     );
+  });
+
+  // The launcher's read is not trusted: the worktree can change between its check and
+  // the child's start (#5783).
+  it('refuses a --from the reused worktree lacks even after the launcher passed it', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const isolationDb = await import('@archon/core/db/isolation-environments');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'plan', description: 'Plan work' })],
+      errors: [],
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(preCreatedRow);
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-1',
+      name: 'test/repo',
+      default_cwd: '/test/path',
+      kind: 'repo',
+    });
+    (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'env-1',
+      working_path: '/worktrees/feat',
+      provider: 'worktree',
+      branch_name: 'my-feature',
+      workflow_type: 'task',
+      workflow_id: 'my-feature',
+    });
+    (git.getCurrentBranchStrict as ReturnType<typeof mock>).mockResolvedValueOnce('my-feature');
+    const refusal = new Error('--from dev is not in its history');
+    mockRefuseUnappliedStartPoint.mockRejectedValueOnce(refusal);
+    (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {
+        detachedRunId: 'run-precreated',
+        conversationId: 'cli-123',
+        branchName: 'my-feature',
+        fromBranch: 'dev',
+      })
+    ).rejects.toThrow('--from dev is not in its history');
+
+    expect(workflowDb.failWorkflowRun).toHaveBeenCalledWith(
+      'run-precreated',
+      expect.stringContaining('Detached run failed to start'),
+      { exitReason: 'launch_failed', pendingLaunchToken: 'launch-token' }
+    );
+    expect(executeWorkflow).not.toHaveBeenCalled();
   });
 
   // #2872 R3 — the flag names a row this process will execute AS. Both halves are
