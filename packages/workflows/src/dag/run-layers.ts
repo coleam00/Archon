@@ -3,6 +3,7 @@
  * whether it is replayed from a prior pass, skipped, or dispatched, and folding each
  * layer's results into the shared run context.
  */
+import { observeReturnsCheckout } from '../run-result';
 import { ParentStatusReadError } from '../parent-status-read';
 import { isWorkflowExecutionInterruption } from '../execution-interruption';
 import { peerAdmissions } from '../interaction-admission';
@@ -174,6 +175,8 @@ async function runLayerPhase(
                 () => dispatchNode(nodeCtx, node, isParallelLayer)
               )
             ));
+          // A replayed node did not run in this pass: its checkout then is not observed.
+          if (admitted === undefined) await observeReturnsCheckout(nodeCtx, node.id, result.output);
           if (result.output.state === 'failed') nodeCtx.interactionAdmission?.failed(node.id);
           return result;
         } catch (error) {

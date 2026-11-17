@@ -137,8 +137,9 @@ export const itemRunSchema = z.object({
   hasResult: z.boolean(),
   /**
    * The commit the run's result holds at, which an `at: checkout` input matches: the clean
-   * git checkout the run completed on. Null when the run has not completed, completed at no
-   * clean commit, or was recorded before results held at commits.
+   * checkout its `returns:` node completed on, unchanged when the run completed. Null when the
+   * run has not completed, its result holds at no commit, or it was recorded before results
+   * held at commits.
    */
   resultCommit: z.string().nullable(),
 });

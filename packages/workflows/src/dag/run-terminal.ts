@@ -45,6 +45,7 @@ export type RunTerminalContext = Pick<
   | 'platform'
   | 'conversationId'
   | 'cwd'
+  | 'returnsCheckout'
   | 'config'
   | 'workflowRun'
   | 'artifactsDir'
@@ -471,7 +472,7 @@ async function completeRun(
   const assessed = await assessCompletedWorktree(deps, workflowRun);
   const { completedRun } = assessed;
   const worktreeDisposition = keepHandedOff(assessed.worktreeDisposition, workflowRun, result);
-  const resultCommit = await sampleResultCommit(ctx.cwd, ctx.execContext, workflowRun.id);
+  const resultCommit = await sampleResultCommit(ctx, workflowRun.id);
 
   try {
     await requireTerminalStatusWrite(

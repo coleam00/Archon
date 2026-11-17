@@ -519,6 +519,7 @@ async function createRunContext(
     totalTokens: priorUsage?.tokens,
     totalTokensUnknown: priorUsage?.tokensUnknown,
     stepNamePrefix: '',
+    returnsCheckout: workflow.returns === undefined ? undefined : { nodeId: workflow.returns },
     loopGroupPath: [],
     loopBodyScopes: [],
   };

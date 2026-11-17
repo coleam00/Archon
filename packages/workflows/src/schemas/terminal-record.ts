@@ -45,15 +45,18 @@ export type WorktreeDisposition = z.infer<typeof worktreeDispositionSchema>;
 export const RESULT_COMMIT_METADATA_KEY = 'result_commit';
 /**
  * The commit a completed run's result holds at (#5769): the commit its checkout was on when
- * it completed, only when that checkout was a clean git checkout. A result that holds at no
- * commit says why: `dirty` (a tracked change or an untracked file), `not_git`, `unavailable`
- * (the engine could not read the checkout, or its backend), `unborn` (no commit yet).
+ * its `returns:` node completed, only when the checkout was clean at that commit then and
+ * still is when the run completes. A result that holds at no commit says why: `dirty` (a
+ * tracked change or an untracked file), `not_git`, `unavailable` (the engine could not read
+ * the checkout, or its backend), `unborn` (no commit yet), `moved` (the checkout moved to
+ * another commit after the `returns:` node completed), `unobserved` (no `returns:` node
+ * completed in the pass that completed the run: none is declared, or a resume replayed it).
  */
 export const resultCommitSchema = z.discriminatedUnion('held', [
   z.object({ held: z.literal(true), commit: gitObjectIdSchema }),
   z.object({
     held: z.literal(false),
-    reason: z.enum(['dirty', 'not_git', 'unavailable', 'unborn']),
+    reason: z.enum(['dirty', 'not_git', 'unavailable', 'unborn', 'moved', 'unobserved']),
   }),
 ]);
 export type ResultCommit = z.infer<typeof resultCommitSchema>;

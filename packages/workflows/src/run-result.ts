@@ -58,9 +58,9 @@ export function readCompletedRunResult(
 }
 
 /**
- * Where a completed run's result holds, from its checkout sampled as it completed: at the
- * commit only when the checkout is a clean git checkout. A validation that passed with an
- * uncommitted or untracked file present did not pass at the commit.
+ * Where a result holds by one checkout sample: at the commit only when the checkout is a
+ * clean git checkout. A validation that passed with an uncommitted or untracked file present
+ * did not pass at the commit.
  */
 export function resultCommitFromSample(sample: CheckoutSample): ResultCommit {
   const { observation } = sample;
@@ -76,24 +76,67 @@ export function resultCommitFromSample(sample: CheckoutSample): ResultCommit {
   }
 }
 
+/** The top-level `returns:` node, and the checkout sampled when it completed. */
+export interface ReturnsCheckout {
+  nodeId: string;
+  sample?: CheckoutSample;
+}
+
 /**
- * The commit a completing run's result holds at: its checkout as it completed, read once,
- * when the run completes. A result is about the checkout the run ended on, so a build holds
- * at the commit it made and a read-only check at the commit it was given. `sampleCheckout`
+ * Sample the checkout the moment the top-level `returns:` node completes: the checkout its
+ * result was given at. A node of a loop body or fan-out instance (a non-empty step prefix)
+ * is never the run's `returns:` node.
+ */
+export async function observeReturnsCheckout(
+  ctx: {
+    returnsCheckout?: ReturnsCheckout;
+    stepNamePrefix: string;
+    cwd: string;
+    execContext: ExecutionContext;
+  },
+  nodeId: string,
+  output: { state: string }
+): Promise<void> {
+  const held = ctx.returnsCheckout;
+  if (held?.nodeId !== nodeId || ctx.stepNamePrefix !== '' || output.state !== 'completed') return;
+  held.sample = await sampleCheckout(ctx.cwd, ctx.execContext);
+}
+
+/**
+ * The commit a completing run's result holds at: the clean checkout its `returns:` node
+ * completed on, only when the run completes on that same clean checkout. A node that
+ * commits after the `returns:` node moves the checkout off the commit the result was given
+ * at, so the result holds at no commit rather than at one it never judged. `sampleCheckout`
  * never throws; a checkout it cannot read holds at no commit.
  */
 export async function sampleResultCommit(
-  cwd: string,
-  execContext: ExecutionContext,
+  run: { cwd: string; execContext: ExecutionContext; returnsCheckout?: ReturnsCheckout },
   workflowRunId: string
 ): Promise<ResultCommit> {
-  const resultCommit = resultCommitFromSample(await sampleCheckout(cwd, execContext));
+  const resultCommit = await heldThroughCompletion(
+    run.cwd,
+    run.execContext,
+    run.returnsCheckout?.sample
+  );
   if (!resultCommit.held)
     getLog().info(
       { workflowRunId, reason: resultCommit.reason },
       'workflow.result_holds_at_no_commit'
     );
   return resultCommit;
+}
+
+async function heldThroughCompletion(
+  cwd: string,
+  execContext: ExecutionContext,
+  atReturns: CheckoutSample | undefined
+): Promise<ResultCommit> {
+  if (atReturns === undefined) return { held: false, reason: 'unobserved' };
+  const given = resultCommitFromSample(atReturns);
+  if (!given.held) return given;
+  const end = resultCommitFromSample(await sampleCheckout(cwd, execContext));
+  if (!end.held) return end;
+  return end.commit === given.commit ? given : { held: false, reason: 'moved' };
 }
 
 /** The commit a run's result holds at, or null: never any other commit in its place. */
@@ -350,7 +393,14 @@ export async function resolveResultInputs(
       const latest = results.get(input);
       if (latest === undefined) throw new Error(`No result read for '${input}'`);
       const { runId, result } = latest;
-      resolved[input] = result.kind === 'result' ? result.value : null;
+      // An `at: checkout` value carries the commit it holds at, so a land merges that
+      // commit and not whatever its checkout is on by the time it acts.
+      resolved[input] =
+        result.kind !== 'result'
+          ? null
+          : at === 'checkout'
+            ? { commit: String(startCommit), result: result.value }
+            : result.value;
       read[input] = at === 'checkout' ? { runId, at: startCommit } : { runId };
       lines.push(readLine(input, workflowName, latest, startCommit));
     }

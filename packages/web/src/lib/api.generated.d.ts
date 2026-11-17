@@ -9937,7 +9937,7 @@ export interface components {
                 /** @enum {boolean} */
                 held: false;
                 /** @enum {string} */
-                reason: 'dirty' | 'not_git' | 'unavailable' | 'unborn';
+                reason: 'dirty' | 'not_git' | 'unavailable' | 'unborn' | 'moved' | 'unobserved';
               };
         } | null;
         /** @description The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. A loop body node holds its latest round. */

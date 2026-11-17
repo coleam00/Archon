@@ -294,54 +294,82 @@ test('a reader with no item is refused before it starts, unless the value is sup
   });
 }, 120_000);
 
-// A review whose verdict names the commit it saw, so a reader can tell which review it got.
+// A review that returns its verdict, then, with `after=commit`, commits in a later node.
 const REVIEW = `name: review
-description: Approve the change.
-mutates_checkout: false
-returns: verdict
+description: Judge the change.
+inputs:
+  verdict: { default: approve }
+  after: { default: none }
+returns: judge
 nodes:
-  - id: verdict
+  - id: judge
     bash: |
-      printf '{"verdict": "approve", "seen": "%s"}' "$(git rev-parse HEAD)"
-    output_format:
-      type: object
-      properties: { verdict: { type: string }, seen: { type: string } }
-      required: [verdict, seen]
+      printf '{"verdict": "%s"}' "$INPUTS_VERDICT"
+    output_format: { type: object, properties: { verdict: { type: string } }, required: [verdict] }
+  - id: later
+    depends_on: [judge]
+    bash: |
+      if [ "$INPUTS_AFTER" = commit ]; then
+        echo later > later.txt
+        git add later.txt
+        git -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m later
+      fi
 `;
 
-// Lands its own HEAD on \`landed\` only when the review holds at that commit; otherwise
-// says where the latest review holds, read from the item, and moves nothing.
+// Lands the commit its approval holds at, only on an approving verdict; otherwise says why
+// and moves nothing. With \`move=commit\`, its checkout moves before it decides.
 const LAND = `name: land
 description: Land the commit the approval holds at.
-mutates_checkout: false
 inputs:
   approval: { result_of: review, at: checkout }
+  move: { default: none }
 returns: decide
 nodes:
+  - id: move
+    bash: |
+      if [ "$INPUTS_MOVE" = commit ]; then
+        echo moved > moved.txt
+        git add moved.txt
+        git -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m moved
+      fi
   - id: decide
+    depends_on: [move]
     runtime: bun
     script: |
       import { execFileSync } from 'node:child_process';
       import { emit, item } from 'archon:script';
       const approval = JSON.parse(process.env.INPUTS_APPROVAL ?? 'null');
-      const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-      if (approval !== null) {
-        execFileSync('git', ['update-ref', 'refs/heads/landed', head]);
-        emit({ landed: head, seen: approval.seen, message: null });
-      } else {
+      if (approval === null) {
+        const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
         const reviews = (item()?.runs ?? []).filter(run => run.workflow === 'review' && run.status === 'completed');
         const approvedAt = reviews.at(-1)?.resultCommit ?? 'no commit';
-        emit({ landed: null, seen: null, message: \`approved at \${approvedAt}, the change is now at \${head}\` });
+        emit({ landed: null, message: \`approved at \${approvedAt}, the change is now at \${head}\` });
+      } else if (approval.result.verdict !== 'approve') {
+        emit({ landed: null, message: \`review at \${approval.commit} returned \${approval.result.verdict}\` });
+      } else {
+        execFileSync('git', ['update-ref', 'refs/heads/landed', approval.commit]);
+        emit({ landed: approval.commit, message: null });
       }
     output_format:
       type: object
-      properties: { landed: {}, seen: {}, message: {} }
-      required: [landed, seen, message]
+      properties: { landed: {}, message: {} }
+      required: [landed, message]
 `;
 
-test('a land stage merges only the commit its approval holds at', async () => {
-  const fixture = await makeFixture('land', { review: REVIEW, land: LAND });
-  const git = async (...args: string[]): Promise<string> => {
+interface LandFixture {
+  fixture: Fixture;
+  commit: (file: string) => Promise<string>;
+  /** Where \`landed\` points, or null when nothing has landed. */
+  landed: () => Promise<string | null>;
+  /** Run \`land\` and return its result. */
+  land: (...inputs: string[]) => Promise<{ landed: string | null; message: string | null }>;
+  reviews: () => Promise<ItemRun[]>;
+  checkout: (commit: string) => Promise<void>;
+}
+
+async function makeLandFixture(label: string): Promise<LandFixture> {
+  const fixture = await makeFixture(label, { review: REVIEW, land: LAND });
+  const git = async (...args: string[]): Promise<{ exitCode: number; stdout: string }> => {
     const child = Bun.spawn(
       [
         'git',
@@ -358,72 +386,100 @@ test('a land stage merges only the commit its approval holds at', async () => {
       { cwd: fixture.projectRoot, stdout: 'pipe', stderr: 'pipe' }
     );
     const [exitCode, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
-    if (exitCode !== 0) throw new Error(`git ${args.join(' ')} failed`);
-    return stdout.trim();
+    return { exitCode, stdout: stdout.trim() };
   };
   const commit = async (file: string): Promise<string> => {
     writeFileSync(join(fixture.projectRoot, file), file);
-    await git('add', '-A');
-    await git('commit', '-q', '-m', file);
-    return git('rev-parse', 'HEAD');
+    for (const args of [
+      ['add', '-A'],
+      ['commit', '-q', '-m', file],
+    ])
+      expect((await git(...args)).exitCode).toBe(0);
+    return (await git('rev-parse', 'HEAD')).stdout;
   };
-  const landed = () =>
-    git('rev-parse', '--verify', '--quiet', 'refs/heads/landed').catch(() => null);
-  const landResult = async (): Promise<{
-    landed: string | null;
-    seen: string | null;
-    message: string | null;
-  }> => {
-    const runs = await itemRuns(fixture);
-    const last = runs.at(-1);
+  const landed = async (): Promise<string | null> => {
+    const read = await git('rev-parse', '--verify', '--quiet', 'refs/heads/landed');
+    return read.exitCode === 0 ? read.stdout : null;
+  };
+  const land = async (...inputs: string[]) => {
+    await fixture.cli(run('land', ...inputs));
+    const last = (await itemRuns(fixture)).at(-1);
     expect(last?.workflow).toBe('land');
     return (await detail(fixture, last?.id)).terminal_record.returns.value as {
       landed: string | null;
-      seen: string | null;
       message: string | null;
     };
   };
+  const reviews = async () => (await itemRuns(fixture)).filter(read => read.workflow === 'review');
+  const checkout = async (target: string): Promise<void> => {
+    expect((await git('checkout', '-q', '--detach', target)).exitCode).toBe(0);
+  };
+  return { fixture, commit, landed, land, reviews, checkout };
+}
 
+test('a land stage merges only the commit its approval holds at', async () => {
+  const { fixture, commit, landed, land, reviews, checkout } = await makeLandFixture('land');
   const x = await commit('x.txt');
   await fixture.cli(run('review'));
-  await fixture.cli(run('land'));
-  expect(await landResult()).toEqual({ landed: x, seen: x, message: null });
-  expect(await landed()).toBe(x);
+  expect(await land()).toEqual({ landed: x, message: null });
 
   // The change moves on: the approval at X does not hold at Y.
   const y = await commit('y.txt');
   const refused = await fixture.cli(run('land'));
   expect(refused).toContain(`no completed run of \`review\` holds at ${y.slice(0, 12)}`);
   expect(refused).toContain(`holds at ${x.slice(0, 12)}`);
-  expect(await landResult()).toEqual({
+  const lastLand = (await itemRuns(fixture)).at(-1);
+  expect((await detail(fixture, lastLand?.id)).terminal_record.returns.value).toEqual({
     landed: null,
-    seen: null,
     message: `approved at ${x}, the change is now at ${y}`,
   });
   expect(await landed()).toBe(x);
 
-  // With a later review at Y, a land at X still reads the review that holds at X.
+  // A later review at Y does not replace the one that holds at X.
   await fixture.cli(run('review'));
-  await git('checkout', '-q', '--detach', x);
-  await fixture.cli(run('land'));
-  expect(await landResult()).toEqual({ landed: x, seen: x, message: null });
+  await checkout(x);
+  expect(await land()).toEqual({ landed: x, message: null });
+  expect((await reviews()).map(read => read.resultCommit)).toEqual([x, y]);
+}, 240_000);
 
-  // A review that completed with an untracked file present holds at no commit.
+test('a land stage reads the latest verdict at its commit and refuses a rejecting one', async () => {
+  const { fixture, commit, landed, land } = await makeLandFixture('verdict');
+  const x = await commit('x.txt');
+  await fixture.cli(run('review'));
+  await fixture.cli(run('review', 'verdict=return'));
+  expect(await land()).toEqual({ landed: null, message: `review at ${x} returned return` });
+  expect(await landed()).toBeNull();
+}, 240_000);
+
+test('a result holds at no commit when the checkout moved after the verdict, or was dirty', async () => {
+  const { fixture, commit, landed, land, reviews } = await makeLandFixture('moved');
+  const x = await commit('x.txt');
+  // The verdict is given at X, then a later node of the same run commits Y.
+  await fixture.cli(run('review', 'after=commit'));
+  const [moved] = await reviews();
+  expect(moved?.resultCommit).toBeNull();
+  expect((await detail(fixture, moved?.id)).terminal_record).toMatchObject({
+    result_commit: { held: false, reason: 'moved' },
+  });
+  const { message } = await land();
+  expect(message).toStartWith('approved at no commit, the change is now at ');
+  expect(message).not.toContain(x);
+
+  // A review that completes with an untracked file present holds at no commit.
   const z = await commit('z.txt');
   writeFileSync(join(fixture.projectRoot, 'untracked.txt'), 'not committed');
   await fixture.cli(run('review'));
-  await fixture.cli(run('land'));
-  expect(await landResult()).toEqual({
+  expect(await land()).toEqual({
     landed: null,
-    seen: null,
     message: `approved at no commit, the change is now at ${z}`,
   });
-  expect(await landed()).toBe(x);
+  expect(await landed()).toBeNull();
+}, 240_000);
 
-  const reviews = (await itemRuns(fixture)).filter(read => read.workflow === 'review');
-  expect(reviews.map(read => [read.hasResult, read.resultCommit])).toEqual([
-    [true, x],
-    [true, y],
-    [true, null],
-  ]);
+test('a land stage merges the commit its approval was read at, not where its checkout moved', async () => {
+  const { fixture, commit, landed, land } = await makeLandFixture('land-moves');
+  const x = await commit('x.txt');
+  await fixture.cli(run('review'));
+  expect(await land('move=commit')).toEqual({ landed: x, message: null });
+  expect(await landed()).toBe(x);
 }, 240_000);

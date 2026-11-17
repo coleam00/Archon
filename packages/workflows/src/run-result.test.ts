@@ -49,3 +49,20 @@ test('an unreadable item run fails the read instead of yielding an older run as 
   await expect(read).rejects.toThrow('item runs lost-run did not read');
   expect(eventsRead).toBe(false);
 });
+
+test('a reader whose checkout is at no commit reads no result, even from a run that holds at none', async () => {
+  // `older` has no terminal record, so it holds at no commit, as runs recorded before #5769 do.
+  const read = await latestResultsOnItem(
+    {
+      getItemRuns: async () => ({ item, runs: [older], descendantIds: [] }),
+      listEventsForRuns: async () => new Map(),
+    },
+    item,
+    new Map([['approval', { workflow: 'build', at: { commit: null } }]])
+  );
+  expect(read.get('approval')).toEqual({
+    runId: null,
+    result: { kind: 'none', reason: "this run's checkout is at no commit" },
+    latest: { runId: 'older-build', holdsAt: undefined },
+  });
+});
