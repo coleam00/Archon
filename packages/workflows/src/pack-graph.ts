@@ -11,7 +11,7 @@
  * started the next.
  */
 import { z } from 'zod';
-import { declaredOutcome } from './completed-outcome';
+import { declaredOutcome, outcomeValues } from './completed-outcome';
 import { readComposedMeta } from './compiled-command';
 import type { PackBinding } from './schemas/pack-bindings';
 import { kindedPackBinding } from './schemas/pack-bindings';
@@ -381,7 +381,7 @@ function graphStage(stage: Stage, started: ReadonlySet<string>): PackGraph['stag
   const declared = declaredOutcome(stage);
   let outcome: PackGraph['stages'][number]['outcome'] = null;
   if (declared !== undefined) {
-    const values = declared.form.kind === 'enum' ? declared.form.values : ['succeeded', 'failed'];
+    const values = outcomeValues(declared.form);
     outcome = {
       field: declared.field,
       form: declared.form.kind,

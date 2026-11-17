@@ -26,7 +26,7 @@ import {
 } from '@archon/workflows/schemas/resource-start';
 import type { WorkflowItem, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowDeps } from '@archon/workflows/deps';
-import { declaredOutcome } from '@archon/workflows/completed-outcome';
+import { declaredOutcome, outcomeValues } from '@archon/workflows/completed-outcome';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
@@ -127,7 +127,7 @@ export function runEndedBindingProblems(
 ): string[] {
   const problems: string[] = [];
   const form = ended.outcomeForm;
-  const values = form.kind === 'enum' ? form.values : ['succeeded', 'failed'];
+  const values = outcomeValues(form);
   if (!values.includes(runEnded.outcome))
     problems.push(
       `outcome '${runEnded.outcome}' is not one '${runEnded.workflowName}' completes with (${values.map(value => `'${value}'`).join(', ')})`
