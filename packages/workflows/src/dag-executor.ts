@@ -40,7 +40,8 @@ import { runUsageMismatch, type RunUsageFigures } from './dag/usage';
 import { RunSourceUnreadableError } from './dag/node-source';
 import { type RunInputs, type RunLayersContext } from './dag/run-context';
 import { assertRunCapabilities } from './dag/capability-preflight';
-import { runLayers, type OperatorPauseBoundary } from './dag/run-layers';
+import { runLayers } from './dag/run-layers';
+import { OperatorPauseBoundary } from './dag/operator-pause-boundary';
 import { publishContainerPause, type ContainerPauseReceipt } from './dag/pause';
 import { restoreRunState, type RestoredRunState } from './dag/resume-state';
 import { failRun, finishRun, skipIfStatusChanged } from './dag/run-terminal';
@@ -373,7 +374,7 @@ export async function executeDagWorkflow(
     );
   };
 
-  const pauseBoundary: OperatorPauseBoundary = { reached: false };
+  const pauseBoundary = new OperatorPauseBoundary(deps.store, workflowRun.id);
   let sourceUnreadable: RunSourceUnreadableError | undefined;
   try {
     await runLayers(runCtx, pauseBoundary);

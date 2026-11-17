@@ -13,7 +13,6 @@ import { NodeEventWriteError, recordNodeState } from '../node-event-write';
 import type { DagNode, SessionCursor, SkipCause } from '../schemas';
 import {
   canSuspend,
-  operatorPause,
   nodeUsesPersistedScope,
   readSubrunMetadata,
   isNodeContextResume,
@@ -28,7 +27,8 @@ import { writeNodeArtifact } from '../artifacts-index';
 import { safeSendMessage } from '../platform-messages';
 import { getLog } from './log';
 import { incrementalLoopUsage, sumTokenUsage } from './usage';
-import { RunSourceUnreadableError, settledValuesOrThrow } from './node-source';
+import { RunSourceUnreadableError, settleSequentially, settledValuesOrThrow } from './node-source';
+import type { OperatorPauseBoundary } from './operator-pause-boundary';
 import {
   beginExecution,
   ownsBodySessionCursor,
@@ -46,49 +46,19 @@ import { runWithPackDir } from '../workflow-variables';
 import { releaseAdmittedScratch, releaseInvocationScratch, runInNodeScratch } from './node-scratch';
 import { getStaleCachedDependencies } from './stale-dependencies';
 /**
- * Await thunks one at a time, collecting outcomes in `Promise.allSettled` shape so the
- * caller's result handling is identical for the sequential and concurrent paths.
- */
-async function settleSequentially(
-  thunks: readonly (() => Promise<LayerNodeResult>)[],
-  stopBefore?: () => Promise<boolean>
-): Promise<PromiseSettledResult<LayerNodeResult>[]> {
-  const settled: PromiseSettledResult<LayerNodeResult>[] = [];
-  for (const thunk of thunks) {
-    if (settled.length > 0 && (await stopBefore?.())) break;
-    try {
-      settled.push({ status: 'fulfilled', value: await thunk() });
-    } catch (reason) {
-      settled.push({ status: 'rejected', reason });
-    }
-  }
-  return settled;
-}
-
-/**
- * Where the top-level walk stops for an operator's pause request (`archon workflow pause`).
- * `reached` is set when the walk stopped for it; the caller then pauses the run.
- */
-export interface OperatorPauseBoundary {
-  reached: boolean;
-}
-
-/**
  * Walk the topological `layers` of a DAG (or subgraph), executing each layer's nodes
  * concurrently within each admission phase, aggregating results into `ctx.nodeOutputs` and usage into
  * `ctx`. Stops early (returns) when a between-layer status check sees a non-running run
  * state (paused/cancelled/deleted) — the caller always proceeds to its own terminal tally.
+ * The top-level walk also stops at `pause`: after a layer while one remains, or before the
+ * next node of a layer it runs one node at a time.
  *
  * Shared by the top-level DAG, `executeLoopGroupNode`'s per-iteration body and each
- * composed fan-out instance; `ctx.stepNamePrefix` is empty for the top-level DAG. Only
- * the top-level walk passes `pauseBoundary`: it stops for a pending pause request after a
- * layer settles while a layer remains, or before the next node of a layer it runs one
- * node at a time. A nested walk never stops for one, so a `loop`, `loop_group` or
- * `workflow:` node is one unit.
+ * composed fan-out instance; `ctx.stepNamePrefix` is empty for the top-level DAG.
  */
 export async function runLayers(
   ctx: RunLayersContext,
-  pauseBoundary?: OperatorPauseBoundary
+  pause?: OperatorPauseBoundary
 ): Promise<void> {
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
 
@@ -97,51 +67,19 @@ export async function runLayers(
       break;
     await ctx.toolAttention.refresh();
     const layer = ctx.layers[layerIdx];
-    await runLayer(ctx, layer, layerIdx, pauseBoundary);
-    if (pauseBoundary?.reached) break;
+    await runLayer(ctx, layer, layerIdx, pause);
 
-    if (await stopsBetweenLayers(ctx, layerIdx)) break;
-    if (
-      pauseBoundary !== undefined &&
-      layerIdx < ctx.layers.length - 1 &&
-      !ctx.containerPause?.publish &&
-      (await stopsForOperatorPause(ctx, pauseBoundary, layerIdx))
-    )
-      break;
+    if (pause?.reached || (await stopsBetweenLayers(ctx, layerIdx))) break;
+    const remains = layerIdx < ctx.layers.length - 1 && !ctx.containerPause?.publish;
+    if (remains && (await pause?.stopsHere())) break;
   }
-}
-
-/**
- * True, and `boundary` reached, when the run carries a pending operator pause request.
- * A failed read never stops the walk: failing the run over it would destroy the work the
- * pause exists to keep, and the next boundary reads again.
- */
-async function stopsForOperatorPause(
-  ctx: RunLayersContext,
-  boundary: OperatorPauseBoundary,
-  layerIdx: number
-): Promise<boolean> {
-  let run;
-  try {
-    run = await ctx.deps.store.getWorkflowRun(ctx.workflowRun.id);
-  } catch (err) {
-    getLog().warn({ err, workflowRunId: ctx.workflowRun.id }, 'dag.operator_pause_read_failed');
-    return false;
-  }
-  if (run === null || operatorPause(run)?.state !== 'requested') return false;
-  getLog().info(
-    { workflowRunId: ctx.workflowRun.id, layerIdx },
-    'dag.operator_pause_boundary_reached'
-  );
-  boundary.reached = true;
-  return true;
 }
 
 async function runLayer(
   ctx: RunLayersContext,
   layer: readonly DagNode[],
   layerIdx: number,
-  pauseBoundary: OperatorPauseBoundary | undefined
+  pause: OperatorPauseBoundary | undefined
 ): Promise<void> {
   const isParallelLayer = layer.length > 1;
 
@@ -169,16 +107,14 @@ async function runLayer(
   for (const phase of phases) {
     if (ctx.containerPause?.publish && ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause')
       break;
-    if (pauseBoundary?.reached) break;
+    if (pause?.reached) break;
     const layerHadFailure = await runLayerPhase(
       ctx,
       phase,
       isParallelLayer,
       serializeLayer,
       guardedLayerSnapshots,
-      pauseBoundary === undefined
-        ? undefined
-        : () => stopsForOperatorPause(ctx, pauseBoundary, layerIdx)
+      pause
     );
 
     if (layerHadFailure) {
@@ -193,7 +129,7 @@ async function runLayerPhase(
   isParallelLayer: boolean,
   serializeLayer: boolean,
   guardedLayerSnapshots: Set<string> | undefined,
-  stopBeforeNextNode: (() => Promise<boolean>) | undefined
+  pause: OperatorPauseBoundary | undefined
 ): Promise<boolean> {
   const peers =
     ctx.interactionAdmission && layer.some(canSuspend)
@@ -248,7 +184,7 @@ async function runLayerPhase(
   // Mixed checkout guards still require sequential execution within each phase.
   const layerResults =
     serializeLayer && layer.some(isCheckoutGuarded)
-      ? await settleSequentially(nodeThunks, stopBeforeNextNode)
+      ? await settleSequentially(nodeThunks, pause && (() => pause.stopsHere()))
       : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
 
   const layerHadFailure = await aggregateLayerResults(ctx, layer, layerResults, isParallelLayer);
