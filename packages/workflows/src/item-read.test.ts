@@ -364,32 +364,43 @@ describe('reading an item', () => {
 
   test('a start admitted while the item is read is listed once, as a run', async () => {
     const admitted: WorkflowRun = { ...first, id: 'admitted', status: 'pending', metadata: {} };
+    // One start, either queued or admitted, never both. Admission lands right after the
+    // second store read (the first resolves the item), whichever read that is, so a read
+    // that takes the runs before the queue sees the start in neither.
     let reads = 0;
+    let isAdmitted = false;
+    const read = async <T>(value: () => T): Promise<T> => {
+      const result = value();
+      if (++reads === 2) isAdmitted = true;
+      return result;
+    };
     const racing: ItemReadSource = {
       ...source,
       store: {
         ...source.store,
-        // The start is admitted after the first read: the next read has its run.
-        getItemRuns: async () => ({
-          item,
-          runs: reads++ === 0 ? [] : [admitted],
-          descendantIds: [],
-        }),
-        listQueuedItemStarts: async () => [
-          {
-            requestId: 'admitted',
-            workflow: 'deliver',
-            resource: 'build',
-            hostId: 'host',
-            queuedAt: '2026-11-01T11:05:00.000Z',
-            ahead: 0,
-          },
-        ],
+        getItemRuns: () =>
+          read(() => ({ item, runs: isAdmitted ? [admitted] : [], descendantIds: [] })),
+        listQueuedItemStarts: () =>
+          read(() =>
+            isAdmitted
+              ? []
+              : [
+                  {
+                    requestId: 'admitted',
+                    workflow: 'deliver',
+                    resource: 'build',
+                    hostId: 'host',
+                    queuedAt: '2026-11-01T11:05:00.000Z',
+                    ahead: 0,
+                  },
+                ]
+          ),
       },
     };
-    const read = await readItem(racing, item.projectKey, item.key);
-    expect(read?.runs.map(run => run.id)).toEqual(['admitted']);
-    expect(read?.queued).toEqual([]);
+    const result = await readItem(racing, item.projectKey, item.key);
+    expect(isAdmitted).toBe(true);
+    expect(result?.runs.map(run => run.id)).toEqual(['admitted']);
+    expect(result?.queued).toEqual([]);
   });
 
   test('links read from this item: outgoing to what it points at, incoming from what points at it', async () => {
