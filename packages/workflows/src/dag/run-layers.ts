@@ -50,7 +50,7 @@ import { getStaleCachedDependencies } from './stale-dependencies';
  * concurrently within each admission phase, aggregating results into `ctx.nodeOutputs` and usage into
  * `ctx`. Stops early (returns) when a between-layer status check sees a non-running run
  * state (paused/cancelled/deleted) — the caller always proceeds to its own terminal tally.
- * The top-level walk also stops at `pause`: after a layer while one remains, or before the
+ * The top-level walk also stops at `pause`: before each layer dispatches, or before the
  * next node of a layer it runs one node at a time.
  *
  * Shared by the top-level DAG, `executeLoopGroupNode`'s per-iteration body and each
@@ -66,12 +66,11 @@ export async function runLayers(
     if (ctx.containerPause?.publish && ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause')
       break;
     await ctx.toolAttention.refresh();
+    if (await pause?.stopsHere()) break;
     const layer = ctx.layers[layerIdx];
     await runLayer(ctx, layer, layerIdx, pause);
 
     if (pause?.reached || (await stopsBetweenLayers(ctx, layerIdx))) break;
-    const remains = layerIdx < ctx.layers.length - 1 && !ctx.containerPause?.publish;
-    if (remains && (await pause?.stopsHere())) break;
   }
 }
 

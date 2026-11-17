@@ -121,6 +121,24 @@ test('a layer run one node at a time starts no node after the request', async ()
   expect(await started()).toEqual(['a', 'g']);
 });
 
+test('a request recorded before the first layer starts no node', async () => {
+  const { store, run, options, started, resume } = await startRun([
+    { id: 'a', bash: 'echo a' },
+    { id: 'b', depends_on: ['a'], bash: 'echo b' },
+  ]);
+  await store.updateWorkflowRunMetadataIfRunning(run.id, { operator_pause: request });
+
+  await executeDagWorkflow(options);
+
+  expect((await store.getWorkflowRun(run.id))?.status).toBe('paused');
+  expect(await started()).toEqual([]);
+
+  await resume();
+
+  expect((await store.getWorkflowRun(run.id))?.status).toBe('completed');
+  expect(await started()).toEqual(['a', 'b']);
+});
+
 test('a request during the last layer lets the run complete', async () => {
   const { store, run, options } = await startRun([{ id: 'a', prompt: 'a' }]);
 

@@ -1678,7 +1678,7 @@ archon workflow pause <run-id> --as ops   # record who asked
 archon workflow pause <run-id> --json
 ```
 
-The command records the request and returns at once. The process that executes the run honours it: after the current layer of the graph settles, or before the next node of a layer it runs one node at a time, it moves the run to `paused`. Until then the run reads `pause requested` in `workflow status`, `workflow get` and `workflow runs`. A pause never interrupts an agent mid-turn or a command mid-execution. A `loop`, `loop_group` or `workflow:` node counts as one node: the pause waits for the whole node to end. A request that arrives when no node is left to start lets the run complete.
+The command records the request and returns at once. The process that executes the run honours it: before the next layer of the graph starts, or before the next node of a layer it runs one node at a time, it moves the run to `paused`. Until then the run reads `pause requested` in `workflow status`, `workflow get` and `workflow runs`. A pause never interrupts an agent mid-turn or a command mid-execution. A `loop`, `loop_group` or `workflow:` node counts as one node: the pause waits for the whole node to end. A request that arrives when no node is left to start lets the run complete.
 
 A paused run keeps its checkout and worktree, the results of the nodes it finished, its resource slot and its hold on its item, so no other run of its workflow starts on that item meanwhile. It asks nothing, appears in no attention queue, and nothing continues it on its own, also after a restart. `workflow get` and the item read show who paused it, through which surface, and when.
 
@@ -1691,7 +1691,7 @@ Pause refuses, and leaves the run unchanged, when:
 - no live owner answers for the run on this host: nothing would reach a node boundary. If its process is gone, `workflow resume` or `workflow abandon` it;
 - the recorded owner runs on another host or as another user: pause it from there.
 
-A second pause of a run that already has one pending changes nothing and reports the first request. A request that a gate or wait overtakes ends when that pause is resumed; pause the run again if you still want it paused.
+A second pause of a run that already has one pending changes nothing and reports the first request, provided its owner still answers; otherwise it is refused like the first. A request that a gate or wait overtakes ends when that pause is resumed; pause the run again if you still want it paused.
 
 `--json` prints `{ "ok": true, "runId", "action": "pause", "state": "requested", "alreadyRequested", "requestedAt" }`, or `{ "ok": false, "runId", "action": "pause", "error" }` with exit code 1. `--as <name>` records the name you declare as who asked; it is a claim, never checked.
 
