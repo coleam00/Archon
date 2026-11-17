@@ -1,10 +1,35 @@
-import { expect, test } from 'bun:test';
-import { Children, isValidElement, type ReactElement, type ReactNode } from 'react';
+import { afterAll, expect, test } from 'bun:test';
+import { Window } from 'happy-dom';
+import { act, Children, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { AttentionAnswerPanel } from './AttentionAnswerPanel';
 import { RunActionBar } from './RunActionBar';
 import { toRun, type Run } from '../primitives/run';
+
+// A DOM for the one test that types into the panel; restored after this file.
+const dom = new Window({ url: 'http://localhost' });
+const globals = { window: dom, document: dom.document, IS_REACT_ACT_ENVIRONMENT: true };
+const descriptors = new Map(
+  Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)])
+);
+for (const [key, value] of Object.entries(globals)) {
+  Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+}
+const { createRoot } = await import('react-dom/client');
+// React tracks a text box's value through the prototype setter, so typing goes through it.
+const setTextAreaValue = Object.getOwnPropertyDescriptor(
+  dom.HTMLTextAreaElement.prototype,
+  'value'
+)?.set;
+
+afterAll(async () => {
+  await dom.happyDOM.close();
+  for (const [key, descriptor] of descriptors) {
+    if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+    else Reflect.deleteProperty(globalThis, key);
+  }
+});
 
 function buttonClick(node: ReactNode, label: string): (() => void) | undefined {
   let click: (() => void) | undefined;
@@ -92,11 +117,34 @@ test("the reserved 'other' option cannot be chosen without text", () => {
   expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>Use main<\/button>/);
 });
 
-test('a message wait cannot be answered while its text is blank', () => {
-  const html = renderToStaticMarkup(
-    <AttentionAnswerPanel run={run} attention={{ ...attention, form: 'message', options: [] }} />
-  );
-  expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Answer<\/button>/);
+test('a message wait can be answered only while its text has a non-blank character', async () => {
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  const message = { ...attention, form: 'message' as const, options: [] };
+  const answerButton = (): HTMLButtonElement | undefined =>
+    [...container.querySelectorAll('button')].find(button => button.textContent === 'Answer');
+  const type = async (value: string): Promise<void> => {
+    const box = container.querySelector('textarea');
+    if (!box) throw new Error('Answer text box was not rendered');
+    await act(async () => {
+      setTextAreaValue?.call(box, value);
+      box.dispatchEvent(new window.Event('input', { bubbles: true }));
+    });
+  };
+  try {
+    await act(async () => root.render(<AttentionAnswerPanel run={run} attention={message} />));
+    expect(answerButton()?.disabled).toBe(true);
+    await type('   ');
+    expect(answerButton()?.disabled).toBe(true);
+    await type('1, 3');
+    expect(answerButton()?.disabled).toBe(false);
+    await type('');
+    expect(answerButton()?.disabled).toBe(true);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
 });
 
 test('the recommendation and what each option does are shown before the choices', () => {
