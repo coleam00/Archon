@@ -404,8 +404,9 @@ export class CodexProvider implements IAgentProvider {
    * On a model listed in `toolFreeStructuredOutputModels`, a call with an output schema is
    * two turns on one thread: the tool turn without the schema, then, on a second process
    * that resumes the thread with Archon's and the model catalog's tools off, a turn with the
-   * schema. The tool turn's success result is held back; the final turn's result is the
-   * call's only one.
+   * schema. The tool turn's success result is held back and its usage goes on the final turn's
+   * first result. A later result, from subagents still running at that turn's end, carries only
+   * the usage they reported since.
    */
   async *sendQuery(
     prompt: string,
