@@ -314,14 +314,14 @@ function nextSteps(generated: readonly Generated[], target: Target): string[] {
   const lines: string[] = [];
   const ended = generated.filter(g => g.kind === 'run_ended');
   if (ended.length > 0) {
-    const triggers = shellQuote(getTriggersPath());
     lines.push(
       '',
-      'Run-ended bindings. Copy each into the triggers directory, where it is active at once: it starts its workflow when a run on an item ends with its outcome. Then list and check them with `archon trigger check`; deleting a copy turns it off:',
-      `  mkdir -p ${triggers}`
+      'Run-ended bindings. Add each to the triggers directory, where it is active at once: it starts its workflow when a run on an item ends with its outcome. Then list and check them with `archon trigger check`; deleting one from the triggers directory turns it off:'
     );
     for (const item of ended)
-      lines.push(`  cp ${shellQuote(item.path)} ${triggers}/  # outcome '${item.outcome ?? ''}'`);
+      lines.push(
+        `  archon trigger add ${shellQuote(item.path)}  # outcome '${item.outcome ?? ''}'`
+      );
   }
   const timers = generated.filter(g => g.kind === 'timer');
   const events = generated.filter(g => g.kind === 'event');
