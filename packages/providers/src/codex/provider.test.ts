@@ -1017,6 +1017,28 @@ describe('CodexProvider', () => {
       expect(tokens.reduce((sum, t) => sum + t.input, 0)).toBe(140);
     });
 
+    // Codex resets a thread's cumulative total when its context overflows.
+    test('a subagent’s usage after its thread’s total resets adds to what it used before', async () => {
+      const tokens = (await tokensOf([
+        itemCompleted(collabSpawn('completed', ['child-thread'])),
+        otherTurn('started'),
+        tokenUsage(
+          { input: 550, output: 55 },
+          { input: 50, output: 5 },
+          'child-turn',
+          'child-thread'
+        ),
+        otherTurn('completed'),
+        otherTurn('started', 'child-thread', 'child-turn-2'),
+        tokenUsage({ input: 100, output: 10 }),
+        turnCompleted('completed'),
+        tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn-2', 'child-thread'),
+        otherTurn('completed', 'child-thread', 'child-turn-2'),
+      ])) as { input: number; output: number }[];
+      expect(tokens.reduce((sum, t) => sum + t.input, 0)).toBe(100 + 50 + 40);
+      expect(tokens.reduce((sum, t) => sum + t.output, 0)).toBe(10 + 5 + 4);
+    });
+
     test('a v2 subagent keeps the usage its thread reported before its activity named it', async () => {
       const tokens = await tokensOf([
         tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn', 'child-thread'),

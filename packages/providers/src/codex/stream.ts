@@ -194,30 +194,38 @@ function backgroundEventOf(
   return undefined;
 }
 
-/** The first and latest usage snapshots one thread reported while the turn observed it. */
+/**
+ * The first and latest usage snapshots one thread reported while the turn observed it, and
+ * what it used before its cumulative total last reset (a context overflow resets it).
+ */
 interface UsageSpan {
   first: ThreadTokenUsage;
   end: TokenUsageBreakdown;
+  beforeReset?: TokenUsage;
 }
 
 function extendedSpan(span: UsageSpan | undefined, usage: ThreadTokenUsage): UsageSpan {
-  return { first: span?.first ?? usage, end: usage.total };
+  if (!span) return { first: usage, end: usage.total };
+  // A total below the last one is a reset: what was used so far stays, and counting restarts.
+  if (usage.total.inputTokens < span.end.inputTokens)
+    return { first: usage, end: usage.total, beforeReset: spanUsageOf(span) };
+  return { ...span, end: usage.total };
 }
 
 /**
  * A thread's usage over a span: its cumulative total at the end less the total before the
- * span's first request (`total - last` of the first snapshot), clamped at zero as Codex
- * clamps its own per-turn figure (a context overflow resets the total). Codex reports
- * reasoning tokens inside `outputTokens`, so they are not added again.
+ * span's first request (`total - last` of the first snapshot), clamped at zero, plus what it
+ * used before a reset. Codex reports reasoning tokens inside `outputTokens`, so they are not
+ * added again.
  */
-function spanUsageOf({ first, end }: UsageSpan): TokenUsage {
+function spanUsageOf({ first, end, beforeReset }: UsageSpan): TokenUsage {
   const used = (key: keyof TokenUsageBreakdown): number =>
     Math.max(0, end[key] - (first.total[key] - first.last[key]));
   return {
-    input: used('inputTokens'),
-    output: used('outputTokens'),
-    cacheRead: used('cachedInputTokens'),
-    cacheWrite: used('cacheWriteInputTokens'),
+    input: used('inputTokens') + (beforeReset?.input ?? 0),
+    output: used('outputTokens') + (beforeReset?.output ?? 0),
+    cacheRead: used('cachedInputTokens') + (beforeReset?.cacheRead ?? 0),
+    cacheWrite: used('cacheWriteInputTokens') + (beforeReset?.cacheWrite ?? 0),
   };
 }
 
