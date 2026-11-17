@@ -107,6 +107,13 @@ describe('pauseWorkflow', () => {
     expect((await refusal(run, { owned: false })).reason).toBe('no_owner_answered');
   });
 
+  test('refuses a pending request whose owner has since gone', async () => {
+    const run = running({
+      metadata: { operator_pause: requested, execution_owner: { host: hostname(), pid: 1 } },
+    });
+    expect((await refusal(run, { owned: false })).reason).toBe('no_owner_answered');
+  });
+
   test('refuses a run whose recorded owner is on another host', async () => {
     const run = running({
       metadata: { execution_owner: { host: `${hostname()}-elsewhere`, pid: 1 } },

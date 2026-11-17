@@ -63,9 +63,9 @@ export async function pauseWorkflow(
     );
   }
   assertPausable(run);
+  await assertOwnerAnswers(ctx, run);
   const pending = operatorPause(run);
   if (pending !== null) return { run, requested: pending.requested, alreadyRequested: true };
-  await assertOwnerAnswers(ctx, run);
 
   const requested = { at: new Date().toISOString(), ...(await itemAct(ctx.store, actor, via)) };
   const recorded = await ctx.store.updateWorkflowRunMetadataIfRunning(run.id, {
