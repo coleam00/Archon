@@ -149,7 +149,8 @@ interface PassWrites {
   notPosted: TrackerMissedWrite[];
 }
 
-function itemTrackerDestinationId(projectKey: string): string {
+/** The ledger's destination id for a tracked project. */
+export function itemTrackerDestinationId(projectKey: string): string {
   return `tracker:${projectKey}`;
 }
 

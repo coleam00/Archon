@@ -178,6 +178,31 @@ export async function runMetrics({ positionals, values }: CliRouteContext): Prom
   });
 }
 
+const TRACKER_USAGE =
+  'Usage: archon tracker sync [--json]\n       archon tracker release <project> [--json]';
+
+export async function runTracker({
+  subcommand,
+  positionals,
+  json,
+  forgeTrustedEnv,
+}: CliRouteContext): Promise<number> {
+  const project = positionals[2];
+  const known =
+    (subcommand === 'sync' && project === undefined) ||
+    (subcommand === 'release' && project !== undefined && positionals[3] === undefined);
+  if (!known) return await fail(json, TRACKER_USAGE);
+  const { trackerSyncCommand, trackerReleaseCommand, syncConfiguredProjects } = await loadRoute(
+    () => import('../commands/tracker'),
+    { database: true }
+  );
+  if (project !== undefined) return await trackerReleaseCommand(project, { json: json === true });
+  return await trackerSyncCommand({
+    json: json === true,
+    sync: () => syncConfiguredProjects(forgeTrustedEnv),
+  });
+}
+
 export async function runTrigger({
   subcommand,
   positionals,
