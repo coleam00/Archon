@@ -430,7 +430,9 @@ export async function abandonTrackerPass(destination: string, owner: ProcessOwne
 /**
  * Explicit operator release of `destination`'s pass, for a holder this host cannot prove
  * gone, such as one on another host. Refuses a same-host holder that is still running. A
- * holder whose record does not parse has no owner to probe, so the release stands.
+ * holder on another host cannot be probed, so the operator must confirm it stopped first:
+ * if it is still running, its pass overlaps the next. A holder whose record does not parse
+ * has no owner to probe, so the release stands.
  */
 export async function releaseTrackerPass(
   destination: string

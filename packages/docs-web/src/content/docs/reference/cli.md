@@ -2707,7 +2707,7 @@ archon tracker release <project> [--json]
 
 It exits 1 only when a project could not be scanned at all (`misconfigured` or `failed`), and then `ok` is false. A `held` project is not a failure.
 
-`tracker release <project>` lets go of a project's pass when its holder is a process this host cannot prove gone, such as one on another host or in a container recreated under another hostname. It refuses, exiting 1, when the holder runs on this host and is still alive, and when the project is not in the `itemTracker` config. A pass held by a gone process on the same host needs no release: the next pass takes it over.
+`tracker release <project>` lets go of a project's pass when its holder is a process this host cannot prove gone, such as one on another host or in a container recreated under another hostname. It refuses, exiting 1, when the holder runs on this host and is still alive, and when the project is not in the `itemTracker` config. It cannot check a holder on another host: release only after confirming that process is gone, since a holder still running its pass overlaps the next one and can post a comment twice or edit the status comment out of order. A pass held by a gone process on the same host needs no release: the next pass takes it over.
 
 ### `chat <message>`
 

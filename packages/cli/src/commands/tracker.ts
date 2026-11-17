@@ -65,7 +65,7 @@ function reportLines(report: TrackerPassReport): string {
     case 'held':
       return (
         `${project}: held by ${report.heldBy.host}:${String(report.heldBy.pid)} since ${report.since}; ` +
-        `that process runs one more pass. If it is gone, run: archon tracker release ${project}\n`
+        `that process runs one more pass. Only once you have confirmed it is gone, run: archon tracker release ${project}\n`
       );
     case 'misconfigured':
       return `${project}: misconfigured (${[report.errorKind, ...(report.unsupported ?? [])].join(': ')})\n`;
