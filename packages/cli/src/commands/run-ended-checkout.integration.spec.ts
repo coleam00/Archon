@@ -442,7 +442,6 @@ describe('a stage on the checkout the asking run left', () => {
   test("answering the last ask starts the stage on the asking run's branch at the commit it ended on", async () => {
     const fixture = await makeFixture('asks', `printf '{"outcome": "pass"}'`);
     fixture.bindAsks('carry-on-after-answers', 'ask-build', 'carry-on');
-    fixture.bindAsks('look-after-answers', 'ask-build', 'look-again');
     const asking = await startAskBuild(fixture);
     const { handoff } = metadata(asking).asks_checkout as {
       handoff: { runId: string; branch: string; commit: string };
@@ -461,11 +460,10 @@ describe('a stage on the checkout the asking run left', () => {
     expect(fired.stderr).toContain('on.asksSettled.checkout');
 
     await answerTheAsk(fixture);
-    const all = await waitForRuns(fixture, 3);
-    expect(all.map(run => [run.workflow_name, run.status]).sort()).toEqual([
+    const all = await waitForRuns(fixture, 2);
+    expect(all.map(run => [run.workflow_name, run.status])).toEqual([
       ['ask-build', 'completed'],
       ['carry-on', 'completed'],
-      ['look-again', 'completed'],
     ]);
     const read = (name: string): string => readFileSync(join(fixture.root, name), 'utf8').trim();
     // The mutating stage continued on the branch, from the commit the asking run ended on,
@@ -475,20 +473,30 @@ describe('a stage on the checkout the asking run left', () => {
       'carry on',
       'asked',
     ]);
-    // The read-only stage got a checkout of its own at that commit.
-    const [lookBranch, lookCommit] = read('look-again').split(' ');
-    expect(lookCommit).toBe(handoff.commit);
-    expect(lookBranch).not.toBe(handoff.branch);
-    const byName = (name: string): RunRow | undefined =>
-      all.find(run => run.workflow_name === name);
-    expect(metadata(byName('carry-on')).checkout_handoff).toMatchObject({
+    expect(metadata(all[1]).checkout_handoff).toMatchObject({
       runId: asking.id,
       lane: 'continue',
     });
-    expect(metadata(byName('look-again')).checkout_handoff).toMatchObject({
-      runId: asking.id,
-      lane: 'copy',
-    });
+  }, 120_000);
+
+  // Apart from the test above: a copy is cut only while the branch is at the commit, so a
+  // mutating stage started by the same answer could move it first.
+  test('a read-only stage gets a checkout of its own at the commit the asking run ended on', async () => {
+    const fixture = await makeFixture('asks-copy', `printf '{"outcome": "pass"}'`);
+    fixture.bindAsks('look-after-answers', 'ask-build', 'look-again');
+    const asking = await startAskBuild(fixture);
+    const { handoff } = metadata(asking).asks_checkout as {
+      handoff: { branch: string; commit: string };
+    };
+    await answerTheAsk(fixture);
+    const [, look] = await waitForRuns(fixture, 2);
+    expect(look?.status).toBe('completed');
+    const [lookBranch, lookCommit] = readFileSync(join(fixture.root, 'look-again'), 'utf8')
+      .trim()
+      .split(' ');
+    expect(lookCommit).toBe(handoff.commit);
+    expect(lookBranch).not.toBe(handoff.branch);
+    expect(metadata(look).checkout_handoff).toMatchObject({ runId: asking.id, lane: 'copy' });
   }, 120_000);
 
   test('a branch that moved after the asking run ended is refused, for a read-only stage too', async () => {
