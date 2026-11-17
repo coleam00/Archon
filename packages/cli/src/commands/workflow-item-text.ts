@@ -91,13 +91,17 @@ function skippedLines(start: ItemSkippedStart): string[] {
   return lines;
 }
 
-/** One run, and how to start it when it was admitted but no process is running it. */
+/**
+ * One run, how to read its result when it has one, and how to start it when it was admitted
+ * but no process is running it.
+ */
 function runLines(run: ItemRun): string[] {
   const outcome = run.outcome === null ? '' : ` · authored outcome: ${run.outcome}`;
   const ended = run.completedAt === null ? '' : ` → ${minute(run.completedAt)}`;
   const lines = [
     `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow}${outcome}  ${minute(run.startedAt)}${ended}${causeText(run.cause)}`,
   ];
+  if (run.hasResult) lines.push(`            result: archon workflow get ${run.id} --json`);
   const waiting = run.awaitingExecution;
   if (waiting)
     lines.push(

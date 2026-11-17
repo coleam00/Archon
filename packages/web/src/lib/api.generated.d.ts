@@ -5908,6 +5908,7 @@ export interface components {
           required?: boolean;
           default?: unknown;
           description?: string;
+          result_of?: string;
         };
       };
       returns?: string;
@@ -7889,6 +7890,7 @@ export interface components {
           /** @enum {string|null} */
           owner: 'reachable' | 'unreachable' | 'unknown' | null;
         } | null;
+        hasResult: boolean;
       }[];
       queued: {
         requestId: string;

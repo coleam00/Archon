@@ -277,6 +277,7 @@ describe('reading an item', () => {
         cause: null,
         awaitingExecution: null,
         heldBehind: null,
+        hasResult: false,
       },
       {
         id: 'second',
@@ -288,6 +289,7 @@ describe('reading an item', () => {
         cause: { kind: 'run_ended', runId: 'first', sourceInstanceId: 'review-after-deliver' },
         awaitingExecution: null,
         heldBehind: null,
+        hasResult: false,
       },
     ]);
     // The children's questions are the item's, under their own run ids, oldest first; the

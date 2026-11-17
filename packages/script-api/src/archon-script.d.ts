@@ -2062,6 +2062,7 @@ declare module 'archon:script' {
         readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
         readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
       } | null;
+      readonly hasResult: boolean;
     }>;
     readonly queued: ReadonlyArray<{
       readonly requestId: string;

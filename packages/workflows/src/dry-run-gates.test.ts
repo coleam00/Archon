@@ -111,6 +111,26 @@ describe('dry-run gates and waits', () => {
     });
   });
 
+  test.each([
+    { inputs: undefined, previewed: 'Prior was null.' },
+    { inputs: { prior: 'supplied' }, previewed: 'Prior was supplied.' },
+  ])(
+    'previews an unsupplied result_of input as null, a supplied one as given (%j)',
+    async ({ inputs, previewed }) => {
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'reader',
+          inputs: { prior: { result_of: 'build' } },
+          nodes: [{ id: 'recover', wait: { attention: 'Prior was $INPUTS.prior.' } }],
+        }),
+        ...(inputs ? { inputs } : {}),
+      });
+
+      expect(result.outcome).toBe('paused');
+      expect(result.trace.at(-1)).toMatchObject({ nodeId: 'recover', resolvedText: previewed });
+    }
+  );
+
   test('gate messages, cancel reasons and wait messages keep $ARGUMENTS literal, as a real run renders them', async () => {
     const preview = async (node: Record<string, unknown>): Promise<string | undefined> => {
       const result = await dryRunWorkflow({

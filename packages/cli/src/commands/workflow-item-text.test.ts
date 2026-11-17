@@ -15,6 +15,7 @@ const read: ItemRead = {
       cause: null,
       awaitingExecution: null,
       heldBehind: null,
+      hasResult: true,
     },
   ],
   queued: [
@@ -147,6 +148,7 @@ test('an item read prints its runs, open questions and answers', () => {
   expect(runLine).toContain('2026-11-01T09:00Z');
   expect(runLine).toContain('2026-11-01T09:30Z');
   const text = lines.join('\n');
+  expect(text).toContain('result: archon workflow get run-done-1 --json');
   expect(text).toContain('Ship the fix?');
   expect(text).toContain('archon workflow approve run-ask-1 --occurrence gate-3');
   const answerLine = lines.find(line => line.includes('needs tests'));
