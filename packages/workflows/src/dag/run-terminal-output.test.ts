@@ -2098,7 +2098,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     expect(store.failWorkflowRun).toHaveBeenCalled();
     const failCall = (store.failWorkflowRun as ReturnType<typeof mock>).mock.calls[0];
     const failMsg = failCall[1] as string;
-    expect(failMsg).toContain('fail-node failed');
+    expect(failMsg).toContain('fail-node (config) failed');
     expect(failMsg).not.toContain('no successful nodes');
   });
 

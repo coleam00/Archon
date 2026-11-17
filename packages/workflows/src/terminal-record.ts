@@ -535,11 +535,16 @@ export function failedOutcomeReason(record: TerminalRecord | null): string[] {
 /**
  * Why a run that ended needs a look, for a reader of that one run: the failed-outcome
  * reason, or for a failed run the first line of its first failed node's error, or else of
- * the run's own. Error text is whatever a command or provider printed, so it stays out of
- * the attention stream, which uses structured failure facts instead.
+ * the run's own, led by that node's recorded failure kind. Error text is whatever a
+ * command or provider printed, so it stays out of the attention stream, which uses
+ * structured failure facts instead.
  */
 export function terminalReason(record: TerminalRecord | null): string[] {
   if (record?.status !== 'failed') return failedOutcomeReason(record);
   const failed = record.nodes.find(node => node.node_id === record.first_failed_node);
-  return boundedReason([firstLine(failed?.error ?? record.error ?? '') ?? '']);
+  const reason = boundedReason([firstLine(failed?.error ?? record.error ?? '') ?? '']);
+  const kind = failed?.failure_kind;
+  return kind === undefined
+    ? reason
+    : reason.map((line, i) => (i === 0 ? `(${kind}) ${line}` : line));
 }

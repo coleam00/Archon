@@ -1038,6 +1038,54 @@ describe('workflowGetCommand', () => {
     }
   );
 
+  it("prints a failed run's reason led by its first failed node's recorded kind", async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+    const record: TerminalRecord = {
+      run_id: 'run-schema-unmet',
+      status: 'failed',
+      outcome: null,
+      error: 'Node check failed',
+      first_failed_node: 'check',
+      nodes: [
+        {
+          node_id: 'check',
+          state: 'failed',
+          error: 'the answer was rejected',
+          failure_kind: 'schema_unmet',
+        },
+      ],
+      returns: { availability: 'unavailable', node_id: null, reason: 'not_declared' },
+      artifacts: { root: null, files: [], limitations: [] },
+    };
+    const run = {
+      id: record.run_id,
+      workflow_name: 'implement',
+      status: record.status,
+      started_at: new Date(),
+      metadata: { error: 'Node check failed' },
+      output_root: null,
+      checkout_baseline: null,
+      codebase_id: null,
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(run);
+    (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'terminal-event',
+        workflow_run_id: record.run_id,
+        event_type: 'workflow_failed',
+        step_name: null,
+        step_index: null,
+        created_at: '2026-11-17T00:00:00.000Z',
+        data: { terminal_record: record },
+      },
+    ]);
+
+    await workflowGetCommand(createTestWorkflowHost(), record.run_id);
+
+    expect(consoleSpy).toHaveBeenCalledWith('  Reason: (schema_unmet) the answer was rejected');
+  });
+
   const usageCases: [string, Record<string, unknown>, string, string, string][] = [
     [
       'recorded numbers',

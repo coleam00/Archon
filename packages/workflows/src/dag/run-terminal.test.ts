@@ -94,7 +94,7 @@ describe('executeDagWorkflow -- final status derivation', () => {
     // node's own error text is the subprocess's, so the assertion pins the
     // sentence the executor owns and the node it names.
     expect(deliveredMessages(platform)).toEqual([
-      "❌ DAG workflow 'status-test' completed with failures: 'fail': Bash node 'fail' failed " +
+      "❌ DAG workflow 'status-test' completed with failures: 'fail' (exec_failed): Bash node 'fail' failed " +
         '[exit 1]: no diagnostic output',
     ]);
   });
@@ -178,12 +178,18 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
   async function runDag(
     nodes: DagNode[],
     prepareStore?: (store: MockWorkflowStore) => void
-  ): Promise<{ store: MockWorkflowStore; failureKinds: Record<string, unknown> }> {
+  ): Promise<{
+    store: MockWorkflowStore;
+    failureKinds: Record<string, unknown>;
+    messages: string[];
+  }> {
     const store = createMockStore();
     prepareStore?.(store);
+    const platform = createMockPlatform();
     await executeDagWorkflow(
       dagOptions({
         deps: createMockDeps(store),
+        platform,
         cwd: testDir,
         workflow: { name: 'dag-reasons', nodes },
         workflowRun: makeWorkflowRun(),
@@ -194,7 +200,7 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
       if (event.event_type !== 'node_failed' || !event.step_name) continue;
       failureKinds[event.step_name] = (event.data as Record<string, unknown>).failure_kind;
     }
-    return { store, failureKinds };
+    return { store, failureKinds, messages: deliveredMessages(platform) };
   }
 
   function failOptions(store: MockWorkflowStore): unknown {
@@ -222,7 +228,7 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
       yield { type: 'agent_message_chunk', text: 'Sure, here is my answer in prose.' };
       yield { type: 'result', sessionId: 'sid-prose' };
     });
-    const { failureKinds } = await runDag([
+    const { failureKinds, messages } = await runDag([
       {
         id: 'classify',
         kind: 'agent',
@@ -231,6 +237,11 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
       },
     ]);
     expect(failureKinds).toEqual({ classify: 'schema_unmet' });
+    // The run's summary names the recorded kind, the value a retry policy targets.
+    expect(messages.at(-1)).toBe(
+      "❌ DAG workflow 'dag-reasons' failed: node classify (schema_unmet) failed. " +
+        '0 downstream nodes were skipped.'
+    );
   });
 
   it('an untyped provider error is unknown, whatever its message says', async () => {
