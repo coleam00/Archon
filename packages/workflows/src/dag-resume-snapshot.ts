@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { createLogger } from '@archon/paths';
-import { mergeTokenUsage, type TokenUsage } from '@archon/provider-contract';
+import { mergeTokenUsage, modelCallUsageSchema, type TokenUsage } from '@archon/provider-contract';
 import { sumFanOutTokens, sumReportedCost } from './dag/usage';
 import type { FanOutInstanceSnapshot } from './fan-out-identity';
 import {
@@ -195,6 +195,9 @@ function readTokens(runId: string, stepName: string, tokens: unknown): TokenUsag
   // multi-agent node) keeps the resumed run a floor. Anything other than `true`
   // is ignored without a warn: unlike the numeric axes it carries no total.
   if (tokens.cachePartial === true) normalized.cachePartial = true;
+  const calls = modelCallUsageSchema.array().safeParse(tokens.calls);
+  if (calls.success) normalized.calls = calls.data;
+  if (tokens.callsPartial === true) normalized.callsPartial = true;
   return normalized;
 }
 

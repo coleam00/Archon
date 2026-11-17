@@ -5172,6 +5172,17 @@ export interface components {
                   cachePartial?: true;
                   total?: number;
                   cost?: number;
+                  calls?: {
+                    responseId?: string;
+                    provider?: string;
+                    model?: string;
+                    input: number;
+                    output: number;
+                    cacheRead?: number;
+                    cacheWrite?: number;
+                  }[];
+                  /** @enum {boolean} */
+                  callsPartial?: true;
                 };
               }
             | {
@@ -6547,6 +6558,17 @@ export interface components {
           cachePartial?: true;
           total?: number;
           cost?: number;
+          calls?: {
+            responseId?: string;
+            provider?: string;
+            model?: string;
+            input: number;
+            output: number;
+            cacheRead?: number;
+            cacheWrite?: number;
+          }[];
+          /** @enum {boolean} */
+          callsPartial?: true;
         } | null;
         signaledCostUsd?: number | null;
         execution?: {
@@ -6786,6 +6808,17 @@ export interface components {
                     cachePartial?: true;
                     total?: number;
                     cost?: number;
+                    calls?: {
+                      responseId?: string;
+                      provider?: string;
+                      model?: string;
+                      input: number;
+                      output: number;
+                      cacheRead?: number;
+                      cacheWrite?: number;
+                    }[];
+                    /** @enum {boolean} */
+                    callsPartial?: true;
                   };
                 }
               | {

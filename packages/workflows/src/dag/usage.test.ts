@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test';
 import { tokenUsageSchema } from '@archon/provider-contract';
-import { runUsageMismatch } from './usage';
+import { runUsageMismatch, incrementalCallUsage } from './usage';
 
 // Each case is the shape of a historical aggregation defect, or a difference the
 // comparison must not report, so a comparison that passes on anything fails here.
@@ -68,5 +68,38 @@ describe('runUsageMismatch', () => {
   it('treats absent cost as zero and tolerates float summation order', () => {
     expect(runUsageMismatch({}, { costUsd: 0 })).toEqual([]);
     expect(runUsageMismatch({ costUsd: 0.1 + 0.2 }, { costUsd: 0.3 })).toEqual([]);
+  });
+});
+
+describe('incremental request evidence', () => {
+  const one = { responseId: 'one', input: 100, output: 10 };
+  const two = { responseId: 'two', input: 200, output: 20 };
+  const total = { input: 300, output: 30, calls: [one, two] };
+  it('removes an already reported prefix even after JSON round-trip', () => {
+    const prior = tokenUsageSchema.parse(
+      JSON.parse(JSON.stringify({ input: 100, output: 10, calls: [one] }))
+    );
+    expect(incrementalCallUsage(total, prior)).toEqual({ calls: [two] });
+    expect(incrementalCallUsage(total, total)).toEqual({ calls: [] });
+  });
+  it('does not infer a prefix from counters or mismatched response identities', () => {
+    for (const prior of [
+      { input: 100, output: 10 },
+      { input: 100, output: 10, calls: [two] },
+    ]) {
+      expect(incrementalCallUsage(total, prior)).toEqual({ calls: undefined, callsPartial: true });
+    }
+  });
+  it('retains incomplete evidence through incremental accounting', () => {
+    expect(
+      incrementalCallUsage(
+        { ...total, callsPartial: true },
+        {
+          input: 100,
+          output: 10,
+          calls: [one],
+        }
+      )
+    ).toEqual({ calls: [two], callsPartial: true });
   });
 });
