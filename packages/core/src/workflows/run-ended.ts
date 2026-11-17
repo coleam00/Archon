@@ -265,15 +265,7 @@ export function createRunEndedStarts(
       receipts.push(
         bindingReceipt(
           candidate,
-          {
-            deliveryId: ended.run.id,
-            sourceActor: {
-              source: RUN_ENDED_SOURCE_ACTOR,
-              id: ended.run.id,
-              ...(ended.outcome.value === '' ? {} : { display: ended.outcome.value }),
-            },
-            itemKey: item.key,
-          },
+          { deliveryId: run.id, sourceActor: runEndedActor(ended), itemKey: item.key },
           mappedInputs(candidate.runEnded.inputs, ended),
           candidate.runEnded.checkout === undefined ? undefined : await checkout,
           dependencies.now?.() ?? new Date()
@@ -281,6 +273,15 @@ export function createRunEndedStarts(
       );
     }
     return receipts;
+  };
+}
+
+/** The source actor of a start a run's end caused: the run, and its outcome when it has one. */
+function runEndedActor(ended: RunEndedFacts): NonNullable<SourceReceiptInput['sourceActor']> {
+  return {
+    source: RUN_ENDED_SOURCE_ACTOR,
+    id: ended.run.id,
+    ...(ended.outcome.value === '' ? {} : { display: ended.outcome.value }),
   };
 }
 
