@@ -402,16 +402,6 @@ async function preflightRun(
 }
 
 /**
- * The context the layers run in, seeded with what earlier passes left: restored node
- * outputs and sessions, prior usage, unfinished invocations and the run budget's ledger.
- *
- * runLayers mutates the context's mutable fields in place (nodeOutputs,
- * lastSequentialSession, usage accumulators); the executor reads them back for the
- * terminal tally. stepNamePrefix is '' for the top-level DAG so node event step_names are
- * the raw node ids. Fields stay explicit because spreading options would also copy
- * executor-only state into this context without an excess-property check.
- */
-/**
  * The run's `returns:` node to observe. A run that takes no path lock marks its checkout
  * as its first pass begins, so completion can show nothing moved HEAD while it judged.
  */
@@ -429,6 +419,16 @@ async function returnsCheckout(
   return { nodeId: workflow.returns, startMark: await readCheckoutMark(cwd, execContext) };
 }
 
+/**
+ * The context the layers run in, seeded with what earlier passes left: restored node
+ * outputs and sessions, prior usage, unfinished invocations and the run budget's ledger.
+ *
+ * runLayers mutates the context's mutable fields in place (nodeOutputs,
+ * lastSequentialSession, usage accumulators); the executor reads them back for the
+ * terminal tally. stepNamePrefix is '' for the top-level DAG so node event step_names are
+ * the raw node ids. Fields stay explicit because spreading options would also copy
+ * executor-only state into this context without an excess-property check.
+ */
 async function createRunContext(
   options: ExecuteDagWorkflowOptions,
   execContext: ExecutionContext,
