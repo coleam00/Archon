@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import type { ItemAsk } from '@archon/workflows/schemas/item-ask';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
+import { asksResultMetadata } from '@archon/workflows/schemas/run-metadata';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { openAskItems } from '@archon/workflows/attention-queue';
 import { readItemOfRun } from '@archon/workflows/item-read';
@@ -521,7 +522,7 @@ export function describeSqlItemAskConformance(makeHarness: () => Promise<Harness
       await harness.store.completeWorkflowRun(
         run.id,
         { duration_ms: 1 },
-        { asks_result: { summary: 'half planned' } },
+        asksResultMetadata({ summary: 'half planned' }),
         { asks: [ask('Keep the flag?'), ask('Rename it?')] }
       );
       const deps = itemDeps(harness, store);
@@ -604,6 +605,54 @@ export function describeSqlItemAskConformance(makeHarness: () => Promise<Harness
           ],
         },
       });
+    } finally {
+      await removeTempTree(directory);
+      await harness.close();
+    }
+  });
+
+  test('a result with nulls reaches the binding as written, at any depth and whole', async () => {
+    const harness = await makeHarness();
+    const file = asksSettledFile('build-after-answers', 'answered');
+    const { store, directory } = await storeWithBindings(harness, {
+      'build-after-answers.json': {
+        ...file,
+        on: {
+          asksSettled: {
+            workflowName: 'plan',
+            settled: 'answered',
+            inputs: { choice: { result: '/choice' }, whole: { result: '' } },
+          },
+        },
+      },
+    });
+    try {
+      const result = { choice: null, nested: { value: null, kept: 1 } };
+      const run = await harness.store.createWorkflowRun({
+        workflow_name: 'plan',
+        user_message: '',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+        item_key: 'issue-1',
+      });
+      await harness.store.claimPendingWorkflowRun(run.id);
+      await harness.store.completeWorkflowRun(
+        run.id,
+        { duration_ms: 1 },
+        asksResultMetadata(result),
+        { asks: [ask('Keep the flag?')] }
+      );
+      const [ref] = await openRefs(harness);
+      await answerAttentionItem(
+        itemDeps(harness, store),
+        ref ?? '',
+        { choose: ['keep'] },
+        operator,
+        'cli'
+      );
+      const [listed] = await receiptsFor(harness, run.id);
+      const receipt = await harness.store.getStartReceipt(listed?.id ?? '');
+      expect(receipt?.outcome).toBe('matched');
+      expect(receipt?.bindings[0]?.intent?.eventInputs).toEqual({ choice: null, whole: result });
     } finally {
       await removeTempTree(directory);
       await harness.close();

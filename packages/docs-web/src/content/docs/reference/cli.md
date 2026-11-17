@@ -1504,11 +1504,13 @@ the start the same way, but the server prepares only starts on the host its
 `ARCHON_TRIGGER_HOST` names; a start on any other host waits for that host's next drain. See
 [who prepares the start](/guides/workflow-triggers/#who-prepares-the-start).
 
-`--json` prints `{ ok: true, ref, action, settled?, unchanged?, waiting?, notStarted? }`:
+`--json` prints `{ ok: true, ref, action, settled?, unchanged?, waiting?, notStarted?, startsUnread? }`:
 `action` is `answer` or `withdraw`, `settled` is true when this write settled the set,
 `unchanged: true` when nothing changed, `waiting` lists `{ receiptId, bindingId, hostId }` for
 each start left for its host's drain, and `notStarted` lists `{ receiptId, bindingId, reason }`
-for each binding the settlement matched that could not start. An answer to a run-held item prints `runId`, `cancelled` and `continues`
+for each binding the settlement matched that could not start. When the starts were recorded
+but could not be read back, `startsUnread` holds `{ receiptIds, error }` instead; the answer
+still stands, and `archon trigger inspect <receipt>` shows each start. An answer to a run-held item prints `runId`, `cancelled` and `continues`
 instead of `settled`. A refusal exits 1 and prints `{ ok: false, error, message }`, where
 `error` is `unknown` (nothing the caller may answer has the ref), `closed`, `moved`,
 `takes_no_answer`, `already_answered`, `already_withdrawn`, `already_replaced`, `not_an_ask`

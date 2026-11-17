@@ -209,15 +209,32 @@ function withdrawn(
   }
 }
 
-/** The starts a close's settlement caused, as they stand once this process tried them. */
-function startsOf(
-  result: AttentionItemAnswerResult | AttentionItemWithdrawResult,
-  host: WorkflowHost
-): Promise<SettledStarts> | SettledStarts {
-  return (result.kind === 'ask_answered' || result.kind === 'withdrawn') &&
-    result.startReceipts.length > 0
-    ? settledStarts(result.startReceipts, host.deps.store)
-    : NO_STARTS;
+/**
+ * The starts a close's settlement caused, as they stand once this process tried them. The
+ * close has committed by now, so a failure to read them back is reported beside the
+ * recorded answer, naming the receipts, and never turns the command into a failure.
+ */
+export async function startsOf(
+  caused: readonly SourceReceiptAcceptance[],
+  store: Pick<IWorkflowStore, 'getStartReceipt'>
+): Promise<SettledStarts> {
+  if (caused.length === 0) return NO_STARTS;
+  try {
+    return await settledStarts(caused, store);
+  } catch (error) {
+    const receiptIds = caused.map(accepted => accepted.receipt.id);
+    const message = (error as Error).message;
+    return {
+      text: `\n\u26a0\ufe0f The settlement recorded ${String(receiptIds.length)} bound stage start(s), but where they stand could not be read: ${message}. archon trigger inspect <receipt> shows each: ${receiptIds.join(', ')}.`,
+      json: { startsUnread: { receiptIds, error: message } },
+    };
+  }
+}
+
+function causedBy(
+  result: AttentionItemAnswerResult | AttentionItemWithdrawResult
+): readonly SourceReceiptAcceptance[] {
+  return result.kind === 'ask_answered' || result.kind === 'withdrawn' ? result.startReceipts : [];
 }
 
 export async function workflowAnswerRefCommand(
@@ -235,14 +252,18 @@ export async function workflowAnswerRefCommand(
   try {
     if ('withdraw' in request) {
       const result = await withdrawAttentionItem(deps, request.withdraw, actor, 'cli');
-      outcome = withdrawn(request.withdraw, result, await startsOf(result, host));
+      outcome = withdrawn(
+        request.withdraw,
+        result,
+        await startsOf(causedBy(result), host.deps.store)
+      );
     } else {
       const answer: AttentionAnswerRequest = {
         ...request.selection,
         ...(request.text === undefined ? {} : { text: request.text }),
       };
       const result = await answerAttentionItem(deps, request.ref, answer, actor, 'cli');
-      outcome = answered(request.ref, result, await startsOf(result, host));
+      outcome = answered(request.ref, result, await startsOf(causedBy(result), host.deps.store));
     }
   } catch (error) {
     outcome = { ok: false, code: 'error', error: (error as Error).message };

@@ -11,7 +11,7 @@ import type {
   WorkflowUsageLimitWaitContext,
 } from '../schemas';
 import { SUBRUN_METADATA_KEYS } from '../schemas';
-import { ASKS_RESULT_METADATA_KEY } from '../schemas/run-metadata';
+import { asksResultMetadata } from '../schemas/run-metadata';
 import type { RunExitReason } from '../schemas/run-terminal-reason';
 import {
   WORKTREE_DISPOSITION_METADATA_KEY,
@@ -271,15 +271,15 @@ function runEndedFacts(
 }
 
 /** The asking run's result, kept on its row for the bindings its settled asks start. */
-function asksResultMetadata(
+function keptAsksResult(
   ctx: RunTerminalContext,
   result: Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3]
-): Record<string, JsonValue> {
+): Record<string, string> {
   const { workflow, nodeOutputs } = ctx;
   if (result?.asks === undefined || workflow.returns === undefined) return {};
   const returned = nodeOutputs.get(workflow.returns);
   const value = returned?.state === 'completed' ? returnedValue(returned) : undefined;
-  return value === undefined ? {} : { [ASKS_RESULT_METADATA_KEY]: value };
+  return value === undefined ? {} : asksResultMetadata(value);
 }
 
 function returnedValue(
@@ -502,7 +502,7 @@ async function completeRun(
             : {}),
           // An asks-settled binding reads the result when the asks settle, by then from
           // the row alone. Gated on the asks a top-level run declares, like the asks.
-          ...asksResultMetadata(ctx, result),
+          ...keptAsksResult(ctx, result),
         },
         // The one write of the run's outcome (#5660): it lands with the completed status,
         // so no reader sees an outcome on a run that has not ended. The starts the end

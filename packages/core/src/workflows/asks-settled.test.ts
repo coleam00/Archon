@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
+import { asksResultMetadata } from '@archon/workflows/schemas/run-metadata';
 import { createAsksSettledStarts } from './asks-settled';
 
 const track = trackTempRoots();
@@ -79,7 +80,7 @@ describe('asks-settled starts', () => {
     const { directory, build } = await prepareWith({
       'build.json': trigger({ progress: { result: '/missing' } }),
     });
-    const [receipt] = build?.(SETTLED, { metadata: { asks_result: { summary: 'x' } } }) ?? [];
+    const [receipt] = build?.(SETTLED, { metadata: asksResultMetadata({ summary: 'x' }) }) ?? [];
     expect(receipt).toMatchObject({
       outcome: 'unmatched',
       receipt: { deliveryId: RUN_ID, itemKey: ITEM.key },

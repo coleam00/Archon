@@ -163,8 +163,24 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
  * node output, parsed. Written only by the completing write, and only when the value is
  * defined, so an asks-settled binding can read the run's result once its asks settle,
  * long after the process that held its node outputs has exited.
+ *
+ * Stored as JSON text, not as a JSON value: the completing write merges metadata, and
+ * SQLite's merge (`json_patch`) deletes every null-valued key at any depth, so a result
+ * stored as a value would lose its nulls and a binding reading one would see nothing.
+ * Write it with `asksResultMetadata` and read it with `readAsksResult`.
  */
-export const ASKS_RESULT_METADATA_KEY = 'asks_result';
+const ASKS_RESULT_METADATA_KEY = 'asks_result';
+
+/** The metadata that keeps a run's `returns:` value for its asks-settled bindings. */
+export function asksResultMetadata(value: JsonValue): Record<string, string> {
+  return { [ASKS_RESULT_METADATA_KEY]: JSON.stringify(value) };
+}
+
+/** The `returns:` value kept by `asksResultMetadata`, or undefined when none was kept. */
+export function readAsksResult(metadata: Record<string, unknown>): JsonValue | undefined {
+  const text = metadata[ASKS_RESULT_METADATA_KEY];
+  return typeof text === 'string' ? (JSON.parse(text) as JsonValue) : undefined;
+}
 
 export const CANCELLED_REASON_METADATA_KEY = 'cancelled_reason';
 

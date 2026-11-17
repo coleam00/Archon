@@ -19,10 +19,7 @@ import {
   type SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
-import {
-  ASKS_RESULT_METADATA_KEY,
-  readSubrunMetadata,
-} from '@archon/workflows/schemas/run-metadata';
+import { readAsksResult, readSubrunMetadata } from '@archon/workflows/schemas/run-metadata';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import {
@@ -102,8 +99,7 @@ export function createAsksSettledStarts(
           ? { gone: `run '${runId}', which left the asks, no longer exists`, answers }
           : {
               inputs: readSubrunMetadata(run.metadata).inputs ?? {},
-              // Written by this binary's completing write, which parsed it as JSON.
-              result: run.metadata[ASKS_RESULT_METADATA_KEY] as JsonValue | undefined,
+              result: readAsksResult(run.metadata),
               answers,
             };
       return candidates
