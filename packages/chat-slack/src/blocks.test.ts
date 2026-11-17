@@ -326,6 +326,25 @@ describe('buildStatusBlocks', () => {
     expect(nodeLines).toContain('`plan` — (schema_unmet) Type error in plan node');
   });
 
+  test('a recorded failure kind shows even when no error text arrived', () => {
+    const { blocks } = buildStatusBlocks(
+      snapshot({
+        status: 'failed',
+        failureKind: 'schema_unmet',
+        nodes: [{ nodeId: 'p', nodeName: 'plan', state: 'failed', failureKind: 'schema_unmet' }],
+      }),
+      startedAt + 1000
+    );
+    const ctx = blocks.find(b => (b as { type: string }).type === 'context') as {
+      elements: Array<{ text: string }>;
+    };
+    expect(ctx.elements[0]?.text).toContain('reason: (schema_unmet)');
+    const nodeLine = blocks
+      .map(b => (b as { text?: { text: string } }).text?.text ?? '')
+      .find(text => text.includes('`plan`'));
+    expect(nodeLine).toContain('`plan` — (schema_unmet)');
+  });
+
   test('terminal cancelled snapshot also surfaces reason', () => {
     const { blocks } = buildStatusBlocks(
       snapshot({

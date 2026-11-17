@@ -589,7 +589,7 @@ If you need to accumulate results across iterations, write them to files in
 
 | Scenario | Behavior |
 |----------|----------|
-| Iteration fails | A transient, rate-limited or capacity (`overloaded`) failure retries the iteration. Any other failure fails the node (no more iterations) |
+| Iteration fails | A transient, rate-limited or capacity (`overloaded`) failure retries the iteration. With `retry.on_error: schema_unmet`, an iteration whose output did not meet its schema retries too. Any other failure fails the node (no more iterations) |
 | Max iterations exceeded | Node fails with descriptive error; with `on_exhausted: complete`, node completes with the last iteration's output |
 | Workflow cancelled | Detected between iterations, node stops |
 | Idle timeout per iteration | The iteration is retried as a transient failure, whether or not its provider produced output first |

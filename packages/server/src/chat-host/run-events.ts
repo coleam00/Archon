@@ -137,7 +137,10 @@ type NodeFailedExecution = Extract<WorkflowEmitterEvent, { type: 'node_failed' }
 
 /**
  * The recorded kind of the node a failed run failed at, read from the stored terminal
- * record and that node's `node_failed` row, never from the run's error text.
+ * record and that node's `node_failed` row, never from the run's error text. The engine
+ * emits `workflow_failed` only after that failure committed, so a read started at emit
+ * time sees this failure's record; a read deferred behind queued routing could see a later
+ * failure of the same run after a resume.
  */
 async function terminalFailureKind(runId: string): Promise<{ failureKind?: string }> {
   const rows =
@@ -199,6 +202,18 @@ export function subscribeChatRunEvents(
     const fail = (): void => {
       log.warn({ eventType: event.type }, 'chat.run_event_failed');
     };
+    // Started now, not in the routing chain: see terminalFailureKind. The kind is display
+    // only, so a failed read still delivers the terminal event, without it.
+    const failureKind =
+      projected.type === 'terminal' && projected.status === 'failed'
+        ? terminalFailureKind(event.runId).catch((error: unknown) => {
+            log.warn(
+              { err: error as Error, runId: event.runId },
+              'chat.run_event_failure_kind_read_failed'
+            );
+            return {};
+          })
+        : undefined;
     routing = routing
       .then(async () => {
         if (stopped) return;
@@ -216,8 +231,7 @@ export function subscribeChatRunEvents(
             ? { ...projected, conversationId: conversation.platform_conversation_id }
             : projected;
         applyRunDetails(run, routed, platform, platforms);
-        if (routed.type === 'terminal' && routed.status === 'failed')
-          Object.assign(routed, await terminalFailureKind(run.id));
+        if (failureKind !== undefined) Object.assign(routed, await failureKind);
         const delivery = (deliveries.get(platform) ?? Promise.resolve())
           .then(async () => {
             if (!stopped) await plugin.runEvent(routed);

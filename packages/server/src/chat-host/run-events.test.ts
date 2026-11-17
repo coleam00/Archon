@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,7 +9,8 @@ import { terminalWorkflowRunStatusSchema } from '@archon/workflows/schemas/workf
 import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/connection';
 import { createWorkflowRun, pauseWorkflowRun } from '@archon/core/db/workflows';
 import { failWorkflowRun } from '@archon/core/db/workflow-run-transitions';
-import { insertWorkflowEvent } from '@archon/core/db/workflow-events';
+import * as workflowEventDb from '@archon/core/db/workflow-events';
+import * as workflowDb from '@archon/core/db/workflows';
 import {
   finishNodeExecution,
   newNodeInvocation,
@@ -268,6 +269,129 @@ test('a cancelled run carries its cancellation reason to the plugin', async () =
   }
 });
 
+async function recordNodeFailure(record: ReturnType<typeof finishNodeExecution>): Promise<void> {
+  await workflowEventDb.insertWorkflowEvent(
+    (sql, params) => getDatabase().query(sql, params),
+    serializeNodeStateRecord(record)
+  );
+}
+
+/** Fail `run` at node `check` with `failureKind`, as the engine records it. */
+async function failRunAt(runId: string, failureKind: 'schema_unmet' | 'timeout'): Promise<void> {
+  await getDatabase().query(
+    `UPDATE remote_agent_workflow_runs SET status = 'running' WHERE id = $1`,
+    [runId]
+  );
+  await recordNodeFailure(
+    finishNodeExecution(
+      startNodeExecution({
+        runId,
+        path: 'check',
+        node: { id: 'check', kind: 'agent', source: { kind: 'inline', prompt: 'check' } },
+        invocation: newNodeInvocation(),
+      }),
+      { status: 'failed', error: `failed with ${failureKind}`, failureKind },
+      { durationMs: 5 }
+    )
+  );
+  await failWorkflowRun(runId, 'Node check failed');
+}
+
+function collectingSupervisor(delivered: ChatRunEvent[]): ChatSupervisor {
+  const supervisor = new ChatSupervisor(
+    { descriptor, argv: [process.execPath] },
+    () => {},
+    () => {}
+  );
+  supervisor.runEvent = async event => {
+    delivered.push(event);
+  };
+  return supervisor;
+}
+
+async function waitFor(delivered: ChatRunEvent[], count: number): Promise<void> {
+  const deadline = Date.now() + DEFAULT_TEST_TIMEOUT_MS;
+  while (delivered.length < count) {
+    if (Date.now() > deadline) throw new Error('Events were not forwarded');
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+}
+
+test('a failed run keeps the kind of its own failure when routing lags behind a later one', async () => {
+  const delivered: ChatRunEvent[] = [];
+  const unsubscribe = subscribeChatRunEvents(
+    new Map([['fixture-chat', collectingSupervisor(delivered)]]),
+    new Map()
+  );
+  const reads = spyOn(workflowEventDb, 'listEventsForRuns');
+  let release: () => void = () => {};
+  const held = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  const realGetRun = workflowDb.getWorkflowRun;
+  const getRun = spyOn(workflowDb, 'getWorkflowRun').mockImplementation(async id => {
+    await held;
+    return realGetRun(id);
+  });
+  try {
+    const run = await createRun('fixture-chat');
+    await failRunAt(run.id, 'schema_unmet');
+    getWorkflowEventEmitter().emit({
+      type: 'workflow_failed',
+      runId: run.id,
+      workflowName: run.workflow_name,
+      error: 'Node check failed',
+    });
+    // The emitted failure's kind is read at once; routing is still held.
+    await reads.mock.results[0]?.value;
+    // The run resumes and fails again, differently, before routing gets to the event.
+    await failRunAt(run.id, 'timeout');
+    release();
+    await waitFor(delivered, 1);
+    expect(delivered[0]).toMatchObject({
+      type: 'terminal',
+      status: 'failed',
+      failureKind: 'schema_unmet',
+    });
+  } finally {
+    release();
+    getRun.mockRestore();
+    reads.mockRestore();
+    unsubscribe();
+  }
+});
+
+test('a failed run is still delivered when its failure kind cannot be read', async () => {
+  const delivered: ChatRunEvent[] = [];
+  const unsubscribe = subscribeChatRunEvents(
+    new Map([['fixture-chat', collectingSupervisor(delivered)]]),
+    new Map()
+  );
+  const reads = spyOn(workflowEventDb, 'listEventsForRuns').mockRejectedValueOnce(
+    new Error('database is locked')
+  );
+  try {
+    const run = await createRun('fixture-chat');
+    await failRunAt(run.id, 'schema_unmet');
+    getWorkflowEventEmitter().emit({
+      type: 'workflow_failed',
+      runId: run.id,
+      workflowName: run.workflow_name,
+      error: 'Node check failed',
+    });
+    await waitFor(delivered, 1);
+    expect(delivered[0]).toMatchObject({
+      type: 'terminal',
+      status: 'failed',
+      error: 'Node check failed',
+    });
+    expect(delivered[0]).not.toHaveProperty('failureKind');
+  } finally {
+    reads.mockRestore();
+    unsubscribe();
+  }
+});
+
 test('a failed node and its failed run carry the recorded failure kind to the plugin', async () => {
   const delivered: ChatRunEvent[] = [];
   const supervisor = new ChatSupervisor(
@@ -296,10 +420,7 @@ test('a failed node and its failed run carry the recorded failure kind to the pl
       { status: 'failed', error: 'the answer was rejected', failureKind: 'schema_unmet' },
       { durationMs: 5 }
     );
-    await insertWorkflowEvent(
-      (sql, params) => getDatabase().query(sql, params),
-      serializeNodeStateRecord(failedNode)
-    );
+    await recordNodeFailure(failedNode);
     await failWorkflowRun(run.id, 'Node check failed');
     const emitter = getWorkflowEventEmitter();
     const nodeEvent = serializeNodeEmitter(failedNode);

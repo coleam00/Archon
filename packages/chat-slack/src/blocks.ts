@@ -280,10 +280,9 @@ export function buildStatusBlocks(
         n.state === 'completed' && typeof n.durationMs === 'number'
           ? ` · ${formatElapsed(n.durationMs)}`
           : '';
-      const errSuffix =
-        n.state === 'failed' && n.error
-          ? ` — ${withKind(n.failureKind, truncate(n.error, 120))}`
-          : '';
+      const failure =
+        n.state === 'failed' ? failureText(n.failureKind, n.error && truncate(n.error, 120)) : '';
+      const errSuffix = failure ? ` — ${failure}` : '';
       return `${glyph} \`${n.nodeName}\`${duration}${errSuffix}`;
     });
     blocks.push({
@@ -360,9 +359,13 @@ function buildStatusHeader(snapshot: RunSnapshot, header: string, elapsed: strin
   };
 }
 
-/** A failure's text led by its recorded kind, when the engine recorded one. */
-function withKind(failureKind: string | undefined, text: string): string {
-  return failureKind === undefined ? text : `(${failureKind}) ${text}`;
+/**
+ * A failure's text led by its recorded kind. Either may be absent: a kind with no text is
+ * still shown, and an empty result means there is nothing to show.
+ */
+function failureText(failureKind: string | undefined, text: string | undefined): string {
+  if (failureKind === undefined) return text ?? '';
+  return text ? `(${failureKind}) ${text}` : `(${failureKind})`;
 }
 
 function buildStatusFooter(
@@ -373,10 +376,12 @@ function buildStatusFooter(
   if (terminalStatus && typeof snapshot.totalCostUsd === 'number') {
     footerParts.push(`total cost: $${snapshot.totalCostUsd.toFixed(4)}`);
   }
-  if ((snapshot.status === 'failed' || snapshot.status === 'cancelled') && snapshot.failureReason) {
-    footerParts.push(
-      `reason: ${withKind(snapshot.failureKind, truncate(snapshot.failureReason, 200))}`
+  if (snapshot.status === 'failed' || snapshot.status === 'cancelled') {
+    const reason = failureText(
+      snapshot.failureKind,
+      snapshot.failureReason && truncate(snapshot.failureReason, 200)
     );
+    if (reason) footerParts.push(`reason: ${reason}`);
   }
   if (footerParts.length > 0) {
     return {
