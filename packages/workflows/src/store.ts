@@ -610,6 +610,13 @@ export interface IWorkflowStore
     beforePublish?: () => Promise<void>
   ): Promise<{ released: boolean }>;
   /**
+   * Claim-checked transition from running to paused for an operator's pending pause
+   * request (`operatorPauseWrite`): records when it paused, `pause_cause: operator`, and
+   * commits `operator_paused` in the same transaction. A run that is no longer running,
+   * carries another claim or has no pending request is left unchanged with no event.
+   */
+  pauseWorkflowRunForOperator(id: string, claimId: string | null): Promise<{ paused: boolean }>;
+  /**
    * Pause a running run on a wait, committing `wait_started` for a new wait or
    * `wait_continued` (`waitContinuedEvent`) for one a resume reached again.
    */

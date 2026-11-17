@@ -44,6 +44,7 @@ import {
   EXECUTION_CLAIM_METADATA_KEY,
   currentExecutionOwner,
   sourceReleasedEvent,
+  operatorPauseWrite,
 } from '../store';
 import { EXECUTION_OWNER_METADATA_KEY } from '../schemas/run-metadata';
 import {
@@ -583,6 +584,16 @@ export function createTransactionView(
       Object.assign(run.metadata, sourceReleaseMetadata(release, new Date().toISOString()));
       record(sourceReleasedEvent(id, release));
       return { released: true };
+    },
+    pauseWorkflowRunForOperator: async (id, claimId) => {
+      const run = row(id);
+      const write = operatorPauseWrite(run, claimId, new Date().toISOString());
+      if (write === undefined) return { paused: false };
+      run.status = 'paused';
+      run.last_activity_at = new Date();
+      Object.assign(run.metadata, write.metadata);
+      record(write.event);
+      return { paused: true };
     },
     pauseWorkflowRunForWait: async (id, wait, pause) => {
       const run = row(id);

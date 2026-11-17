@@ -94,6 +94,7 @@ export const {
   createWorkflowOperations,
   AbandonOwnerNotStoppedError,
   CancelRefusedError,
+  PauseRefusedError,
   ResumeRefusedError,
   describeAbandonOwner,
   assertAnswerable,
@@ -144,6 +145,9 @@ export const store: WorkflowOperationsDeps['store'] = {
   listWorkflowRuns: mockListWorkflowRuns,
   findWorkflowRunsByIdPrefix: async () => [],
   cancelWorkflowRun: mockCancelWorkflowRun,
+  updateWorkflowRunMetadataIfRunning: async () => {
+    throw new Error('Unexpected updateWorkflowRunMetadataIfRunning');
+  },
   cancelResumableRunsForConversation: mockCancelResumableRunsForConversation,
   findChildRuns: mockFindChildRuns,
   getRunAncestry: mockGetRunAncestry,

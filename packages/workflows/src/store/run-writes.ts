@@ -5,6 +5,12 @@ import { PAUSE_CAUSE_METADATA_KEY, type PauseCause } from '../schemas/pause-caus
 import type { RunCancelReason } from '../schemas/run-terminal-reason';
 import type { ExecutionOwnerRecord } from '../schemas/run-metadata';
 import {
+  OPERATOR_PAUSE_METADATA_KEY,
+  readOperatorPauseRecord,
+  type OperatorPauseRecord,
+} from '../schemas/operator-pause';
+import type { WorkflowRun } from '../schemas/workflow-run';
+import {
   SOURCE_RELEASE_METADATA_KEY,
   workflowWaitStepName,
   type AttentionAnswer,
@@ -126,6 +132,39 @@ export function sourceReleasedEvent(
       ...(release.path !== undefined ? { path: release.path } : {}),
       error: release.error,
       retry_at: release.retryAt,
+    },
+  };
+}
+
+/**
+ * The write that pauses a run for an operator's pause request, or undefined when it must
+ * not: the run is no longer `running`, another execution claimed it, or no request is
+ * pending. Every store applies it with the row's status set to `paused`, in one
+ * transaction with the event.
+ */
+export function operatorPauseWrite(
+  run: Pick<WorkflowRun, 'id' | 'status' | 'metadata'>,
+  claimId: string | null,
+  pausedAt: string
+): { metadata: Record<string, unknown>; event: ObservabilityEventInput } | undefined {
+  const record = readOperatorPauseRecord(run.metadata);
+  if (
+    run.status !== 'running' ||
+    executionClaim(run.metadata) !== claimId ||
+    record === undefined ||
+    record.pausedAt !== undefined
+  )
+    return undefined;
+  const paused: OperatorPauseRecord = { ...record, pausedAt };
+  return {
+    metadata: {
+      [OPERATOR_PAUSE_METADATA_KEY]: paused,
+      [PAUSE_CAUSE_METADATA_KEY]: 'operator' satisfies PauseCause,
+    },
+    event: {
+      workflow_run_id: run.id,
+      event_type: 'operator_paused',
+      data: { requested: record.requested, paused_at: pausedAt },
     },
   };
 }

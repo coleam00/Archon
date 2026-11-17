@@ -154,6 +154,9 @@ function createMockStore(): IWorkflowStore {
     releaseRunForUnreadableSource: mock<IWorkflowStore['releaseRunForUnreadableSource']>(() => {
       throw new Error('Unexpected releaseRunForUnreadableSource');
     }),
+    pauseWorkflowRunForOperator: mock<IWorkflowStore['pauseWorkflowRunForOperator']>(() => {
+      throw new Error('Unexpected pauseWorkflowRunForOperator');
+    }),
     releasePausedRunSlot: mock<IWorkflowStore['releasePausedRunSlot']>(() =>
       Promise.resolve({ released: false })
     ),
