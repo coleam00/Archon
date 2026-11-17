@@ -61,7 +61,7 @@ import {
   type SkippedItemStart,
   type ResourceStartRequestInspection,
 } from './resource-start-store';
-import { holdsItem, itemHolder, itemHolders } from './item-hold';
+import { itemHolder, itemHolders } from './item-hold';
 import { runOwnerObservationSchema } from './schemas/workflow-run-listing';
 
 /**
@@ -308,7 +308,6 @@ async function itemHolds(source: ItemReadSource, itemId: string, runs: readonly 
     status: run.status,
     admitted: requests.get(run.id)?.status === 'admitted',
   }));
-  const held = itemHolders(rows);
   const byId = new Map(runs.map(run => [run.id, run]));
   const behind = new Map<string, Promise<ItemHeldBehind>>();
   const describe = (runId: string): Promise<ItemHeldBehind> | null => {
@@ -326,21 +325,24 @@ async function itemHolds(source: ItemReadSource, itemId: string, runs: readonly 
     }
     return read;
   };
+  // Leave the start's own run out before choosing the oldest holder, as the claim does: an
+  // admitted pending run holds the item itself and would otherwise hide a newer holder.
   const holderOf = (runId: string, workflow: string): Promise<ItemHeldBehind> | null => {
+    const held = itemHolders(rows.filter(row => row.id !== runId));
     const holder = itemHolder(held, { runId, workflow, itemId });
     return holder === undefined ? null : describe(holder);
   };
   return {
     request: (runId: string) => requests.get(runId) ?? null,
-    /** A pending run that holds nothing waits behind its workflow's holder. */
+    /**
+     * A pending run waits behind another run of its workflow on the item: a hand start that
+     * has not won its turn, or an admitted run whose claim is refused for that holder.
+     */
     runHeldBehind: (run: WorkflowRun) => {
       const refused = refusedBy.get(run.id);
       if (refused !== undefined)
         return byId.get(refused)?.workflow_name === run.workflow_name ? describe(refused) : null;
-      return run.status === 'pending' &&
-        !holdsItem({ status: run.status, admitted: requests.get(run.id)?.status === 'admitted' })
-        ? holderOf(run.id, run.workflow_name)
-        : null;
+      return run.status === 'pending' ? holderOf(run.id, run.workflow_name) : null;
     },
     /** A queued start waits behind its workflow's holder now, not the blocker it stored. */
     queuedHeldBehind: (start: QueuedItemStart) =>

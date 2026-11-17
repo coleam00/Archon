@@ -385,6 +385,9 @@ describe('one run of a workflow per item', () => {
       holderRunId: newer,
     });
     expect((await getWorkflowRun(older))?.status).toBe('pending');
+    const item = await store.getItem(String((await getWorkflowRun(older))?.item_id));
+    const read = await readItem(source(), String(item?.projectKey), 'issue-1');
+    expect(read?.runs.find(run => run.id === older)?.heldBehind?.runId).toBe(newer);
   });
 
   test('a failed run on an item resumes only while no other run of its workflow holds the item', async () => {
