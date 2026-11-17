@@ -7,6 +7,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   checkedResumeCursor,
   leasedResumeCursor,
+  WorkflowItemHeldError,
   type RunOwnerLease,
 } from '@archon/workflows/store';
 import { spellWorkflowCommand, type WorkflowDeps } from '@archon/workflows/deps';
@@ -220,6 +221,19 @@ async function reportRefusedResume(
     await platform.sendMessage(
       conversationId,
       `⏳ **${workflow.name}** cannot resume yet. ${err.message}` + deferredNote
+    );
+    return;
+  }
+  // The failed run stays failed while another run of its workflow works its item.
+  if (err instanceof WorkflowItemHeldError) {
+    getLog().info(
+      { workflowName: workflow.name, runId: resumableRun.id, holderRunId: err.holderRunId },
+      'orchestrator.resume_item_held'
+    );
+    await platform.sendMessage(
+      conversationId,
+      `⏳ **${workflow.name}** cannot resume while another run works its item. ${err.message}` +
+        deferredNote
     );
     return;
   }

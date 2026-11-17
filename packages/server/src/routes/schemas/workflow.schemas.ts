@@ -191,7 +191,7 @@ const nullableRunAttentionSchema = z.union([runAttentionSchema, z.literal(null)]
 
 const ownerObservationSchema = runOwnerObservationSchema.nullable().openapi({
   description:
-    "What this server observes about the running run's execution owner, by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run is not running. Observed per request; never stored.",
+    "What this server observes about the run's execution owner while its state needs one (running, or paused on a sub-run that runs in its process), by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run needs no owner now (an ordinary pause, a pending or ended run). Observed per request; never stored.",
 });
 
 /** A workflow run record (wire shape with ISO string dates). */

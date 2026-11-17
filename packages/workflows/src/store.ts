@@ -337,7 +337,8 @@ export interface IWorkflowStore
    * Fresh execution must win this pending-to-running CAS before doing any work.
    * `workingPath` is the checkout the run will use; the claim stamps it on a row
    * created without one. The claim records the calling process as the run's execution
-   * owner (`currentExecutionOwner`).
+   * owner (`currentExecutionOwner`). A store with items throws `WorkflowItemHeldError`,
+   * writing nothing, while another run of the run's workflow holds its item (`holdsItem`).
    */
   claimPendingWorkflowRun(id: string, workingPath?: string): Promise<WorkflowRun | null>;
   /**
@@ -448,6 +449,9 @@ export interface IWorkflowStore
    * to continue (answered, due or signaled, or claimed with a `cursor`) records its first
    * refusal (`CAPACITY_WAIT_METADATA_KEY`) before the error is thrown, so it keeps its place
    * while the host retries (`resumeRefusal`).
+   *
+   * A failed run on an item resumes only while no other run of its workflow holds that
+   * item; otherwise it stays failed and `WorkflowItemHeldError` is thrown.
    */
   resumeWorkflowRun(id: string, cursor?: ResumeClaimCursor): Promise<WorkflowRun>;
   /**

@@ -375,7 +375,8 @@ describe('trigger CLI durable execution', () => {
       () => fixture.requests().find(request => request.status === 'queued'),
       'the follow-up start to queue'
     );
-    // While it waits, the item read lists it as queued, next for the slot the first run holds.
+    // While it waits, the item read lists it as queued, next for the slot the first run holds
+    // and behind that run, which works the item for the same workflow.
     const queued = itemReadSchema.parse(
       JSON.parse((await invoke(['workflow', 'runs', '--item', 'item-1', '--json'])).stdout)
     );
@@ -387,6 +388,7 @@ describe('trigger CLI durable execution', () => {
         hostId: fixture.hostId,
         queuedAt: expect.any(String),
         ahead: 0,
+        heldBehind: expect.objectContaining({ runId: runs()[0]?.id, workflow: 'item-proof' }),
       },
     ]);
     // Every receipt shows the item it named; the follow-up inherited the first's.
@@ -617,6 +619,100 @@ describe('trigger CLI durable execution', () => {
       { continues: onItem.id, item_key: 'item-2' },
     ]);
   }, 90_000);
+
+  test("a binding's item mapping wins over the fired-from run's item, and --item or --no-item wins over it", async () => {
+    const fixture = await heldTriggerRun('item-map');
+    const root = join(fixture.projectRoot, '..');
+    const mappedRoot = join(root, 'mapped');
+    mkdirSync(join(mappedRoot, '.archon', 'workflows'), { recursive: true });
+    expect(await Bun.spawn(['git', 'init', '-q'], { cwd: mappedRoot }).exited).toBe(0);
+    writeFileSync(
+      join(mappedRoot, '.archon', 'workflows', 'mapped-proof.yaml'),
+      'name: mapped-proof\ndescription: mapped proof.\nmutates_checkout: false\ninputs:\n  number:\n    required: true\nnodes:\n  - id: done\n    bash: echo done\n'
+    );
+    const config = JSON.parse(readFileSync(join(root, 'trigger.json'), 'utf8'));
+    config.binding = {
+      ...config.binding,
+      bindingId: 'mapped-proof',
+      resource: 'mapped:resource',
+      launch: { ...config.binding.launch, cwd: mappedRoot, workflowName: 'mapped-proof' },
+    };
+    // A fire-only file: a timer maps no item.
+    config.schedule = undefined;
+    config.item = { field: 'number', prefix: 'issue-' };
+    const mappedConfig = join(root, 'mapped.json');
+    writeFileSync(mappedConfig, JSON.stringify(config));
+    const inputs = (name: string, value: Record<string, unknown>) => {
+      const path = join(root, `${name}.json`);
+      writeFileSync(path, JSON.stringify(value));
+      return path;
+    };
+    const fire = (path: string) =>
+      `'${process.execPath}' '${fixture.cliPath}' trigger fire --config '${mappedConfig}' --inputs '${path}'`;
+    const refusal = join(root, 'refused');
+    // From a run on item-1: an input without the field, the mapped field, and --item.
+    fixture.writeWorkflow(
+      `${fire(inputs('none', { other: 1 }))} > '${refusal}' 2>&1; echo "exit $?" >> '${refusal}'; ${fire(inputs('seven', { number: 7 }))} || exit 1; ${fire(inputs('eight', { number: 8 }))} --item named || exit 1`
+    );
+    const database = join(fixture.archonHome, 'archon.db');
+    const runs = () =>
+      readRows<{ workflow_name: string; status: string; item: string | null }>(
+        database,
+        `SELECT r.workflow_name, r.status, i.key AS item
+           FROM remote_agent_workflow_runs r LEFT JOIN remote_agent_items i ON i.id = r.item_id
+          ORDER BY r.workflow_name, i.key`
+      );
+    const settled = (count: number) =>
+      waitFor(
+        () =>
+          runs().length === count && runs().every(run => run.status === 'completed')
+            ? runs()
+            : undefined,
+        `${String(count)} completed runs`
+      );
+    const invoke = (args: string[]) =>
+      runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, args);
+
+    await invoke(['trigger', 'fire', '--config', join(root, 'trigger.json'), '--item', 'item-1']);
+    await settled(3);
+    // Fired by an operator, on no item: the same mapped item.
+    await invoke([
+      'trigger',
+      'fire',
+      '--config',
+      mappedConfig,
+      '--inputs',
+      join(root, 'seven.json'),
+    ]);
+    // --no-item wins over the mapping.
+    await invoke([
+      'trigger',
+      'fire',
+      '--config',
+      mappedConfig,
+      '--inputs',
+      join(root, 'seven.json'),
+      '--no-item',
+    ]);
+    expect((await settled(5)).map(run => [run.workflow_name, run.item])).toEqual([
+      ['item-map-proof', 'item-1'],
+      ['mapped-proof', null],
+      ['mapped-proof', 'issue-7'],
+      ['mapped-proof', 'issue-7'],
+      ['mapped-proof', 'named'],
+    ]);
+    const refused = readFileSync(refusal, 'utf8');
+    expect(refused).toContain("Binding 'mapped-proof' names its item from the fire's --inputs");
+    expect(refused).toContain("field 'number' is missing");
+    expect(refused).toContain('exit 1');
+    // The refusal recorded nothing: one receipt per start.
+    expect(
+      readRows<{ count: number }>(
+        database,
+        'SELECT COUNT(*) AS count FROM remote_agent_start_receipts'
+      )
+    ).toEqual([{ count: 5 }]);
+  }, 60_000);
 
   test('an inherited item is refused in another project, and an item named there starts', async () => {
     const fixture = await heldTriggerRun('item-cross');

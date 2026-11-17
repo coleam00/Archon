@@ -154,6 +154,11 @@ function itemBody(item: RunAttentionQueueItem, detail: AttentionItemDetail): str
         `needs a look: ${item.detail}`,
         `show more: ${command(`get ${run.id}`)}, then resume or abandon it`,
       ];
+    case 'owner_lost':
+      return [
+        `${item.observedStatus} but its owner is gone, holding item ${item.item?.key ?? '(unread)'}: later starts of ${run.workflow} on it wait behind it`,
+        `continue it: ${command(`resume ${run.id}`)}, or end it: ${command(`abandon ${run.id}`)}`,
+      ];
   }
 }
 
@@ -165,7 +170,11 @@ function headingLine(item: AttentionQueueItem): string {
   const project = item.project?.name ?? '(no project)';
   if (isHeldByRun(item)) {
     const paused =
-      item.pausedAt === null ? 'pause time not recorded' : `paused ${formatAge(item.pausedAt)} ago`;
+      item.kind === 'owner_lost'
+        ? 'owner gone'
+        : item.pausedAt === null
+          ? 'pause time not recorded'
+          : `paused ${formatAge(item.pausedAt)} ago`;
     return `  ${item.run.id}  ${item.run.workflow}  ${project}  ${paused}`;
   }
   const opened =
@@ -274,11 +283,17 @@ export function attentionStreamText(
       return [`Run ${line.runId} resumed (${line.status}).${runContextText(line)}`];
     case 'notice':
       return [noticeText(line)];
-    case 'owner_lost':
+    case 'owner_lost': {
+      // A run on an item holds it, so the later starts of its workflow on it wait behind it.
+      const held =
+        line.item == null
+          ? ''
+          : ` It holds item ${line.item}: later starts of ${line.workflow ?? 'its workflow'} on it wait behind it.`;
       return [
-        `Run ${line.runId} is ${line.observedStatus} but its owner is gone.${runContextText(line)} ` +
-          `Show more with ${command(`get ${line.runId}`)}, or abandon it with ${command(`abandon ${line.runId}`)}.`,
+        `Run ${line.runId} is ${line.observedStatus} but its owner is gone.${runContextText(line)}${held} ` +
+          `Show more with ${command(`get ${line.runId}`)}, continue it with ${command(`resume ${line.runId}`)}, or abandon it with ${command(`abandon ${line.runId}`)}.`,
       ];
+    }
     case 'ready':
       return [
         `Watching ${scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`} for attention. Ctrl-C stops.`,

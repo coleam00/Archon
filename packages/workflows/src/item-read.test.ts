@@ -180,6 +180,7 @@ const source: ItemReadSource = {
     listItemRulings: async id => (id === item.id ? rulings : []),
     listItemLinks: async id => (id === item.id ? links : []),
     getResourceStartRequest: async () => null,
+    listSkippedItemStarts: async () => [],
     listQueuedItemStarts: async () => [],
     getStartReceipt: async id =>
       id === SECOND_RECEIPT
@@ -275,6 +276,7 @@ describe('reading an item', () => {
         completedAt: '2026-11-01T09:30:00.000Z',
         cause: null,
         awaitingExecution: null,
+        heldBehind: null,
         hasResult: false,
       },
       {
@@ -286,6 +288,7 @@ describe('reading an item', () => {
         completedAt: null,
         cause: { kind: 'run_ended', runId: 'first', sourceInstanceId: 'review-after-deliver' },
         awaitingExecution: null,
+        heldBehind: null,
         hasResult: false,
       },
     ]);
@@ -357,6 +360,7 @@ describe('reading an item', () => {
       item,
       runs: [],
       queued: [],
+      skipped: [],
       questions: [],
       answers: rulings,
       links: [],
@@ -482,5 +486,73 @@ describe('reading an item', () => {
       { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'lost-ruling' },
       { type: 'degraded', reason: 'link_unreadable', linkId: 'lost-link' },
     ]);
+  });
+
+  test('a start held behind the run of its workflow on the item names that run and its owner', async () => {
+    // `second` runs `deliver` on the item and its owner is gone. A hand start of `deliver`
+    // waits behind it; a `review` run on the same item is held by nothing.
+    const waiting = run('waiting', {
+      status: 'pending',
+      started_at: new Date('2026-11-01T12:00:00Z'),
+    });
+    const review = run('review', {
+      workflow_name: 'review',
+      status: 'pending',
+      started_at: new Date('2026-11-01T12:01:00Z'),
+    });
+    const queued = (requestId: string, workflow: string) => ({
+      requestId,
+      workflow,
+      resource: 'build',
+      hostId: 'host',
+      queuedAt: '2026-11-01T12:02:00.000Z',
+      ahead: 0,
+    });
+    const held: ItemReadSource = {
+      ...source,
+      ownerLost: { holders: async () => [second], observe: async () => 'unreachable' },
+      store: {
+        ...source.store,
+        getItemRuns: async () => ({
+          item,
+          runs: [first, second, waiting, review],
+          descendantIds: [],
+        }),
+        listQueuedItemStarts: async () => [
+          queued('queued-deliver', 'deliver'),
+          queued('queued-review', 'review'),
+        ],
+        listSkippedItemStarts: async () => [
+          {
+            requestId: 'skipped-deliver',
+            workflow: 'deliver',
+            resource: 'build',
+            blockerRunId: 'second',
+          },
+        ],
+      },
+    };
+    const read = await readItem(held, item.projectKey, item.key);
+    const behindSecond = {
+      runId: 'second',
+      workflow: 'deliver',
+      status: 'running',
+      owner: 'unreachable',
+    } as const;
+    expect(read?.runs.map(row => [row.id, row.heldBehind])).toEqual([
+      ['first', null],
+      ['second', null],
+      ['waiting', behindSecond],
+      ['review', null],
+    ]);
+    expect(read?.queued.map(start => [start.requestId, start.heldBehind])).toEqual([
+      ['queued-deliver', behindSecond],
+      ['queued-review', null],
+    ]);
+    expect(read?.skipped.map(start => [start.requestId, start.heldBehind])).toEqual([
+      ['skipped-deliver', behindSecond],
+    ]);
+    // The lost owner is reported on the starts held behind it, not as an open question.
+    expect(read?.questions).toEqual([]);
   });
 });

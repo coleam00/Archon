@@ -50,3 +50,21 @@ export class WorkflowResourceBusyError extends Error {
     this.name = 'WorkflowResourceBusyError';
   }
 }
+
+/**
+ * Another run of the same workflow holds the item this run is on (`holdsItem`), so this run
+ * cannot be claimed or resumed now. Thrown by `claimPendingWorkflowRun` and
+ * `resumeWorkflowRun`; nothing was written. A pending run that gets it waits and asks again,
+ * or is refused under `--no-wait`.
+ */
+export class WorkflowItemHeldError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly holderRunId: string,
+    public readonly workflow: string,
+    public readonly itemKey: string
+  ) {
+    super(`Item '${itemKey}' is held by run ${holderRunId} of workflow '${workflow}'.`);
+    this.name = 'WorkflowItemHeldError';
+  }
+}

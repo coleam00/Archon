@@ -6478,7 +6478,7 @@ export interface components {
       agents_total: number | null;
       attention: components['schemas']['RunAttention'] | (never | null);
       /**
-       * @description What this server observes about the running run's execution owner, by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run is not running. Observed per request; never stored.
+       * @description What this server observes about the run's execution owner while its state needs one (running, or paused on a sub-run that runs in its process), by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run needs no owner now (an ordinary pause, a pending or ended run). Observed per request; never stored.
        * @enum {string|null}
        */
       owner_observation: 'reachable' | 'unreachable' | 'unknown' | null;
@@ -7449,6 +7449,45 @@ export interface components {
             | 'child_chain_too_deep'
             | 'source_release_not_continued';
           detail: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'owner_lost';
+          ref: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          run: {
+            id: string;
+            workflow: string;
+            parentRunId: string | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
+          };
+          /** @enum {string} */
+          observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
         };
     AttentionQueueCountsResponse: {
       counts: components['schemas']['AttentionQueueCounts'];
@@ -7709,6 +7748,45 @@ export interface components {
               | 'source_release_not_continued';
             detail: string;
           }
+        | {
+            /** @enum {string} */
+            kind: 'owner_lost';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            run: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+            };
+            /** @enum {string} */
+            observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          }
         | unknown;
     };
     LabelAttentionResponse: {
@@ -7766,6 +7844,14 @@ export interface components {
           requestId: string;
           hostId: string;
         } | null;
+        heldBehind: {
+          runId: string;
+          workflow: string;
+          /** @enum {string} */
+          status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          /** @enum {string|null} */
+          owner: 'reachable' | 'unreachable' | 'unknown' | null;
+        } | null;
         hasResult: boolean;
       }[];
       queued: {
@@ -7776,6 +7862,27 @@ export interface components {
         /** Format: date-time */
         queuedAt: string;
         ahead: number;
+        heldBehind: {
+          runId: string;
+          workflow: string;
+          /** @enum {string} */
+          status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          /** @enum {string|null} */
+          owner: 'reachable' | 'unreachable' | 'unknown' | null;
+        } | null;
+      }[];
+      skipped: {
+        requestId: string;
+        workflow: string | null;
+        resource: string;
+        heldBehind: {
+          runId: string;
+          workflow: string;
+          /** @enum {string} */
+          status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          /** @enum {string|null} */
+          owner: 'reachable' | 'unreachable' | 'unknown' | null;
+        } | null;
       }[];
       questions: (
         | {
@@ -7972,6 +8079,45 @@ export interface components {
               | 'child_chain_too_deep'
               | 'source_release_not_continued';
             detail: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'owner_lost';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            run: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+            };
+            /** @enum {string} */
+            observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
           }
       )[];
       answers: (
@@ -8435,6 +8581,51 @@ export interface components {
                   | 'child_chain_too_deep'
                   | 'source_release_not_continued';
                 detail: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'owner_lost';
+                ref: string;
+                project: {
+                  key: string;
+                  codebaseId: string | null;
+                  name: string;
+                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
+                revision: number;
+                labels: {
+                  [key: string]: string;
+                };
+                /** Format: date-time */
+                pausedAt: string | null;
+                run: {
+                  id: string;
+                  workflow: string;
+                  parentRunId: string | null;
+                  fanOut: {
+                    parentRunId: string;
+                    nodeId: string;
+                    index: number;
+                  } | null;
+                  context: {
+                    artifactsDir: string | null;
+                    transcript: string | null;
+                    workingPath: string | null;
+                    branch: string | null;
+                  };
+                };
+                /** @enum {string} */
+                observedStatus:
+                  | 'pending'
+                  | 'running'
+                  | 'completed'
+                  | 'failed'
+                  | 'cancelled'
+                  | 'paused';
               };
         }
       | (
@@ -8621,6 +8812,7 @@ export interface components {
           parentRunId: string | null;
           /** @enum {string} */
           observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          item?: string | null;
         }
       | {
           /** @enum {string} */
@@ -8823,7 +9015,7 @@ export interface components {
         parent_platform_id?: string;
         conversation_platform_id: string | null;
         /**
-         * @description What this server observes about the running run's execution owner, by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run is not running. Observed per request; never stored.
+         * @description What this server observes about the run's execution owner while its state needs one (running, or paused on a sub-run that runs in its process), by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run needs no owner now (an ordinary pause, a pending or ended run). Observed per request; never stored.
          * @enum {string|null}
          */
         owner_observation: 'reachable' | 'unreachable' | 'unknown' | null;
