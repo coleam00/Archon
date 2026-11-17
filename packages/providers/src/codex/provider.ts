@@ -657,6 +657,9 @@ async function* reportedTurn(
         continue;
       }
       withToolTurnOf(chunk, call.toolTurnResult);
+      // The first result carries the tool turn's tokens; a later one, which a final turn whose
+      // subagents outlive its first result reports, carries only the usage reported since.
+      if (call.toolTurnResult) call.toolTurnResult = { ...call.toolTurnResult, tokens: undefined };
       reportResult(chunk, turn.abortSignal, turn.catalogId);
       call.resultReported = true;
     }

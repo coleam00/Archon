@@ -52,6 +52,7 @@ import * as pluginProcess from '@archon/paths/plugin-process';
 import { TOOL_FREE_THREAD_CONFIG } from './turn-params';
 import type { CodexErrorInfo } from './protocol/v2/CodexErrorInfo';
 import type { ServerNotification } from './protocol/ServerNotification';
+import type { ThreadItem } from './protocol/v2/ThreadItem';
 
 const trackTempRoot = trackTempRoots();
 
@@ -89,6 +90,24 @@ async function streamOf(
   }
   expect(chunks.at(-1)).toEqual({ type: 'settled' });
   return chunks.slice(0, -1);
+}
+
+type CollabItem = Extract<ThreadItem, { type: 'collabAgentToolCall' }>;
+
+/** Codex's v1 `spawn_agent` item: `receiverThreadIds` names the new thread once it completes. */
+function collabSpawn(status: CollabItem['status'], receiverThreadIds: string[] = []): CollabItem {
+  return {
+    type: 'collabAgentToolCall',
+    id: 'spawn-1',
+    tool: 'spawnAgent',
+    status,
+    senderThreadId: THREAD_ID,
+    receiverThreadIds,
+    prompt: null,
+    model: null,
+    reasoningEffort: null,
+    agentsStates: {},
+  };
 }
 
 function resultOf(chunks: MessageChunk[]): Extract<MessageChunk, { type: 'result' }> {
@@ -894,6 +913,18 @@ describe('CodexProvider', () => {
         cacheWrite: 0,
       });
       expect(chunks.filter(c => c.type === 'warning')).toEqual([]);
+    });
+
+    test('a thread spawned through Codex’s v1 tool counts like a v2 subagent', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          itemStarted(collabSpawn('inProgress')),
+          itemCompleted(collabSpawn('completed', ['child-thread'])),
+          tokenUsage({ input: 40, output: 4 }, undefined, 'child-turn', 'child-thread'),
+          tokenUsage({ input: 100, output: 10 }),
+        ],
+      });
+      expect(resultOf(chunks).tokens).toMatchObject({ input: 140, output: 14 });
     });
 
     test('a later result carries the usage subagents report after the first, and repeats its output', async () => {
@@ -1707,6 +1738,29 @@ describe('CodexProvider', () => {
         );
         const result = resultOf(await run(provider, options('glm-5.3')));
         expect(result.tokens).toMatchObject({ input: 100 + 40 + 50, output: 10 + 4 + 5 });
+      });
+
+      // A v2 catalog keeps its collaboration tools on the final turn, so it can spawn too.
+      test('a final turn that reports two results counts the tool turn’s tokens once', async () => {
+        const { provider } = providerWith(
+          scripted(toolTurn, {
+            notifications: [
+              itemStarted(subAgentActivity('started')),
+              ...(finalTurn.notifications ?? []),
+              turnCompleted('completed'),
+              tokenUsage({ input: 20, output: 2 }, undefined, TURN_ID, 'child-thread'),
+              itemCompleted(subAgentActivity('completed')),
+            ],
+            completion: null,
+          })
+        );
+        const results = (await run(provider, options('glm-5.3'))).filter(
+          (c): c is Extract<MessageChunk, { type: 'result' }> => c.type === 'result'
+        );
+        expect(results.map(r => r.tokens)).toEqual([
+          { input: 100 + 50, output: 10 + 5, cacheRead: 0, cacheWrite: 0 },
+          { input: 20, output: 2, cacheRead: 0, cacheWrite: 0 },
+        ]);
       });
 
       test('a failed tool turn is the result, and no final turn runs', async () => {

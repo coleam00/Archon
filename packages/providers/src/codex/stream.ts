@@ -307,8 +307,8 @@ interface TurnObservation {
   // Codex reports a subagent's usage on its own thread, so each subagent this turn saw start
   // gets a span, across all of its turns. A span starts at the thread's first snapshot because
   // a forked subagent, the default for `spawn_agent`, starts from its parent's running total.
-  // Only a `subAgentActivity` start makes a thread a subagent: one from an earlier turn that
-  // this turn only messages is not counted, nor one from Codex's v1 tools, which report none.
+  // A v2 `subAgentActivity` start or a completed v1 `spawnAgent` item marks a thread a subagent.
+  // Only v2 ones are live tasks: a v1 subagent's usage after the parent completes is missed.
   readonly agentUsageSpans: Map<string, UsageSpan>;
   rateLimits: RateLimitSnapshot | undefined;
   retries: number;
@@ -630,6 +630,7 @@ function* observeItem(
     yield* observeBackgroundItem(observation, item, completed, itemThreadId);
     return;
   }
+  if (completed) registerV1Spawn(observation, item);
   if (!parentItem) return;
   if (isToolItem(item)) {
     yield* observeToolItem(observation, item, completed);
@@ -640,6 +641,12 @@ function* observeItem(
     const text = item.summary.join('\n\n');
     if (text) yield { type: 'agent_thought_chunk', text };
   }
+}
+
+/** Codex's v1 spawn tool reports no `subAgentActivity`; its completed item names the thread. */
+function registerV1Spawn(observation: TurnObservation, item: ThreadItem): void {
+  if (item.type !== 'collabAgentToolCall' || item.tool !== 'spawnAgent') return;
+  for (const threadId of item.receiverThreadIds) observation.agentThreads.add(threadId);
 }
 
 function* observeBackgroundItem(
