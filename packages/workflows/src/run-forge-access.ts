@@ -54,7 +54,7 @@ export interface ForgeRequirementFailure {
 export class ForgeRequirementError extends Error {
   constructor(
     workflowName: string,
-    packKey: string,
+    readonly packKey: string,
     readonly failures: readonly ForgeRequirementFailure[]
   ) {
     super(
@@ -223,6 +223,9 @@ const checkThroughCli: ForgeCheck = async (request, { cliCommand, env, cwd }) =>
     await writeFile(dataFile, JSON.stringify(request), { mode: 0o600 });
     let child: Bun.Subprocess<'ignore', 'pipe', 'ignore'>;
     try {
+      // stderr is dropped, never stored or shown: the child holds the remote URL and the
+      // run's credential, and its stderr is unplanned output (a crash, a plugin's or git's
+      // error) that can echo either. The no-answer refusal names the command to rerun instead.
       child = Bun.spawn([...cliCommand, 'forge', 'check', '--json', '--data-file', dataFile], {
         cwd,
         env,
@@ -237,8 +240,13 @@ const checkThroughCli: ForgeCheck = async (request, { cliCommand, env, cwd }) =>
         message: `archon forge check could not start: ${(error as Error).message}`,
       };
     }
-    const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-    return forgeCheckFailure(stdout, exitCode);
+    const [stdout] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+    // `exited` reads 143 for a timeout; the child's own code and signal tell the two apart.
+    return forgeCheckFailure(
+      stdout,
+      { exitCode: child.exitCode, signalCode: child.signalCode },
+      request.operations
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -247,7 +255,8 @@ const checkThroughCli: ForgeCheck = async (request, { cliCommand, env, cwd }) =>
 /** Read one `forge check` answer; exported for its tests. */
 export function forgeCheckFailure(
   stdout: string,
-  exitCode: number | null
+  ended: { exitCode: number | null; signalCode: string | null },
+  operations: readonly string[]
 ): Omit<ForgeRequirementFailure, 'remote'> | undefined {
   let raw: unknown;
   try {
@@ -257,10 +266,12 @@ export function forgeCheckFailure(
   }
   const answer = cliForgeResponseSchema.safeParse(raw);
   if (!answer.success) {
-    log.warn({ exitCode }, 'workflow.forge_check_unanswered');
+    log.warn(ended, 'workflow.forge_check_unanswered');
     return {
       reason: 'check_failed',
-      message: `archon forge check gave no answer (exit ${String(exitCode)})`,
+      message: unansweredCheck(stdout, ended),
+      // The remote stays a placeholder: its URL can carry a credential, and this is stored.
+      remedy: `Run \`archon forge check --json --data '${JSON.stringify({ remote: '<url>', operations })}'\` in the project, with the remote's URL for <url>, to see what it reports.`,
     };
   }
   if (answer.data.ok) return undefined;
@@ -272,4 +283,15 @@ export function forgeCheckFailure(
     ...(unsupported ? { unsupported } : {}),
     ...(remedy ? { remedy } : {}),
   };
+}
+
+function unansweredCheck(
+  stdout: string,
+  { exitCode, signalCode }: { exitCode: number | null; signalCode: string | null }
+): string {
+  if (signalCode !== null)
+    return `archon forge check ended on ${signalCode} without an answer; a check still running after ${String(CHECK_TIMEOUT_MS / 1000)}s is stopped with SIGTERM`;
+  return stdout.trim() === ''
+    ? `archon forge check exited ${String(exitCode)} with no output`
+    : `archon forge check exited ${String(exitCode)} without a forge answer on stdout`;
 }

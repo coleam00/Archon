@@ -658,6 +658,7 @@ test('preparation refuses event-mapped inputs for a workflow that declares none'
   expect((await host.deps.store.getStartReceipt(receiptId))?.bindings[0]).toMatchObject({
     status: 'rejected',
     error: 'launch_preparation_failed',
+    forgeRefusal: null,
   });
 });
 

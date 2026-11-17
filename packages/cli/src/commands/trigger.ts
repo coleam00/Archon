@@ -29,6 +29,7 @@ import {
   awaitingExecution,
   SourceReceiptDigestConflictError,
   type AwaitingExecution,
+  type StartBindingInspection,
 } from '@archon/workflows/resource-start-store';
 import {
   mappedItemKey,
@@ -137,6 +138,8 @@ async function triggerWhoami(host: WorkflowHost): Promise<void> {
  * Each receipt, with `awaitingExecution`: its starts that are admitted but whose run no
  * executor has claimed. One stays there when the process that admitted it died before it
  * spawned the executor; `archon trigger execute <requestId> --host <hostId>` runs it once.
+ * And `refusedBindings`: its bindings whose preparation failed or was refused, each with
+ * the failed boundary and, for a refusal of the pack's forge needs, the reasons and remedies.
  */
 async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise<void> {
   const receipts = await host.deps.store.listStartReceipts(
@@ -144,19 +147,29 @@ async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise
   );
   await writeJsonLine(
     await Promise.all(
-      receipts.map(async receipt => ({
-        ...receipt,
-        awaitingExecution: await receiptAwaitingExecution(host, receipt.id),
-      }))
+      receipts.map(async receipt => {
+        const bindings = (await host.deps.store.getStartReceipt(receipt.id))?.bindings ?? [];
+        return {
+          ...receipt,
+          awaitingExecution: await receiptAwaitingExecution(host, bindings),
+          refusedBindings: bindings
+            .filter(binding => binding.status === 'rejected' || binding.status === 'failed')
+            .map(({ bindingId, status, error, forgeRefusal }) => ({
+              bindingId,
+              status,
+              error,
+              forgeRefusal,
+            })),
+        };
+      })
     )
   );
 }
 
 async function receiptAwaitingExecution(
   host: WorkflowHost,
-  receiptId: string
+  bindings: readonly StartBindingInspection[]
 ): Promise<AwaitingExecution[]> {
-  const bindings = (await host.deps.store.getStartReceipt(receiptId))?.bindings ?? [];
   const awaiting: AwaitingExecution[] = [];
   for (const binding of bindings) {
     if (binding.requestStatus !== 'admitted' || !binding.disposition) continue;

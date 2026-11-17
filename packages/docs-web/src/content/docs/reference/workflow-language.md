@@ -2737,7 +2737,8 @@ run is not checked again. The engine asks
 remote of the project's checkout, with the run's GitHub credential; the run starts when one
 remote names a forge whose plugin advertises every listed capability and whose credential
 resolves. No forge operation runs. Otherwise the run is refused with a typed reason per remote
-and the plugin's remedy:
+and the plugin's remedy. A refused trigger binding's receipt records them as `forgeRefusal`,
+read with [`archon trigger list`](/reference/cli/#trigger) or `archon trigger inspect`:
 
 | Reason | Meaning |
 | --- | --- |
@@ -2746,7 +2747,7 @@ and the plugin's remedy:
 | `no_credential` | The plugin's credential is unset or empty |
 | `no_forge_remote` | The checkout has no git remote, or the project is not a git repository |
 | `no_forge_path` | The run executes in a container, or the host publishes no `ARCHON_CLI_COMMAND` |
-| `check_failed` | The check could not answer, for example plugin discovery failed |
+| `check_failed` | The check could not answer, for example plugin discovery failed. A check that gave no answer names its exit code or signal and the command to rerun it by hand; its stderr is not kept, because it can carry the remote's URL or the credential |
 
 A pack that declares no `forge:` block is not checked.
 [`archon validate workflows`](/reference/cli/#validate-workflows-name) warns about a listed

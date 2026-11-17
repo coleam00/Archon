@@ -181,6 +181,8 @@ describe('assertRunForgeAccess', () => {
 
 describe('forgeCheckFailure', () => {
   const answer = (value: object): string => JSON.stringify({ operationId: 'op', ...value });
+  const exited = (exitCode: number) => ({ exitCode, signalCode: null });
+  const ops = ['pr.view'];
 
   test('a passing answer lets the run start', () => {
     expect(
@@ -192,7 +194,8 @@ describe('forgeCheckFailure', () => {
             value: { host: 'github.com', plugin: { name: 'github', version: '1' }, operations: [] },
           },
         }),
-        0
+        exited(0),
+        ops
       )
     ).toBeUndefined();
   });
@@ -203,7 +206,8 @@ describe('forgeCheckFailure', () => {
       expect(
         forgeCheckFailure(
           answer({ ok: false, error: { kind, message: 'm' }, remedy: 'do this' }),
-          1
+          exited(1),
+          ops
         )
       ).toEqual({ reason: kind, message: 'm', remedy: 'do this' });
     }
@@ -213,9 +217,22 @@ describe('forgeCheckFailure', () => {
     expect(
       forgeCheckFailure(
         answer({ ok: false, error: { kind: 'process_failed', message: 'discovery failed' } }),
-        1
+        exited(1),
+        ops
       )
     ).toEqual({ reason: 'check_failed', message: 'discovery failed' });
-    expect(forgeCheckFailure('not json', null)).toMatchObject({ reason: 'check_failed' });
+  });
+
+  test('a check with no answer names how it ended and how to rerun it, never its output', () => {
+    const stopped = forgeCheckFailure('', { exitCode: null, signalCode: 'SIGTERM' }, ops);
+    expect(stopped).toMatchObject({ reason: 'check_failed' });
+    expect(stopped?.message).toContain('SIGTERM');
+    for (const stdout of ['', 'token=ghp_secret not json'])
+      expect(forgeCheckFailure(stdout, exited(3), ops)).toMatchObject({ reason: 'check_failed' });
+    const garbled = forgeCheckFailure('token=ghp_secret not json', exited(3), ops);
+    expect(garbled?.message).toContain('3');
+    expect(JSON.stringify(garbled)).not.toContain('ghp_secret');
+    expect(garbled?.remedy).toContain('archon forge check');
+    expect(garbled?.remedy).toContain('pr.view');
   });
 });

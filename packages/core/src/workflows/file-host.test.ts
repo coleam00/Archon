@@ -1071,4 +1071,15 @@ test('a binding whose pack forge this checkout cannot reach is refused before ad
   expect(started).toEqual([]);
   expect(await store.listQueuedResourceStartsForHost('host')).toEqual([]);
   expect(await store.listPendingStartBindings({ hostId: 'host' })).toEqual([]);
+  // The receipt alone tells the operator why and what to do.
+  expect((await store.getStartReceipt(receiptId))?.bindings).toMatchObject([
+    {
+      status: 'rejected',
+      error: 'launch_preparation_failed',
+      forgeRefusal: {
+        pack: 'factory',
+        failures: [{ reason: 'no_forge_remote', remedy: expect.any(String) }],
+      },
+    },
+  ]);
 });
