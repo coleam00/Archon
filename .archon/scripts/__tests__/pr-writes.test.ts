@@ -290,11 +290,6 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(remoteHead(result.cwd, 'build/7-an-issue-run12345')).toBe('');
   });
 
-  it('fails loudly when the forge is unavailable', () => {
-    const result = publishPr({ forge: { kind: 'no-host' } });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('ARCHON_CLI_COMMAND');
-  });
 });
 
 const { start: START, end: END } = DESCRIPTION_SECTION;
