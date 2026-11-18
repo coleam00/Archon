@@ -83,7 +83,9 @@ function resolveSimulatedAttentionAsk(
     ...ask,
     trace: {
       form: condition.form,
-      ...(ask.options !== undefined ? { options: ask.options } : {}),
+      ...(ask.options !== undefined
+        ? { options: ask.options.map(({ id, label, does }) => ({ id, label, does })) }
+        : {}),
       ...(ask.recommendation !== undefined ? { recommendation: ask.recommendation } : {}),
       ...(ask.labels !== undefined ? { labels: ask.labels } : {}),
       ...(condition.other === true ? { other: true as const } : {}),

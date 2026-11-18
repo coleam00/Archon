@@ -64,7 +64,7 @@ const dryRunTraceBaseSchema = z.object({
   attentionAsk: z
     .object({
       form: attentionFormSchema,
-      options: z.array(attentionOptionSchema).optional(),
+      options: z.array(attentionOptionSchema.omit({ value: true })).optional(),
       recommendation: attentionRecommendationSchema.optional(),
       labels: attentionLabelsSchema.optional(),
       other: z.literal(true).optional(),

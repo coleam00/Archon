@@ -43,15 +43,11 @@ export function fixtureWaitLabelsFailure(
 ): string | undefined {
   if (declaration['wait-labels'] === undefined) return undefined;
   for (const [nodeId, expectedLabels] of Object.entries(declaration['wait-labels'])) {
-    const entries = result.trace.filter(entry => entry.nodeId === nodeId);
+    const entries = result.trace.filter(
+      entry => entry.nodeId === nodeId && entry.attentionAsk !== undefined
+    );
     if (entries.length === 0) return `expected labels for wait '${nodeId}', but it was not reached`;
-    if (
-      !entries.some(
-        entry =>
-          entry.attentionAsk !== undefined &&
-          Bun.deepEquals(entry.attentionAsk.labels ?? {}, expectedLabels)
-      )
-    ) {
+    if (!entries.every(entry => Bun.deepEquals(entry.attentionAsk?.labels ?? {}, expectedLabels))) {
       return `expected wait '${nodeId}' labels to equal ${JSON.stringify(expectedLabels)}`;
     }
   }

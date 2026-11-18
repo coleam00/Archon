@@ -842,6 +842,46 @@ describe('runFixtures', () => {
     }
   });
 
+  it('checks wait labels on every reached loop occurrence, not only a matching earlier ask', async () => {
+    const { cwd } = writeTempProject({
+      workflowYaml: [
+        'name: test-wf',
+        'description: test',
+        'nodes:',
+        '  - id: group',
+        '    loop_group:',
+        '      until: DONE',
+        '      max_iterations: 2',
+        '      on_exhausted: complete',
+        '      nodes:',
+        '        - id: ask',
+        '          wait:',
+        '            attention: Merge it?',
+        '            form: select',
+        '            options: [{ id: merge }]',
+        '            labels:',
+        '              stage: $LOOP_PREV.ask.output.decision',
+      ].join('\n'),
+      body: [
+        'fixture:',
+        '  wait-labels:',
+        '    ask: { stage: "" }',
+        'ask: { decision: merge, text: "" }',
+      ].join('\n'),
+    });
+
+    const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
+
+    expect(report.results[0]).toMatchObject({
+      pass: false,
+      outcome: 'completed',
+      failureReason: 'expected wait \'ask\' labels to equal {"stage":""}',
+    });
+    expect(
+      report.results[0].trace?.filter(entry => entry.nodeId === 'ask').map(entry => entry.iteration)
+    ).toEqual([1, 2]);
+  });
+
   it('matches a multi-line fragment against a command file checked out with CRLF', async () => {
     // A command file is read as raw text, so `* text=auto` hands a Windows clone CRLF inside
     // it — while a fixture spells its expectation with `\n` escapes that stay LF everywhere.
