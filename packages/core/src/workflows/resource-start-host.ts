@@ -288,18 +288,11 @@ async function authorizeTrustedBinding(
   const receipt = await host.deps.store.getStartReceipt(receiptId);
   const itemKey = intent.itemKey ?? receipt?.itemKey ?? undefined;
   if (!itemKey) throw new Error('trusted_text_item_required');
-  await host.deps.trustedText.declare?.(intent.trustedText, {
-    codebaseId: codebase.id,
-    itemKey,
-  });
+  await host.deps.trustedText.declare?.(intent.trustedText, { codebaseId: codebase.id, itemKey });
   return await host.deps.trustedText.authorize(intent.trustedText, { codebase, itemKey });
 }
 
-/**
- * Freeze one binding's workflow source, inputs and run configuration, then commit it to
- * admission. The capture is kept only when admission keeps a promise to run it: a start
- * the install hold turned back is prepared again, from a fresh capture, after the lift.
- */
+/** Freeze a binding's launch for admission; a held start is prepared again after the lift. */
 async function prepareBinding(
   host: WorkflowHost,
   intent: ResourceStartBindingIntent,
