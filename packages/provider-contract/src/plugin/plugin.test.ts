@@ -608,7 +608,13 @@ test('concurrent native tools remain scoped to their owning session', async () =
       async *sendQuery(prompt, _cwd, _resume, options) {
         const tool = options?.nativeTools?.[0];
         if (!tool) throw new Error('missing tool');
-        yield { type: 'result', text: await tool.handler({ prompt }) };
+        yield {
+          type: 'result',
+          text: await tool.handler(
+            { prompt },
+            { providerCallId: `provider-${prompt}`, providerCallScope: 'connection' }
+          ),
+        };
         yield { type: 'settled' };
       },
     }),
@@ -621,8 +627,12 @@ test('concurrent native tools remain scoped to their owning session', async () =
                 name: 'host',
                 description: 'Host tool',
                 inputSchema: { properties: { prompt: { kind: 'string' } }, required: ['prompt'] },
-                handler: async input => {
+                handler: async (input, context) => {
                   expect(input).toEqual({ prompt: name });
+                  expect(context).toEqual({
+                    providerCallId: `provider-${name}`,
+                    providerCallScope: 'connection',
+                  });
                   return name;
                 },
               },

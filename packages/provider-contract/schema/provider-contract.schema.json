@@ -1686,6 +1686,14 @@
           "additionalProperties": {
             "$ref": "#/$defs/schema10"
           }
+        },
+        "providerCallId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerCallScope": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": [

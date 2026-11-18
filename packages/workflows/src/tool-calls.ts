@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
-import { writeArtifactFile } from './artifact-writes';
+import { readArtifactFile, writeArtifactFile } from './artifact-writes';
 import {
   WORKFLOW_TOOL_CALL_EVENT_TYPE,
   workflowToolCallSchema,
@@ -18,6 +18,23 @@ export function newToolCallId(): string {
 
 export function toolCallRef(callId: string, name: 'input.json' | 'output.json'): string {
   return join(TOOL_CALLS_SUBDIR, callId, name);
+}
+
+export function toolValueDigest(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
+}
+
+export async function readToolCallValue(
+  artifactsDir: string,
+  ref: string,
+  digest: string | undefined
+): Promise<string> {
+  const text = await readArtifactFile(join(artifactsDir, ref));
+  if (text === undefined || digest === undefined || toolValueDigest(text) !== digest) {
+    throw new Error('Tool-call artifact is missing or its recorded digest does not match');
+  }
+  JSON.parse(text);
+  return text;
 }
 
 export async function writeToolCallValue(
@@ -81,7 +98,14 @@ export async function writeToolCallListing(
   events: readonly WorkflowEventRow[]
 ): Promise<string> {
   const path = join(artifactsDir, TOOL_CALLS_SUBDIR, `${randomUUID()}-listing.json`);
-  await writeArtifactFile(path, JSON.stringify({ runId, calls: foldToolCalls(events, runId) }), {
+  const calls = foldToolCalls(events, runId);
+  for (const call of calls) {
+    if (call.status === 'completed' && call.output_ref !== undefined) {
+      await readToolCallValue(artifactsDir, call.input_ref, call.input_digest);
+      await readToolCallValue(artifactsDir, call.output_ref, call.output_digest);
+    }
+  }
+  await writeArtifactFile(path, JSON.stringify({ runId, calls }), {
     mode: 0o600,
   });
   return path;

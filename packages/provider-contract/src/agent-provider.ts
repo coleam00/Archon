@@ -197,6 +197,7 @@ export function defineNativeToolInputSchema<P extends Record<string, NativeToolP
  * an outer try/catch around its dispatch.)
  * `context.providerCallId` is the provider protocol's exact invocation id. Existing chat
  * handlers may ignore it; Engine-backed script tools require it for their durable receipt.
+ * A transport whose call IDs restart supplies providerCallScope for that connection.
  */
 export interface NativeTool {
   name: string;
@@ -204,7 +205,7 @@ export interface NativeTool {
   inputSchema: NativeToolInputSchema;
   handler: (
     input: Record<string, unknown>,
-    context?: { providerCallId: string }
+    context?: { providerCallId: string; providerCallScope?: string }
   ) => Promise<string>;
 }
 

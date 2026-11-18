@@ -10,8 +10,20 @@ export const workflowToolCallSchema = z.looseObject({
   attempt_id: z.string().min(1),
   tool_name: z.string().min(1),
   provider_call_id: z.string().min(1),
+  provider_call_scope: z.string().min(1).optional(),
+  node_path: z.string().min(1).optional(),
+  invocation_id: z.string().uuid().optional(),
+  loop_path: z.array(z.object({ groupId: z.string(), iteration: z.number().int() })).optional(),
   input_ref: z.string().min(1),
+  input_digest: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .optional(),
   output_ref: z.string().min(1).optional(),
+  output_digest: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .optional(),
   status: z.enum(['started', 'completed', 'failed', 'outcome_unknown']),
   error: z.string().optional(),
   recorded_at: z.string().datetime(),

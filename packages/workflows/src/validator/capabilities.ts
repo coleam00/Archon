@@ -72,7 +72,16 @@ function validateNativeToolCapability(
   provider: string | undefined,
   capabilities: ProviderCapabilities
 ): void {
-  if (!('tools' in node) || node.tools === undefined || capabilities.nativeTools) return;
+  if (!('tools' in node) || node.tools === undefined) return;
+  if (node.sandbox?.enabled === true) {
+    validation.issues.push({
+      level: 'error',
+      nodeId: node.id,
+      field: 'tools',
+      message: 'Script-backed tools cannot inherit the provider sandbox',
+    });
+  }
+  if (capabilities.nativeTools) return;
   validation.issues.push({
     level: 'error',
     nodeId: node.id,

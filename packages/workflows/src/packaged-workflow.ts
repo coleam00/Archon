@@ -113,9 +113,7 @@ function qualifyNodeResources(
   // An include directive carries no resources of its own to qualify here (matches
   // prior behavior — it fell through every check unmutated before #2486 too).
   if (isIncludeDirective(node)) return;
-  if (isAgentNode(node) && node.source.kind === 'command') {
-    node.source.name = qualifyResourceReference(node.source.name, owner);
-  }
+  if (isAgentNode(node)) qualifyAgentResources(node, owner);
   if (isExecNode(node) && node.runtime !== 'sh' && isNamedScript(node.script)) {
     node.script = qualifyResourceReference(node.script, owner);
   }
@@ -124,6 +122,18 @@ function qualifyNodeResources(
   }
   if (isLoopGroupNode(node)) {
     for (const child of node.loop_group.nodes) qualifyNodeResources(child, owner);
+  }
+}
+
+function qualifyAgentResources(
+  node: Extract<WorkflowDefinition['nodes'][number], { kind: 'agent' }>,
+  owner: WorkflowResourceOwner
+): void {
+  if (node.source.kind === 'command') {
+    node.source.name = qualifyResourceReference(node.source.name, owner);
+  }
+  for (const tool of Object.values(node.tools ?? {})) {
+    if (isNamedScript(tool.script)) tool.script = qualifyResourceReference(tool.script, owner);
   }
 }
 

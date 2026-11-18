@@ -65,7 +65,10 @@ export function createProvider(stateFile?: string, log?: ProviderLogSink): TestP
     yield {
       type: 'result',
       structuredOutput: {
-        tool: await tool.handler({ action: 'inspect', enabled: true }),
+        tool: await tool.handler(
+          { action: 'inspect', enabled: true },
+          { providerCallId: 'fixture-provider-call', providerCallScope: 'fixture-connection' }
+        ),
         env: options?.env ?? {},
         hostPath: process.env.PATH ?? '',
       },

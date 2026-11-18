@@ -155,14 +155,21 @@ export async function executeAgentNode(
     return result;
   }
 
-  const preparedTools = await prepareScriptTools(ctx, node, execution, stepName, listings);
+  const abortController = new AbortController();
+  const preparedTools = await prepareScriptTools(
+    ctx,
+    node,
+    execution,
+    stepName,
+    listings,
+    abortController.signal
+  );
   if (preparedTools.error !== undefined) {
     return failAgentNode(preparedTools.error, 'config', { providerNotCalled: true });
   }
   const scriptTools = preparedTools.runtime;
 
   // Per-node abort controller, for idle timeout, operator cutoff and cancellation.
-  const abortController = new AbortController();
   const pc: AgentPassContext = {
     ctx,
     node,
@@ -195,6 +202,8 @@ export async function executeAgentNode(
     result = await runWorkload(pc, state, prompt.prompt, session, scriptTools);
   } catch (error) {
     const cancelled = abortController.signal.aborted && !state.cutOff;
+    abortController.abort();
+    await scriptTools?.settle();
     const failure = attemptFailure(error as Error, cancelled, nodeMcp, node.id, scriptTools);
     return failAgentNode(failure.message, failure.kind, {
       providerFailure: failure.providerFailure,
@@ -348,6 +357,7 @@ async function runWorkload(
     session.resumeIntent === 'source-fork'
   );
 
+  await scriptTools?.settle();
   assertScriptToolsSettled(scriptTools);
 
   const failed = await finishTurnOutput(pc, state);

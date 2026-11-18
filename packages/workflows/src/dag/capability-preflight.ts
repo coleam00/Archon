@@ -226,11 +226,20 @@ export function collectStrictSchemaViolations(
  */
 export function assertRunCapabilities(
   providers: ProviderRegistry,
-  workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'>,
+  workflow: Pick<ResolvedWorkflow, 'name' | 'nodes' | 'sandbox'>,
   workflowProvider: string | undefined,
   aiProfile: ResolvedAiProfile | undefined,
   execContext: ExecutionContext
 ): void {
+  visitProviderInvokingNodes(workflow.nodes, workflowProvider, aiProfile, node => {
+    if (
+      'tools' in node &&
+      node.tools !== undefined &&
+      (node.sandbox ?? workflow.sandbox)?.enabled === true
+    ) {
+      throw new Error(`Node '${node.id}' script-backed tools cannot inherit the provider sandbox`);
+    }
+  });
   const capabilityMismatches = collectScopedCapabilityMismatches(
     providers,
     workflow.nodes,

@@ -215,8 +215,12 @@ test('native tools, container env and logs have parity in process, over streams 
                 },
                 required: ['action'],
               },
-              handler: async input => {
+              handler: async (input, context) => {
                 expect(input).toEqual({ action: 'inspect', enabled: true });
+                expect(context).toEqual({
+                  providerCallId: 'fixture-provider-call',
+                  providerCallScope: 'fixture-connection',
+                });
                 return `host-result-${++calls}`;
               },
             },

@@ -15,7 +15,19 @@ describe('packaged workflow resource qualification (#2527)', () => {
       name: 'test',
       description: 'test',
       nodes: [
-        { id: 'command', kind: 'agent', source: { kind: 'command', name: 'review' } },
+        {
+          id: 'command',
+          kind: 'agent',
+          source: { kind: 'command', name: 'review' },
+          tools: {
+            record: {
+              description: 'record',
+              input_schema: { type: 'object', properties: {} },
+              output_schema: { type: 'object' },
+              script: 'record',
+            },
+          },
+        },
         {
           id: 'loop',
           kind: 'loop',
@@ -36,12 +48,16 @@ describe('packaged workflow resource qualification (#2527)', () => {
     } as unknown as WorkflowDefinition;
 
     qualifyWorkflowResources(workflow, owner);
-    const command = workflow.nodes[0] as { source: { name: string } };
+    const command = workflow.nodes[0] as {
+      source: { name: string };
+      tools: Record<string, { script: string }>;
+    };
     const loop = workflow.nodes[1] as { loop: { command: string } };
     const group = workflow.nodes[2] as {
       loop_group: { nodes: Array<{ source?: { name: string }; script?: string }> };
     };
     expect(parsePackagedResourceReference(command.source.name)?.name).toBe('review');
+    expect(parsePackagedResourceReference(command.tools.record.script)?.name).toBe('record');
     expect(parsePackagedResourceReference(loop.loop.command)?.name).toBe('iterate');
     expect(parsePackagedResourceReference(group.loop_group.nodes[0].source?.name ?? '')?.name).toBe(
       'child'

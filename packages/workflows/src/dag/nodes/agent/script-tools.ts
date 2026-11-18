@@ -1,20 +1,20 @@
 import type { NativeTool, NativeToolInputSchema } from '@archon/provider-contract';
 import { redactCredentialValues } from '@archon/paths/credential-redaction';
 import { z } from 'zod';
-import { join } from 'node:path';
-import { readArtifactFile } from '../../../artifact-writes';
 import type { AgentNode } from '../../../schemas';
 import type { ScriptToolDeclaration } from '../../../schemas/provider-options';
 import type { NodeExecutionRecord } from '../../../schemas/node-execution';
 import type { WorkflowToolCall } from '../../../schemas/tool-call';
 import { compileOutputSchema, validateStructuredOutput } from '../../../structured-output';
-import { isSubprocessTimeout, type RawSubprocessRejection } from '../../../subprocess';
+import { hostSpawnFailure, type RawSubprocessRejection } from '../../../subprocess';
 import {
   newToolCallId,
   foldToolCalls,
   persistToolCall,
   toolCallRef,
   writeToolCallValue,
+  readToolCallValue,
+  toolValueDigest,
 } from '../../../tool-calls';
 import { writeInvocationListings, type InvocationListings } from '../../../invocation-listings';
 import { NodeFailure } from '../../ai-turn';
@@ -39,6 +39,7 @@ const inputSchema = z.strictObject({
 
 export interface ScriptToolRuntime {
   nativeTools: NativeTool[];
+  settle(): Promise<void>;
   unknownOutcome(): { callId: string; error: string } | undefined;
 }
 
@@ -47,9 +48,16 @@ export async function prepareScriptTools(
   node: AgentNode,
   execution: NodeExecutionRecord,
   stepName: string,
-  listings: InvocationListings | undefined
+  listings: InvocationListings | undefined,
+  abortSignal?: AbortSignal
 ): Promise<{ runtime?: ScriptToolRuntime; error?: string }> {
   if (node.tools === undefined) return {};
+  if ((node.sandbox ?? ctx.workflowLevelOptions.sandbox)?.enabled === true) {
+    return {
+      error:
+        'Script-backed tools cannot inherit the provider sandbox; remove tools or use container isolation without a provider sandbox',
+    };
+  }
   try {
     return {
       runtime: await buildScriptTools(
@@ -57,7 +65,8 @@ export async function prepareScriptTools(
         node,
         execution,
         stepName,
-        listings ?? (await writeInvocationListings(ctx))
+        listings ?? (await writeInvocationListings(ctx)),
+        abortSignal
       ),
     };
   } catch (error) {
@@ -88,11 +97,23 @@ type UnknownOutcome = { callId: string; error: string };
 type CallResults = Map<string, { fingerprint: string; result: Promise<string> }>;
 type ToolCallBase = Pick<
   WorkflowToolCall,
-  'call_id' | 'run_id' | 'node_id' | 'attempt_id' | 'tool_name' | 'provider_call_id' | 'input_ref'
+  | 'call_id'
+  | 'run_id'
+  | 'node_id'
+  | 'attempt_id'
+  | 'tool_name'
+  | 'provider_call_id'
+  | 'provider_call_scope'
+  | 'node_path'
+  | 'invocation_id'
+  | 'loop_path'
+  | 'input_ref'
+  | 'input_digest'
 >;
 type ToolCallTransition = ToolCallBase & {
   status: WorkflowToolCall['status'];
   output_ref?: string;
+  output_digest?: string;
   error?: string;
 };
 
@@ -137,12 +158,13 @@ export async function buildScriptTools(
   node: AgentNode,
   execution: NodeExecutionRecord,
   stepName: string,
-  listings: InvocationListings
+  listings: InvocationListings,
+  abortSignal?: AbortSignal
 ): Promise<ScriptToolRuntime> {
   const declarations = Object.entries(node.tools ?? {});
   let unknown: UnknownOutcome | undefined;
   const calls: CallResults = new Map();
-  await loadCallHistory(ctx, node, calls, failure => {
+  const replayOnly = await loadCallHistory(ctx, execution, calls, failure => {
     unknown = failure;
   });
   const nativeTools = declarations.map(([name, declaration]): NativeTool => {
@@ -155,6 +177,8 @@ export async function buildScriptTools(
         dispatchScriptTool(ctx, node, execution, stepName, listings, name, declaration, input, {
           context,
           calls,
+          replayOnly,
+          abortSignal,
           setUnknown: failure => {
             unknown = failure;
           },
@@ -162,7 +186,13 @@ export async function buildScriptTools(
         }),
     };
   });
-  return { nativeTools, unknownOutcome: () => unknown };
+  return {
+    nativeTools,
+    settle: async () => {
+      await Promise.allSettled([...calls.values()].map(call => call.result));
+    },
+    unknownOutcome: () => unknown,
+  };
 }
 
 function validateToolSchemas(name: string, declaration: ScriptToolDeclaration): void {
@@ -174,28 +204,46 @@ function validateToolSchemas(name: string, declaration: ScriptToolDeclaration): 
 
 async function loadCallHistory(
   ctx: RunLayersContext,
-  node: AgentNode,
+  execution: NodeExecutionRecord,
   calls: CallResults,
   setUnknown: (failure: UnknownOutcome) => void
-): Promise<void> {
+): Promise<boolean> {
+  let replayOnly = false;
   const events =
     (await ctx.deps.store.listEventsForRuns([ctx.workflowRun.id], ['workflow_tool_call'])).get(
       ctx.workflowRun.id
     ) ?? [];
   for (const call of foldToolCalls(events, ctx.workflowRun.id).filter(
-    call => call.node_id === node.id
+    call =>
+      (call.node_path ?? call.node_id) === execution.path &&
+      (call.invocation_id === undefined ||
+        call.invocation_id === execution.invocation.id ||
+        JSON.stringify(call.loop_path) === JSON.stringify(execution.invocation.loopPath) ||
+        call.status === 'started' ||
+        call.status === 'outcome_unknown')
   )) {
-    const inputText = await readArtifactFile(join(ctx.artifactsDir, call.input_ref));
-    const input = inputText === undefined ? undefined : JSON.parse(inputText);
+    if (call.status === 'completed' && call.attempt_id !== execution.attempt.id) replayOnly = true;
+    let inputText: string;
+    try {
+      inputText = await readToolCallValue(ctx.artifactsDir, call.input_ref, call.input_digest);
+    } catch {
+      setUnknown({
+        callId: call.call_id,
+        error: 'Recorded tool input failed integrity verification',
+      });
+      continue;
+    }
+    const input = JSON.parse(inputText);
     const fingerprint = JSON.stringify([call.tool_name, input]);
     const result = historicalResult(ctx, call, setUnknown);
-    // History is loaded before the model calls; avoid an unhandled rejection while it is idle.
-    void result.catch(() => undefined);
-    if (calls.has(call.provider_call_id)) {
+    await result.catch(() => undefined);
+    const key = JSON.stringify([call.provider_call_scope ?? '', call.provider_call_id]);
+    if (calls.has(key)) {
       throw new Error(`Provider call '${call.provider_call_id}' has conflicting receipts`);
     }
-    calls.set(call.provider_call_id, { fingerprint, result });
+    calls.set(key, { fingerprint, result });
   }
+  return replayOnly;
 }
 
 function historicalResult(
@@ -204,9 +252,8 @@ function historicalResult(
   setUnknown: (failure: UnknownOutcome) => void
 ): Promise<string> {
   if (call.status === 'completed' && call.output_ref !== undefined) {
-    return readArtifactFile(join(ctx.artifactsDir, call.output_ref)).then(output => {
-      if (output !== undefined) return output;
-      const error = `Recorded output for tool call '${call.call_id}' is unreadable`;
+    return readToolCallValue(ctx.artifactsDir, call.output_ref, call.output_digest).catch(() => {
+      const error = `Recorded output for tool call '${call.call_id}' failed integrity verification`;
       setUnknown({ callId: call.call_id, error });
       throw new Error(error);
     });
@@ -229,18 +276,23 @@ function dispatchScriptTool(
   declaration: ScriptToolDeclaration,
   input: Record<string, unknown>,
   state: {
-    context: { providerCallId: string } | undefined;
+    context: { providerCallId: string; providerCallScope?: string } | undefined;
     calls: CallResults;
+    replayOnly: boolean;
+    abortSignal?: AbortSignal;
     setUnknown(failure: UnknownOutcome): void;
     hasUnknown(): boolean;
   }
 ): Promise<string> {
+  if (state.abortSignal?.aborted)
+    return Promise.reject(new Error('Agent attempt has ended; no script tool will start'));
   if (state.context?.providerCallId === undefined) {
     return Promise.reject(new Error(`Provider did not identify the call to '${name}'`));
   }
-  const { providerCallId } = state.context;
+  const { providerCallId, providerCallScope } = state.context;
   const fingerprint = JSON.stringify([name, input]);
-  const existing = state.calls.get(providerCallId);
+  const key = JSON.stringify([providerCallScope ?? '', providerCallId]);
+  const existing = state.calls.get(key);
   if (existing !== undefined) {
     if (existing.fingerprint !== fingerprint) {
       return Promise.reject(
@@ -249,14 +301,22 @@ function dispatchScriptTool(
     }
     return existing.result;
   }
+  if (state.replayOnly) {
+    const error =
+      'A previous attempt completed a script tool; a new provider call cannot safely replay it';
+    state.setUnknown({ callId: providerCallId, error });
+    return Promise.reject(new Error(error));
+  }
   const result = invokeScriptTool(ctx, node, execution, stepName, listings, name, declaration, {
     callId: newToolCallId(),
     providerCallId,
+    providerCallScope,
     input,
     setUnknown: state.setUnknown,
     hasUnknown: state.hasUnknown,
+    abortSignal: state.abortSignal,
   });
-  state.calls.set(providerCallId, { fingerprint, result });
+  state.calls.set(key, { fingerprint, result });
   return result;
 }
 
@@ -271,9 +331,11 @@ async function invokeScriptTool(
   state: {
     callId: string;
     providerCallId: string;
+    providerCallScope?: string;
     input: Record<string, unknown>;
     setUnknown(failure: { callId: string; error: string }): void;
     hasUnknown(): boolean;
+    abortSignal?: AbortSignal;
   }
 ): Promise<string> {
   if (state.hasUnknown()) {
@@ -289,15 +351,32 @@ async function invokeScriptTool(
     attempt_id: execution.attempt.id,
     tool_name: name,
     provider_call_id: state.providerCallId,
+    ...(state.providerCallScope !== undefined
+      ? { provider_call_scope: state.providerCallScope }
+      : {}),
+    node_path: execution.path,
+    invocation_id: execution.invocation.id,
+    loop_path: execution.invocation.loopPath,
     input_ref: inputRef,
+    input_digest: toolValueDigest(JSON.stringify(state.input)),
   } as const;
+  let processStarted = false;
   try {
     return await executeAndRecordTool(ctx, node, execution, stepName, listings, name, declaration, {
       base,
       input: state.input,
+      onProcessStart: () => {
+        state.abortSignal?.throwIfAborted();
+        if (state.hasUnknown())
+          throw new Error(
+            'An earlier script tool has an unknown outcome; no further tool will start'
+          );
+        processStarted = true;
+      },
+      abortSignal: state.abortSignal,
     });
   } catch (error) {
-    await recordToolFailure(ctx, stepName, base, error, state.setUnknown);
+    await recordToolFailure(ctx, stepName, base, error, processStarted, state.setUnknown);
     throw error;
   }
 }
@@ -328,7 +407,12 @@ async function executeAndRecordTool(
   listings: InvocationListings,
   name: string,
   declaration: ScriptToolDeclaration,
-  state: { base: ToolCallBase; input: Record<string, unknown> }
+  state: {
+    base: ToolCallBase;
+    input: Record<string, unknown>;
+    onProcessStart(): void;
+    abortSignal?: AbortSignal;
+  }
 ): Promise<string> {
   await writeToolArtifact(ctx, state.base.input_ref, state.input, name, 'input');
   await persistTransition(ctx, stepName, { ...state.base, status: 'started' });
@@ -349,6 +433,7 @@ async function executeAndRecordTool(
   await persistTransition(ctx, stepName, {
     ...state.base,
     output_ref: outputRef,
+    output_digest: toolValueDigest(JSON.stringify(value)),
     status: 'completed',
   });
   return JSON.stringify(value);
@@ -362,7 +447,12 @@ async function runToolProcess(
   listings: InvocationListings,
   name: string,
   declaration: ScriptToolDeclaration,
-  state: { base: { call_id: string }; input: Record<string, unknown> }
+  state: {
+    base: { call_id: string };
+    input: Record<string, unknown>;
+    onProcessStart(): void;
+    abortSignal?: AbortSignal;
+  }
 ): Promise<string> {
   const prepared = await prepareNamedScript(
     ctx,
@@ -373,6 +463,7 @@ async function runToolProcess(
     listings
   );
   const { command, args, input: stdin } = prepared.invocation;
+  state.onProcessStart();
   try {
     const { stdout, credentialValues } = await runSubprocessUntilRunStops(
       ctx.deps.store,
@@ -386,6 +477,7 @@ async function runToolProcess(
         timeout: declaration.timeout,
         endTreeOnTimeout: true,
         input: stdin,
+        abortSignal: state.abortSignal,
         env: {
           ...prepared.env,
           ARCHON_TOOL_CALL_ID: state.base.call_id,
@@ -451,6 +543,7 @@ async function recordToolFailure(
   stepName: string,
   base: ToolCallBase,
   error: unknown,
+  processStarted: boolean,
   setUnknown: (failure: UnknownOutcome) => void
 ): Promise<void> {
   const raw = error instanceof ToolProcessError ? error.raw : (error as RawSubprocessRejection);
@@ -458,10 +551,8 @@ async function recordToolFailure(
   const uncertain =
     receiptFailed ||
     error instanceof ToolArtifactPersistenceError ||
-    (error instanceof ToolProcessError &&
-      (isSubprocessTimeout(raw) ||
-        raw.cancelled === true ||
-        raw.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'));
+    (processStarted &&
+      !(error instanceof ToolProcessError && hostSpawnFailure(ctx.execContext, raw) !== undefined));
   const message = redactCredentialValues(
     error instanceof Error ? error.message : String(error),
     ctx.config.protectedCredentialValues ?? []

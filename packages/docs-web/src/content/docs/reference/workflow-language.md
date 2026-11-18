@@ -1481,9 +1481,18 @@ node. It receives the logical input in `ARCHON_TOOL_INPUT` and its Engine call I
 
 Every call has a `workflow_tool_call` event sequence: `started`, then `completed`, `failed`,
 or `outcome_unknown`. Raw input and output live in private artifacts referenced by the
-receipt rather than in the event. A timeout, cancellation, output overflow or persistence
+receipt rather than in the event; their content digests are retained in the receipt and
+checked before replay or listing. Consumers must verify the output digest again before
+using a file read from `output_ref`. A timeout, cancellation, output overflow or persistence
 failure cannot be reported as success. An unknown outcome fails the agent node as
-non-retryable, and the same Provider call ID cannot execute the script twice.
+non-retryable. Any failure after process dispatch, including nonzero exit or malformed
+output, is treated as unknown because the script may already have written. The same
+Provider call ID within its transport and node invocation cannot execute the script twice.
+A retry after a completed tool may replay its existing call, but refuses new call IDs;
+the operator must reconcile completed effects before starting new work. Claude MCP
+request IDs are scoped to the SDK server instance rather than treated as global IDs.
+Provider `sandbox.enabled: true` with script-backed tools is refused before model
+invocation; use container isolation without a provider sandbox when isolation is needed.
 
 Later `bash:` and `script:` nodes receive `TOOL_CALLS_FILE`, a JSON listing shaped as
 `{ "runId": "...", "calls": [...] }`. Select a call by `call_id` (or verify its
@@ -1494,9 +1503,10 @@ Later `bash:` and `script:` nodes receive `TOOL_CALLS_FILE`, a JSON listing shap
 const listing = JSON.parse(await Bun.file(process.env.TOOL_CALLS_FILE!).text());
 const call = listing.calls.find((entry) => entry.call_id === expectedCallId);
 if (call?.status !== 'completed') throw new Error('merge was not recorded');
-const result = JSON.parse(
-  await Bun.file(`${process.env.ARTIFACTS_DIR}/${call.output_ref}`).text()
-);
+const output = await Bun.file(`${process.env.ARTIFACTS_DIR}/${call.output_ref}`).text();
+const digest = new Bun.CryptoHasher('sha256').update(output).digest('hex');
+if (digest !== call.output_digest) throw new Error('recorded output changed');
+const result = JSON.parse(output);
 ```
 
 The listing is an observation written for each invocation. Use `depends_on` to order the
