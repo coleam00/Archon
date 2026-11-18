@@ -416,6 +416,7 @@ export function createInMemoryWorkflowStore(
     listOpenItemAsks: async () => [],
     listItemAsks: async () => [],
     getItemAsk: async () => null,
+    listOpenItemWaits: async () => [],
     listWorkflowRuns: options => write(view => view.listWorkflowRuns(options)),
     listDueWorkflowContinuations: (now, limit) =>
       write(view => view.listDueWorkflowContinuations(now, limit)),
