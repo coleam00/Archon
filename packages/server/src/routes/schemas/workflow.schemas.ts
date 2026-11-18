@@ -1,4 +1,5 @@
 import { attentionDegradedSchema } from '@archon/workflows/schemas/attention-degraded';
+import { operatorPauseSchema } from '@archon/workflows/schemas/operator-pause';
 import {
   toolCallAttentionArraySchema,
   TOOL_CALL_ATTENTION_METADATA_KEY,
@@ -12,9 +13,12 @@ import { providerEventRecordSchema as engineProviderEventRecordSchema } from '@a
  * Zod schemas for workflow API endpoints.
  */
 import { z } from '@hono/zod-openapi';
+import { loopRoundSchema } from '@archon/workflows/schemas/loop-rounds';
 import { openAttentionQueueCountsSchema } from '@archon/workflows/attention-counts';
 import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import { itemWindowSchema } from '@archon/workflows/item-window';
+import { packGraphSchema } from '@archon/workflows/pack-graph';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
 import {
   attentionWatchLevelSchema,
@@ -189,7 +193,12 @@ const nullableRunAttentionSchema = z.union([runAttentionSchema, z.literal(null)]
 
 const ownerObservationSchema = runOwnerObservationSchema.nullable().openapi({
   description:
-    "What this server observes about the running run's execution owner, by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run is not running. Observed per request; never stored.",
+    "What this server observes about the run's execution owner while its state needs one (running, or paused on a sub-run that runs in its process), by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run needs no owner now (an ordinary pause, a pending or ended run). Observed per request; never stored.",
+});
+
+const operatorPauseFieldSchema = operatorPauseSchema.nullable().openapi({
+  description:
+    "An operator's pause (`archon workflow pause`): `requested` while the run still runs the nodes it had started and pauses once they finish, `paused` once it stopped at that boundary, with who asked, through which surface and when. Null when the run is in neither. Derived from the run row; a resume ends it.",
 });
 
 /** A workflow run record (wire shape with ISO string dates). */
@@ -198,6 +207,7 @@ export const workflowRunSchema = engineWorkflowRunSchema
     outcome: workflowRunOutcomeSchema,
     metadata: workflowRunMetadataSchema,
     attention: nullableRunAttentionSchema,
+    operator_pause: operatorPauseFieldSchema,
     started_at: z.string(),
     active_phase_started_at: z.string().nullable(),
     completed_at: z.string().nullable(),
@@ -236,7 +246,11 @@ export const workflowRunDetailSchema = z
       terminal_record: terminalRecordSchema.nullable(),
       nodes: z.array(runNodeStateSchema).openapi({
         description:
-          "The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far.",
+          "The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. A loop body node holds its latest round.",
+      }),
+      loop_rounds: z.array(loopRoundSchema).optional().openapi({
+        description:
+          'Each round of each loop_group the run has entered, in order: the body nodes it reached, with state, timing and output. Absent when the run ran no loop.',
       }),
     }),
     events: z.array(workflowEventSchema),
@@ -369,6 +383,7 @@ export const dashboardWorkflowRunSchema = coreDashboardWorkflowRunSchema
   .extend({
     metadata: workflowRunMetadataSchema,
     attention: nullableRunAttentionSchema,
+    operator_pause: operatorPauseFieldSchema,
     owner_observation: ownerObservationSchema,
     started_at: z.string(),
     active_phase_started_at: z.string().nullable(),
@@ -437,8 +452,26 @@ export const itemReadQuerySchema = z.object({
   key: z.string().min(1),
 });
 
+/** GET /api/packs/{pack}/graph response: the pack's stages and run-ended arrows. */
+export const packGraphResponseSchema = packGraphSchema.meta({ id: 'PackGraph' });
+
 /** GET /api/items response: the item, its runs, open questions and answers. */
 export const itemReadResponseSchema = itemReadSchema.meta({ id: 'ItemRead' });
+
+/**
+ * GET /api/items/window query: the project as for GET /api/items, and either a window
+ * (`since`, `until` in `archon metrics` syntax) or the `after` cursor a page returned.
+ */
+export const itemWindowQuerySchema = z.object({
+  project: z.string().min(1),
+  since: z.string().min(1).optional(),
+  until: z.string().min(1).optional(),
+  limit: z.coerce.number().int().optional(),
+  after: z.string().min(1).optional(),
+});
+
+/** GET /api/items/window response: a page of items, as `archon workflow items --json`. */
+export const itemWindowResponseSchema = itemWindowSchema.meta({ id: 'ItemWindow' });
 
 /** POST /api/items/rulings body: the item, by project and key, and the ruling's text. */
 export const recordItemRulingBodySchema = z
@@ -475,6 +508,44 @@ export const labelAttentionBodySchema = z
     unset: z.array(attentionLabelKeySchema).optional(),
   })
   .openapi('LabelAttentionBody');
+
+/**
+ * POST /api/attention/answer body: the item's ref as the queue lists it, and the answer in
+ * its form. The ref is in the body because it is opaque and may hold a ':'.
+ */
+export const answerAttentionItemBodySchema = z
+  .object({
+    ref: z.string().min(1),
+    choose: z.array(z.string().min(1)).optional(),
+    recommended: z.literal(true).optional(),
+    text: z.string().optional(),
+  })
+  .refine(body => !(body.recommended === true && (body.choose?.length ?? 0) > 0), {
+    message: 'Use choose or recommended, not both',
+  })
+  .openapi('AnswerAttentionItemBody');
+
+/** POST /api/attention/withdraw body: the ref of an ask a completed run left. */
+export const withdrawAttentionItemBodySchema = z
+  .object({ ref: z.string().min(1) })
+  .openapi('WithdrawAttentionItemBody');
+
+/**
+ * POST /api/attention/answer and /api/attention/withdraw response. `settled` is set when
+ * the write closed the last open ask of its set; `unchanged` when the item already had
+ * this answer or was already withdrawn; `runId` names the paused run an answer went to.
+ */
+export const attentionItemActionResponseSchema = z
+  .object({
+    ref: z.string(),
+    action: z.enum(['answer', 'withdraw']),
+    unchanged: z.boolean(),
+    settled: z.boolean().optional(),
+    runId: z.string().optional(),
+    continues: z.boolean().optional(),
+    cancelled: z.boolean().optional(),
+  })
+  .openapi('AttentionItemActionResponse');
 
 /** POST /api/runs/{runId}/attention/labels response. */
 export const labelAttentionResponseSchema = z

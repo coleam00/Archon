@@ -4,7 +4,6 @@ import {
   listAttentionQueue,
   selectAttentionQueue,
   type AttentionQueueScope,
-  type AttentionQueueSource,
   type ProjectRef,
 } from '@archon/workflows/attention-queue';
 import { splitAttentionRead } from '@archon/workflows/schemas/attention-degraded';
@@ -13,6 +12,7 @@ import {
   answerAttentionItem,
   mayAnswerAttentionItem,
   type AttentionItemAnswerResult,
+  type AttentionItemDeps,
 } from '../operations/attention-items';
 import type { RunActor } from '../operations/run-authorization';
 import {
@@ -33,7 +33,7 @@ export interface AttentionToolContext {
     'answerWorkflow' | 'respondToWorkflow' | 'assertRunActionAllowed'
   >;
   /** The queue the CLI's `workflow attention` and the API's attention routes read. */
-  queue: AttentionQueueSource;
+  queue: AttentionItemDeps['queue'];
   /** Resolve a project the agent named: a codebase id, a codebase name or a project key. */
   resolveProject: (spec: string) => Promise<ProjectRef>;
   /** The chat's project, which a list covers by default; null lists the whole install. */
@@ -217,7 +217,7 @@ function withText(chosen: string, said: string | undefined): string {
 /** Why the item `ref` names was not answered, in words the agent can act on. */
 function notAnswered(
   ref: string,
-  result: Exclude<AttentionItemAnswerResult, { kind: 'answered' }>
+  result: Exclude<AttentionItemAnswerResult, { kind: 'answered' | 'ask_answered' }>
 ): string {
   switch (result.kind) {
     case 'unknown':
@@ -227,13 +227,27 @@ function notAnswered(
     case 'moved':
       return `attention: item '${ref}' is over; its run now asks something else, as item '${result.item.ref}'. Call action=list and answer what it asks now.`;
     case 'takes_no_answer':
-      return result.item.kind === 'usage_limit'
-        ? `attention: item '${ref}' waits for a usage limit and continues by itself at ${result.item.resetAt}. It takes no answer.`
-        : `attention: item '${ref}' cannot be read (${result.item.reason}: ${result.item.detail}). Someone has to look at its run; it takes no answer.`;
+      switch (result.item.kind) {
+        case 'usage_limit':
+          return `attention: item '${ref}' waits for a usage limit and continues by itself at ${result.item.resetAt}. It takes no answer.`;
+        case 'unreadable':
+          return `attention: item '${ref}' cannot be read (${result.item.reason}: ${result.item.detail}). Someone has to look at its run; it takes no answer.`;
+        case 'owner_lost':
+          return `attention: run ${result.item.run.id} lost its owner while it holds its item, so later starts wait behind it. It takes no answer: resume or abandon the run.`;
+      }
+      return result.item satisfies never;
     case 'refused':
-      return result.reason === 'gate_has_no_recommendation'
-        ? 'attention: a gate has no recommendation. Pass choose with one decision.'
-        : 'attention: a gate takes exactly one decision in choose, e.g. ["approve"].';
+      switch (result.reason) {
+        case 'gate_has_no_recommendation':
+          return 'attention: a gate has no recommendation. Pass choose with one decision.';
+        case 'gate_takes_one_decision':
+          return 'attention: a gate takes exactly one decision in choose, e.g. ["approve"].';
+        case 'already_answered':
+          return `attention: item '${ref}' was already answered differently; that answer stands.`;
+      }
+      break;
+    case 'unchanged':
+      return `attention: item '${ref}' already has this answer; nothing changed.`;
   }
 }
 
@@ -248,6 +262,12 @@ async function answerItem(
   const answer = answerFrom(input);
   if (typeof answer === 'string') return answer;
   const result = await answerAttentionItem(ctx, ref, answer, ctx.actor, SURFACE);
+  if (result.kind === 'ask_answered') {
+    const { item } = result;
+    log.info({ ref, settled: result.settled }, 'attention_tool.ask_answered');
+    // Nothing continues from an ask: its run completed. Settling the set is recorded.
+    return `Answered ${ref}${item.askedIn === undefined ? '' : `, which run ${item.askedIn.runId} (${item.askedIn.workflow}) left,`} with ${describe(answer)}. It asked:\n> ${item.message.replace(/\n/g, '\n> ')}\n${result.settled ? 'That was the last open ask of its set; the set is settled.' : 'Other asks of its set are still open.'}`;
+  }
   if (result.kind !== 'answered') return notAnswered(ref, result);
   const { item } = result;
   const subject = `run ${item.run.id} (${item.run.workflow})`;

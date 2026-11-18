@@ -272,6 +272,10 @@ export async function createFileWorkflowStore(
       write([id], view => view.pauseWorkflowRunForWait(id, wait, pause)),
     releaseRunForUnreadableSource: (id, release, beforePublish) =>
       write([id], view => view.releaseRunForUnreadableSource(id, release, beforePublish)),
+    requestOperatorPause: (id, requested) =>
+      write([id], view => view.requestOperatorPause(id, requested)),
+    pauseWorkflowRunForOperator: (id, claimId) =>
+      write([id], view => view.pauseWorkflowRunForOperator(id, claimId)),
     clearWorkflowWaitContext: (id, wait, completion) =>
       write([id], view => view.clearWorkflowWaitContext(id, wait, completion)),
     resolveApprovalGate: (id, metadata, events, expected) =>
@@ -366,6 +370,15 @@ export async function createFileWorkflowStore(
     withdrawItemRuling: async () => {
       throw new FileStoreUnsupportedError('items');
     },
+    listItemsInWindow: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    getItemMerge: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    recordItemMerge: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
     listItemLinks: async () => {
       throw new FileStoreUnsupportedError('items');
     },
@@ -373,6 +386,17 @@ export async function createFileWorkflowStore(
       throw new FileStoreUnsupportedError('items');
     },
     endItemLink: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    // An ask belongs to an item, and this store holds none, so it holds no asks: the
+    // readers see an empty set rather than a failure that would break every queue read.
+    listOpenItemAsks: async () => [],
+    listItemAsks: async () => [],
+    getItemAsk: async () => null,
+    answerItemAsk: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    withdrawItemAsk: async () => {
       throw new FileStoreUnsupportedError('items');
     },
     listWorkflowRuns: async options => {

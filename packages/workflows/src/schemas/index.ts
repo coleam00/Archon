@@ -135,6 +135,7 @@ export {
   inputEnvKey,
   bindingDirectiveSchema,
   isBindingDirective,
+  isBindingDirectiveShape,
   isTypedOutputsDirective,
 } from './node-bindings';
 export {
@@ -347,8 +348,18 @@ export {
   pauseCauseOfApproval,
   pauseCauseOfWait,
   readPauseCause,
+  isOperatorPaused,
   type PauseCause,
 } from './pause-cause';
+export {
+  OPERATOR_PAUSE_METADATA_KEY,
+  operatorPause,
+  describeOperatorPause,
+  operatorPauseSchema,
+  readOperatorPauseRecord,
+  type OperatorPause,
+  type OperatorPauseRecord,
+} from './operator-pause';
 export type { WorkflowRunOrigin } from './workflow-run';
 
 export * from './workflow-event';

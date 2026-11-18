@@ -16,6 +16,7 @@ import {
   type PreparedRunAiConfiguration,
 } from '@archon/workflows/run-preflight';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
+import { assertRunForgeAccess } from '@archon/workflows/run-forge-access';
 import { requireTerminalStatusWrite } from '@archon/workflows/terminal-status-write';
 import {
   prepareWorkflowSource,
@@ -183,6 +184,11 @@ async function dispatchBackgroundWorkflowOwned(
   if (!prepared) return;
   const { workflow, preparedAiConfiguration } = prepared;
   let { preparedSource } = prepared;
+  // Remotes are read from the project, never from a branch lane's archived config.
+  await assertRunForgeAccess(workflowDeps, workflow, preparedAiConfiguration, {
+    cwd: estate.codebase?.default_cwd ?? ctx.cwd,
+    codebaseId: ctx.codebaseId,
+  });
 
   const { workerPlatformId, workerConv } = await createWorkerConversation(ctx);
 

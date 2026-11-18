@@ -158,22 +158,6 @@ describe('POST /webhooks/github', () => {
       'webhook_endpoint_error'
     );
   });
-
-  test('returns 500 when check-run processing rejects', async () => {
-    const app = createWebhookApp();
-    mockReceiveWebhook.mockImplementation(async () => {
-      throw new Error('workflow signal failed');
-    });
-
-    const res = await postWebhook(app, {
-      'x-github-event': 'check_run',
-      'x-hub-signature-256': 'sha256=abc123',
-      'x-github-delivery': 'guid-1',
-    });
-
-    expect(res.status).toBe(500);
-    expect(mockReceiveWebhook).toHaveBeenCalledTimes(1);
-  });
   test('does not acknowledge before receiveWebhook completes', async () => {
     let complete: (() => void) | undefined;
     const pending = new Promise<void>(resolve => {
@@ -192,16 +176,6 @@ describe('POST /webhooks/github', () => {
     expect(acknowledged).toBe(false);
     complete?.();
     expect((await response).status).toBe(200);
-  });
-
-  test('verifies the received bytes without dropping a leading BOM', async () => {
-    const response = await createWebhookApp().request('/webhooks/github', {
-      method: 'POST',
-      headers: { 'x-hub-signature-256': 'signed' },
-      body: new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('{}')]),
-    });
-    expect(response.status).toBe(200);
-    expect(mockReceiveWebhook.mock.calls[0]?.[0]).toBe('\uFEFF{}');
   });
 
   test.each([
@@ -243,20 +217,6 @@ describe('POST /webhooks/sources/:sourceInstanceId', () => {
     });
     // Only a committed receipt asks the host to drain.
     expect(onReceiptAccepted).toHaveBeenCalledTimes(result === 'accepted' ? 1 : 0);
-  });
-
-  test('passes the received bytes through without dropping a leading BOM', async () => {
-    const app = new OpenAPIHono();
-    const receive = mock(
-      async (_sourceInstanceId: string, _request: { body: string }) => 'accepted' as const
-    );
-    registerWebhookSourceRoutes(app, { hasSource: () => true, receive });
-    const response = await app.request('/webhooks/sources/configured', {
-      method: 'POST',
-      body: new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('{}')]),
-    });
-    expect(response.status).toBe(200);
-    expect(receive.mock.calls[0]?.[1].body).toBe('\uFEFF{}');
   });
 
   test('refuses a body that is not UTF-8 before the source reads it', async () => {

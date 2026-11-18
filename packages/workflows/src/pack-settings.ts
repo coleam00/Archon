@@ -3,7 +3,8 @@
  *
  *  - The DECLARATION is `<pack>/.pack/pack.yaml`, a top-level `inputs:` block in the
  *    workflow input-spec shape plus a `type`. (The same file's `bindings:` block holds the
- *    trigger bindings the pack recommends; see `schemas/pack-bindings.ts`.) It lives in a dot folder because neither
+ *    trigger bindings the pack recommends; see `schemas/pack-bindings.ts`. Its `forge:` block
+ *    names the forge capabilities the pack calls; see `run-forge-access.ts`.) It lives in a dot folder because neither
  *    workflow loader reads one at a pack root: the flat loader would parse a `.yaml` beside
  *    the workflow folders as a workflow of its own, and the packaged loader skips dot
  *    folders as it does `.shared/`. A source capture copies the pack tree whole, so a
@@ -30,7 +31,9 @@ import { INPUT_NAME_PATTERN } from './schemas/node-bindings';
 import type { ResolvedWorkflow } from './schemas';
 import type { PackBinding } from './schemas/pack-bindings';
 import {
+  packForgeNeedsSchema,
   packSettingSpecSchema,
+  type PackForgeNeeds,
   type PackSettingSpec,
   type WorkflowPack,
 } from './schemas/pack-settings';
@@ -103,7 +106,7 @@ function topLevelMappings<K extends string>(
   keys: readonly K[],
   fail: Fail
 ): Partial<Record<K, Record<string, unknown>>> {
-  const allowed = keys.map(key => `'${key}:'`).join(' and ');
+  const allowed = keys.map(key => `'${key}:'`).join(', ');
   let raw: unknown;
   try {
     raw = parseYamlText(text);
@@ -154,11 +157,13 @@ function parseSettingSpec(name: string, rawSpec: unknown, fail: Fail): PackSetti
 export interface PackDeclaration {
   readonly settings?: Record<string, PackSettingSpec>;
   readonly bindings?: Record<string, PackBinding>;
+  readonly forge?: PackForgeNeeds;
 }
 
 /**
- * Parse a pack declaration: a top-level `inputs:` map of settings and a top-level
- * `bindings:` map of the trigger bindings the pack recommends. Each setting name follows
+ * Parse a pack declaration: a top-level `inputs:` map of settings, a top-level
+ * `bindings:` map of the trigger bindings the pack recommends, and a top-level `forge:`
+ * block of the forge capabilities its workflows call. Each setting name follows
  * the input-name grammar, each spec the setting schema, and each default its own type.
  * Two names folding to one `INPUTS_*` key are refused here, where all are visible.
  *
@@ -167,7 +172,7 @@ export interface PackDeclaration {
  */
 export function parsePackDeclaration(text: string, label: string): PackDeclaration {
   const fail = failIn(label);
-  const declared = topLevelMappings(text, ['inputs', 'bindings'], fail);
+  const declared = topLevelMappings(text, ['inputs', 'bindings', 'forge'], fail);
   const settings = Object.fromEntries(
     Object.entries(declared.inputs ?? {}).map(([name, rawSpec]) => [
       name,
@@ -177,10 +182,20 @@ export function parsePackDeclaration(text: string, label: string): PackDeclarati
   const collision = inputEnvKeyCollision(Object.keys(settings));
   if (collision !== null) fail(collision);
   const bindings = parsePackBindings(declared.bindings ?? {}, fail);
+  const forge = declared.forge === undefined ? undefined : parseForgeNeeds(declared.forge, fail);
   return {
     ...(Object.keys(settings).length > 0 ? { settings } : {}),
     ...(Object.keys(bindings).length > 0 ? { bindings } : {}),
+    ...(forge ? { forge } : {}),
   };
+}
+
+function parseForgeNeeds(raw: Record<string, unknown>, fail: Fail): PackForgeNeeds {
+  const parsed = packForgeNeedsSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  const issue = parsed.error.issues[0];
+  const where = issue?.path.length ? ` at '${issue.path.join('.')}'` : '';
+  return fail(`'forge' is invalid${where}: ${issue?.message ?? 'unknown error'}`);
 }
 
 /**

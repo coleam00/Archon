@@ -16,6 +16,8 @@ import {
   type Mock,
 } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
+import { ITEM_ASKS_DESCRIPTION, itemAsksJsonSchema } from '../schemas/item-ask';
+import { readCompletedAsks } from '../completed-asks';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -39,7 +41,7 @@ import {
   readTranscript,
 } from './test-utils';
 import { executeDagWorkflow } from '../dag-executor';
-import type { DagNode, AgentNode, WorkflowRun } from '../schemas';
+import type { DagNode, AgentNode, NodeOutput, WorkflowRun } from '../schemas';
 import type { IWorkflowStore, PersistedNodeOutput } from '../store';
 import type { RunEndedFacts, WorkflowDeps } from '../deps';
 import type { LinkedRunEndedStart, SourceReceiptAcceptance } from '../schemas/resource-start';
@@ -1059,7 +1061,7 @@ describe('executeDagWorkflow -- the outcome is written when the run completes (#
     mockStructuredResult({ green: true, plan: 'ship it' });
     const store = createMockStore();
     const receipt = { receipt: { id: 'r' } } as unknown as SourceReceiptAcceptance;
-    const linked = { form: 'all', endedRunId: 'ended-run' } as unknown as LinkedRunEndedStart;
+    const linked = { endedRunId: 'ended-run' } as unknown as LinkedRunEndedStart;
     const seen: RunEndedFacts[] = [];
 
     await run(store, [resultNode()], {
@@ -1809,5 +1811,218 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
       )
     ).toHaveLength(0);
     expect(store.getDagResumeSnapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeDagWorkflow -- the asks a run leaves are written when it completes', () => {
+  let testDir: string;
+
+  const asksSchema = {
+    type: 'object',
+    properties: { summary: { type: 'string' } },
+    required: ['summary'],
+  };
+  const resultNode: DagNode = {
+    id: 'decide',
+    kind: 'agent',
+    source: { kind: 'inline', prompt: 'decide' },
+    output_format: asksSchema,
+  };
+  const anAsk = {
+    question: 'Keep the flag?',
+    context: 'Two readings of the issue.',
+    options: [
+      { id: 'keep', does: 'Keep it.', cost: 'One more flag.' },
+      { id: 'drop', does: 'Drop it.', cost: 'Old configs break.' },
+    ],
+    recommendation: { option: 'keep', why: 'Nothing needs it gone.' },
+    artifacts: [],
+  };
+
+  const mockStructuredResult = (value: Record<string, unknown>): void => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: JSON.stringify(value) };
+      yield { type: 'result', sessionId: 'asks-session', structuredOutput: value };
+    });
+  };
+
+  const run = async (
+    store: MockWorkflowStore,
+    options: {
+      asks?: boolean;
+      workflowRun?: WorkflowRun;
+      asksCheckout?: WorkflowDeps['asksCheckout'];
+    } = {}
+  ): Promise<void> => {
+    await executeDagWorkflow(
+      dagOptions({
+        deps: { ...createMockDeps(store), asksCheckout: options.asksCheckout },
+        conversationId: 'conv-asks',
+        cwd: testDir,
+        workflow: {
+          name: 'leaves-asks',
+          nodes: [resultNode],
+          returns: 'decide',
+          ...(options.asks === false ? {} : { result: { asks: 'asks' } }),
+        },
+        workflowRun: options.workflowRun ?? makeWorkflowRun('asks-run'),
+      })
+    );
+  };
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-asks-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+  });
+
+  afterEach(async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'DAG AI response' };
+      yield { type: 'result', sessionId: 'dag-session-id' };
+    });
+    await removeTempTree(testDir);
+  });
+
+  /** The output schema the one provider call was sent. */
+  const sentSchema = (): Record<string, unknown> | undefined =>
+    (mockSendQueryDag.mock.calls[0]?.[3] as { outputFormat?: { schema: Record<string, unknown> } })
+      ?.outputFormat?.schema;
+
+  it('sends the engine-owned ask schema, with its descriptions, only when the workflow declares asks', async () => {
+    mockStructuredResult({ summary: 'done', asks: [] });
+    await run(createMockStore());
+    const declared = sentSchema();
+    expect((declared?.properties as Record<string, unknown>).asks).toEqual(itemAsksJsonSchema());
+    expect(declared).toMatchObject({
+      required: ['summary', 'asks'],
+      properties: {
+        asks: {
+          description: ITEM_ASKS_DESCRIPTION,
+          items: { properties: { options: { items: { required: ['id', 'does', 'cost'] } } } },
+        },
+      },
+    });
+
+    // Every field the model writes carries its own guidance: walk each property of the
+    // sent schema, through objects and array items, and require a description on it.
+    const undescribed: string[] = [];
+    const walk = (schema: unknown, path: string): void => {
+      if (typeof schema !== 'object' || schema === null) return;
+      const { properties, items } = schema as { properties?: unknown; items?: unknown };
+      if (typeof properties === 'object' && properties !== null)
+        for (const [key, property] of Object.entries(properties)) {
+          const description = (property as { description?: unknown }).description;
+          if (typeof description !== 'string' || description.trim() === '')
+            undescribed.push(`${path}.${key}`);
+          walk(property, `${path}.${key}`);
+        }
+      walk(items, `${path}[]`);
+    };
+    walk({ properties: { asks: (declared?.properties as Record<string, unknown>).asks } }, '');
+    expect(undescribed).toEqual([]);
+
+    mockSendQueryDag.mockClear();
+    await run(createMockStore(), { asks: false });
+    const undeclared = sentSchema();
+    expect((undeclared?.properties as Record<string, unknown>).asks).toBeUndefined();
+    expect(JSON.stringify(undeclared)).not.toContain(ITEM_ASKS_DESCRIPTION.slice(0, 40));
+  });
+
+  it('completes with the asks in the completing write, and with an empty set when none are left', async () => {
+    mockStructuredResult({ summary: 'done', asks: [anAsk] });
+    const store = createMockStore();
+    await run(store);
+    expect(store.completeWorkflowRun.mock.calls[0]?.[3]).toEqual({ asks: [anAsk] });
+
+    mockStructuredResult({ summary: 'done', asks: [] });
+    const empty = createMockStore();
+    await run(empty);
+    expect(empty.completeWorkflowRun.mock.calls[0]?.[3]).toEqual({ asks: [] });
+  });
+
+  it('fails the run naming the field when an ask does not hold together, and opens none', async () => {
+    // Valid JSON Schema, but the recommendation names no option: only the engine's check sees it.
+    mockStructuredResult({
+      summary: 'done',
+      asks: [{ ...anAsk, recommendation: { option: 'neither', why: 'x' } }],
+    });
+    const store = createMockStore();
+    await run(store);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun.mock.calls[0]?.[1]).toContain(
+      "returns.asks 'asks' on node 'decide': [0].recommendation.option names 'neither'"
+    );
+  });
+
+  it('fails the run naming the field when the asks value has the wrong type, and opens none', async () => {
+    // The node's own output check refuses it. Its node_failed error is what `workflow get`
+    // prints as the run's reason (`terminalReason`); the run-level summary is the generic
+    // one every node failure has.
+    mockStructuredResult({ summary: 'done', asks: 'keep the flag' });
+    const store = createMockStore();
+    await run(store);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    const failed = store.createWorkflowEvent.mock.calls
+      .map(([event]) => event)
+      .find(event => event.event_type === 'node_failed' && event.step_name === 'decide');
+    expect(String(failed?.data?.error)).toContain('/asks');
+  });
+
+  it('leaves an earlier open set alone when the returns node was skipped', () => {
+    const workflow = { name: 'asks-wf', returns: 'decide', result: { asks: 'asks' } };
+    const skipped = new Map([['decide', { state: 'skipped', output: '' } as NodeOutput]]);
+    expect(readCompletedAsks(workflow, { parent_run_id: null }, skipped)).toEqual({ kind: 'none' });
+  });
+
+  it('records the checkout it leaves for the asks-settled bindings that take it', async () => {
+    const recorded = (store: MockWorkflowStore): unknown =>
+      (store.completeWorkflowRun.mock.calls[0]?.[2] as Record<string, unknown>).asks_checkout;
+    const handoff = { runId: 'asks-run', branch: 'archon/plan', commit: 'b'.repeat(40) };
+    const worktree = '/worktrees/plan';
+
+    mockStructuredResult({ summary: 'done', asks: [anAsk] });
+    const taken = createMockStore();
+    await run(taken, { asksCheckout: async () => ({ handoff, worktree }) });
+    expect(recorded(taken)).toEqual({ handoff, worktree });
+
+    // No binding takes it, or the run leaves no asks to settle: nothing is read or recorded.
+    const untaken = createMockStore();
+    await run(untaken, { asksCheckout: async () => undefined });
+    expect(recorded(untaken)).toBeUndefined();
+    mockStructuredResult({ summary: 'done', asks: [] });
+    const reads: string[] = [];
+    const noAsks = createMockStore();
+    await run(noAsks, {
+      asksCheckout: async ended => {
+        reads.push(ended.id);
+        return { handoff, worktree };
+      },
+    });
+    expect(reads).toEqual([]);
+    expect(recorded(noAsks)).toBeUndefined();
+  });
+
+  it('fails the run naming the reason when its asks-settled triggers cannot be read', async () => {
+    mockStructuredResult({ summary: 'done', asks: [anAsk] });
+    const store = createMockStore();
+    await run(store, {
+      asksCheckout: async () => {
+        throw new Error('Trigger file /home/triggers/build.json is not readable JSON');
+      },
+    });
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun.mock.calls[0]?.[1]).toContain(
+      'Trigger file /home/triggers/build.json is not readable JSON'
+    );
+  });
+
+  it('opens no asks from a workflow: child, whose asks stay data in its result', async () => {
+    mockStructuredResult({ summary: 'done', asks: [anAsk] });
+    const store = createMockStore();
+    await run(store, { workflowRun: makeWorkflowRun('asks-child', { parent_run_id: 'parent' }) });
+    expect(store.completeWorkflowRun.mock.calls[0]?.[3]).toBeUndefined();
   });
 });

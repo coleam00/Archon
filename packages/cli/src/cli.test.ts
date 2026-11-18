@@ -6,6 +6,8 @@
  */
 import { receiptPath } from '@archon/plugin-manifest/store';
 import { RUN_GITHUB_IDENTITY_KEYS } from '@archon/workflows/utils/github-token-policy';
+import { assertRunForgeAccess, ForgeRequirementError } from '@archon/workflows/run-forge-access';
+import { RUN_GITHUB_IDENTITY_HANDOFF_ENV } from '@archon/paths/github-token-env';
 import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
 import { describe, it, expect, beforeAll, afterAll, spyOn } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -80,8 +82,9 @@ describe('forge user trust boundary', () => {
           GH_CONFIG_DIR: 'workflow-login',
           GIT_CONFIG_PARAMETERS: "'credential.helper='",
           GH_TOKEN: token,
+          [RUN_GITHUB_IDENTITY_HANDOFF_ENV]: '1',
         };
-        const trusted = await loadCliEnv(repo, { env, preserveGithubCredentials: true });
+        const trusted = await loadCliEnv(repo, { env });
         expect(trusted.GH_CONFIG_DIR).toBe('workflow-login');
         expect(trusted.GIT_CONFIG_PARAMETERS).toBe("'credential.helper='");
         expect(env.GH_CONFIG_DIR).toBe('workflow-login');
@@ -274,6 +277,72 @@ if (process.argv[3] === 'metadata') {
       expect(JSON.parse(result.stdout)).toMatchObject({ ok: true });
       expect(readFileSync(marker, 'utf8')).toBe('engine-test-token');
     } finally {
+      await removeTempTree(root);
+    }
+  });
+
+  // A fresh run has no WORKFLOW_ID yet, so the start-time forge check hands its
+  // resolved identity to the CLI it spawns explicitly.
+  it("a fresh run's forge check keeps the user's credential state over the host env file", async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-forge-check-identity-'));
+    const home = join(root, 'home');
+    const repo = join(root, 'repo');
+    const plugin = join(root, 'plugin.ts');
+    mkdirSync(home);
+    mkdirSync(repo);
+    spawnSync('git', ['init', '-q', '.'], { cwd: repo });
+    spawnSync('git', ['remote', 'add', 'origin', 'https://forge.example/owner/repo.git'], {
+      cwd: repo,
+    });
+    writeFileSync(join(home, '.env'), 'GH_TOKEN=home-test-token\n');
+    writeFileSync(
+      plugin,
+      `console.log(JSON.stringify({ protocol: 1, name: 'marker', version: '1', forge: 'test', hosts: ['forge.example'], capabilities: ['pr.view'], token_env: ['GH_TOKEN'] }));\n`
+    );
+    writeFileSync(
+      join(home, 'config.yaml'),
+      `forge:\n  plugins:\n    - plugin: marker\n      command: ${JSON.stringify(process.execPath)}\n      args: [${JSON.stringify(plugin)}]\n  hosts:\n    forge.example: marker\n`
+    );
+    const savedCliCommand = process.env.ARCHON_CLI_COMMAND;
+    process.env.ARCHON_CLI_COMMAND = JSON.stringify([process.execPath, CLI_ENTRY]);
+    const start = (userToken: string | undefined) =>
+      assertRunForgeAccess(
+        {
+          store: { getCodebase: async () => null },
+          isPerUserGitHubEnabled: () => true,
+          getUserGithubToken: async () => userToken,
+        },
+        {
+          name: 'deliver',
+          pack: { key: 'factory', source: 'project', forge: { operations: ['pr.view'] } },
+        },
+        {
+          config: {
+            envVars: {
+              HOME: root,
+              USERPROFILE: root,
+              ARCHON_HOME: home,
+              ARCHON_TELEMETRY_DISABLED: '1',
+              WORKFLOW_ID: '',
+            },
+          },
+          executionUserId: 'user-1',
+        },
+        { cwd: repo, codebaseId: undefined }
+      );
+    try {
+      const refused = await start(undefined).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(refused).toBeInstanceOf(ForgeRequirementError);
+      expect((refused as ForgeRequirementError).failures).toEqual([
+        expect.objectContaining({ remote: 'origin', reason: 'no_credential' }),
+      ]);
+      await start('user-test-token');
+    } finally {
+      if (savedCliCommand === undefined) delete process.env.ARCHON_CLI_COMMAND;
+      else process.env.ARCHON_CLI_COMMAND = savedCliCommand;
       await removeTempTree(root);
     }
   });
@@ -683,7 +752,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
             );
             const message =
               flag === 'config'
-                ? 'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
+                ? 'Error: --config can only be used with workflow run, trigger fire, trigger schedule, or pack bindings.'
                 : 'Error: --config-from-run can only be used with workflow run.';
             expect(result.status, result.stderr).toBe(1);
             if (json) {
@@ -707,6 +776,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
     for (const subcommand of ['fire', 'schedule']) {
       expect(rejectConfigOutsideRun('trigger', subcommand, 'config.yaml')).toBeUndefined();
     }
+    expect(rejectConfigOutsideRun('pack', 'bindings', 'run.yaml')).toBeUndefined();
   });
 
   it('parses one local path', () => {
@@ -732,7 +802,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
     // Pure pre-dispatch argv guard — no I/O, so asserted in-process.
     const message = rejectConfigOutsideRun('chat', undefined, './does-not-exist.yaml');
     expect(message).toBe(
-      'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
+      'Error: --config can only be used with workflow run, trigger fire, trigger schedule, or pack bindings.'
     );
   });
 
@@ -887,7 +957,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
       // of through a full interpreter startup.
       const message = rejectConfigOutsideRun(args[0], args[1], './config.minimax.yaml');
       expect(message).toBe(
-        'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
+        'Error: --config can only be used with workflow run, trigger fire, trigger schedule, or pack bindings.'
       );
     });
   }

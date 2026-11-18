@@ -24,7 +24,7 @@ import {
 import { terminalFacts } from './attention-watch-events';
 import type { AttentionWatchOptions } from './engine-port';
 import { createFileWorkflowStore } from './file-store';
-import { splitAttentionRead } from './schemas/attention-degraded';
+import { splitAttentionRead, type AttentionRead } from './schemas/attention-degraded';
 import type { ApprovalContext, WorkflowWaitContext } from './schemas/workflow-run';
 import {
   executionClaim,
@@ -1394,8 +1394,19 @@ describe('watchAttentionQueue', () => {
     const orphan = await running(store);
     const healthy = await running(store, 'beta');
     const watched: string[] = [];
+    // The orphan holds an item; the file store keeps none, so the reads give it one.
+    const item = { id: 'item-row', projectKey: '_cwd/alpha', key: 'issue-7' };
+    const onItem = <Run extends { id: string }>(run: Run) =>
+      run.id === orphan ? { ...run, item_id: item.id } : run;
+    const withItem: IWorkflowStore = Object.assign(Object.create(store), {
+      listWorkflowRuns: async (options: Parameters<IWorkflowStore['listWorkflowRuns']>[0]) => {
+        const page = await store.listWorkflowRuns(options);
+        return { ...page, runs: page.runs.map(onItem) };
+      },
+      getItem: async (id: string) => (id === item.id ? item : null),
+    });
     const stream = await watch(
-      store,
+      withItem,
       {},
       {
         ...host,
@@ -1409,6 +1420,7 @@ describe('watchAttentionQueue', () => {
     expect(await stream.next(ofRun(orphan, 'owner_lost'))).toMatchObject({
       observedStatus: 'running',
       project: { key: '_cwd/alpha' },
+      item: 'issue-7',
     });
     await Bun.sleep(30);
     await stream.close();
@@ -1420,6 +1432,85 @@ describe('watchAttentionQueue', () => {
     await portless.next(ofRun(healthy, 'terminal'));
     await portless.close();
     expect(portless.lines.filter(line => line.type === 'owner_lost')).toEqual([]);
+  });
+
+  test('a run claimed after ready, before its first event, is still watched for owner loss', async () => {
+    const store = await makeStore();
+    const stream = await watch(
+      store,
+      { bookmarkIntervalMs: 0 },
+      { ...host, ownerLoss: async () => ({ observedStatus: 'running' }) }
+    );
+    try {
+      await stream.next(line => line.type === 'ready');
+      // A claim writes no event: an owner that dies here leaves nothing for the feed to deliver.
+      const runId = await running(store);
+      expect(await stream.next(ofRun(runId, 'owner_lost'))).toMatchObject({
+        observedStatus: 'running',
+      });
+    } finally {
+      await stream.close();
+    }
+  });
+
+  test('a running row whose project cannot be read does not keep the watch from other runs', async () => {
+    const store = await makeStore();
+    // The scan sees nothing until all three rows exist, so it meets them in one read.
+    let held = true;
+    const failing: IWorkflowStore = Object.create(store);
+    failing.listWorkflowRuns = async options => {
+      const page = await store.listWorkflowRuns(options);
+      return held ? { ...page, runs: [], total: 0 } : page;
+    };
+    failing.getCodebase = async id =>
+      id === 'unreadable'
+        ? Promise.reject(new Error('database unavailable'))
+        : store.getCodebase(id);
+    const stream = await watch(
+      failing,
+      { bookmarkIntervalMs: 0 },
+      { ...host, ownerLoss: async () => ({ observedStatus: 'running' }) }
+    );
+    try {
+      await stream.next(line => line.type === 'ready');
+      // Unreadable rows on both sides of the claim, whichever order the store lists them in.
+      await running(store, 'alpha', 'unreadable');
+      const runId = await running(store);
+      await running(store, 'alpha', 'unreadable');
+      held = false;
+      expect(await stream.next(ofRun(runId, 'owner_lost'))).toMatchObject({
+        observedStatus: 'running',
+      });
+    } finally {
+      await stream.close();
+    }
+  });
+
+  test('a failed read of open asks does not keep the watch from a new claim', async () => {
+    const store = await makeStore();
+    let failing = false;
+    const stream = await watch(
+      store,
+      { bookmarkIntervalMs: 0 },
+      {
+        ...host,
+        itemsWithoutRun: async () => {
+          if (failing) throw new Error('database unavailable');
+          return [];
+        },
+        ownerLoss: async () => ({ observedStatus: 'running' }),
+      }
+    );
+    try {
+      await stream.next(line => line.type === 'ready');
+      failing = true;
+      const runId = await running(store);
+      expect(await stream.next(ofRun(runId, 'owner_lost'))).toMatchObject({
+        observedStatus: 'running',
+      });
+    } finally {
+      await stream.close();
+    }
   });
 
   test.each(['workflow_started', 'workflow_resumed', 'workflow_unpaused'] as const)(
@@ -1779,5 +1870,38 @@ test('an item no run holds is listed, read by its ref, streamed and resolved, wi
     ['attention', 'answer'],
     ['attention', 'answer'],
     ['resolved', 'nothing'],
+  ]);
+});
+
+test('an open ask whose row turns unreadable stays open, with one degraded line', async () => {
+  const store = await makeStore();
+  const project = { key: '_cwd/alpha', codebaseId: null, name: 'alpha' };
+  const ask: AttentionQueueItemWithoutRun = {
+    kind: 'attention',
+    ref: 'ask:1',
+    project,
+    revision: 1,
+    labels: {},
+    pausedAt: '2026-11-13T00:00:00.000Z',
+    message: 'Ship the fix?',
+    form: 'approval',
+    options: [{ id: 'approve' }, { id: 'reject' }],
+    askedIn: { runId: 'r1', workflow: 'w' },
+  };
+  const later = { ...ask, ref: 'ask:2', askedIn: { runId: 'r2', workflow: 'w' } };
+  const unreadable = { type: 'degraded', reason: 'run_unreadable', runId: 'r1' } as const;
+  let asks: AttentionRead<AttentionQueueItemWithoutRun>[] = [ask];
+  const stream = await watch(store, {}, { ...host, itemsWithoutRun: async () => asks });
+  asks = [unreadable];
+  await stream.next(line => line.type === 'degraded');
+  asks = [unreadable, later];
+  await stream.next(line => line.type === 'attention' && line.item.ref === 'ask:2');
+  await stream.close();
+
+  expect(stream.lines.map(line => line.type)).toEqual([
+    'attention',
+    'ready',
+    'degraded',
+    'attention',
   ]);
 });

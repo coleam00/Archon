@@ -1,5 +1,6 @@
 // @archon-test-isolated
 import { makeRun } from '../../test/orchestrator-agent-fixtures';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, realpath } from 'node:fs/promises';
@@ -93,6 +94,7 @@ const mockCloseRunLiveOwner = mock(() => {
 const mockStartRunLiveOwner = mock<typeof RunLiveOwnerModule.startRunLiveOwner>(runId => {
   runLiveOwnerCalls.push(`start:${runId}`);
   return Promise.resolve({
+    lease: testRunOwnerLease(runId),
     close: mockCloseRunLiveOwner,
     isStopRequested: () => false,
     registerTerminationPreparation: () => () => undefined,
@@ -589,6 +591,28 @@ describe('dispatchBackgroundWorkflow', () => {
     } finally {
       factory.mockRestore();
       (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
+    }
+  });
+
+  test('forge refusal reads the registered checkout and prevents worker isolation and engine submission', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const refusal = new forgeAccess.ForgeRequirementError('forge-run', 'factory', [
+      { reason: 'no_forge_remote', message: 'the checkout has no git remote' },
+    ]);
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockRejectedValue(refusal);
+    try {
+      await expect(
+        dispatchBackgroundWorkflow(
+          makeRoutingCtx(),
+          makeTestResolvedWorkflow({ name: 'forge-run', nodes: [{ id: 'one', prompt: 'work' }] })
+        )
+      ).rejects.toBe(refusal);
+      expect(assertForge.mock.calls[0]?.[3]).toMatchObject({ cwd: '/workspace/test-repo' });
+      expect(mockResolve).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    } finally {
+      assertForge.mockRestore();
     }
   });
 

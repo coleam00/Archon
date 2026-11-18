@@ -98,7 +98,10 @@ export async function runPack({
   cwd,
   json,
 }: CliRouteContext): Promise<number> {
-  const { packCommand } = await loadRoute(() => import('../commands/pack'));
+  // The graph resolves each run-ended file's project from the codebase records.
+  const { packCommand } = await loadRoute(() => import('../commands/pack'), {
+    database: subcommand === 'graph' && (await usesDatabaseStore()),
+  });
   const text = (name: string): string | undefined => {
     const value = values[name];
     return typeof value === 'string' ? value : undefined;
@@ -109,6 +112,8 @@ export async function runPack({
     host: text('host'),
     runAs: text('run-as'),
     out: text('out'),
+    config: text('config'),
+    workflowSource: text('workflow-source'),
     only: text('only'),
     force: values.force === true,
     json,
@@ -173,10 +178,36 @@ export async function runMetrics({ positionals, values }: CliRouteContext): Prom
   });
 }
 
+const TRACKER_USAGE =
+  'Usage: archon tracker sync [--json]\n       archon tracker release <project> [--json]';
+
+export async function runTracker({
+  subcommand,
+  positionals,
+  json,
+  forgeTrustedEnv,
+}: CliRouteContext): Promise<number> {
+  const project = positionals[2];
+  const known =
+    (subcommand === 'sync' && project === undefined) ||
+    (subcommand === 'release' && project !== undefined && positionals[3] === undefined);
+  if (!known) return await fail(json, TRACKER_USAGE);
+  const { trackerSyncCommand, trackerReleaseCommand, syncConfiguredProjects } = await loadRoute(
+    () => import('../commands/tracker'),
+    { database: true }
+  );
+  if (project !== undefined) return await trackerReleaseCommand(project, { json: json === true });
+  return await trackerSyncCommand({
+    json: json === true,
+    sync: () => syncConfiguredProjects(forgeTrustedEnv),
+  });
+}
+
 export async function runTrigger({
   subcommand,
   positionals,
   values,
+  forgeTrustedEnv,
 }: CliRouteContext): Promise<number> {
   const { triggerCommand, spawnAdmitted } = await loadRoute(() => import('../commands/trigger'), {
     database: await usesDatabaseStore(),
@@ -185,7 +216,7 @@ export async function runTrigger({
   // A `trigger execute` process serves the host it runs for, so the run it ends admits
   // that host's next start.
   const host = await createCliWorkflowHost(
-    true,
+    { forgeTrustedEnv },
     cliOwnTriggerHost(
       subcommand === 'execute' && typeof values.host === 'string' ? values.host : undefined
     )
@@ -208,6 +239,23 @@ export async function runTrigger({
     { dispatch: (requestId, hostId) => spawnAdmitted(host, requestId, hostId) }
   );
   return 0;
+}
+
+export async function runHold({
+  subcommand,
+  values,
+  forgeTrustedEnv,
+}: CliRouteContext): Promise<number> {
+  const { holdCommand } = await loadRoute(() => import('../commands/hold'), {
+    database: await usesDatabaseStore(),
+  });
+  const { spawnAdmitted } = await import('../commands/trigger');
+  const { createCliWorkflowHost } = await import('../utils/workflow-host');
+  // Lifting prepares the held starts and admits them, as `trigger drain` does.
+  const host = await createCliWorkflowHost({ forgeTrustedEnv });
+  return await holdCommand(host, subcommand, { json: values.json === true }, (requestId, hostId) =>
+    spawnAdmitted(host, requestId, hostId)
+  );
 }
 
 export async function runVersion(): Promise<number> {
@@ -361,6 +409,7 @@ export async function runIsolation({
       if (values.merged) {
         return await isolationCleanupMergedCommand({
           includeClosed: Boolean(values['include-closed']),
+          json: Boolean(json),
         });
       } else {
         const days = parseInt(positionals[2] ?? '7', 10);
@@ -383,13 +432,14 @@ export async function runValidate({
   positionals,
   effectiveCwd,
   json,
+  forgeTrustedEnv,
 }: CliRouteContext): Promise<number> {
   const { validateWorkflowsCommand, validateCommandsCommand } = await loadRoute(
     () => import('../commands/validate')
   );
   switch (subcommand) {
     case 'workflows':
-      return await validateWorkflowsCommand(effectiveCwd, positionals[2], json);
+      return await validateWorkflowsCommand(effectiveCwd, positionals[2], json, forgeTrustedEnv);
 
     case 'commands':
       return await validateCommandsCommand(effectiveCwd, positionals[2], json);

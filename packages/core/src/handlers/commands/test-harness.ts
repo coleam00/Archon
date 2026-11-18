@@ -332,6 +332,8 @@ mock.module('../../db/sessions', () => ({
 }));
 
 mock.module('../../db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   getActiveWorkflowRun: mockGetActiveWorkflowRun,
@@ -483,7 +485,7 @@ mock.module('../../services/run-owner-stop', () => ({
 }));
 
 export const mockReclaimContainerEnv = mock(async () => undefined);
-export const mockGetLiveRunBlocker = mock<typeof CleanupRunLock.getLiveRunBlocker>(() =>
+export const mockGetUseBlocker = mock<typeof CleanupRunLock.getUseBlocker>(() =>
   Promise.resolve(null)
 );
 export const mockGetWorktreeStatusBreakdown = mock<
@@ -505,7 +507,8 @@ mock.module('../../services/cleanup-service', () => ({
   getWorktreeStatusBreakdown: mockGetWorktreeStatusBreakdown,
 }));
 mock.module('../../services/cleanup/run-lock', () => ({
-  getLiveRunBlocker: mockGetLiveRunBlocker,
+  getUseBlocker: mockGetUseBlocker,
+  useBlockerLogFields: () => ({}),
   getCleanupRunLock: mock(),
   toUnpushedLock: mock(),
   countUnpushedCommits: mock(),
@@ -587,8 +590,8 @@ export function clearAllMocks(): void {
   mockIsolationEnvDbCreate.mockClear();
   mockIsolationEnvDbGet.mockClear();
   mockMarkWorktreeDestroyed.mockClear();
-  mockGetLiveRunBlocker.mockReset();
-  mockGetLiveRunBlocker.mockResolvedValue(null);
+  mockGetUseBlocker.mockReset();
+  mockGetUseBlocker.mockResolvedValue(null);
   // Cleanup service mocks
   mockCleanupMergedWorktrees.mockClear();
   mockCleanupStaleWorktrees.mockClear();

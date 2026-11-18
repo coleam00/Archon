@@ -1,10 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { z } from '@hono/zod-openapi';
-import { type ForgeEvent, mapForgeInputs, matchForgeEvent } from '@archon/forge';
+import {
+  type ForgeEvent,
+  mapForgeInputs,
+  matchForgeEvent,
+  readForgeEventField,
+} from '@archon/forge';
 import { normalizeGitHubWebhook } from './normalize-event';
 export { githubSourceCapabilities as capabilities } from './normalize-event';
 import type { JsonValue } from '@archon/workflows/output-ref';
 import {
+  mappedItemKey,
   resourceStartBindingIntentSchema,
   type ResourceStartBindingIntent,
   type SourceReceiptInput,
@@ -16,49 +22,51 @@ import type {
 import { githubSourceBindingSchema, githubWebhookSourceConfigSchema } from './source-config';
 import { verifyGitHubWebhookSignature } from './webhook-signature';
 
+type EvaluatedBinding = NonNullable<
+  Extract<WebhookSourceResult, { status: 'received' }>['acceptance']['evaluatedBindings']
+>[number];
+
+/** The start one configured binding makes of `event`, or why it makes none. */
+function evaluateBinding(
+  binding: z.infer<typeof githubSourceBindingSchema>,
+  event: ForgeEvent
+): { start: ResourceStartBindingIntent } | { skipped: EvaluatedBinding } {
+  const bindingRevision = createHash('sha256').update(JSON.stringify(binding)).digest('hex');
+  const skipped = (status: EvaluatedBinding['status'], reason: string) => ({
+    skipped: { bindingId: binding.bindingId, bindingRevision, status, reason },
+  });
+  const { selector, inputMapping, item, ...intent } = binding;
+  if (!matchForgeEvent(selector, event)) return skipped('unmatched', 'selector_did_not_match');
+  const mapped = mapForgeInputs(inputMapping, event);
+  if (!mapped.ok) return skipped('rejected', `Input '${mapped.input}': ${mapped.reason}`);
+  const itemKey = item ? mappedItemKey(item, readForgeEventField(event, item.field)) : undefined;
+  if (itemKey && !itemKey.ok) return skipped('rejected', `Item: ${itemKey.reason}`);
+  // Field mappings carry event content; literal mappings are the operator's own values.
+  const literalInputs: Record<string, JsonValue> = {};
+  const eventInputs: Record<string, JsonValue> = {};
+  for (const [name, value] of Object.entries(mapped.inputs))
+    (inputMapping[name]?.source === 'field' ? eventInputs : literalInputs)[name] = value;
+  return {
+    start: resourceStartBindingIntentSchema.parse({
+      ...intent,
+      bindingRevision,
+      launch: { ...binding.launch, inputs: { ...binding.launch.inputs, ...literalInputs } },
+      eventInputs,
+      ...(itemKey ? { itemKey: itemKey.key } : {}),
+    }),
+  };
+}
+
 function evaluateBindings(
   configuredBindings: z.infer<typeof githubSourceBindingSchema>[],
   event: ForgeEvent
 ) {
   const bindings: ResourceStartBindingIntent[] = [];
-  const evaluatedBindings: NonNullable<
-    Extract<WebhookSourceResult, { status: 'received' }>['acceptance']['evaluatedBindings']
-  > = [];
+  const evaluatedBindings: EvaluatedBinding[] = [];
   for (const binding of configuredBindings) {
-    const bindingRevision = createHash('sha256').update(JSON.stringify(binding)).digest('hex');
-    const { selector, inputMapping, ...intent } = binding;
-    if (!matchForgeEvent(selector, event)) {
-      evaluatedBindings.push({
-        bindingId: binding.bindingId,
-        bindingRevision,
-        status: 'unmatched',
-        reason: 'selector_did_not_match',
-      });
-      continue;
-    }
-    const mapped = mapForgeInputs(inputMapping, event);
-    if (!mapped.ok) {
-      evaluatedBindings.push({
-        bindingId: binding.bindingId,
-        bindingRevision,
-        status: 'rejected',
-        reason: `Input '${mapped.input}': ${mapped.reason}`,
-      });
-      continue;
-    }
-    // Field mappings carry event content; literal mappings are the operator's own values.
-    const literalInputs: Record<string, JsonValue> = {};
-    const eventInputs: Record<string, JsonValue> = {};
-    for (const [name, value] of Object.entries(mapped.inputs))
-      (inputMapping[name]?.source === 'field' ? eventInputs : literalInputs)[name] = value;
-    bindings.push(
-      resourceStartBindingIntentSchema.parse({
-        ...intent,
-        bindingRevision,
-        launch: { ...binding.launch, inputs: { ...binding.launch.inputs, ...literalInputs } },
-        eventInputs,
-      })
-    );
+    const evaluated = evaluateBinding(binding, event);
+    if ('start' in evaluated) bindings.push(evaluated.start);
+    else evaluatedBindings.push(evaluated.skipped);
   }
   return { bindings, evaluatedBindings };
 }

@@ -21,6 +21,7 @@ import {
   type AttentionQueueCounts,
 } from '@archon/workflows/attention-counts';
 import {
+  askIdOfRef,
   listAttentionQueue,
   parseAttentionLabelPairs,
   parseAttentionQueueRequest,
@@ -327,6 +328,36 @@ function rejectConflictingAttentionOptions(
     );
 }
 
+/** `workflow attention ask:<id>`: an ask a completed run left, open or how it closed. */
+async function attentionAskCommand(
+  host: WorkflowHost,
+  source: AttentionQueueSource,
+  ref: string,
+  json: boolean | undefined
+): Promise<number> {
+  const { values } = splitAttentionRead(await listAttentionQueue(source));
+  const item = values.find(candidate => candidate.ref === ref);
+  if (item !== undefined) {
+    if (json) await writeJsonLine({ ok: true, action: 'attention', ref, item });
+    else for (const line of attentionItemLines(item, 'full')) console.log(line);
+    return 0;
+  }
+  const stored = await host.deps.store.getItemAsk(askIdOfRef(ref) ?? '');
+  if (stored === null) {
+    if (json) await writeJsonLine({ ok: false, ref, action: 'attention', error: 'not_found' });
+    else console.log(`Ask not found: ${ref}`);
+    return 1;
+  }
+  if (stored.closed === null)
+    throw new Error(
+      `Ask ${ref} is open but its queue item could not be read; check the operator log`
+    );
+  // Closed: it needs no attention, as a run that is not paused needs none.
+  if (json) await writeJsonLine({ ok: true, action: 'attention', ref, item: null });
+  else console.log(`Ask ${ref} needs no attention now: it was ${stored.closed.as}.`);
+  return 0;
+}
+
 /** `workflow attention <run-id>`: the one item the run stands for, null when it needs none. */
 async function attentionRunCommand(
   host: WorkflowHost,
@@ -335,6 +366,7 @@ async function attentionRunCommand(
   runId: string,
   json: boolean | undefined
 ): Promise<number> {
+  if (askIdOfRef(runId) !== undefined) return attentionAskCommand(host, source, runId, json);
   const resolvedId = await resolveAttentionRunId(host, runId, cwd);
   const item = await readAttentionQueueItem(source, resolvedId);
   if (item === undefined) {
@@ -361,7 +393,7 @@ async function renderAttentionCounts(
   scope: AttentionQueueScope,
   json: boolean | undefined,
   degraded: AttentionDegraded[],
-  none = 'No runs need attention.'
+  none = 'Nothing needs attention.'
 ): Promise<number> {
   if (json) {
     await writeJsonLine({
@@ -383,7 +415,7 @@ async function renderAttentionCounts(
     console.log(
       degraded.length === 0
         ? none
-        : 'No readable matching runs need attention; counts are incomplete.'
+        : 'Nothing readable that matches needs attention; counts are incomplete.'
     );
   return 0;
 }
@@ -436,12 +468,12 @@ async function renderAttentionItems(
   if (selected.length === 0) {
     console.log(
       degraded.length === 0
-        ? `No runs need attention in ${where}.`
-        : `No readable matching runs need attention in ${where}; coverage is incomplete.`
+        ? `Nothing needs attention in ${where}.`
+        : `Nothing readable that matches needs attention in ${where}; coverage is incomplete.`
     );
     return 0;
   }
-  console.log(`\n${String(selected.length)} run(s) need attention in ${where}:\n`);
+  console.log(`\n${String(selected.length)} item(s) need attention in ${where}:\n`);
   for (const item of selected) {
     for (const line of attentionItemLines(item, 'brief')) console.log(line);
     console.log('');

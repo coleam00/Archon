@@ -1,6 +1,7 @@
 /**
  * An operator's act on an item outside any run: recording or withdrawing a ruling, recording
- * or ending a link. Each records who did it when they say, through which surface and when.
+ * or ending a link, answering or withdrawing an ask. Each records who did it when they say,
+ * through which surface and when.
  */
 import { z } from 'zod';
 import { recordSurfaceSchema } from './record-surface';

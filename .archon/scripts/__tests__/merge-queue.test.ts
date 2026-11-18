@@ -12,7 +12,6 @@ import {
   type MergeSettled,
   mergeWaits,
   type PrFacts,
-  MERGE_QUEUE_FORGE_OPERATIONS,
   UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
@@ -228,8 +227,6 @@ interface FakePr {
   /** Pull requests, by number, that read back merged whatever `state` says. */
   readonly merged?: readonly number[];
   readonly baseUnreadable?: boolean;
-  /** Merge-queue operations the forge plugin's metadata leaves out. */
-  readonly missingOps?: readonly string[];
   /** The head `pr.merge-state` reports, when it answers about another commit than `pr.view`. */
   readonly mergeStateHead?: string;
   /** The revision `checks.state` reports, when it answers about another commit than `pr.view`. */
@@ -258,10 +255,6 @@ const forgeOp = (op, request) => {
   const unreadable = () => forgePr.unreadable === true || Array.isArray(forgePr.unreadable) && forgePr.unreadable.includes(ref.number);
   // The harness's forge resolves a pull request URL.
   if (op === 'resolve') return null;
-  if (op === 'check') {
-    const unsupported = request.operations.filter(name => (forgePr.missingOps ?? []).includes(name));
-    return unsupported.length === 0 ? out(true, request) : out(false, { error: { kind: 'unsupported_op', message: 'plugin fake does not support ' + unsupported.join(', ') }, unsupported });
-  }
   if (op === 'checks.commit') return forgePr.baseUnreadable ? failed('HTTP 502 reading base') : out(true, { repo: request.repo, branch: 'dev', revision: ${JSON.stringify(OLD)}, units: units(forgePr.baseChecks ?? 'green') });
   if (op === 'pr.merge') {
     if (request.conditions.head !== forgePr.headRefOid) return failed('Head branch was modified', { op, target: ref, outcome: 'refused' });
@@ -882,32 +875,6 @@ describe('the gate under ci: none', () => {
 });
 
 describe('the merge queue on the forge', () => {
-  test('facts refuses a plugin without every merge-queue operation before claiming anything', () => {
-    const at = install();
-    seed(at, item());
-    const refused = run(at, 'facts', {}, { pr: { missingOps: ['pr.merge-state'] } });
-    expect(refused.code).not.toBe(0);
-    expect(refused.stderr).toContain('does not support pr.merge-state');
-    expect(forgeCalls(refused)).toEqual(['forge check']);
-    expect(stored(at).value?.claim ?? null).toBeNull();
-    expect(stored(at).value?.facts.merge).toBeUndefined();
-  }, 60_000);
-
-  test('the facts and the merge use exactly the operations the plugin must advertise, besides the sweep agent\'s rerun', () => {
-    const at = install();
-    seed(at, item());
-    const facts = run(at, 'facts', {}, {});
-    const merged = gate(at);
-    expect([facts.code, merged.code]).toEqual([0, 0]);
-    const used = [...forgeCalls(facts), ...forgeCalls(merged)];
-    // `resolve` runs no preflight: the host refuses it on a plugin that cannot resolve a URL.
-    const preflighted = used.filter(call => call.startsWith('forge ') && !['forge check', 'forge resolve'].includes(call));
-    expect(new Set(preflighted.map(call => call.split(' ')[1]))).toEqual(
-      // The sweep agent, not a script, reruns a pull request's failed checks.
-      new Set(MERGE_QUEUE_FORGE_OPERATIONS.filter(op => op !== 'checks.rerun'))
-    );
-  }, 60_000);
-
   test.each([
     ['merge state', { mergeStateHead: OLD }, 'moved while it was read'],
     ['checks', { checksRevision: OLD }, 'are not on its head'],

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * A run's end starts the stage a run-ended binding names and admits the work its slot
  * held back, with no other command: real SQLite, every run in its own CLI process.
@@ -5,9 +6,11 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -17,6 +20,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import { packGraphSchema } from '@archon/workflows/pack-graph';
 
 const CLI_PATH = resolve(import.meta.dir, '..', 'cli.ts');
 const HOST = 'factory-host';
@@ -87,13 +91,46 @@ nodes:
     bash: echo "building $INPUTS_PLAN"
 `;
 
-// The stage an order starts once its members are planned; it reads nothing from them.
-const SHIP = `name: ship
-description: Ship an order.
+// Leaves two asks on its item and a summary of where it got to.
+const ASK_PLAN = `name: ask-plan
+description: Plan an item, asking what it cannot decide.
 mutates_checkout: false
+inputs:
+  issue: { required: true }
+returns: { node: decide, asks: asks }
 nodes:
-  - id: ship
-    bash: echo shipping
+  - id: decide
+    bash: |
+      echo '${JSON.stringify({
+        summary: 'half planned',
+        asks: ['Keep the flag?', 'Rename it?'].map(question => ({
+          question,
+          context: 'The issue reads two ways.',
+          options: [
+            { id: 'keep', does: 'Keep it.', cost: 'More to maintain.' },
+            { id: 'drop', does: 'Drop it.', cost: 'Configs break.' },
+          ],
+          recommendation: { option: 'keep', why: 'Nothing needs it gone.' },
+          artifacts: [],
+        })),
+      })}'
+    output_format:
+      type: object
+      properties:
+        summary: { type: string }
+      required: [summary]
+`;
+
+const BUILD_ANSWERS = `name: build-answers
+description: Build with the answers the plan asked for.
+mutates_checkout: false
+inputs:
+  decisions: { required: true }
+  issue: { required: true }
+  progress: { required: true }
+nodes:
+  - id: build
+    bash: echo "building"
 `;
 
 // Holds a slot of resource 'pool' until the test writes \`release\`.
@@ -135,7 +172,8 @@ async function makeFixture(label: string): Promise<Fixture> {
   writeFileSync(join(workflows, 'pool-work.yaml'), POOL);
   writeFileSync(join(workflows, 'held.yaml'), HELD);
   writeFileSync(join(workflows, 'quick.yaml'), QUICK);
-  writeFileSync(join(workflows, 'ship.yaml'), SHIP);
+  writeFileSync(join(workflows, 'ask-plan.yaml'), ASK_PLAN);
+  writeFileSync(join(workflows, 'build-answers.yaml'), BUILD_ANSWERS);
   expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
 
   const spawnCli = (args: string[], env: Record<string, string> = {}) =>
@@ -329,9 +367,9 @@ describe('a run-ended binding', () => {
     expect(read.runs.map(run => run.id)).toEqual(runs.map(run => run.id));
     expect(read.runs.map(run => run.cause)).toEqual([
       { kind: 'receipt', receiptId: expect.any(String), sourceInstanceId: 'plan' },
-      { kind: 'run_ended', runId: runs[0]?.id },
+      { kind: 'run_ended', runId: runs[0]?.id, sourceInstanceId: 'build-after-plan' },
       { kind: 'receipt', receiptId: expect.any(String), sourceInstanceId: 'plan' },
-      { kind: 'run_ended', runId: runs[2]?.id },
+      { kind: 'run_ended', runId: runs[2]?.id, sourceInstanceId: 'build-after-plan' },
     ]);
     expect(read.runs.map(run => run.outcome)).toEqual(['planned', null, 'planned', null]);
     expect(await fixture.cli(['workflow', 'runs', '--item', 'issue-1'])).toContain(
@@ -339,23 +377,131 @@ describe('a run-ended binding', () => {
     );
   }, 90_000);
 
-  test('an all binding starts the order once, after its last member ends with the outcome', async () => {
-    const fixture = await makeFixture('order');
-    fixture.bind(
-      'ship-order',
-      {
-        runEnded: {
-          workflowName: 'stage-a',
-          outcome: 'planned',
-          linked: { kind: 'part_of', holder: 'to', form: 'all' },
-        },
-      },
-      { workflowName: 'ship' }
+  test('a pack declares it, `pack bindings` writes it inactive, and once copied into the triggers directory the end of a run starts it', async () => {
+    const fixture = await makeFixture('pack');
+    const pack = join(fixture.projectRoot, '.archon', 'workflows', 'chain');
+    for (const [name, body] of [
+      ['chain-plan', STAGE_A.replace('name: stage-a', 'name: chain-plan')],
+      ['chain-build', STAGE_B.replace('name: stage-b', 'name: chain-build')],
+    ] as const) {
+      mkdirSync(join(pack, name), { recursive: true });
+      writeFileSync(join(pack, name, `${name}.yaml`), body);
+    }
+    mkdirSync(join(pack, '.pack'), { recursive: true });
+    writeFileSync(
+      join(pack, '.pack', 'pack.yaml'),
+      `bindings:
+  build:
+    workflow: chain-build
+    resource: build
+    overlap: queue
+    isolation: { kind: in-place }
+    run_ended: { workflow: chain-plan, outcome: planned }
+    inputs:
+      plan: { result: /plan }
+      issue: { input: issue }
+`
     );
+    const { runAsUserId } = JSON.parse(await fixture.cli(['trigger', 'whoami'])) as {
+      runAsUserId: string;
+    };
+    await fixture.cli([
+      'pack',
+      'bindings',
+      'chain',
+      '--repo',
+      'github.com/acme/widgets',
+      '--host',
+      HOST,
+      '--run-as',
+      runAsUserId,
+      '--out',
+      join(fixture.root, 'bindings'),
+      '--json',
+    ]);
+    const written = JSON.parse(await fixture.cli(['trigger', 'check'])) as { runEnded: unknown[] };
+    expect(written.runEnded).toEqual([]);
+    const graph = async () =>
+      packGraphSchema.parse(JSON.parse(await fixture.cli(['pack', 'graph', 'chain', '--json'])));
+    const declared = await graph();
+    expect(declared.stages.map(stage => stage.name).sort()).toEqual(['chain-build', 'chain-plan']);
+    expect(declared.arrows).toEqual([
+      {
+        from: { stage: 'chain-plan', outcome: 'planned' },
+        to: 'chain-build',
+        active: false,
+        declared: { binding: 'build', problems: [] },
+        installed: null,
+      },
+    ]);
+    mkdirSync(join(fixture.archonHome, 'triggers'), { recursive: true });
+    for (const file of readdirSync(join(fixture.root, 'bindings')))
+      copyFileSync(
+        join(fixture.root, 'bindings', file),
+        join(fixture.archonHome, 'triggers', file)
+      );
+    const listed = JSON.parse(await fixture.cli(['trigger', 'check'])) as {
+      runEnded: { workflowName: string; problems: string[] }[];
+    };
+    expect(listed.runEnded).toMatchObject([{ workflowName: 'chain-build', problems: [] }]);
+    const [arrow] = (await graph()).arrows;
+    expect(arrow).toMatchObject({ active: true, declared: { binding: 'build', problems: [] } });
+    if (!arrow?.active) throw new Error('the copied file did not activate the arrow');
+    const arrowId = arrow.installed.sourceInstanceId;
+
+    await fixture.cli([
+      'workflow',
+      'run',
+      'chain-plan',
+      '--no-worktree',
+      '--item',
+      'issue-1',
+      '--input',
+      'plan=p1',
+      '--input',
+      'issue=i1',
+    ]);
+    const runs = await waitFor(
+      () => completedRuns(fixture, 2),
+      'the plan and the build its end started'
+    );
+    expect(runs.map(run => run.workflow_name)).toEqual(['chain-plan', 'chain-build']);
+    expect(JSON.parse(runs[1]?.metadata ?? '{}')).toMatchObject({
+      inputs: { plan: 'planned: p1', issue: 'i1' },
+    });
+    const read = itemReadSchema.parse(
+      JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json']))
+    );
+    // The item's path: the build was started by the plan's end, through the graph's arrow.
+    expect(read.runs[1]?.cause).toEqual({
+      kind: 'run_ended',
+      runId: runs[0]?.id,
+      sourceInstanceId: arrowId,
+    });
+  }, 90_000);
+
+  test('a linked binding starts the stage on the order each time a member ends, naming the member', async () => {
+    const fixture = await makeFixture('order');
+    fixture.bind('build-order', {
+      runEnded: {
+        workflowName: 'stage-a',
+        outcome: 'planned',
+        linked: { kind: 'part_of', holder: 'to' },
+        inputs: { plan: { result: '/plan' }, issue: { item: 'key' } },
+      },
+    });
     // A link names items of a registered project, and the first run registers it.
-    await fixture.cli(['workflow', 'run', 'ship', '--no-worktree']);
-    const members = ['m1', 'm2', 'm3'];
-    for (const member of members)
+    await fixture.cli([
+      'workflow',
+      'run',
+      'stage-b',
+      '--no-worktree',
+      '--input',
+      'plan=p',
+      '--input',
+      'issue=i',
+    ]);
+    for (const member of ['m1', 'm2'])
       await fixture.cli([
         'workflow',
         'link',
@@ -379,25 +525,29 @@ describe('a run-ended binding', () => {
         '--input',
         'issue=i1',
       ]);
-      return waitFor(() => completedRuns(fixture, count), `${member} and what its end started`);
+      return waitFor(() => completedRuns(fixture, count), `${member} and the start its end caused`);
     };
-    await plan('m1', 2);
-    await plan('m2', 3);
-    const runs = await plan('m3', 5);
+    await plan('m1', 3);
+    const runs = await plan('m2', 5);
     expect(runs.map(run => run.workflow_name)).toEqual([
-      'ship',
+      'stage-b',
       'stage-a',
+      'stage-b',
       'stage-a',
-      'stage-a',
-      'ship',
+      'stage-b',
     ]);
 
     const order = itemReadSchema.parse(
       JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'order-1', '--json']))
     );
-    expect(order.runs.map(run => [run.workflow, run.cause])).toEqual([
-      ['ship', { kind: 'run_ended', runId: runs[3]?.id }],
+    expect(order.runs.map(run => [run.id, run.cause])).toEqual([
+      [runs[2]?.id, { kind: 'run_ended', runId: runs[1]?.id, sourceInstanceId: 'build-order' }],
+      [runs[4]?.id, { kind: 'run_ended', runId: runs[3]?.id, sourceInstanceId: 'build-order' }],
     ]);
+    const inputsOf = (run: RunRow | undefined) =>
+      (JSON.parse(run?.metadata ?? '{}') as { inputs?: Record<string, string> }).inputs;
+    expect(inputsOf(runs[2])).toEqual({ plan: 'planned: m1', issue: 'm1' });
+    expect(inputsOf(runs[4])).toEqual({ plan: 'planned: m2', issue: 'm2' });
   }, 90_000);
 
   test('a hand run with no trigger host starts the stage its end caused, with no other command', async () => {
@@ -595,6 +745,193 @@ describe('a run-ended binding', () => {
   }, 90_000);
 });
 
+const ASKS_SETTLED = {
+  asksSettled: {
+    workflowName: 'ask-plan',
+    settled: 'answered',
+    inputs: {
+      decisions: { answers: true },
+      issue: { input: 'issue' },
+      progress: { result: '/summary' },
+    },
+  },
+};
+
+describe('an asks-settled binding', () => {
+  test('starts the bound stage on the item once the last ask is answered, with every answer', async () => {
+    const fixture = await makeFixture('asks');
+    fixture.bind('build-after-answers', ASKS_SETTLED, { workflowName: 'build-answers' });
+    await fixture.cli([
+      'workflow',
+      'run',
+      'ask-plan',
+      '--no-worktree',
+      '--item',
+      'issue-1',
+      '--input',
+      'issue=Fix the login page',
+    ]);
+    const { items } = JSON.parse(
+      await fixture.cli(['workflow', 'attention', '--all', '--json'])
+    ) as { items: { ref: string; message: string }[] };
+    const refOf = (message: string): string =>
+      items.find(item => item.message === message)?.ref ?? '';
+
+    await fixture.cli(['workflow', 'answer', '--ref', refOf('Keep the flag?'), '--recommended']);
+    const last = ['workflow', 'answer', '--ref', refOf('Rename it?'), '--choose', 'drop'];
+    await fixture.cli([...last, '--as', 'reviewer']);
+    await fixture.cli([...last, '--as', 'reviewer']);
+    const runs = await waitFor(
+      () => completedRuns(fixture, 2),
+      'the plan and the build it started'
+    );
+    expect(runs.map(run => run.workflow_name)).toEqual(['ask-plan', 'build-answers']);
+    const values = (
+      JSON.parse(runs[1]?.metadata ?? '{}') as { inputs_values?: Record<string, unknown> }
+    ).inputs_values;
+    expect(values).toMatchObject({
+      issue: 'Fix the login page',
+      progress: 'half planned',
+      decisions: [
+        { question: 'Keep the flag?', closedAs: 'answered', answer: { decision: 'keep' } },
+        {
+          question: 'Rename it?',
+          closedAs: 'answered',
+          answer: { decision: 'drop' },
+          by: { declared: 'reviewer' },
+          via: 'cli',
+        },
+      ],
+    });
+
+    const read = itemReadSchema.parse(
+      JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json']))
+    );
+    expect(read.runs.map(run => run.cause)).toEqual([
+      null,
+      { kind: 'asks_settled', runId: runs[0]?.id },
+    ]);
+    // The human view names the asking run on the started run's line.
+    const startedLine = (await fixture.cli(['workflow', 'runs', '--item', 'issue-1']))
+      .split('\n')
+      .find(line => line.includes(runs[1]?.id.slice(0, 8) ?? '-'));
+    expect(startedLine).toContain(runs[0]?.id.slice(0, 8));
+  }, 90_000);
+
+  test('a settlement recorded by a process that does not prepare it waits for its host, whose drain starts it once', async () => {
+    const fixture = await makeFixture('asks-recorded-elsewhere');
+    fixture.bind('build-after-answers', ASKS_SETTLED, { workflowName: 'build-answers' });
+    await fixture.cli([
+      'workflow',
+      'run',
+      'ask-plan',
+      '--no-worktree',
+      '--item',
+      'issue-1',
+      '--input',
+      'issue=Fix the login page',
+    ]);
+    const { items } = JSON.parse(
+      await fixture.cli(['workflow', 'attention', '--all', '--json'])
+    ) as { items: { ref: string }[] };
+    // Records both answers through the store every surface shares, as the server does for an
+    // answer on a host it does not serve, or a CLI that dies right after its commit: nothing
+    // follows the commit.
+    const answerer = join(fixture.root, 'answer-elsewhere.ts');
+    const core = resolve(import.meta.dir, '..', '..', '..', 'core', 'src');
+    writeFileSync(
+      answerer,
+      `const { createWorkflowStore } = await import(${JSON.stringify(join(core, 'workflows', 'store-adapter.ts'))});
+const { attentionQueueSource } = await import(${JSON.stringify(join(core, 'operations', 'attention-queue.ts'))});
+const { answerAttentionItem } = await import(${JSON.stringify(join(core, 'operations', 'attention-items.ts'))});
+const { closeDatabase } = await import(${JSON.stringify(join(core, 'db', 'connection.ts'))});
+const notUsed = async () => { throw new Error('not used for an ask'); };
+const deps = {
+  queue: attentionQueueSource(createWorkflowStore(), { findLatestByCodebaseAndWorkingPath: async () => null }),
+  operations: { answerWorkflow: notUsed, respondToWorkflow: notUsed, assertRunActionAllowed: async () => undefined },
+};
+for (const ref of process.argv.slice(2))
+  await answerAttentionItem(deps, ref, { recommended: true }, { kind: 'operator', declared: 'reviewer' }, 'api');
+await closeDatabase();
+`
+    );
+    const answered = Bun.spawn([process.execPath, answerer, ...items.map(item => item.ref)], {
+      cwd: fixture.projectRoot,
+      env: { ...process.env, DATABASE_URL: '', ARCHON_HOME: fixture.archonHome },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(await answered.exited).toBe(0);
+    const pending = () =>
+      fixture.rows<{ host_id: string }>(
+        "SELECT host_id FROM remote_agent_start_receipt_bindings WHERE preparation_status = 'pending'"
+      );
+    expect(pending()).toEqual([{ host_id: HOST }]);
+    expect(fixture.rows<RunRow>(RUNS_SQL).map(run => run.workflow_name)).toEqual(['ask-plan']);
+
+    await fixture.cli(['trigger', 'drain', '--host', HOST]);
+    await fixture.cli(['trigger', 'drain', '--host', HOST]);
+    const runs = await waitFor(() => completedRuns(fixture, 2), 'the build the drain started');
+    expect(runs.map(run => run.workflow_name)).toEqual(['ask-plan', 'build-answers']);
+    expect(pending()).toEqual([]);
+  }, 90_000);
+
+  test('an answer whose bound stage cannot be prepared succeeds and reports the stage as not started', async () => {
+    const fixture = await makeFixture('asks-unprepared');
+    fixture.bind('build-after-answers', ASKS_SETTLED, { workflowName: 'build-answers' });
+    await fixture.cli([
+      'workflow',
+      'run',
+      'ask-plan',
+      '--no-worktree',
+      '--item',
+      'issue-1',
+      '--input',
+      'issue=Fix the login page',
+    ]);
+    const { items } = JSON.parse(
+      await fixture.cli(['workflow', 'attention', '--all', '--json'])
+    ) as { items: { ref: string }[] };
+    // The stage the binding names is gone by the time the asks are answered.
+    rmSync(join(fixture.projectRoot, '.archon', 'workflows', 'build-answers.yaml'));
+    await fixture.cli(['workflow', 'answer', '--ref', items[0]?.ref ?? '', '--recommended']);
+    const last = JSON.parse(
+      await fixture.cli([
+        'workflow',
+        'answer',
+        '--ref',
+        items[1]?.ref ?? '',
+        '--recommended',
+        '--json',
+      ])
+    ) as { ok: boolean; settled: boolean; notStarted?: { receiptId: string }[] };
+    expect(last).toMatchObject({ ok: true, settled: true });
+    expect(last.notStarted).toHaveLength(1);
+    expect(fixture.rows<RunRow>(RUNS_SQL).map(run => run.workflow_name)).toEqual(['ask-plan']);
+  }, 90_000);
+
+  test('trigger check reports a binding on a workflow with no asks, not one that starts its own', async () => {
+    const fixture = await makeFixture('asks-check');
+    fixture.bind('no-asks', { asksSettled: { workflowName: 'stage-a', settled: 'any' } });
+    fixture.bind(
+      'again',
+      { asksSettled: { workflowName: 'ask-plan', settled: 'answered' } },
+      {
+        workflowName: 'ask-plan',
+      }
+    );
+    const checked = await fixture.attempt(['trigger', 'check']);
+    expect(checked.exitCode).not.toBe(0);
+    const problems = new Map(
+      (
+        JSON.parse(checked.stdout) as { asksSettled: { file: string; problems: string[] }[] }
+      ).asksSettled.map(entry => [basename(entry.file, '.json'), entry.problems])
+    );
+    expect(problems.get('no-asks')).toEqual(["workflow 'stage-a' declares no returns.asks"]);
+    expect(problems.get('again')).toEqual([]);
+  }, 90_000);
+});
+
 describe('trigger check', () => {
   test('reports a duplicate stage, a stage bound to itself and a missing launch.cwd', async () => {
     const fixture = await makeFixture('check');
@@ -603,7 +940,7 @@ describe('trigger check', () => {
     fixture.bind('plan-again', RUN_ENDED, { workflowName: 'stage-a' });
     const gone = join(fixture.root, 'deleted-checkout');
     fixture.bind('stale', RUN_ENDED, { cwd: gone });
-    const linked = { kind: 'part_of', holder: 'to', form: 'each' };
+    const linked = { kind: 'part_of', holder: 'to' };
     // A linked binding starts the stage on other items: no duplicate of a same-item one.
     fixture.bind('order-after-plan', { runEnded: { ...RUN_ENDED.runEnded, linked } });
     fixture.bind('order-typo', {

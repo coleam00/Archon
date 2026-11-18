@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { isJsonPointer } from '../json-pointer';
 import { jsonValueSchema } from '../output-ref';
 import { itemLinkKindSchema } from './item-link';
-import { itemKeySchema, workflowRunOriginSchema } from './workflow-run';
+import { ITEM_KEY_MAX_LENGTH, itemKeySchema, workflowRunOriginSchema } from './workflow-run';
 import {
   DEFAULT_RESOURCE_CAPACITY,
   declaredCapacitySchema,
@@ -140,11 +140,21 @@ export const RUN_SOURCE_ACTOR = 'archon-run';
 export const RUN_ENDED_SOURCE_ACTOR = 'archon-run-ended';
 
 /**
- * What caused a start, read from its receipt's source actor: a run that ended, a node
- * that fired, or another source (a schedule, a webhook, an operator's fire).
+ * `sourceActor.source` of a receipt the settlement of a run's asks caused (an
+ * asks-settled binding): `id` is the run that left the asks and `display` how the set
+ * settled, `answered` or `withdrawn`.
+ */
+export const ASKS_SETTLED_SOURCE_ACTOR = 'archon-asks-settled';
+
+/**
+ * What caused a start, read from its receipt's source actor: a run that ended, the asks a
+ * run left settling, a node that fired, or another source (a schedule, a webhook, an
+ * operator's fire).
  */
 export const startCauseSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('run_ended'), runId: z.string() }),
+  /** `sourceInstanceId` is the run-ended arrow that started the run (see `pack-graph`). */
+  z.object({ kind: z.literal('run_ended'), runId: z.string(), sourceInstanceId: z.string() }),
+  z.object({ kind: z.literal('asks_settled'), runId: z.string() }),
   z.object({ kind: z.literal('run_fired'), runId: z.string(), node: z.string().nullable() }),
   z.object({ kind: z.literal('receipt'), receiptId: z.string(), sourceInstanceId: z.string() }),
 ]);
@@ -156,7 +166,9 @@ export function startCause(receipt: {
   sourceActor: SourceReceiptInput['sourceActor'];
 }): StartCause {
   const actor = receipt.sourceActor;
-  if (actor?.source === RUN_ENDED_SOURCE_ACTOR) return { kind: 'run_ended', runId: actor.id };
+  if (actor?.source === RUN_ENDED_SOURCE_ACTOR)
+    return { kind: 'run_ended', runId: actor.id, sourceInstanceId: receipt.sourceInstanceId };
+  if (actor?.source === ASKS_SETTLED_SOURCE_ACTOR) return { kind: 'asks_settled', runId: actor.id };
   if (actor?.source === RUN_SOURCE_ACTOR)
     return { kind: 'run_fired', runId: actor.id, node: actor.display ?? null };
   return { kind: 'receipt', receiptId: receipt.id, sourceInstanceId: receipt.sourceInstanceId };
@@ -206,6 +218,12 @@ export const resourceStartIntentSchema = z
   .strict();
 export type ResourceStartIntent = z.infer<typeof resourceStartIntentSchema>;
 
+/** What a queued or skipped start waits behind: a run holding the slot, or a request ahead. */
+const resourceBlockerSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('run'), id: z.string().uuid() }),
+  z.object({ kind: z.literal('request'), id: z.string().uuid() }),
+]);
+
 export const resourceStartDispositionSchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('admitted'),
@@ -215,20 +233,47 @@ export const resourceStartDispositionSchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('queued'),
     requestId: z.string().uuid(),
-    blocker: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('run'), id: z.string().uuid() }),
-      z.object({ kind: z.literal('request'), id: z.string().uuid() }),
-    ]),
+    blocker: resourceBlockerSchema,
   }),
   z.object({
     status: z.literal('skipped'),
     requestId: z.string().uuid(),
-    blocker: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('run'), id: z.string().uuid() }),
-      z.object({ kind: z.literal('request'), id: z.string().uuid() }),
-    ]),
+    blocker: resourceBlockerSchema,
   }),
 ]);
+/**
+ * A start on an item still waiting for capacity, as the item read lists it. What it waits
+ * behind is `ahead`: the queued starts of the same resource and host with an earlier queue
+ * position, read when the item is read; at 0 it waits for a free slot on `resource`. A drain
+ * admits one host's requests in queue order. It is queue order, not a promise; a start whose
+ * checkout is held is passed over. The blocker a request recorded when it queued is not
+ * listed: drains do not refresh it, so it soon names a start that has ended.
+ * `workflow` is null when the stored launch does not read.
+ */
+export const queuedItemStartSchema = z.object({
+  requestId: z.string(),
+  workflow: z.string().nullable(),
+  resource: z.string(),
+  hostId: z.string(),
+  queuedAt: z.string().datetime(),
+  ahead: z.number().int().nonnegative(),
+});
+export type QueuedItemStart = z.infer<typeof queuedItemStartSchema>;
+
+/**
+ * The install hold: while it is set, admission admits no new run from any source, and
+ * every start it holds back waits for the lift. `setBy` is the CLI identity that set it.
+ */
+export const installHoldSchema = z.object({
+  setBy: z.string(),
+  setAt: z.string().datetime(),
+});
+export type InstallHold = z.infer<typeof installHoldSchema>;
+
+export function describeInstallHold(hold: InstallHold): string {
+  return `set by ${hold.setBy} at ${hold.setAt}`;
+}
+
 export const resourceStartRequestStatusSchema = z.union([
   ...resourceStartDispositionSchema.options.map(option => option.shape.status),
   z.literal('withdrawn'),
@@ -256,6 +301,125 @@ export const sourceReceiptInputSchema = z
   })
   .strict();
 export type SourceReceiptInput = z.infer<typeof sourceReceiptInputSchema>;
+
+/**
+ * How a binding names the item its start is on: the value of one field of the start's
+ * event, after an optional fixed `prefix`. Data only, no expression; the engine gives the
+ * key no meaning. For a source plugin's binding the field is one of the plugin's event
+ * fields; for a fire-only trigger file it is a key of the fire's `--inputs`.
+ */
+export const itemMappingSchema = z
+  .object({ field: z.string().min(1), prefix: z.string().min(1).optional() })
+  .strict();
+export type ItemMapping = z.infer<typeof itemMappingSchema>;
+
+/**
+ * The item key `mapping` makes of the field's value: text as it is, a finite number in
+ * decimal. Anything else, a missing or empty value included, is refused with a reason
+ * that names the field, so a start never falls through to no item.
+ */
+export function mappedItemKey(
+  mapping: ItemMapping,
+  value: unknown
+): { ok: true; key: string } | { ok: false; reason: string } {
+  const field = `field '${mapping.field}'`;
+  if (value === undefined || value === null) return { ok: false, reason: `${field} is missing` };
+  if (value === '') return { ok: false, reason: `${field} is empty` };
+  if (typeof value !== 'string' && !(typeof value === 'number' && Number.isFinite(value)))
+    return { ok: false, reason: `${field} is not text or a number` };
+  const key = `${mapping.prefix ?? ''}${String(value)}`;
+  if (!itemKeySchema.safeParse(key).success)
+    return {
+      ok: false,
+      reason: `${field} makes an item key longer than ${String(ITEM_KEY_MAX_LENGTH)} characters`,
+    };
+  return { ok: true, key };
+}
+
+/**
+ * A checkout one run hands the next: `branch` at `commit`, kept in the estate of run
+ * `runId`. That is the ended run, or, when the ended run worked on a copy, the run the
+ * copy was taken from, so a check's end hands on the build's branch and not its own.
+ */
+export const checkoutHandoffSchema = z
+  .object({
+    runId: z.string().min(1),
+    branch: z.string().min(1),
+    commit: z.string().regex(/^[0-9a-f]{40,64}$/, 'Expected a full commit id'),
+  })
+  .strict();
+export type CheckoutHandoff = z.infer<typeof checkoutHandoffSchema>;
+
+/** The checkout a run left when it ended, read for a binding that takes it: the hand-off, or why there is none. */
+export const endedCheckoutSchema = z.union([
+  z.object({ handoff: checkoutHandoffSchema }).strict(),
+  z.object({ refused: z.string().min(1) }).strict(),
+]);
+export type EndedCheckout = z.infer<typeof endedCheckoutSchema>;
+
+/**
+ * Run metadata key of a run started on a hand-off, and the lane it got: `continue` works
+ * on the hand-off's branch (a stage that mutates its checkout), `copy` works in a checkout
+ * of its own cut at the hand-off's commit (a stage with `mutates_checkout: false`).
+ */
+export const CHECKOUT_HANDOFF_METADATA_KEY = 'checkout_handoff';
+export const checkoutHandoffRunMetadataSchema = checkoutHandoffSchema
+  .extend({ lane: z.enum(['continue', 'copy']) })
+  .strict();
+export type CheckoutHandoffRunMetadata = z.infer<typeof checkoutHandoffRunMetadataSchema>;
+
+/**
+ * The hand-off a run was started on, or undefined when it was not. A value that does not
+ * parse throws: reading it as no hand-off would start the run somewhere it was not given.
+ */
+export function readCheckoutHandoff(run: {
+  id: string;
+  metadata: Readonly<Record<string, unknown>> | null | undefined;
+}): CheckoutHandoffRunMetadata | undefined {
+  const value = run.metadata?.[CHECKOUT_HANDOFF_METADATA_KEY];
+  if (value === undefined) return undefined;
+  const parsed = checkoutHandoffRunMetadataSchema.safeParse(value);
+  if (!parsed.success)
+    throw new Error(`Run '${run.id}' has an invalid ${CHECKOUT_HANDOFF_METADATA_KEY}`);
+  return parsed.data;
+}
+
+/**
+ * Run metadata key of a run that completed leaving asks while an asks-settled binding
+ * with `checkout: "asking-run"` matched it: the checkout it left, read at completion, and
+ * the worktree that holds it (the run's own, or for a run that worked on a copy, the one
+ * its source left). The settling transaction and the started run's execution each refuse
+ * the hand-off when that worktree is gone, so the checkout is never recreated.
+ */
+export const ASKS_CHECKOUT_METADATA_KEY = 'asks_checkout';
+
+export const asksCheckoutSchema = z.union([
+  z.object({ handoff: checkoutHandoffSchema, worktree: z.string().min(1) }).strict(),
+  z.object({ refused: z.string().min(1) }).strict(),
+]);
+export type AsksCheckout = z.infer<typeof asksCheckoutSchema>;
+
+/** The metadata that records an asking run's checkout. */
+export function asksCheckoutMetadata(checkout: AsksCheckout): Record<string, AsksCheckout> {
+  return { [ASKS_CHECKOUT_METADATA_KEY]: checkout };
+}
+
+/**
+ * The checkout an asking run recorded, or undefined when it recorded none. A value that
+ * does not parse reads as a refusal, not a throw: this runs inside the transaction that
+ * closes an ask, and a throw there would refuse the operator's answer.
+ */
+export function readAsksCheckout(run: {
+  id: string;
+  metadata: Readonly<Record<string, unknown>>;
+}): AsksCheckout | undefined {
+  const value = run.metadata[ASKS_CHECKOUT_METADATA_KEY];
+  if (value === undefined) return undefined;
+  const parsed = asksCheckoutSchema.safeParse(value);
+  return parsed.success
+    ? parsed.data
+    : { refused: `run '${run.id}' has an invalid recorded ${ASKS_CHECKOUT_METADATA_KEY}` };
+}
 
 export const resourceStartBindingIntentSchema = z
   .object({
@@ -297,9 +461,48 @@ export const resourceStartBindingIntentSchema = z
      * strictly; see `storableIntent` in core's start-receipt-writes.
      */
     eventInputs: z.record(z.string(), jsonValueSchema).optional(),
+    /**
+     * The item a source plugin's binding mapped from its event, for this binding's start
+     * only, since one receipt can start several bindings. A receipt that names its own
+     * `itemKey` leaves this unset. Like `eventInputs`, the SQL store keeps it out of the
+     * `intent` column.
+     */
+    itemKey: itemKeySchema.optional(),
+    /**
+     * The checkout a run-ended binding with `checkout: "ended-run"` or an asks-settled
+     * binding with `checkout: "asking-run"` hands the started run, recorded when the ended
+     * or asking run completed. Preparation decides the lane from it, not from
+     * `launch.isolation`, which names the branch only for older binaries. Operator configs
+     * omit this field. The SQL store never writes it into the `intent` column; see
+     * `storableIntent` in core's start-receipt-writes.
+     */
+    checkoutFrom: checkoutHandoffSchema.optional(),
   })
   .strict();
 export type ResourceStartBindingIntent = z.infer<typeof resourceStartBindingIntentSchema>;
+
+/**
+ * A binding refused at start because its pack's forge needs cannot be met: the pack and
+ * each remote's reason and remedy. Older binaries read this stored shape, so `reason` is a
+ * string, not the engine's union, and unknown keys are stripped rather than refused.
+ */
+const forgeRefusalFailureSchema = z.object({
+  /** The git remote's name, never its URL: a URL can carry a credential. */
+  remote: z.string().optional(),
+  reason: z.string(),
+  message: z.string(),
+  /** The declared capabilities the plugin does not advertise. */
+  unsupported: z.array(z.string()).readonly().optional(),
+  /** The operator's next step, from the plugin or forge, or the engine's own. */
+  remedy: z.string().optional(),
+});
+export type ForgeRefusalFailure = z.infer<typeof forgeRefusalFailureSchema>;
+
+export const forgeRefusalSchema = z.object({
+  pack: z.string(),
+  failures: z.array(forgeRefusalFailureSchema).readonly(),
+});
+export type ForgeRefusal = z.infer<typeof forgeRefusalSchema>;
 
 /** A receipt binding as stores report it, without any store's own bookkeeping. */
 export const startBindingInspectionSchema = z.object({
@@ -310,6 +513,7 @@ export const startBindingInspectionSchema = z.object({
   status: startBindingPreparationStatusSchema,
   ownerId: z.string().nullable(),
   error: z.string().nullable(),
+  forgeRefusal: forgeRefusalSchema.nullable().default(null),
   intent: resourceStartBindingIntentSchema.nullable(),
 });
 
@@ -354,6 +558,13 @@ export const sourceReceiptAcceptanceSchema = z
         });
       }
       seen.add(binding.bindingId);
+      if (acceptance.receipt.itemKey !== undefined && binding.itemKey !== undefined) {
+        context.addIssue({
+          code: 'custom',
+          path: ['bindings', index, 'itemKey'],
+          message: 'A binding names its item only when its receipt names none',
+        });
+      }
     }
     for (const [index, binding] of (acceptance.evaluatedBindings ?? []).entries()) {
       if (seen.has(binding.bindingId)) {
@@ -371,35 +582,30 @@ export type SourceReceiptAcceptance = z.infer<typeof sourceReceiptAcceptanceSche
 /**
  * Where a run-ended binding reads one input of the stage it starts: a JSON Pointer into
  * the ended run's result (its `returns:` node output), one of the ended run's own inputs
- * by name, or the key of the ended run's item (which member ended, for a linked start).
+ * by name, or the key of the ended run's item (which item ended, for a linked start).
  * Data only: no expression, and nothing here names a workflow.
  */
-export const runEndedInputSourceSchema = z.union([
+const runInputSources = [
   z.object({ result: z.string().refine(isJsonPointer, 'Invalid JSON Pointer') }).strict(),
   z.object({ input: z.string().min(1) }).strict(),
+] as const;
+export const runEndedInputSourceSchema = z.union([
+  ...runInputSources,
   z.object({ item: z.literal('key') }).strict(),
 ]);
 export type RunEndedInputSource = z.infer<typeof runEndedInputSourceSchema>;
 
 /**
- * `on.runEnded.linked`: the stage starts on the items the ended run's item is linked to,
- * not on that item. `kind` names the link and `holder` the end of it the started item is
- * on; the ended run's item is on the other end. An order whose members are `part_of` it
- * uses `holder: 'to'`; an item that `depends_on` another uses `holder: 'from'`. The engine
- * gives the kind no meaning: the file names both the kind and the end. Only active links
- * count.
- *
- * `form: 'all'` starts the stage once, when every item linked to the holder by `kind`
- * has completed `workflowName` with `outcome` (each item counted by its latest completed
- * run of it); the engine only counts. `form: 'each'` starts it every time one of them
- * does, and the stage judges whether the holder is ready.
+ * `on.runEnded.linked`: the stage starts on the items the ended run's item is linked to
+ * (the holders), not on that item, once for every holder each time the run ends with the
+ * outcome; the stage judges whether its item is ready. `kind` names the link and `holder`
+ * the end of it the started item is on; the ended run's item is on the other end. An
+ * order whose members are `part_of` it uses `holder: 'to'`; an item that `depends_on`
+ * another uses `holder: 'from'`. The engine gives the kind no meaning: the file names
+ * both the kind and the end. Only links active when the run completes count.
  */
 export const runEndedLinkedSchema = z
-  .object({
-    kind: itemLinkKindSchema,
-    holder: z.enum(['from', 'to']),
-    form: z.enum(['all', 'each']),
-  })
+  .object({ kind: itemLinkKindSchema, holder: z.enum(['from', 'to']) })
   .strict();
 export type RunEndedLinked = z.infer<typeof runEndedLinkedSchema>;
 
@@ -413,58 +619,129 @@ export const runEndedTriggerSchema = z
     workflowName: z.string().min(1),
     outcome: z.string(),
     inputs: z.record(z.string().min(1), runEndedInputSourceSchema).optional(),
+    /**
+     * `ended-run`: the started run works in the checkout the ended run left, on its branch
+     * at the commit it ended on, or is refused naming why.
+     */
+    checkout: z.literal('ended-run').optional(),
     linked: runEndedLinkedSchema.optional(),
   })
   .strict()
-  // An all start is about a set of items, not the one run that happened to end last, so
-  // its receipt carries nothing from that run; it is also what lets a member's re-run
-  // replay the receipt instead of conflicting with it.
-  .refine(trigger => trigger.linked?.form !== 'all' || trigger.inputs === undefined, {
-    message:
-      "A linked 'all' start takes no inputs: it is about a set of items, not one run; read the item's links in the stage",
-    path: ['inputs'],
+  // The ended run's checkout is its own item's work, not the holder's.
+  .refine(trigger => trigger.linked === undefined || trigger.checkout === undefined, {
+    message: 'A linked start takes no checkout: the ended run left it for its own item',
+    path: ['checkout'],
   });
 export type RunEndedTrigger = z.infer<typeof runEndedTriggerSchema>;
 
 /**
- * A linked run-ended start, as the completing write resolves it. The engine matched the
- * binding against the ended run; which items hold a link, and for `all` whether every
- * linked item is done, can only be read inside the transaction that completes the run, so
- * two members ending together see each other. `acceptance` is the receipt for the ended
- * run; the store sets its `id`, `itemKey` and `deliveryId` per holder, and for `all` its
- * `contentDigest`.
+ * A linked run-ended start, as the completing write resolves it. Which items hold an
+ * active link to the ended run's item can only be read exactly inside the transaction
+ * that completes the run. `acceptance` is the receipt for the ended run; the store sets
+ * its `id`, `itemKey` and `deliveryId` per holder.
  */
 export interface LinkedRunEndedStart {
-  form: RunEndedLinked['form'];
-  link: Pick<RunEndedLinked, 'kind' | 'holder'>;
-  /** What every linked item must have completed, for `all`. */
-  workflowName: string;
-  outcome: string;
+  link: RunEndedLinked;
   endedRunId: string;
   endedItemId: string;
   acceptance: SourceReceiptAcceptance;
 }
 
 /**
+ * Where an asks-settled binding reads one input of the stage it starts: what a run-ended
+ * binding reads from the run that left the asks, or `{answers: true}` for the settled set
+ * itself, each ask with its question, how it closed and who closed it.
+ */
+export const asksSettledInputSourceSchema = z.union([
+  ...runInputSources,
+  z.object({ answers: z.literal(true) }).strict(),
+]);
+export type AsksSettledInputSource = z.infer<typeof asksSettledInputSourceSchema>;
+
+/**
+ * `on.asksSettled` of a trigger file: the binding starts when the asks a run of
+ * `workflowName` left on an item are settled, in the project the binding launches in.
+ * `answered` matches a set with at least one answer, `withdrawn` one whose every ask was
+ * withdrawn, `any` either.
+ */
+export const asksSettledTriggerSchema = z
+  .object({
+    workflowName: z.string().min(1),
+    settled: z.enum(['answered', 'withdrawn', 'any']),
+    inputs: z.record(z.string().min(1), asksSettledInputSourceSchema).optional(),
+    /**
+     * `asking-run`: the started run works in the checkout the asking run left, on its
+     * branch at the commit it ended on, or is refused naming why. The checkout is read
+     * when the asking run completes, not when its asks settle.
+     */
+    checkout: z.literal('asking-run').optional(),
+  })
+  .strict();
+export type AsksSettledTrigger = z.infer<typeof asksSettledTriggerSchema>;
+
+/**
  * A trigger file: the binding, and what starts it. With `schedule` a clock fires it; with
- * `on.runEnded` the end of a run does; with neither it is fire-only, and nothing but
- * `trigger fire` starts it. A `schedule` or `on` that is present must be complete, so a
- * half-written one is never fire-only.
+ * `on` the end of a run (`runEnded`) or the settling of a run's asks (`asksSettled`) does,
+ * exactly one of them; with neither it is fire-only, and nothing but `trigger fire` starts
+ * it. A `schedule` or `on` that is present must be complete, so a half-written one is
+ * never fire-only.
+ *
+ * `item` names a fire-only binding's item from a field of the fire's `--inputs`. It sits
+ * beside `binding`, not in it, because the launch intent is what the store persists. A
+ * timer tick, a run's end and a settled set are about no event the file could map.
  */
 export const triggerConfigSchema = z
   .object({
     version: z.literal(1),
     sourceInstanceId: z.string().min(1),
-    binding: resourceStartBindingIntentSchema.omit({ eventInputs: true }),
+    binding: resourceStartBindingIntentSchema.omit({
+      eventInputs: true,
+      checkoutFrom: true,
+      itemKey: true,
+    }),
+    item: itemMappingSchema.optional(),
     schedule: z
       .object({ intervalSeconds: z.number().int().positive(), runAtLoad: z.boolean() })
       .strict()
       .optional(),
-    on: z.object({ runEnded: runEndedTriggerSchema }).strict().optional(),
+    on: z
+      .object({
+        runEnded: runEndedTriggerSchema.optional(),
+        asksSettled: asksSettledTriggerSchema.optional(),
+      })
+      .strict()
+      .refine(on => (on.runEnded === undefined) !== (on.asksSettled === undefined), {
+        message: 'on has exactly one of runEnded or asksSettled',
+      })
+      .optional(),
   })
   .strict()
   .refine(config => config.schedule === undefined || config.on === undefined, {
-    message: 'A trigger has either a schedule or on.runEnded, not both',
+    message: 'A trigger has either a schedule or on, not both',
     path: ['on'],
+  })
+  .refine(config => config.item === undefined || config.schedule === undefined, {
+    message: 'A timer binding maps no item: a tick is about no item',
+    path: ['item'],
+  })
+  .refine(config => config.item === undefined || config.on === undefined, {
+    message: 'An on binding maps no item: its start is on the item of the run its event names',
+    path: ['item'],
+  })
+  // The engine picks the lane of a start on another run's checkout; a fixed one here
+  // would contradict it.
+  .superRefine((config, context) => {
+    const field =
+      config.on?.runEnded?.checkout !== undefined
+        ? 'on.runEnded.checkout'
+        : config.on?.asksSettled?.checkout !== undefined
+          ? 'on.asksSettled.checkout'
+          : undefined;
+    if (field !== undefined && config.binding.launch.isolation.kind !== 'default')
+      context.addIssue({
+        code: 'custom',
+        message: `With ${field}, binding.launch.isolation must be { "kind": "default" }`,
+        path: ['binding', 'launch', 'isolation'],
+      });
   });
 export type TriggerConfig = z.infer<typeof triggerConfigSchema>;

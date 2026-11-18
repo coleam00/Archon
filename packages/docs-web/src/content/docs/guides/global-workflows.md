@@ -72,6 +72,7 @@ review-kit/                     # plugin root: owner/repo or owner/repo/<path>
 ├── archon-plugin.json
 ├── .shared/                    # modules and documents the pack's scripts use
 │   ├── metric-views.json       # optional overview cards for the console
+│   ├── item-metrics.json       # optional per-item figures for archon metrics
 │   ├── scripts/preflight.ts    # a script any workflow of the pack can name
 │   └── util.ts
 ├── .github/workflows/ci.yml    # a dot directory: never a workflow folder

@@ -18,7 +18,12 @@ import {
 import { safeSendMessage, sendCriticalMessage } from './platform-messages';
 import type { ExecuteWorkflowOptions } from './executor';
 import type { ResolvedWorkflow, WorkflowExecutionResult, WorkflowRun } from './schemas';
-import { isApprovalContext, isTerminalRunStatus, pendingWorkflowWaitDeadline } from './schemas';
+import {
+  isApprovalContext,
+  isOperatorPaused,
+  isTerminalRunStatus,
+  pendingWorkflowWaitDeadline,
+} from './schemas';
 import { deadlineWaitCursor } from './store';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 
@@ -70,7 +75,8 @@ export async function settleRunOutcome(
     finalStatus,
     resolveChildIsolation
   );
-  if (finalStatus.status === 'paused') {
+  // A fan-out gate beside an operator pause is history; only a resume continues that run.
+  if (finalStatus.status === 'paused' && !isOperatorPaused(finalStatus)) {
     const continued = await continueReleasedFanOutParent(
       deps,
       platform,
@@ -212,6 +218,7 @@ async function pausedResult(
     paused: true,
     workflowRunId: paused.id,
     ...(waitCursor ? { waitCursor } : {}),
+    ...(isOperatorPaused(paused) ? { byOperator: true as const } : {}),
   };
 }
 
@@ -318,7 +325,7 @@ async function recordFailedStatus(
 ): Promise<void> {
   const emitter = getWorkflowEventEmitter();
   try {
-    const { failed } = await requireTerminalStatusWrite(
+    const { failed, failureKind } = await requireTerminalStatusWrite(
       deps.store.failWorkflowRun(workflowRunId, err.message, { exitReason: 'unhandled_error' }),
       {
         workflowRunId,
@@ -332,6 +339,7 @@ async function recordFailedStatus(
         runId: workflowRunId,
         workflowName: workflow.name,
         error: err.message,
+        ...(failureKind !== undefined ? { failureKind } : {}),
       });
     }
   } catch (writeError) {

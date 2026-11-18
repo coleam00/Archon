@@ -34,6 +34,7 @@ export const detailFixture: Detail = {
       status: 'completed',
       at: '2026-10-05T10:01:00Z',
     },
+    operator_pause: null,
     outcome: 'failed',
     completed_outcome: 'failed',
     user_message: '',

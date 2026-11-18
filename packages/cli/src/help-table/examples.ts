@@ -61,8 +61,13 @@ export const orderedExamples: ExampleHelp[] = [
     text: 'archon workflow wait <run-id> --json',
     owner: { command: 'workflow', subcommand: 'wait' },
   },
+  { text: 'archon workflow pause <run-id>', owner: { command: 'workflow', subcommand: 'pause' } },
   { text: 'archon workflow resume <run-id>', owner: { command: 'workflow', subcommand: 'resume' } },
   { text: 'archon workflow cancel <run-id>', owner: { command: 'workflow', subcommand: 'cancel' } },
+  {
+    text: 'archon workflow cancel --item issue-42',
+    owner: { command: 'workflow', subcommand: 'cancel' },
+  },
   { text: 'archon workflow runs --open', owner: { command: 'workflow', subcommand: 'runs' } },
   {
     text: 'archon workflow run archon-review --adopt <run-id> "Review the changes"',

@@ -605,9 +605,12 @@ CREATE TABLE IF NOT EXISTS remote_agent_start_receipt_bindings (
   host_id TEXT,
   intent TEXT,
   event_input_names TEXT,
+  item_key TEXT,
+  checkout_from TEXT,
   preparation_status VARCHAR(20) NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
   preparation_owner TEXT,
   preparation_error TEXT,
+  forge_refusal TEXT,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   PRIMARY KEY (receipt_id, binding_id)
@@ -617,6 +620,13 @@ CREATE TABLE IF NOT EXISTS remote_agent_resource_slots (
   resource_key TEXT PRIMARY KEY,
   capacity INTEGER NOT NULL DEFAULT 1 CHECK (capacity >= 1),
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+-- The install hold (#5911): a row means no new run is admitted until an operator lifts it.
+CREATE TABLE IF NOT EXISTS remote_agent_install_hold (
+  id TEXT PRIMARY KEY,
+  set_by TEXT NOT NULL,
+  set_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS remote_agent_resource_slot_holders (
@@ -728,6 +738,17 @@ ALTER TABLE remote_agent_workflow_runs ADD COLUMN IF NOT EXISTS origin JSONB;
 -- Names of a binding's event-derived inputs, kept beside the intent: older binaries
 -- parse `intent` strictly and would refuse an extra key.
 ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS event_input_names TEXT;
+-- A run-ended start's checkout hand-off (branch, commit, source run), kept beside the
+-- intent for the same reason.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS checkout_from TEXT;
+
+-- The item a source plugin's binding mapped from its event; null means the receipt's
+-- item_key, if any. One receipt can start several bindings, not all on an item.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS item_key TEXT;
+
+-- A binding refused for its pack's forge needs: the typed reasons and remedies, beside
+-- preparation_error, which keeps only the failed boundary.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS forge_refusal TEXT;
 
 -- The durable thing runs are about: a key within a project, and when it was first named.
 -- No status, stage or config; where an item stands is derived from its runs. project_key
@@ -777,6 +798,38 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_rulings (
   CHECK ((withdraws IS NULL) = (text IS NOT NULL))
 );
 
+-- The merge of an item's change, as the forge reported it to the caller that recorded it.
+-- An append-only fact beside the item, like a ruling: the primary key on item_id makes it
+-- recorded once, so a second report keeps the first. change is the forge's identity of
+-- the merged change (a pull request URL), stored and never parsed. from_run_id has no
+-- foreign key, so run cleanup keeps the fact.
+CREATE TABLE IF NOT EXISTS remote_agent_item_merges (
+  item_id UUID PRIMARY KEY REFERENCES remote_agent_items(id),
+  change TEXT NOT NULL,
+  merge_commit TEXT,
+  merged_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  via TEXT NOT NULL,
+  from_run_id TEXT,
+  from_node_path TEXT,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+-- One row per item tracker destination ('tracker:<project>'). The row exists once the
+-- destination's activation baseline is committed, so a later activation does not baseline
+-- again. The pass_owner_* columns name the process running the destination's pass, NULL
+-- when none: one pass writes at a time across processes. pass_requested is 1 when a
+-- process found the pass held and asked the holder for one more. What the tracker showed
+-- stays in its attention_notice_sent ledger, not here.
+CREATE TABLE IF NOT EXISTS remote_agent_item_tracker_destinations (
+  destination TEXT PRIMARY KEY,
+  activated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  pass_owner_host TEXT,
+  pass_owner_pid INTEGER,
+  pass_owner_instance TEXT,
+  pass_started_at TIMESTAMP WITH TIME ZONE,
+  pass_requested INTEGER NOT NULL DEFAULT 0
+);
+
 -- Links between items: accepted, directed relations, read from from_item_id to to_item_id.
 -- One row per link. The link and who recorded it are written at insert and never change;
 -- ending a link writes the ended_* columns once, so the original fact and who ended it and
@@ -805,6 +858,33 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_links (
   ended_from_node_path TEXT,
   CHECK (from_item_id <> to_item_id),
   CHECK ((ended_at IS NULL) = (ended_via IS NULL))
+);
+
+-- Asks: decisions a completed run left for an operator on its item (returns.asks). A row
+-- opens in the write that completes the run and closes once: answered, withdrawn, or
+-- replaced when a later completed run of the same workflow on the same item leaves its
+-- own set. run_id is the run that left it and names the set; like from_run_id on a
+-- ruling it has no foreign key, so run cleanup keeps the record. `ask` is the JSON the
+-- run left, read tolerantly because more than one binary reads it.
+-- closed_as is checked in code, not by a constraint: a later binary may close an ask in a
+-- way this one does not know, and a reader treats that row as unreadable, not as open.
+CREATE TABLE IF NOT EXISTS remote_agent_item_asks (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  item_id UUID NOT NULL REFERENCES remote_agent_items(id),
+  run_id TEXT NOT NULL,
+  workflow_name TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  ask JSONB NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  closed_as TEXT,
+  answer JSONB,
+  closed_at TIMESTAMP WITH TIME ZONE,
+  closed_via TEXT,
+  closed_by_declared TEXT,
+  closed_by_user_id TEXT,
+  closed_from_run_id TEXT,
+  closed_from_node_path TEXT,
+  replaced_by_run_id TEXT
 );
 
 -- The surface a state write outside a run came through (cli, api, ...). Nullable:
@@ -857,6 +937,11 @@ CREATE INDEX IF NOT EXISTS idx_item_links_from_item_id
   ON remote_agent_item_links(from_item_id);
 CREATE INDEX IF NOT EXISTS idx_item_links_to_item_id
   ON remote_agent_item_links(to_item_id);
+-- Item asks
+CREATE INDEX IF NOT EXISTS idx_item_asks_open
+  ON remote_agent_item_asks(item_id, workflow_name) WHERE closed_as IS NULL;
+CREATE INDEX IF NOT EXISTS idx_item_asks_run_id
+  ON remote_agent_item_asks(run_id);
 
 -- Codebase env vars
 CREATE INDEX IF NOT EXISTS idx_codebase_env_vars_codebase_id

@@ -1,5 +1,10 @@
 import type { HelpGroup } from './types';
 
+const ALL_RUNS_FLAG = {
+  spec: '--all-runs',
+  description: 'With --item: act on every matching run instead of refusing when several match',
+};
+
 export const workflowHelp: HelpGroup = {
   entries: [
     {
@@ -75,15 +80,16 @@ export const workflowHelp: HelpGroup = {
     {
       command: 'workflow',
       subcommand: 'wait',
-      spec: 'workflow wait <run-id>',
-      description: 'Block until the run ends or needs attention',
+      spec: 'workflow wait <run-id> | --item <key>',
+      description:
+        'Block until the run ends or needs attention\nWith --item: until any live run on the item does; names the run',
     },
     {
       command: 'workflow',
       subcommand: 'attention',
-      spec: 'workflow attention [<run-id>]',
+      spec: 'workflow attention [<run-id>|ask:<id>]',
       description:
-        'List, count or stream the attention queue, or read the item one run stands for\n(defaults to the current project)',
+        'List, count or stream the attention queue, or read the item one run or ask stands for\n(defaults to the current project)',
       scopedFlags: [
         { spec: '--project <id|name|key>', description: 'Scope to another project' },
         { spec: '--all', description: 'The whole install' },
@@ -144,6 +150,13 @@ export const workflowHelp: HelpGroup = {
     },
     {
       command: 'workflow',
+      subcommand: 'pause',
+      spec: 'workflow pause <run-id>',
+      description:
+        "Request a pause before a running run's next node; a run with no node left completes\nOnce paused it keeps its slot and item; resume it with 'workflow resume'",
+    },
+    {
+      command: 'workflow',
       subcommand: 'resume',
       spec: 'workflow resume <run-id>',
       description: 'Resume a failed, paused or killed run from completed nodes',
@@ -186,14 +199,18 @@ export const workflowHelp: HelpGroup = {
     {
       command: 'workflow',
       subcommand: 'cancel',
-      spec: 'workflow cancel <run-id>',
-      description: 'Stop a running workflow (stops an owning process first)',
+      spec: 'workflow cancel <run-id> | --item <key>',
+      description:
+        "Stop a running workflow (stops an owning process first)\nWith --item: the item's running run; refuses when several are",
+      scopedFlags: [ALL_RUNS_FLAG],
     },
     {
       command: 'workflow',
       subcommand: 'abandon',
-      spec: 'workflow abandon <run-id>',
-      description: 'Mark a run cancelled, stopping a live owner first',
+      spec: 'workflow abandon <run-id> | --item <key>',
+      description:
+        "Mark a run cancelled, stopping a live owner first\nWith --item: the item's pending, running or paused run; refuses when several are",
+      scopedFlags: [ALL_RUNS_FLAG],
     },
     {
       command: 'workflow',
@@ -232,6 +249,15 @@ export const workflowHelp: HelpGroup = {
           description: 'In place of --choose: the option the wait recommends',
         },
         { spec: '--text <text>', description: 'Free text recorded with the answer' },
+        {
+          spec: '--ref <ref>',
+          description:
+            "In place of <run-id> --occurrence: the item's ref as workflow attention lists it.\nThe only way to answer an ask a completed run left",
+        },
+        {
+          spec: '--withdraw <ref>',
+          description: 'Withdraw an ask a completed run left; it closes unanswered',
+        },
       ],
     },
     {
@@ -280,6 +306,33 @@ export const workflowHelp: HelpGroup = {
           spec: '--end <link-id>',
           description: 'End a link instead; the record stays and says who ended it and when',
         },
+      ],
+    },
+    {
+      command: 'workflow',
+      subcommand: 'items',
+      spec: 'workflow items',
+      description:
+        "This project's items with a run started in a window (default the last 30 days),\neach with all its runs, questions, answers and merge, ordered by item id",
+      scopedFlags: [
+        { spec: '--since <40m|7d|24h|2w|ISO>', description: 'Start of the window' },
+        { spec: '--until <ISO>', description: 'End of the window, exclusive (default now)' },
+        {
+          spec: '--after <cursor>',
+          description: "Read the page after the one that returned this 'next' cursor",
+        },
+      ],
+    },
+    {
+      command: 'workflow',
+      subcommand: 'merged',
+      spec: 'workflow merged --item <key> --change <ref> --at <ISO>',
+      description:
+        "Record that an item's change merged, as the forge reported it. Recorded once:\na second report keeps the first",
+      scopedFlags: [
+        { spec: '--change <ref>', description: 'The merged change, such as its pull request URL' },
+        { spec: '--at <ISO>', description: 'When the forge says it merged' },
+        { spec: '--commit <sha>', description: 'The merge commit, when the forge reported one' },
       ],
     },
     {

@@ -26,6 +26,25 @@ export const operatorHelp: HelpGroup = {
       description: 'Start configured workflows and inspect durable resource admission',
     },
     {
+      command: 'hold',
+      spec: 'hold <set|lift>',
+      description:
+        'Hold all new runs on this install, or lift the hold and start what it kept;\nrunning runs continue',
+    },
+    {
+      command: 'pack',
+      subcommand: 'graph',
+      spec: 'pack graph <pack>',
+      description:
+        "Show a pack's stages, their outcomes and the run-ended arrows between them,\neach active in this install or declared and inactive (--json for the read)",
+      scopedFlags: [
+        {
+          spec: '--workflow-source <dir>',
+          description: "Where the pack's workflows are found when it is not in the checkout",
+        },
+      ],
+    },
+    {
       command: 'pack',
       subcommand: 'bindings',
       spec: 'pack bindings <pack>',
@@ -42,6 +61,14 @@ export const operatorHelp: HelpGroup = {
         {
           spec: '--cwd <checkout>',
           description: 'The checkout the runs launch in and the pack is read from',
+        },
+        {
+          spec: '--config <file>',
+          description: 'A run config every written binding launches with (model aliases)',
+        },
+        {
+          spec: '--workflow-source <dir>',
+          description: "Where the pack's workflows are found when it is not in the checkout",
         },
         { spec: '--only <id,...>', description: 'Write only these bindings' },
         { spec: '--force', description: 'Replace binding files that already exist' },
@@ -104,6 +131,12 @@ export const operatorHelp: HelpGroup = {
       subcommand: 'drain',
       spec: 'trigger drain --host <host-id>',
       description: 'Prepare persisted bindings and admit eligible queued work',
+    },
+    {
+      command: 'trigger',
+      subcommand: 'add',
+      spec: 'trigger add <file>',
+      description: 'Place a trigger file in ARCHON_HOME/triggers without exposing a partial copy',
     },
     {
       command: 'trigger',

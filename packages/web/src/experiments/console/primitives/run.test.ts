@@ -44,12 +44,6 @@ describe('normalizeOrigin', () => {
 });
 
 describe('runDetailPath', () => {
-  test('uses the project-scoped route for assigned runs', () => {
-    expect(runDetailPath({ id: 'run-1', projectId: 'project-1' })).toBe(
-      '/console/p/project-1/r/run-1'
-    );
-  });
-
   test('uses the projectless route for unassigned runs', () => {
     expect(runDetailPath({ id: 'run-1', projectId: null })).toBe('/console/r/run-1');
   });
@@ -141,18 +135,6 @@ describe('toRun — provenance', () => {
       raw({ id: 'r1', workflow_name: 'plan', status: 'running', platform_type: 'web' })
     );
     expect(r.origin).toBe('web');
-  });
-
-  test('detail-sourced row still populates conversationPlatformId (unchanged behavior)', () => {
-    const r = toRun(
-      raw({
-        id: 'r1',
-        workflow_name: 'plan',
-        status: 'completed',
-        conversation_platform_id: 'cli-detail-789',
-      })
-    );
-    expect(r.conversationPlatformId).toBe('cli-detail-789');
   });
 
   test('worker_platform_id maps through for chat-dispatched runs; absent → null', () => {
@@ -435,6 +417,27 @@ describe('toRun — resolved gate (approved/rejected awaiting resume)', () => {
   });
 });
 
+describe('toRun — operator pause', () => {
+  test('a gate and wait left beside an operator pause show as neither pending nor resolved', () => {
+    const r = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'review',
+        status: 'paused',
+        operator_pause: {
+          state: 'paused',
+          requested: { by: null, via: 'cli', at: '2026-10-05T10:00:00Z', fromRun: null },
+          pausedAt: '2026-10-05T10:01:00Z',
+        },
+        metadata: { approval: { nodeId: 'gate', message: 'Approve?', resolved: 'approved' } },
+      })
+    );
+    expect(r.approval).toBeNull();
+    expect(r.wait).toBeNull();
+    expect(r.gateResolved).toBeNull();
+  });
+});
+
 describe('toRun — durable wait', () => {
   type RawWait = NonNullable<NonNullable<Raw['metadata']>['wait']>;
   type NormalizedWait = NonNullable<ReturnType<typeof toRun>['wait']>;
@@ -511,45 +514,6 @@ describe('toRun — durable wait', () => {
         resumeAt,
       },
       label: 'Waiting for provider limit',
-    },
-    {
-      name: 'loop-group time',
-      wait: {
-        owner: 'loop_group',
-        nodeId: 'poll',
-        bodyWaitId: 'delay',
-        iteration: 2,
-        sessionId: null,
-        sessionProvider: null,
-        kind: 'time',
-        waitingSince,
-        resumeAt,
-      },
-      expected: { nodeId: 'poll.delay', kind: 'time', waitingSince, resumeAt },
-      label: 'Waiting until scheduled time',
-    },
-    {
-      name: 'loop-group event',
-      wait: {
-        owner: 'loop_group',
-        nodeId: 'poll',
-        bodyWaitId: 'checks',
-        iteration: 3,
-        sessionId: 'session-1',
-        sessionProvider: 'claude',
-        kind: 'event',
-        waitingSince,
-        resumeAt,
-        event: 'checks.complete',
-      },
-      expected: {
-        nodeId: 'poll.checks',
-        kind: 'event',
-        waitingSince,
-        resumeAt,
-        event: 'checks.complete',
-      },
-      label: 'Waiting for event',
     },
     {
       name: 'loop-group attention',

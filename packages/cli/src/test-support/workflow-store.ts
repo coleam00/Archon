@@ -17,6 +17,7 @@ import {
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import type { WorkflowStoreHarness } from '@archon/workflows/store-conformance';
+import { workflowStoreDouble } from '@archon/workflows/test-utils';
 import {
   createTransactionView,
   isConversationResetTarget,
@@ -237,7 +238,7 @@ export function createInMemoryWorkflowStore(
     ): ((...args: Args) => Promise<Result>) =>
     (...args) =>
       serialize(() => operation(...args));
-  return {
+  return workflowStoreDouble<InMemoryWorkflowStore>({
     ...createInMemoryStateDocumentStore(id => runs.get(id)?.status ?? null),
     admitResourceStart: admit(admission.admitResourceStart.bind(admission)),
     admitPendingRun: admit(admission.admitPendingRun.bind(admission)),
@@ -248,9 +249,17 @@ export function createInMemoryWorkflowStore(
     listStartReceipts: admit(admission.listStartReceipts.bind(admission)),
     listPendingStartBindings: admit(admission.listPendingStartBindings.bind(admission)),
     getResourceStartRequest: admit(admission.getResourceStartRequest.bind(admission)),
+    listSkippedItemStarts: admit(admission.listSkippedItemStarts.bind(admission)),
+    getInstallHold: admit(admission.getInstallHold.bind(admission)),
+    setInstallHold: admit(admission.setInstallHold.bind(admission)),
+    liftInstallHold: admit(admission.liftInstallHold.bind(admission)),
+    listHeldStarts: admit(admission.listHeldStarts.bind(admission)),
+    listHeldItemStarts: admit(admission.listHeldItemStarts.bind(admission)),
+    listWaitedItemHolders: admit(admission.listWaitedItemHolders.bind(admission)),
     listQueuedResourceStartsForHost: admit(
       admission.listQueuedResourceStartsForHost.bind(admission)
     ),
+    listQueuedItemStarts: admit(admission.listQueuedItemStarts.bind(admission)),
     withdrawQueuedResourceStart: admit(admission.withdrawQueuedResourceStart.bind(admission)),
     claimStartBindingPreparation: admit(admission.claimStartBindingPreparation.bind(admission)),
     completeStartBindingPreparation: admit(
@@ -314,6 +323,10 @@ export function createInMemoryWorkflowStore(
       write(view => view.pauseWorkflowRunForWait(id, wait, pause)),
     releaseRunForUnreadableSource: (id, release, beforePublish) =>
       write(view => view.releaseRunForUnreadableSource(id, release, beforePublish)),
+    requestOperatorPause: (id, requested) =>
+      write(view => view.requestOperatorPause(id, requested)),
+    pauseWorkflowRunForOperator: (id, claimId) =>
+      write(view => view.pauseWorkflowRunForOperator(id, claimId)),
     clearWorkflowWaitContext: (id, wait, completion) =>
       write(view => view.clearWorkflowWaitContext(id, wait, completion)),
     resolveApprovalGate: (id, metadata, gateEvents, expected) =>
@@ -394,14 +407,9 @@ export function createInMemoryWorkflowStore(
       write(view => view.findWorkflowRunsByIdPrefix(prefix, codebase)),
     findAdoptingRuns: id => write(view => view.findAdoptingRuns(id)),
     findOpenWorkRuns: options => write(view => view.findOpenWorkRuns(options)),
-    getItemRuns: unsupported,
-    getItem: unsupported,
-    listItemRulings: unsupported,
-    recordItemRuling: unsupported,
-    withdrawItemRuling: unsupported,
-    listItemLinks: unsupported,
-    recordItemLink: unsupported,
-    endItemLink: unsupported,
+    listOpenItemAsks: async () => [],
+    listItemAsks: async () => [],
+    getItemAsk: async () => null,
     listWorkflowRuns: options => write(view => view.listWorkflowRuns(options)),
     listDueWorkflowContinuations: (now, limit) =>
       write(view => view.listDueWorkflowContinuations(now, limit)),
@@ -465,5 +473,5 @@ export function createInMemoryWorkflowStore(
           }
         return { deleted };
       }),
-  };
+  });
 }

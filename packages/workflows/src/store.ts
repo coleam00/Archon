@@ -14,6 +14,7 @@ import type { LinkedRunEndedStart, SourceReceiptAcceptance } from './schemas/res
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { ProviderEventQuery, ProviderEventRecord } from './schemas/provider-event';
 import type { WorkflowEventRow } from './schemas/workflow-event';
+import type { NodeFailureKind } from './schemas/node-execution';
 import type { ExpectedApprovalGate } from './schemas/workflow-run';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
 import type {
@@ -28,6 +29,13 @@ import type {
 } from './schemas';
 import type { IStateDocumentStore } from './state-document-store';
 import type { ItemAct } from './schemas/item-act';
+import type {
+  ItemAsk,
+  ItemAskActInput,
+  ItemAskCloseResult,
+  StoredItemAsk,
+} from './schemas/item-ask';
+import type { AttentionAnswer } from './schemas/run-wait';
 import type { AttentionAnswerWrite, AttentionLabelWrite } from './store/attention-writes';
 import type {
   PauseCursor,
@@ -47,6 +55,7 @@ import type { DagResumeSnapshot } from './store/resume-snapshot';
 import type { WorkflowRunFailureOptions } from './workflow-run-failure';
 import type {
   FanOutCancelReason,
+  OperatorPauseRequest,
   SourceReleaseWrite,
   WorkflowCancellationEventDetails,
   WorkflowWaitCompletion,
@@ -230,6 +239,34 @@ export interface IWorkflowStore
     input: { rulingId: string; projectKey?: string } & ItemAct
   ): Promise<import('./schemas/item-ruling').ItemRuling>;
   /**
+   * The items of a project with one of their own runs (`item_id` set, so not a
+   * `workflow:` child) started in `[since, until)`, ordered by item id, after
+   * `afterItemId` when given. The id order is a resume key, not a ranking.
+   */
+  listItemsInWindow(query: {
+    projectKey: string;
+    since: Date;
+    until: Date;
+    afterItemId: string | null;
+    limit: number;
+  }): Promise<import('./schemas/workflow-run').WorkflowItem[]>;
+  /** The merge recorded on an item; null when none is. An unreadable row is reported, not thrown. */
+  getItemMerge(
+    itemId: string
+  ): Promise<
+    | import('./schemas/item-merge').ItemMerge
+    | import('./schemas/item-merge').ItemMergeDegraded
+    | null
+  >;
+  /**
+   * Record that the item `key` names merged, as the forge reported it. Recorded once: a
+   * second report keeps the first and returns it with `recorded: false`. Null when the
+   * project has no item under the key; a merge never creates an item.
+   */
+  recordItemMerge(
+    input: import('./schemas/item-merge').ItemMergeReport
+  ): Promise<import('./schemas/item-merge').ItemMergeRecorded | null>;
+  /**
    * Every link from or to an item, ended ones included, in recording order. A row that does
    * not read is reported as unreadable in its place, not thrown.
    */
@@ -255,6 +292,35 @@ export interface IWorkflowStore
   endItemLink(
     input: { linkId: string; projectKey?: string } & ItemAct
   ): Promise<import('./schemas/item-link').ItemLink>;
+  /**
+   * Every open ask, oldest first. An ask whose stored value does not read is reported in
+   * its place as its run's unreadable entry, not thrown. A store without items has none.
+   */
+  listOpenItemAsks(): Promise<AttentionRead<StoredItemAsk>[]>;
+  /**
+   * Every ask left on the item, open or closed, oldest set first. The rows are the item's
+   * record of its asks: they outlive the run that left them, so its answers and settled
+   * sets still read after that run is deleted.
+   */
+  listItemAsks(itemId: string): Promise<AttentionRead<StoredItemAsk>[]>;
+  /** One ask, open or closed; null when no ask has the id. Throws when its row does not read. */
+  getItemAsk(id: string): Promise<StoredItemAsk | null>;
+  /**
+   * Answer an open ask. The same answer to an answered ask is `unchanged`; any other close
+   * stands and the answer is `refused`. The write that closes the last open ask of its set
+   * records `asks_settled` on the run that left them, once, and in the same transaction
+   * writes the starts that settlement causes (asks-settled bindings), returned as the
+   * result's `startReceipts`. A binding that cannot be read refuses a settling close,
+   * naming the file, and nothing is recorded.
+   */
+  answerItemAsk(
+    input: { askId: string; answer: AttentionAnswer } & ItemAskActInput
+  ): Promise<ItemAskCloseResult>;
+  /**
+   * Withdraw an open ask. A withdrawn ask is `unchanged`; an answered or replaced one is
+   * `refused`. Settles its set as `answerItemAsk` does.
+   */
+  withdrawItemAsk(input: { askId: string } & ItemAskActInput): Promise<ItemAskCloseResult>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */
   listWorkflowEvents(
@@ -304,7 +370,10 @@ export interface IWorkflowStore
    * Fresh execution must win this pending-to-running CAS before doing any work.
    * `workingPath` is the checkout the run will use; the claim stamps it on a row
    * created without one. The claim records the calling process as the run's execution
-   * owner (`currentExecutionOwner`).
+   * owner (`currentExecutionOwner`). A store with items throws `WorkflowItemHeldError`,
+   * writing nothing, while another run of the run's workflow holds its item (`holdsItem`).
+   * A store with the install hold throws `InstallHeldError`, writing nothing, while the hold
+   * is set and nothing admitted the run (a top-level run with no start request).
    */
   claimPendingWorkflowRun(id: string, workingPath?: string): Promise<WorkflowRun | null>;
   /**
@@ -406,13 +475,18 @@ export interface IWorkflowStore
    * `WorkflowNotResumableError`. A failed or paused run resumes with or without a
    * `cursor`. A `running` run resumes only with an `ownerless` cursor whose claim still
    * matches; the caller has checked that no owner answers for it, and an admitted one
-   * keeps the resource slot it already holds.
+   * keeps the resource slot it already holds. That cursor must carry the caller's held
+   * live-owner lease for this run, or the store throws before it changes anything
+   * (`requireOwnerlessLease`).
    *
    * A resume of a failed or paused run admitted through a resource start takes a slot or throws
    * `WorkflowResourceBusyError` (`resourceResumeBlocker`). A paused run refused while ready
    * to continue (answered, due or signaled, or claimed with a `cursor`) records its first
    * refusal (`CAPACITY_WAIT_METADATA_KEY`) before the error is thrown, so it keeps its place
    * while the host retries (`resumeRefusal`).
+   *
+   * A failed run on an item resumes only while no other run of its workflow holds that
+   * item; otherwise it stays failed and `WorkflowItemHeldError` is thrown.
    */
   resumeWorkflowRun(id: string, cursor?: ResumeClaimCursor): Promise<WorkflowRun>;
   /**
@@ -476,11 +550,18 @@ export interface IWorkflowStore
    *
    * `result.linkedStarts` are run-ended bindings whose stage starts on the items linked to
    * the ended run's item. The store resolves them in the same transaction, after the
-   * completing write: the holders through active links of the named kind, and for `all`
-   * the count of linked items done, read under a lock on the holder so two members ending
-   * together cause exactly one start. It returns every receipt this call wrote, from both
-   * lists, and not the ones that replayed; the caller starts those. A store without items
-   * refuses a non-empty list.
+   * completing write: one receipt on each item holding an active link of the named kind
+   * at the named end, so a link ended before the run completed causes nothing. A store
+   * without items refuses a non-empty list.
+   *
+   * It returns every receipt this call wrote, from both lists, and not those that replayed;
+   * the caller starts those.
+   *
+   * `result.asks` is present when the run's workflow declares `returns.asks` and the run is
+   * top-level. In the same transaction, and only when this call wins, the asks still open
+   * from that workflow on the run's item close as `replaced`, and these open in their
+   * place, so the asks exist exactly when the completion does. A store refuses a
+   * non-empty list for a run with no item; a store without items refuses any.
    */
   completeWorkflowRun(
     id: string,
@@ -490,6 +571,7 @@ export interface IWorkflowStore
       outcome?: RunCompletedOutcome;
       startReceipts?: readonly SourceReceiptAcceptance[];
       linkedStarts?: readonly LinkedRunEndedStart[];
+      asks?: readonly ItemAsk[];
     }
   ): Promise<{ startReceipts: SourceReceiptAcceptance[] }>;
   /**
@@ -507,7 +589,14 @@ export interface IWorkflowStore
     id: string,
     error: string,
     options?: WorkflowRunFailureOptions
-  ): Promise<{ failed: boolean }>;
+  ): Promise<{
+    failed: boolean;
+    /**
+     * When this call failed the run: the recorded kind of the node it failed at, from the
+     * terminal record written in the same transaction. Absent when no node failure caused it.
+     */
+    failureKind?: NodeFailureKind;
+  }>;
   /**
    * Pause a running run for human review, stamping the approval context. Optional
    * `extraMetadata` is folded into the SAME atomic metadata write (e.g. the
@@ -533,6 +622,22 @@ export interface IWorkflowStore
     release: SourceReleaseWrite,
     beforePublish?: () => Promise<void>
   ): Promise<{ released: boolean }>;
+  /**
+   * Record an operator's pause request on a running run (`operatorPauseRequestWrite`),
+   * checked and written atomically: a request already pending is returned unchanged, so
+   * concurrent requests agree on one. Undefined when the run is missing or not running.
+   */
+  requestOperatorPause(
+    id: string,
+    requested: OperatorPauseRequest['requested']
+  ): Promise<OperatorPauseRequest | undefined>;
+  /**
+   * Claim-checked transition from running to paused for an operator's pending pause
+   * request (`operatorPauseWrite`): records when it paused, `pause_cause: operator`, and
+   * commits `operator_paused` in the same transaction. A run that is no longer running,
+   * carries another claim or has no pending request is left unchanged with no event.
+   */
+  pauseWorkflowRunForOperator(id: string, claimId: string | null): Promise<{ paused: boolean }>;
   /**
    * Pause a running run on a wait, committing `wait_started` for a new wait or
    * `wait_continued` (`waitContinuedEvent`) for one a resume reached again.

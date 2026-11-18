@@ -1,6 +1,7 @@
 /**
  * GET /api/items: read one item, its runs, open questions, and answers with rulings
- * (`readItem`). POST /api/items/rulings records a ruling on an item; POST
+ * (`readItem`). GET /api/items/window: a page of the project's items with a run started in
+ * a window (`readItemWindow`). POST /api/items/rulings records a ruling on an item; POST
  * /api/items/rulings/{rulingId}/withdraw withdraws one.
  */
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
@@ -20,6 +21,7 @@ import type { RunActor } from '@archon/core/operations/run-authorization';
 import { createWorkflowHostStore } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import { readItem } from '@archon/workflows/item-read';
+import { ItemWindowQueryError, readItemWindow } from '@archon/workflows/item-window';
 import {
   ItemRulingNotFoundError,
   ItemRulingOutsideProjectError,
@@ -38,6 +40,8 @@ import {
 import {
   itemReadQuerySchema,
   itemReadResponseSchema,
+  itemWindowQuerySchema,
+  itemWindowResponseSchema,
   itemRulingResponseSchema,
   recordItemRulingBodySchema,
   withdrawItemRulingBodySchema,
@@ -56,6 +60,22 @@ const getItemRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('No item under that key in the project'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getItemWindowRoute = createRoute({
+  method: 'get',
+  path: '/api/items/window',
+  tags: ['Workflows'],
+  summary: "A page of a project's items with a run started in a window, each read whole",
+  request: { query: itemWindowQuerySchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: itemWindowResponseSchema } },
+      description: 'The page, with the cursor of the next one',
+    },
+    400: jsonError('Bad request, an unknown project, or a window or cursor that does not resolve'),
     500: jsonError('Server error'),
   },
 });
@@ -146,6 +166,19 @@ export function registerItemRoutes(app: OpenAPIHono): void {
     } catch (error) {
       getLog().error({ err: error }, 'api.item_read_failed');
       return apiError(c, 500, 'Failed to read the item');
+    }
+  });
+
+  registerOpenApiRoute(getItemWindowRoute, async c => {
+    const { project: spec, ...query } = getValidatedQuery(c, itemWindowQuerySchema);
+    try {
+      const project = await projectKeyOf(spec);
+      if ('refusal' in project) return apiError(c, 400, project.refusal);
+      return c.json(await readItemWindow(source, project.key, query));
+    } catch (error) {
+      if (error instanceof ItemWindowQueryError) return apiError(c, 400, error.message);
+      getLog().error({ err: error }, 'api.item_window_read_failed');
+      return apiError(c, 500, 'Failed to read the items');
     }
   });
 

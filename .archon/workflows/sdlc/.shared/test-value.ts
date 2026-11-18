@@ -12,7 +12,6 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { requireForge } from './forge-check.ts';
 import { record } from './inputs.ts';
 
 /** The judge workflow's directory: every file in it is part of the judge. */
@@ -21,18 +20,6 @@ export const JUDGE_DIR = join(import.meta.dir, '..', 'metrics-test-value-judge')
 const CRITERIA_FILE = join(import.meta.dir, '..', 'review', 'commands', 'review-tests.md');
 /** The node that judges, in the judge workflow and in the fan-out that launches it. */
 export const JUDGE_NODE = 'judge';
-
-/** The forge operations the test-value metric reads through: each pull request, then each judge's files. */
-export const TEST_VALUE_FORGE_OPERATIONS = ['pr.view', 'pr.files', 'repo.file'] as const;
-
-/**
- * Refuse before any judge runs when a host's plugin lacks one of them or has no
- * credential (`archon forge check`). Each judge run would otherwise fail on its own, and the metric would record nothing, with every
- * pull request listed as skipped.
- */
-export function requireTestValueSource(hosts: Iterable<string>): void {
-  for (const host of new Set(hosts)) requireForge(host, TEST_VALUE_FORGE_OPERATIONS);
-}
 
 /** The project's calibration labels, relative to the checkout the calibration runs in. */
 export const CASES_PATH = '.archon/sdlc/metrics/test-value-cases.json';

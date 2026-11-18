@@ -91,9 +91,11 @@ export function createInMemoryResourceStartStore(
       reusableCheckouts: reusable,
       holders,
       waiters: capacityWaiters(candidates),
-      queue: [...requests.values()].filter(
-        request => request.resource === resource && request.status === 'queued'
-      ),
+      // This store carries no items, so no start names one and none is held.
+      queue: [...requests.values()]
+        .filter(request => request.resource === resource && request.status === 'queued')
+        .map(request => ({ ...request, itemId: null })),
+      heldItems: new Map(),
       heldCheckouts: heldCheckouts(live, reusable),
       foreignHeldCheckouts: heldCheckouts(
         listRuns()
@@ -121,7 +123,12 @@ export function createInMemoryResourceStartStore(
     const previous = requests.get(intent.launch.run.id);
     if (previous) return decision(previous);
     const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
-    const blocker = resourceStartBlocker(await occupancy(intent.resource), launch, intent.hostId);
+    const blocker = resourceStartBlocker(
+      await occupancy(intent.resource),
+      launch,
+      intent.hostId,
+      null
+    );
     const request: ResourceStartRequestInspection = {
       id: launch.run.id,
       resource: intent.resource,
@@ -209,7 +216,8 @@ export function createInMemoryResourceStartStore(
       const blocker = resourceStartBlocker(
         { ...(await occupancy(resource)), capacity: installed.get(resource) ?? capacity },
         launch,
-        DIRECT_START_HOST_ID
+        DIRECT_START_HOST_ID,
+        null
       );
       if (blocker) return blocker;
       requests.set(id, {
@@ -267,6 +275,7 @@ export function createInMemoryResourceStartStore(
             status: 'pending' as const,
             ownerId: null,
             error: null,
+            forgeRefusal: null,
             intent: structuredClone(intent),
             requestStatus: null,
             disposition: null,
@@ -279,6 +288,7 @@ export function createInMemoryResourceStartStore(
             status: item.status,
             ownerId: null,
             error: item.reason,
+            forgeRefusal: null,
             intent: null,
             requestStatus: null,
             disposition: null,
@@ -298,10 +308,11 @@ export function createInMemoryResourceStartStore(
         [...receipts.values()]
           .sort(compareStartReceipts)
           .slice(0, validateStartReceiptLimit(limit))
-          .map(({ id, sourceInstanceId, deliveryId, outcome, reason, receivedAt }) => ({
+          .map(({ id, sourceInstanceId, deliveryId, itemKey, outcome, reason, receivedAt }) => ({
             id,
             sourceInstanceId,
             deliveryId,
+            itemKey,
             outcome,
             reason,
             receivedAt,
@@ -322,6 +333,16 @@ export function createInMemoryResourceStartStore(
           )
           .slice(0, limit)
       ),
+    // The install hold is proved against the SQL store; this one is never held.
+    getInstallHold: async () => null,
+    setInstallHold: async () => {
+      throw new Error('The test store has no install hold');
+    },
+    liftInstallHold: async () => null,
+    listHeldStarts: async () => [],
+    listHeldItemStarts: async () => [],
+    listSkippedItemStarts: async () => [],
+    listWaitedItemHolders: async () => [],
     getResourceStartRequest: async (
       id
     ): ReturnType<IResourceStartStore['getResourceStartRequest']> => {
@@ -336,6 +357,9 @@ export function createInMemoryResourceStartStore(
           .filter(item => item.hostId === hostId && item.status === 'queued')
           .map(inspect)
       ),
+    listQueuedItemStarts: async () => {
+      throw new Error('The test store has no items');
+    },
     withdrawQueuedResourceStart: async (
       id
     ): ReturnType<IResourceStartStore['withdrawQueuedResourceStart']> => {
@@ -361,6 +385,7 @@ export function createInMemoryResourceStartStore(
       const result = await admit(preparedBindingStart(item.intent, input));
       item.status = 'complete';
       item.error = null;
+      item.forgeRefusal = null;
       item.disposition = result;
       return result;
     },
@@ -371,6 +396,7 @@ export function createInMemoryResourceStartStore(
       if (!item) return false;
       item.status = input.retryable ? 'failed' : 'rejected';
       item.error = input.error;
+      item.forgeRefusal = input.forgeRefusal ? structuredClone(input.forgeRefusal) : null;
       return true;
     },
     resetStartBindingPreparation: async (

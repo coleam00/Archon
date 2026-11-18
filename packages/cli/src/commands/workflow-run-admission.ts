@@ -1,4 +1,5 @@
 import { rmSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
@@ -11,6 +12,7 @@ import {
   assertRunCredentials,
   type PreparedRunAiConfiguration,
 } from '@archon/workflows/run-preflight';
+import { assertRunForgeAccess } from '@archon/workflows/run-forge-access';
 import {
   prepareWorkflowSource,
   recordSelectedWorkflow,
@@ -27,6 +29,7 @@ import {
   findWorkflowLoadError,
   type ResolvedWorkflow,
   type WorkflowLoadError,
+  type WorkflowSource,
   type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
@@ -160,14 +163,27 @@ export async function selectRunWorkflow(request: OwnedRunRequest): Promise<RunSe
       workflowName,
       workflowEntries.map(ws => ws.workflow)
     );
-  if (!workflow) throw workflowNotFoundError(workflowName, workflowEntries, errors);
+  if (!workflow) {
+    const error = workflowNotFoundError(workflowName, workflowEntries, errors);
+    throw isContinuation ? error : withSourceContext(error, options.discoveryCwd);
+  }
+  const workflowEntry = workflowEntries.find(ws => ws.workflow === workflow);
+  // An explicit --workflow-source that lacks the named workflow would otherwise run another
+  // scope's copy while recording the source as its origin (#5826). Commands, scripts and
+  // composed workflows may still resolve from other scopes; the named workflow may not.
+  if (
+    !isContinuation &&
+    options.discoveryCwd !== undefined &&
+    workflowEntry?.source !== 'project'
+  ) {
+    throw workflowNotInSourceError(workflowName, options.discoveryCwd, workflowEntry?.source);
+  }
   // Name the selection in the capture's manifest, now that it is known. The manifest is
   // outside the digest, so this records provenance without disturbing what was frozen.
   if (source.preparedSource) {
     await recordSelectedWorkflow(source.preparedSource.anchor.root, workflow.name);
   }
   assertDetachedRowWorkflow(preCreatedRun, workflow);
-  const workflowEntry = workflowEntries.find(ws => ws.workflow === workflow);
 
   // Keys this workflow's YAML declares that the engine drops (#2213). Written to
   // stderr, never stdout: in --json mode Pino is silenced and stdout must stay
@@ -350,7 +366,10 @@ async function discoverRunWorkflows(
   if (workflowEntries.length === 0 && errors.length === 0) {
     // No manual cleanup here or anywhere else in this run: the owner reclaims
     // anything unadopted on the way out, which is the point of having one.
-    throw new Error('No workflows found in .archon/workflows/');
+    throw withSourceContext(
+      new Error('No workflows found in .archon/workflows/'),
+      options.discoveryCwd
+    );
   }
   return { workflowEntries, errors };
 }
@@ -367,6 +386,54 @@ function workflowNotFoundError(
     );
   }
   return unknownWorkflowError(workflowName, workflowEntries);
+}
+
+function workflowNotInSourceError(
+  workflowName: string,
+  sourceRoot: string,
+  resolvedScope: WorkflowSource | undefined
+): Error {
+  const root = resolve(sourceRoot);
+  const lines = [
+    `Workflow '${workflowName}' is not in --workflow-source ${root}: Archon looked in ` +
+      `${join(root, '.archon', 'workflows')} and found it only in the ${resolvedScope ?? 'another'} scope. ` +
+      'Nothing was started.',
+    ...checkoutRootHint(root),
+  ];
+  return new Error(lines.join('\n'));
+}
+
+/**
+ * Every refusal under an explicit --workflow-source names the directory searched, so a wrong
+ * path is visible whether or not the name exists in another scope.
+ */
+function withSourceContext(error: Error, sourceRoot: string | undefined): Error {
+  if (sourceRoot === undefined) return error;
+  const root = resolve(sourceRoot);
+  const lines = [
+    error.message,
+    '',
+    `--workflow-source ${root}: Archon looked in ${join(root, '.archon', 'workflows')}.`,
+    ...checkoutRootHint(root),
+  ];
+  return new Error(lines.join('\n'));
+}
+
+function checkoutRootHint(root: string): string[] {
+  const checkout = checkoutRootAbove(root);
+  return checkout === undefined
+    ? []
+    : [`--workflow-source takes the checkout root; did you mean ${checkout}?`];
+}
+
+/** The checkout whose `.archon/workflows` contains `path`, when the path sits inside one. */
+function checkoutRootAbove(path: string): string | undefined {
+  for (let dir = path; dirname(dir) !== dir; dir = dirname(dir)) {
+    if (basename(dir) === 'workflows' && basename(dirname(dir)) === '.archon') {
+      return dirname(dirname(dir));
+    }
+  }
+  return undefined;
 }
 
 function unknownWorkflowError(
@@ -504,10 +571,32 @@ export type LaneConfigSource =
   | { kind: 'checkout'; cwd: string; recapture: boolean; codebaseId: string | undefined };
 
 /**
- * Prepare and preflight the run's AI configuration from the checkout its lane executes.
+ * Prepare and preflight the run's AI configuration from the checkout its lane executes,
+ * then, for a fresh run, its pack's forge needs against the repository's remotes.
  * Without an explicit source, an adopted lane's own `.archon` is recaptured first.
  */
 export async function prepareLaneAiConfiguration(
+  request: OwnedRunRequest,
+  admission: OwnedRunAdmission,
+  lane: LaneConfigSource,
+  executesInContainer: boolean
+): Promise<PreparedRunAiConfiguration> {
+  const prepared = await prepareLaneCredentials(request, admission, lane, executesInContainer);
+  if (!admission.isContinuation) {
+    // A branch lane's config is read from an archive of the branch, which has no remotes.
+    const repository =
+      lane.kind === 'branch'
+        ? { cwd: lane.codebase.default_cwd, codebaseId: lane.codebase.id }
+        : { cwd: lane.cwd, codebaseId: lane.codebaseId };
+    await assertRunForgeAccess(request.host.deps, admission.workflow, prepared, {
+      ...repository,
+      inContainer: executesInContainer,
+    });
+  }
+  return prepared;
+}
+
+async function prepareLaneCredentials(
   request: OwnedRunRequest,
   admission: OwnedRunAdmission,
   lane: LaneConfigSource,

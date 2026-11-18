@@ -244,6 +244,7 @@ const ROW_WORKFLOW_STATUS: Partial<Record<string, RowWorkflowStatus>> = {
   wait_started: 'paused',
   wait_completed: 'running',
   source_released: 'paused',
+  operator_paused: 'paused',
 } satisfies Partial<Record<WorkflowEventType, RowWorkflowStatus>>;
 
 /** DB event_type → node-level status, emitted as a `dag_node` SSE event. */

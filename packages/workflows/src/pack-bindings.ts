@@ -1,36 +1,46 @@
 /**
  * The `bindings:` block of a pack declaration, validated when the pack loads.
  *
- * Each binding is a timer (`schedule:`), an event (`event:`) or, with neither, a fire-only
- * binding. The checks that span bindings run here, where all are visible: a sibling
- * reference names a declared binding that is written as a file `trigger fire` reads (a
- * timer or fire-only binding), and an event field is read only by an event binding.
+ * Each binding is a timer (`schedule:`), an event (`event:`), a run-ended binding
+ * (`run_ended:`), an asks-settled binding (`asks_settled:`) or, with none of them, a
+ * fire-only binding. The checks that span bindings run here, where all are visible: a
+ * sibling reference names a declared binding that is written as a file `trigger fire`
+ * reads (a timer or fire-only binding), an event field is read only by an event binding, a
+ * part of the run only by a run-ended or asks-settled binding, and the settled answers
+ * only by an asks-settled binding.
  */
 import type { Fail } from './pack-settings';
 import {
   packBindingKind,
   packBindingNameSchema,
+  packAsksSettledBindingSchema,
   packEventBindingSchema,
   packFireBindingSchema,
+  packRunEndedBindingSchema,
   packTimerBindingSchema,
   type PackBinding,
+  type PackBindingInput,
 } from './schemas/pack-bindings';
+
+const START_SCHEMAS = [
+  ['schedule', packTimerBindingSchema],
+  ['event', packEventBindingSchema],
+  ['run_ended', packRunEndedBindingSchema],
+  ['asks_settled', packAsksSettledBindingSchema],
+] as const;
 
 function parseBinding(id: string, raw: unknown, fail: Fail): PackBinding {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     return fail(`binding '${id}' must be a mapping`);
   }
-  const timer = 'schedule' in raw;
-  const event = 'event' in raw;
-  if (timer && event) {
-    return fail(`binding '${id}' must not set both 'schedule' (a timer) and 'event'`);
+  const starts = START_SCHEMAS.filter(([key]) => key in raw);
+  if (starts.length > 1) {
+    return fail(
+      `binding '${id}' must set at most one of 'schedule', 'event', 'run_ended' and 'asks_settled'`
+    );
   }
   // The key's presence picks the schema, so `schedule:` with no value fails as a timer.
-  const schema = timer
-    ? packTimerBindingSchema
-    : event
-      ? packEventBindingSchema
-      : packFireBindingSchema;
+  const schema = starts[0]?.[1] ?? packFireBindingSchema;
   const parsed = schema.safeParse(raw);
   if (parsed.success) return parsed.data;
   const issue = parsed.error.issues[0];
@@ -65,22 +75,41 @@ function checkInputs(
   fail: Fail
 ): void {
   for (const [name, input] of Object.entries(binding.inputs)) {
-    if (typeof input === 'string' || 'repo' in input) continue;
-    if ('event' in input) {
-      if (packBindingKind(binding) !== 'event') {
-        fail(
-          `binding '${id}' input '${name}' reads an event field, but only an event binding has an event`
-        );
-      }
-      continue;
-    }
-    const sibling = Object.hasOwn(bindings, input.binding) ? bindings[input.binding] : undefined;
-    if (sibling === undefined) {
-      fail(`binding '${id}' input '${name}' names unknown binding '${input.binding}'`);
-    } else if (packBindingKind(sibling) === 'event') {
-      fail(
-        `binding '${id}' input '${name}' names event binding '${input.binding}'; only a timer or fire-only binding is a file a run can fire`
-      );
-    }
+    const problem = inputProblem(binding, input, bindings);
+    if (problem !== undefined) fail(`binding '${id}' input '${name}' ${problem}`);
   }
+}
+
+function inputProblem(
+  binding: PackBinding,
+  input: PackBindingInput,
+  bindings: Readonly<Record<string, PackBinding>>
+): string | undefined {
+  if (typeof input === 'string' || 'repo' in input) return undefined;
+  if ('binding' in input) return siblingProblem(input.binding, bindings);
+  const kind = packBindingKind(binding);
+  if ('event' in input)
+    return kind === 'event'
+      ? undefined
+      : 'reads an event field, but only an event binding has an event';
+  if ('answers' in input)
+    return kind === 'asks_settled'
+      ? undefined
+      : 'reads the settled answers, but only an asks-settled binding has them';
+  return kind === 'run_ended' || kind === 'asks_settled'
+    ? undefined
+    : 'reads the ended run, but only a run-ended or asks-settled binding has a run to read';
+}
+
+/** A sibling reference is written as a file path, so it must name a file a run can fire. */
+function siblingProblem(
+  id: string,
+  bindings: Readonly<Record<string, PackBinding>>
+): string | undefined {
+  const sibling = Object.hasOwn(bindings, id) ? bindings[id] : undefined;
+  if (sibling === undefined) return `names unknown binding '${id}'`;
+  const kind = packBindingKind(sibling);
+  if (kind === 'timer' || kind === 'fire') return undefined;
+  const named = { event: 'event', run_ended: 'run-ended', asks_settled: 'asks-settled' }[kind];
+  return `names ${named} binding '${id}'; only a timer or fire-only binding is a file a run can fire`;
 }

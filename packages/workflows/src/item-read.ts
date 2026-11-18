@@ -1,19 +1,31 @@
 /**
- * The read of one item (`workflow runs --item`): its runs, the questions open in them, the
- * answers recorded in them with the rulings recorded on the item, each oldest first, and
- * the links from and to it.
- * Where the item stands is left to the reader; this computes no position and stores nothing.
+ * The read of one item (`workflow runs --item`): its runs, its starts that have no run yet,
+ * the questions open in its runs, the answers recorded in them with the rulings recorded
+ * on the item, each oldest first, and the links from and to it. Its starts still waiting
+ * are listed with the queue order recorded for them, and its refused starts beside them. A
+ * start waiting or refused because another run of its workflow works the item names that
+ * run (`item-hold`). Where the item stands is left to the reader; this computes no stage
+ * and stores nothing.
  */
 import { z } from 'zod';
+import { createLogger } from '@archon/paths';
 import {
+  askItemRef,
   attentionQueueItemSchema,
   compareAge,
   isHeldByRun,
   listAttentionQueue,
+  type AttentionQueueItem,
   type AttentionQueueSource,
 } from './attention-queue';
-import { attentionDegradedSchema, splitAttentionRead } from './schemas/attention-degraded';
+import {
+  attentionDegradedSchema,
+  splitAttentionRead,
+  type AttentionDegraded,
+  type IdentifiedAttentionDegraded,
+} from './schemas/attention-degraded';
 import { itemActFields } from './schemas/item-act';
+import { operatorPause, operatorPauseSchema } from './schemas/operator-pause';
 import {
   itemLinkDegradedSchema,
   itemLinkKindSchema,
@@ -26,7 +38,14 @@ import {
   type ItemRulingDegraded,
   type ItemRuling,
 } from './schemas/item-ruling';
+import {
+  itemMergeDegradedSchema,
+  itemMergeSchema,
+  type ItemMergeDegraded,
+} from './schemas/item-merge';
 import { recordSurfaceSchema } from './schemas/record-surface';
+import { parseRunUsage } from './schemas/run-usage';
+import { chosenAskOption, type StoredItemAsk } from './schemas/item-ask';
 import { workflowRunStatusSchema } from './schemas/run-status';
 import {
   attentionAnswererSchema,
@@ -34,12 +53,50 @@ import {
   attentionAnswerSchema,
   displayedRunOutcome,
   workflowItemSchema,
+  type WorkflowItem,
   type WorkflowRun,
 } from './schemas/workflow-run';
 import type { WorkflowEventRow } from './schemas/workflow-event';
-import { readResourceStartReceiptId, startCause, startCauseSchema } from './schemas/resource-start';
+import {
+  installHoldSchema,
+  queuedItemStartSchema,
+  type QueuedItemStart,
+  readResourceStartReceiptId,
+  startCause,
+  startCauseSchema,
+} from './schemas/resource-start';
 import type { IWorkflowStore } from './store';
-import { awaitingExecution } from './resource-start-store';
+import {
+  awaitingExecution,
+  type SkippedItemStart,
+  type ResourceStartRequestInspection,
+} from './resource-start-store';
+import { itemHolder, itemHolders } from './item-hold';
+import { runOwnerObservationSchema } from './schemas/workflow-run-listing';
+import { readCompletedRunResult, resultCommitOf } from './run-result';
+import { getTerminalRecord } from './terminal-record';
+
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('workflow.item-read');
+  return cachedLog;
+}
+
+/**
+ * The run of the same workflow that holds the item, which a start waits behind or was
+ * refused for. `owner` is what the reading process observes about that run's execution
+ * owner while its state needs one (`observeRunOwner`: running, or paused on a sub-run that
+ * runs in its process). `unreachable`: its owner is gone, and only an operator's
+ * `archon workflow resume` or `archon workflow abandon` moves it. Null when the run needs
+ * no owner now or the reader observes no owners. The engine never ends that run by itself.
+ */
+export const itemHeldBehindSchema = z.object({
+  runId: z.string(),
+  workflow: z.string(),
+  status: workflowRunStatusSchema,
+  owner: runOwnerObservationSchema.nullable(),
+});
+export type ItemHeldBehind = z.infer<typeof itemHeldBehindSchema>;
 
 export const itemRunSchema = z.object({
   id: z.string(),
@@ -62,8 +119,76 @@ export const itemRunSchema = z.object({
    * `archon trigger execute <requestId> --host <hostId>`.
    */
   awaitingExecution: z.object({ requestId: z.string(), hostId: z.string() }).nullable(),
+  /** The totals recorded on the run row; null where the run recorded no figure. */
+  spend: z.object({
+    usd: z.number().nullable(),
+    inputTokens: z.number().nullable(),
+    outputTokens: z.number().nullable(),
+  }),
+  /**
+   * Set while the run is a pending start waiting for another run of its workflow on the
+   * item, and kept on a start that was refused for it (`--no-wait`), which is cancelled.
+   */
+  heldBehind: itemHeldBehindSchema.nullable(),
+  /**
+   * An operator's pause: requested on a running run, which pauses once its running nodes
+   * finish, or the pause a paused run is in. Null otherwise.
+   */
+  operatorPause: operatorPauseSchema.nullable(),
+  /**
+   * The run completed with a readable `returns:` value: the value a `result_of` input
+   * naming its workflow reads while it is the latest completed run. Read it with
+   * `archon workflow get <id> --json` at `terminal_record.returns.value`, or from the run
+   * detail API.
+   */
+  hasResult: z.boolean(),
+  /**
+   * The commit the run's result holds at, which an `at: checkout` input matches: the clean
+   * checkout its `returns:` node completed on, unchanged when the run completed. Null when the
+   * run has not completed, its result holds at no commit, or it was recorded before results
+   * held at commits.
+   */
+  resultCommit: z.string().nullable(),
 });
 export type ItemRun = z.infer<typeof itemRunSchema>;
+
+/**
+ * A start on the item still waiting for admission, which has no run yet. `heldBehind`
+ * names the run of its workflow that holds the item now, when one does; null when it
+ * waits for capacity or its checkout only, or its workflow does not read.
+ */
+export const itemQueuedStartSchema = queuedItemStartSchema.extend({
+  heldBehind: itemHeldBehindSchema.nullable(),
+});
+export type ItemQueuedStart = z.infer<typeof itemQueuedStartSchema>;
+
+/**
+ * A start on the item that was refused (its binding's `overlap: skip`) and has no run.
+ * `heldBehind` names the run of its workflow on the item it was refused for; null when it
+ * was refused for capacity or its checkout instead. `workflow` is null when the stored
+ * launch does not read.
+ */
+export const itemSkippedStartSchema = z.object({
+  requestId: z.string(),
+  workflow: z.string().nullable(),
+  resource: z.string(),
+  heldBehind: itemHeldBehindSchema.nullable(),
+});
+export type ItemSkippedStart = z.infer<typeof itemSkippedStartSchema>;
+
+/**
+ * A start on the item that the install hold keeps from admission: a trigger's binding,
+ * not yet prepared, so it has no request or run. After the lift it is prepared and
+ * admitted, queued or skipped by its binding's `overlap`. `workflow` is null when the
+ * stored binding does not read.
+ */
+export const itemHeldStartSchema = z.object({
+  receiptId: z.string(),
+  bindingId: z.string(),
+  workflow: z.string().nullable(),
+  receivedAt: z.string(),
+});
+export type ItemHeldStart = z.infer<typeof itemHeldStartSchema>;
 
 /**
  * Where an answer was recorded. A field the event row does not carry is null, so an older
@@ -81,7 +206,14 @@ const answerFields = {
  * One recorded answer: `attention` answers a question (`wait_answered`), `gate` resolves an
  * approval gate (`approval_received`), `ruling` is a decision recorded on the item with no
  * question asked (`ItemRuling`), which no run holds. `text` on a gate is its comment, or a
- * rejection's reason. A withdrawn ruling stays, with `withdrawn` set.
+ * rejection's reason. A withdrawn ruling stays, with `withdrawn` set. `ask` answers or
+ * withdraws an ask a completed run left, and `asks_settled` records that the last open ask
+ * of that run's set closed, with how many were answered and withdrawn: `answered: 0` means
+ * nothing was. Both read from the item's ask rows, not from run events, so they stay on the
+ * item after the run that left the asks is deleted; `runId` names that run, `node` and
+ * `occurrence` are null. A set that a newer one replaced before it closed never settles. A
+ * set with an ask row that cannot be read does not settle in the read either; `degraded`
+ * names its run.
  */
 export const itemAnswerSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -99,8 +231,39 @@ export const itemAnswerSchema = z.discriminatedUnion('kind', [
     text: z.string().nullable(),
   }),
   itemRulingSchema,
+  z.object({
+    kind: z.literal('ask'),
+    ...answerFields,
+    /** The ask's ref, as the queue listed it. */
+    ref: z.string(),
+    /** What was asked. */
+    question: z.string(),
+    /** Null for a withdrawal. */
+    answer: attentionAnswerSchema.nullable(),
+    /** The option the answer chose and what it does; null when none is recorded. */
+    chosen: z.object({ id: z.string(), does: z.string() }).nullable(),
+    withdrawn: z.boolean(),
+    by: attentionAnswererSchema.nullable(),
+    /** Reported from the answering run's environment and not verified. */
+    fromRun: attentionAnsweringRunSchema.nullable(),
+  }),
+  z.object({
+    kind: z.literal('asks_settled'),
+    ...answerFields,
+    answered: z.number().int().nonnegative(),
+    withdrawn: z.number().int().nonnegative(),
+  }),
 ]);
 export type ItemAnswer = z.infer<typeof itemAnswerSchema>;
+
+/** Every answer kind, checked against `ItemAnswer` so a new kind cannot be left out. */
+export const itemAnswerKindSchema = z.enum({
+  attention: 'attention',
+  gate: 'gate',
+  ruling: 'ruling',
+  ask: 'ask',
+  asks_settled: 'asks_settled',
+} satisfies { [Kind in ItemAnswer['kind']]: Kind });
 
 /**
  * A link seen from the item read: `outgoing` when this item is the link's `from` (it
@@ -121,21 +284,33 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * An item and what is recorded about it. `runs` are the item's own readable runs; a
  * `workflow:` child is left to `workflow get` on its parent. `questions` and `answers` come from the
  * whole run tree, because a question is often asked inside a child; each names the run
- * that holds it. `degraded` names each part that could not be read: one of the item's own
- * runs, a paused run the queue could not read (`run_unreadable`, by `runId`), a ruling
- * (`ruling_unreadable`, by `rulingId`), or a link (`link_unreadable`, by `linkId`). The rest
- * still reads.
+ * that holds it. `queued` are the item's starts still waiting, which have no run yet;
+ * `archon trigger withdraw <requestId>` withdraws one. `skipped` are its refused starts.
+ * `hold` is the install hold while it is set, else null; `held` are the item's starts it
+ * keeps that are not yet `queued`, empty while no hold is set.
+ * `degraded` names each part that could not be read: one of the item's own runs, a paused
+ * run the queue could not read (`run_unreadable`, by `runId`), a ruling
+ * (`ruling_unreadable`, by `rulingId`), a link (`link_unreadable`, by `linkId`), or the
+ * merge (`merge_unreadable`). The rest still reads. `merged` is the merge the forge
+ * reported for the item's change, recorded once; null while none is recorded or when its
+ * row could not be read.
  */
 export const itemReadSchema = z.object({
   item: workflowItemSchema,
   runs: z.array(itemRunSchema),
+  queued: z.array(itemQueuedStartSchema),
+  skipped: z.array(itemSkippedStartSchema),
+  hold: installHoldSchema.nullable(),
+  held: z.array(itemHeldStartSchema),
   questions: z.array(attentionQueueItemSchema),
   answers: z.array(itemAnswerSchema),
   links: z.array(itemReadLinkSchema),
+  merged: itemMergeSchema.nullable(),
   degraded: z.array(
     z.discriminatedUnion('reason', [
       attentionDegradedSchema,
       itemRulingDegradedSchema,
+      itemMergeDegradedSchema,
       itemLinkDegradedSchema,
     ])
   ),
@@ -149,19 +324,56 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'getItemRuns'
       | 'listEventsForRuns'
       | 'listItemRulings'
+      | 'getItemMerge'
       | 'listItemLinks'
+      | 'listItemAsks'
       | 'getStartReceipt'
       | 'getResourceStartRequest'
+      | 'listQueuedItemStarts'
+      | 'listSkippedItemStarts'
+      | 'getInstallHold'
+      | 'listHeldItemStarts'
     >;
 }
 
-async function itemRun(source: ItemReadSource, run: WorkflowRun): Promise<ItemRun> {
+function readResult(
+  run: WorkflowRun,
+  events: readonly WorkflowEventRow[]
+): Pick<ItemRun, 'hasResult' | 'resultCommit'> {
+  try {
+    return {
+      hasResult: readCompletedRunResult(run, events).kind === 'result',
+      resultCommit:
+        run.status === 'completed' ? resultCommitOf(getTerminalRecord(run.status, events)) : null,
+    };
+  } catch (error) {
+    // One unreadable record must not fail the whole item read.
+    getLog().warn({ err: error, workflowRunId: run.id }, 'item_read.terminal_record_unreadable');
+    return { hasResult: false, resultCommit: null };
+  }
+}
+
+/** The `workflow_completed` events of the completed runs, which hold their results. */
+async function completionEvents(
+  source: ItemReadSource,
+  runs: readonly WorkflowRun[]
+): Promise<ReadonlyMap<string, WorkflowEventRow[]>> {
+  const completedIds = runs.filter(run => run.status === 'completed').map(run => run.id);
+  if (completedIds.length === 0) return new Map();
+  return source.store.listEventsForRuns(completedIds, ['workflow_completed']);
+}
+
+async function itemRun(
+  source: ItemReadSource,
+  run: WorkflowRun,
+  request: ResourceStartRequestInspection | null,
+  heldBehind: ItemHeldBehind | null,
+  terminalEvents: ReadonlyMap<string, WorkflowEventRow[]>
+): Promise<ItemRun> {
   // The receipt stays the one owner of why a start happened; this only reads it.
   const receiptId = readResourceStartReceiptId(run.metadata);
   const receipt = receiptId ? await source.store.getStartReceipt(receiptId) : null;
-  // Only a start from a receipt is executed by another process; only a pending run waits.
-  const request =
-    receipt && run.status === 'pending' ? await source.store.getResourceStartRequest(run.id) : null;
+  const usage = parseRunUsage(run.metadata);
   return {
     id: run.id,
     workflow: run.workflow_name,
@@ -171,6 +383,90 @@ async function itemRun(source: ItemReadSource, run: WorkflowRun): Promise<ItemRu
     completedAt: run.completed_at?.toISOString() ?? null,
     cause: receipt ? startCause(receipt) : null,
     awaitingExecution: awaitingExecution(request),
+    spend: {
+      usd: usage.costUsd ?? null,
+      inputTokens: usage.tokens?.input ?? null,
+      outputTokens: usage.tokens?.output ?? null,
+    },
+    heldBehind,
+    operatorPause: operatorPause(run),
+    ...readResult(run, terminalEvents.get(run.id) ?? []),
+  };
+}
+
+/**
+ * Who holds the item for each of its workflows, from the item's own runs (`itemHolders`),
+ * and a reader of the run a start is held behind. A pending run's start request says
+ * whether it was admitted.
+ */
+async function itemHolds(source: ItemReadSource, itemId: string, runs: readonly WorkflowRun[]) {
+  const requests = new Map<string, ResourceStartRequestInspection | null>();
+  for (const run of runs)
+    if (run.status === 'pending')
+      requests.set(run.id, await source.store.getResourceStartRequest(run.id));
+  // A start refused because a run held the item records that run on its cancellation.
+  const cancelled = runs.filter(run => run.status === 'cancelled').map(run => run.id);
+  const refusedBy = new Map<string, string>();
+  if (cancelled.length > 0)
+    for (const [runId, events] of await source.store.listEventsForRuns(cancelled, [
+      'workflow_cancelled',
+    ])) {
+      const holder = events.map(event => event.data.held_by_run_id).find(id => id !== undefined);
+      if (typeof holder === 'string') refusedBy.set(runId, holder);
+    }
+  const rows = runs.map(run => ({
+    id: run.id,
+    workflow_name: run.workflow_name,
+    item_id: itemId,
+    status: run.status,
+    admitted: requests.get(run.id)?.status === 'admitted',
+  }));
+  const byId = new Map(runs.map(run => [run.id, run]));
+  const behind = new Map<string, Promise<ItemHeldBehind>>();
+  const describe = (runId: string): Promise<ItemHeldBehind> | null => {
+    const run = byId.get(runId);
+    if (run === undefined) return null;
+    let read = behind.get(runId);
+    if (read === undefined) {
+      read = (async () => ({
+        runId,
+        workflow: run.workflow_name,
+        status: run.status,
+        owner: source.ownerLost === undefined ? null : await source.ownerLost.observe(run),
+      }))();
+      behind.set(runId, read);
+    }
+    return read;
+  };
+  // Leave the start's own run out before choosing the oldest holder, as the claim does: an
+  // admitted pending run holds the item itself and would otherwise hide a newer holder.
+  const holderOf = (runId: string, workflow: string): Promise<ItemHeldBehind> | null => {
+    const held = itemHolders(rows.filter(row => row.id !== runId));
+    const holder = itemHolder(held, { runId, workflow, itemId });
+    return holder === undefined ? null : describe(holder);
+  };
+  return {
+    request: (runId: string) => requests.get(runId) ?? null,
+    /**
+     * A pending run waits behind another run of its workflow on the item: a hand start that
+     * has not won its turn, or an admitted run whose claim is refused for that holder.
+     */
+    runHeldBehind: (run: WorkflowRun) => {
+      const refused = refusedBy.get(run.id);
+      if (refused !== undefined)
+        return byId.get(refused)?.workflow_name === run.workflow_name ? describe(refused) : null;
+      return run.status === 'pending' ? holderOf(run.id, run.workflow_name) : null;
+    },
+    /** A queued start waits behind its workflow's holder now, not the blocker it stored. */
+    queuedHeldBehind: (start: QueuedItemStart) =>
+      start.workflow === null ? null : holderOf(start.requestId, start.workflow),
+    /** A skipped start keeps the blocker it was refused for. */
+    skippedHeldBehind: (start: SkippedItemStart) => {
+      const blocker = start.blockerRunId === null ? undefined : byId.get(start.blockerRunId);
+      return blocker !== undefined && blocker.workflow_name === start.workflow
+        ? describe(blocker.id)
+        : null;
+    },
   };
 }
 
@@ -212,57 +508,216 @@ function readLink(itemId: string, link: ItemLink): ItemReadLink {
   return { ...rest, direction: outgoing ? 'outgoing' : 'incoming', other: outgoing ? to : from };
 }
 
+/**
+ * The item `key` names in project `projectKey` and its own runs, in start order: the one
+ * read of an item's runs, for the item read and for every verb that acts on an item.
+ * `degraded` names each own run whose row could not be read. Null when there is no such item.
+ */
+export async function readItemRuns(
+  store: Pick<IWorkflowStore, 'getItemRuns'>,
+  projectKey: string,
+  key: string
+): Promise<{
+  item: WorkflowItem;
+  runs: WorkflowRun[];
+  degraded: IdentifiedAttentionDegraded[];
+  descendantIds: string[];
+} | null> {
+  const found = await store.getItemRuns(projectKey, key);
+  if (found === null) return null;
+  const { values, degraded } = splitAttentionRead(found.runs);
+  return { item: found.item, runs: values, degraded, descendantIds: found.descendantIds };
+}
+
+function distinctByRun(reports: readonly AttentionDegraded[]): AttentionDegraded[] {
+  return reports.filter(
+    (report, index) => reports.findIndex(other => other.runId === report.runId) === index
+  );
+}
+
+/** An answered or withdrawn ask as an entry of the item's answers; null while it is open or once replaced. */
+function askAnswer({ id, runId, ask, closed }: StoredItemAsk): ItemAnswer | null {
+  if (closed === null || closed.as === 'replaced') return null;
+  const answer = closed.as === 'answered' ? closed.answer : null;
+  return {
+    kind: 'ask',
+    runId,
+    node: null,
+    occurrence: null,
+    at: closed.act.at,
+    via: closed.act.via,
+    ref: askItemRef(id),
+    question: ask.question,
+    answer,
+    chosen: answer === null ? null : (chosenAskOption(ask, answer) ?? null),
+    withdrawn: answer === null,
+    by: closed.act.by,
+    fromRun: closed.act.fromRun,
+  };
+}
+
+/**
+ * The answers and settled sets the item's asks hold: one entry per answered or withdrawn
+ * ask, and one `asks_settled` per set whose asks all closed that way and all read, at its
+ * last close. `unreadable` names the sets with a row that could not be read: any of those
+ * rows may be an open ask, so the read cannot say the set settled.
+ */
+function askAnswers(asks: readonly StoredItemAsk[], unreadable: ReadonlySet<string>): ItemAnswer[] {
+  const sets = new Map<string, StoredItemAsk[]>();
+  for (const ask of asks) sets.set(ask.runId, [...(sets.get(ask.runId) ?? []), ask]);
+  return [...sets].flatMap(([runId, set]) => {
+    const closes = set.map(askAnswer).filter(answer => answer?.kind === 'ask');
+    const [first] = closes;
+    if (first === undefined || closes.length < set.length || unreadable.has(runId)) return closes;
+    const answered = closes.filter(close => !close.withdrawn).length;
+    const settled: ItemAnswer = {
+      kind: 'asks_settled',
+      runId,
+      node: null,
+      occurrence: null,
+      at: closes.reduce(
+        (last, close) => (Date.parse(close.at) > Date.parse(last) ? close.at : last),
+        first.at
+      ),
+      via: null,
+      answered,
+      withdrawn: closes.length - answered,
+    };
+    return [...closes, settled];
+  });
+}
+
 /** Read the item `key` names in project `projectKey`; null when there is no such item. */
 export async function readItem(
   source: ItemReadSource,
   projectKey: string,
   key: string
 ): Promise<ItemRead | null> {
-  const found = await source.store.getItemRuns(projectKey, key);
+  const resolved = await readItemRuns(source.store, projectKey, key);
+  if (resolved === null) return null;
+  return assembleItemRead(source, resolved.item, await readItemQueue(source));
+}
+
+type ItemQueueRead = ReturnType<typeof splitAttentionRead<AttentionQueueItem>>;
+
+/**
+ * The attention queue as an item read takes it, read once for any number of items. A
+ * holder whose owner is gone is reported on the start held behind it, not as a question.
+ */
+export async function readItemQueue(source: ItemReadSource): Promise<ItemQueueRead> {
+  // The one queue reader, so a question here reads as `workflow attention` lists it.
+  return splitAttentionRead(await listAttentionQueue({ ...source, ownerLost: undefined }));
+}
+
+/** The facts recorded on the item itself: its rulings, its links and its merge. */
+async function readItemFacts(source: ItemReadSource, itemId: string) {
+  const rulings: ItemRuling[] = [];
+  const unreadableRulings: ItemRulingDegraded[] = [];
+  for (const read of await source.store.listItemRulings(itemId))
+    if ('type' in read) unreadableRulings.push(read);
+    else rulings.push(read);
+  const links: ItemReadLink[] = [];
+  const unreadableLinks: ItemLinkDegraded[] = [];
+  for (const read of await source.store.listItemLinks(itemId))
+    if ('type' in read) unreadableLinks.push(read);
+    else links.push(readLink(itemId, read));
+  const merge = await source.store.getItemMerge(itemId);
+  const unreadableMerge: ItemMergeDegraded[] = merge !== null && 'type' in merge ? [merge] : [];
+  return {
+    rulings,
+    links,
+    merged: merge !== null && !('type' in merge) ? merge : null,
+    degraded: [...unreadableRulings, ...unreadableMerge, ...unreadableLinks],
+  };
+}
+
+/**
+ * Build the read of an item against one read of the attention queue, so a reader of many
+ * items reads the queue once. Null when the item has gone from the store.
+ */
+export async function assembleItemRead(
+  source: ItemReadSource,
+  item: WorkflowItem,
+  queue: ItemQueueRead
+): Promise<ItemRead | null> {
+  // Held starts first, then queued starts, then the runs, the order a start moves through:
+  // one that moves on between two reads shows twice, never in neither. An admitted start
+  // shows in both queued and runs (its run id is its request id) and is listed once as a run.
+  const hold = await source.store.getInstallHold();
+  const held = hold ? await source.store.listHeldItemStarts(item.id) : [];
+  const waiting = await source.store.listQueuedItemStarts(item.id);
+  const found = await readItemRuns(source.store, item.projectKey, item.key);
   if (found === null) return null;
-  const own = splitAttentionRead(found.runs);
+  const own = { values: found.runs, degraded: found.degraded };
   const tree = new Set([
     ...own.values.map(run => run.id),
     ...own.degraded.map(report => report.runId),
     ...found.descendantIds,
   ]);
-  // The one queue reader, so a question here reads as `workflow attention` lists it.
-  const { values, degraded } = splitAttentionRead(await listAttentionQueue(source));
+  const { values, degraded } = queue;
+  // An ask no run holds belongs to the item it was left on.
   const questions = values
-    .filter(item => isHeldByRun(item) && tree.has(item.run.id))
+    .filter(question =>
+      isHeldByRun(question) ? tree.has(question.run.id) : question.item?.id === found.item.id
+    )
     .sort(compareAge);
   const events =
     tree.size === 0
       ? new Map<string, WorkflowEventRow[]>()
       : await source.store.listEventsForRuns([...tree], ['wait_answered', 'approval_received']);
-  const rulings: ItemRuling[] = [];
-  const unreadableRulings: ItemRulingDegraded[] = [];
-  for (const read of await source.store.listItemRulings(found.item.id))
-    if ('type' in read) unreadableRulings.push(read);
-    else rulings.push(read);
-  const links: ItemReadLink[] = [];
-  const unreadableLinks: ItemLinkDegraded[] = [];
-  for (const read of await source.store.listItemLinks(found.item.id))
-    if ('type' in read) unreadableLinks.push(read);
-    else links.push(readLink(found.item.id, read));
-  const answers = [...[...events.values()].flat().map(itemAnswer), ...rulings]
+  const facts = await readItemFacts(source, found.item.id);
+  const terminalEvents = await completionEvents(source, own.values);
+  const asks = splitAttentionRead(await source.store.listItemAsks(found.item.id));
+  const answers = [
+    ...[...events.values()].flat().map(itemAnswer),
+    ...facts.rulings,
+    ...askAnswers(asks.values, new Set(asks.degraded.map(report => report.runId))),
+  ]
     // Stable, so rows that tie on `at` keep their store order: append order within a run,
-    // recording order among rulings.
+    // recording order among rulings, and a set's last answer before its settle.
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const holds = await itemHolds(source, found.item.id, own.values);
+  const queued: ItemQueuedStart[] = [];
+  for (const start of waiting.filter(start => !tree.has(start.requestId)))
+    queued.push({ ...start, heldBehind: (await holds.queuedHeldBehind(start)) ?? null });
+  const skipped: ItemSkippedStart[] = [];
+  for (const start of await source.store.listSkippedItemStarts(found.item.id))
+    skipped.push({
+      requestId: start.requestId,
+      workflow: start.workflow,
+      resource: start.resource,
+      heldBehind: (await holds.skippedHeldBehind(start)) ?? null,
+    });
   return {
     item: found.item,
-    runs: await Promise.all(own.values.map(run => itemRun(source, run))),
+    runs: await Promise.all(
+      own.values.map(async run =>
+        itemRun(
+          source,
+          run,
+          holds.request(run.id),
+          (await holds.runHeldBehind(run)) ?? null,
+          terminalEvents
+        )
+      )
+    ),
+    queued,
+    skipped,
+    hold,
+    held,
     questions,
     answers,
-    links,
-    // A paused item run the store could not read is in both reports; list it once.
+    links: facts.links,
+    merged: facts.merged,
+    // A paused item run the store could not read is in both reports, and an unreadable
+    // open ask in the queue's and the item's; list each run once.
     degraded: [
-      ...own.degraded,
-      ...degraded.filter(
-        report => tree.has(report.runId) && !own.degraded.some(mine => mine.runId === report.runId)
-      ),
-      ...unreadableRulings,
-      ...unreadableLinks,
+      ...distinctByRun([
+        ...own.degraded,
+        ...degraded.filter(report => tree.has(report.runId)),
+        ...asks.degraded,
+      ]),
+      ...facts.degraded,
     ],
   };
 }

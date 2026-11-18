@@ -29,7 +29,12 @@ describe('run action authorization precedes effects and state validation', () =>
       test(`${action} refuses ${actor.kind} before all effects`, async () => {
         const run = makePausedRun({
           user_id: 'starter',
-          status: action === 'cancel' ? 'running' : action === 'delete' ? 'completed' : 'paused',
+          status:
+            action === 'cancel' || action === 'pause'
+              ? 'running'
+              : action === 'delete'
+                ? 'completed'
+                : 'paused',
         });
         const write = mock(async () => ({ resolved: true, cancelled: true, signaled: true }));
         const stop = mockRequestDetachedRunStop;
@@ -42,6 +47,10 @@ describe('run action authorization precedes effects and state validation', () =>
             resolveApprovalGate: write,
             resolveAndCancelApprovalGate: write,
             cancelWorkflowRun: write,
+            requestOperatorPause: async (_id, requested) => {
+              await write();
+              return { requested, alreadyRequested: false };
+            },
             signalWorkflowWait: write,
             deleteWorkflowRun: async () => {
               await write();
@@ -62,6 +71,7 @@ describe('run action authorization precedes effects and state validation', () =>
             operations.respondToWorkflow(run.id, 'custom', 'secret comment', actor, { via: 'cli' }),
           resume: () => operations.resumeWorkflow(run.id, actor),
           cancel: () => operations.cancelWorkflow(run.id, actor),
+          pause: () => operations.pauseWorkflow(run.id, actor, 'cli'),
           abandon: () => operations.abandonWorkflow(run.id, actor),
           signal: () =>
             operations.signalWorkflowWait(
@@ -146,7 +156,12 @@ describe('starter, admin and operator can act through core', () => {
       test(`${action} allows ${JSON.stringify(actor)}`, async () => {
         const run = makePausedRun({
           user_id: 'starter',
-          status: action === 'cancel' ? 'running' : action === 'delete' ? 'completed' : 'paused',
+          status:
+            action === 'cancel' || action === 'pause'
+              ? 'running'
+              : action === 'delete'
+                ? 'completed'
+                : 'paused',
           metadata: {
             approval: {
               nodeId: 'review',
@@ -179,6 +194,10 @@ describe('starter, admin and operator can act through core', () => {
             resolveApprovalGate: write,
             resolveAndCancelApprovalGate: write,
             cancelWorkflowRun: write,
+            requestOperatorPause: async (_id, requested) => {
+              await write();
+              return { requested, alreadyRequested: false };
+            },
             signalWorkflowWait: async (id, cursor, payload) => {
               expect(workflowWaitContextSchema.parse(cursor)).toEqual(cursor);
               expect(cursor).not.toHaveProperty('futureField');
@@ -201,6 +220,7 @@ describe('starter, admin and operator can act through core', () => {
           respond: () =>
             operations.respondToWorkflow(run.id, 'custom', undefined, actor, { via: 'cli' }),
           cancel: () => operations.cancelWorkflow(run.id, actor),
+          pause: () => operations.pauseWorkflow(run.id, actor, 'cli'),
           abandon: () => operations.abandonWorkflow(run.id, actor),
           resume: () => operations.resumeWorkflow(run.id, actor),
           signal: () =>

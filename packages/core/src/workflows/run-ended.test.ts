@@ -6,6 +6,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import type { RunEndedFacts } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { providerRegistry } from '@archon/providers';
+import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
 import { createRunEndedPreflight, createRunEndedStarts, launchProjectKey } from './run-ended';
 
 const track = trackTempRoots();
@@ -81,7 +82,14 @@ function trigger(fields: { cwd?: string; on?: unknown; sourceInstanceId?: string
   };
 }
 
-async function triggersWith(files: Record<string, unknown>) {
+// A binding without `checkout` never reads the ended run's checkout.
+const noCheckout = (): Promise<EndedCheckout> =>
+  Promise.reject(new Error('no binding here reads the checkout'));
+
+async function triggersWith(
+  files: Record<string, unknown>,
+  endedCheckout: (run: WorkflowRun) => Promise<EndedCheckout> = noCheckout
+) {
   const directory = track(await mkdtemp(join(tmpdir(), 'archon-run-ended-')));
   for (const [name, value] of Object.entries(files))
     await writeFile(
@@ -92,6 +100,7 @@ async function triggersWith(files: Record<string, unknown>) {
     triggersDirectory: () => directory,
     getItem: async id => (id === ITEM.id ? ITEM : null),
     projectKeyOf: async cwd => (cwd === PROJECT_CWD ? ITEM.projectKey : 'acme/other'),
+    endedCheckout,
     now: () => new Date('2026-11-16T10:00:00.000Z'),
   });
 }
@@ -150,6 +159,7 @@ describe('run-ended starts', () => {
       triggersDirectory: () => directory,
       getItem: async () => ITEM,
       projectKeyOf: async () => ITEM.projectKey,
+      endedCheckout: noCheckout,
     };
     const noItem = endedRun({ item_id: null });
     expect(await createRunEndedStarts(dependencies)(facts({ run: noItem }))).toEqual({
@@ -179,6 +189,7 @@ describe('run-ended starts', () => {
       triggersDirectory: () => join(tmpdir(), `archon-no-triggers-${crypto.randomUUID()}`),
       getItem: async () => ITEM,
       projectKeyOf: async () => ITEM.projectKey,
+      endedCheckout: noCheckout,
     });
     expect(await starts(facts())).toEqual({ receipts: [], linked: [] });
   });
@@ -191,18 +202,8 @@ describe('run-ended starts', () => {
           runEnded: {
             workflowName: 'plan',
             outcome: 'planned',
-            linked: { kind: 'part_of', holder: 'to', form: 'each' },
+            linked: { kind: 'part_of', holder: 'to' },
             inputs: { member: { item: 'key' }, plan: { result: '/plan' } },
-          },
-        },
-      }),
-      'all.json': trigger({
-        sourceInstanceId: 'review-all',
-        on: {
-          runEnded: {
-            workflowName: 'plan',
-            outcome: 'planned',
-            linked: { kind: 'part_of', holder: 'to', form: 'all' },
           },
         },
       }),
@@ -211,48 +212,38 @@ describe('run-ended starts', () => {
     expect(receipts).toEqual([]);
     expect(linked).toMatchObject([
       {
-        form: 'all',
         link: { kind: 'part_of', holder: 'to' },
-        workflowName: 'plan',
-        outcome: 'planned',
         endedRunId: endedRun().id,
         endedItemId: ITEM.id,
-        acceptance: { outcome: 'matched', receipt: { sourceInstanceId: 'review-all' } },
-      },
-      {
-        form: 'each',
         // Which member ended, and what it ended with.
         acceptance: {
-          receipt: { sourceActor: { source: 'archon-run-ended', id: endedRun().id } },
+          outcome: 'matched',
+          receipt: {
+            sourceInstanceId: 'review-each',
+            sourceActor: { source: 'archon-run-ended', id: endedRun().id },
+          },
           bindings: [{ eventInputs: { member: ITEM.key, plan: { steps: ['a', 'b'] } } }],
         },
       },
     ]);
-    // Another outcome causes nothing, in either form.
+    // Another outcome causes nothing.
     expect(await starts(facts({ outcome: { kind: 'enum', value: 'blocked' } }))).toEqual({
       receipts: [],
       linked: [],
     });
   });
 
-  test('a linked all binding with inputs, or a link kind that does not exist, is refused', async () => {
-    for (const linked of [
-      { kind: 'part_of', holder: 'to', form: 'all' },
-      { kind: 'blocks', holder: 'to', form: 'each' },
+  test('a linked binding naming an unknown link kind or taking a checkout is refused', async () => {
+    for (const runEnded of [
+      { linked: { kind: 'blocks', holder: 'to' } },
+      { linked: { kind: 'part_of', holder: 'to' }, checkout: 'ended-run' },
     ]) {
       const starts = await triggersWith({
-        'all.json': trigger({
-          on: {
-            runEnded: {
-              workflowName: 'plan',
-              outcome: 'planned',
-              linked,
-              inputs: { plan: { result: '/plan' } },
-            },
-          },
+        'linked.json': trigger({
+          on: { runEnded: { workflowName: 'plan', outcome: 'planned', ...runEnded } },
         }),
       });
-      await expect(starts(facts())).rejects.toThrow('all.json is invalid');
+      await expect(starts(facts())).rejects.toThrow('linked.json is invalid');
     }
   });
 
@@ -326,6 +317,7 @@ describe('run-ended starts', () => {
       triggersDirectory: () => directory,
       getItem: async () => ITEM,
       projectKeyOf: () => Promise.reject(new Error('Failed to find repo root for /srv/widgets')),
+      endedCheckout: noCheckout,
     };
     for (const read of [
       () => createRunEndedStarts(dependencies)(facts()),
@@ -340,6 +332,65 @@ describe('run-ended starts', () => {
       await expect(refused).rejects.toThrow('build.json');
       await expect(refused).rejects.toThrow('Failed to find repo root');
     }
+  });
+
+  test('a binding that takes the ended checkout starts on its branch and records the commit', async () => {
+    const handoff = { runId: endedRun().id, branch: 'archon/task-plan-1', commit: 'c'.repeat(40) };
+    const reads: string[] = [];
+    const checkoutTrigger = (sourceInstanceId: string) =>
+      trigger({
+        sourceInstanceId,
+        on: { runEnded: { workflowName: 'plan', outcome: 'planned', checkout: 'ended-run' } },
+      });
+    const starts = await triggersWith(
+      { 'build.json': checkoutTrigger('build'), 'check.json': checkoutTrigger('check') },
+      async run => {
+        reads.push(run.id);
+        return { handoff };
+      }
+    );
+    const { receipts } = await starts(facts());
+    // Read once per completion, however many bindings take it.
+    expect(reads).toEqual([endedRun().id]);
+    for (const receipt of receipts)
+      expect(receipt).toMatchObject({
+        outcome: 'matched',
+        bindings: [
+          {
+            checkoutFrom: handoff,
+            launch: { isolation: { kind: 'worktree', branch: 'archon/task-plan-1' } },
+          },
+        ],
+      });
+  });
+
+  test('a binding whose ended run left no checkout is rejected on its receipt, naming why', async () => {
+    const refused = 'the checkout of the ended run is gone';
+    const starts = await triggersWith(
+      {
+        'build.json': trigger({
+          on: { runEnded: { workflowName: 'plan', outcome: 'planned', checkout: 'ended-run' } },
+        }),
+      },
+      async () => ({ refused })
+    );
+    const [receipt] = (await starts(facts())).receipts;
+    expect(receipt).toMatchObject({
+      outcome: 'unmatched',
+      bindings: [],
+      evaluatedBindings: [{ bindingId: 'build', status: 'rejected' }],
+    });
+    expect(receipt?.reason).toContain('build.json');
+    expect(receipt?.reason).toContain(refused);
+  });
+
+  test('a fixed isolation beside checkout: ended-run is refused when the file is read', async () => {
+    const file = trigger({
+      on: { runEnded: { workflowName: 'plan', outcome: 'planned', checkout: 'ended-run' } },
+    });
+    file.binding.launch.isolation = { kind: 'in-place' };
+    const starts = await triggersWith({ 'build.json': file });
+    await expect(starts(facts())).rejects.toThrow('binding.launch.isolation');
   });
 
   // A stale file for another project must not fail item runs of its workflow here.

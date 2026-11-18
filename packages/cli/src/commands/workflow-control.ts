@@ -1,4 +1,12 @@
-import { formatAbandonResult } from './workflow-abandon-output';
+import {
+  abandonOneRun,
+  cancelOneRun,
+  cancelResultPayload,
+  formatAbandonResult,
+  printAbandonResult,
+  printCancelResult,
+  printCleanupWarnings,
+} from './workflow-run-stop';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import {
   checkedResumeCursor,
@@ -7,11 +15,7 @@ import {
 } from '@archon/workflows/store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
-  CancelRefusedError,
   ResumeRefusedError,
-  type CancelWorkflowResult,
-  describeAbandonOwner,
-  describeReleasedWorktrees,
   assertAnswerAdmissible,
   assertResponseAccepted,
   expectedGateForOccurrence,
@@ -159,15 +163,13 @@ export async function workflowAbandonCommand(
   json?: boolean,
   cwd?: string
 ): Promise<number> {
-  const { abandonWorkflow } = host.operations;
-
   // The container reclaim (M2) and the live-owner stop both live in the shared
   // `abandonWorkflow` op, so EVERY surface does them — the CLI reports the outcome.
   // Keeps `--json` a clean one-line contract (no reclaim text before the payload).
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
-      const result = await abandonWorkflow(resolvedId, { kind: 'operator' });
+      const result = await abandonOneRun(host, resolvedId);
       await writeJsonLine(formatAbandonResult(resolvedId, result));
       return 0;
     } catch (error) {
@@ -177,34 +179,8 @@ export async function workflowAbandonCommand(
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
-  const { run, cascadeFailures, cleanupWarnings, releasedWorktrees, blockedParentRunId, owner } =
-    await abandonWorkflow(resolvedId, { kind: 'operator' });
-  for (const line of describeAbandonOwner(owner)) console.log(line);
-  console.log(`Abandoned workflow run: ${resolvedId}`);
-  console.log(`Workflow: ${run.workflow_name}`);
-  for (const line of describeReleasedWorktrees(releasedWorktrees)) console.log(line);
-  for (const warning of cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
-  printRunTreeCancellationWarnings(cascadeFailures, blockedParentRunId);
+  printAbandonResult(resolvedId, await abandonOneRun(host, resolvedId));
   return 0;
-}
-
-function printRunTreeCancellationWarnings(
-  cascadeFailures: number,
-  blockedParentRunId: string | null
-): void {
-  if (cascadeFailures > 0) {
-    console.log(
-      `Warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check \`archon workflow status\`.`
-    );
-  }
-  if (blockedParentRunId) {
-    console.log(
-      `Warning: parent run ${blockedParentRunId} was blocked on this sub-run and stays paused.`
-    );
-    console.log(
-      `  Resume it so it reads this sub-run's outcome (archon workflow resume ${blockedParentRunId}) or abandon it too.`
-    );
-  }
 }
 
 /**
@@ -220,44 +196,10 @@ export async function workflowCancelCommand(
   json?: boolean,
   cwd?: string
 ): Promise<number> {
-  const { cancelWorkflow } = host.operations;
-
-  const cancel = async (): Promise<{ resolvedId: string; result: CancelWorkflowResult }> => {
-    const resolvedId = await resolveRunIdArg(host, runId, cwd);
-    try {
-      const result = await cancelWorkflow(resolvedId, { kind: 'operator' });
-      if (result.kind === 'cooperative' && !result.cancelled) {
-        throw new Error(`Workflow run ${resolvedId} already finished; nothing to cancel.`);
-      }
-      return { resolvedId, result };
-    } catch (error) {
-      if (error instanceof CancelRefusedError && error.reason === 'no_owner_answered') {
-        throw new Error(`${error.message}\nAbandon it: archon workflow abandon ${resolvedId}`, {
-          cause: error,
-        });
-      }
-      throw error;
-    }
-  };
-
   if (json) {
     try {
-      const { resolvedId, result } = await cancel();
-      await writeJsonLine({
-        ok: true,
-        runId: resolvedId,
-        action: 'cancel',
-        status: 'cancelled',
-        processStopped: result.kind === 'stopped',
-        workflowName: result.run.workflow_name,
-        cleanupWarnings: result.cleanupWarnings,
-        ...(result.kind === 'stopped' && result.cascadeFailures > 0
-          ? { cascadeFailures: result.cascadeFailures }
-          : {}),
-        ...(result.kind === 'stopped' && result.blockedParentRunId
-          ? { blockedParentRunId: result.blockedParentRunId }
-          : {}),
-      });
+      const resolvedId = await resolveRunIdArg(host, runId, cwd);
+      await writeJsonLine(cancelResultPayload(resolvedId, await cancelOneRun(host, resolvedId)));
       return 0;
     } catch (error) {
       await printJsonWriteError(runId, 'cancel', error);
@@ -265,19 +207,54 @@ export async function workflowCancelCommand(
     }
   }
 
-  const { resolvedId, result } = await cancel();
-  if (result.kind === 'cooperative') {
-    console.log(`Cancelled workflow run: ${resolvedId}`);
-    console.log(`Workflow: ${result.run.workflow_name}`);
-    console.log("It runs inside its parent run's process and stops at its next status check.");
-    printCleanupWarnings(result.cleanupWarnings);
-    return 0;
+  const resolvedId = await resolveRunIdArg(host, runId, cwd);
+  printCancelResult(resolvedId, await cancelOneRun(host, resolvedId));
+  return 0;
+}
+
+/**
+ * Ask the executor that owns a running run to pause it before its next node
+ * (`pauseWorkflow`). Returns at once; the run reads `pause requested` until it pauses.
+ */
+export async function workflowPauseCommand(
+  host: WorkflowHost,
+  runId: string,
+  opts: { json?: boolean; cwd?: string; as?: string }
+): Promise<number> {
+  const pause = async () => {
+    const resolvedId = await resolveRunIdArg(host, runId, opts.cwd);
+    return host.operations.pauseWorkflow(resolvedId, cliActor(opts.as), 'cli');
+  };
+  if (opts.json) {
+    try {
+      const { run, requested, alreadyRequested } = await pause();
+      await writeJsonLine({
+        ok: true,
+        runId: run.id,
+        action: 'pause',
+        state: 'requested',
+        alreadyRequested,
+        requestedAt: requested.at,
+      });
+      return 0;
+    } catch (error) {
+      await printJsonWriteError(runId, 'pause', error);
+      return 1;
+    }
   }
-  console.log(`Cancelled detached workflow run: ${resolvedId}`);
-  console.log(`Workflow: ${result.run.workflow_name}`);
-  console.log('Run owner stopped before run state was changed.');
-  printCleanupWarnings(result.cleanupWarnings);
-  printRunTreeCancellationWarnings(result.cascadeFailures, result.blockedParentRunId);
+  const { run, requested, alreadyRequested } = await pause();
+  console.log(
+    alreadyRequested
+      ? `A pause of run ${run.id} (${run.workflow_name}) was already requested at ${requested.at}.`
+      : `Pause requested for run ${run.id} (${run.workflow_name}).`
+  );
+  console.log(
+    'It pauses before its next node starts, once the nodes running now finish; ' +
+      'if no node is left, it completes instead. A paused run keeps its checkout, results, resource slot and item.'
+  );
+  console.log(
+    `Once \`archon workflow status\` shows it paused, resume it: archon workflow resume ${run.id}`
+  );
   return 0;
 }
 
@@ -790,8 +767,4 @@ export async function workflowRespondCommand(
     recorded: 'response',
   });
   return 0;
-}
-
-function printCleanupWarnings(warnings: readonly string[] = []): void {
-  for (const warning of warnings) console.log(`Warning: ${warning}`);
 }

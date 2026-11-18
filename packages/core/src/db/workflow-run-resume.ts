@@ -17,8 +17,10 @@ import {
   EXECUTION_CLAIM_METADATA_KEY,
   FAN_OUT_CANCEL_REASONS,
   WorkflowNotResumableError,
+  WorkflowItemHeldError,
   WorkflowResourceBusyError,
   pauseCursorMatches,
+  requireOwnerlessLease,
   resumeCursorMatches,
   type PauseCursor,
   type ResumeClaimCursor,
@@ -26,6 +28,7 @@ import {
 import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import {
   addResourceSlotHolder,
+  heldItemRefusal,
   lockResourceSlot,
   lockResourceSlotForAdmission,
   removeResourceSlotHolder,
@@ -73,6 +76,7 @@ export async function listResumableRunsByParentConversation(
 
 type PriorRunRow = Pick<WorkflowRunRow, 'status' | 'metadata'> & {
   resource_key?: string | null;
+  item_id?: string | null;
 };
 
 /** Pin the run row (and its admitted resource request, if any) for the resume transaction. */
@@ -84,7 +88,7 @@ async function lockPriorRun(query: TransactionQuery, id: string): Promise<PriorR
     await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
   }
   const priorRows = await query<PriorRunRow>(
-    `SELECT w.status, w.metadata, q.resource_key
+    `SELECT w.status, w.metadata, q.resource_key, w.item_id
        FROM remote_agent_workflow_runs w
        LEFT JOIN remote_agent_resource_start_requests q
          ON q.id = w.id AND q.status = 'admitted'
@@ -237,14 +241,21 @@ export async function resumeWorkflowRun(
   id: string,
   cursor?: ResumeClaimCursor
 ): Promise<WorkflowRun> {
+  requireOwnerlessLease(id, cursor);
   let updateResult:
     | { rowCount: 0 }
-    | { busy: WorkflowResourceBusyError }
+    | { busy: WorkflowResourceBusyError | WorkflowItemHeldError }
     | { admitted: WorkflowRun };
   try {
     updateResult = await getDatabase().withTransaction(async query => {
       const prior = await lockPriorRun(query, id);
       if (!prior || !priorMatchesCursor(prior, cursor)) return { rowCount: 0 };
+      // A paused or running run still holds its item; a failed one gave it up.
+      const held =
+        prior.status === 'failed' && prior.item_id != null
+          ? await heldItemRefusal(query, id, ['failed'])
+          : undefined;
+      if (held) return { busy: held };
       const busy = await claimResourceSlot(query, id, prior, cursor);
       if (busy) return { busy };
       const admitted = await casResumeRun(query, id, prior, cursor);

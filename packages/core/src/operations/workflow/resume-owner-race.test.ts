@@ -4,7 +4,8 @@ import * as os from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
-import { checkedResumeCursor } from '@archon/workflows/store';
+import { checkedResumeCursor, leasedResumeCursor } from '@archon/workflows/store';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 import type { IIsolationStore } from '@archon/isolation';
 import { createWorkflowOperations, ResumeRefusedError } from '../workflow-operations';
 import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../../services/run-live-owner';
@@ -54,7 +55,10 @@ test('a run another host just resumed is refused, not resumed a second time', as
 
   onHost('host-2');
   const read = await operations.resumeWorkflow(created.id, { kind: 'operator' });
-  await store.resumeWorkflowRun(created.id, checkedResumeCursor(read));
+  await store.resumeWorkflowRun(
+    created.id,
+    leasedResumeCursor(checkedResumeCursor(read), testRunOwnerLease(created.id))
+  );
 
   onHost('host-1');
   const refusal = await operations.resumeWorkflow(created.id, { kind: 'operator' }).then(

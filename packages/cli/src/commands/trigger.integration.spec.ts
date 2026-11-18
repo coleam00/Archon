@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -16,6 +17,7 @@ import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import { itemWindowSchema } from '@archon/workflows/item-window';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
 import { itemLinkSchema } from '@archon/workflows/schemas/item-link';
 import { standardWebhooksSourceConfigSchema } from '@archon/adapters/sources/standard-webhooks/source-plugin';
@@ -42,8 +44,12 @@ afterEach(async () => {
   for (const root of tempRoots.splice(0)) await removeTempTree(root);
 });
 
-async function waitFor<T>(read: () => T | undefined, label: string): Promise<T> {
-  const deadline = Date.now() + DEADLINE_MS;
+async function waitFor<T>(
+  read: () => T | undefined,
+  label: string,
+  deadlineMs = DEADLINE_MS
+): Promise<T> {
+  const deadline = Date.now() + deadlineMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
@@ -341,9 +347,11 @@ describe('trigger CLI durable execution', () => {
     const fixture = await heldTriggerRun('item');
     const configPath = join(fixture.projectRoot, '..', 'trigger.json');
     const fired = join(fixture.projectRoot, '..', 'fired');
-    // The first run fires one follow-up start and names no item for it.
+    const release = join(fixture.projectRoot, '..', 'release');
+    // The first run fires one follow-up start and names no item for it, then holds the
+    // slot until the test releases it, so the follow-up stays queued meanwhile.
     fixture.writeWorkflow(
-      `[ -e '${fired}' ] || { touch '${fired}'; '${process.execPath}' '${fixture.cliPath}' trigger fire --config '${configPath}'; }`
+      `[ -e '${fired}' ] || { touch '${fired}'; '${process.execPath}' '${fixture.cliPath}' trigger fire --config '${configPath}'; for _ in $(seq 600); do [ -e '${release}' ] && break; sleep 0.1; done; [ -e '${release}' ] || exit 1; }`
     );
     const invoke = (args: string[], expectSuccess?: boolean) =>
       runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, args, expectSuccess);
@@ -364,9 +372,36 @@ describe('trigger CLI durable execution', () => {
 
     await invoke(['trigger', 'fire', '--config', configPath, '--item', 'item-1']);
     // The follow-up start shares the first run's checkout, so it waits for a drain.
+    const follow = await waitFor(
+      () => fixture.requests().find(request => request.status === 'queued'),
+      'the follow-up start to queue'
+    );
+    // While it waits, the item read lists it as queued, next for the slot the first run holds
+    // and behind that run, which works the item for the same workflow.
+    const queued = itemReadSchema.parse(
+      JSON.parse((await invoke(['workflow', 'runs', '--item', 'item-1', '--json'])).stdout)
+    );
+    expect(queued.queued).toEqual([
+      {
+        requestId: follow.id,
+        workflow: 'item-proof',
+        resource: 'item:resource',
+        hostId: fixture.hostId,
+        queuedAt: expect.any(String),
+        ahead: 0,
+        heldBehind: expect.objectContaining({ runId: runs()[0]?.id, workflow: 'item-proof' }),
+      },
+    ]);
+    // Every receipt shows the item it named; the follow-up inherited the first's.
+    const listed = JSON.parse((await invoke(['trigger', 'list'])).stdout) as {
+      itemKey: string | null;
+    }[];
+    expect(listed.map(receipt => receipt.itemKey)).toEqual(['item-1', 'item-1']);
+    writeFileSync(release, '');
     await waitFor(() => runs().find(run => run.status === 'completed'), 'the first run to end');
     await invoke(['trigger', 'drain', '--host', fixture.hostId]);
     const started = await settled(2);
+    expect(started.map(run => run.id)).toContain(follow.id);
     expect(started.map(run => run.item_key)).toEqual(['item-1', 'item-1']);
 
     await invoke(['workflow', 'run', 'item-proof', '--no-worktree', '--item', 'item-2']);
@@ -409,6 +444,7 @@ describe('trigger CLI durable execution', () => {
     expect(waiting).toMatchObject({
       item: { key: 'item-3' },
       runs: [],
+      queued: [],
       questions: [],
       answers: [],
     });
@@ -471,6 +507,50 @@ describe('trigger CLI durable execution', () => {
       itemReadSchema.parse(await readJson(['workflow', 'runs', '--item', 'item-new', '--json']))
         .answers
     ).toEqual([withdrawn]);
+
+    // The merged fact is recorded once, never on a key nothing named, and the item read carries it.
+    const merged = [
+      'workflow',
+      'merged',
+      '--item',
+      'item-1',
+      '--change',
+      'https://github.com/acme/web/pull/1',
+      '--at',
+      '2026-11-02T10:00:00Z',
+      '--json',
+    ];
+    expect(await readJson(merged)).toMatchObject({ recorded: true });
+    const secondReport = await readJson([...merged.slice(0, 5), 'other', ...merged.slice(6)]);
+    expect(secondReport).toMatchObject({
+      recorded: false,
+      merge: { change: 'https://github.com/acme/web/pull/1' },
+    });
+    const notNamed = await invoke([...merged.slice(0, 3), 'item-9', ...merged.slice(4)], false);
+    expect(notNamed.exitCode).toBe(1);
+    expect(JSON.parse(notNamed.stdout)).toEqual({ ok: false, error: 'not_found' });
+
+    // The window read returns the items with a run in it, each read as --item reads it, and
+    // a page past the limit hands a cursor that returns the rest once.
+    const page = itemWindowSchema.parse(await readJson(['workflow', 'items', '--json']));
+    expect(page.items.map(entry => entry.item.key).sort()).toEqual(['item-1', 'item-2']);
+    const one = page.items.find(entry => entry.item.key === 'item-1');
+    expect(one).toEqual(
+      itemReadSchema.parse(await readJson(['workflow', 'runs', '--item', 'item-1', '--json']))
+    );
+    expect(one?.merged?.change).toBe('https://github.com/acme/web/pull/1');
+    const first = itemWindowSchema.parse(
+      await readJson(['workflow', 'items', '--limit', '1', '--json'])
+    );
+    const rest = itemWindowSchema.parse(
+      await readJson(['workflow', 'items', '--after', first.next ?? '', '--json'])
+    );
+    expect([...first.items, ...rest.items]).toEqual(page.items);
+    expect(rest.next).toBeNull();
+    const badCursor = await invoke(['workflow', 'items', '--after', 'nope', '--json'], false);
+    expect(badCursor.exitCode).toBe(1);
+    expect(JSON.parse(badCursor.stdout)).toMatchObject({ ok: false });
+
     // Under a selected project, a ruling on another project's item is not withdrawn.
     const scratch = new Database(database);
     let codebaseId: string;
@@ -585,6 +665,46 @@ describe('trigger CLI durable execution', () => {
     ]);
   }, 90_000);
 
+  // Which item wins is decided in-process (trigger.test.ts); this fire proves a mapped key
+  // reaches the started run.
+  test("a binding's item mapping puts the started run on the item its --inputs name", async () => {
+    const fixture = await heldTriggerRun('item-map');
+    const root = join(fixture.projectRoot, '..');
+    writeFileSync(
+      join(fixture.projectRoot, '.archon', 'workflows', 'item-map-proof.yaml'),
+      'name: item-map-proof\ndescription: item-map proof.\nmutates_checkout: false\ninputs:\n  number:\n    required: true\nnodes:\n  - id: done\n    bash: echo done\n'
+    );
+    const config = JSON.parse(readFileSync(join(root, 'trigger.json'), 'utf8'));
+    // A fire-only file: a timer maps no item.
+    config.schedule = undefined;
+    config.item = { field: 'number', prefix: 'issue-' };
+    const mappedConfig = join(root, 'mapped.json');
+    writeFileSync(mappedConfig, JSON.stringify(config));
+    const inputs = join(root, 'seven.json');
+    writeFileSync(inputs, JSON.stringify({ number: 7 }));
+
+    await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
+      'trigger',
+      'fire',
+      '--config',
+      mappedConfig,
+      '--inputs',
+      inputs,
+    ]);
+    const database = join(fixture.archonHome, 'archon.db');
+    const runs = () =>
+      readRows<{ status: string; item: string | null }>(
+        database,
+        `SELECT r.status, i.key AS item
+           FROM remote_agent_workflow_runs r LEFT JOIN remote_agent_items i ON i.id = r.item_id`
+      );
+    const settled = await waitFor(
+      () => (runs()[0]?.status === 'completed' ? runs() : undefined),
+      'the mapped run to complete'
+    );
+    expect(settled).toEqual([{ status: 'completed', item: 'issue-7' }]);
+  }, 60_000);
+
   test('an inherited item is refused in another project, and an item named there starts', async () => {
     const fixture = await heldTriggerRun('item-cross');
     const root = join(fixture.projectRoot, '..');
@@ -668,75 +788,6 @@ describe('trigger CLI durable execution', () => {
     expect(detached.exitCode).not.toBe(0);
     expect(detached.stderr).toContain('--item');
     expect(runs()).toHaveLength(2);
-  }, 60_000);
-
-  test('a script on an item names the item of a start, or starts it on no item', async () => {
-    const fixture = await heldTriggerRun('item-script');
-    const root = join(fixture.projectRoot, '..');
-    const otherConfig = await writeOtherProject(root);
-    const refusal = join(root, 'refusal');
-    // The run on item-1 fires into the other project naming item-2, then naming nothing,
-    // which would inherit item-1 across projects, then declining an item.
-    writeFileSync(
-      join(fixture.projectRoot, '.archon', 'workflows', 'item-script-proof.yaml'),
-      `name: item-script-proof
-description: item-script proof.
-mutates_checkout: false
-nodes:
-  - id: fire
-    runtime: bun
-    script: |
-      import { writeFileSync } from 'node:fs';
-      import { HostCommandError, trigger } from 'archon:script';
-      const binding = ${JSON.stringify(otherConfig)};
-      trigger.fire(binding, {}, { item: 'item-2' });
-      try {
-        trigger.fire(binding);
-        writeFileSync(${JSON.stringify(refusal)}, 'started');
-      } catch (error) {
-        if (!(error instanceof HostCommandError)) throw error;
-        writeFileSync(${JSON.stringify(refusal)}, error.message);
-      }
-      trigger.fire(binding, {}, { item: null });
-`
-    );
-    const database = join(fixture.archonHome, 'archon.db');
-    const runs = () =>
-      readRows<{ workflow_name: string; status: string; item: string | null }>(
-        database,
-        `SELECT r.workflow_name, r.status, i.key || ' in ' || i.project_key AS item
-           FROM remote_agent_workflow_runs r LEFT JOIN remote_agent_items i ON i.id = r.item_id
-          ORDER BY r.started_at, r.id`
-      );
-
-    await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
-      'trigger',
-      'fire',
-      '--config',
-      join(root, 'trigger.json'),
-      '--item',
-      'item-1',
-    ]);
-    const settled = await waitFor(
-      () =>
-        runs().length === 3 && runs().every(run => run.status === 'completed') ? runs() : undefined,
-      'all three runs to complete'
-    );
-    const projects = readRows<{ project_key: string; key: string }>(
-      database,
-      'SELECT project_key, key FROM remote_agent_items ORDER BY key'
-    );
-    expect(projects.map(row => row.key)).toEqual(['item-1', 'item-2']);
-    const [own, other] = projects.map(row => row.project_key);
-    expect(own).not.toBe(other);
-    expect(settled.map(run => [run.workflow_name, run.item])).toEqual([
-      ['item-script-proof', `item-1 in ${String(own)}`],
-      ['other-proof', `item-2 in ${String(other)}`],
-      ['other-proof', null],
-    ]);
-    const message = readFileSync(refusal, 'utf8');
-    expect(message).toContain(`fired start runs in project '${String(other)}'`);
-    expect(message).toContain('--no-item');
   }, 60_000);
 
   test('--item and --no-item together are refused before a receipt', async () => {

@@ -8,6 +8,7 @@ import type { WebAdapter } from './adapters/web';
 import { registerApiRoutes } from './routes/api';
 import type { AppCommit } from './routes/schemas/system.schemas';
 import type { AttentionRouter } from './services/attention-router';
+import type { ItemTracker } from '@archon/adapters/item-tracker/item-tracker';
 import type { WebPushDestination } from './services/web-push';
 import {
   registerGiteaWebhookRoute,
@@ -25,7 +26,11 @@ export interface ServerRouteDeps {
   webAdapter: WebAdapter;
   lockManager: ConversationLockManager;
   activePlatforms: readonly string[];
-  attention: { webPush: WebPushDestination; router: AttentionRouter };
+  attention: {
+    webPush: WebPushDestination;
+    router: AttentionRouter;
+    tracker: ItemTracker | undefined;
+  };
   adapters: PlatformAdapters;
   webhookSources: WebhookSourcePluginHost | undefined;
   requestResourceStartDrain: (() => void) | undefined;

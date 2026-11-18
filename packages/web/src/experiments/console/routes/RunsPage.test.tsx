@@ -117,6 +117,7 @@ test('the console attention skill uses the unpaged endpoint and preserves its AP
             attention: action.attention,
           },
         ],
+        items: [],
       });
     },
     { preconnect: originalFetch.preconnect }

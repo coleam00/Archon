@@ -585,6 +585,27 @@ export class SqliteAdapter implements IDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_item_rulings_item_id ON remote_agent_item_rulings(item_id);
 
+      -- An item's merged fact, recorded once; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_merges (
+        item_id TEXT PRIMARY KEY REFERENCES remote_agent_items(id),
+        change TEXT NOT NULL,
+        merge_commit TEXT,
+        merged_at TEXT NOT NULL,
+        via TEXT NOT NULL,
+        from_run_id TEXT,
+        from_node_path TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      -- An item tracker destination's activation and pass holder; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_tracker_destinations (
+        destination TEXT PRIMARY KEY,
+        activated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        pass_owner_host TEXT,
+        pass_owner_pid INTEGER,
+        pass_owner_instance TEXT,
+        pass_started_at TEXT,
+        pass_requested INTEGER NOT NULL DEFAULT 0
+      );
       -- Links between items, one row per link, ended not deleted; see migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_item_links (
         -- Recording order; timestamps tie and the id is random.
@@ -612,6 +633,27 @@ export class SqliteAdapter implements IDatabase {
         ON remote_agent_item_links(from_item_id, to_item_id, kind) WHERE ended_at IS NULL;
       CREATE INDEX IF NOT EXISTS idx_item_links_from_item_id ON remote_agent_item_links(from_item_id);
       CREATE INDEX IF NOT EXISTS idx_item_links_to_item_id ON remote_agent_item_links(to_item_id);
+      -- Asks a completed run left on its item; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_asks (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        item_id TEXT NOT NULL REFERENCES remote_agent_items(id),
+        run_id TEXT NOT NULL,
+        workflow_name TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        ask TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        closed_as TEXT,
+        answer TEXT,
+        closed_at TEXT,
+        closed_via TEXT,
+        closed_by_declared TEXT,
+        closed_by_user_id TEXT,
+        closed_from_run_id TEXT,
+        closed_from_node_path TEXT,
+        replaced_by_run_id TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_item_asks_open ON remote_agent_item_asks(item_id, workflow_name) WHERE closed_as IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_item_asks_run_id ON remote_agent_item_asks(run_id);
 
       CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
         project_key TEXT NOT NULL,
@@ -653,9 +695,12 @@ export class SqliteAdapter implements IDatabase {
         host_id TEXT,
         intent TEXT,
         event_input_names TEXT,
+        item_key TEXT,
+        checkout_from TEXT,
         preparation_status TEXT NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
         preparation_owner TEXT,
         preparation_error TEXT,
+        forge_refusal TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
         PRIMARY KEY (receipt_id, binding_id)
@@ -665,6 +710,12 @@ export class SqliteAdapter implements IDatabase {
         resource_key TEXT PRIMARY KEY,
         capacity INTEGER NOT NULL DEFAULT 1 CHECK (capacity >= 1),
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_agent_install_hold (
+        id TEXT PRIMARY KEY,
+        set_by TEXT NOT NULL,
+        set_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
       ${resourceSlotHoldersTable('remote_agent_resource_slot_holders')}

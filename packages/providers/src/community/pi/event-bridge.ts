@@ -5,6 +5,7 @@ import {
   toolCallSchema,
   truncateToolOutput,
   type ProviderStopReason,
+  type ModelCallUsage,
 } from '@archon/provider-contract';
 
 import type { MessageChunk, ResultChunk, TokenUsage } from '../../types';
@@ -189,7 +190,7 @@ function sumPromptUsage(
   }
   const sum = (pick: (u: Usage) => number): number =>
     calls.reduce((total, u) => total + pick(u), 0);
-  return usageToTokens({
+  const totals = usageToTokens({
     input: sum(u => u.input),
     output: sum(u => u.output),
     cacheRead: sum(u => u.cacheRead),
@@ -203,6 +204,30 @@ function sumPromptUsage(
       total: sum(u => u.cost.total),
     },
   });
+  // Each request's counters come from usageToTokens, the one owner of the gross-input
+  // formula, so the requests of a turn without side calls sum to its totals.
+  totals.calls = assistants
+    .filter(message => !isZero(message.usage))
+    .map((message): ModelCallUsage => {
+      const { input, output, cacheRead, cacheWrite } = usageToTokens(message.usage);
+      return {
+        input,
+        output,
+        ...(cacheRead !== undefined ? { cacheRead } : {}),
+        ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+        ...(message.provider ? { provider: message.provider } : {}),
+        // The served model, as resolvedModel reports it; `model` is what was requested,
+        // possibly an alias, and pricing by it would price the wrong model.
+        ...(typeof message.responseModel === 'string' && message.responseModel.length > 0
+          ? { model: message.responseModel }
+          : {}),
+        ...(message.responseId ? { responseId: message.responseId } : {}),
+      };
+    });
+  // Compaction usage may itself combine several requests, and does not reliably
+  // identify their models. It remains in totals, never masquerades as one call.
+  if (sideCalls.length > 0) totals.callsPartial = true;
+  return totals;
 }
 
 /** Pi's stop reason in ACP's names; `undefined` for one ACP has no name for. */

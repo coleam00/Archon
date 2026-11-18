@@ -500,6 +500,136 @@ export function describeSqlStatusReadConformance(
     }
   });
 
+  test("a binding's own item key puts only that binding's start on the item", async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      const { launch } = resourceStartFixtures(
+        CONFORMANCE_CODEBASE_ID,
+        CONFORMANCE_CONVERSATION_ID
+      );
+      const binding = (bindingId: string, itemKey?: string) => ({
+        bindingId,
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: 'operator',
+        resource: bindingId,
+        overlap: 'skip' as const,
+        launch: {
+          cwd: '/c',
+          workflowName: 'item',
+          inputs: {},
+          isolation: { kind: 'in-place' as const },
+        },
+        ...(itemKey === undefined ? {} : { itemKey }),
+      });
+      // Two deliveries about one subject, each also matching a binding that maps no item.
+      const deliver = async () => {
+        const receiptId = randomUUID();
+        await store.acceptStartReceipt({
+          receipt: {
+            id: receiptId,
+            sourceInstanceId: 'source',
+            deliveryId: null,
+            contentDigest: receiptId,
+            receivedAt: new Date().toISOString(),
+            occurredAt: null,
+            sourceActor: null,
+          },
+          outcome: 'matched',
+          bindings: [binding(`mapped-${receiptId}`, 'issue-7'), binding(`plain-${receiptId}`)],
+        });
+        const itemOf = async (bindingId: string) => {
+          const identity = { receiptId, bindingId, ownerId: 'owner' };
+          await store.claimStartBindingPreparation(identity);
+          const started = await store.completeStartBindingPreparation({
+            ...identity,
+            launch: launch(),
+          });
+          if (started?.status !== 'admitted') throw new Error('Expected the start to be admitted');
+          return (await store.getWorkflowRun(started.runId))?.item_id ?? null;
+        };
+        const inspected = await store.getStartReceipt(receiptId);
+        expect(inspected?.bindings.map(b => b.intent?.itemKey)).toEqual(['issue-7', undefined]);
+        return [await itemOf(`mapped-${receiptId}`), await itemOf(`plain-${receiptId}`)];
+      };
+      const [first, unmapped] = await deliver();
+      // The first run must end, or it holds the item and the second start is refused.
+      await db.query(
+        "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE item_id = $1",
+        [first]
+      );
+      const [second] = await deliver();
+      expect(first).not.toBeNull();
+      expect(second).toBe(first);
+      expect(unmapped).toBeNull();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("an item's queued starts count only the same resource and host starts queued ahead of them", async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      const itemId = async (key: string): Promise<string> => {
+        const inserted = await db.query<{ id: string }>(
+          "INSERT INTO remote_agent_items (project_key, key) VALUES ('acme/web', $1) RETURNING id",
+          [key]
+        );
+        return inserted.rows[0]?.id ?? '';
+      };
+      const [x, k1, idle] = [await itemId('x'), await itemId('k1'), await itemId('idle')];
+      const { start } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
+      const holder = start();
+      const before = start();
+      const elsewhere = start('queue', 'other-host');
+      const otherHolder = { ...start(), resource: 'other' };
+      const otherResource = { ...start(), resource: 'other' };
+      const waiting = start();
+      expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });
+      expect(await store.admitResourceStart(before)).toMatchObject({ status: 'queued' });
+      expect(await store.admitResourceStart(elsewhere)).toMatchObject({ status: 'queued' });
+      expect(await store.admitResourceStart(otherHolder)).toMatchObject({ status: 'admitted' });
+      expect(await store.admitResourceStart(otherResource)).toMatchObject({ status: 'queued' });
+      expect(await store.admitResourceStart(waiting)).toMatchObject({ status: 'queued' });
+      // Preparation writes a start's item onto its request; these starts have no receipt.
+      for (const [intent, item] of [
+        [before, x],
+        [waiting, k1],
+      ] as const)
+        await db.query(
+          'UPDATE remote_agent_resource_start_requests SET item_id = $1 WHERE id = $2',
+          [item, intent.launch.run.id]
+        );
+
+      // `before` is ahead on the same resource and host. `elsewhere` (another host) and
+      // `otherResource` (another resource) queued earlier and are not counted.
+      expect(await store.listQueuedItemStarts(k1)).toEqual([
+        {
+          requestId: waiting.launch.run.id,
+          workflow: 'conformance',
+          resource: 'resource',
+          hostId: 'host',
+          queuedAt: expect.stringMatching(/Z$/),
+          ahead: 1,
+        },
+      ]);
+      expect(await store.listQueuedItemStarts(idle)).toEqual([]);
+
+      // Once admitted, a start has a run and leaves the list.
+      await store.claimPendingWorkflowRun(holder.launch.run.id);
+      await store.completeWorkflowRun(holder.launch.run.id, { duration_ms: 1 });
+      await store.drainResourceStarts({ resource: 'resource', hostId: 'host' });
+      expect(await store.listQueuedItemStarts(x)).toEqual([]);
+      expect(await store.listQueuedItemStarts(k1)).toMatchObject([
+        { requestId: waiting.launch.run.id, ahead: 0 },
+      ]);
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('an item read finds every run below the item, and reports the ones it cannot read', async () => {
     const harness = await makeHarness();
     try {
@@ -652,6 +782,102 @@ export function describeSqlStatusReadConformance(
       const item = await store.getItemRuns(projectKey, 'tie');
       const listed = await store.listItemRulings(item?.item.id ?? '');
       expect(listed.map(read => ('text' in read ? read.text : read))).toEqual(['one', 'two']);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a window lists the items with an own run started in it, by id, after a cursor once', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const projectKey = projectKeyForCodebase(
+        { name: 'conformance', default_cwd: '/conformance' },
+        ''
+      );
+      const at = async (key: string, workflow: string, started: string, parent?: string) => {
+        const run = await store.createWorkflowRun({
+          workflow_name: workflow,
+          user_message: '',
+          codebase_id: CONFORMANCE_CODEBASE_ID,
+          ...(parent ? { parent_run_id: parent } : { item_key: key }),
+        });
+        await harness.backdate(run.id, { started_at: new Date(started) });
+        return run;
+      };
+      const a = await at('a', 'build', '2026-10-20T00:00:00Z');
+      await at('a', 'review', '2026-11-02T00:00:00Z');
+      // Only a `workflow:` child of b's run started in the window: b has no own run in it.
+      const b = await at('b', 'build', '2026-10-05T00:00:00Z');
+      await at('', 'review', '2026-11-05T00:00:00Z', b.id);
+      await at('c', 'build', '2026-11-30T23:59:59Z');
+      await at('d', 'review', '2026-12-01T00:00:00Z');
+      const window = {
+        projectKey,
+        since: new Date('2026-11-01T00:00:00Z'),
+        until: new Date('2026-12-01T00:00:00Z'),
+      };
+      const all = await store.listItemsInWindow({ ...window, afterItemId: null, limit: 10 });
+      expect(all.map(item => item.key).sort()).toEqual(['a', 'c']);
+      expect(all.map(item => item.id)).toEqual(all.map(item => item.id).sort());
+      expect(all.find(item => item.key === 'a')?.id).toBe(a.item_id ?? '');
+      const first = await store.listItemsInWindow({ ...window, afterItemId: null, limit: 1 });
+      const after = first[0]?.id ?? '';
+      const rest = await store.listItemsInWindow({ ...window, afterItemId: after, limit: 10 });
+      expect([...first, ...rest]).toEqual(all);
+      expect(
+        await store.listItemsInWindow({
+          ...window,
+          projectKey: 'other',
+          afterItemId: null,
+          limit: 10,
+        })
+      ).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("an item's merge is recorded once, never creates an item, and reads back", async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const projectKey = projectKeyForCodebase(
+        { name: 'conformance', default_cwd: '/conformance' },
+        ''
+      );
+      const report = {
+        projectKey,
+        key: 'merged',
+        change: 'https://github.com/acme/web/pull/1',
+        commit: 'a'.repeat(40),
+        at: '2026-11-02T10:00:00+02:00',
+        via: 'cli',
+        fromRun: { runId: 'run-1', nodePath: 'record' },
+      };
+      expect(await store.recordItemMerge(report)).toBeNull();
+      expect(await store.getItemRuns(projectKey, 'merged')).toBeNull();
+      await store.createWorkflowRun({
+        workflow_name: 'build',
+        user_message: '',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+        item_key: 'merged',
+      });
+      const first = await store.recordItemMerge(report);
+      expect(first).toMatchObject({
+        recorded: true,
+        merge: {
+          change: report.change,
+          commit: report.commit,
+          at: '2026-11-02T08:00:00.000Z',
+          via: 'cli',
+          fromRun: report.fromRun,
+        },
+      });
+      const again = await store.recordItemMerge({ ...report, change: 'other', commit: null });
+      expect(again).toEqual(first && { merge: first.merge, recorded: false });
+      const item = await store.getItemRuns(projectKey, 'merged');
+      expect(await store.getItemMerge(item?.item.id ?? '')).toEqual(first?.merge ?? null);
     } finally {
       await harness.close();
     }

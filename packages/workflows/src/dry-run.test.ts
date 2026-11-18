@@ -321,7 +321,7 @@ describe('dry-run outcomes and trace', () => {
   test('a stubbed child workflow node still fails on a binding a real launch would reject', async () => {
     const workflow = makeTestWorkflow({
       name: 'parent',
-      nodes: [{ id: 'child', workflow: 'other', with: { target: '$missing.output' } }],
+      nodes: [{ id: 'child', workflow: 'other', with: { target: '$missing.output.id' } }],
     });
     const result = await dryRunWorkflow({
       workflow,

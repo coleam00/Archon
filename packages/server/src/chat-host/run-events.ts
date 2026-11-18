@@ -80,6 +80,7 @@ export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent 
         nodeName: event.nodeName,
         state: 'failed',
         error: event.error,
+        ...failureKindOf(event.execution),
       };
     case 'node_skipped':
       return {
@@ -101,7 +102,14 @@ export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent 
     case 'workflow_completed':
       return { type: 'terminal', runId, status: 'completed' };
     case 'workflow_failed':
-      return { type: 'terminal', runId, status: 'failed', error: event.error };
+      // The kind travels on the event, from the terminal record of this very failure.
+      return {
+        type: 'terminal',
+        runId,
+        status: 'failed',
+        error: event.error,
+        ...(event.failureKind !== undefined ? { failureKind: event.failureKind } : {}),
+      };
     case 'workflow_cancelled':
       return { type: 'terminal', runId, status: 'cancelled', error: event.reason };
     case 'loop_iteration_started':
@@ -118,6 +126,15 @@ export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent 
     }
   }
 }
+
+/** The failure kind a node's execution record carries; nothing when it recorded none. */
+function failureKindOf(execution: NodeFailedExecution): { failureKind?: string } {
+  const lifecycle = execution?.lifecycle;
+  return lifecycle?.status === 'failed' && lifecycle.failureKind !== undefined
+    ? { failureKind: lifecycle.failureKind }
+    : {};
+}
+type NodeFailedExecution = Extract<WorkflowEmitterEvent, { type: 'node_failed' }>['execution'];
 
 function applyRunDetails(
   run: WorkflowRun,

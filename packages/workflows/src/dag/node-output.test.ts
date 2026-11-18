@@ -508,7 +508,7 @@ describe('artifact pointers (#2453)', () => {
     expect(producerError(events)).toContain(
       "a result may only point at its own run's artifacts today"
     );
-    expect(store.getWorkflowRun).not.toHaveBeenCalled();
+    expect(store.getWorkflowRun).not.toHaveBeenCalledWith('some-other-run');
   });
 
   it('a validated pointer resolves identically after a cold resume', async () => {

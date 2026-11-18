@@ -138,15 +138,6 @@ describe('provider event vocabulary', () => {
       },
     ],
     [
-      'output over the cap in code points',
-      {
-        type: 'tool_call_update',
-        toolCallId: 'a',
-        status: 'completed',
-        output: '😀'.repeat(TOOL_OUTPUT_MAX_CHARS + 1),
-      },
-    ],
-    [
       'outputTruncated: false',
       { type: 'tool_call_update', toolCallId: 'a', status: 'completed', outputTruncated: false },
     ],

@@ -1,5 +1,5 @@
 import { CANCELLED_REASON_METADATA_KEY } from '../schemas/run-metadata';
-import { inMemoryEventRows, type InMemoryStoreEvent } from '../test-utils';
+import { inMemoryEventRows, unsetStoreMethods, type InMemoryStoreEvent } from '../test-utils';
 import { readEventsForRuns } from './test-events';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 import type { IWorkflowStore } from '../store';
@@ -22,156 +22,19 @@ export const holdsPathLock = (status: WorkflowRun['status']): boolean =>
 // getRunAncestry), and the ancestor-aware path lock.
 // ---------------------------------------------------------------------------
 
-export class InMemoryStore implements IWorkflowStore {
-  getWorkflowEventHead: IWorkflowStore['getWorkflowEventHead'] = async () => {
-    throw new Error('Unexpected event feed read');
-  };
-  readWorkflowEventsAfter: IWorkflowStore['readWorkflowEventsAfter'] = async () => {
-    throw new Error('Unexpected event feed read');
-  };
-  getStateDocument: IWorkflowStore['getStateDocument'] = async () => {
-    throw new Error('Unexpected getStateDocument');
-  };
-  putStateDocument: IWorkflowStore['putStateDocument'] = async () => {
-    throw new Error('Unexpected putStateDocument');
-  };
-  patchStateDocument: IWorkflowStore['patchStateDocument'] = async () => {
-    throw new Error('Unexpected patchStateDocument');
-  };
-  deleteStateDocument: IWorkflowStore['deleteStateDocument'] = async () => {
-    throw new Error('Unexpected deleteStateDocument');
-  };
-  claimStateDocument: IWorkflowStore['claimStateDocument'] = async () => {
-    throw new Error('Unexpected claimStateDocument');
-  };
-  listStateRevisions: IWorkflowStore['listStateRevisions'] = async () => {
-    throw new Error('Unexpected listStateRevisions');
-  };
-  listStateDocuments: IWorkflowStore['listStateDocuments'] = async () => {
-    throw new Error('Unexpected listStateDocuments');
-  };
-  getStateDocuments: IWorkflowStore['getStateDocuments'] = async () => {
-    throw new Error('Unexpected getStateDocuments');
-  };
-  pruneStateRevisions: IWorkflowStore['pruneStateRevisions'] = async () => {
-    throw new Error('Unexpected pruneStateRevisions');
-  };
-  admitResourceStart: IWorkflowStore['admitResourceStart'] = async () => {
-    throw new Error('Unexpected admitResourceStart');
-  };
-  admitPendingRun: IWorkflowStore['admitPendingRun'] = async () => {
-    throw new Error('Unexpected admitPendingRun');
-  };
-  drainResourceStarts: IWorkflowStore['drainResourceStarts'] = async () => {
-    throw new Error('Unexpected drainResourceStarts');
-  };
-  hasStartReceiptForDelivery: IWorkflowStore['hasStartReceiptForDelivery'] = async () => {
-    throw new Error('Unexpected hasStartReceiptForDelivery');
-  };
-  acceptStartReceipt: IWorkflowStore['acceptStartReceipt'] = async () => {
-    throw new Error('Unexpected acceptStartReceipt');
-  };
-  getStartReceipt: IWorkflowStore['getStartReceipt'] = async () => {
-    throw new Error('Unexpected getStartReceipt');
-  };
-  listStartReceipts: IWorkflowStore['listStartReceipts'] = async () => {
-    throw new Error('Unexpected listStartReceipts');
-  };
-  listPendingStartBindings: IWorkflowStore['listPendingStartBindings'] = async () => {
-    throw new Error('Unexpected listPendingStartBindings');
-  };
-  getResourceStartRequest: IWorkflowStore['getResourceStartRequest'] = async () => {
-    throw new Error('Unexpected getResourceStartRequest');
-  };
-  listQueuedResourceStartsForHost: IWorkflowStore['listQueuedResourceStartsForHost'] = async () => {
-    throw new Error('Unexpected listQueuedResourceStartsForHost');
-  };
-  withdrawQueuedResourceStart: IWorkflowStore['withdrawQueuedResourceStart'] = async () => {
-    throw new Error('Unexpected withdrawQueuedResourceStart');
-  };
-  claimStartBindingPreparation: IWorkflowStore['claimStartBindingPreparation'] = async () => {
-    throw new Error('Unexpected claimStartBindingPreparation');
-  };
-  completeStartBindingPreparation: IWorkflowStore['completeStartBindingPreparation'] = async () => {
-    throw new Error('Unexpected completeStartBindingPreparation');
-  };
-  failStartBindingPreparation: IWorkflowStore['failStartBindingPreparation'] = async () => {
-    throw new Error('Unexpected failStartBindingPreparation');
-  };
-  resetStartBindingPreparation: IWorkflowStore['resetStartBindingPreparation'] = async () => {
-    throw new Error('Unexpected resetStartBindingPreparation');
-  };
+// The merged interface declares the store methods the class leaves out; at runtime the
+// prototype set below the class makes each of them throw `Unexpected <method>`.
+export interface InMemoryStore extends IWorkflowStore {}
 
-  listDueWorkflowContinuations: IWorkflowStore['listDueWorkflowContinuations'] = () => {
-    throw new Error('Unexpected listDueWorkflowContinuations');
-  };
-  deferWorkflowContinuation: IWorkflowStore['deferWorkflowContinuation'] = () => {
-    throw new Error('Unexpected deferWorkflowContinuation');
-  };
-  releaseRunForUnreadableSource: IWorkflowStore['releaseRunForUnreadableSource'] = () => {
-    throw new Error('Unexpected releaseRunForUnreadableSource');
-  };
+export class InMemoryStore {
+  listSkippedItemStarts: IWorkflowStore['listSkippedItemStarts'] = async () => [];
+  listWaitedItemHolders: IWorkflowStore['listWaitedItemHolders'] = async () => [];
   releasePausedRunSlot: IWorkflowStore['releasePausedRunSlot'] = async () => ({
     released: false,
   });
-  answerAttentionWait: IWorkflowStore['answerAttentionWait'] = () => {
-    throw new Error('Unexpected answerAttentionWait');
-  };
-  labelAttentionWait: IWorkflowStore['labelAttentionWait'] = () => {
-    throw new Error('Unexpected labelAttentionWait');
-  };
-  listAttentionQueueRows: IWorkflowStore['listAttentionQueueRows'] = () => {
-    throw new Error('Unexpected listAttentionQueueRows');
-  };
-  signalWorkflowWait: IWorkflowStore['signalWorkflowWait'] = () => {
-    throw new Error('Unexpected signalWorkflowWait');
-  };
-
-  resolveApprovalGate: IWorkflowStore['resolveApprovalGate'] = () => {
-    throw new Error('Unexpected resolveApprovalGate');
-  };
-  resolveAndCancelApprovalGate: IWorkflowStore['resolveAndCancelApprovalGate'] = () => {
-    throw new Error('Unexpected resolveAndCancelApprovalGate');
-  };
-  cancelResumableRunsForConversation: IWorkflowStore['cancelResumableRunsForConversation'] = () => {
-    throw new Error('Unexpected cancelResumableRunsForConversation');
-  };
-  deleteWorkflowNodeSessions: IWorkflowStore['deleteWorkflowNodeSessions'] = () => {
-    throw new Error('Unexpected deleteWorkflowNodeSessions');
-  };
-  getItemRuns: IWorkflowStore['getItemRuns'] = async () => {
-    throw new Error('not used');
-  };
-  getItem: IWorkflowStore['getItem'] = async () => {
-    throw new Error('not used');
-  };
-  listItemRulings: IWorkflowStore['listItemRulings'] = async () => {
-    throw new Error('not used');
-  };
-  recordItemRuling: IWorkflowStore['recordItemRuling'] = async () => {
-    throw new Error('not used');
-  };
-  withdrawItemRuling: IWorkflowStore['withdrawItemRuling'] = async () => {
-    throw new Error('not used');
-  };
-  listItemLinks: IWorkflowStore['listItemLinks'] = async () => {
-    throw new Error('not used');
-  };
-  recordItemLink: IWorkflowStore['recordItemLink'] = async () => {
-    throw new Error('not used');
-  };
-  endItemLink: IWorkflowStore['endItemLink'] = async () => {
-    throw new Error('not used');
-  };
-  findOpenWorkRuns: IWorkflowStore['findOpenWorkRuns'] = async () => {
-    throw new Error('Not used by this test');
-  };
-  findAdoptingRuns: IWorkflowStore['findAdoptingRuns'] = async () => {
-    throw new Error('Not used by this test');
-  };
-  deleteOldWorkflowRuns: IWorkflowStore['deleteOldWorkflowRuns'] = async () => {
-    throw new Error('Not used by this test');
-  };
+  listOpenItemAsks: IWorkflowStore['listOpenItemAsks'] = async () => [];
+  listItemAsks: IWorkflowStore['listItemAsks'] = async () => [];
+  getItemAsk: IWorkflowStore['getItemAsk'] = async () => null;
   listWorkflowEvents: IWorkflowStore['listWorkflowEvents'] = async runId =>
     inMemoryEventRows(this.events).filter(event => event.workflow_run_id === runId);
   listEventsForRuns: IWorkflowStore['listEventsForRuns'] = async (ids, types) =>
@@ -180,9 +43,7 @@ export class InMemoryStore implements IWorkflowStore {
   listAttentionWaitStarts: IWorkflowStore['listAttentionWaitStarts'] = async () => [];
   listWorkflowNoticeRows: IWorkflowStore['listWorkflowNoticeRows'] = async () => [];
   findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'] = async () => [];
-  listWorkflowRuns: IWorkflowStore['listWorkflowRuns'] = () => {
-    throw new Error('Unexpected listWorkflowRuns');
-  };
+
   runs = new Map<string, WorkflowRun>();
   events: InMemoryStoreEvent[] = [];
   private seq = 0;
@@ -516,3 +377,4 @@ export class InMemoryStore implements IWorkflowStore {
     r.metadata = { ...r.metadata, approval: { ...(approval ?? {}), resolved: 'approved' } };
   }
 }
+Object.setPrototypeOf(InMemoryStore.prototype, unsetStoreMethods());

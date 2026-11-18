@@ -1,12 +1,11 @@
 import { CONTAINER_ISOLATION_MARKER, ISOLATION_ENV_ID_METADATA_KEY } from './schemas/run-metadata';
 import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { currentExecutionOwner, executionClaim } from './store';
-import { formatDuration } from '@archon/paths/duration';
 import { captureWorkflowTerminal, createLogger } from '@archon/paths';
 import { recordCheckoutSample, sampleCheckout, type CheckoutSample } from './checkout-observation';
+import { checkoutInUseMessage } from './checkout-in-use-message';
 import { gatherDescendantRunIds } from './child-runs';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
-import { attentionAnswerLines, spellWorkflowCommand } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
 import { safeSendMessage, sendCriticalMessage } from './platform-messages';
 import { type RunPhase } from './executor-shared';
@@ -21,16 +20,20 @@ import {
   EXECUTION_OWNER_METADATA_KEY,
   RUN_DISPATCH_METADATA_KEY,
   SUBRUN_METADATA_KEYS,
-  pendingWorkflowWaitDeadline,
   readSubrunMetadata,
-  runAttention,
   runInputsMetadata,
 } from './schemas';
 import type { CheckoutSharedEventData } from './schemas/workflow-event';
 import { ContinuedItemProjectError, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
-import { refuseBrokenRunEndedBindings } from './run-ended-refusal';
-import { holdWorkflowResource } from './resource-hold';
+import { refusePendingStart } from './start-refusal';
+import { holdWorkflowResource, installHold, itemHold, waitForTurn } from './resource-hold';
+import {
+  refuseResultInputsWithoutItem,
+  resolveResultInputs,
+  unsuppliedResultInputs,
+} from './run-result';
+import { InstallHeldError, WorkflowItemHeldError } from './store/errors';
 import { workflowPathPriorityTime } from './workflow-path-lock';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -88,9 +91,11 @@ export async function admitWorkflowRun(
     workflowRun = created.value;
   }
 
+  // A continuation's row already says everything this process adds: the store's resume
+  // recorded this process as its owner.
   let checkoutBaselineSample: CheckoutSample | undefined;
   if (!dispatch.isContinuation) {
-    const claimed = await claimPendingRun(
+    const started = await startFreshRun(
       deps,
       platform,
       conversationId,
@@ -98,26 +103,11 @@ export async function admitWorkflowRun(
       workflow,
       workflowRun,
       execContext,
-      opts
-    );
-    if (claimed.stopped) return claimed;
-    checkoutBaselineSample = claimed.value;
-  }
-
-  // A continuation's row already says everything this process adds: the store's resume
-  // recorded this process as its owner. A fresh pre-created row still needs its invocation.
-  if (preCreatedRun && !dispatch.isContinuation) {
-    const stamped = await stampPreCreatedRun(
-      deps,
-      platform,
-      conversationId,
-      cwd,
-      preCreatedRun,
       opts,
       dispatch
     );
-    if (stamped.stopped) return stamped;
-    workflowRun = stamped.value;
+    if (started.stopped) return started;
+    ({ workflowRun, checkoutBaselineSample } = started.value);
   }
 
   const blocked = await holdCheckoutPathLock(
@@ -130,6 +120,71 @@ export async function admitWorkflowRun(
   );
   if (blocked) return { stopped: true, result: blocked };
   return { stopped: false, value: { workflowRun, checkoutBaselineSample } };
+}
+
+/**
+ * Claim a fresh run and record a pre-created row's invocation, then fill its `result_of`
+ * inputs: read after the resource wait, they are the latest when the run starts work.
+ */
+async function startFreshRun(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  cwd: string,
+  workflow: ResolvedWorkflow,
+  workflowRun: WorkflowRun,
+  execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
+  opts: ExecuteWorkflowOptions,
+  dispatch: RunDispatch
+): Promise<RunPhase<AdmittedRun>> {
+  const resultInputs = unsuppliedResultInputs(workflow, dispatch.startInputs);
+  const itemless = await refuseResultInputsWithoutItem(
+    deps,
+    platform,
+    conversationId,
+    workflow,
+    workflowRun,
+    resultInputs
+  );
+  if (itemless) return { stopped: true, result: itemless };
+  const claimed = await claimPendingRun(
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflow,
+    workflowRun,
+    execContext,
+    opts
+  );
+  if (claimed.stopped) return claimed;
+  let run = workflowRun;
+  if (opts.preCreatedRun) {
+    const stamped = await stampPreCreatedRun(
+      deps,
+      platform,
+      conversationId,
+      cwd,
+      opts.preCreatedRun,
+      opts,
+      dispatch
+    );
+    if (stamped.stopped) return stamped;
+    run = stamped.value;
+  }
+  const resolved = await resolveResultInputs(
+    deps,
+    platform,
+    conversationId,
+    run,
+    resultInputs,
+    claimed.value
+  );
+  if (resolved.stopped) return resolved;
+  return {
+    stopped: false,
+    value: { workflowRun: resolved.value, checkoutBaselineSample: claimed.value },
+  };
 }
 
 async function notifyResumingRun(
@@ -220,16 +275,17 @@ async function createWorkflowRunRow(
 }
 
 /**
- * A run whose end would fire a broken run-ended binding is refused before it does any
- * work, so a binding that names a missing stage is found before the stage feeding it runs.
+ * Refuse a pending row before the claim, for every reason `refusePendingStart` decides,
+ * and tell the conversation why.
  */
-async function refuseRunOnBrokenBindings(
+async function refuseRunBeforeClaim(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
+  workflow: ResolvedWorkflow,
   workflowRun: WorkflowRun
 ): Promise<WorkflowExecutionResult | undefined> {
-  const reason = await refuseBrokenRunEndedBindings(deps, workflowRun);
+  const reason = await refusePendingStart(deps, workflow, workflowRun);
   if (reason === undefined) return undefined;
   await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${reason}`);
   return { success: false, workflowRunId: workflowRun.id, error: reason };
@@ -237,7 +293,9 @@ async function refuseRunOnBrokenBindings(
 
 /**
  * Take the workflow's resource slot, win execution ownership of a pending row, then sample
- * the checkout the run starts from.
+ * the checkout the run starts from. While another run of the workflow holds the run's item,
+ * or the install hold is set, the claim waits for it like a full resource, or is refused
+ * under `noWait`.
  */
 async function claimPendingRun(
   deps: WorkflowDeps,
@@ -249,8 +307,14 @@ async function claimPendingRun(
   execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
   { onExecutionClaimed, noWait }: ExecuteWorkflowOptions
 ): Promise<RunPhase<CheckoutSample>> {
-  const broken = await refuseRunOnBrokenBindings(deps, platform, conversationId, workflowRun);
-  if (broken) return { stopped: true, result: broken };
+  const notStarted = await refuseRunBeforeClaim(
+    deps,
+    platform,
+    conversationId,
+    workflow,
+    workflowRun
+  );
+  if (notStarted) return { stopped: true, result: notStarted };
   const refused = await holdWorkflowResource(
     deps,
     platform,
@@ -261,10 +325,28 @@ async function claimPendingRun(
     noWait === true
   );
   if (refused) return { stopped: true, result: refused };
-  let claimed: WorkflowRun | null;
-  try {
-    claimed = await deps.store.claimPendingWorkflowRun(workflowRun.id, cwd);
-  } catch (error) {
+  const claim: { run?: WorkflowRun | null; error?: unknown } = {};
+  const itemRefused = await waitForTurn({
+    deps,
+    platform,
+    conversationId,
+    workflowRun,
+    noWait: noWait === true,
+    attempt: async () => {
+      try {
+        claim.run = await deps.store.claimPendingWorkflowRun(workflowRun.id, cwd);
+      } catch (error) {
+        if (error instanceof WorkflowItemHeldError)
+          return { held: itemHold(error.itemKey, error.holderRunId, error.workflow) };
+        if (error instanceof InstallHeldError) return { held: installHold(error.hold) };
+        claim.error = error;
+      }
+      return { done: undefined };
+    },
+  });
+  if (itemRefused) return { stopped: true, result: itemRefused };
+  if ('error' in claim) {
+    const error = claim.error;
     getLog().error({ err: error, workflowRunId: workflowRun.id }, 'workflow.pending_claim_failed');
     // A lost connection may hide a committed claim. Do not release ownership or
     // write a terminal state when this process cannot confirm the transition.
@@ -282,6 +364,7 @@ async function claimPendingRun(
       },
     };
   }
+  const claimed = claim.run;
   if (!claimed) {
     getLog().warn({ workflowRunId: workflowRun.id }, 'workflow.pending_claim_lost');
     return {
@@ -578,87 +661,6 @@ async function recordCheckoutSharing(
       }
     }
   }
-}
-
-/** Spell a workflow action the way the surface rendering the message accepts it. */
-function formatRunCommand(platform: IWorkflowPlatform, action: string, shortId?: string): string {
-  return spellWorkflowCommand(platform, shortId ? `${action} ${shortId}` : action);
-}
-
-/** Explain which run holds the checkout and what the user can do about it. */
-function checkoutInUseMessage(platform: IWorkflowPlatform, activeWorkflow: WorkflowRun): string {
-  const elapsedMs = Date.now() - workflowPathPriorityTime(activeWorkflow).getTime();
-  const duration = formatDuration(elapsedMs);
-  const shortId = activeWorkflow.id.slice(0, 8);
-
-  let stateLine: string;
-  let actionLines: string;
-  if (activeWorkflow.status === 'paused') {
-    ({ stateLine, actionLines } = pausedCheckoutState(platform, activeWorkflow, duration, shortId));
-    actionLines +=
-      // Cancel stops live work, and a paused run has none: abandon discards it.
-      `• Discard it: \`${formatRunCommand(platform, 'abandon', shortId)}\`\n` +
-      '• Use a different branch: `--branch <other>`';
-  } else {
-    const verb = activeWorkflow.status === 'pending' ? 'starting' : 'running';
-    stateLine = `${verb} ${duration}, run \`${shortId}\``;
-    // Cancel only accepts a running run; a pending one has nothing executing yet.
-    const cancelLine =
-      activeWorkflow.status === 'running'
-        ? `• Cancel it: \`${formatRunCommand(platform, 'cancel', shortId)}\`\n`
-        : '';
-    actionLines =
-      `• Wait for it to finish: \`${formatRunCommand(platform, 'status')}\`\n` +
-      cancelLine +
-      `• If its process is gone: \`${formatRunCommand(platform, 'abandon', shortId)}\`\n` +
-      '• Use a different branch: `--branch <other>`';
-  }
-  return (
-    `❌ **This worktree is in use** by \`${activeWorkflow.workflow_name}\` ` +
-    `(${stateLine}).\n${actionLines}`
-  );
-}
-
-function pausedCheckoutState(
-  platform: IWorkflowPlatform,
-  activeWorkflow: WorkflowRun,
-  duration: string,
-  shortId: string
-): { stateLine: string; actionLines: string } {
-  let stateLine: string;
-  let actionLines: string;
-  const attention = runAttention(activeWorkflow);
-  const wait = pendingWorkflowWaitDeadline(activeWorkflow);
-  if (attention?.kind === 'attention') {
-    stateLine = `paused, needs attention (${duration} since phase began, run \`${shortId}\`)`;
-    actionLines = `• Answer it: ${attention.message}\n${attentionAnswerLines(platform, attention)
-      .map(line => `• ${line}\n`)
-      .join('')}`;
-  } else if (wait) {
-    const waitingFor =
-      wait.kind === 'event'
-        ? `for event \`${wait.event}\` until`
-        : wait.kind === 'quota'
-          ? 'on a provider usage or rate limit, trying again at'
-          : 'until';
-    stateLine = `paused waiting ${waitingFor} ${wait.resumeAt} (${duration} since phase began, run \`${shortId}\`)`;
-    actionLines =
-      (wait.kind === 'event'
-        ? `• Signal event \`${wait.event}\` for run \`${activeWorkflow.id}\`\n`
-        : '') + `• Wait until ${wait.resumeAt}: \`${formatRunCommand(platform, 'status')}\`\n`;
-  } else if (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children') {
-    // The parent takes no answer of its own; it continues when its sub-runs finish.
-    const childRunIds =
-      attention.kind === 'blocked_on_child' ? [attention.childRunId] : attention.childRunIds;
-    stateLine = `paused waiting on sub-runs (${duration} since phase began, run \`${shortId}\`)`;
-    actionLines = `• Check sub-runs ${childRunIds.map(id => `\`${id}\``).join(', ')}: \`${formatRunCommand(platform, 'status')}\`\n`;
-  } else {
-    stateLine = `paused waiting for user input (${duration} since phase began, run \`${shortId}\`)`;
-    actionLines =
-      `• Approve it: \`${formatRunCommand(platform, 'approve', shortId)}\`\n` +
-      `• Reject it: \`${formatRunCommand(platform, 'reject', shortId)}\`\n`;
-  }
-  return { stateLine, actionLines };
 }
 
 /** Persist the baseline sampled at claim time, now that the run's artifacts directory exists. */

@@ -35,7 +35,7 @@ import type { NodeMcpResolution } from '../../provider-resolution';
 import {
   type TurnCutOff,
   type WatchdogReset,
-  type structuredOutputPass,
+  type StructuredOutputPass,
   providerReportedFailure,
   assertResultBeforeSettlement,
 } from '../../ai-turn';
@@ -128,12 +128,21 @@ export function createAttemptState(ctx: RunLayersContext, nodeId: string): Agent
 function passChunks(
   pc: AgentPassContext,
   prompt: string,
-  resumeSessionId: string | undefined
+  pass: StructuredOutputPass
 ): AsyncGenerator<MessageChunk> {
+  // A same-session correction continues the thread this attempt wrote seconds ago, never a
+  // fork of it. A stale-resume fallback would start a fresh session holding only the
+  // correction text, so a failed resume here surfaces as the error it is.
+  if (pass.continuesThread) {
+    return pc.aiClient.sendQuery(prompt, pc.ctx.cwd, pass.resumeSessionId, {
+      ...pc.queryOptions,
+      forkSession: false,
+    });
+  }
   const send = (id: string | undefined): AsyncGenerator<MessageChunk> =>
     pc.aiClient.sendQuery(prompt, pc.ctx.cwd, id, pc.queryOptions);
-  if (!pc.staleResumeRetry) return send(resumeSessionId);
-  return withStaleResumeRetry(send, resumeSessionId, {
+  if (!pc.staleResumeRetry) return send(pass.resumeSessionId);
+  return withStaleResumeRetry(send, pass.resumeSessionId, {
     logContext: { workflowRunId: pc.ctx.workflowRun.id, nodeId: pc.node.id },
   });
 }
@@ -147,14 +156,14 @@ export async function runStreamPass(
   pc: AgentPassContext,
   state: AgentAttemptState,
   prompt: string,
-  pass: ReturnType<typeof structuredOutputPass>
+  pass: StructuredOutputPass
 ): Promise<void> {
   resetPass(pc, state, pass);
   const providerEvents = createPassEventHandler(pc, state);
   const shouldStopStream = stopCheck(pc, state, providerEvents);
   try {
     for await (const msg of withIdleTimeout(
-      passChunks(pc, prompt, pass.resumeSessionId),
+      passChunks(pc, prompt, pass),
       pc.idleTimeoutMs,
       () => onIdleTimeout(pc, state),
       (msg, resetAt) => {
@@ -214,11 +223,12 @@ export async function runStreamPass(
 function resetPass(
   pc: AgentPassContext,
   state: AgentAttemptState,
-  pass: ReturnType<typeof structuredOutputPass>
+  pass: StructuredOutputPass
 ): void {
   state.outputText = '';
   state.structuredOutput = undefined;
-  if (pass.threadsSession) {
+  // A same-session correction stays in the thread: its id and the node's resumed origin carry over.
+  if (pass.threadsSession && !pass.continuesThread) {
     state.sessionId = undefined;
     state.resumed = undefined;
   }
@@ -388,12 +398,13 @@ async function heartbeat(pc: AgentPassContext, tickNow: number): Promise<void> {
 function recordResult(
   pc: AgentPassContext,
   state: AgentAttemptState,
-  pass: ReturnType<typeof structuredOutputPass>,
+  pass: StructuredOutputPass,
   msg: ResultChunk
 ): void {
   if (pass.threadsSession) {
     state.sessionId = msg.sessionId;
-    if (msg.resumed !== undefined) state.resumed = msg.resumed;
+    // A correction's resume is Archon's, not the node's: it must not record a fresh node as resumed.
+    if (msg.resumed !== undefined && !pass.continuesThread) state.resumed = msg.resumed;
   }
   recordResultUsage(pc.node.id, state, msg);
   if (msg.stopReason !== undefined) state.stopReason = msg.stopReason;

@@ -11,6 +11,7 @@ import {
 import { readStoreId } from '@archon/paths/server-discovery';
 import * as workflowDb from '@archon/core/db/workflows';
 import { PUSH_DESTINATION_STATES, type AttentionRouter } from '../services/attention-router';
+import type { ItemTracker } from '@archon/adapters/item-tracker/item-tracker';
 import { appVersion } from '../app-version';
 import { getLog, openApiRouteRegistrar } from './api-route-kit';
 import {
@@ -122,7 +123,10 @@ export function registerHealthRoutes(
   }: {
     lockManager: Pick<ConversationLockManager, 'getStats'>;
     activePlatforms?: readonly string[];
-    attention?: { router: Pick<AttentionRouter, 'health'> };
+    attention?: {
+      router: Pick<AttentionRouter, 'health'>;
+      tracker?: Pick<ItemTracker, 'health'>;
+    };
     /** Read once at boot by `readArchonCommit` (`@archon/git/archon-commit`); see there for why not per request. */
     commit?: AppCommit;
   }
@@ -188,7 +192,14 @@ export function registerHealthRoutes(
       ...(wslDistro ? { wsl_distro: wslDistro } : {}),
       ...(storeId ? { storeId } : {}),
       activePlatforms: activePlatforms ? [...activePlatforms] : ['Web'],
-      ...(attention ? { attentionDestinations: attention.router.health() } : {}),
+      ...(attention
+        ? {
+            attentionDestinations: [
+              ...attention.router.health(),
+              ...(attention.tracker?.health() ?? []),
+            ],
+          }
+        : {}),
       ...(schema ? { schema } : {}),
     });
   });

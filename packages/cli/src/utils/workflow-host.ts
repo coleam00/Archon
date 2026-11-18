@@ -4,6 +4,7 @@ import { loadStoreSelection } from '@archon/core/config/store-selection';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
+import { trackerExit } from './tracker-exit';
 
 /**
  * The trigger host this process serves, if any: the `--host` a `trigger execute` process
@@ -14,10 +15,17 @@ export function cliOwnTriggerHost(executeHost?: string): string | undefined {
   return executeHost ?? (process.env.ARCHON_TRIGGER_HOST?.trim() || undefined);
 }
 
+/** A host that executes workflows: it can start, resume or pause runs. */
+export interface CliWorkflowExecution {
+  forgeTrustedEnv: NodeJS.ProcessEnv;
+}
+
 export async function createCliWorkflowHost(
-  executesWorkflow = false,
+  execution?: CliWorkflowExecution,
   ownTriggerHost = cliOwnTriggerHost()
 ): Promise<WorkflowHost> {
+  const executesWorkflow = execution !== undefined;
+  if (execution) await trackerExit.prepare(execution.forgeTrustedEnv);
   // Set once the host exists: what a run's end starts runs through the whole host.
   let host: WorkflowHost | undefined;
   const wrapStore = async <S extends IWorkflowStore>(store: S): Promise<S> => {
@@ -45,7 +53,8 @@ export async function createCliWorkflowHost(
 }
 
 /**
- * After a run this process ended: start the starts its completion wrote, each on the host
+ * After a run this process ended, or a set of asks this process settled: start the starts
+ * its completion or settlement wrote, each on the host
  * its binding names, as `trigger fire` starts its receipt; then, when this process serves
  * a trigger host, drain that host so queued work takes the slot the run released. A
  * process that serves no host leaves every other start on a host's queue to that host.
@@ -75,6 +84,8 @@ async function afterRunEnded(
     await drainResourceStartHost(asHost(host, ownTriggerHost));
   });
   return async (runId, caused) => {
+    // Called for every run end this process wrote, from any host it built.
+    trackerExit.markOwed();
     const host = getHost();
     if (!host) return;
     createLogger('cli.run-end-drain').debug(

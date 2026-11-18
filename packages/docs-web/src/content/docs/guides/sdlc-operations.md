@@ -70,7 +70,7 @@ The first alias your config defines wins; `aliases:` in `.archon/config.yaml` se
 
 ## The forge and the repository
 
-Every pull-request, issue and check read and write the pack makes goes through `archon forge` and an installed forge plugin. When the plugin cannot answer (no plugin for the host, no credential, a failed operation), the node refuses; nothing falls back to another tool. [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack) covers the plugin, the credential order, which operations each stage needs, and the forge check that runs before delivery spends. Run that check alone with `archon workflow run archon-forge-check` from a checkout.
+Every pull-request, issue and check read and write the pack makes goes through `archon forge` and an installed forge plugin. When the plugin cannot answer (no plugin for the host, no credential, a failed operation), the node refuses; nothing falls back to another tool. [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack) covers the plugin, the credential order, which operations each stage needs, and the forge check the engine runs when a pack run starts.
 
 The queues take the repository from their `repo_host` and `repo_path` inputs, which a binding passes. Left empty, as in a run started by hand from a checkout, the repository is the one the forge's `resolve` operation finds for the checkout's remote: its only remote, or `origin` among several. A checkout whose remote resolves to no repository, or that has several remotes and no `origin`, refuses the run and says so. A checkout whose `origin` is a fork works on the fork; set both inputs to choose another repository.
 
@@ -79,6 +79,8 @@ Delivery decides which remote holds a repository by the remote's configured URL,
 ## Work items and claims
 
 Each issue has a work item: the state document `work/<number>` in the project's state scope, read with `archon state get work/<number>`. The document is the item's state: its trust, stage, triage fields, the related work triage found (overlapping issues, earlier attempts and merged changes on the same surface), promotion, claim, a short history, and each queue's record under `facts`. The issue's pack labels mirror it. A label a person adds is a request, never the state.
+
+A run that works one issue is on that issue's engine item, `issue-<number>`: intake, re-triage, and every build round after the first. `archon workflow runs --item issue-<number>` lists them with their questions and answers. A queue pass that picks its issue inside the run (the scheduled build queue, the split queue, the merge sweep) is on no item.
 
 Every queue claims an item with a conditional write, in one order: most urgent, then most important, then smallest, then oldest. An untriaged item sorts after triaged ones, oldest first.
 
@@ -103,7 +105,7 @@ A claim that carries no lease of its run is held, and an idle pass names it. Aba
 - **Only intake closes.** `archon-triage` run alone, even with `publish`, only labels the item `archon-close`.
 - **Closed issues.** Intake records the event and changes nothing else: no trust decision, no stage change, no label write.
 - **Inputs.** `label_actor` is the one input that can create a promotion, never trust. Only the binding, or someone with access to the install, can supply it.
-- **Handoff.** A run that leaves its item waiting for the build queue fires the binding its `build_queue_binding` input names, keyed by the item and the run. The fire names no item: the run it starts takes the waiting item that sorts first, under that binding's own `orders_only`. A fire that finds every slot busy is skipped, and the item waits for the next scheduled run.
+- **Handoff.** A run that routes its issue to a build ends with that route as its outcome (`investigate`, `plan`, `deliver` or `continue`). The `build-after-intake` run-ended binding then starts the issue's first build round on the issue's item, with no node firing anything. A start that finds every slot busy is skipped, and the issue waits for the next scheduled run. The start names the issue, so it is built whatever `orders_only` says: an install that builds only work orders does not register this binding.
 
 Two bindings in the GitHub source plugin's configuration start intake: `intake-issues` on an issue opened, edited or reopened, and `intake-labels` on `archon-triage` added. They share one resource with `overlap: queue` and a capacity of 10: each run triages one issue and changes no checkout, so up to ten issues are triaged at once and a later event queues behind them. The label binding's predicate names that label only to save runs: intake ignores any other label, and the pack's own route-label writes start no intake run. A binding file written before this change still lists the route labels; write it again with `archon pack bindings sdlc --only intake-labels`.
 
@@ -167,7 +169,7 @@ A schedule keeps items moving, because a run works one item and a continuation w
 
 The binding's `build_queue_binding` input names the binding's own file, so a run's follow-up rounds start through the same binding. One run of the queue holds a slot of the resource while it fires its follow-up, so the follow-up needs a free slot. Under `overlap: skip`, a follow-up fired while every slot is busy is dropped, and the item waits for the next scheduled run. Without the input, every follow-up waits for the next scheduled run.
 
-Intake's `build_queue_binding` input names the same file, so a run starts as soon as intake routes an item. An intake binding without that input fires nothing, and its items wait for the next scheduled build-queue run: write `intake-issues` and `intake-labels` again with `--only` and `--force`, and replace their entries in the source plugin's configuration.
+A build round starts as soon as intake routes an issue only when the intake run is on the issue's item and `build-after-intake` is registered. Intake bindings written before the item mapping start runs on no item, which hand nothing on: write `intake-issues` and `intake-labels` again with `--only` and `--force`, replace their entries in the source plugin's configuration, and register `build-after-intake` with `archon trigger add`.
 
 ### Work orders
 
@@ -325,20 +327,15 @@ The `discoveries` binding starts a pass on a schedule, with `overlap: skip`: a s
 
 ## Worktree cleanup
 
-`archon-worktree-cleanup` runs [`archon isolation cleanup --merged`](/reference/cli/#isolation-cleanup-days) across every project registered on the install. It removes each merged worktree with its local branch, including a branch the worktree adopted instead of creating. Removal accepts Git base ancestry, patch equivalence, or one merged pull request head that covers every existing local tip (the worktree's HEAD and its branch ref). Cleanup finds that pull request by the local commits, so it counts even when its published branch name differs.
+The pack has no cleanup workflow. Merged worktrees are removed by the engine's merged sweep, [`archon isolation cleanup --merged`](/reference/cli/#isolation-cleanup-days), across every project registered on the install. A server runs it on its cleanup schedule. An install that runs only the CLI schedules the same sweep with [`archon isolation cleanup schedule install`](/reference/cli/#isolation-cleanup-schedule).
 
-- A worktree with uncommitted changes, or one a run can still claim, stays and is reported. One with a commit the merge does not cover stays as ordinary unmerged work.
-- With `include_closed: "true"` it also accepts a closed, unmerged pull request whose head covers every existing local tip. The default is `"false"`; any other value refuses the run.
-- Remote branches are retained with a warning, including with force. On GitHub, enable **Automatically delete head branches** in repository settings, or follow the [remote branch recovery procedure](/reference/cli/#recovering-remote-branch-cleanup).
-- It runs in place and creates no worktree of its own.
+The sweep removes each merged worktree with its local branch, including a branch the worktree adopted instead of creating. A worktree with uncommitted changes, one a run can still claim, or one with a commit the merge does not cover stays. Remote branches are retained with a warning; on GitHub, enable **Automatically delete head branches** in repository settings, or follow the [remote branch recovery procedure](/reference/cli/#recovering-remote-branch-cleanup).
 
 Who removes each checkout:
 
-- Intake, triage, the split queue, discoveries, the merge queue, the forge check and cleanup create no worktree. They run in the launch checkout as it stands.
+- Intake, triage, the split queue, discoveries, the merge queue and the forge check create no worktree. They run in the launch checkout as it stands.
 - A run that creates a worktree on its own run-named branch, such as a build round, removes it when the run completes, if the checkout is clean and every commit is on a remote; its pushed branch counts. A branch with commits of its own stays; one still at the commit it was cut from is deleted with the worktree. Otherwise the run reports what removing it would lose, and the checkout stays listed by `archon isolation list`.
 - A worktree launched with `--branch` waits for the merged sweep.
-
-A server already runs a merged sweep on its cleanup schedule. An install that runs only the CLI can schedule the same sweep without a workflow, with [`archon isolation cleanup schedule install`](/reference/cli/#isolation-cleanup-schedule); the `worktree-cleanup` binding remains for now. Its resource is named for the host, not the repository, because one pass covers every project registered there: generated for two repositories, the two schedules share one slot and `overlap: skip` drops the second pass.
 
 ## Notices
 

@@ -23,7 +23,7 @@ import { ConversationNotFoundError } from '../types';
 import { getLog } from './cleanup/log';
 import { resolveRepoGitContext } from './cleanup/merge-verdict';
 import { statusDiagnostic } from './cleanup/status-diagnostic';
-import { checkRemoval, getLiveRunBlocker } from './cleanup/run-lock';
+import { checkRemoval, getUseBlocker, useBlockerLogFields } from './cleanup/run-lock';
 import { removeEnvironment } from './cleanup/remove-environment';
 import { reapContainerEnvironments, type ContainerCleanupReport } from './cleanup/containers';
 import { recordCleanupRemoval, type CleanupOperationResult } from './cleanup/merged-sweep';
@@ -129,12 +129,9 @@ export async function onConversationClosed(
   // read before the null-out below: a top-level run attaches to its env ONLY
   // through this conversation's reference, so clearing first would erase the
   // pin and let the env be removed under a running or paused run.
-  const liveRun = await getLiveRunBlocker(envId);
-  if (liveRun) {
-    getLog().info(
-      { envId, runId: liveRun.runId, runStatus: liveRun.runStatus },
-      'env_has_live_run'
-    );
+  const inUse = await getUseBlocker(envId);
+  if (inUse) {
+    getLog().info({ envId, ...useBlockerLogFields(inUse) }, 'env_has_live_run');
     return;
   }
 

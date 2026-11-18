@@ -1,5 +1,6 @@
 import { resolveRunContinuation } from '../../operations/workflow-continuation';
 import { assertRunCredentials } from '@archon/workflows/run-preflight';
+import { assertRunForgeAccess } from '@archon/workflows/run-forge-access';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import * as db from '../../db/conversations';
 import { createWorkflowDeps } from '../../workflows/store-adapter';
@@ -8,6 +9,7 @@ import { dispatchBackgroundWorkflow } from './background';
 import { dispatchForeground } from './foreground';
 import { runSignatureGates, sendRunStartNotices } from './gates';
 import {
+  continuesImplicitly,
   detectContinuation,
   resolveDispatchAdoption,
   resolveRequestedWorkflow,
@@ -115,6 +117,14 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
     return;
   }
 
+  // The background path above checks its own start; this is the foreground's.
+  if (!willContinueExistingRun && preparedAiConfiguration) {
+    await assertRunForgeAccess(createWorkflowDeps(), workflow, preparedAiConfiguration, {
+      cwd: codebase.default_cwd,
+      codebaseId: codebase.id,
+    });
+  }
+
   await dispatchForeground(scope, {
     workflow,
     continuation,
@@ -137,7 +147,7 @@ async function offerResumeChoice(
   workflow: ResolvedWorkflow,
   { resumableRun, explicitResumeRequested }: Continuation
 ): Promise<boolean> {
-  if (!resumableRun?.working_path || resumableRun.status === 'paused' || explicitResumeRequested)
+  if (!resumableRun?.working_path || continuesImplicitly(resumableRun) || explicitResumeRequested)
     return false;
   getLog().info(
     {

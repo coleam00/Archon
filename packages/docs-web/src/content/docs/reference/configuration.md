@@ -118,6 +118,17 @@ streaming:
 #   - platform: slack
 #     destination: C0123456789
 
+# Item tracker (global config only, off when absent): Archon keeps one status comment on
+# the issue or pull request an item's key names, and posts a new comment for each
+# question, ask, ruling and final result, with or without a running server. includeUsage adds cost and token counts. See "Show progress on the item's tracker" in the workflow triggers guide.
+# itemTracker:
+#   includeUsage: false
+#   projects:
+#     - project: acme/widgets
+#       repo: { host: github.com, path: acme/widgets }
+#       keys:
+#         - { prefix: 'issue-', kind: issue }
+
 # Server-wide conversation admission
 # Precedence: default (10) < global YAML < MAX_CONCURRENT_CONVERSATIONS.
 # Repository config cannot change this limit.
@@ -170,7 +181,7 @@ Invalid assistants config in '/Users/you/.archon/config.yaml':
 
 `archon doctor` reports the same failure as the **Config files** check. To repair `~/.archon/config.yaml` through Archon, change the invalid value from the console settings; any other settings, `archon ai tier set`, or `archon ai alias set` change is refused until that value is fixed, because Archon validates the whole file before writing it. An `assistants:` entry for a provider this install has not registered is ignored, as before — there is no provider to validate it.
 
-The other blocks, `tiers`, `aliases`, `workflows`, `streaming`, `attentionNotices` and `concurrency`, fail the same way when their own check refuses a value. So does a file that is not valid YAML, whose top level is not a map of settings, or that Archon cannot read. The failure names the file and stops startup, `archon doctor`, run starts, chat messages and workflow listings such as `archon workflow list`; Archon never loads the file with that block replaced by defaults. Only a missing file falls back: `~/.archon/config.yaml` is created from the template, and a missing repository config uses defaults.
+The other blocks, `tiers`, `aliases`, `workflows`, `streaming`, `attentionNotices`, `itemTracker` and `concurrency`, fail the same way when their own check refuses a value. So does a file that is not valid YAML, whose top level is not a map of settings, or that Archon cannot read. The failure names the file and stops startup, `archon doctor`, run starts, chat messages and workflow listings such as `archon workflow list`; Archon never loads the file with that block replaced by defaults. Only a missing file falls back: `~/.archon/config.yaml` is created from the template, and a missing repository config uses defaults.
 
 ## Provider concurrency caps
 
@@ -709,7 +720,7 @@ Archon loads its own environment files, separate from the target repository's ap
 3. Load `~/.archon/.env` with `override: true` (archon config wins over shell-inherited vars and source-checkout values).
 4. Load `<cwd>/.archon/.env` with `override: true` (repo scope wins over user scope).
 
-The CLI makes exceptions to this order: selected chat scope is read from the explicit `--chat-project-id` argument before Archon env loading; env files and the old `ARCHON_WORKFLOW_CODEBASE_ID` variable cannot supply or override it. Repository env cannot set `GH_CONFIG_DIR`; the CLI preserves the user-scope value, including its absence. Inside a workflow, an inherited `GH_CONFIG_DIR`, `GH_TOKEN`, `GITHUB_TOKEN` or `COPILOT_GITHUB_TOKEN`, including an empty value, wins over both files. The standalone server follows the general load order above, including repository overrides of `GH_CONFIG_DIR`. See [forge configuration](/reference/forge/#plugin-configuration) and [GitHub credentials](/reference/forge/#github-credentials-and-check-observations).
+The CLI makes exceptions to this order: selected chat scope is read from the explicit `--chat-project-id` argument before Archon env loading; env files and the old `ARCHON_WORKFLOW_CODEBASE_ID` variable cannot supply or override it. Repository env cannot set `GH_CONFIG_DIR`; the CLI preserves the user-scope value, including its absence. Inside a workflow, and in the start-time forge check of a pack that declares `forge:`, an inherited `GH_CONFIG_DIR`, `GH_TOKEN`, `GITHUB_TOKEN` or `COPILOT_GITHUB_TOKEN`, including an empty value, wins over both files. The standalone server follows the general load order above, including repository overrides of `GH_CONFIG_DIR`. See [forge configuration](/reference/forge/#plugin-configuration) and [GitHub credentials](/reference/forge/#github-credentials-and-check-observations).
 
 A repository's `<cwd>/.archon/.env` cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`. If it does, Archon refuses to start and names the file and the key. Those keys decide which Archon home and which executables Archon uses, so a repository could otherwise choose which plugins run. Set them in your shell, your scheduler or `~/.archon/.env` instead.
 
