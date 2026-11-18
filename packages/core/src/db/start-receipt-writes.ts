@@ -85,6 +85,15 @@ export async function insertStartReceipt(
       recorded.outcome,
       recorded.reason ?? null,
     ]);
+  await insertReceiptBindings(query, recorded);
+  return { receiptId: recorded.receipt.id, replay: false };
+}
+
+/** The rows of a claimed receipt's bindings: one per start, one per binding that starts nothing. */
+async function insertReceiptBindings(
+  query: Query,
+  recorded: SourceReceiptAcceptance
+): Promise<void> {
   for (const binding of recorded.bindings) {
     await query(
       `INSERT INTO remote_agent_start_receipt_bindings
@@ -114,7 +123,6 @@ export async function insertStartReceipt(
       ]
     );
   }
-  return { receiptId: recorded.receipt.id, replay: false };
 }
 
 /**
