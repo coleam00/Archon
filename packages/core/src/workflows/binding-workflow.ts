@@ -18,7 +18,8 @@ export type StartedWorkflow = { workflow: ResolvedWorkflow } | { refused: string
  * come from `<discoveryCwd>/.archon/workflows`: another scope's copy of the same name would
  * run while the run records the directory as its source (#5853). Commands, scripts and
  * composed workflows may still resolve from other scopes; the started workflow may not.
- * A refused name with a load error reports that error: the file exists but does not load.
+ * A refusal appends a load error for the name: some copy exists but does not load. With a
+ * workflow source the refusal still names the directory, wherever that copy lives.
  */
 export function selectStartedWorkflow(
   launch: Pick<ResourceStartBindingIntent['launch'], 'workflowName' | 'discoveryCwd'>,
@@ -32,10 +33,9 @@ export function selectStartedWorkflow(
   const scope = discovered.workflows.find(entry => entry.workflow === workflow)?.source;
   if (workflow && (discoveryCwd === undefined || scope === 'project')) return { workflow };
   const loadError = findWorkflowLoadError(discovered.errors, workflowName);
-  if (loadError)
-    return { refused: `workflow '${workflowName}' failed to load: ${loadError.error}` };
+  const failedToLoad = loadError && `workflow '${workflowName}' failed to load: ${loadError.error}`;
   if (discoveryCwd === undefined)
-    return { refused: `workflow '${workflowName}' is not in this project` };
+    return { refused: failedToLoad || `workflow '${workflowName}' is not in this project` };
   const root = resolve(discoveryCwd);
   const checkout = checkoutRootAbove(root);
   return {
@@ -43,6 +43,7 @@ export function selectStartedWorkflow(
       `workflow '${workflowName}' is not in the binding's workflow source ${root}: Archon looked in ` +
       `${join(root, '.archon', 'workflows')}` +
       (scope ? ` and found it only in the ${scope} scope` : '') +
+      (failedToLoad ? `; ${failedToLoad}` : '') +
       (checkout === undefined
         ? ''
         : `; launch.discoveryCwd takes the checkout root, did you mean ${checkout}?`),

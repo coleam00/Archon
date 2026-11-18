@@ -57,6 +57,26 @@ describe('selectStartedWorkflow', () => {
     expect(started.refused).toContain(`did you mean ${SOURCE}?`);
   });
 
+  test('with a workflow source, a load error from another scope still names where it looked', () => {
+    const started = selectStartedWorkflow(
+      { workflowName: 'build', discoveryCwd: SOURCE },
+      {
+        workflows: [entry('build', 'bundled')],
+        errors: [
+          {
+            filename: 'build.yaml',
+            workflowName: 'build',
+            error: 'nodes: expected array',
+            errorType: 'validation_error',
+          },
+        ],
+      }
+    );
+    if (!('refused' in started)) throw new Error('expected a refusal');
+    expect(started.refused).toContain(join(SOURCE, '.archon', 'workflows'));
+    expect(started.refused).toContain('nodes: expected array');
+  });
+
   test('without a workflow source, the name resolves across every scope', () => {
     const global = entry('build', 'global');
     expect(selectStartedWorkflow({ workflowName: 'build' }, found(global))).toEqual({
@@ -130,11 +150,11 @@ describe('trigger check refuses what a fire refuses', () => {
               },
               deps
             );
-      expect(problems).toContainEqual(
-        state === 'lacks'
-          ? expect.stringContaining(workflowsDir)
-          : expect.stringContaining(`'${bundled.workflow.name}' failed to load`)
-      );
+      expect(problems).toContainEqual(expect.stringContaining(workflowsDir));
+      if (state === 'cannot load')
+        expect(problems).toContainEqual(
+          expect.stringContaining(`'${bundled.workflow.name}' failed to load`)
+        );
     }
   );
 });
