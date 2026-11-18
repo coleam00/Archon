@@ -178,12 +178,14 @@ export async function executeAgentNode(
   } catch (error) {
     if (tools?.recordingError) throw tools.recordingError;
     const cancelled = wasUserCancelled(abortController, state, tools);
-    const failure = attemptFailure(error as Error, cancelled, nodeMcp, node.id);
-    const unknownWrite = tools?.unknownWrite;
-    const message = unknownWrite
-      ? `${failure.message}\nTool write outcome unknown: ${unknownWrite}`
-      : failure.message;
-    return failAgentNode(message, unknownWrite ? 'unknown' : failure.kind, {
+    const failure = attemptFailure(
+      error as Error,
+      cancelled,
+      nodeMcp,
+      node.id,
+      tools?.unknownWrite
+    );
+    return failAgentNode(failure.message, failure.kind, {
       providerFailure: failure.providerFailure,
       providerNotCalled: !workloadStarted,
     });
@@ -301,18 +303,26 @@ function attemptFailure(
   err: Error,
   cancelled: boolean,
   nodeMcp: AgentBinding['nodeMcp'],
-  nodeId: string
+  nodeId: string,
+  unknownWrite?: string
 ): { message: string; kind: NodeFailureKind; providerFailure?: ProviderFailure } {
   if (cancelled) {
     getLog().info({ nodeId }, 'dag_node_cancelled_via_abort');
     return { message: 'Cancelled by user', kind: 'cancelled' };
   }
   getLog().error({ err, nodeId }, 'dag_node_failed');
-  return {
+  const failure = {
     message: nodeMcp.kind === 'missing' ? `${err.message}\n${nodeMcp.diagnostic}` : err.message,
     kind: err instanceof NodeFailure ? err.kind : 'unknown',
     providerFailure: err instanceof NodeFailure ? err.providerFailure : undefined,
   };
+  return unknownWrite
+    ? {
+        ...failure,
+        message: `${failure.message}\nTool write outcome unknown: ${unknownWrite}`,
+        kind: 'unknown',
+      }
+    : failure;
 }
 
 function attemptQueryOptions(
