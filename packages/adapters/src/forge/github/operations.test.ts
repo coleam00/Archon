@@ -621,6 +621,25 @@ describe('a check is its newest run across suites of one workflow', () => {
     ]);
   });
 
+  test('a failed check present only in the older suite keeps the commit red', async () => {
+    const value = await unitsFor(
+      [
+        { id: 1, suite: 10, name: 'deploy', conclusion: 'failure' },
+        { id: 2, suite: 10, name: 'test', conclusion: 'cancelled' },
+        { id: 3, suite: 20, name: 'test', conclusion: 'success' },
+      ],
+      [
+        { id: 100, suite: 10, workflow: 7 },
+        { id: 200, suite: 20, workflow: 7 },
+      ]
+    );
+    expect(value.summary.state).toBe('red');
+    expect(value.units.map(unit => [unit.unit.id, unit.rerun])).toEqual([
+      ['1', { id: '100', attempt: 1 }],
+      ['3', { id: '200', attempt: 1 }],
+    ]);
+  });
+
   test('a rerun in the older suite is the newest run of its check', async () => {
     const value = await unitsFor(
       [
