@@ -48,6 +48,7 @@ import {
 } from '../routes/workflow';
 import { workflowContinuationCommand } from './workflow-continuations';
 import { workflowAttentionCommand } from './workflow-attention';
+import * as connection from '@archon/core/db/connection';
 const scopes: CliTestScope[] = [];
 let originalEnv: NodeJS.ProcessEnv;
 let originalLogLevel: ReturnType<typeof getLogLevel>;
@@ -1389,16 +1390,31 @@ test('independent questions survive separate CLI processes and apply second firs
     writeFileSync(join(f.project, '.archon/workflows', `${name}.yaml`), yaml);
   // The subject is that the questions outlive the process that opened them and each answer
   // comes from its own CLI process. The queue reads between them only read the store, so they
-  // run in-process.
+  // run in-process, under the same SQL-open trap the child entry sets.
   const started = await cli(f, ['workflow', 'run', 'questions', '--folder', '--no-worktree']);
   expect(started, started.output + started.error).toMatchObject({ code: 0 });
   setLogLevel('error');
   process.env = { ...f.env };
   const host = await createFileWorkflowHost(join(f.home, 'store'));
-  const attention = (runId?: string) =>
-    commandResult(() =>
-      workflowAttentionCommand(host, f.project, runId, { json: true, labels: [] })
-    );
+  const sqlOpen = (): never => {
+    throw new Error('SQL open trap');
+  };
+  const attention = async (runId?: string) => {
+    const traps = [
+      spyOn(connection, 'getDatabase').mockImplementation(sqlOpen),
+      spyOn(connection, 'getDialect').mockImplementation(sqlOpen),
+      spyOn(connection.pool, 'query').mockImplementation(sqlOpen),
+    ];
+    try {
+      const result = await commandResult(() =>
+        workflowAttentionCommand(host, f.project, runId, { json: true, labels: [] })
+      );
+      for (const trap of traps) expect(trap).not.toHaveBeenCalled();
+      return result;
+    } finally {
+      for (const trap of traps) trap.mockRestore();
+    }
+  };
   const queue = async () => {
     const result = await attention();
     expect(result, result.error).toMatchObject({ code: 0 });

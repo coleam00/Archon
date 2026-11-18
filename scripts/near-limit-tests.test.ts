@@ -22,6 +22,11 @@ describe('testLimits', () => {
       "test.each([1, 2])('row %s', () => {}, 60_000);",
       "test.skip('skipped', () => {}, 25_000);",
       "test('unread', () => {}, budgetFor('x'));",
+      "test('quoted key', () => {}, { 'timeout': 5_000 });",
+      "describe('inner', () => { const SLOW = 1_000; test('shadowed', () => {}, SLOW); });",
+      'let changing = 1_000;',
+      "test('let binding', () => {}, changing);",
+      "test('spread options', () => {}, { ...shared });",
     ].join('\n');
     expect([...testLimits(source)]).toEqual([
       [3, 90_000],
@@ -33,6 +38,10 @@ describe('testLimits', () => {
       [9, 60_000],
       [10, 25_000],
       [11, undefined],
+      [12, 5_000],
+      [13, 1_000],
+      [15, undefined],
+      [16, undefined],
     ]);
   });
 

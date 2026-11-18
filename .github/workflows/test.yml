@@ -224,7 +224,7 @@ jobs:
       # (about 4,700 extra per leg). Putting the real binary first removes the launcher.
       #
       # `ARCHON_TEST_REPORT_DIR` makes each test process write a JUnit report, and the next
-      # step lists every test that used more than half its time limit in the job summary.
+      # step lists the tests that used more than half their time limit in the job summary.
       # Windows is the slowest runner, so a test drifting toward its limit shows here before
       # it fails (#5835).
       - name: Validate

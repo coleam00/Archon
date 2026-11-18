@@ -38,49 +38,67 @@ function testCallee(expression: ts.Expression): boolean {
   return false;
 }
 
-function numberValue(node: ts.Expression, constants: ReadonlyMap<string, number>): Limit {
+/**
+ * The value of a limit expression, or `undefined` for a form this does not read: a call
+ * other than `testTimeout(n)`, a non-`const` binding, or options that could carry it in a
+ * spread or computed key.
+ */
+function numberValue(node: ts.Expression, checker: ts.TypeChecker): Limit {
   if (ts.isNumericLiteral(node)) return Number(node.text);
-  if (ts.isIdentifier(node)) return constants.get(node.text);
+  if (ts.isIdentifier(node)) return constValue(node, checker);
+  if (ts.isObjectLiteralExpression(node)) return optionsValue(node, checker);
   if (
     ts.isCallExpression(node) &&
     ts.isIdentifier(node.expression) &&
     node.expression.text === 'testTimeout' &&
     node.arguments.length === 1
   ) {
-    const value = numberValue(node.arguments[0], constants);
+    const value = numberValue(node.arguments[0], checker);
     return value === undefined ? undefined : Math.max(value, DEFAULT_TEST_TIMEOUT_MS);
-  }
-  if (ts.isObjectLiteralExpression(node)) {
-    for (const property of node.properties) {
-      if (
-        ts.isPropertyAssignment(property) &&
-        ts.isIdentifier(property.name) &&
-        property.name.text === 'timeout'
-      ) {
-        return numberValue(property.initializer, constants);
-      }
-    }
-    return DEFAULT_TEST_TIMEOUT_MS;
   }
   return undefined;
 }
 
+/**
+ * A name resolved through the checker, so the binding in scope at the call wins over a
+ * same-named one elsewhere. Only a `const` counts: a `let` may change before the test runs.
+ */
+function constValue(name: ts.Identifier, checker: ts.TypeChecker): Limit {
+  const declaration = checker.getSymbolAtLocation(name)?.valueDeclaration;
+  if (declaration === undefined || !ts.isVariableDeclaration(declaration)) return undefined;
+  const isConst = (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0;
+  return isConst && declaration.initializer !== undefined
+    ? numberValue(declaration.initializer, checker)
+    : undefined;
+}
+
+/** `{ timeout: n }`, with the key quoted or not; options without one take the default. */
+function optionsValue(options: ts.ObjectLiteralExpression, checker: ts.TypeChecker): Limit {
+  for (const property of options.properties) {
+    if (!ts.isPropertyAssignment(property)) return undefined;
+    const key = property.name;
+    if (ts.isComputedPropertyName(key) || ts.isPrivateIdentifier(key)) return undefined;
+    if (key.text === 'timeout') return numberValue(property.initializer, checker);
+  }
+  return DEFAULT_TEST_TIMEOUT_MS;
+}
+
+/** A program of one file, so the checker can resolve the names in it; imports are not read. */
+function checkedSource(source: string): { file: ts.SourceFile; checker: ts.TypeChecker } {
+  const fileName = 'test.ts';
+  const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
+  const options: ts.CompilerOptions = { noLib: true, noResolve: true, types: [] };
+  const host = ts.createCompilerHost(options);
+  host.getSourceFile = name => (name === fileName ? file : undefined);
+  host.fileExists = name => name === fileName;
+  host.readFile = () => undefined;
+  const program = ts.createProgram([fileName], options, host);
+  return { file, checker: program.getTypeChecker() };
+}
+
 /** The limit of every test call in one source file, by the line Bun reports it at. */
 export function testLimits(source: string): Map<number, Limit> {
-  const file = ts.createSourceFile('test.ts', source, ts.ScriptTarget.Latest, true);
-  const constants = new Map<string, number>();
-  for (const statement of file.statements) {
-    if (!ts.isVariableStatement(statement)) continue;
-    for (const declaration of statement.declarationList.declarations) {
-      if (
-        ts.isIdentifier(declaration.name) &&
-        declaration.initializer !== undefined &&
-        ts.isNumericLiteral(declaration.initializer)
-      ) {
-        constants.set(declaration.name.text, Number(declaration.initializer.text));
-      }
-    }
-  }
+  const { file, checker } = checkedSource(source);
   const limits = new Map<number, Limit>();
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && testCallee(node.expression)) {
@@ -90,10 +108,7 @@ export function testLimits(source: string): Map<number, Limit> {
       const name = node.arguments[0] ?? node;
       const line = file.getLineAndCharacterOfPosition(name.getStart(file)).line + 1;
       const limit = node.arguments[2];
-      limits.set(
-        line,
-        limit === undefined ? DEFAULT_TEST_TIMEOUT_MS : numberValue(limit, constants)
-      );
+      limits.set(line, limit === undefined ? DEFAULT_TEST_TIMEOUT_MS : numberValue(limit, checker));
       for (const argument of node.arguments) visit(argument);
       return;
     }
@@ -131,7 +146,8 @@ export interface NearLimit extends TestTime {
 
 /**
  * The tests over half their limit, most of their limit first. A test whose limit this cannot
- * read is listed when it is over half the default, so an unread form cannot hide one.
+ * read is measured against the default limit. That can hide one whose real limit is smaller,
+ * so the report also counts the tests whose limit was not read.
  */
 export function nearLimit(times: readonly TestTime[], limitOf: (time: TestTime) => Limit) {
   const listed: NearLimit[] = [];
@@ -186,7 +202,8 @@ function main(directory: string | undefined): void {
     reportTimes(readFileSync(file, 'utf8'), cwdKey)
   );
   const listed = nearLimit(times, limitOf);
-  const heading = `### Tests over half their time limit (${String(listed.length)} of ${String(times.length)})`;
+  const unread = times.filter(time => limitOf(time) === undefined).length;
+  const heading = `### Tests over half their time limit (${String(listed.length)} of ${String(times.length)}; limit not read for ${String(unread)}, measured against the default)`;
   const body = listed.length === 0 ? 'None.' : table(listed);
   const summary = process.env.GITHUB_STEP_SUMMARY;
   if (summary !== undefined && summary !== '') appendFileSync(summary, `${heading}\n\n${body}\n`);
