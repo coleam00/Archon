@@ -332,8 +332,8 @@ async function prepareLaunch(
     }
   );
   await assertRunCredentials(workflowDeps, preparedAiConfiguration, { cwd: launchConfigCwd });
-  // Remotes are read from the project, since a branch lane's snapshot is an archive with
-  // none; the pack settings come from the checkout the run's configuration does.
+  // Pack settings come from where the configuration above was read; remotes come from the
+  // project, because a branch lane's snapshot is an archive with none.
   await assertRunForgeAccess(workflowDeps, workflow, preparedAiConfiguration, {
     cwd: codebase?.default_cwd ?? ctx.cwd,
     settingsCwd: launchConfigCwd,
