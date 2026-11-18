@@ -15,3 +15,8 @@ first and this file after it.
 - **Measure first.** When an item's acceptance needs a metric that is not recorded
   yet, the metric ships and starts recording first, then the change it measures. This
   holds even when an older baseline exists.
+- **Split a large item sooner.** When triage sizes an item `l` and one of its pieces is
+  an outcome worth having on its own, route `split` instead of building it whole. A large
+  pull request here stays open longer, so it conflicts with `dev` and collects review
+  rounds while it waits. Size alone is still not a reason: an `l` item that is one
+  outcome is built whole.
