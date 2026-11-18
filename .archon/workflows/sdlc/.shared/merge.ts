@@ -10,7 +10,7 @@
  * Every read and the merge go through the forge contract (`forge` of `archon:script`).
  */
 
-import { itemPullRequest, type Validation } from './build.ts';
+import { buildWaits, itemPullRequest, type Validation } from './build.ts';
 import { type QualifiedPr } from './identity.ts';
 import { record } from './inputs.ts';
 import { forge } from 'archon:script';
@@ -100,7 +100,8 @@ export function answeredMergeDecision(effect: MergeEffect): `answered: ${MergeEf
  */
 export function mergeWaits(doc: WorkItem): boolean {
   const build = doc.facts.build;
-  if (build?.status !== 'ready') return false;
+  // A re-triaged item is the build queue's until its round ends: no claim says so.
+  if (build?.status !== 'ready' || buildWaits(doc)) return false;
   const merge = doc.facts.merge;
   if (merge === undefined || merge.status === 'waiting' || merge.status === 'asking') return true;
   return build.at > merge.at;
