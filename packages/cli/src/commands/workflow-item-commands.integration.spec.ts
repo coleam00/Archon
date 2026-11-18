@@ -40,6 +40,8 @@ const callerEnv: NodeJS.ProcessEnv = {
   GITHUB_TOKEN: '',
   GH_TOKEN: '',
   GITHUB_APP_ID: '',
+  GITHUB_APP_PRIVATE_KEY: '',
+  GITHUB_APP_PRIVATE_KEY_PATH: '',
 };
 const savedEnv = Object.fromEntries(Object.keys(callerEnv).map(key => [key, process.env[key]]));
 
@@ -343,7 +345,9 @@ test.serial(
       const outside = await withdraw('foreign-ruling');
       expect(outside.exitCode).toBe(1);
       expect(JSON.parse(outside.stdout)).toMatchObject({ ok: false, error: 'outside_project' });
-      expect((await withdraw('foreign-ruling', false)).stderr).toContain('outside project');
+      const outsideText = await withdraw('foreign-ruling', false);
+      expect(outsideText.exitCode).toBe(1);
+      expect(outsideText.stderr).toContain('outside project');
     } finally {
       scopeSpy.mockReturnValue(undefined);
     }
@@ -391,6 +395,8 @@ test.serial(
     expect(one?.merged?.change).toBe(change);
     const first = await items({ limit: 1 });
     const rest = await items({ after: first.next ?? '' });
+    expect(first.items).toHaveLength(1);
+    expect(rest.items).toHaveLength(1);
     expect([...first.items, ...rest.items]).toEqual(page.items);
     expect(rest.next).toBeNull();
     const badCursor = await invoke(host =>
@@ -439,9 +445,9 @@ test.serial(
       expect(refused.exitCode).toBe(1);
       expect(JSON.parse(refused.stdout)).toEqual({ ok: false, error });
     }
-    expect((await link({ ...toItem1, kind: 'same_as' }, false)).stderr).toContain(
-      'depends_on, part_of, duplicate_of'
-    );
+    const unknownText = await link({ ...toItem1, kind: 'same_as' }, false);
+    expect(unknownText.exitCode).toBe(1);
+    expect(unknownText.stderr).toContain('depends_on, part_of, duplicate_of');
     // Ended once: the fact stays readable with who ended it, and is no longer active.
     const endedLink = itemLinkSchema.parse(
       succeeded(await link({ end: recorded.id, as: 'alice' }))
@@ -454,6 +460,7 @@ test.serial(
       { id: recorded.id, ended: { by: { declared: 'alice' } } },
     ]);
     const again = await link({ end: recorded.id });
+    expect(again.exitCode).toBe(1);
     expect(JSON.parse(again.stdout)).toEqual({ ok: false, error: 'already_ended' });
   }
 );
