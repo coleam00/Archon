@@ -7,10 +7,13 @@
  * only attachments, so a push to it runs no workflow, and the file is exactly as
  * visible as the repository. The link is pinned to the commit that holds the file,
  * so a later push to the branch cannot change what it shows. Nothing prunes the
- * branch; deleting it breaks the links into it.
+ * branch, and deleting it does not guarantee the commit-addressed links stop
+ * serving the file.
  *
  * The blob, tree and commit are unreachable until the branch moves, so the ref
- * update is the one write that decides the outcome.
+ * update is the one write that decides the outcome. A refused ref write, such as
+ * a 422 when another writer moved the branch first, is reported as GitHub's own
+ * refusal with its status; a caller sends the same bytes again, which is safe.
  */
 
 import { createHash } from 'node:crypto';
@@ -22,8 +25,6 @@ import { applied, refused, unverified, type Submit } from './mutation-outcome';
 type PutRequest = Extract<ForgeMutationRequest, { op: 'attachment.put' }>;
 
 const BRANCH = 'archon-attachments';
-/** Ref writes that find the branch moved by another writer, before the put is refused. */
-const REF_ATTEMPTS = 3;
 
 const extensions = {
   'image/png': 'png',
@@ -96,19 +97,15 @@ function storedResult(request: PutRequest, stored: Stored, changed: boolean, com
   });
 }
 
-/**
- * One read of the branch and, when the file is not on it, one commit that adds it.
- * `moved` means GitHub refused the ref write because another writer moved the
- * branch since it was read; nothing references the new commit.
- */
-async function storeOnce(
+/** One read of the branch and, when the file is not on it, one commit that adds it. */
+async function store(
   request: PutRequest,
   stored: Stored,
   fetchImpl: Fetch,
   token: string,
   api: string,
   submit: Submit
-): Promise<ForgeResponse | 'moved'> {
+): Promise<ForgeResponse> {
   const parent = await readBranch(fetchImpl, token, api);
   if (parent?.names.has(stored.name)) return storedResult(request, stored, false, parent.commit);
   const blob = await create(fetchImpl, token, `${api}/git/blobs`, {
@@ -125,20 +122,19 @@ async function storeOnce(
     parents: parent ? [parent.commit] : [],
   });
   submit('submitted');
-  const response = await githubSend(
+  const answer = await githubRequest(
     fetchImpl,
     token,
     parent ? `${api}/git/refs/heads/${BRANCH}` : `${api}/git/refs`,
     parent
       ? { method: 'PATCH', body: JSON.stringify({ sha: commit, force: false }) }
-      : { method: 'POST', body: JSON.stringify({ ref: `refs/heads/${BRANCH}`, sha: commit }) }
+      : { method: 'POST', body: JSON.stringify({ ref: `refs/heads/${BRANCH}`, sha: commit }) },
+    () => {
+      submit('acknowledged');
+    }
   );
-  // GitHub answers 422 when the branch was created or advanced since it was read.
-  if (response.status === 422) return 'moved';
-  if (!response.ok) throw githubResponseError(response);
-  submit('acknowledged');
   // The ref write answers with where the branch now points, which is the read-back.
-  const moved = refSchema.safeParse(await response.json().catch(() => null));
+  const moved = refSchema.safeParse(answer);
   if (!moved.success || moved.data.object.sha !== commit)
     return unverified(
       request,
@@ -171,12 +167,5 @@ export async function putAttachment(
     bytes: bytes.byteLength,
     htmlUrl: repository.html_url,
   };
-  for (let attempt = 1; attempt <= REF_ATTEMPTS; attempt++) {
-    const outcome = await storeOnce(request, stored, fetchImpl, token, api, submit);
-    if (outcome !== 'moved') return outcome;
-  }
-  return refused(request, {
-    kind: 'conflict',
-    message: `branch ${BRANCH} kept moving; the attachment was not stored`,
-  });
+  return store(request, stored, fetchImpl, token, api, submit);
 }

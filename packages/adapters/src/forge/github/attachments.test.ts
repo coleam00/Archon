@@ -11,8 +11,8 @@ const name = `${createHash('sha256').update(Buffer.from(content, 'base64')).dige
 
 /**
  * A GitHub repository's git data API, holding commits and the one attachments
- * branch. `moveOnce` lets another writer advance the branch once before the first
- * ref write lands, so that write is refused with 422.
+ * branch. `moveOnce` lets another writer create or advance the branch, adding
+ * `other.png`, just before the first ref write lands, so that write is refused with 422.
  */
 function gitGitHub(options: { push?: boolean; moveOnce?: boolean } = {}) {
   const commits = new Map<string, { tree: string; parents: string[] }>();
@@ -147,16 +147,24 @@ describe('attachment.put', () => {
     expect(github.writes).toEqual([]);
   });
 
-  test('a branch another writer moved is read again and extended, keeping its files', async () => {
+  test('a refused ref write is reported as GitHub refused it, with its status, and not tried again', async () => {
     const github = gitGitHub({ moveOnce: true });
+    expect(await run(github)).toMatchObject({
+      ok: false,
+      error: { kind: 'conflict', status: 422 },
+      mutation: { op: 'attachment.put', outcome: 'refused' },
+    });
+    expect(github.writes.filter(write => write.includes('/git/refs'))).toEqual(['POST /git/refs']);
+  });
+
+  test('a put on a branch with other files extends it and keeps them', async () => {
+    const github = gitGitHub({ moveOnce: true });
+    await run(github);
     const response = await run(github);
     if (!response.ok || response.result.op !== 'attachment.put')
       throw new Error(JSON.stringify(response));
     const head = github.branch() ?? '';
     expect(response.result.value.attachment.url).toContain(`/blob/${head}/`);
-    expect(github.writes.filter(write => write.startsWith('POST /git/refs'))).toEqual([
-      'POST /git/refs',
-    ]);
     expect(github.writes.at(-1)).toBe('PATCH /git/refs/heads/archon-attachments');
     const stored = github.commits.get(head);
     expect(stored?.parents.length).toBe(1);
