@@ -120,9 +120,10 @@ export function resolveMetricsSplit(input: {
   const compareAt =
     input.compare === undefined ? undefined : parseInstant('compare', input.compare);
   if (input.byDimension !== undefined) {
-    if (!metricDimensionKeySchema.safeParse(input.byDimension).success) {
+    const key = metricDimensionKeySchema.safeParse(input.byDimension);
+    if (!key.success) {
       throw new MetricsQueryError(
-        `by-dimension must be a key of 1-32 characters of [a-z0-9_]; got ${JSON.stringify(input.byDimension)}`
+        `by-dimension ${key.error.issues[0]?.message ?? 'is not a dimension key'}; got ${JSON.stringify(input.byDimension)}`
       );
     }
     return compareAt === undefined

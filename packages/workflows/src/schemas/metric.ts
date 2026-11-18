@@ -22,9 +22,12 @@ const runIdSchema = z
     'must be a run id'
   );
 
+const DIMENSION_KEY_RULE =
+  'must be a lowercase letter, then up to 31 lowercase letters, digits or underscores';
+
 export const metricDimensionKeySchema = z
   .string()
-  .regex(/^[a-z][a-z0-9_]{0,31}$/, 'must be a letter, then up to 31 characters of [a-z0-9_]');
+  .regex(/^[a-z][a-z0-9_]{0,31}$/, DIMENSION_KEY_RULE);
 
 const metricDimensionValueSchema = z
   .string()
@@ -104,7 +107,7 @@ const metricDimensionsSchema = z.preprocess(
         code: 'custom',
         input,
         path: ['__proto__'],
-        message: 'must be a letter, then up to 31 characters of [a-z0-9_]',
+        message: DIMENSION_KEY_RULE,
       });
     }
     return input;

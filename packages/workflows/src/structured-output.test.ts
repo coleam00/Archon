@@ -118,6 +118,11 @@ describe('validateStructuredOutput: reserved metrics key', () => {
   test.each([
     ['a key that does not start with a letter', { _route: 'plan' }, '/metric_dimensions/1/_route'],
     ['a key outside [a-z0-9_]', { Route: 'plan' }, '/metric_dimensions/1/Route'],
+    [
+      'a key over 32 characters',
+      { ['k'.repeat(33)]: 'plan' },
+      `/metric_dimensions/1/${'k'.repeat(33)}`,
+    ],
     // A parsed `__proto__` would be dropped silently, so it is refused.
     ['the key __proto__', JSON.parse('{"__proto__":"plan"}'), '/metric_dimensions/1/__proto__'],
     ['a value over 64 characters', { route: 'x'.repeat(65) }, '/metric_dimensions/1/route'],
@@ -135,6 +140,13 @@ describe('validateStructuredOutput: reserved metrics key', () => {
     const errors = r.valid ? [] : r.errors;
     expect(errors.length).toBeGreaterThan(0);
     expect(errors.every(e => e.startsWith(path))).toBe(true);
+  });
+
+  // Dimensions sit beside the records: a strict reader from before them must still read every record.
+  test('a record carrying its own dimensions fails', () => {
+    expect(errorsFor([{ ...count, dimensions: { route: 'plan' } }])).toEqual([
+      expect.stringMatching(/^\/metrics\/0: /),
+    ]);
   });
 
   test('dimensions that do not match the records one for one fail', () => {
