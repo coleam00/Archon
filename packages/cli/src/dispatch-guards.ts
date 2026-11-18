@@ -31,6 +31,7 @@ export function isContinueSubcommand(subcommand: string | undefined): boolean {
 const KEPT_ON_CONTINUE = {
   model: 'the model bindings',
   input: 'the inputs',
+  'input-file': 'the inputs',
   base: 'the base branch',
 } as const;
 

@@ -538,6 +538,7 @@ describe('workflow model arguments', () => {
       for (const [values, flag, kept] of [
         [{ model: 'large=opus' }, '--model', 'the model bindings'],
         [{ input: ['ticket=1'] }, '--input', 'the inputs'],
+        [{ 'input-file': ['ticket=ticket.md'] }, '--input-file', 'the inputs'],
         [{ base: 'main' }, '--base', 'the base branch'],
       ] as const) {
         const message = rejectRunFlagsOnContinue(args[1], values);

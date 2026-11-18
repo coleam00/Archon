@@ -138,6 +138,12 @@ export interface WorkflowRunOptions {
    * (`parseInputAssignments` in `@archon/workflows`).
    */
   inputs?: string[];
+  /**
+   * Raw `--input-file name=path` assignments, one per occurrence of the flag. The value is
+   * the file's exact contents, read once at the invocation gate; a relative path resolves
+   * from the run's cwd, as `--config` does.
+   */
+  inputFiles?: string[];
   /** Raw repeatable `--model name=spec` mappings; parsed once at the invocation gate. */
   modelAssignments?: string[];
   /** Local YAML file supplying a sparse configuration layer for this run. */

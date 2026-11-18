@@ -166,6 +166,7 @@ function buildRunOptions(
     pauseAtGates: values['pause-at-gates'] as boolean | undefined,
     // Raw `name=value` assignments; parsed at the invocation gate (#2554).
     inputs: values.input as string[] | undefined,
+    inputFiles: values['input-file'] as string[] | undefined,
     modelAssignments: values.model as string[] | undefined,
     configPath: typeof values.config === 'string' ? resolve(cwd, values.config) : undefined,
     configFromRun: values['config-from-run'] as string | undefined,

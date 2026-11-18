@@ -18,7 +18,6 @@ import type {
 } from '@archon/workflows/schemas/run-config';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { resolveTopLevelInputs } from '@archon/workflows/utils/workflow-requirements';
-import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
 import { liveSourceRoots, workflowSourceConfigFrom } from '@archon/workflows/workflow-source';
 import {
   dryRunWorkflow,
@@ -29,6 +28,7 @@ import {
 import { resolveCliUserId } from '../utils/cli-user';
 import { writeJsonLine, writeStdout } from '../utils/stdout';
 import { getLog, type WorkflowRunOptions } from './workflow-shared';
+import { readSuppliedInputs } from './workflow-run-admission';
 
 export async function resolveDryRunEnvironment(
   host: WorkflowHost,
@@ -140,10 +140,7 @@ export async function runDryRun(
   // with the same errors (undeclared key, missing required) before any trace output.
   // Only the supplied entries travel; the simulator layers pack settings and declared
   // defaults under them through `resolveRunStartInputs`, the merge a real run starts with.
-  const dryRunInputs = resolveTopLevelInputs(
-    workflow,
-    options.inputs ? parseInputAssignments(options.inputs) : undefined
-  );
+  const dryRunInputs = resolveTopLevelInputs(workflow, await readSuppliedInputs(cwd, options));
 
   // Relative stub paths resolve from `--cwd`, as the CLI reference states. They are the
   // operator's dry-run inputs, not part of the workflow's source, so `--workflow-source`
