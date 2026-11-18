@@ -35,6 +35,10 @@ const sdkToolHandlers = new Map<
     extra: { requestId: string | number }
   ) => Promise<{ content: { type: 'text'; text: string }[] }>
 >();
+// Exports these tests never reach fail when called instead of running the real SDK.
+const unmocked = (name: string) => () => {
+  throw new Error(`${name} is not mocked`);
+};
 mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   createSdkMcpServer: ({ name }: { name: string }) => ({
     type: 'sdk',
@@ -53,6 +57,9 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
     },
   }),
   query: mockQuery,
+  archiveSession: unmocked('archiveSession'),
+  unarchiveSession: unmocked('unarchiveSession'),
+  matchDeniedModels: unmocked('matchDeniedModels'),
 }));
 
 import { TOOL_OUTPUT_MAX_CHARS, type ProviderStopReason } from '@archon/provider-contract';
@@ -2814,6 +2821,11 @@ describe('typed failures (#1797, #3524)', () => {
     ['temp_dir_unusable', 'misconfigured'],
     ['cwd_unavailable', 'misconfigured'],
     ['shell_tool_missing', 'misconfigured'],
+    ['sandbox_required_unavailable', 'misconfigured'],
+    ['config_file_invalid', 'misconfigured'],
+    ['initialize_not_first', 'misconfigured'],
+    ['managed_settings_not_delivered', 'misconfigured'],
+    ['initialize_fields_not_delivered', 'misconfigured'],
     ['remote_settings_required_unavailable', 'unknown'],
     ['org_verify_failed', 'unknown'],
   ])('a startup failure for %s reports %s, classified by its reason', async (reason, expected) => {

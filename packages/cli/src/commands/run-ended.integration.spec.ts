@@ -480,6 +480,76 @@ describe('a run-ended binding', () => {
     });
   }, 90_000);
 
+  test('a linked binding starts the stage on the order each time a member ends, naming the member', async () => {
+    const fixture = await makeFixture('order');
+    fixture.bind('build-order', {
+      runEnded: {
+        workflowName: 'stage-a',
+        outcome: 'planned',
+        linked: { kind: 'part_of', holder: 'to' },
+        inputs: { plan: { result: '/plan' }, issue: { item: 'key' } },
+      },
+    });
+    // A link names items of a registered project, and the first run registers it.
+    await fixture.cli([
+      'workflow',
+      'run',
+      'stage-b',
+      '--no-worktree',
+      '--input',
+      'plan=p',
+      '--input',
+      'issue=i',
+    ]);
+    for (const member of ['m1', 'm2'])
+      await fixture.cli([
+        'workflow',
+        'link',
+        '--item',
+        member,
+        '--kind',
+        'part_of',
+        '--to',
+        'order-1',
+      ]);
+    const plan = async (member: string, count: number): Promise<RunRow[]> => {
+      await fixture.cli([
+        'workflow',
+        'run',
+        'stage-a',
+        '--no-worktree',
+        '--item',
+        member,
+        '--input',
+        `plan=${member}`,
+        '--input',
+        'issue=i1',
+      ]);
+      return waitFor(() => completedRuns(fixture, count), `${member} and the start its end caused`);
+    };
+    await plan('m1', 3);
+    const runs = await plan('m2', 5);
+    expect(runs.map(run => run.workflow_name)).toEqual([
+      'stage-b',
+      'stage-a',
+      'stage-b',
+      'stage-a',
+      'stage-b',
+    ]);
+
+    const order = itemReadSchema.parse(
+      JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'order-1', '--json']))
+    );
+    expect(order.runs.map(run => [run.id, run.cause])).toEqual([
+      [runs[2]?.id, { kind: 'run_ended', runId: runs[1]?.id, sourceInstanceId: 'build-order' }],
+      [runs[4]?.id, { kind: 'run_ended', runId: runs[3]?.id, sourceInstanceId: 'build-order' }],
+    ]);
+    const inputsOf = (run: RunRow | undefined) =>
+      (JSON.parse(run?.metadata ?? '{}') as { inputs?: Record<string, string> }).inputs;
+    expect(inputsOf(runs[2])).toEqual({ plan: 'planned: m1', issue: 'm1' });
+    expect(inputsOf(runs[4])).toEqual({ plan: 'planned: m2', issue: 'm2' });
+  }, 90_000);
+
   test('a hand run with no trigger host starts the stage its end caused, with no other command', async () => {
     const fixture = await makeFixture('hand');
     fixture.bind('build-after-plan', RUN_ENDED);
@@ -870,6 +940,13 @@ describe('trigger check', () => {
     fixture.bind('plan-again', RUN_ENDED, { workflowName: 'stage-a' });
     const gone = join(fixture.root, 'deleted-checkout');
     fixture.bind('stale', RUN_ENDED, { cwd: gone });
+    const linked = { kind: 'part_of', holder: 'to' };
+    // A linked binding starts the stage on other items: no duplicate of a same-item one.
+    fixture.bind('order-after-plan', { runEnded: { ...RUN_ENDED.runEnded, linked } });
+    fixture.bind('order-typo', {
+      runEnded: { workflowName: 'stage-a', outcome: 'plannned', linked },
+    });
+    fixture.bind('order-missing', { runEnded: { workflowName: 'stage-z', outcome: 'x', linked } });
 
     const checked = await fixture.attempt(['trigger', 'check']);
     expect(checked.exitCode).not.toBe(0);
@@ -885,6 +962,11 @@ describe('trigger check', () => {
     expect(problems.get('plan-again')).toEqual([
       "binding starts 'stage-a', the workflow whose end fires it: each run that completes with 'planned' starts another on the same item",
     ]);
+    expect(problems.get('order-after-plan')).toEqual([]);
+    expect(problems.get('order-typo')).toEqual([
+      "outcome 'plannned' is not one 'stage-a' completes with ('planned', 'blocked')",
+    ]);
+    expect(problems.get('order-missing')).toEqual(["workflow 'stage-z' is not in this project"]);
     expect(problems.get('stale')).toEqual([
       `binding.launch.cwd '${gone}' does not exist, so this binding never starts; fix the path or remove the file`,
     ]);

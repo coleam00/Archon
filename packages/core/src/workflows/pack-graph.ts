@@ -69,6 +69,7 @@ async function installedArrows(
       sourceInstanceId: file.sourceInstanceId,
       from,
       launchWorkflow,
+      linked: 'runEnded' in file && file.runEnded.linked !== undefined,
     };
     // A start from a missing checkout is in no project, so the end of a run never starts
     // it (`launchProjectKey`). Which project it was meant for cannot be known, so a file

@@ -55,6 +55,7 @@ function installed(
     sourceInstanceId: id,
     from: { stage: from, outcome },
     launchWorkflow: to,
+    linked: false,
     problems,
   };
 }
@@ -151,6 +152,7 @@ describe('a pack graph', () => {
           sourceInstanceId: 'answered',
           from: { stage: 'a', settled: 'answered' },
           launchWorkflow: 'a',
+          linked: false,
           problems: [],
         },
       ],
@@ -172,6 +174,7 @@ describe('a pack graph', () => {
           sourceInstanceId: 'asks',
           from: { stage: 'a', settled: 'answered' },
           launchWorkflow: 'b',
+          linked: false,
           problems: [],
         },
       ],
@@ -233,6 +236,17 @@ describe('a pack graph', () => {
       },
     ]);
     expect(graph.stages[0]?.outcome?.values).toEqual([{ value: 'ready', startsNothing: false }]);
+  });
+
+  test('a linked trigger file is never the declared same-item arrow it shares stages with', () => {
+    const graph = graphOf(stages(stage('a', ['ready']), stage('b', ['done'])), {
+      declared: { 'b-after-a': runEnded('b', 'a', 'ready') },
+      installed: [{ ...installed('a', 'ready', 'b', 'order'), linked: true }],
+    });
+    expect(graph.arrows.map(arrow => [arrow.active, arrow.declared?.binding ?? null])).toEqual([
+      [false, 'b-after-a'],
+      [true, null],
+    ]);
   });
 
   test('an installed arrow the run preflight refuses starts nothing', () => {

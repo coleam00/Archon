@@ -123,6 +123,11 @@ function classOfStartupFailure(reason: SDKStartupFailureReason): ProviderFailure
     case 'shell_tool_missing':
     case 'cli_version_too_old':
     case 'bypass_root':
+    case 'sandbox_required_unavailable':
+    case 'config_file_invalid': // every start is refused until the file is repaired
+    case 'initialize_not_first': // the host or a wrapper script wrote the wrong first line
+    case 'managed_settings_not_delivered':
+    case 'initialize_fields_not_delivered':
       return 'misconfigured';
     case 'worktree_unverified':
     case 'org_config_required_unavailable': // the org's required settings could not be loaded
