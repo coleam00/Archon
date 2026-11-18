@@ -8,7 +8,7 @@
  */
 import { afterAll, beforeAll, beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
