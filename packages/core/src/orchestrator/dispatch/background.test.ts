@@ -638,6 +638,24 @@ describe('dispatchBackgroundWorkflow', () => {
     }
   });
 
+  test('the run is created with the inputs naming the repository the forge check judged', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue({
+      repo_host: 'github.com',
+      repo_path: 'o/project',
+    });
+    try {
+      await dispatchBackgroundWorkflow(makeRoutingCtx({ inputs: { goal: 'x' } }), makeWorkflow());
+      expect(mockCreateWorkflowRun.mock.calls[0]?.[0].metadata?.inputs).toEqual({
+        goal: 'x',
+        repo_host: 'github.com',
+        repo_path: 'o/project',
+      });
+    } finally {
+      assertForge.mockRestore();
+    }
+  });
+
   for (const structured of [false, true]) {
     for (const fails of [false, true]) {
       test(`new adapter background lifecycle, structured=${structured}, fails=${fails}`, async () => {

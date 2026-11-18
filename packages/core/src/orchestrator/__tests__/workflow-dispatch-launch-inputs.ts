@@ -427,6 +427,26 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     }
   });
 
+  test('a fresh foreground run starts with the inputs naming the repository the forge check judged', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue({
+      repo_host: 'github.com',
+      repo_path: 'o/project',
+    });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
+    try {
+      await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+        actor: operator,
+      });
+      const opts = mockExecuteWorkflow.mock.calls[0]?.[7] as { inputs?: unknown };
+      expect(opts.inputs).toEqual({ repo_host: 'github.com', repo_path: 'o/project' });
+    } finally {
+      assertForge.mockRestore();
+    }
+  });
+
   test('threads context.workflowModelOverrides into a fresh foreground run', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));

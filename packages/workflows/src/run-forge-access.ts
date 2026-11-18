@@ -83,6 +83,9 @@ export interface ForgeRepository {
   readonly path: string;
 }
 
+/** The start inputs, by name, whose values name the repository a run acts on. */
+export type ForgeRepositoryInputs = Readonly<Record<string, string>>;
+
 /** What one `forge check` asks about: a remote of the checkout, or the repository the run names. */
 export type ForgeCheckRequest = ({ remote: string } | { repo: ForgeRepository }) & {
   operations: readonly string[];
@@ -122,6 +125,10 @@ export interface RunForgeAccessSite {
  * `forge.repository`; when they name none, some remote of the checkout must pass. A run
  * whose pack declares nothing returns at once.
  *
+ * @returns the start inputs that name the repository the check judged, or undefined when
+ *   it judged the checkout's remotes. The caller supplies them to the run: a run that
+ *   executes in a worktree cut after this check reads its settings again from that
+ *   worktree, which can name another repository.
  * @throws ForgeRequirementError naming each typed reason and its remedy.
  */
 export async function assertRunForgeAccess(
@@ -131,10 +138,10 @@ export async function assertRunForgeAccess(
   prepared: { readonly config: WorkflowEnvironment; readonly executionUserId?: string },
   site: RunForgeAccessSite,
   check: ForgeCheck = checkThroughCli
-): Promise<void> {
+): Promise<ForgeRepositoryInputs | undefined> {
   const { name: workflowName, pack } = workflow;
   const needs = pack?.forge;
-  if (pack === undefined || needs === undefined) return;
+  if (pack === undefined || needs === undefined) return undefined;
   const packKey = pack.key;
   function refuse(failures: ForgeRequirementFailure[], repository?: ForgeRepository): never {
     throw new ForgeRequirementError(workflowName, packKey, failures, repository);
@@ -176,14 +183,14 @@ export async function assertRunForgeAccess(
     // The run acts on this repository, so no other remote of the checkout can stand in.
     const failure = await check({ repo: target.repo, operations: needs.operations }, context);
     if (failure !== undefined) refuse([failure], target.repo);
-    return;
+    return target.inputs;
   }
   const failures: ForgeRequirementFailure[] = [];
   for (const { name, url } of target.remotes) {
     const failure = await check({ remote: url, operations: needs.operations }, context);
     // One remote that serves the run is enough: a mirror on a host no plugin claims, or one
     // the credential cannot read, must not refuse a run its canonical remote can serve.
-    if (failure === undefined) return;
+    if (failure === undefined) return undefined;
     failures.push({ remote: name, ...failure });
   }
   refuse(failures);
@@ -198,21 +205,23 @@ async function forgeTarget(
   names: { host: string; path: string } | undefined,
   site: RunForgeAccessSite
 ): Promise<
-  { repo: ForgeRepository } | { remotes: { name: string; url: string }[] } | ForgeRequirementFailure
+  | { repo: ForgeRepository; inputs: ForgeRepositoryInputs }
+  | { remotes: { name: string; url: string }[] }
+  | ForgeRequirementFailure
 > {
   const inputs =
     names === undefined
       ? undefined
       : (await resolveRunStartInputs(site.settingsCwd, workflow, site.supplied)).inputs;
   const named = namedRepository(names, inputs);
-  if ('missing' in named) {
+  if (named !== undefined && 'missing' in named) {
     return {
       reason: 'no_forge_repository',
       message: `the run sets input '${named.set}' but not '${named.missing}', which together name its repository`,
       remedy: `Set both ${named.set} and ${named.missing}, or neither to use the checkout's remotes.`,
     };
   }
-  if (named.repo !== undefined) return { repo: named.repo };
+  if (named !== undefined) return named;
   const remotes = await checkoutRemotes(site.cwd);
   if (remotes === undefined) {
     return {
@@ -245,16 +254,24 @@ async function forgeTarget(
 function namedRepository(
   names: { host: string; path: string } | undefined,
   inputs: Readonly<Record<string, JsonValue>> | undefined
-): { repo?: ForgeRepository } | { set: string; missing: string } {
-  if (names === undefined) return {};
-  const value = (name: string): string => {
-    const raw = inputs?.[name];
-    return typeof raw === 'string' ? raw.trim() : '';
+):
+  | { repo: ForgeRepository; inputs: ForgeRepositoryInputs }
+  | { set: string; missing: string }
+  | undefined {
+  if (names === undefined) return undefined;
+  const raw = (name: string): string => {
+    const value = inputs?.[name];
+    return typeof value === 'string' ? value : '';
   };
-  const host = value(names.host);
-  const path = value(names.path);
-  if (host !== '' && path !== '') return { repo: { host, path } };
-  if (host === '' && path === '') return {};
+  const host = raw(names.host).trim();
+  const path = raw(names.path).trim();
+  if (host !== '' && path !== '') {
+    return {
+      repo: { host, path },
+      inputs: { [names.host]: raw(names.host), [names.path]: raw(names.path) },
+    };
+  }
+  if (host === '' && path === '') return undefined;
   return host === ''
     ? { set: names.path, missing: names.host }
     : { set: names.host, missing: names.path };

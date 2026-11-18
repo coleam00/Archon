@@ -118,20 +118,15 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
     return;
   }
 
-  // The background path above checks its own start; this is the foreground's. A branch
-  // lane's run executes that branch, so its pack settings come from a snapshot of it.
-  if (!willContinueExistingRun && preparedAiConfiguration) {
-    const checkForge = (settingsCwd: string): Promise<void> =>
-      assertRunForgeAccess(createWorkflowDeps(), workflow, preparedAiConfiguration, {
-        cwd: codebase.default_cwd,
-        settingsCwd,
-        codebaseId: codebase.id,
-        supplied: resolvedInputs,
-      });
-    await (adoptionLane?.kind === 'checkout-branch'
-      ? withBranchLaunchSource(codebase.default_cwd, adoptionLane.taskBranch.branch, checkForge)
-      : checkForge(launchConfigCwd));
-  }
+  // The background path above checks its own start; this is the foreground's.
+  const launchInputs =
+    !willContinueExistingRun && preparedAiConfiguration
+      ? await checkForegroundForge(scope, workflow, preparedAiConfiguration, {
+          adoptionLane,
+          launchConfigCwd,
+          resolvedInputs,
+        })
+      : resolvedInputs;
 
   await dispatchForeground(scope, {
     workflow,
@@ -140,10 +135,42 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
     adoptedEnvironment: executable.adoptedEnvironment,
     adoptionLane,
     preparedAiConfiguration,
-    resolvedInputs,
+    resolvedInputs: launchInputs,
     deferredInputError,
     prepareLaunchAiConfiguration: prepareLaunch,
   });
+}
+
+/**
+ * Check a fresh foreground run's forge needs and return the inputs it starts with: the
+ * resolved inputs, plus those naming the repository the check judged. A branch lane's run
+ * executes that branch, so its pack settings come from a snapshot of it.
+ */
+async function checkForegroundForge(
+  { codebase }: DispatchScope,
+  workflow: ResolvedWorkflow,
+  prepared: Parameters<typeof assertRunForgeAccess>[2],
+  {
+    adoptionLane,
+    launchConfigCwd,
+    resolvedInputs,
+  }: {
+    adoptionLane: Parameters<typeof dispatchForeground>[1]['adoptionLane'];
+    launchConfigCwd: string;
+    resolvedInputs: Record<string, string> | undefined;
+  }
+): Promise<Record<string, string> | undefined> {
+  const checkForge = (settingsCwd: string): ReturnType<typeof assertRunForgeAccess> =>
+    assertRunForgeAccess(createWorkflowDeps(), workflow, prepared, {
+      cwd: codebase.default_cwd,
+      settingsCwd,
+      codebaseId: codebase.id,
+      supplied: resolvedInputs,
+    });
+  const forgeInputs = await (adoptionLane?.kind === 'checkout-branch'
+    ? withBranchLaunchSource(codebase.default_cwd, adoptionLane.taskBranch.branch, checkForge)
+    : checkForge(launchConfigCwd));
+  return forgeInputs === undefined ? resolvedInputs : { ...resolvedInputs, ...forgeInputs };
 }
 
 /**

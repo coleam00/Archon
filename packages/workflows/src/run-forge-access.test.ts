@@ -40,11 +40,13 @@ function site(
 }
 
 /** The common call: a declaring pack, freshly prepared, on the host. */
-function assertFor(cwd: string, check: ForgeCheck): Promise<void> {
+function assertFor(cwd: string, check: ForgeCheck): ReturnType<typeof assertRunForgeAccess> {
   return assertRunForgeAccess(noGithub, declaring, prepared, site(cwd), check);
 }
 
-async function refusal(run: Promise<void>): Promise<ForgeRequirementError['failures'] | undefined> {
+async function refusal(
+  run: Promise<unknown>
+): Promise<ForgeRequirementError['failures'] | undefined> {
   try {
     await run;
     return undefined;
@@ -213,7 +215,7 @@ describe('assertRunForgeAccess', () => {
 
     test('falls back to the checkout remotes when neither input is set', async () => {
       const check = mock<ForgeCheck>(async () => undefined);
-      await run({ repo_host: '', repo_path: ' ' }, check);
+      expect(await run({ repo_host: '', repo_path: ' ' }, check)).toBeUndefined();
       await run(undefined, check);
       expect(check.mock.calls.map(([request]) => request)).toEqual([
         { remote: 'git@github.com:mirror/r.git', operations: ['pr.view'] },
@@ -239,7 +241,7 @@ describe('assertRunForgeAccess', () => {
 
     test('reads the repository from the project settings when the run supplies none', async () => {
       const check = mock<ForgeCheck>(async () => undefined);
-      await assertRunForgeAccess(
+      const judged = await assertRunForgeAccess(
         noGithub,
         settingNaming,
         prepared,
@@ -249,6 +251,8 @@ describe('assertRunForgeAccess', () => {
       expect(check.mock.calls.map(([request]) => request)).toEqual([
         { repo: { host: 'github.com', path: 'o/target' }, operations: ['pr.view'] },
       ]);
+      // Returned for the caller to supply, so a worktree cut later cannot name another.
+      expect(judged).toEqual({ repo_host: 'github.com', repo_path: 'o/target' });
     });
 
     test('reads the settings of the checkout the run starts in, not the project checkout', async () => {
