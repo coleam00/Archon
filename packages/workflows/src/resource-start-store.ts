@@ -9,6 +9,7 @@ import {
 import type { z } from 'zod';
 import type {
   ForgeRefusal,
+  InstallHold,
   PreparedWorkflowLaunch,
   QueuedItemStart,
   ResourceStartBindingIntent,
@@ -170,6 +171,45 @@ export interface SkippedItemStart {
   workflow: string | null;
   resource: string;
   blockerRunId: string | null;
+}
+
+/**
+ * A start the install hold keeps from admission, oldest first. `trigger` is a receipt
+ * binding not yet prepared: its workflow source, project and item are resolved, and
+ * admission or its `overlap` decides it, only after the lift. `queued` is a request that
+ * was already waiting for capacity, its item or its checkout. `workflow`, `cwd` and
+ * `itemKey` are null when the stored intent does not read.
+ */
+export type HeldStart =
+  | {
+      kind: 'trigger';
+      receiptId: string;
+      bindingId: string;
+      hostId: string | null;
+      workflow: string | null;
+      cwd: string | null;
+      itemKey: string | null;
+      receivedAt: string;
+    }
+  | {
+      kind: 'queued';
+      requestId: string;
+      hostId: string;
+      resource: string;
+      workflow: string | null;
+      queuedAt: string;
+    };
+
+/** A held `trigger` start on one item, as the item read lists it. */
+export type HeldItemStart = Pick<
+  Extract<HeldStart, { kind: 'trigger' }>,
+  'receiptId' | 'bindingId' | 'workflow' | 'receivedAt'
+>;
+
+/** A binding preparation the install hold turned back: the binding is pending again. */
+export interface HeldPreparation {
+  status: 'held';
+  hold: InstallHold;
 }
 
 /** An admitted start whose run has not begun, and the host whose executor runs it. */
@@ -544,6 +584,16 @@ export interface DamagedStartReceipt {
 export type PendingStartBindingInspection = StartBindingInspection | DamagedStartReceipt;
 
 export interface IResourceStartStore {
+  /** The install hold, or null when none is set. A store without it reports none. */
+  getInstallHold(): Promise<InstallHold | null>;
+  /** Set the install hold; a hold already set is kept as it was. */
+  setInstallHold(input: { setBy: string }): Promise<{ hold: InstallHold; alreadySet: boolean }>;
+  /** Lift the install hold: the hold that was lifted, or null when none was set. */
+  liftInstallHold(): Promise<InstallHold | null>;
+  /** Every start the hold would keep: unprepared bindings, then queued requests. */
+  listHeldStarts(): Promise<HeldStart[]>;
+  /** The unprepared binding starts on item `itemId`. A store without items returns none. */
+  listHeldItemStarts(itemId: string): Promise<HeldItemStart[]>;
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
   /**
    * Admit an existing pending run that no binding started onto `resource` now, or return
@@ -612,11 +662,12 @@ export interface IResourceStartStore {
   }): Promise<boolean>;
   /**
    * Admit a prepared binding start. `resource` is the bound workflow's declaration; see
-   * `preparedBindingStart` for what it changes.
+   * `preparedBindingStart` for what it changes. Under the install hold nothing is admitted
+   * and the binding is pending again, so the lift prepares it anew.
    */
   completeStartBindingPreparation(
     input: PreparedBindingInput & { ownerId: string }
-  ): Promise<ResourceStartDisposition | null>;
+  ): Promise<ResourceStartDisposition | HeldPreparation | null>;
   failStartBindingPreparation(input: {
     receiptId: string;
     bindingId: string;

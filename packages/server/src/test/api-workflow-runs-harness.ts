@@ -464,6 +464,12 @@ mock.module('@archon/core/db/resource-starts', () => ({
   listQueuedItemStarts: mockListQueuedItemStarts,
   listSkippedItemStarts: mockListSkippedItemStarts,
 }));
+// The item read reads the install hold; no hold is set here.
+const realInstallHold = { ...(await import('@archon/core/db/install-hold')) };
+mock.module('@archon/core/db/install-hold', () => ({
+  ...realInstallHold,
+  getInstallHold: async () => null,
+}));
 type ItemRulingsDb = typeof import('@archon/core/db/item-rulings');
 export const mockListItemRulings = mock<ItemRulingsDb['listItemRulings']>(async () => []);
 export const mockRecordItemRuling = mock<ItemRulingsDb['recordItemRuling']>(async () => {

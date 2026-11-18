@@ -712,6 +712,12 @@ export class SqliteAdapter implements IDatabase {
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
+      CREATE TABLE IF NOT EXISTS remote_agent_install_hold (
+        id TEXT PRIMARY KEY,
+        set_by TEXT NOT NULL,
+        set_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
       ${resourceSlotHoldersTable('remote_agent_resource_slot_holders')}
 
       CREATE TABLE IF NOT EXISTS remote_agent_resource_start_requests (

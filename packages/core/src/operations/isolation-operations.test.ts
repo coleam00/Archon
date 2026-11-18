@@ -20,12 +20,14 @@ const mockListAllActiveWithCodebase = mock<typeof IsolationDb.listAllActiveWithC
 const mockListByCodebaseWithAge = mock<typeof IsolationDb.listByCodebaseWithAge>(() =>
   Promise.resolve([])
 );
+const mockListByCodebase = mock<typeof IsolationDb.listByCodebase>(() => Promise.resolve([]));
 const mockMarkWorktreeDestroyed = mock<typeof IsolationDb.markWorktreeDestroyed>(() =>
   Promise.resolve()
 );
 mock.module('../db/isolation-environments', () => ({
   listAllActiveWithCodebase: mockListAllActiveWithCodebase,
   listByCodebaseWithAge: mockListByCodebaseWithAge,
+  listByCodebase: mockListByCodebase,
   updateStatus: mock(() => Promise.resolve()),
   markWorktreeDestroyed: mockMarkWorktreeDestroyed,
 }));
@@ -249,7 +251,31 @@ describe('cleanupMergedEnvironments', () => {
     const result = await cleanupMergedEnvironments('cb-1', '/main');
 
     expect(mockCleanupMerged).toHaveBeenCalledWith('cb-1', '/main', {});
-    expect(result).toEqual(sweep);
+    expect(result).toEqual({ kind: 'swept', result: sweep });
+  });
+
+  test('reports the worktrees of a missing checkout without sweeping them', async () => {
+    mockLstat.mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+    mockListByCodebase.mockResolvedValueOnce([
+      makeActiveEnv({ branch_name: 'probe/x', working_path: '/worktrees/probe/x' }),
+      makeActiveEnv({ id: 'env-2', provider: 'container', working_path: '/folder' }),
+    ]);
+
+    const result = await cleanupMergedEnvironments('cb-1', '/gone');
+
+    expect(mockLstat).toHaveBeenCalledWith('/gone');
+    expect(mockCleanupMerged).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      kind: 'repository-gone',
+      environments: [{ branchName: 'probe/x', workingPath: '/worktrees/probe/x' }],
+    });
+  });
+
+  test('an unreadable checkout is a failure, not a gone repository', async () => {
+    mockLstat.mockRejectedValueOnce(Object.assign(new Error('denied'), { code: 'EACCES' }));
+
+    await expect(cleanupMergedEnvironments('cb-1', '/locked')).rejects.toThrow('denied');
+    expect(mockCleanupMerged).not.toHaveBeenCalled();
   });
 
   test('forwards includeClosed option to cleanupMergedWorktrees', async () => {

@@ -354,6 +354,10 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 - **`remote_agent_resource_slots`** - Keyed resource capacity
   - Stores capacity per `resource_key` for workflow and provider-attempt admission
 
+- **`remote_agent_install_hold`** - The install hold (`archon hold set|lift`)
+  - One row (`id = 'install'`) while the hold is set, with `set_by` (the CLI identity that set it) and `set_at`; no row means no hold
+  - Admission reads it under the admission lock and admits no new run while it is present. Binaries older than the table never read it
+
 - **`remote_agent_resource_slot_holders`** - Resource capacity holders
   - Tracks workflow runs and provider attempts occupying a slot
   - Provider-attempt holders record their owner host, PID, and instance

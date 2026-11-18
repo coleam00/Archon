@@ -10,6 +10,7 @@ import {
   validateStartReceiptLimit,
 } from '@archon/workflows/resource-start-store';
 import type {
+  HeldPreparation,
   PreparedBindingInput,
   StartBindingInspection,
   StartReceiptInspection,
@@ -49,6 +50,7 @@ import {
   lockAdmission,
   lockResourceSlot,
   lockResourceSlotForAdmission,
+  readInstallHold,
   resourceStartOccupancy,
   parseQueuedResourceStart,
   type TransactionQuery as Query,
@@ -63,6 +65,7 @@ import { ensureItem } from './items';
 import { WorkflowStatusReadError } from './workflow-run-reads';
 import { insertStartReceipt } from './start-receipt-writes';
 import { toHydratedTimestamp } from './timestamps';
+import { InstallHeldError } from '@archon/workflows/store';
 
 interface RequestRow {
   id: string;
@@ -241,7 +244,10 @@ export async function admitPendingRun(input: {
       [id]
     );
     const status = run.rows[0]?.status;
+    // Checked before the hold, so a start cancelled while it waits for the lift stops waiting.
     if (status !== 'pending') throw new Error(`Run '${id}' is ${status ?? 'missing'}, not pending`);
+    const hold = await readInstallHold(query);
+    if (hold) throw new InstallHeldError(hold);
     const itemId = run.rows[0]?.item_id;
     const blocker = resourceStartBlocker(
       await resourceStartOccupancy(query, input.resource, capacity),
@@ -261,7 +267,7 @@ export async function admitPendingRun(input: {
   });
 }
 
-/** Admit this host's queued requests that can run while the slot has free capacity. */
+/** Admit this host's queued requests that fit the slot's free capacity; none under the install hold. */
 export async function drainResourceStarts(options: {
   resource: string;
   hostId: string;
@@ -269,6 +275,7 @@ export async function drainResourceStarts(options: {
   return getDatabase().withTransaction(async query => {
     await lockAdmission(query);
     const { capacity } = await lockResourceSlotForAdmission(query, options.resource);
+    if (await readInstallHold(query)) return [];
     const slot = await resourceStartOccupancy(query, options.resource, capacity);
     const admitted: ResourceStartDisposition[] = [];
     for (const start of drainableStarts(slot, options.hostId))
@@ -294,7 +301,7 @@ export async function acceptStartReceipt(
   return getDatabase().withTransaction(query => insertStartReceipt(query, input));
 }
 
-function parseStoredJson(value: unknown): unknown {
+export function parseStoredJson(value: unknown): unknown {
   return typeof value === 'string' ? JSON.parse(value) : value;
 }
 
@@ -630,7 +637,7 @@ export async function listQueuedResourceStartsForHost(
 const storedWorkflowNameSchema = z.object({ run: z.object({ workflow_name: z.string() }) });
 
 /** The launch's workflow name, or null when the stored launch does not read. */
-function storedWorkflowName(launch: unknown): string | null {
+export function storedWorkflowName(launch: unknown): string | null {
   try {
     const parsed = storedWorkflowNameSchema.safeParse(parseStoredJson(launch));
     return parsed.success ? parsed.data.run.workflow_name : null;
@@ -708,7 +715,7 @@ export async function claimStartBindingPreparation(input: {
 
 export async function completeStartBindingPreparation(
   input: PreparedBindingInput & { ownerId: string }
-): Promise<ResourceStartDisposition | null> {
+): Promise<ResourceStartDisposition | HeldPreparation | null> {
   return getDatabase().withTransaction(async query => {
     // See withdrawQueuedResourceStart: acquire SQLite's writer lock before the read.
     if (getDatabase().dialect === 'sqlite') {
@@ -724,6 +731,12 @@ export async function completeStartBindingPreparation(
     );
     const row = binding.rows[0];
     if (!row?.intent) return null;
+    await lockAdmission(query);
+    const hold = await readInstallHold(query);
+    if (hold) {
+      await resetStartBindingPreparation(input, query);
+      return { status: 'held', hold };
+    }
     const persisted = resourceStartBindingIntentSchema.parse(parseStoredJson(row.intent));
     const disposition = await admitResourceStartWithQuery(
       query,
@@ -781,12 +794,11 @@ export async function failStartBindingPreparation(input: {
   return result.rowCount === 1;
 }
 
-export async function resetStartBindingPreparation(input: {
-  receiptId: string;
-  bindingId: string;
-  ownerId: string;
-}): Promise<boolean> {
-  const result = await getDatabase().query(
+export async function resetStartBindingPreparation(
+  input: { receiptId: string; bindingId: string; ownerId: string },
+  query: Query = (sql, params) => getDatabase().query(sql, params)
+): Promise<boolean> {
+  const result = await query(
     `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'pending', preparation_owner = NULL, updated_at = ${getDialect().now()}
       WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3`,
     [input.receiptId, input.bindingId, input.ownerId]
