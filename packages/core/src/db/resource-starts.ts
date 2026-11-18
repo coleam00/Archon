@@ -39,6 +39,8 @@ import {
   preparedWorkflowLaunchSchema,
   resourceStartBindingIntentSchema,
   checkoutHandoffSchema,
+  forgeRefusalSchema,
+  type ForgeRefusal,
 } from '@archon/workflows/schemas/resource-start';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDialect } from './connection';
@@ -342,6 +344,10 @@ function withEventInputs(
   };
 }
 
+function readForgeRefusal(stored: unknown): ForgeRefusal | null {
+  return stored == null ? null : forgeRefusalSchema.parse(parseStoredJson(stored));
+}
+
 function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
   const requestStatus =
     row.request_status === 'queued' ||
@@ -377,6 +383,7 @@ function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
     status: row.preparation_status as StartBindingInspection['status'],
     ownerId: typeof row.preparation_owner === 'string' ? row.preparation_owner : null,
     error: typeof row.preparation_error === 'string' ? row.preparation_error : null,
+    forgeRefusal: readForgeRefusal(row.forge_refusal),
     intent:
       row.intent == null
         ? null
@@ -737,7 +744,7 @@ export async function completeStartBindingPreparation(
       await namedItem(query, input, row.item_key)
     );
     await query(
-      `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'complete', preparation_error = NULL, updated_at = ${getDialect().now()}
+      `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'complete', preparation_error = NULL, forge_refusal = NULL, updated_at = ${getDialect().now()}
         WHERE receipt_id = $1 AND binding_id = $2 AND preparation_owner = $3`,
       [input.receiptId, input.bindingId, input.ownerId]
     );
@@ -770,9 +777,10 @@ export async function failStartBindingPreparation(input: {
   ownerId: string;
   retryable: boolean;
   error: string;
+  forgeRefusal?: ForgeRefusal;
 }): Promise<boolean> {
   const result = await getDatabase().query(
-    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = $4, preparation_error = $5, updated_at = ${getDialect().now()}
+    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = $4, preparation_error = $5, forge_refusal = $6, updated_at = ${getDialect().now()}
       WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3`,
     [
       input.receiptId,
@@ -780,6 +788,7 @@ export async function failStartBindingPreparation(input: {
       input.ownerId,
       input.retryable ? 'failed' : 'rejected',
       input.error,
+      input.forgeRefusal ? JSON.stringify(input.forgeRefusal) : null,
     ]
   );
   return result.rowCount === 1;

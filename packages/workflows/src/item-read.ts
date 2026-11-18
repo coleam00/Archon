@@ -25,6 +25,7 @@ import {
   type IdentifiedAttentionDegraded,
 } from './schemas/attention-degraded';
 import { itemActFields } from './schemas/item-act';
+import { operatorPause, operatorPauseSchema } from './schemas/operator-pause';
 import {
   itemLinkDegradedSchema,
   itemLinkKindSchema,
@@ -129,6 +130,11 @@ export const itemRunSchema = z.object({
    * item, and kept on a start that was refused for it (`--no-wait`), which is cancelled.
    */
   heldBehind: itemHeldBehindSchema.nullable(),
+  /**
+   * An operator's pause: requested on a running run, which pauses once its running nodes
+   * finish, or the pause a paused run is in. Null otherwise.
+   */
+  operatorPause: operatorPauseSchema.nullable(),
   /**
    * The run completed with a readable `returns:` value: the value a `result_of` input
    * naming its workflow reads while it is the latest completed run. Read it with
@@ -383,6 +389,7 @@ async function itemRun(
       outputTokens: usage.tokens?.output ?? null,
     },
     heldBehind,
+    operatorPause: operatorPause(run),
     ...readResult(run, terminalEvents.get(run.id) ?? []),
   };
 }

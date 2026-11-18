@@ -51,6 +51,8 @@ export interface Run {
    */
   ownerObservation?: components['schemas']['DashboardWorkflowRun']['owner_observation'];
   attention: components['schemas']['WorkflowRun']['attention'];
+  /** An operator's pause, requested or in effect; null or absent otherwise. */
+  operatorPause?: components['schemas']['WorkflowRun']['operator_pause'];
   outcome: RunOutcome;
   terminalRecord: components['schemas']['WorkflowRunDetail']['run']['terminal_record'];
   startedAt: WorkflowRun['started_at'];
@@ -143,6 +145,7 @@ type RawWorkflowRun = Pick<
       | 'user_message'
       | 'metadata'
       | 'attention'
+      | 'operator_pause'
       | 'parent_run_id'
     >
   > &
@@ -253,16 +256,24 @@ export function readOutcome(
   return raw.completed_outcome ?? (raw.status === 'completed' ? (raw.outcome ?? null) : null);
 }
 
+/** The gate or wait the run is paused at; a gate or wait beside an operator pause is history. */
+function readCurrentPause(raw: RawWorkflowRun): Pick<Run, 'approval' | 'wait' | 'gateResolved'> {
+  if (raw.operator_pause?.state === 'paused')
+    return { approval: null, wait: null, gateResolved: null };
+  const wait = raw.metadata?.wait;
+  const parsedWait: NormalizedWorkflowWait | null =
+    wait === undefined ? null : normalizeWorkflowWait(wait);
+  return {
+    approval: parsedWait === null ? readApproval(raw.metadata?.approval) : null,
+    wait: parsedWait,
+    gateResolved: raw.metadata?.approval?.resolved ?? null,
+  };
+}
+
 export function toRun(raw: RawWorkflowRun): Run {
   const activeNodes = Array.isArray(raw.active_nodes)
     ? raw.active_nodes.filter(nodeId => typeof nodeId === 'string' && nodeId.length > 0)
     : [];
-  const approval = raw.metadata?.approval;
-  const gateResolved = approval?.resolved ?? null;
-  const parsedApproval = readApproval(approval);
-  const wait = raw.metadata?.wait;
-  const parsedWait: NormalizedWorkflowWait | null =
-    wait === undefined ? null : normalizeWorkflowWait(wait);
 
   return {
     ...readRunProvenance(raw),
@@ -272,6 +283,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     status: normalizeStatus(raw.status),
     ownerObservation: raw.owner_observation,
     attention: raw.attention ?? null,
+    operatorPause: raw.operator_pause ?? null,
     outcome: readOutcome(raw),
     terminalRecord: raw.terminal_record ?? null,
     startedAt: raw.started_at,
@@ -282,9 +294,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     activeNodes,
     lastTool: null,
     toolCallAttention: raw.status === 'running' ? (raw.metadata?.tool_call_attention ?? []) : [],
-    approval: parsedWait === null ? parsedApproval : null,
-    wait: parsedWait,
-    gateResolved,
+    ...readCurrentPause(raw),
     stopReason: raw.metadata?.stop_reason ?? null,
   };
 }

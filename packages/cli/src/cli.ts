@@ -524,6 +524,8 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
           return await workflowRoutes.runWorkflowRuns(route);
         case 'resume':
           return await workflowRoutes.runWorkflowResume(route);
+        case 'pause':
+          return await workflowRoutes.runWorkflowPause(route);
         case 'abandon':
           return await workflowRoutes.runWorkflowAbandon(route);
         case 'end-turn':

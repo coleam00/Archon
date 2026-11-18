@@ -28,7 +28,8 @@ import { writeNodeArtifact } from '../artifacts-index';
 import { safeSendMessage } from '../platform-messages';
 import { getLog } from './log';
 import { incrementalLoopUsage, sumTokenUsage } from './usage';
-import { RunSourceUnreadableError, settledValuesOrThrow } from './node-source';
+import { RunSourceUnreadableError, settleSequentially, settledValuesOrThrow } from './node-source';
+import type { OperatorPauseBoundary } from './operator-pause-boundary';
 import {
   beginExecution,
   ownsBodySessionCursor,
@@ -46,50 +47,39 @@ import { runWithPackDir } from '../workflow-variables';
 import { releaseAdmittedScratch, releaseInvocationScratch, runInNodeScratch } from './node-scratch';
 import { getStaleCachedDependencies } from './stale-dependencies';
 /**
- * Await thunks one at a time, collecting outcomes in `Promise.allSettled` shape so the
- * caller's result handling is identical for the sequential and concurrent paths.
- */
-async function settleSequentially(
-  thunks: readonly (() => Promise<LayerNodeResult>)[]
-): Promise<PromiseSettledResult<LayerNodeResult>[]> {
-  const settled: PromiseSettledResult<LayerNodeResult>[] = [];
-  for (const thunk of thunks) {
-    try {
-      settled.push({ status: 'fulfilled', value: await thunk() });
-    } catch (reason) {
-      settled.push({ status: 'rejected', reason });
-    }
-  }
-  return settled;
-}
-
-/**
  * Walk the topological `layers` of a DAG (or subgraph), executing each layer's nodes
  * concurrently within each admission phase, aggregating results into `ctx.nodeOutputs` and usage into
  * `ctx`. Stops early (returns) when a between-layer status check sees a non-running run
  * state (paused/cancelled/deleted) — the caller always proceeds to its own terminal tally.
+ * The top-level walk also stops at `pause`: before each layer dispatches, or before the
+ * next node of a layer it runs one node at a time.
  *
  * Shared by the top-level DAG, `executeLoopGroupNode`'s per-iteration body and each
  * composed fan-out instance; `ctx.stepNamePrefix` is empty for the top-level DAG.
  */
-export async function runLayers(ctx: RunLayersContext): Promise<void> {
+export async function runLayers(
+  ctx: RunLayersContext,
+  pause?: OperatorPauseBoundary
+): Promise<void> {
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
 
   for (let layerIdx = 0; layerIdx < ctx.layers.length; layerIdx++) {
     if (ctx.containerPause?.publish && ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause')
       break;
     await ctx.toolAttention.refresh();
+    if (await pause?.stopsHere()) break;
     const layer = ctx.layers[layerIdx];
-    await runLayer(ctx, layer, layerIdx);
+    await runLayer(ctx, layer, layerIdx, pause);
 
-    if (await stopsBetweenLayers(ctx, layerIdx)) break;
+    if (pause?.reached || (await stopsBetweenLayers(ctx, layerIdx))) break;
   }
 }
 
 async function runLayer(
   ctx: RunLayersContext,
   layer: readonly DagNode[],
-  layerIdx: number
+  layerIdx: number,
+  pause: OperatorPauseBoundary | undefined
 ): Promise<void> {
   const isParallelLayer = layer.length > 1;
 
@@ -117,12 +107,14 @@ async function runLayer(
   for (const phase of phases) {
     if (ctx.containerPause?.publish && ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause')
       break;
+    if (pause?.reached) break;
     const layerHadFailure = await runLayerPhase(
       ctx,
       phase,
       isParallelLayer,
       serializeLayer,
-      guardedLayerSnapshots
+      guardedLayerSnapshots,
+      pause
     );
 
     if (layerHadFailure) {
@@ -136,7 +128,8 @@ async function runLayerPhase(
   layer: readonly DagNode[],
   isParallelLayer: boolean,
   serializeLayer: boolean,
-  guardedLayerSnapshots: Set<string> | undefined
+  guardedLayerSnapshots: Set<string> | undefined,
+  pause: OperatorPauseBoundary | undefined
 ): Promise<boolean> {
   const peers =
     ctx.interactionAdmission && layer.some(canSuspend)
@@ -195,7 +188,7 @@ async function runLayerPhase(
       }
   );
   const layerResults = sequential
-    ? await settleSequentially(nodeThunks)
+    ? await settleSequentially(nodeThunks, pause && (() => pause.stopsHere()))
     : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
 
   const layerHadFailure = await aggregateLayerResults(ctx, layer, layerResults, isParallelLayer);

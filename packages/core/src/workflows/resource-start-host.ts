@@ -11,7 +11,7 @@ import {
   type PreparedRunAiConfiguration,
   WorkflowCredentialPreflightError,
 } from '@archon/workflows/run-preflight';
-import { assertRunForgeAccess } from '@archon/workflows/run-forge-access';
+import { assertRunForgeAccess, ForgeRequirementError } from '@archon/workflows/run-forge-access';
 import {
   requireTerminalStatusWrite,
   TerminalStatusWriteError,
@@ -399,13 +399,18 @@ async function prepareClaimedBinding(
   } catch (error) {
     // Unknown failures are not an implicit retry policy; the receipt stays inspectable.
     // Configuration and provider errors can contain secret values, so persist the
-    // failed boundary, not the exception text. The original cause reaches the caller.
+    // failed boundary, not the exception text. A forge refusal is the exception: it holds
+    // only remote names, typed reasons and text written to be shown. The original cause
+    // reaches the caller.
     try {
       await host.deps.store.failStartBindingPreparation({
         ...identity,
         retryable:
           error instanceof TrustedTextRefusedError && error.reason === 'waiting_acceptance',
         error: error instanceof TrustedTextRefusedError ? error.reason : `${stage}_failed`,
+        ...(error instanceof ForgeRequirementError
+          ? { forgeRefusal: { pack: error.packKey, failures: error.failures } }
+          : {}),
       });
     } catch (statusError) {
       throw new AggregateError(

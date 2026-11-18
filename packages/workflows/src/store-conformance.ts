@@ -23,6 +23,7 @@ import { describePausesAndWaitsConformance } from './store-conformance/pauses-an
 import { describeResumeReductionConformance } from './store-conformance/resume-reduction';
 import { describeRunsAndClaimsConformance } from './store-conformance/runs-and-claims';
 import { describeSourceReleaseConformance } from './store-conformance/source-release';
+import { describeOperatorPauseConformance } from './store-conformance/operator-pause';
 import { describeStartReceiptConformance } from './store-conformance/start-receipts';
 
 export interface WorkflowStoreHarness {
@@ -69,6 +70,7 @@ export function describeWorkflowStoreConformance(
     describeEventFeedConformance(current);
     describePausesAndWaitsConformance(current);
     describeSourceReleaseConformance(() => harness.store);
+    describeOperatorPauseConformance(() => harness.store);
     describeAttentionConformance(current);
     describeGatesAndTerminalsConformance(current);
     describeResumeReductionConformance(current);

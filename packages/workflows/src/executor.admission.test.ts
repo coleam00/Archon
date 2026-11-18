@@ -805,6 +805,27 @@ describe('checkout-in-use message', () => {
     expect(message).not.toContain('Wait for it to finish');
   });
 
+  it('offers resume, not approve or reject, for an operator-paused run with a stale gate', async () => {
+    const message = await blockedBy(
+      blocker({
+        status: 'paused',
+        metadata: {
+          pause_cause: 'operator',
+          operator_pause: {
+            requested: { by: null, via: 'cli', at: '2026-10-05T12:00:00.000Z' },
+            pausedAt: '2026-10-05T12:01:00.000Z',
+          },
+          approval: { type: 'approval', nodeId: 'review', message: 'Approve?', resolved: true },
+        },
+      })
+    );
+    expect(message).toContain('paused by an operator');
+    expect(message).toContain('/workflow resume abc12345');
+    expect(message).toContain('/workflow abandon abc12345');
+    for (const absent of ['user input', '/workflow approve', '/workflow reject'])
+      expect(message).not.toContain(absent);
+  });
+
   it.each([
     [
       'child_workflow',

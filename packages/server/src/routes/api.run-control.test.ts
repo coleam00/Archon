@@ -1071,8 +1071,10 @@ describe('starter or admin authorization on every HTTP run action', () => {
       setRequireRunIdentity(false);
     }
   });
+  // `pause` has no HTTP route; its authorization is tested at the operation.
+  const httpRunActions = RUN_ACTIONS.filter(action => action !== 'pause');
   for (const identity of ['another member', 'failed proxy identity'] as const) {
-    for (const action of RUN_ACTIONS) {
+    for (const action of httpRunActions) {
       test(`${action} returns 403 and performs no mutation for ${identity}`, async () => {
         setSessionUserId(identity === 'another member' ? 'member-b' : undefined);
         if (identity === 'failed proxy identity')

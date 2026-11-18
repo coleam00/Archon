@@ -145,6 +145,8 @@ async function triggerWhoami(host: WorkflowHost): Promise<void> {
  * Each receipt, with `awaitingExecution`: its starts that are admitted but whose run no
  * executor has claimed. One stays there when the process that admitted it died before it
  * spawned the executor; `archon trigger execute <requestId> --host <hostId>` runs it once.
+ * And `refusedBindings`: its bindings whose preparation failed or was refused, each with
+ * the failed boundary and, for a refusal of the pack's forge needs, the reasons and remedies.
  * `hold` is the install hold when the receipt has a start it keeps (a binding not yet
  * prepared, or a queued request), else null.
  */
@@ -160,6 +162,14 @@ async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise
         return {
           ...receipt,
           awaitingExecution: await receiptAwaitingExecution(host, bindings),
+          refusedBindings: bindings
+            .filter(binding => binding.status === 'rejected' || binding.status === 'failed')
+            .map(({ bindingId, status, error, forgeRefusal }) => ({
+              bindingId,
+              status,
+              error,
+              forgeRefusal,
+            })),
           hold: hold && bindings.some(heldBinding) ? hold : null,
         };
       })

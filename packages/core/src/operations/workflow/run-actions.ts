@@ -161,15 +161,8 @@ async function assertNoLiveOwner(ctx: OperationContext, run: WorkflowRun): Promi
       `Run ${run.id} is a sub-run of ${rootRunId}, whose owner still answers on this host. ${notChanged}`
     );
   }
-  const thisHost = hostname();
-  const thisUid = process.getuid?.();
-  const otherUser =
-    recorded?.uid !== undefined && thisUid !== undefined && recorded.uid !== thisUid;
-  if (recorded && (recorded.host !== thisHost || otherUser)) {
-    const where =
-      recorded.host !== thisHost
-        ? `on another host (${recorded.host}, pid ${String(recorded.pid)}); this is ${thisHost}`
-        : `as another user (uid ${String(recorded.uid)}, pid ${String(recorded.pid)}); this is uid ${String(thisUid)}`;
+  const where = unreachableOwner(recorded);
+  if (where !== undefined) {
     throw new ResumeRefusedError(
       'owner_unreachable',
       `Run ${run.id} is marked running and its recorded owner ran ${where}. ` +
@@ -177,6 +170,23 @@ async function assertNoLiveOwner(ctx: OperationContext, run: WorkflowRun): Promi
         'Resume it from that host and user, or abandon it if its process is gone.'
     );
   }
+}
+
+/**
+ * Where a recorded owner runs when this process cannot ask it: on another host or as
+ * another user. Undefined when it is local or none is recorded.
+ */
+export function unreachableOwner(
+  recorded: ReturnType<typeof readExecutionOwner>
+): string | undefined {
+  if (!recorded) return undefined;
+  const thisHost = hostname();
+  const thisUid = process.getuid?.();
+  if (recorded.host !== thisHost)
+    return `on another host (${recorded.host}, pid ${String(recorded.pid)}); this is ${thisHost}`;
+  if (recorded.uid !== undefined && thisUid !== undefined && recorded.uid !== thisUid)
+    return `as another user (uid ${String(recorded.uid)}, pid ${String(recorded.pid)}); this is uid ${String(thisUid)}`;
+  return undefined;
 }
 
 /**
