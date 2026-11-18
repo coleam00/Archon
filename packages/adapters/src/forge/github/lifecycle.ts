@@ -18,6 +18,7 @@ import { mergePullRequest } from './merge';
 import { upsertComment } from './comments';
 import { replyOnThread, resolveThread } from './review-threads';
 import { submitReview } from './reviews';
+import { putAttachment } from './attachments';
 import {
   addLabel,
   closeWorkItem,
@@ -76,6 +77,8 @@ export async function handleGithubMutation(
         return await resolveThread(request, fetchImpl, token, submit);
       case 'pr.review.submit':
         return await submitReview(request, fetchImpl, token, submit);
+      case 'attachment.put':
+        return await putAttachment(request, fetchImpl, token, submit);
     }
   } catch (cause) {
     const error = githubErrorDetail(cause);
