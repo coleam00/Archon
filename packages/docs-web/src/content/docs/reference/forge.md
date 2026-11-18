@@ -128,8 +128,7 @@ On success it exits 0 and the result names the plugin and, when the plugin needs
       "host": "github.com",
       "plugin": { "name": "github", "version": "0.14.0" },
       "operations": ["pr.view", "pr.create", "pr.merge"],
-      "credentialSource": "GH_TOKEN",
-      "read": false
+      "credentialSource": "GH_TOKEN"
     }
   }
 }
