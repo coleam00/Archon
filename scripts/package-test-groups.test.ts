@@ -55,6 +55,14 @@ test('the Windows directive counts anywhere in the leading comment lines, and on
   expect(hasWindowsTestDirective(`${WINDOWS_TEST_DIRECTIVE} because`)).toBe(false);
 });
 
+test('an isolation directive below line 1 fails discovery instead of being ignored', () => {
+  const root = fixture();
+  write(root, 'src/a.test.ts', `${WINDOWS_TEST_DIRECTIVE}\n${TEST_ISOLATION_DIRECTIVE}\n`);
+  expect(() => resolvePackageTestGroups(root, {})).toThrow('below line 1');
+  write(root, 'src/a.test.ts', `${TEST_ISOLATION_DIRECTIVE}\n${WINDOWS_TEST_DIRECTIVE}\n`);
+  expect(resolvePackageTestGroups(root, {})).toEqual([['src/a.test.ts']]);
+});
+
 test('a direct mock.module() call without the directive fails discovery', () => {
   const root = fixture();
   const mocking = "mock.module('./value', () => ({}));\n";

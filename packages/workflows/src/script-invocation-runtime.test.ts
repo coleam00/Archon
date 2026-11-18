@@ -1,5 +1,5 @@
-// @archon-test-windows
 // @archon-test-isolated
+// @archon-test-windows
 import { expect, test } from 'bun:test';
 import { execFileAsync } from '@archon/git';
 import { removeTempTree } from '@archon/paths/test-utils';

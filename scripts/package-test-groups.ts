@@ -10,13 +10,18 @@ export const TEST_ISOLATION_DIRECTIVE = '// @archon-test-isolated';
  */
 export const WINDOWS_TEST_DIRECTIVE = '// @archon-test-windows';
 
-/** Whether a test file's source carries `WINDOWS_TEST_DIRECTIVE` in its leading comment lines. */
-export function hasWindowsTestDirective(source: string): boolean {
+/** Whether `directive` is one of the `//` lines a test file's source starts with. */
+function inLeadingComments(source: string, directive: string): boolean {
   for (const line of source.replace(/^\uFEFF/, '').split(/\r?\n/)) {
-    if (line === WINDOWS_TEST_DIRECTIVE) return true;
+    if (line === directive) return true;
     if (!line.startsWith('//')) return false;
   }
   return false;
+}
+
+/** Whether a test file's source carries `WINDOWS_TEST_DIRECTIVE` in its leading comment lines. */
+export function hasWindowsTestDirective(source: string): boolean {
+  return inLeadingComments(source, WINDOWS_TEST_DIRECTIVE);
 }
 
 export function resolvePackageTestGroups(
@@ -68,6 +73,7 @@ function groupDiscoveredTestFiles(packageDirectory: string, files: readonly stri
   const isolated: string[][] = [];
   const shared: string[] = [];
   const unmarkedMocks: string[] = [];
+  const misplaced: string[] = [];
   for (const file of files) {
     let source: string;
     try {
@@ -76,12 +82,19 @@ function groupDiscoveredTestFiles(packageDirectory: string, files: readonly stri
       throw new Error(`Cannot read test file ${file}: ${String(cause)}`, { cause });
     }
     if (source.split(/\r?\n/, 1)[0] === TEST_ISOLATION_DIRECTIVE) isolated.push([file]);
+    else if (inLeadingComments(source, TEST_ISOLATION_DIRECTIVE)) misplaced.push(file);
     else if (source.includes('mock.module(')) unmarkedMocks.push(file);
     else shared.push(file);
   }
   // A direct mock.module() call in the shared process would leak into every other
   // unmarked file. Mocks reached through a helper cannot be seen here; those files
   // still need the directive by hand.
+  // Below line 1 the isolation directive is ignored, so the file would share a process unseen.
+  if (misplaced.length > 0) {
+    throw new Error(
+      `These tests carry "${TEST_ISOLATION_DIRECTIVE}" below line 1, where it has no effect; move it to line 1: ${misplaced.join(', ')}`
+    );
+  }
   if (unmarkedMocks.length > 0) {
     throw new Error(
       `These tests call mock.module() but do not start with "${TEST_ISOLATION_DIRECTIVE}": ${unmarkedMocks.join(', ')}`

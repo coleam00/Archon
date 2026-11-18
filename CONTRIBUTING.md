@@ -177,8 +177,11 @@ or other-platform CI results.
 
 On a push to `dev`, Windows runs only the Windows set: the test files whose first comment
 lines include `// @archon-test-windows` (below `// @archon-test-isolated` when a file has
-both). Everything else on Windows only repeats what Linux proved, so it runs there only on a
-push to `main` or a dispatch with `windows-full-suite=true`.
+both; discovery refuses the isolation directive below line 1). Every other test runs on
+Windows only on a push to `main` or a dispatch with `windows-full-suite=true`. Most of those
+prove nothing Linux does not, but not all: a Windows branch in an unmarked file, such as an
+assertion whose expected value differs on Windows, is not checked on `dev`. When that branch
+is what the test is about, move the case into a marked file.
 
 Mark a file when its subject behaves differently on Windows and the test exercises the real
 platform, not an injected `win32` path API or a mocked `process.platform`, which Linux proves
@@ -192,7 +195,8 @@ equally well:
 
 A marked file runs every one of its tests on Windows. A case that cannot run there (a chmod
 denial, a symlink Git-Bash cannot make) goes in an unmarked sibling file, not behind a
-`win32` skip. `skipIf(process.platform !== 'win32')` for a Windows-only case is fine.
+`win32` skip. A Windows-only case in a large mixed file goes the other way, into a small
+marked sibling. `skipIf(process.platform !== 'win32')` for a Windows-only case is fine.
 
 Run the set with `bun run test --windows` or `bun run validate --only windows-tests`; the
 runner prints the files it selected. `scripts/package-test-groups.ts` reads the marker.

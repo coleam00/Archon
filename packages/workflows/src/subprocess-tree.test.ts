@@ -1,3 +1,4 @@
+// @archon-test-isolated
 // @archon-test-windows
 /**
  * A node's timeout or abort ends the whole process tree, wrapper and grandchild, on every OS.
