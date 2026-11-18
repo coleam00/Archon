@@ -478,6 +478,26 @@ describe('Task Scheduler', () => {
     expect(await readdir(schedules)).toEqual([`${LABEL}.log`]);
   });
 
+  it('removes the files of a task the scheduler no longer has', async () => {
+    const archonHome = await scratchDirectory();
+    const job = windowsJob({ archonHome });
+    await installNativeSchedule(job, {
+      platform: 'win32',
+      windowsUserId: 'me',
+      runCommand: recorder().runCommand,
+    });
+    // A task that is gone fails both /Query and /Delete.
+    const { commands, runCommand } = recorder(command =>
+      ['/Query', '/Delete'].includes(command[1])
+    );
+
+    expect(
+      await removeNativeSchedule(job, { platform: 'win32', windowsUserId: 'me', runCommand })
+    ).toBe(true);
+    expect(commands.map(command => command[1])).toEqual(['/Query']);
+    expect(await readdir(join(archonHome, 'schedules'))).toEqual([]);
+  });
+
   it('deletes the task and its files when the first run cannot start', async () => {
     const archonHome = await scratchDirectory();
     const { commands, runCommand } = recorder(command => command[1] === '/Run');

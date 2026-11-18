@@ -2834,7 +2834,7 @@ Platform rules:
 
 - **macOS**: the user must be logged in to a GUI session.
 - **Linux**: the timer needs a reachable systemd user manager. It runs while the user has a session; `loginctl enable-linger` keeps it running without one. The service is a `Type=oneshot` unit with `KillMode=process`, so the run `trigger fire` hands to a background process survives `fire`'s exit.
-- **Windows**: the task runs as the logged-on user and only while that user is logged on, so it keeps access to the Credential Manager; each run opens a console window. The interval must be a whole number of minutes from 1 minute to 31 days, and a path or `PATH` entry must not contain a double quote. A run that is still going when the next is due is skipped.
+- **Windows**: the task runs as the logged-on user and only while that user is logged on, so it keeps access to the Credential Manager; each run opens a console window. The interval must be a whole number of minutes from 1 minute to 31 days, a path or `PATH` entry must not contain a double quote, and `ARCHON_HOME` must not contain `%`. A run that is still going when the next is due is skipped.
 
 On any other host, or on Linux without a reachable `systemctl --user`, `install` refuses and prints the command to schedule by hand, with its interval; see [drive the same commands from another scheduler](/guides/workflow-triggers/#drive-the-same-commands-from-another-scheduler).
 
