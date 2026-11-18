@@ -381,7 +381,7 @@ async function prepareChildAiConfiguration(
       await assertRunForgeAccess(deps, childWorkflow, childPrepared, {
         cwd: configCwd,
         codebaseId: args.codebaseId,
-        inputs,
+        supplied: inputs,
       });
     }
     return proceed(childPrepared);

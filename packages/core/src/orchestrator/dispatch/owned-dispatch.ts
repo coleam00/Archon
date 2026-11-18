@@ -122,7 +122,7 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
     await assertRunForgeAccess(createWorkflowDeps(), workflow, preparedAiConfiguration, {
       cwd: codebase.default_cwd,
       codebaseId: codebase.id,
-      inputs: resolvedInputs,
+      supplied: resolvedInputs,
     });
   }
 

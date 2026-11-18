@@ -300,7 +300,7 @@ async function prepareBinding(
     await assertRunForgeAccess(host.deps, workflow, preparedAi, {
       cwd,
       codebaseId: codebase.id,
-      inputs,
+      supplied: inputs,
     });
     const launch: PreparedWorkflowLaunch = {
       version: 2,

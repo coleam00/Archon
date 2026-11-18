@@ -9,7 +9,8 @@
  * The check asks `archon forge check` through `ARCHON_CLI_COMMAND`, the same executable,
  * plugin discovery and credential reading the run's own forge calls use, so the check and
  * the run cannot disagree about which plugin serves a remote. Each check makes one read of
- * the repository with the run's credential and no write.
+ * the repository with the run's credential and no write, when the plugin advertises
+ * `pr.view`.
  */
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -24,9 +25,10 @@ import { createLogger } from '@archon/paths';
 import { RUN_GITHUB_IDENTITY_HANDOFF_ENV } from '@archon/paths/github-token-env';
 import type { WorkflowEnvironment } from './deps';
 import type { JsonValue } from './output-ref';
+import { resolveRunStartInputs } from './pack-settings';
 import { resolveWorkflowGithubEnvironment, type WorkflowGithubDeps } from './run-credential-env';
-import type { WorkflowPack } from './schemas/pack-settings';
 import type { ForgeRefusalFailure } from './schemas/resource-start';
+import type { ResolvedWorkflow } from './schemas/workflow';
 
 const log = createLogger('workflow.run-forge-access');
 
@@ -98,22 +100,26 @@ export interface RunForgeAccessSite {
   readonly cwd: string;
   readonly codebaseId: string | undefined;
   readonly inContainer?: boolean;
-  /** The run's resolved inputs, which may name its repository (`forge.repository`). */
-  readonly inputs: Readonly<Record<string, JsonValue>> | undefined;
+  /**
+   * The values the run is started with (`--input`, a binding's inputs, a parent's `with:`).
+   * The check merges the pack's settings and the workflow's defaults under them, as the run
+   * does at start, before reading the inputs that name its repository (`forge.repository`).
+   */
+  readonly supplied: Readonly<Record<string, JsonValue>> | undefined;
 }
 
 /**
  * Refuse a fresh run whose pack declares forge needs this run cannot meet: the forge must
- * have a plugin that advertises every declared capability, a credential that resolves, and
- * accept that credential in one read of the repository. The repository is the one the
- * run's inputs name through the pack's `forge.repository`; when they name none, some
- * remote of the checkout must pass. A run whose pack declares nothing returns at once.
+ * have a plugin that advertises every declared capability, a credential that resolves, and,
+ * when the plugin advertises `pr.view`, accept that credential in one read of the
+ * repository. The repository is the one the run's start inputs name through the pack's
+ * `forge.repository`; when they name none, some remote of the checkout must pass. A run whose pack declares nothing returns at once.
  *
  * @throws ForgeRequirementError naming each typed reason and its remedy.
  */
 export async function assertRunForgeAccess(
   deps: WorkflowGithubDeps,
-  workflow: { readonly name: string; readonly pack?: WorkflowPack },
+  workflow: Pick<ResolvedWorkflow, 'name' | 'pack' | 'inputs'>,
   /** The run's prepared configuration, before its GitHub credential is layered. */
   prepared: { readonly config: WorkflowEnvironment; readonly executionUserId?: string },
   site: RunForgeAccessSite,
@@ -135,7 +141,7 @@ export async function assertRunForgeAccess(
       },
     ]);
   }
-  const target = await forgeTarget(needs.repository, site);
+  const target = await forgeTarget(workflow, needs.repository, site);
   if ('reason' in target) refuse([target]);
   const cliCommand = hostCliCommand();
   if (cliCommand === undefined) {
@@ -181,12 +187,17 @@ export async function assertRunForgeAccess(
  * remotes, each URL once. A run that cannot name either is refused with the reason.
  */
 async function forgeTarget(
+  workflow: Pick<ResolvedWorkflow, 'pack' | 'inputs'>,
   names: { host: string; path: string } | undefined,
   site: RunForgeAccessSite
 ): Promise<
   { repo: ForgeRepository } | { remotes: { name: string; url: string }[] } | ForgeRequirementFailure
 > {
-  const named = namedRepository(names, site.inputs);
+  const inputs =
+    names === undefined
+      ? undefined
+      : (await resolveRunStartInputs(site.cwd, workflow, site.supplied)).inputs;
+  const named = namedRepository(names, inputs);
   if ('missing' in named) {
     return {
       reason: 'no_forge_repository',

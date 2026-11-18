@@ -2869,7 +2869,8 @@ run is not checked again. The engine asks
 [`archon forge check`](/reference/forge/#check-forge-access-before-a-run-spends), with the
 run's GitHub credential, about the repository the run acts on:
 
-- When the run's inputs set both inputs `repository` names, the check judges that repository
+- When the run's inputs, with its pack settings and input defaults merged in as the run
+  starts with them, set both inputs `repository` names, the check judges that repository
   alone. The checkout's remotes are not read, so a capable mirror cannot start a run whose
   repository fails.
 - When they set neither, or the pack declares no `repository`, the check asks for each remote
@@ -2879,7 +2880,8 @@ run's GitHub credential, about the repository the run acts on:
 
 A repository passes when its plugin advertises every listed capability, its credential
 resolves, and the forge accepts that credential in one read: a `pr.view` by head, at most one
-per remote checked and none that writes. Otherwise the run is refused with a typed reason per
+per remote checked and none that writes. A plugin that does not advertise `pr.view` has no
+read to serve, so its check stops after the credential resolves. Otherwise the run is refused with a typed reason per
 repository or remote and the plugin's remedy. A refused trigger binding's receipt records them
 as `forgeRefusal`, read with [`archon trigger list`](/reference/cli/#trigger) or
 `archon trigger inspect`:

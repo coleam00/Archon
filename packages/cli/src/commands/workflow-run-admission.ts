@@ -653,7 +653,7 @@ export async function prepareLaneAiConfiguration(
     await assertRunForgeAccess(request.host.deps, admission.workflow, prepared, {
       ...repository,
       inContainer: executesInContainer,
-      inputs: admission.resolvedInputs,
+      supplied: admission.resolvedInputs,
     });
   }
   return prepared;

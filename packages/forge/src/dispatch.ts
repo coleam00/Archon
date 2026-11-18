@@ -421,9 +421,10 @@ const ACCESS_READ_HEAD = 'archon-forge-check';
  * Whether a forge operation could start: a plugin claims the forge, it advertises every
  * capability in `operations`, its credential resolves, and the forge accepts that
  * credential for the repository. The forge is `host`, `repo`'s host, or the plugin a
- * `resolve` of `remote` selects. A `remote` or `repo` check then makes one read, a `pr.view`
- * by head (after a `resolve` of a remote to its repository), so a rejected or blind
- * credential is refused. A `host` check names no repository and runs no plugin operation.
+ * `resolve` of `remote` selects. A `remote` or `repo` check whose plugin advertises `pr.view`
+ * then makes one read, a `pr.view` by head (after a `resolve` of a remote to its
+ * repository), so a rejected or blind credential is refused; without it the check stops
+ * after the credential resolves. A `host` check names no repository and runs no plugin operation.
  * No check proves what the credential may write. A refusal the operator can fix carries
  * their next step.
  */

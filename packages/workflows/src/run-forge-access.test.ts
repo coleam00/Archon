@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { mkdtempSync } from 'fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -34,9 +34,9 @@ const prepared = { config: { envVars: {} }, executionUserId: undefined };
 function site(
   cwd: string,
   inContainer = false,
-  inputs?: RunForgeAccessSite['inputs']
+  supplied?: RunForgeAccessSite['supplied']
 ): RunForgeAccessSite {
-  return { cwd, codebaseId: undefined, inContainer, inputs };
+  return { cwd, codebaseId: undefined, inContainer, supplied };
 }
 
 /** The common call: a declaring pack, freshly prepared, on the host. */
@@ -187,8 +187,14 @@ describe('assertRunForgeAccess', () => {
       },
     };
     const capableMirror = () => checkout({ mirror: 'git@github.com:mirror/r.git' });
-    const run = (inputs: RunForgeAccessSite['inputs'], check: ForgeCheck) =>
-      assertRunForgeAccess(noGithub, naming, prepared, site(capableMirror(), false, inputs), check);
+    const run = (supplied: RunForgeAccessSite['supplied'], check: ForgeCheck) =>
+      assertRunForgeAccess(
+        noGithub,
+        naming,
+        prepared,
+        site(capableMirror(), false, supplied),
+        check
+      );
 
     test('is checked against that repository alone, so a capable remote cannot start it', async () => {
       const check = mock<ForgeCheck>(async request =>
@@ -212,6 +218,27 @@ describe('assertRunForgeAccess', () => {
       expect(check.mock.calls.map(([request]) => request)).toEqual([
         { remote: 'git@github.com:mirror/r.git', operations: ['pr.view'] },
         { remote: 'git@github.com:mirror/r.git', operations: ['pr.view'] },
+      ]);
+    });
+
+    test('reads the repository from the project settings when the run supplies none', async () => {
+      const cwd = capableMirror();
+      mkdirSync(join(cwd, '.archon', 'packs'), { recursive: true });
+      writeFileSync(
+        join(cwd, '.archon', 'packs', 'factory.yaml'),
+        'settings:\n  repo_host: github.com\n  repo_path: o/target\n'
+      );
+      const settingNaming = {
+        ...naming,
+        pack: {
+          ...naming.pack,
+          settings: { repo_host: { type: 'string' }, repo_path: { type: 'string' } },
+        },
+      } as const;
+      const check = mock<ForgeCheck>(async () => undefined);
+      await assertRunForgeAccess(noGithub, settingNaming, prepared, site(cwd), check);
+      expect(check.mock.calls.map(([request]) => request)).toEqual([
+        { repo: { host: 'github.com', path: 'o/target' }, operations: ['pr.view'] },
       ]);
     });
 
