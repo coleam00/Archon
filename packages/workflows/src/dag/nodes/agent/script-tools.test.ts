@@ -24,6 +24,8 @@ import {
 
 let root: string;
 let deps: ReturnType<typeof createMockDeps<MockWorkflowStore>>;
+const events = (type: string) =>
+  persistedEvents(deps.store).filter(event => event.event_type === type);
 const inputSchema = {
   type: 'object',
   properties: {
@@ -107,7 +109,7 @@ test('engine validates complex input, records one call, and downstream reads per
   }) as ExecNode;
   const result = await run([agent(), downstream]);
   expect(result).toContain('call-7');
-  const calls = persistedEvents(deps.store).filter(e => e.event_type === 'script_tool_call');
+  const calls = events('script_tool_call');
   expect(calls).toHaveLength(1);
   expect(calls[0].data).toMatchObject({
     provider_call_id: 'call-7',
@@ -115,7 +117,7 @@ test('engine validates complex input, records one call, and downstream reads per
     output: { green: false },
     status: 'completed',
   });
-  const completed = persistedEvents(deps.store).filter(e => e.event_type === 'node_completed');
+  const completed = events('node_completed');
   expect(completed.find(e => e.step_name === 'use')?.data?.node_output).toContain('call-7');
   const cold = await foldDagResumeSnapshot(persistedEvents(deps.store), makeWorkflowRun().id);
   expect(cold.completedNodeOutputs.get('inspect')?.structuredOutput).toMatchObject({
@@ -136,11 +138,9 @@ test.each([
       yield reply();
     });
     await run();
-    expect(persistedEvents(deps.store).filter(e => e.event_type === 'node_failed')).toHaveLength(0);
+    expect(events('node_failed')).toHaveLength(0);
     expect(exec.mock.calls.filter(([cmd]) => cmd === 'bun')).toHaveLength(0);
-    expect(
-      persistedEvents(deps.store).filter(e => e.event_type === 'script_tool_call')
-    ).toHaveLength(1);
+    expect(events('script_tool_call')).toHaveLength(1);
   } finally {
     exec.mockRestore();
   }
@@ -161,10 +161,8 @@ test.each([
     yield reply();
   });
   await run([agent(writes)]);
-  expect(persistedEvents(deps.store).filter(e => e.event_type === 'node_failed')).toHaveLength(0);
-  expect(
-    persistedEvents(deps.store).find(e => e.event_type === 'script_tool_call')?.data?.status
-  ).toBe('failed');
+  expect(events('node_failed')).toHaveLength(0);
+  expect(events('script_tool_call')[0]?.data?.status).toBe('failed');
 });
 
 test('write timeout stops the node non-retryably and preserves provider failure', async () => {
@@ -182,13 +180,11 @@ test('write timeout stops the node non-retryably and preserves provider failure'
       retry: { max_attempts: 3, delay_ms: 1000, on_error: 'all' as const },
     };
     await run([node]);
-    const failed = persistedEvents(deps.store).find(e => e.event_type === 'node_failed');
+    const failed = events('node_failed')[0];
     expect(failed?.data).toMatchObject({ retryable: false });
     expect(failed?.data?.error).toContain('provider transport failed');
     expect(mockSendQueryDag.mock.calls).toHaveLength(1);
-    expect(
-      persistedEvents(deps.store).find(e => e.event_type === 'script_tool_call')?.data?.status
-    ).toBe('unknown');
+    expect(events('script_tool_call')[0]?.data?.status).toBe('unknown');
   } finally {
     exec.mockRestore();
   }
@@ -224,10 +220,10 @@ test('no-schema agent exposes text result plus calls without changing other node
     yield { type: 'result', text: 'plain answer' };
   });
   await run([{ ...agent(), output_format: undefined }]);
-  expect(
-    persistedEvents(deps.store).find(e => e.event_type === 'node_completed')?.data
-      ?.structured_output
-  ).toEqual({ result: 'plain answer', tool_calls: [] });
+  expect(events('node_completed')[0]?.data?.structured_output).toEqual({
+    result: 'plain answer',
+    tool_calls: [],
+  });
 });
 
 test('an unsettled provider with a pending write is cancelled and cannot complete or retry', async () => {
@@ -250,12 +246,8 @@ test('an unsettled provider with a pending write is cancelled and cannot complet
     });
     await run([agent(true)]);
     await expect(work).rejects.toThrow();
-    expect(
-      persistedEvents(deps.store).find(e => e.event_type === 'node_failed')?.data
-    ).toMatchObject({ retryable: false });
-    expect(
-      persistedEvents(deps.store).filter(e => e.event_type === 'script_tool_call')
-    ).toHaveLength(1);
+    expect(events('node_failed')[0]?.data).toMatchObject({ retryable: false });
+    expect(events('script_tool_call')).toHaveLength(1);
   } finally {
     exec.mockRestore();
   }
