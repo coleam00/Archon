@@ -488,13 +488,15 @@ export const resourceStartBindingIntentSchema = z
      */
     checkoutFrom: checkoutHandoffSchema.optional(),
     /**
-     * A source plugin's binding that wakes waiting work instead of naming an item: the open
-     * wait `wait` a run of `workflowName` left, on an item of the project this binding
-     * launches in, whose `about` is exactly this `about`. The store resolves it when it
-     * accepts the receipt, in the same transaction: a match closes the set as met and the
-     * binding starts on the wait's item, with the met wait as event input `input` when set;
-     * anything else is recorded as not started, with why. It never reaches the `intent`
-     * column. Mutually exclusive with `itemKey`.
+     * A source plugin's binding that wakes waiting work: the open wait `wait` a run of
+     * `workflowName` left, on an item of the project this binding launches in, whose `about`
+     * is exactly this `about`. With `itemKey`, the item the event names, only a wait on that
+     * item matches; an event that names its subject (a review names its pull request) must
+     * set it, so another subject at the same commit wakes nothing here. The store resolves
+     * the wake when it accepts the receipt, in the same transaction: a match closes the set
+     * as met and the binding starts on the wait's item, with the met wait as event input
+     * `input` when set; anything else is recorded as not started, with why. It never
+     * reaches the `intent` column.
      */
     wake: bindingWakeSchema.optional(),
   })
@@ -585,14 +587,11 @@ export const sourceReceiptAcceptanceSchema = z
           message: 'A binding names its item only when its receipt names none',
         });
       }
-      if (
-        binding.wake !== undefined &&
-        (binding.itemKey !== undefined || acceptance.receipt.itemKey !== undefined)
-      ) {
+      if (binding.wake !== undefined && acceptance.receipt.itemKey !== undefined) {
         context.addIssue({
           code: 'custom',
           path: ['bindings', index, 'wake'],
-          message: 'A binding that wakes a wait takes its item from the wait, so none is named',
+          message: 'A binding that wakes a wait names its item on the binding, not the receipt',
         });
       }
     }

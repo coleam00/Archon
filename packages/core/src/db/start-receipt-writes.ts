@@ -10,8 +10,10 @@ import type { TransactionQuery as Query } from './resource-slots';
 /**
  * Record a receipt. A binding that wakes a wait is resolved against the open waits in the
  * same transaction (`resolveWakes`), with its launch's project from `projectKeyOf`, read
- * first; a delivery already recorded is left to `insertStartReceipt`, which answers replay
- * or conflict and resolves nothing.
+ * first. The resolution runs only after this transaction has claimed the delivery by
+ * writing the receipt's row: a concurrent delivery with the same identity waits on that row
+ * and then replays, so it can never close a wait (one opened since, say) for a receipt
+ * that is not recorded.
  */
 export async function acceptStartReceipt(
   input: SourceReceiptAcceptance,
@@ -21,33 +23,26 @@ export async function acceptStartReceipt(
   for (const binding of input.bindings)
     if (binding.wake !== undefined)
       projectKeys.set(binding.bindingId, await projectKeyOf(binding.launch.cwd));
-  return getDatabase().withTransaction(async query => {
-    if (projectKeys.size === 0) return insertStartReceipt(query, input);
-    const { deliveryId, sourceInstanceId } = input.receipt;
-    const recorded =
-      deliveryId !== null &&
-      (
-        await query(
-          'SELECT 1 FROM remote_agent_start_receipts WHERE source_instance_id = $1 AND delivery_id = $2',
-          [sourceInstanceId, deliveryId]
-        )
-      ).rows.length > 0;
-    return insertStartReceipt(
+  return getDatabase().withTransaction(query =>
+    insertStartReceipt(
       query,
-      recorded ? input : await resolveWakes(query, input, projectKeys)
-    );
-  });
+      input,
+      projectKeys.size === 0 ? undefined : claimed => resolveWakes(query, claimed, projectKeys)
+    )
+  );
 }
 
 /**
  * Accept one receipt inside the caller's transaction: the one body behind
  * `acceptStartReceipt` and the run completion that causes starts, so the two cannot
  * write a receipt differently. A delivery already recorded is a replay, or a conflict
- * when its content differs.
+ * when its content differs. `resolve`, when given, runs only once this write has claimed
+ * the delivery and decides the bindings and outcome actually recorded.
  */
 export async function insertStartReceipt(
   query: Query,
-  input: SourceReceiptAcceptance
+  input: SourceReceiptAcceptance,
+  resolve?: (claimed: SourceReceiptAcceptance) => Promise<SourceReceiptAcceptance>
 ): Promise<{ receiptId: string; replay: boolean }> {
   const inserted = await query(
     `INSERT INTO remote_agent_start_receipts
@@ -83,13 +78,20 @@ export async function insertStartReceipt(
       );
     return { receiptId: prior.id, replay: true };
   }
-  for (const binding of input.bindings) {
+  const recorded = resolve === undefined ? input : await resolve(input);
+  if (recorded.outcome !== input.outcome || recorded.reason !== input.reason)
+    await query('UPDATE remote_agent_start_receipts SET outcome = $2, reason = $3 WHERE id = $1', [
+      input.receipt.id,
+      recorded.outcome,
+      recorded.reason ?? null,
+    ]);
+  for (const binding of recorded.bindings) {
     await query(
       `INSERT INTO remote_agent_start_receipt_bindings
        (receipt_id,binding_id,binding_revision,host_id,intent,event_input_names,checkout_from,item_key,preparation_status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending')`,
       [
-        input.receipt.id,
+        recorded.receipt.id,
         binding.bindingId,
         binding.bindingRevision,
         binding.hostId,
@@ -98,13 +100,13 @@ export async function insertStartReceipt(
       ]
     );
   }
-  for (const evaluated of input.evaluatedBindings ?? []) {
+  for (const evaluated of recorded.evaluatedBindings ?? []) {
     await query(
       `INSERT INTO remote_agent_start_receipt_bindings
        (receipt_id,binding_id,binding_revision,host_id,intent,preparation_status,preparation_error)
        VALUES ($1,$2,$3,NULL,NULL,$4,$5)`,
       [
-        input.receipt.id,
+        recorded.receipt.id,
         evaluated.bindingId,
         evaluated.bindingRevision,
         evaluated.status,
@@ -112,7 +114,7 @@ export async function insertStartReceipt(
       ]
     );
   }
-  return { receiptId: input.receipt.id, replay: false };
+  return { receiptId: recorded.receipt.id, replay: false };
 }
 
 /**

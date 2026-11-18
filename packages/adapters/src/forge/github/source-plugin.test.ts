@@ -384,6 +384,7 @@ describe('GitHub source plugin', () => {
             repository: { host: 'github.com', path: 'owner/repo' },
           },
           inputMapping: { state: { source: 'field', field: 'review.state' } },
+          item: { field: 'subject.number', prefix: 'pr-' },
           wake: {
             workflow: 'host',
             wait: 'review',
@@ -417,6 +418,7 @@ describe('GitHub source plugin', () => {
         {
           bindingId: 'reviewed',
           eventInputs: { state: 'approved' },
+          itemKey: 'pr-7',
           wake: { workflowName: 'host', wait: 'review', about: 'c0ffee', input: 'waited' },
         },
       ],
@@ -438,16 +440,31 @@ describe('GitHub source plugin', () => {
     });
   });
 
-  test('a binding with wake maps no item and reads a field its event has', () => {
+  test('a binding with wake maps the item its event names and reads a field its event has', () => {
     const wake = { workflow: 'host', wait: 'checks', about: { field: 'check.revision' as const } };
+    // A review names its pull request: without the item, a review of another pull request at
+    // the same commit could wake this one.
+    const review = {
+      selector: {
+        kind: 'review.changed',
+        actions: ['submitted'],
+        repository: { host: 'github.com', path: 'owner/repo' },
+      },
+      inputMapping: {},
+      wake: { workflow: 'host', wait: 'review', about: { field: 'review.commit' } },
+    };
     expect(
       githubWebhookSourceConfigSchema.safeParse({
         version: 1,
         webhookSecretEnv: 'ARCHON_SOURCE_PLUGIN_TEST_SECRET',
         host: 'github.com',
-        bindings: [binding({ wake, item: { field: 'check.revision' } })],
+        bindings: [binding(review)],
       }).success
     ).toBe(false);
+    expect(
+      config([binding({ ...review, item: { field: 'subject.number', prefix: 'pr-' } })]).bindings[0]
+        ?.item
+    ).toEqual({ field: 'subject.number', prefix: 'pr-' });
     expect(
       githubWebhookSourceConfigSchema.safeParse({
         version: 1,

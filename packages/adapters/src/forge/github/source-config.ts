@@ -34,7 +34,9 @@ export const githubSourceBindingSchema = resourceStartBindingIntentSchema
      * Wake the open wait `wait` a run of `workflow` left on an item of this binding's
      * project, when the event's `about` field holds exactly the value the wait names; the
      * engine matches it when it accepts the receipt. The met wait is passed as input `input`
-     * when set. The start is on the wait's item, so `item` is left out.
+     * when set. An event that names its subject (an issue or pull request) must map `item`
+     * as well, and only a wait on that item matches: a commit does not name a pull request.
+     * A check event names no single subject, so it matches on `about` alone.
      */
     wake: z
       .object({
@@ -54,10 +56,10 @@ function wakeProblems(
   const { wake, selector } = binding;
   if (wake === undefined) return [];
   const problems: { path: string[]; message: string }[] = [];
-  if (binding.item)
+  if (!binding.item && isForgeEventFieldAvailable(selector.kind, 'subject.number'))
     problems.push({
       path: ['item'],
-      message: 'A binding with wake starts on the item of the wait it wakes, so it maps no item',
+      message: `A ${selector.kind} event names its subject, so a binding with wake maps it as item: only a wait on that item may be woken`,
     });
   if (!isForgeEventFieldAvailable(selector.kind, wake.about.field))
     problems.push({

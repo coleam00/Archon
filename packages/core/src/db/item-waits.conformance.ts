@@ -59,7 +59,13 @@ export async function projectKey(harness: Harness): Promise<string> {
 /** A source plugin's receipt for a check at `about`, whose one binding wakes `checks`. */
 export function wakeReceipt(
   about: string,
-  options: { deliveryId?: string; workflow?: string; bindingId?: string } = {}
+  options: {
+    deliveryId?: string;
+    workflow?: string;
+    bindingId?: string;
+    wait?: string;
+    item?: string;
+  } = {}
 ): SourceReceiptAcceptance {
   const binding: ResourceStartBindingIntent = {
     bindingId: options.bindingId ?? 'next-stage',
@@ -75,7 +81,13 @@ export function wakeReceipt(
       isolation: { kind: 'default' },
     },
     eventInputs: { revision: about },
-    wake: { workflowName: options.workflow ?? 'host', wait: 'checks', about, input: 'waited' },
+    ...(options.item === undefined ? {} : { itemKey: options.item }),
+    wake: {
+      workflowName: options.workflow ?? 'host',
+      wait: options.wait ?? 'checks',
+      about,
+      input: 'waited',
+    },
   };
   return {
     receipt: {
@@ -259,6 +271,43 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
       expect(read.reason).toContain('pr-7');
       expect(read.reason).toContain('issue-3');
       expect(await harness.store.listOpenItemWaits()).toHaveLength(2);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a wake meets only a wait of the event it names', async () => {
+    const harness = await makeHarness();
+    try {
+      await completeWithWaits(harness, [checks(HEAD)]);
+      const id = await accept(wakeReceipt(HEAD, { wait: 'review' }), await projectKey(harness));
+      expect((await readReceipt(harness, id)).outcome).toBe('unmatched');
+      expect((await harness.store.listOpenItemWaits()).map(wait => wait.event)).toEqual(['checks']);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('an event that names its item wakes only that item, even when another waits at the commit', async () => {
+    const harness = await makeHarness();
+    try {
+      const review = { event: 'review', about: HEAD, within_minutes: 60 };
+      await completeWithWaits(harness, [review], { item: 'pr-7' });
+      const project = await projectKey(harness);
+      // A review of pr-8 at the same commit: pr-7's wait is not about it.
+      const elsewhere = await accept(wakeReceipt(HEAD, { wait: 'review', item: 'pr-8' }), project);
+      expect((await readReceipt(harness, elsewhere)).outcome).toBe('unmatched');
+      expect(await harness.store.listOpenItemWaits()).toHaveLength(1);
+      // With pr-8 waiting too, each item's review wakes its own item.
+      await completeWithWaits(harness, [review], { item: 'pr-8' });
+      for (const item of ['pr-8', 'pr-7']) {
+        const id = await accept(wakeReceipt(HEAD, { wait: 'review', item }), project);
+        expect(await readReceipt(harness, id)).toMatchObject({
+          outcome: 'matched',
+          bindings: [{ itemKey: item }],
+        });
+      }
+      expect(await harness.store.listOpenItemWaits()).toEqual([]);
     } finally {
       await harness.close();
     }

@@ -81,19 +81,16 @@ export const packEventBindingSchema = z
     item: itemMappingSchema.optional(),
     /**
      * Wake the open wait `wait` that a run of `workflow`, a workflow of this pack, left on an
-     * item, when the event's field `about` holds exactly the value the wait names. The start
-     * is on the wait's item, so a binding with `wake` maps no `item`.
+     * item, when the event's field `about` holds exactly the value the wait names. When the
+     * event names its subject, `item` is required with it (checked by the source plugin when
+     * the binding is generated), and only a wait on that item matches.
      */
     wake: z
       .object({ workflow: z.string().min(1), wait: z.string().min(1), about: z.string().min(1) })
       .strict()
       .optional(),
   })
-  .strict()
-  .refine(binding => binding.wake === undefined || binding.item === undefined, {
-    message: 'with wake, item must be left out: the start is on the item of the wait it wakes',
-    path: ['item'],
-  });
+  .strict();
 
 const runEndedOutcomeSchema = runEndedTriggerSchema.shape.outcome;
 

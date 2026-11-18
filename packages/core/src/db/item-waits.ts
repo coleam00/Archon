@@ -165,8 +165,9 @@ type Evaluated = NonNullable<SourceReceiptAcceptance['evaluatedBindings']>[numbe
 /**
  * The binding a wake makes once resolved against the open waits, or why it starts nothing.
  * A match is an open wait of the binding's workflow and name whose `about` is exactly the
- * event's, on an item of the binding's project: a wait about any other value (the commit
- * the change has moved past) is not one. The match closes its whole set as met, guarded on
+ * event's, on an item of the binding's project, and on the item the event names when it
+ * names one: a wait about any other value (the commit the change has moved past), or on
+ * another subject at the same commit, is not one. The match closes its whole set as met, guarded on
  * the set still being open, so of two deliveries for one wait only the first starts.
  */
 async function resolveWake(
@@ -184,7 +185,8 @@ async function resolveWake(
       reason,
     },
   });
-  const named = `wait '${wake.wait}' about '${wake.about}' from '${wake.workflowName}'`;
+  const onItem = binding.itemKey === undefined ? '' : ` on item '${binding.itemKey}'`;
+  const named = `wait '${wake.wait}' about '${wake.about}' from '${wake.workflowName}'${onItem}`;
   if (projectKey === null)
     return notStarted(
       'rejected',
@@ -195,9 +197,15 @@ async function resolveWake(
     `SELECT w.*, i.key AS item_key FROM remote_agent_item_waits w
      JOIN remote_agent_items i ON i.id = w.item_id
      WHERE i.project_key = $1 AND w.workflow_name = $2 AND w.event = $3 AND w.about = $4
-       AND w.closed_as IS NULL
+       AND w.closed_as IS NULL${binding.itemKey === undefined ? '' : ' AND i.key = $5'}
      ORDER BY w.created_at, w.run_id${lock}`,
-    [projectKey, wake.workflowName, wake.wait, wake.about]
+    [
+      projectKey,
+      wake.workflowName,
+      wake.wait,
+      wake.about,
+      ...(binding.itemKey === undefined ? [] : [binding.itemKey]),
+    ]
   );
   const items = [...new Set(found.rows.map(row => row.item_key))];
   const row = found.rows[0];

@@ -2885,10 +2885,12 @@ workflow does not declare an input mapped to it. With `checkout` on either form,
 must be left out: the engine picks the start's checkout.
 
 An event binding with `wake:` starts its workflow on the item of an open
-[wait](#waits-what-an-item-waits-for-outside-archon) instead of on an item its event names: the
-wait `wake.wait` that a run of `wake.workflow`, a workflow of this pack, left, whose `about` is
-exactly the value of the event field `wake.about`. `{ wait: true }` passes the met wait. A
-binding with `wake:` maps no `item:`. See
+[wait](#waits-what-an-item-waits-for-outside-archon): the wait `wake.wait` that a run of
+`wake.workflow`, a workflow of this pack, left, whose `about` is exactly the value of the event
+field `wake.about`. `{ wait: true }` passes the met wait. When the event names its subject (a
+review, a pull request or issue event), the binding also maps `item:`, and only a wait on that
+item matches; the GitHub source plugin refuses the binding without it. A check names no single
+subject and maps no `item:`. See
 [start a stage when what an item waits for happens](/guides/workflow-triggers/#start-a-stage-when-what-an-item-waits-for-happens).
 
 A stage that needs both a clock and a hand-off declares two bindings with the
