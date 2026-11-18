@@ -64,7 +64,7 @@ import { ClaudeFirstEventTimeoutError, thrownErrorChunks } from './failure';
 import { applyNodeConfig, isWorkflowNode } from './node-config';
 import { requireMcpConnections } from '../mcp/readiness';
 import { streamClaudeMessages, type ToolResultEntry } from './stream';
-import { holdStructuredOutputWhileSubtasksRun } from './structured-output-hold';
+import { holdTurnEndWhileSubtasksRun, OpenSubtasks } from './structured-output-hold';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -289,7 +289,7 @@ function buildBaseClaudeOptions(
   controller: AbortController,
   stderrLines: string[],
   toolResultQueue: ToolResultEntry[],
-  openSubtaskIds: ReadonlySet<string>,
+  openSubtasks: OpenSubtasks,
   env: NodeJS.ProcessEnv,
   cliPath: string | undefined,
   settingSources: (typeof SETTING_SOURCES)[number][]
@@ -356,7 +356,7 @@ function buildBaseClaudeOptions(
     hooks: {
       ...buildToolCaptureHooks(toolResultQueue),
       ...(requestOptions?.outputFormat !== undefined
-        ? { PreToolUse: [holdStructuredOutputWhileSubtasksRun(openSubtaskIds)] }
+        ? { Stop: [holdTurnEndWhileSubtasksRun(openSubtasks)] }
         : {}),
     },
     stderr: (data: string): void => {
@@ -442,7 +442,7 @@ interface QueryRun {
   controller: AbortController;
   stderrLines: string[];
   toolResultQueue: ToolResultEntry[];
-  openSubtaskIds: ReadonlySet<string>;
+  openSubtasks: OpenSubtasks;
 }
 
 /**
@@ -482,7 +482,7 @@ async function* buildQueryOptions(
     run.controller,
     run.stderrLines,
     run.toolResultQueue,
-    run.openSubtaskIds,
+    run.openSubtasks,
     env,
     resolvedCliPath,
     [...settingSources]
@@ -566,14 +566,6 @@ function setResumeTarget(
   } else {
     getLog().debug({ cwd }, 'starting_new_session');
   }
-}
-
-function trackSubtask(
-  openSubtaskIds: Set<string>,
-  chunk: Extract<MessageChunk, { type: 'subtask' }>
-): void {
-  if (chunk.status === 'started' || chunk.status === 'running') openSubtaskIds.add(chunk.taskId);
-  else openSubtaskIds.delete(chunk.taskId);
 }
 
 function createQueryInput(
@@ -705,7 +697,7 @@ export class ClaudeProvider implements IAgentProvider {
     let resultReported = false;
     let closeInput: (() => void) | undefined;
     let preparedQuery: ReturnType<typeof query> | undefined;
-    const openSubtaskIds = new Set<string>();
+    const openSubtasks = new OpenSubtasks();
 
     try {
       if (requestOptions?.abortSignal?.aborted) {
@@ -720,7 +712,7 @@ export class ClaudeProvider implements IAgentProvider {
           controller,
           stderrLines,
           toolResultQueue,
-          openSubtaskIds,
+          openSubtasks,
         }
       );
 
@@ -773,7 +765,7 @@ export class ClaudeProvider implements IAgentProvider {
           isContainerRun,
         });
         if (chunk.type === 'result') resultReported = true;
-        else if (chunk.type === 'subtask') trackSubtask(openSubtaskIds, chunk);
+        else if (chunk.type === 'subtask') openSubtasks.track(chunk);
         yield chunk;
       }
     } catch (error) {
@@ -783,7 +775,7 @@ export class ClaudeProvider implements IAgentProvider {
         stderr: stderrLines.join('\n'),
         hostCwd,
         resultReported,
-        subtasksOpen: openSubtaskIds.size > 0,
+        subtasksOpen: openSubtasks.size > 0,
       });
     } finally {
       closeInput?.();

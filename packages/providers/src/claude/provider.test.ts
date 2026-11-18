@@ -931,42 +931,60 @@ describe('subtasks and settling', () => {
     expect(stream.chunks.filter(chunk => chunk.type === 'subtask')).toHaveLength(1);
   });
 
-  test('refuses the main agent its structured result while a subtask runs (#5923)', async () => {
+  test('holds the main agent turn end until its subtasks close, and never refuses its structured result (#5923)', async () => {
     const decisions: unknown[] = [];
+    let structuredOutputHooks: unknown[] = [];
     mockQuery.mockImplementation(async function* ({ options }) {
-      const hold = options?.hooks?.PreToolUse?.find(m => m.matcher === 'StructuredOutput')
-        ?.hooks[0];
-      if (!hold) throw new Error('no StructuredOutput hook');
-      const ask = async (input: Record<string, unknown> = {}): Promise<void> => {
-        decisions.push(
-          await hold(
-            { hook_event_name: 'PreToolUse', tool_name: 'StructuredOutput', ...input } as never,
-            'so-id',
-            { signal: new AbortController().signal }
-          )
-        );
-      };
+      structuredOutputHooks = (options?.hooks?.PreToolUse ?? []).filter(
+        m => m.matcher === 'StructuredOutput'
+      );
+      const hold = options?.hooks?.Stop?.[0]?.hooks[0];
+      if (!hold) throw new Error('no Stop hook');
+      const stop = (input: Record<string, unknown> = {}, signal = new AbortController().signal) =>
+        hold({ hook_event_name: 'Stop', ...input } as never, undefined, { signal }).then(d => {
+          decisions.push(d);
+        });
       yield { type: 'system', subtype: 'task_started', task_id: 'helper' };
-      await ask();
-      await ask({ agent_id: 'helper' });
+      await stop({ agent_id: 'helper' });
+      const held = stop();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(decisions).toHaveLength(1);
       yield { type: 'system', subtype: 'task_notification', task_id: 'helper', status: 'failed' };
-      await ask();
+      await held;
+      await stop();
     });
 
     await chunksOf('test', '/workspace', undefined, {
       outputFormat: { type: 'json_schema', schema: { type: 'object' } },
     });
 
+    expect(structuredOutputHooks).toEqual([]);
     expect(decisions).toEqual([
-      {
-        hookSpecificOutput: expect.objectContaining({
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'deny',
-        }),
-      },
       { continue: true },
+      { decision: 'block', reason: expect.any(String) },
       { continue: true },
     ]);
+  });
+
+  test('an aborted hold releases the turn end without sending the agent back', async () => {
+    let decision: unknown;
+    mockQuery.mockImplementation(async function* ({ options }) {
+      const hold = options?.hooks?.Stop?.[0]?.hooks[0];
+      if (!hold) throw new Error('no Stop hook');
+      yield { type: 'system', subtype: 'task_started', task_id: 'helper' };
+      const aborted = new AbortController();
+      const held = hold({ hook_event_name: 'Stop' } as never, undefined, {
+        signal: aborted.signal,
+      });
+      aborted.abort();
+      decision = await held;
+    });
+
+    await chunksOf('test', '/workspace', undefined, {
+      outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+    });
+
+    expect(decision).toEqual({ continue: true });
   });
 });
 
