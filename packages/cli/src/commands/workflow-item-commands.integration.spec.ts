@@ -8,7 +8,7 @@
  */
 import { afterAll, beforeAll, beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { cpSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -89,6 +89,9 @@ afterAll(async () => {
 // another wrote and the order they run in cannot change a result.
 beforeEach(async () => {
   await removeTempTree(root);
+  // removeTempTree only warns when removal fails; copying over a leftover tree would keep
+  // what the last test wrote.
+  if (existsSync(root)) throw new Error(`Could not clear the previous test's state at ${root}`);
   cpSync(seeded, root, { recursive: true, verbatimSymlinks: true });
 });
 

@@ -39,48 +39,73 @@ function testCallee(expression: ts.Expression): boolean {
 }
 
 /**
- * The value of a limit expression, or `undefined` for a form this does not read: a call
- * other than `testTimeout(n)`, a non-`const` binding, or options that could carry it in a
- * spread or computed key.
+ * The limit a test call's third argument proves, or `undefined` when it does not prove one.
+ * The reader only answers what the source fixes before the test registers: a number, a
+ * `const` number, the shared `testTimeout(n)`, or an inline options literal. Anything that
+ * could hold another value by then (an options object bound to a name, a spread, a local
+ * helper) is not read, so it is counted rather than given a limit it may not have.
  */
-function numberValue(node: ts.Expression, checker: ts.TypeChecker): Limit {
+function limitValue(node: ts.Expression, checker: ts.TypeChecker): Limit {
+  return ts.isObjectLiteralExpression(node) ? optionsValue(node, checker) : scalar(node, checker);
+}
+
+/** A number the source fixes: a literal, a `const` bound to one, or `testTimeout(n)`. */
+function scalar(node: ts.Expression, checker: ts.TypeChecker): Limit {
   if (ts.isNumericLiteral(node)) return Number(node.text);
   if (ts.isIdentifier(node)) return constValue(node, checker);
-  if (ts.isObjectLiteralExpression(node)) return optionsValue(node, checker);
   if (
     ts.isCallExpression(node) &&
     ts.isIdentifier(node.expression) &&
-    node.expression.text === 'testTimeout' &&
+    isSharedTestTimeout(node.expression, checker) &&
     node.arguments.length === 1
   ) {
-    const value = numberValue(node.arguments[0], checker);
+    const value = scalar(node.arguments[0], checker);
     return value === undefined ? undefined : Math.max(value, DEFAULT_TEST_TIMEOUT_MS);
   }
   return undefined;
 }
 
+/** Whether a name is `testTimeout` imported from `@archon/paths/test-utils`, not a local one. */
+function isSharedTestTimeout(name: ts.Identifier, checker: ts.TypeChecker): boolean {
+  const declaration = checker.getSymbolAtLocation(name)?.declarations?.[0];
+  if (declaration === undefined || !ts.isImportSpecifier(declaration)) return false;
+  const imported = (declaration.propertyName ?? declaration.name).text;
+  const module = declaration.parent.parent.parent.moduleSpecifier;
+  return (
+    imported === 'testTimeout' &&
+    ts.isStringLiteral(module) &&
+    module.text === '@archon/paths/test-utils'
+  );
+}
+
 /**
  * A name resolved through the checker, so the binding in scope at the call wins over a
- * same-named one elsewhere. Only a `const` counts: a `let` may change before the test runs.
+ * same-named one elsewhere. Only a `const` bound to a number counts: a `let` may change, and
+ * an object's properties may change, before the test registers.
  */
 function constValue(name: ts.Identifier, checker: ts.TypeChecker): Limit {
   const declaration = checker.getSymbolAtLocation(name)?.valueDeclaration;
   if (declaration === undefined || !ts.isVariableDeclaration(declaration)) return undefined;
   const isConst = (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0;
   return isConst && declaration.initializer !== undefined
-    ? numberValue(declaration.initializer, checker)
+    ? scalar(declaration.initializer, checker)
     : undefined;
 }
 
-/** `{ timeout: n }`, with the key quoted or not; options without one take the default. */
+/**
+ * An inline options literal. A later `timeout` key overrides an earlier one, as at runtime;
+ * a spread or a computed key could set it, so either makes the limit unread. Options
+ * without a `timeout` take the default.
+ */
 function optionsValue(options: ts.ObjectLiteralExpression, checker: ts.TypeChecker): Limit {
+  let limit: Limit = DEFAULT_TEST_TIMEOUT_MS;
   for (const property of options.properties) {
     if (!ts.isPropertyAssignment(property)) return undefined;
     const key = property.name;
     if (ts.isComputedPropertyName(key) || ts.isPrivateIdentifier(key)) return undefined;
-    if (key.text === 'timeout') return numberValue(property.initializer, checker);
+    if (key.text === 'timeout') limit = scalar(property.initializer, checker);
   }
-  return DEFAULT_TEST_TIMEOUT_MS;
+  return limit;
 }
 
 /** A program of one file, so the checker can resolve the names in it; imports are not read. */
@@ -107,9 +132,13 @@ export function testLimits(source: string): Map<number, Limit> {
       // `test.each(rows)` or `test.skipIf(x)` of the chain is not visited.
       const name = node.arguments[0] ?? node;
       const line = file.getLineAndCharacterOfPosition(name.getStart(file)).line + 1;
-      const limit = node.arguments[2];
-      limits.set(line, limit === undefined ? DEFAULT_TEST_TIMEOUT_MS : numberValue(limit, checker));
-      for (const argument of node.arguments) visit(argument);
+      const argument = node.arguments[2];
+      const limit =
+        argument === undefined ? DEFAULT_TEST_TIMEOUT_MS : limitValue(argument, checker);
+      // Bun reports tests by line, so two registrations on one line with different limits
+      // cannot be told apart; neither limit is read.
+      limits.set(line, limits.has(line) && limits.get(line) !== limit ? undefined : limit);
+      for (const child of node.arguments) visit(child);
       return;
     }
     ts.forEachChild(node, visit);

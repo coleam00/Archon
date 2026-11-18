@@ -27,6 +27,13 @@ describe('testLimits', () => {
       'let changing = 1_000;',
       "test('let binding', () => {}, changing);",
       "test('spread options', () => {}, { ...shared });",
+      'const opts = { timeout: 60_000 };',
+      "test('options by name', () => {}, opts);",
+      "test('later spread', () => {}, { timeout: 60_000, ...{ timeout: 1_000 } });",
+      "test('later key wins', () => {}, { timeout: 60_000, timeout: 1_000 });",
+      "test('a', () => {}, 1_000); test('b', () => {}, 60_000);",
+      "test('same limits', () => {}, 1_000); test('same', () => {}, 1_000);",
+      "describe('local helper', () => { const testTimeout = (ms: number) => ms; test('x', () => {}, testTimeout(60_000)); });",
     ].join('\n');
     expect([...testLimits(source)]).toEqual([
       [3, 90_000],
@@ -42,6 +49,12 @@ describe('testLimits', () => {
       [13, 1_000],
       [15, undefined],
       [16, undefined],
+      [18, undefined],
+      [19, undefined],
+      [20, 1_000],
+      [21, undefined],
+      [22, 1_000],
+      [23, undefined],
     ]);
   });
 
