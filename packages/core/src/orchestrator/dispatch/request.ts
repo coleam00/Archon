@@ -5,6 +5,7 @@ import {
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import * as sqlWorkflow from '@archon/core/db/workflows';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
+import { isOperatorPaused } from '@archon/workflows/schemas/pause-cause';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import * as workflowDb from '../../db/workflows';
@@ -201,15 +202,23 @@ export async function readContinuation(
   const resumableRun = candidates[0] ?? null;
   // Whether this dispatch will CONTINUE existing work rather than create a fresh run
   // row. Deliberately the exact negation of the resume/abandon/force menu's condition
-  // (`offerResumeChoice`): a candidate that is neither paused nor the explicitly-targeted run does not
+  // (`offerResumeChoice`): a candidate that neither `continuesImplicitly` nor is the explicitly-targeted run does not
   // continue — it shows that menu and returns. Only a genuine continuation may defer the
   // signature gate, so an invocation that was never going to continue is still refused
   // immediately, with the specific input error rather than a generic menu, and before
   // isolation resolution can create a worktree.
   const willContinueExistingRun =
     Boolean(resumableRun?.working_path) &&
-    (resumableRun?.status === 'paused' || explicitResumeRequested);
+    ((resumableRun !== null && continuesImplicitly(resumableRun)) || explicitResumeRequested);
   return { kind: 'single', resumableRun, explicitResumeRequested, willContinueExistingRun };
+}
+
+/**
+ * A paused run a new request for its workflow continues without asking. An operator
+ * pause ends only on an explicit resume, so that run is offered, not continued.
+ */
+export function continuesImplicitly(run: WorkflowRun): boolean {
+  return run.status === 'paused' && !isOperatorPaused(run);
 }
 
 /** Whether the dispatch answers this start itself: it continues a run, or lists the candidates. */

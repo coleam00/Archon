@@ -19,7 +19,10 @@ import {
   EXECUTION_CLAIM_METADATA_KEY,
   currentExecutionOwner,
   sourceReleasedEvent,
+  operatorPauseRequestWrite,
+  operatorPauseWrite,
   type FanOutCancelReason,
+  type OperatorPauseRequest,
   type SourceReleaseWrite,
   type WorkflowCancellationEventDetails,
 } from '@archon/workflows/store';
@@ -45,7 +48,7 @@ import { insertWorkflowEvent } from './workflow-events';
 import { assertPublicConversation, ensureWorkflowOriginAnchor } from './workflow-origin-anchor';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import { getWorkflowRunStatus } from './workflow-run-reads';
-import { getLog } from './workflow-run-shared';
+import { getLog, lockedRunRow, normalizeMetadata } from './workflow-run-shared';
 import {
   insertTerminalWorkflowEvent,
   observeRunTerminalArtifacts,
@@ -634,5 +637,71 @@ export async function releaseRunForUnreadableSource(
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_source_release_failed');
     throw new Error(`Failed to release workflow run for unreadable source: ${err.message}`);
+  }
+}
+
+/** Record an operator's pause request on a running run (see `IWorkflowStore`). */
+export async function requestOperatorPause(
+  id: string,
+  requested: OperatorPauseRequest['requested']
+): Promise<OperatorPauseRequest | undefined> {
+  const dialect = getDialect();
+  try {
+    return await getDatabase().withTransaction(async query => {
+      const row = await lockedRunRow(query, id);
+      const write =
+        row &&
+        operatorPauseRequestWrite(
+          { status: row.status, metadata: normalizeMetadata(row.metadata) },
+          requested
+        );
+      if (write?.metadata) {
+        await query(
+          `UPDATE remote_agent_workflow_runs
+           SET metadata = ${dialect.jsonMerge('metadata', 2)}
+           WHERE id = $1 AND status = 'running'`,
+          [id, JSON.stringify(write.metadata)]
+        );
+      }
+      return write?.request;
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_operator_pause_request_failed');
+    throw new Error(`Failed to record an operator's pause request: ${err.message}`);
+  }
+}
+
+/** Pause a running run for its operator's pending request (see `IWorkflowStore`). */
+export async function pauseWorkflowRunForOperator(
+  id: string,
+  claimId: string | null
+): Promise<{ paused: boolean }> {
+  const dialect = getDialect();
+  try {
+    return await getDatabase().withTransaction(async query => {
+      const row = await lockedRunRow(query, id);
+      const write =
+        row &&
+        operatorPauseWrite(
+          { id, status: row.status, metadata: normalizeMetadata(row.metadata) },
+          claimId,
+          new Date().toISOString()
+        );
+      if (!write) return { paused: false };
+      await query(
+        `UPDATE remote_agent_workflow_runs
+         SET status = 'paused', last_activity_at = ${dialect.now()},
+             metadata = ${dialect.jsonMerge('metadata', 2)}
+         WHERE id = $1 AND status = 'running'`,
+        [id, JSON.stringify(write.metadata)]
+      );
+      await insertWorkflowEvent(query, write.event);
+      return { paused: true };
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_operator_pause_failed');
+    throw new Error(`Failed to pause workflow run for an operator: ${err.message}`);
   }
 }

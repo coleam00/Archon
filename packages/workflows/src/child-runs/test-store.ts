@@ -123,6 +123,12 @@ export class InMemoryStore implements IWorkflowStore {
   releaseRunForUnreadableSource: IWorkflowStore['releaseRunForUnreadableSource'] = () => {
     throw new Error('Unexpected releaseRunForUnreadableSource');
   };
+  pauseWorkflowRunForOperator: IWorkflowStore['pauseWorkflowRunForOperator'] = () => {
+    throw new Error('Unexpected pauseWorkflowRunForOperator');
+  };
+  requestOperatorPause: IWorkflowStore['requestOperatorPause'] = () => {
+    throw new Error('Unexpected requestOperatorPause');
+  };
   releasePausedRunSlot: IWorkflowStore['releasePausedRunSlot'] = async () => ({
     released: false,
   });

@@ -29,6 +29,8 @@ const mockPauseWorkflowRunForWait = mock(() => Promise.resolve());
 const mockClearWorkflowWaitContext = mock(() => Promise.resolve({ cleared: true }));
 
 mock.module('../db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   insertWorkflowRun: async (): Promise<never> => {

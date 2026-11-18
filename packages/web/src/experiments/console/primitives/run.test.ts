@@ -417,6 +417,27 @@ describe('toRun — resolved gate (approved/rejected awaiting resume)', () => {
   });
 });
 
+describe('toRun — operator pause', () => {
+  test('a gate and wait left beside an operator pause show as neither pending nor resolved', () => {
+    const r = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'review',
+        status: 'paused',
+        operator_pause: {
+          state: 'paused',
+          requested: { by: null, via: 'cli', at: '2026-10-05T10:00:00Z', fromRun: null },
+          pausedAt: '2026-10-05T10:01:00Z',
+        },
+        metadata: { approval: { nodeId: 'gate', message: 'Approve?', resolved: 'approved' } },
+      })
+    );
+    expect(r.approval).toBeNull();
+    expect(r.wait).toBeNull();
+    expect(r.gateResolved).toBeNull();
+  });
+});
+
 describe('toRun — durable wait', () => {
   type RawWait = NonNullable<NonNullable<Raw['metadata']>['wait']>;
   type NormalizedWait = NonNullable<ReturnType<typeof toRun>['wait']>;

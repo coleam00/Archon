@@ -19,6 +19,7 @@ import {
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
+import { describeOperatorPause, operatorPause } from '@archon/workflows/schemas/operator-pause';
 import { terminalReason, type getTerminalRecord } from '@archon/workflows/terminal-record';
 import type {
   WorkflowRun,
@@ -52,6 +53,8 @@ export async function printStatusRun(
   console.log(`  Name:   ${run.workflow_name}`);
   console.log(`  Path:   ${run.working_path ?? '(none)'}`);
   console.log(`  Status: ${run.status}`);
+  const pauseLine = operatorPauseLine(run);
+  if (pauseLine !== undefined) console.log(pauseLine);
   const attention = runAttention(run);
   if (attention?.kind === 'stalled_tool_calls') console.log(formatToolAttention(attention));
   if (attention?.kind === 'usage_limit')
@@ -81,6 +84,16 @@ export async function printStatusRun(
   }
 
   console.log('');
+}
+
+/** The operator pause a run is in or has requested, with how to resume it once paused. */
+export function operatorPauseLine(
+  run: Pick<WorkflowRun, 'id' | 'status' | 'metadata'>
+): string | undefined {
+  const pause = operatorPause(run);
+  if (pause === null) return undefined;
+  const resume = pause.state === 'paused' ? `; resume: archon workflow resume ${run.id}` : '';
+  return `  Pause:  ${describeOperatorPause(pause)}${resume}`;
 }
 
 export function usageLimitWaitLine(nodeId: string, resumeAt: string): string {
@@ -495,6 +508,12 @@ function printReason(terminalRecord: TerminalRecord | null): void {
 
 /** The gate, choices, wait and scheduled-resume lines of a paused or failed run. */
 function printRunPauseLines(run: WorkflowRun): void {
+  const pauseLine = operatorPauseLine(run);
+  if (pauseLine !== undefined) {
+    // Any gate or wait beside an operator pause is history.
+    console.log(pauseLine);
+    return;
+  }
   printApprovalGateLines(run);
   printWaitLines(run);
   const scheduledResume = run.metadata.scheduled_resume;

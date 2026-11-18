@@ -198,6 +198,8 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     listDueWorkflowContinuations: mock(unexpected('listDueWorkflowContinuations')),
     deferWorkflowContinuation: mock(unexpected('deferWorkflowContinuation')),
     releaseRunForUnreadableSource: mock(unexpected('releaseRunForUnreadableSource')),
+    pauseWorkflowRunForOperator: mock(unexpected('pauseWorkflowRunForOperator')),
+    requestOperatorPause: mock(unexpected('requestOperatorPause')),
     releasePausedRunSlot: mock(async () => ({ released: false })),
     answerAttentionWait: mock(unexpected('answerAttentionWait')),
     labelAttentionWait: mock(unexpected('labelAttentionWait')),

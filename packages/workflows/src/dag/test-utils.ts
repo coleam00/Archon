@@ -262,9 +262,9 @@ export function createMockStore(): MockWorkflowStore {
         return { released: true };
       }
     ),
-    releasePausedRunSlot: mock<IWorkflowStore['releasePausedRunSlot']>(() =>
-      Promise.resolve({ released: false })
-    ),
+    pauseWorkflowRunForOperator: mock(unexpected('pauseWorkflowRunForOperator')),
+    requestOperatorPause: mock(unexpected('requestOperatorPause')),
+    releasePausedRunSlot: mock(async () => ({ released: false })),
     answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
       throw new Error('Unexpected answerAttentionWait');
     }),

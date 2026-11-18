@@ -16,6 +16,7 @@ const read: ItemRead = {
       awaitingExecution: null,
       spend: { usd: 0.5, inputTokens: 100, outputTokens: 20 },
       heldBehind: null,
+      operatorPause: null,
       hasResult: true,
       resultCommit: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
     },

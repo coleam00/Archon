@@ -90,6 +90,7 @@ describe('workflow run resume', () => {
         continuation_retry_at: null,
         capacity_wait: null,
         source_release: null,
+        operator_pause: null,
         execution_claim: expect.any(String),
         execution_owner: currentExecutionOwner(),
       });

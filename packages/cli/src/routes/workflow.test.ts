@@ -1,12 +1,18 @@
 import { expect, mock, spyOn, test } from 'bun:test';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import { runWorkflowCancel, runWorkflowWait, type WorkflowRoute } from './workflow';
+import {
+  runWorkflowCancel,
+  runWorkflowPause,
+  runWorkflowWait,
+  type WorkflowRoute,
+} from './workflow';
 
 function route(positionals: string[], values: Record<string, unknown>) {
   const commands = {
     workflowCancelCommand: mock(async () => 0),
     workflowCancelItemCommand: mock(async () => 0),
     workflowWaitCommand: mock(async () => 0),
+    workflowPauseCommand: mock(async () => 0),
   };
   const context = {
     positionals: ['workflow', positionals[0] ?? '', ...positionals.slice(1)],
@@ -52,4 +58,23 @@ test('--item routes cancel to the item form with --all-runs', async () => {
     { json: undefined, allRuns: true }
   );
   expect(commands.workflowCancelCommand).not.toHaveBeenCalled();
+});
+
+test('pause passes the run id and the declared name, and refuses without a run id', async () => {
+  const { context, commands } = route(['pause', 'run-1'], { as: 'ops' });
+  expect(await runWorkflowPause(context)).toBe(0);
+  expect(commands.workflowPauseCommand).toHaveBeenCalledWith(context.host, 'run-1', {
+    json: undefined,
+    cwd: '/repo',
+    as: 'ops',
+  });
+
+  const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    const missing = route(['pause'], {});
+    expect(await runWorkflowPause(missing.context)).toBe(1);
+    expect(missing.commands.workflowPauseCommand).not.toHaveBeenCalled();
+  } finally {
+    errorSpy.mockRestore();
+  }
 });

@@ -121,6 +121,10 @@ export const WORKFLOW_EVENT_TYPES = [
   // paused instead of failed. `data` carries `node_id`, `path` (when known), `error` and
   // `retry_at`; any host that can read the source continues it.
   'source_released',
+  // An operator's pause request took effect at a node boundary: the run moved from running
+  // to paused in the same transaction. `data` carries `requested` (who asked, through
+  // which surface, when) and `paused_at`.
+  'operator_paused',
   'workflow_artifact',
   'integration_operation',
   'node_session_resumed',
