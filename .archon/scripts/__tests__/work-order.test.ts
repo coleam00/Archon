@@ -105,6 +105,11 @@ describe('the pick with work orders', () => {
     expect(fired(store(documents), ORDERS_ONLY)).toEqual([9]);
   }, 60_000);
 
+  test('on, an item the queue already built a round for gets its next round though no order holds it', () => {
+    const begun = { ...waiting(7), facts: { ...waiting(7).facts, build: { status: 'next', brief: 'continue', rounds: [], decisions: [], at: AT } satisfies BuildRecord } };
+    expect(fired(store({ 'work/7': begun, 'work/8': waiting(8) }), ORDERS_ONLY)).toEqual([7]);
+  }, 60_000);
+
   test('on, with no open order, nothing starts', () => {
     for (const orders of [{}, { 'work-order/old': order([7], 'done') }]) {
       expect(fired(store({ 'work/7': waiting(7), ...orders }), ORDERS_ONLY)).toEqual([]);

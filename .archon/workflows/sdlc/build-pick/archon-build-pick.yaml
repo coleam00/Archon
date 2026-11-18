@@ -37,12 +37,12 @@ inputs:
   orders_only:
     default: "false"
     description: >-
-      "true" starts only items that are members of an open work order (a
-      `work-order/<id>` state document; see
-      https://archon.diy/guides/sdlc-operations/#work-orders), and nothing when no
-      order is open. It first marks done each open order whose members have all merged.
-      An issue the message names is started either way. Anything else picks from every
-      waiting item.
+      "true" starts an item the queue never built only when it is a member of an open
+      work order (a `work-order/<id>` state document; see
+      https://archon.diy/guides/sdlc-operations/#work-orders). It first marks done each
+      open order whose members have all merged. An issue the message names is started
+      either way, and so is the next round of an item the queue already has a record
+      for. Anything else picks from every waiting item.
   revisit_blocked:
     default: ""
     description: >-

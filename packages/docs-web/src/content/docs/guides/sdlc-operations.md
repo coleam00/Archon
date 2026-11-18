@@ -174,7 +174,7 @@ A build round starts as soon as intake routes an issue only when the intake run 
 
 ### Work orders
 
-A work order is the set of work items you approved for the factory, so the pick's schedule can stay on while you choose what builds. Set `"orders_only": "true"` in the `launch.inputs` of both pick bindings, and a pick starts only the waiting items that are members of an open order, in the usual pickup order. With no open order it starts nothing. An issue a message names is started either way, and so is one the merge queue returns. Intake's handoff names its issue too, so an install that builds only work orders leaves `build-after-intake` unregistered. The default, `"false"`, picks from every waiting item.
+A work order is the set of work items you approved for the factory, so the pick's schedule can stay on while you choose what builds. Set `"orders_only": "true"` in the `launch.inputs` of both pick bindings, and a pick starts an item the queue never built only when it is a member of an open order, in the usual pickup order. An item the queue already has a build record for is started either way, so the next round of an issue that intake's handoff, a message or a merge-queue return started does not wait for an order. An issue a message names is started either way. Intake's handoff names its issue too, so an install that builds only work orders leaves `build-after-intake` unregistered. The default, `"false"`, picks from every waiting item.
 
 An order is one state document, `work-order/<id>`, in the project's state scope, whose key is the repository's `owner/repo`. The easiest way to write one is to name its members in a pick's message:
 

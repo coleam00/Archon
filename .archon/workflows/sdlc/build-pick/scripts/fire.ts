@@ -2,8 +2,10 @@
  * Start the builds this pick chose, one archon-build-queue run per issue.
  *
  * With no message it starts every item that waits for a round, in pickup order. With
- * `orders_only` on, an item waits only while it is a member of an open work order, after
- * each open order whose members all finished is marked done. A message starts the one
+ * `orders_only` on, an item the queue never built is started only while it is a member of
+ * an open work order, after each open order whose members all finished is marked done. An
+ * item the queue has a record for is started either way, so a round begun from intake's
+ * handoff, a message or a merge-queue return still gets its next round. A message starts the one
  * issue interpret resolved it to, or the person chose, and refuses with the reason when
  * that issue does not wait; a message that was a work order or new work starts nothing
  * here, and one that resolved to nothing refuses the run with interpret's reason.
@@ -57,7 +59,8 @@ function waiting(repo: Repo): WorkItem[] {
   const items = state.listValues('work/')
     .map(stored => read(stored.name, stored))
     .filter(item => item !== undefined)
-    .filter(({ doc }) => sameRepo(doc.subject.repo, repo) && buildWaits(doc) && (members === null || members.has(doc.subject.number)));
+    .filter(({ doc }) => sameRepo(doc.subject.repo, repo) && buildWaits(doc))
+    .filter(({ doc }) => members === null || members.has(doc.subject.number) || doc.facts.build !== undefined);
   return sortCandidates(items, PICKUP_ORDER).map(item => item.doc);
 }
 
