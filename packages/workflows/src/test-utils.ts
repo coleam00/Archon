@@ -184,19 +184,30 @@ export function unsetStoreMethods(
 }
 
 /**
+ * `T`, in a form TypeScript cannot infer `T` from. Not the built-in `NoInfer`: that needs
+ * TypeScript 5.4, and this package declares `^5.0.0`.
+ */
+type NotInferred<T> = [T][T extends unknown ? 0 : never];
+
+/**
  * A workflow store double built from only the methods a test needs: `implemented` gets
  * `unsetStoreMethods(fallback)` as its prototype. Adding a method to the store needs no
  * edit in a double that never calls it, and a test that reaches one it did not set up
- * still fails naming it.
+ * still fails naming it. An entry set to `undefined` counts as not set up.
  *
- * `S` is never inferred from `implemented`: it is `IWorkflowStore` unless a test names a
- * wider store type, so a set-up method is always checked against the store's signature.
- * Spreading the double copies only the implemented methods.
+ * `S` is inferred neither from `implemented` nor from where the result is assigned: it is
+ * `IWorkflowStore` unless a test names a wider store type, so a set-up method is always
+ * checked against the store's signature. Spreading the double copies only the implemented
+ * methods.
  */
 export function workflowStoreDouble<S extends object = IWorkflowStore>(
-  implemented: Partial<NoInfer<S>>,
+  implemented: Partial<NotInferred<S>>,
   fallback?: (method: string) => unknown
-): S {
+): NotInferred<S> {
+  // An own `undefined` would shadow the fallback and fail as "is not a function".
+  for (const [key, value] of Object.entries(implemented)) {
+    if (value === undefined) Reflect.deleteProperty(implemented, key);
+  }
   // Sound: every key `implemented` lacks resolves through the prototype's fallback.
-  return Object.setPrototypeOf(implemented, unsetStoreMethods(fallback)) as S;
+  return Object.setPrototypeOf(implemented, unsetStoreMethods(fallback)) as NotInferred<S>;
 }

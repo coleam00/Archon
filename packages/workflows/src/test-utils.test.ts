@@ -9,7 +9,12 @@ describe('workflowStoreDouble', () => {
 
   it('fails a call to a method the test did not set up, naming it', () => {
     const store = workflowStoreDouble({});
-    expect(() => store.recordItemLink({} as never)).toThrow('Unexpected recordItemLink');
+    expect(() => store.getItem('item-1')).toThrow('Unexpected getItem');
+  });
+
+  it('treats a method set to undefined as not set up', () => {
+    const store = workflowStoreDouble({ getItem: undefined });
+    expect(() => store.getItem('item-1')).toThrow('Unexpected getItem');
   });
 
   it('can be awaited without reaching a fallback', async () => {
