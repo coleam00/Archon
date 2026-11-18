@@ -33,6 +33,39 @@ inputs:
       that changes a matching path never merges on the auto lane: it merges only once a
       maintainer approved it at its head.
 
+# The forge operations the pack's scripts call. The engine checks them when a run of any
+# pack workflow starts, before a worktree, a slot or a node: the project's forge plugin
+# must advertise every one and have a credential. An operation only an agent calls from a
+# prompt is not listed; the host refuses that call by name on a plugin without it.
+forge:
+  operations:
+    - pr.view
+    - pr.create
+    - pr.edit-body
+    - pr.ready
+    - pr.draft
+    - pr.files
+    - pr.merge
+    - pr.merge-state
+    - pr.threads
+    - pr.thread.reply
+    - pr.thread.resolve
+    - comment.upsert
+    - checks.state
+    - checks.commit
+    - checks.rerun
+    - repo.file
+    - repo.labels.list
+    - repo.label.ensure
+    - workitem.view
+    - workitem.create
+    - workitem.edit-body
+    - workitem.close
+    - workitem.comments
+    - workitem.comment.upsert
+    - workitem.label.add
+    - workitem.label.remove
+
 # The trigger bindings the pack recommends. Nothing here starts a run: an operator writes
 # them for one repository with `archon pack bindings sdlc` and registers each file.
 # The README's setup guide says how. https://archon.diy/guides/sdlc-operations/ says,
