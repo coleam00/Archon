@@ -120,6 +120,13 @@ function createMockStore(): IWorkflowStore {
       throw new Error('Unexpected listPendingStartBindings');
     }),
     listSkippedItemStarts: mock<IWorkflowStore['listSkippedItemStarts']>(async () => []),
+    getInstallHold: mock<IWorkflowStore['getInstallHold']>(async () => null),
+    setInstallHold: mock<IWorkflowStore['setInstallHold']>(() => {
+      throw new Error('Unexpected setInstallHold');
+    }),
+    liftInstallHold: mock<IWorkflowStore['liftInstallHold']>(async () => null),
+    listHeldStarts: mock<IWorkflowStore['listHeldStarts']>(async () => []),
+    listHeldItemStarts: mock<IWorkflowStore['listHeldItemStarts']>(async () => []),
     listWaitedItemHolders: mock<IWorkflowStore['listWaitedItemHolders']>(async () => []),
     getResourceStartRequest: mock<IWorkflowStore['getResourceStartRequest']>(() => {
       throw new Error('Unexpected getResourceStartRequest');

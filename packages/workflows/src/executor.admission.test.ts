@@ -26,6 +26,7 @@ import type { ExecuteWorkflowOptions } from './executor';
 import type { WorkflowRun } from './schemas';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { IWorkflowStore } from './store';
+import { InstallHeldError } from './store/errors';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { WorkflowStatusReadError } from './workflow-status-read';
 import { keepAwake } from './utils/keep-awake';
@@ -800,5 +801,34 @@ describe('asks without an item', () => {
     });
     expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
     expect(store.claimPendingWorkflowRun).toHaveBeenCalled();
+  });
+});
+
+describe('install hold', () => {
+  it('a resource start waits for the lift instead of being refused', async () => {
+    const hold = { setBy: 'operator', setAt: '2026-11-17T10:00:00.000Z' };
+    let held = true;
+    const cancelWorkflowRun = mock(async () => ({ cancelled: true }));
+    const platform = makePlatform();
+    const started = startWorkflow({
+      platform,
+      store: makeStore({
+        createWorkflowRun: mock(async () => makeRun({ codebase_id: 'codebase-1' })),
+        admitPendingRun: mock(async () => {
+          if (held) throw new InstallHeldError(hold);
+          return null;
+        }),
+        cancelWorkflowRun,
+      }),
+      workflow: makeWorkflow({ resource: { name: 'pool' } }),
+    });
+    for (let tries = 0; !sentMessages(platform).some(m => m.includes('install hold')); tries++) {
+      if (tries > 100) throw new Error('the start did not wait for the hold');
+      await Bun.sleep(10);
+    }
+    held = false;
+    await started;
+    expect(cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
   });
 });

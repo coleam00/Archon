@@ -27,6 +27,8 @@ function read(key: string, runs: ItemRun[], mergedAt: string | null): ItemRead {
     runs,
     queued: [],
     skipped: [],
+    hold: null,
+    held: [],
     questions: [],
     answers: [],
     links: [],

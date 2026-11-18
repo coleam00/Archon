@@ -2123,6 +2123,16 @@ declare module 'archon:script' {
         readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
       } | null;
     }>;
+    readonly hold: {
+      readonly setBy: string;
+      readonly setAt: string;
+    } | null;
+    readonly held: ReadonlyArray<{
+      readonly receiptId: string;
+      readonly bindingId: string;
+      readonly workflow: string | null;
+      readonly receivedAt: string;
+    }>;
     readonly questions: ReadonlyArray<{
       readonly kind: 'attention';
       readonly ref: string;
@@ -2581,6 +2591,16 @@ declare module 'archon:script' {
           readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
           readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
         } | null;
+      }>;
+      readonly hold: {
+        readonly setBy: string;
+        readonly setAt: string;
+      } | null;
+      readonly held: ReadonlyArray<{
+        readonly receiptId: string;
+        readonly bindingId: string;
+        readonly workflow: string | null;
+        readonly receivedAt: string;
       }>;
       readonly questions: ReadonlyArray<{
         readonly kind: 'attention';

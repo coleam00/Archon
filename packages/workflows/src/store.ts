@@ -371,6 +371,8 @@ export interface IWorkflowStore
    * created without one. The claim records the calling process as the run's execution
    * owner (`currentExecutionOwner`). A store with items throws `WorkflowItemHeldError`,
    * writing nothing, while another run of the run's workflow holds its item (`holdsItem`).
+   * A store with the install hold throws `InstallHeldError`, writing nothing, while the hold
+   * is set and nothing admitted the run (a top-level run with no start request).
    */
   claimPendingWorkflowRun(id: string, workingPath?: string): Promise<WorkflowRun | null>;
   /**

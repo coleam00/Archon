@@ -1,7 +1,8 @@
 /**
  * A run of a workflow that declares `resource:` takes a slot on it before it is claimed,
  * however the run was started. A hand start waits here for its slot, and at its claim for
- * its item (`waitForTurn`).
+ * its item (`waitForTurn`). While the install hold is set, a hand start waits for the lift
+ * at whichever of the two comes first.
  */
 import { createLogger } from '@archon/paths';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
@@ -11,8 +12,11 @@ import type { ResolvedWorkflow, WorkflowExecutionResult, WorkflowRun } from './s
 import {
   ADMISSION_CHECKOUT_GUARD_METADATA_KEY,
   DEFAULT_RESOURCE_CAPACITY,
+  describeInstallHold,
+  type InstallHold,
   type PreparedWorkflowLaunch,
 } from './schemas/resource-start';
+import { InstallHeldError } from './store/errors';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -46,6 +50,16 @@ export function itemHold(itemKey: string, holderRunId: string, workflow: string)
     refusal: `Item '${itemKey}' is held by ${by}; the start does not wait.`,
     log: { itemKey, holderRunId },
     heldBy: holderRunId,
+  };
+}
+
+/** The hold of a start that the install hold keeps from admission. */
+export function installHold(hold: InstallHold): StartHold {
+  const by = describeInstallHold(hold);
+  return {
+    waiting: `the install hold (${by}). The run starts when the hold is lifted.`,
+    refusal: `New runs are held on this install (${by}); the start does not wait.`,
+    log: { installHoldSetAt: hold.setAt },
   };
 }
 
@@ -202,6 +216,7 @@ export async function holdWorkflowResource(
       try {
         blocker = await deps.store.admitPendingRun({ resource, capacity, launch });
       } catch (error) {
+        if (error instanceof InstallHeldError) return { held: installHold(error.hold) };
         return { done: await endResourceWait(deps, workflowRun, resource, error, refuse) };
       }
       if (!blocker) return { done: undefined };
