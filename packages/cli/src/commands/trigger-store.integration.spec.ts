@@ -579,6 +579,70 @@ test('receipt inspection rejects invalid limits through the in-memory store', as
   expect(await store.listStartReceipts(1000)).toEqual([]);
 });
 
+test('trigger list shows a refused binding with its forge refusal and omits the others', async () => {
+  const host = hostForTest();
+  const binding = (bindingId: string): ResourceStartBindingIntent => ({
+    bindingId,
+    bindingRevision: null,
+    hostId: 'host',
+    runAsUserId: 'operator',
+    resource: 'portable',
+    capacity: 1,
+    overlap: 'queue',
+    launch: {
+      cwd: '/portable',
+      workflowName: 'portable',
+      inputs: {},
+      isolation: { kind: 'in-place' },
+    },
+  });
+  const accepted: SourceReceiptAcceptance = {
+    ...acceptance(binding('refused'), 'listed'),
+    outcome: 'matched',
+    bindings: [binding('refused'), binding('waiting')],
+  };
+  await host.deps.store.acceptStartReceipt(accepted);
+  const identity = { receiptId: accepted.receipt.id, bindingId: 'refused', ownerId: 'owner' };
+  const forgeRefusal = {
+    pack: 'sdlc',
+    failures: [
+      { remote: 'origin', reason: 'no_credential', message: 'no token', remedy: 'Log in.' },
+    ],
+  };
+  expect(await host.deps.store.claimStartBindingPreparation(identity)).toBe(true);
+  expect(
+    await host.deps.store.failStartBindingPreparation({
+      ...identity,
+      retryable: false,
+      error: 'launch_preparation_failed',
+      forgeRefusal,
+    })
+  ).toBe(true);
+  const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+    _chunk: unknown,
+    callback?: () => void
+  ) => {
+    callback?.();
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    await triggerCommand(host, 'list', [], {});
+    const [listed] = JSON.parse(stdout.mock.calls.map(call => String(call[0])).join('')) as {
+      refusedBindings: unknown[];
+    }[];
+    expect(listed.refusedBindings).toEqual([
+      {
+        bindingId: 'refused',
+        status: 'rejected',
+        error: 'launch_preparation_failed',
+        forgeRefusal,
+      },
+    ]);
+  } finally {
+    stdout.mockRestore();
+  }
+});
+
 /** Accept one binding for `workflowYaml` and drain it; returns the prepared request or the error. */
 async function prepareTriggerInputs(
   workflowYaml: string,
@@ -658,6 +722,7 @@ test('preparation refuses event-mapped inputs for a workflow that declares none'
   expect((await host.deps.store.getStartReceipt(receiptId))?.bindings[0]).toMatchObject({
     status: 'rejected',
     error: 'launch_preparation_failed',
+    forgeRefusal: null,
   });
 });
 

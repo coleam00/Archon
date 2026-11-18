@@ -8,6 +8,7 @@ import {
 } from './schemas/resource-start';
 import type { z } from 'zod';
 import type {
+  ForgeRefusal,
   InstallHold,
   PreparedWorkflowLaunch,
   QueuedItemStart,
@@ -673,6 +674,8 @@ export interface IResourceStartStore {
     ownerId: string;
     retryable: boolean;
     error: string;
+    /** The one preparation failure whose detail is stored: a refusal for the pack's forge needs. */
+    forgeRefusal?: ForgeRefusal;
   }): Promise<boolean>;
   resetStartBindingPreparation(input: {
     receiptId: string;

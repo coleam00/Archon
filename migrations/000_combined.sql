@@ -610,6 +610,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_start_receipt_bindings (
   preparation_status VARCHAR(20) NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
   preparation_owner TEXT,
   preparation_error TEXT,
+  forge_refusal TEXT,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   PRIMARY KEY (receipt_id, binding_id)
@@ -744,6 +745,10 @@ ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS checkou
 -- The item a source plugin's binding mapped from its event; null means the receipt's
 -- item_key, if any. One receipt can start several bindings, not all on an item.
 ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS item_key TEXT;
+
+-- A binding refused for its pack's forge needs: the typed reasons and remedies, beside
+-- preparation_error, which keeps only the failed boundary.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS forge_refusal TEXT;
 
 -- The durable thing runs are about: a key within a project, and when it was first named.
 -- No status, stage or config; where an item stands is derived from its runs. project_key
