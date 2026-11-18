@@ -709,6 +709,7 @@ nodes:
 - `allowed_tools: []` selects no built-in tools governed by the filter. On Claude this makes an MCP-only node: attach servers with the `mcp` field (see [Node Fields](#node-fields)). A Claude node that declares `skills` keeps the `Skill` tool even with `allowed_tools: []`, so leave `skills` unset on a node that must have only MCP tools. On Pi, an empty list does not mean the node has no tools, as explained below.
 - On Copilot, `allowed_tools` and `denied_tools` match every session tool, MCP tools included, so `allowed_tools: []` also removes the node's MCP tools. Copilot accepts source patterns such as `mcp:*` and `builtin:<name>`; `allowed_tools: ["mcp:*"]` makes an MCP-only Copilot node.
 - If both are set on Claude, Pi or Copilot, `denied_tools` wins: a tool named in both lists is removed.
+- A Claude workflow node never has `ScheduleWakeup`, even when `allowed_tools` names it. The node's query ends with its turn, so a scheduled wake-up would never run.
 - When neither field is set, the node uses the provider's default tool set. On Pi, setting only `denied_tools` does not start from that default set, as explained below.
 - These node fields are supported on Claude, Pi and Copilot. Codex nodes/steps emit a warning and continue (Codex does not support per-call tool restrictions). OpenCode does not apply these node fields; its agent `tools` and `disallowedTools` configuration is separate.
 

@@ -2474,6 +2474,15 @@ describe('workflow node capabilities', () => {
     expect(options.allowedTools).toContain('mcp__declared__*');
   });
 
+  test('a workflow node never gets ScheduleWakeup, and keeps its own denied tools', async () => {
+    const node = await workflowOptions({ nodeConfig: { nodeId: 'n', denied_tools: ['WebFetch'] } });
+    expect(node.disallowedTools).toEqual(['ScheduleWakeup', 'WebFetch']);
+
+    mockQuery.mockClear();
+    const chat = await workflowOptions({ nodeConfig: { denied_tools: ['WebFetch'] } });
+    expect(chat.disallowedTools).toEqual(['WebFetch']);
+  });
+
   test('keeps partial non-workflow nodeConfig on ambient defaults', async () => {
     const options = await workflowOptions({ nodeConfig: { allowed_tools: [] } });
 
