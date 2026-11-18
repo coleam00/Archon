@@ -125,6 +125,24 @@ async function resolveRunProject(route: WorkflowRoute): Promise<string | undefin
   }
 }
 
+/**
+ * Resolve each `--input-file name=path` from the invocation's `--cwd`, as `--config` is:
+ * the cwd the run receives is normalized to the repository root, so resolving later would
+ * read `<root>/item.txt` for `--cwd <root>/briefs`. An entry without `=` stays as given, for
+ * the input gate to refuse with the grammar error.
+ */
+function resolveInputFilePaths(
+  cwd: string,
+  assignments: string[] | undefined
+): string[] | undefined {
+  return assignments?.map(assignment => {
+    const eq = assignment.indexOf('=');
+    return eq === -1
+      ? assignment
+      : `${assignment.slice(0, eq)}=${resolve(cwd, assignment.slice(eq + 1))}`;
+  });
+}
+
 function buildRunOptions(
   { values, cwd, json, detachedRunConfig }: WorkflowRoute,
   workflowSource: string | undefined,
@@ -166,7 +184,7 @@ function buildRunOptions(
     pauseAtGates: values['pause-at-gates'] as boolean | undefined,
     // Raw `name=value` assignments; parsed at the invocation gate (#2554).
     inputs: values.input as string[] | undefined,
-    inputFiles: values['input-file'] as string[] | undefined,
+    inputFiles: resolveInputFilePaths(cwd, values['input-file'] as string[] | undefined),
     modelAssignments: values.model as string[] | undefined,
     configPath: typeof values.config === 'string' ? resolve(cwd, values.config) : undefined,
     configFromRun: values['config-from-run'] as string | undefined,

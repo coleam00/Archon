@@ -95,7 +95,7 @@ async function fixture() {
       database.close();
     }
   };
-  return { root, bigPath, cli, runs };
+  return { root, repo, bigPath, cli, runs };
 }
 
 const recordedBig = (metadata: string): unknown =>
@@ -142,6 +142,25 @@ describe('workflow run --input-file', () => {
     }
     expect(row?.status).toBe('paused');
     expect(recordedBig(row?.metadata ?? '{}')).toBe(CONTENT);
+  }, 90_000);
+
+  // The run's cwd is normalized to the repository root; the path must not follow it.
+  test('a relative path resolves from a subdirectory --cwd, on a dry run and a real run', async () => {
+    const fx = await fixture();
+    const briefs = join(fx.repo, 'briefs');
+    mkdirSync(briefs);
+    writeFileSync(join(briefs, 'item.txt'), 'the brief\n');
+    const launch = ['workflow', 'run', 'take', '--cwd', briefs, '--input-file', 'big=item.txt'];
+
+    // Only briefs/item.txt exists: reading <root>/item.txt would refuse the run.
+    const dry = await fx.cli([...launch, '--dry-run']);
+    expect(dry.exitCode, dry.stderr).toBe(0);
+
+    // A same-named root file must not win.
+    writeFileSync(join(fx.repo, 'item.txt'), 'the root file\n');
+    const real = await fx.cli([...launch, '--no-worktree']);
+    expect(real.exitCode, real.stderr).toBe(0);
+    expect(recordedBig(fx.runs()[0]?.metadata ?? '{}')).toBe('the brief\n');
   }, 90_000);
 
   test('refuses a missing file or a name given twice before any run exists', async () => {

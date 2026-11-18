@@ -140,7 +140,7 @@ export async function runDryRun(
   // with the same errors (undeclared key, missing required) before any trace output.
   // Only the supplied entries travel; the simulator layers pack settings and declared
   // defaults under them through `resolveRunStartInputs`, the merge a real run starts with.
-  const dryRunInputs = resolveTopLevelInputs(workflow, await readSuppliedInputs(cwd, options));
+  const dryRunInputs = resolveTopLevelInputs(workflow, await readSuppliedInputs(options));
 
   // Relative stub paths resolve from `--cwd`, as the CLI reference states. They are the
   // operator's dry-run inputs, not part of the workflow's source, so `--workflow-source`

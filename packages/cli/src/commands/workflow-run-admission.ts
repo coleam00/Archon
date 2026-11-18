@@ -509,7 +509,7 @@ export async function admitRunExecution(
     ? undefined
     : selection.preCreatedRun
       ? recordedLaunchInputs(selection.preCreatedRun)
-      : await readSuppliedInputs(request.cwd, options);
+      : await readSuppliedInputs(options);
   const resolvedInputs = options.resume
     ? undefined
     : resolveTopLevelInputs(workflow, suppliedInputs);
@@ -538,13 +538,12 @@ export async function admitRunExecution(
  * The inputs an invocation supplies: `--input name=value` as typed, and `--input-file
  * name=path` as the file's exact contents (no trimming, unlike `$(cat file)`). Only the
  * explicit flag reads a file; a `--input` value that looks like a path stays a string.
- * Relative paths resolve from `cwd`, as `--config` does.
+ * The CLI route has already resolved each path from `--cwd`.
  *
  * @throws WorkflowInputContractError on a grammar error, a name given by both flags, or a
  *   file that cannot be read. Messages name the input and path, never the contents.
  */
 export async function readSuppliedInputs(
-  cwd: string,
   options: Pick<WorkflowRunOptions, 'inputs' | 'inputFiles'>
 ): Promise<Record<string, string> | undefined> {
   const supplied = options.inputs ? parseInputAssignments(options.inputs) : {};
@@ -555,13 +554,12 @@ export async function readSuppliedInputs(
         `Input '${name}' is given by both --input and --input-file: supply it once.`
       );
     }
-    const resolved = resolve(cwd, path);
     try {
-      supplied[name] = await readFile(resolved, 'utf8');
+      supplied[name] = await readFile(path, 'utf8');
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       throw new WorkflowInputContractError(
-        `Cannot read --input-file for input '${name}' at '${resolved}': ${err.code ?? err.message}`
+        `Cannot read --input-file for input '${name}' at '${path}': ${err.code ?? err.message}`
       );
     }
   }
