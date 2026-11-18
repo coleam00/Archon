@@ -2502,9 +2502,11 @@ What the engine does with them:
   transaction that records the event. Another delivery of the same event, or a second event
   for the same set, starts nothing.
 - **Only the named value meets them.** The engine compares the event's `about`, as the source
-  plugin normalized it, with the open wait's, as exact strings. An event about a commit the item
-  has moved past finds no open wait and is recorded on its receipt as not started, with why.
-  Nothing in the event's own payload stands in for this check.
+  plugin normalized it, with the open wait's, as exact strings. Once a later completed run of the
+  workflow has replaced the waits, an event about the older commit finds no open wait and is
+  recorded on its receipt as not started, with why. The engine does not read the forge's current
+  head, so a push alone replaces no wait. Nothing in the event's own payload stands in for this
+  check.
 - **The deadline raises attention and wakes nothing.** An open set past the deadline of any of
   its waits is listed in the attention queue as an `overdue_wait` item with ref `wait:<run-id>`,
   naming each wait's event and `about` and when it opened. It stays open: a late event still

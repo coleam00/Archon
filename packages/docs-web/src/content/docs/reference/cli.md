@@ -1603,8 +1603,10 @@ still stands, and `archon trigger inspect <receipt>` shows each start. An answer
 instead of `settled`. A refusal exits 1 and prints `{ ok: false, error, message }`, where
 `error` is `unknown` (nothing the caller may answer has the ref), `closed`, `moved`,
 `takes_no_answer` (an overdue wait is withdrawn, not answered), `already_answered`,
-`already_withdrawn`, `already_replaced`, `already_met` (waits an event already met),
-`not_an_ask` (a `--withdraw` of an item a paused run holds) or `error`. The HTTP equivalents are
+`already_replaced`, `already_met` (waits an event already met), `not_an_ask` (a
+`--withdraw` of an item a paused run holds) or `error`. Withdrawing an ask or waits that are
+already withdrawn is not a refusal: it exits 0 with `{ ok: true, action: "withdraw",
+unchanged: true }`. The HTTP equivalents are
 `POST /api/attention/answer` and `POST /api/attention/withdraw`.
 
 `approve`, `reject` and `respond <option>` also answer an attention wait, as shorthand:
