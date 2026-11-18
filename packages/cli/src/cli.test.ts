@@ -33,6 +33,7 @@ import { sealWorkflowRunConfig } from '@archon/core/config';
 import {
   isContinueSubcommand,
   rejectConfigOutsideRun,
+  rejectInputFileOutsideRun,
   rejectRunFlagsOnContinue,
 } from './dispatch-guards';
 import { loadCliEnv } from './load-cli-env';
@@ -770,6 +771,17 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
       );
     }
   }
+
+  it('refuses --input-file outside workflow run, leaving continuations their own message', () => {
+    const files = ['diff=changes.diff'];
+    expect(rejectInputFileOutsideRun('trigger', 'fire', files)).toBe(
+      'Error: --input-file can only be used with workflow run.'
+    );
+    expect(rejectInputFileOutsideRun('workflow', 'list', files)).toBeDefined();
+    expect(rejectInputFileOutsideRun('workflow', 'run', files)).toBeUndefined();
+    expect(rejectInputFileOutsideRun('workflow', 'resume', files)).toBeUndefined();
+    expect(rejectInputFileOutsideRun('trigger', 'fire', undefined)).toBeUndefined();
+  });
 
   it('accepts config flags on their owning commands', () => {
     expect(rejectConfigOutsideRun('workflow', 'run', 'config.yaml')).toBeUndefined();
