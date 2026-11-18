@@ -17,9 +17,10 @@
  * skill.
  */
 
-import { execFile } from 'node:child_process';
+import { type ExecFileException, execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { constants } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { SDKMessage, Settings } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
@@ -104,8 +105,9 @@ export function buildPluginListCommand(input: {
 
 /**
  * Every installed plugin id `claude plugin list --json` reports, deduplicated (it
- * lists one record per install scope). Any failure is `misconfigured` with the
- * command's own output as evidence, so the node fails before its session starts.
+ * lists one record per install scope). A listing ended by a signal or the timeout
+ * is `transient`; any other failure is `misconfigured`. Both carry the command's
+ * own output as evidence, and the node fails before its session starts.
  */
 export async function readClaudePluginIds(cmd: PluginListCommand): Promise<string[]> {
   const stdout = await new Promise<string>((resolve, reject) => {
@@ -115,18 +117,20 @@ export async function readClaudePluginIds(cmd: PluginListCommand): Promise<strin
       { cwd: cmd.cwd, env: cmd.env, timeout: PLUGIN_LIST_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 },
       (error, out, err) => {
         if (error) {
+          const signal = terminatingSignal(error);
           // Not error.message: it repeats the full argv, which for a container run
           // carries the session env (credentials included) as `-e KEY=VALUE`.
           const detail =
             err.trim() ||
-            (error.signal
-              ? `killed by ${error.signal}`
+            (signal
+              ? `killed by ${signal}${error.killed ? ' (timed out)' : ''}`
               : typeof error.code === 'number'
                 ? `exited with code ${error.code}`
                 : String(error.code));
           reject(
             new ClassifiedProviderError(
-              'misconfigured',
+              // Killed or timed out: nothing to fix, and a fresh attempt may finish.
+              signal ? 'transient' : 'misconfigured',
               `Cannot list Claude plugins (\`claude plugin list --json\` via ${cmd.command} failed): ${detail}`
             )
           );
@@ -154,6 +158,18 @@ export async function readClaudePluginIds(cmd: PluginListCommand): Promise<strin
     );
   }
   return [...new Set(parsed.data.map(p => p.id))];
+}
+
+/**
+ * The signal that ended the listing, if one did. A wrapper script or a CLI that
+ * traps the signal reports it as exit status 128+N rather than as a signal, so
+ * both structured channels count.
+ */
+function terminatingSignal(error: ExecFileException): string | undefined {
+  if (error.signal) return error.signal;
+  if (typeof error.code !== 'number' || error.code <= 128) return undefined;
+  const signalNumber = error.code - 128;
+  return Object.entries(constants.signals).find(([, n]) => n === signalNumber)?.[0];
 }
 
 /**

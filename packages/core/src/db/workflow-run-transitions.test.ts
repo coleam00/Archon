@@ -186,7 +186,7 @@ describe('workflow run transitions', () => {
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'completed'");
-      expect(query).toContain('metadata = metadata ||');
+      expect(query).toContain('metadata = (metadata ||');
       expect(params).toEqual(['workflow-run-123', null, null, JSON.stringify(metadata)]);
     });
 
@@ -258,8 +258,8 @@ describe('workflow run transitions', () => {
         error: 'Process terminated (SIGINT)',
         stop_reason: { reason: 'process_terminated', signal: 'SIGINT' },
       });
-      // Written wholesale: a previous failure's copy is removed before the merge, so
-      // SQLite's recursive json_patch cannot leave its signal under a new reason.
+      // Written wholesale: a previous failure's copy is removed before the merge, so a
+      // new reason cannot inherit its signal.
       expect(query).toContain("metadata - 'scheduled_resume' - 'stop_reason'");
       // The terminal event's bare `exit_reason` string is a shipped persisted value the
       // telemetry reader parses; the row's structured copy does not replace it.

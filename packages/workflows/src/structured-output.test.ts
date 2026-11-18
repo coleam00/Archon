@@ -111,6 +111,58 @@ describe('validateStructuredOutput: reserved metrics key', () => {
     expect(errors.every(e => e.startsWith(path))).toBe(true);
   });
 
+  test('records may carry dimensions beside them, one entry per record', () => {
+    const r = validateStructuredOutput(
+      { metrics: [count, count], metric_dimensions: [{}, { route: 'plan', constructor: 'm' }] },
+      schema
+    );
+    expect(r).toEqual({ valid: true });
+  });
+
+  test.each([
+    ['a key that does not start with a letter', { _route: 'plan' }, '/metric_dimensions/1/_route'],
+    ['a key outside [a-z0-9_]', { Route: 'plan' }, '/metric_dimensions/1/Route'],
+    [
+      'a key over 32 characters',
+      { ['k'.repeat(33)]: 'plan' },
+      `/metric_dimensions/1/${'k'.repeat(33)}`,
+    ],
+    // A parsed `__proto__` would be dropped silently, so it is refused.
+    ['the key __proto__', JSON.parse('{"__proto__":"plan"}'), '/metric_dimensions/1/__proto__'],
+    ['a value over 64 characters', { route: 'x'.repeat(65) }, '/metric_dimensions/1/route'],
+    ['a value with free text', { route: 'the plan' }, '/metric_dimensions/1/route'],
+    [
+      'more than 8 dimensions',
+      Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`k${String(i)}`, 'v'])),
+      '/metric_dimensions/1',
+    ],
+  ])('a dimension with %s fails with its path', (_label, dimensions, path) => {
+    const r = validateStructuredOutput(
+      { metrics: [count, count], metric_dimensions: [{}, dimensions] },
+      schema
+    );
+    const errors = r.valid ? [] : r.errors;
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.every(e => e.startsWith(path))).toBe(true);
+  });
+
+  // Dimensions sit beside the records: a strict reader from before them must still read every record.
+  test('a record carrying its own dimensions fails', () => {
+    expect(errorsFor([{ ...count, dimensions: { route: 'plan' } }])).toEqual([
+      expect.stringMatching(/^\/metrics\/0: /),
+    ]);
+  });
+
+  test('dimensions that do not match the records one for one fail', () => {
+    const r = validateStructuredOutput(
+      { metrics: [count, count], metric_dimensions: [{}] },
+      schema
+    );
+    expect(r.valid ? [] : r.errors).toEqual([
+      '/metric_dimensions: must hold one entry per record in metrics',
+    ]);
+  });
+
   test('a score may name the metric it calibrates', () => {
     expect(
       errorsFor([{ ...count, kind: 'score', unit: 'ratio', value: 1, calibrates: 'a.b' }])

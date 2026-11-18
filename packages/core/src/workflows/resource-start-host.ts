@@ -39,7 +39,6 @@ import {
   withCapturedSource,
 } from '@archon/workflows/run-source';
 import { canonicalValueText, type JsonValue } from '@archon/workflows/output-ref';
-import { resolveWorkflowName } from '@archon/workflows/router';
 import {
   readWorkflowRunConfigMetadata,
   WORKFLOW_RUN_CONFIG_METADATA_KEY,
@@ -55,11 +54,7 @@ import {
   type ResourceStartDisposition,
   type ResourceStartRunMetadata,
 } from '@archon/workflows/schemas/resource-start';
-import {
-  findWorkflowLoadError,
-  type ResolvedWorkflow,
-  type WorkflowExecutionResult,
-} from '@archon/workflows/schemas/workflow';
+import type { ResolvedWorkflow, WorkflowExecutionResult } from '@archon/workflows/schemas/workflow';
 import {
   SUBRUN_METADATA_KEYS,
   WORKFLOW_SOURCE_METADATA_KEY,
@@ -70,7 +65,13 @@ import {
 } from '@archon/workflows/utils/workflow-requirements';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { WorkflowInputContractError } from '@archon/workflows/workflow-inputs';
-import { loadWorkflowRunConfigFile, unsealWorkflowRunConfig } from '../config/run-config';
+import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
+import { projectKeyForCodebase } from '@archon/paths/archon-paths';
+import {
+  itemRunConfig,
+  loadWorkflowRunConfigFile,
+  unsealWorkflowRunConfig,
+} from '../config/run-config';
 import type { Codebase } from '../schemas/codebase';
 import type { WorkflowHost } from './host-store';
 import { registerRepository } from '../handlers/clone';
@@ -78,6 +79,7 @@ import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { executionLane, handoffIsolation } from './resource-start-lanes';
+import { selectStartedWorkflow } from './binding-workflow';
 
 const log = createLogger('resource-start-host');
 
@@ -105,7 +107,7 @@ async function findOrRegisterCodebase(host: WorkflowHost, cwd: string): Promise<
 
 async function selectBindingWorkflow(
   host: WorkflowHost,
-  workflowName: string,
+  launch: ResourceStartBindingIntent['launch'],
   cwd: string,
   roots: Parameters<typeof discoverWorkflowsWithConfig>[3]
 ): Promise<ResolvedWorkflow> {
@@ -115,17 +117,9 @@ async function selectBindingWorkflow(
     host.deps.providers,
     roots
   );
-  const workflow = resolveWorkflowName(
-    workflowName,
-    discovered.workflows.map(entry => entry.workflow)
-  );
-  if (workflow) return workflow;
-  const loadError = findWorkflowLoadError(discovered.errors, workflowName);
-  throw new Error(
-    loadError
-      ? `Workflow '${workflowName}' failed to load: ${loadError.error}`
-      : `Workflow '${workflowName}' not found.`
-  );
+  const started = selectStartedWorkflow(launch, discovered);
+  if ('workflow' in started) return started.workflow;
+  throw new Error(`The binding starts nothing: ${started.refused}.`);
 }
 
 async function assertBindingRequirements(
@@ -255,7 +249,7 @@ async function prepareBinding(
   host: WorkflowHost,
   intent: ResourceStartBindingIntent,
   identity: BindingIdentity,
-  runConfig: Awaited<ReturnType<typeof loadWorkflowRunConfigFile>> | undefined
+  runConfig: WorkflowRunConfigInput | undefined
 ): Promise<PreparationResult> {
   const cwd = await canonicalizeProjectPath(intent.launch.cwd);
   const sourceRoot = resolve(intent.launch.discoveryCwd ?? cwd);
@@ -264,12 +258,7 @@ async function prepareBinding(
     let source = await prepareWorkflowSource(host.deps, { sourceRoot });
     owner.hold(source);
 
-    const workflow = await selectBindingWorkflow(
-      host,
-      intent.launch.workflowName,
-      cwd,
-      source.roots
-    );
+    const workflow = await selectBindingWorkflow(host, intent.launch, cwd, source.roots);
     await recordSelectedWorkflow(source.anchor.root, workflow.name);
     await assertBindingRequirements(host, intent, workflow);
     const inputs = resolveBindingInputs(intent, workflow);
@@ -331,6 +320,29 @@ async function prepareBinding(
   });
 }
 
+/**
+ * The run config of the item a binding start is on (see `itemRunConfig`). The item is the
+ * one admission's `namedItem` writes the run onto: the binding's key, else the receipt's,
+ * in the project of the launch cwd. Undefined for a start on no item or an item not
+ * written yet.
+ */
+async function bindingItemRunConfig(
+  host: WorkflowHost,
+  intent: ResourceStartBindingIntent,
+  receiptId: string
+): Promise<WorkflowRunConfigInput | undefined> {
+  const itemKey = intent.itemKey ?? (await host.deps.store.getStartReceipt(receiptId))?.itemKey;
+  if (!itemKey) return undefined;
+  // No registered project means no item yet: admission registers it and writes the item new.
+  const { codebase } = await resolveCodebaseForPath(intent.launch.cwd, host.records.codebases);
+  if (!codebase) return undefined;
+  const found = await host.deps.store.getItemRuns(
+    projectKeyForCodebase(codebase, codebase.default_cwd),
+    itemKey
+  );
+  return found ? itemRunConfig(itemKey, found.runs) : undefined;
+}
+
 async function prepareClaimedBinding(
   host: WorkflowHost,
   intent: ResourceStartBindingIntent,
@@ -342,9 +354,14 @@ async function prepareClaimedBinding(
       throw new Error('The configured run-as user no longer exists.');
     }
     stage = 'run_configuration';
-    const runConfig = intent.launch.configSource
-      ? await loadWorkflowRunConfigFile(intent.launch.configSource)
-      : undefined;
+    // The item's own config wins over `configSource`: a binding file's config is written
+    // once for the install (`pack bindings --config`), a default for an item's first run,
+    // not a change to this item's config.
+    const runConfig =
+      (await bindingItemRunConfig(host, intent, identity.receiptId)) ??
+      (intent.launch.configSource
+        ? await loadWorkflowRunConfigFile(intent.launch.configSource)
+        : undefined);
     stage = 'launch_preparation';
     return await prepareBinding(host, intent, identity, runConfig);
   } catch (error) {

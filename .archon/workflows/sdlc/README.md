@@ -277,14 +277,17 @@ or `parked`), and `value.facts.merge.status` is the merge queue's (`waiting`, `a
 its status and its artifacts, not the stage's decision.
 
 ```bash
-archon workflow run archon-build-queue --input number=42 --detach
+archon workflow run archon-build-queue --input number=42 --item issue-42 --detach
 archon workflow wait <run-id> --json
 archon state get work/42
 ```
 
-The build queue works the issue toward a reviewed pull request, one round per run. A
-round that continues a pull request starts its review from the review the earlier round
-published, not from the start.
+The build queue works the issue toward a reviewed pull request, one round per run. The
+run is on the issue's item (`--item issue-42`), where the engine admits one build run at
+a time, so two runs never build one issue. A round that continues a pull request starts
+its review from the review the earlier round published, not from the start.
+`archon-build-pick` starts a build for every waiting issue, or for the work you describe
+in words: `archon workflow run archon-build-pick "build the retry fix"`.
 
 ```bash
 archon workflow run archon-merge-queue --detach
@@ -328,10 +331,14 @@ The pack installs no binding and starts nothing by itself. It declares the bindi
 recommends under `bindings:` in `.pack/pack.yaml`:
 
 - `intake-issues` and `intake-labels` start intake on GitHub issue and label events.
-- `build-queue`, `split-queue`, `merge-queue` and `discoveries` start the queues on a
-  schedule. Intake also starts the build queue for an item it routed, by firing the
-  `build-queue` file. The merge queue's schedule is short, and a sweep where nothing
-  changed runs no agent.
+- `split-queue`, `merge-queue` and `discoveries` start those queues on a schedule. The
+  merge queue's schedule is short, and a sweep where nothing changed runs no agent.
+- `build-queue` starts one build run for one issue. Nothing schedules it: the next three
+  bindings fire it or start the same workflow.
+- `build-after-intake` starts an issue's first build round when its intake run ends.
+- `build-pick` starts a build for every waiting issue on a schedule, and
+  `build-pick-after-build` does when a build run ends, so a freed slot and a next round
+  do not wait for the schedule.
 - `metrics-prs` and `metrics-test-value` refresh the pack's metrics.
 
 An install that runs no server also needs the merged-worktree sweep a server runs by
@@ -348,7 +355,7 @@ archon pack bindings sdlc \
   --run-as <the id whoami printed> \
   --cwd /path/to/the/clone \
   --out /path/for/binding/files \
-  --only build-queue,merge-queue,discoveries
+  --only build-queue,build-after-intake,build-pick,build-pick-after-build,merge-queue,discoveries
 ```
 
 `--host` is the id of the execution host that starts the runs: a name you choose for

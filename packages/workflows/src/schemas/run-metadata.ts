@@ -159,15 +159,14 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
 }
 
 /**
- * The result a top-level run that declares `returns.asks` completed with: its `returns:`
- * node output, parsed. Written only by the completing write, and only when the value is
+ * The result a top-level run that declares `returns.asks` completed with: the value its
+ * terminal record holds as `returns` (see `recordedReturn`). Written only by the completing write, and only when the value is
  * defined, so an asks-settled binding can read the run's result once its asks settle,
  * long after the process that held its node outputs has exited.
  *
- * Stored as JSON text, not as a JSON value: the completing write merges metadata, and
- * SQLite's merge (`json_patch`) deletes every null-valued key at any depth, so a result
- * stored as a value would lose its nulls and a binding reading one would see nothing.
- * Write it with `asksResultMetadata` and read it with `readAsksResult`.
+ * Stored as JSON text, not as a JSON value: older binaries merged SQLite metadata with
+ * `json_patch`, which deletes every null-valued key at any depth, so they wrote it as text
+ * and read only text. Write it with `asksResultMetadata` and read it with `readAsksResult`.
  */
 const ASKS_RESULT_METADATA_KEY = 'asks_result';
 

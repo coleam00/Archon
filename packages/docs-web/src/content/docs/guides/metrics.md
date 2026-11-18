@@ -222,6 +222,21 @@ affected; to use the key for something else, rename it.
           }
         ]
       }
+    },
+    "metric_dimensions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "propertyNames": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,31}$"
+        },
+        "additionalProperties": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.:@/-]{1,64}$"
+        },
+        "maxProperties": 8
+      }
     }
   },
   "required": [
@@ -250,6 +265,20 @@ affected; to use the key for something else, rename it.
 Records hold only these fields. A record with any other key is refused, so a record
 cannot carry credentials, prompt contents or messages beyond its bounded `subject` and
 `instrument`.
+
+A node may also return `metric_dimensions` beside `metrics`: one entry per record, at the
+same position, naming values a query can split the metric by, such as
+`[{ "route": "plan" }, {}]`. `{}` is a record without dimensions. An entry holds up to 8
+values; a key is a letter followed by up to 31 characters of `[a-z0-9_]`, and a value is 1
+to 64 characters of `[A-Za-z0-9_.:@/-]`. An output whose `metric_dimensions` does not hold
+one entry per record fails like a malformed record. Dimensions are not part of the name's
+definition or of the record's identity: a re-measured subject whose dimension changed
+replaces its old record. See [Splitting by a dimension](#splitting-by-a-dimension).
+
+Dimensions sit beside the records rather than inside them so that a binary that predates
+them still reads every record and counts it, without its dimensions. A binary reading
+stored records also ignores a record key it does not know, so a record a newer binary
+extends still counts.
 
 ## How records are counted
 
@@ -364,12 +393,39 @@ archon metrics sdlc.pr_merge_rate --since 60d --by-model ship__deliver__rounds.r
   existing producing run there is nothing to check the node against, and the query
   succeeds: a window with no records reports none, and records whose runs were all
   deleted are counted as `unattributed`.
-- `--by-model` and `--compare` cannot be combined in one query.
+- `--by-model` cannot be combined with `--compare` or `--by-dimension` in one query.
 
 A model split is observational, like a cohort comparison. Each model ran the work it was
 routed: an install that sends different kinds of work to different models mixes the model
 with the task in any difference it shows. The text output ends with a line that says so.
 Showing a model effect needs work assigned to each model independently of its size.
+
+## Splitting by a dimension
+
+`archon metrics <name> --by-dimension <key>` (or `byDimension=` on the API) splits each
+entry's records by the value their `metric_dimensions` entry holds for `<key>`. A pack that
+needs a metric per route, size or issue type writes each record once with that value,
+rather than once per name.
+
+```bash
+archon metrics sdlc.issues_merged --since 30d --by-dimension route
+archon metrics sdlc.issue_asks --since 60d --by-dimension route --compare 2026-10-15T09:30:00Z
+```
+
+- **Groups.** One group per value, ordered by value, then `none` for records that do not
+  carry the key. Each group reports its `value`, `n`, `interval` and `cost`, and
+  `delta_vs_rest` against the other values combined (never against `none`), with its own
+  interval and `separated`, computed the same way as `--by-model`.
+- **With `--compare`.** Each group also carries its own `compare` block, with the same
+  cohorts, `straddling` and `unattributed` counts as a whole-entry comparison. The entry
+  then has no `compare` block of its own.
+- **A key no record carries fails.** When the window holds records and none carries
+  `<key>`, the query fails and lists the dimension keys they do carry, at most 50:
+  `archon metrics` exits `2`, and the API returns 400.
+- `--by-dimension` and `--by-model` cannot be combined in one query.
+
+A dimension split is observational too: each value covers different work, so a difference
+mixes the dimension with the work. The text output ends with a line that says so.
 
 Metric names are shared by every project on the install. Pass `--project` to read one
 codebase's records; their names keep the install's definitions.
@@ -386,8 +442,9 @@ curl 'http://localhost:3090/api/metrics?name=repo.commits&since=7d'
 
 Each metric reports its `value` (the sum or the mean), `n` (the records counted), its
 `interval`, the `cost` of its producing runs, its latest record and a daily `series`, per
-instrument and `measured_by`, a `compare` block when a cut is given, and a `by_model`
-block when a node is. `archon metrics` exits `4` when it
+instrument and `measured_by`, a `compare` block when a cut is given without a dimension
+key, a `by_model` block when a node is, and a `by_dimension` block when a dimension key
+is, with a `compare` block in each of its groups instead when a cut is also given. `archon metrics` exits `4` when it
 refused a record, and prints each refusal to stderr. See
 [`archon metrics`](/reference/cli/#metrics-name) and
 [`GET /api/metrics`](/reference/api/#metrics) for every option.
