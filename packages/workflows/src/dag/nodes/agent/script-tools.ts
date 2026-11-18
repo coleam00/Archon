@@ -2,13 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { nativeToolInputSchema, type NativeTool } from '@archon/provider-contract';
 import type { AgentNode, ExecNode } from '../../../schemas';
 import type { NodeExecutionRecord } from '../../../schemas/node-execution';
-import { nodeOutputSchema } from '../../../schemas/tool-output';
-import {
-  canonicalValueText,
-  declaredOutputPathsFromSchema,
-  jsonValueSchema,
-  type JsonValue,
-} from '../../../output-ref';
+import { canonicalValueText, jsonValueSchema, type JsonValue } from '../../../output-ref';
 import { validateJsonSchema } from '../../../structured-output';
 import { scriptToolsCompileError } from '../../../loader/contracts';
 import { persistNodeEvent } from '../../../node-event-write';
@@ -18,6 +12,14 @@ import type { RunLayersContext } from '../../run-context';
 import { prepareToolScript, runScript } from '../exec/script';
 import { ExecOutputContractError } from '../exec/exec-output';
 
+const STOP_GRACE_MS = 1_000;
+
+interface ToolOutcome {
+  output: JsonValue;
+  status: 'completed' | 'failed' | 'unknown';
+  error?: string;
+}
+
 export async function createScriptTools(
   ctx: RunLayersContext,
   node: AgentNode,
@@ -26,13 +28,12 @@ export async function createScriptTools(
 ) {
   const schemaError = scriptToolsCompileError(node);
   if (schemaError) throw new Error(schemaError);
-  const calls: JsonValue[] = [];
   const pendingWrites = new Set<Promise<string>>();
+  const timeoutWrites = new Set<() => Promise<void>>();
   const toolAbort = new AbortController();
   let unknownWrite: string | undefined;
   let recordingError: unknown;
   let closed = false;
-  let sequence = 0;
   const nativeTools: NativeTool[] = [];
   for (const [name, declaration] of Object.entries(node.tools ?? {})) {
     const script: ExecNode = {
@@ -51,12 +52,42 @@ export async function createScriptTools(
       inputSchema: nativeToolInputSchema.parse({ jsonSchema: declaration.input_schema }),
       handler: (input, context) => {
         const jsonInput = jsonValueSchema.parse(input);
-        const index = sequence++;
-        const execute = async (): Promise<{
-          output: JsonValue;
-          status: 'completed' | 'failed' | 'unknown';
-          error?: string;
-        }> => {
+        let recorded = false;
+        const record = async (outcome: ToolOutcome): Promise<void> => {
+          if (recorded) return;
+          recorded = true;
+          try {
+            await persistNodeEvent(ctx.deps.store, {
+              workflow_run_id: ctx.workflowRun.id,
+              step_name: execution.path,
+              event_type: 'script_tool_call',
+              data: {
+                attempt_id: execution.attempt.id,
+                tool_name: name,
+                call_id: randomUUID(),
+                ...(context ? { provider_call_id: context.providerCallId } : {}),
+                ...(context?.providerCallScope
+                  ? { provider_call_scope: context.providerCallScope }
+                  : {}),
+                status: outcome.status,
+                input: jsonInput,
+                output: outcome.output,
+                ...(outcome.error ? { error: outcome.error } : {}),
+              },
+            });
+          } catch (cause) {
+            recordingError ??= cause;
+            abortController.abort();
+            throw cause;
+          }
+        };
+        const recordUnknown = async (error: string): Promise<void> => {
+          if (recorded) return;
+          unknownWrite ??= error;
+          abortController.abort();
+          await record({ output: null, status: 'unknown', error });
+        };
+        const execute = async (): Promise<ToolOutcome> => {
           const validation = validateJsonSchema(input, declaration.input_schema);
           if (!validation.valid)
             return {
@@ -73,8 +104,8 @@ export async function createScriptTools(
             const result = await runScript(
               ctx,
               script,
-              prepared.invocation,
-              { ...prepared.env, ARCHON_TOOL_INPUT: JSON.stringify(input) },
+              { ...prepared.invocation, input: JSON.stringify(input) },
+              prepared.env,
               AbortSignal.any([toolAbort.signal, abortController.signal])
             );
             return { output: result.structuredOutput ?? result.output, status: 'completed' };
@@ -84,54 +115,35 @@ export async function createScriptTools(
                 ? cause.message
                 : formatSubprocessFailure(cause as RawSubprocessRejection, `Tool '${name}'`)
                     .userMessage;
-            const status =
-              declaration.writes && !knownScriptFailure(ctx, cause) ? 'unknown' : 'failed';
-            if (status === 'unknown') {
-              unknownWrite = error;
+            if (declaration.writes && !knownScriptFailure(ctx, cause)) {
+              unknownWrite ??= error;
               abortController.abort();
+              return { output: null, status: 'unknown', error };
             }
-            return { output: null, status, error };
+            return { output: null, status: 'failed', error };
           }
         };
         const call = async (): Promise<string> => {
           if (closed || toolAbort.signal.aborted || abortController.signal.aborted)
             throw new Error('Tool attempt has stopped');
-          const { output, status, error } = await execute();
-          const record = {
-            tool_name: name,
-            call_id: randomUUID(),
-            ...(context ? { provider_call_id: context.providerCallId } : {}),
-            ...(context?.providerCallScope
-              ? { provider_call_scope: context.providerCallScope }
-              : {}),
-            status,
-            input: jsonInput,
-            output,
-            ...(error ? { error } : {}),
-          };
-          try {
-            await persistNodeEvent(ctx.deps.store, {
-              workflow_run_id: ctx.workflowRun.id,
-              step_name: execution.path,
-              event_type: 'script_tool_call',
-              data: { attempt_id: execution.attempt.id, ...record },
-            });
-          } catch (cause) {
-            recordingError = cause;
-            abortController.abort();
-            throw cause;
-          }
-          calls[index] = record;
-          if (error) throw new Error(error);
-          return canonicalValueText(output);
+          const outcome = await execute();
+          await record(outcome);
+          if (outcome.error) throw new Error(outcome.error);
+          return canonicalValueText(outcome.output);
         };
         const work = call();
         if (declaration.writes) {
+          const timeout = () =>
+            recordUnknown(
+              `Tool '${name}' did not settle within ${STOP_GRACE_MS}ms after the attempt stopped; its write outcome is unknown`
+            );
           pendingWrites.add(work);
-          void work.then(
-            () => pendingWrites.delete(work),
-            () => pendingWrites.delete(work)
-          );
+          timeoutWrites.add(timeout);
+          const settled = () => {
+            pendingWrites.delete(work);
+            timeoutWrites.delete(timeout);
+          };
+          void work.then(settled, settled);
         }
         return work;
       },
@@ -148,25 +160,16 @@ export async function createScriptTools(
     async stop() {
       closed = true;
       toolAbort.abort();
-      await Promise.allSettled([...pendingWrites]);
-    },
-    output(result: { output: string; structuredOutput?: unknown }) {
-      const value =
-        result.structuredOutput === undefined
-          ? result.output
-          : jsonValueSchema.parse(result.structuredOutput);
-      const structuredOutput =
-        node.output_format?.type === 'object' &&
-        typeof value === 'object' &&
-        value !== null &&
-        !Array.isArray(value)
-          ? { ...value, tool_calls: calls.filter(Boolean) }
-          : { result: value, tool_calls: calls.filter(Boolean) };
-      return {
-        output: canonicalValueText(structuredOutput),
-        structuredOutput,
-        declaredOutputPaths: declaredOutputPathsFromSchema(nodeOutputSchema(node)),
-      };
+      if (pendingWrites.size === 0) return;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timedOut = await Promise.race([
+        Promise.allSettled([...pendingWrites]).then(() => false),
+        new Promise<boolean>(resolve => {
+          timer = setTimeout(() => resolve(true), STOP_GRACE_MS);
+        }),
+      ]);
+      if (timer) clearTimeout(timer);
+      if (timedOut) await Promise.allSettled([...timeoutWrites].map(timeout => timeout()));
     },
   };
 }

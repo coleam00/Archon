@@ -20,10 +20,21 @@ function zodFieldForProperty(prop: NativeToolProperty): z.ZodType<string | boole
   }
 }
 
-export function nativeToolInputParser(input: NativeToolInputSchema) {
+export function nativeToolInputParser(
+  input: NativeToolInputSchema
+): z.ZodType<Record<string, unknown>> {
   nativeToolInputSchema.parse(input);
   if ('jsonSchema' in input) {
-    return z.looseObject({}).meta(input.jsonSchema);
+    const validator = z.fromJSONSchema(input.jsonSchema);
+    return z
+      .looseObject({})
+      .meta(input.jsonSchema)
+      .superRefine((value, context) => {
+        const result = validator.safeParse(value);
+        if (!result.success)
+          for (const issue of result.error.issues)
+            context.addIssue({ code: 'custom', message: issue.message, path: issue.path });
+      });
   }
   const shape: Record<string, z.ZodType<string | boolean | undefined>> = {};
   for (const [key, prop] of Object.entries(input.properties)) {

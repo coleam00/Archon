@@ -20,7 +20,6 @@ import {
   type SchemaLiteral,
 } from './output-types/schema-to-ts';
 import type { DagNode, IncludeDirective, WorkflowLoadError } from './schemas';
-import { nodeOutputSchema } from './schemas/tool-output';
 import { isIncludeDirective, isLoopGroupNode, isOutputFormatEnforced, isWaitNode } from './schemas';
 import type { WorkflowDefinition } from './schemas/workflow';
 import { parseWorkflow } from './loader';
@@ -96,7 +95,7 @@ function nodeTypes(workflowName: string, id: string, schema: unknown): NodeTypes
 
 /** Whether the author declared this node's output: a wait's schema is the engine's own. */
 function declaresOutput(node: DagNode): boolean {
-  return nodeOutputSchema(node) !== undefined && isOutputFormatEnforced(node) && !isWaitNode(node);
+  return node.output_format !== undefined && isOutputFormatEnforced(node) && !isWaitNode(node);
 }
 
 /**
@@ -115,7 +114,7 @@ function declaredOutputs(workflow: WorkflowDefinition): NodeTypes[] {
             `Workflow '${workflow.name}' declares output_format on two nodes with the id '${node.id}'.`
           );
         }
-        found.push(nodeTypes(workflow.name, node.id, nodeOutputSchema(node)));
+        found.push(nodeTypes(workflow.name, node.id, node.output_format));
       }
       if (isLoopGroupNode(node)) visit(node.loop_group.nodes);
     }

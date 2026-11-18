@@ -51,7 +51,12 @@ export function buildCodexNativeTools(tools: readonly NativeTool[]): {
         return toolResponse(`Invalid arguments for ${call.tool}: ${input.error.message}`, false);
       try {
         return toolResponse(
-          await entry.tool.handler(input.data, { providerCallId: call.callId }),
+          await entry.tool.handler(
+            'jsonSchema' in entry.tool.inputSchema
+              ? (call.arguments as Record<string, unknown>)
+              : input.data,
+            { providerCallId: call.callId }
+          ),
           true
         );
       } catch (error) {

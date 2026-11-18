@@ -170,22 +170,27 @@ export async function executeAgentNode(
   };
 
   let result: WorkloadResult;
+  let workloadStarted = false;
   try {
     tools = await prepareAttemptTools(pc, execution);
+    workloadStarted = true;
     result = await runToolWorkload(pc, state, prompt.prompt, session, tools);
   } catch (error) {
     if (tools?.recordingError) throw tools.recordingError;
     const cancelled = wasUserCancelled(abortController, state, tools);
     const failure = attemptFailure(error as Error, cancelled, nodeMcp, node.id);
-    return failAgentNode(failure.message, failure.kind, {
+    const unknownWrite = tools?.unknownWrite;
+    const message = unknownWrite
+      ? `${failure.message}\nTool write outcome unknown: ${unknownWrite}`
+      : failure.message;
+    return failAgentNode(message, failure.kind, {
       providerFailure: failure.providerFailure,
-      providerNotCalled: failure.kind === 'config' && tools === undefined,
+      providerNotCalled: !workloadStarted,
     });
   }
   if (result.state === 'failed') {
     return failAgentNode(result.error, result.failureKind, { output: result.output });
   }
-  if (tools) result = { ...result, ...tools.output(result) };
   const duration = Date.now() - nodeStartTime;
   getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
 
@@ -262,8 +267,11 @@ async function runToolWorkload(
     await tools?.stop();
   }
   if (tools?.recordingError) throw tools.recordingError;
-  if (tools?.unknownWrite && result.state === 'completed')
-    throw new NodeFailure('unknown', `Tool write outcome unknown: ${tools.unknownWrite}`);
+  if (tools?.unknownWrite) {
+    const error = `Tool write outcome unknown: ${tools.unknownWrite}`;
+    if (result.state === 'failed') return { ...result, error, failureKind: 'unknown' };
+    throw new NodeFailure('unknown', error);
+  }
   return result;
 }
 

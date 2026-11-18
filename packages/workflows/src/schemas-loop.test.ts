@@ -78,6 +78,14 @@ describe('dagNodeSchema — LoopNode AI-field survival', () => {
     skills: ['code-review'],
     plugins: ['formatter@tools'],
     agents: { reviewer: { description: 'reviews', prompt: 'review it' } },
+    tools: {
+      lookup: {
+        description: 'lookup',
+        script: 'lookup',
+        input_schema: { type: 'object' },
+        output_schema: { type: 'object' },
+      },
+    },
     pi: { enableExtensions: false },
     effort: 'low',
     maxBudgetUsd: 5,

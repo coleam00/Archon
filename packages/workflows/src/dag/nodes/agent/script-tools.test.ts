@@ -6,10 +6,9 @@ import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import * as runControl from '../../run-control';
 import { executeDagWorkflow } from '../../../dag-executor';
-import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { renderOutputTypes } from '../../../output-types';
 import { qualifyWorkflowResources } from '../../../packaged-workflow';
-import { dagNodeSchema, type AgentNode, type DagNode, type ExecNode } from '../../../schemas';
+import type { AgentNode, DagNode } from '../../../schemas';
 import { validateNodeOutputFormats } from '../../../loader/contracts';
 import {
   createMockDeps,
@@ -30,6 +29,7 @@ const inputSchema = {
   type: 'object',
   properties: {
     count: { type: 'number' },
+    payload: { type: 'string' },
     items: {
       type: 'array',
       items: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] },
@@ -81,7 +81,7 @@ beforeEach(async () => {
   await mkdir(join(root, '.archon', 'scripts'), { recursive: true });
   await writeFile(
     join(root, '.archon', 'scripts', 'lookup.ts'),
-    'console.log(JSON.stringify({green:false}));'
+    'if (process.env.ARCHON_TOOL_INPUT) throw new Error("input used env"); const input = JSON.parse(await Bun.stdin.text()); if (input.count !== 2.5 || input.items[0].id !== 7) throw new Error("wrong input"); console.log(JSON.stringify({green:false}));'
   );
   deps = createMockDeps();
   mockSendQueryDag.mockClear();
@@ -95,20 +95,14 @@ const reply = () => ({
   structuredOutput: { summary: 'Checks are red', metrics: [] },
 });
 
-test('engine validates complex input, records one call, and downstream reads persisted output', async () => {
+test('engine validates complex stdin input, records one call, and leaves agent output unchanged', async () => {
   mockSendQueryDag.mockImplementation(async function* (_prompt, _cwd, _resume, options) {
     const native = options?.nativeTools?.[0];
     if (!native) throw new Error('Missing tool');
     expect(await native.handler(args, { providerCallId: 'call-7' })).toBe('{"green":false}');
     yield reply();
   });
-  const downstream = dagNodeSchema.parse({
-    id: 'use',
-    depends_on: ['inspect'],
-    bash: 'printf %s "$inspect.output.tool_calls"',
-  }) as ExecNode;
-  const result = await run([agent(), downstream]);
-  expect(result).toContain('call-7');
+  await run();
   const calls = events('script_tool_call');
   expect(calls).toHaveLength(1);
   expect(calls[0].data).toMatchObject({
@@ -117,14 +111,20 @@ test('engine validates complex input, records one call, and downstream reads per
     output: { green: false },
     status: 'completed',
   });
-  const completed = events('node_completed');
-  expect(completed.find(e => e.step_name === 'use')?.data?.node_output).toContain('call-7');
-  const cold = await foldDagResumeSnapshot(persistedEvents(deps.store), makeWorkflowRun().id);
-  expect(cold.completedNodeOutputs.get('inspect')?.structuredOutput).toMatchObject({
-    summary: 'Checks are red',
-    metrics: [],
-    tool_calls: [{ output: { green: false } }],
+  expect(events('node_completed')[0]?.data?.structured_output).toEqual(reply().structuredOutput);
+});
+
+test('stdin carries a tool input larger than the Linux per-variable limit', async () => {
+  mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
+    const input = { ...args, payload: 'x'.repeat(140 * 1024) };
+    expect(await options?.nativeTools?.[0].handler(input)).toBe('{"green":false}');
+    yield reply();
   });
+  await run();
+  expect(events('script_tool_call')[0]?.data?.input).toMatchObject({
+    payload: expect.stringMatching(/^x{143360}$/),
+  });
+  expect(events('node_failed')).toHaveLength(0);
 });
 
 test.each([
@@ -195,7 +195,7 @@ test('unsupported tools provider is refused without invoking model', async () =>
   expect(mockSendQueryDag.mock.calls).toHaveLength(0);
 });
 
-test('invalid tool schemas fail load and pack qualification/types derive from the declaration', () => {
+test('invalid tool schemas fail load and pack qualification leaves output types unchanged', () => {
   const node = agent();
   const broken = {
     ...node,
@@ -211,19 +211,17 @@ test('invalid tool schemas fail load and pack qualification/types derive from th
   qualifyWorkflowResources(workflow, { source: 'project', pack: 'checks', workflow: 'inspect' });
   expect(node.tools?.lookup.script).toContain('checks:inspect::lookup');
   const rendered = renderOutputTypes('archon workflow types tools', [workflow]);
-  expect(rendered.content).toContain('tool_calls');
+  expect(rendered.content).not.toContain('tool_calls');
   expect(rendered.content).toContain('summary: string');
 });
 
-test('no-schema agent exposes text result plus calls without changing other nodes', async () => {
+test('no-schema agent keeps its original text output', async () => {
   mockSendQueryDag.mockImplementation(async function* () {
     yield { type: 'result', text: 'plain answer' };
   });
   await run([{ ...agent(), output_format: undefined }]);
-  expect(events('node_completed')[0]?.data?.structured_output).toEqual({
-    result: 'plain answer',
-    tool_calls: [],
-  });
+  expect(events('node_completed')[0]?.data?.node_output).toBe('plain answer');
+  expect(events('node_completed')[0]?.data?.structured_output).toBeUndefined();
 });
 
 test('an unsettled provider with a pending write is cancelled and cannot complete or retry', async () => {
@@ -246,9 +244,66 @@ test('an unsettled provider with a pending write is cancelled and cannot complet
     });
     await run([agent(true)]);
     await expect(work).rejects.toThrow();
-    expect(events('node_failed')[0]?.data).toMatchObject({ retryable: false });
+    expect(events('node_failed').at(-1)?.data).toMatchObject({
+      retryable: false,
+      failure_kind: 'unknown',
+      error: expect.stringContaining('Tool write outcome unknown'),
+    });
     expect(events('script_tool_call')).toHaveLength(1);
   } finally {
     exec.mockRestore();
   }
+});
+
+test('stop bounds a hung write, records unknown once, and fails instead of completing', async () => {
+  let rejectScript: ((error: Error) => void) | undefined;
+  const exec = spyOn(runControl, 'runSubprocessUntilRunStops').mockImplementation(
+    async () =>
+      new Promise<never>((_resolve, reject) => {
+        rejectScript = reject;
+      })
+  );
+  try {
+    let work: Promise<string> | undefined;
+    mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
+      work = options?.nativeTools?.[0].handler(args);
+      void work?.catch(() => undefined);
+      yield reply();
+    });
+    await run([agent(true)]);
+    expect(events('node_failed')[0]?.data).toMatchObject({
+      retryable: false,
+      failure_kind: 'unknown',
+      error: expect.stringContaining('did not settle'),
+    });
+    expect(events('script_tool_call')).toHaveLength(1);
+    expect(events('script_tool_call')[0]?.data?.status).toBe('unknown');
+    rejectScript?.(Object.assign(new Error('late cancellation'), { cancelled: true }));
+    await expect(work).rejects.toThrow('late cancellation');
+    await Promise.resolve();
+    expect(events('script_tool_call')).toHaveLength(1);
+  } finally {
+    exec.mockRestore();
+  }
+});
+
+test('a no-tools schema failure after the model retains provider spend', async () => {
+  mockSendQueryDag.mockImplementation(async function* () {
+    yield {
+      ...reply(),
+      cost: 0.01,
+      tokens: { input: 10, output: 2 },
+    };
+  });
+  const node: AgentNode = {
+    kind: 'agent',
+    id: 'inspect',
+    source: { kind: 'inline', prompt: 'Return JSON' },
+    output_format: { type: 'object', properties: { id: { $ref: '#/missing' } } },
+  };
+  await run([node]);
+  expect(events('node_failed')[0]?.data).toMatchObject({
+    failure_kind: 'config',
+    cost_usd: 0.01,
+  });
 });

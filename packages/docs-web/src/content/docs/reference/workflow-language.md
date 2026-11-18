@@ -160,15 +160,15 @@ An agent node can expose named scripts as callable tools:
         required: [green]
 ```
 
-A tool script reads JSON from `ARCHON_TOOL_INPUT` and prints one JSON document to stdout. Archon validates input before launching it and validates stdout with the ordinary script output gate. Numbers, arrays and nested objects are supported; native tool parameters must be an object. Scripts use ordinary named-script discovery, pack ownership, execution backend, environment and cancellation. The discovered file determines Bun or Python runtime; optional `timeout` and `deps` have ordinary script semantics.
+A tool script reads one JSON document from stdin and prints one JSON document to stdout. Archon validates input before launching it and validates stdout with the ordinary script output gate. Numbers, arrays and nested objects are supported; native tool parameters must be an object. Scripts use ordinary named-script discovery, pack ownership, execution backend, environment and cancellation. The discovered file determines Bun or Python runtime; optional `timeout` and `deps` have ordinary script semantics.
 
 A failed script returns a tool error to the agent, which can correct its request or report a business refusal without failing the node. `writes` defaults to `false`: it is an author declaration, not an OS read-only restriction. For `writes: true`, interrupted calls with unknown outcomes stop the node **non-retryably**. A normal nonzero exit is a tool error, not an unknown outcome. Ordinary agent retries start over; completed calls are not replayed.
 
-Each observed call writes one `script_tool_call` event with input, output, status, provider call ID and attempt ID. A provider without tools is refused before model invocation. Providers must await their callbacks; after a turn stops, Archon cancels tool work and waits only for pending declared writes. Process crashes before event persistence do not have exactly-once recovery guarantees.
+Each observed call writes one `script_tool_call` event with input, output, status, provider call ID and attempt ID. A provider without tools is refused before model invocation. Providers must await their callbacks; after a turn stops, Archon cancels tool work and waits up to one second for pending declared writes. A write still running after that is recorded with an unknown outcome and stops the node non-retryably. Process crashes before event persistence do not have exactly-once recovery guarantees.
 
-For an object `output_format`, the validated agent fields stay at the top level and Archon adds `tool_calls` (reserved for engine results). Other outputs become `{result, tool_calls}`. `$inspect.output.tool_calls` reads the recorded calls through existing output references, including cold resume and generated output types. Tools never called produce an empty list. Nodes without `tools` keep their existing outputs.
+The agent receives each tool result in its own turn and puts what matters in its ordinary output. Archon leaves that output unchanged; the call event is the execution record, not an additional node-output field.
 
-## Bash and script node timeouts
+### Bash and script node timeouts
 
 When a host `bash:` or `script:` node reaches its `timeout`, Archon signals the node's
 process tree, including work behind a wrapper such as `bun run` or `uv run`.

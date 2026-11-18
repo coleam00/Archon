@@ -30,10 +30,15 @@ export function buildArchonMcpServer(nativeTools: NativeTool[]): McpSdkServerCon
         content: [
           {
             type: 'text',
-            text: await spec.handler(schema.parse(args), {
-              providerCallId: String(extra.requestId),
-              providerCallScope,
-            }),
+            text: await spec.handler(
+              'jsonSchema' in spec.inputSchema
+                ? (args as Record<string, unknown>)
+                : schema.parse(args),
+              {
+                providerCallId: String(extra.requestId),
+                providerCallScope,
+              }
+            ),
           },
         ],
       })

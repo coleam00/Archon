@@ -104,7 +104,7 @@ export async function connectProvider(
     if (!parsed.success) throw rpc.error('invalid tool input');
     return {
       text: await tool.handler(
-        parsed.data,
+        'jsonSchema' in tool.inputSchema ? (input as Record<string, unknown>) : parsed.data,
         providerCallId === undefined ? undefined : { providerCallId, providerCallScope }
       ),
     };

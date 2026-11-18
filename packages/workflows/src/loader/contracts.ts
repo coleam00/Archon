@@ -294,12 +294,6 @@ export function validateLoopGroupProseCompletion(
 
 export function scriptToolsCompileError(node: DagNode): string | null {
   if (node.kind !== 'agent' || !node.tools) return null;
-  if (
-    node.output_format?.type === 'object' &&
-    Object.hasOwn(node.output_format.properties ?? {}, 'tool_calls')
-  ) {
-    return `Node '${node.id}': tool_calls is reserved for engine-recorded tool results`;
-  }
   for (const [name, tool] of Object.entries(node.tools)) {
     if (tool.input_schema.type !== 'object')
       return `Node '${node.id}', tool '${name}': input_schema must declare type: object`;

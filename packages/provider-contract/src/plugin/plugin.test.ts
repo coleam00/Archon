@@ -640,12 +640,16 @@ test('concurrent native tools remain scoped to their owning session', async () =
 test('JSON Schema input and provider call identity cross the plugin wire unchanged', async () => {
   const input = { count: 2.5, items: [{ id: 7 }] };
   const context = { providerCallId: 'call-7', providerCallScope: 'mcp-1' };
+  let handled = 0;
   await withProvider(
     fixtureProvider({
-      async *sendQuery(_p, _c, _r, options) {
+      async *sendQuery(prompt, _c, _r, options) {
         const tool = options?.nativeTools?.[0];
         if (!tool) throw new Error('Missing tool');
-        yield { type: 'result', text: await tool.handler(input, context) };
+        yield {
+          type: 'result',
+          text: await tool.handler(prompt === 'invalid' ? { count: 'wrong' } : input, context),
+        };
         yield { type: 'settled' };
       },
     }),
@@ -667,6 +671,7 @@ test('JSON Schema input and provider call identity cross the plugin wire unchang
                 },
               },
               handler: async (actual, identity) => {
+                handled++;
                 expect(actual).toEqual(input);
                 expect(identity).toEqual(context);
                 return 'ok';
@@ -675,6 +680,30 @@ test('JSON Schema input and provider call identity cross the plugin wire unchang
           ],
         })
       );
+      await expect(
+        collect(
+          client.sendQuery('invalid', '/', undefined, {
+            nativeTools: [
+              {
+                name: 'lookup',
+                description: 'lookup',
+                inputSchema: {
+                  jsonSchema: {
+                    type: 'object',
+                    properties: { count: { type: 'number' } },
+                    required: ['count'],
+                  },
+                },
+                handler: async () => {
+                  handled++;
+                  return 'must not run';
+                },
+              },
+            ],
+          })
+        )
+      ).rejects.toThrow('invalid tool input');
+      expect(handled).toBe(1);
     }
   );
 });

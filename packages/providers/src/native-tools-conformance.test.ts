@@ -56,6 +56,7 @@ describe('native tool input schema conformance', () => {
           items: { type: 'object', properties: { id: { type: 'integer' } } },
         },
         metadata: { type: 'object', properties: { owner: { type: 'string' } } },
+        withDefault: { type: 'string', default: 'provider-must-not-fill-this' },
       },
       required: ['count', 'items', 'metadata'],
       additionalProperties: false,
@@ -94,7 +95,7 @@ describe('native tool input schema conformance', () => {
     await Reflect.apply(pi.execute, undefined, ['pi-7', input]);
     const server = buildArchonMcpServer([tool]);
     type Transport = Parameters<typeof server.instance.connect>[0];
-    const response = Promise.withResolvers<unknown>();
+    let response = Promise.withResolvers<unknown>();
     const transport: Transport = {
       start: async () => {},
       close: async () => {},
@@ -119,6 +120,33 @@ describe('native tool input schema conformance', () => {
         { providerCallId: '7', providerCallScope: expect.any(String) },
       ]);
       expect(z.toJSONSchema(nativeToolInputParser(tool.inputSchema))).toMatchObject(jsonSchema);
+      const invalid = { count: 'wrong', items: [], metadata: { owner: 'ops' }, extra: true };
+      expect(
+        (
+          await codex.call(
+            {
+              threadId: 't',
+              turnId: 'u',
+              callId: 'codex-8',
+              namespace: null,
+              tool: 'lookup',
+              arguments: invalid,
+            },
+            't',
+            'u'
+          )
+        ).success
+      ).toBe(false);
+      await expect(Reflect.apply(pi.execute, undefined, ['pi-8', invalid])).rejects.toThrow();
+      response = Promise.withResolvers<unknown>();
+      transport.onmessage?.({
+        jsonrpc: '2.0',
+        id: 8,
+        method: 'tools/call',
+        params: { name: 'lookup', arguments: invalid },
+      });
+      expect(await response.promise).toMatchObject({ result: { isError: true } });
+      expect(seen).toHaveLength(3);
     } finally {
       await server.instance.close();
     }
