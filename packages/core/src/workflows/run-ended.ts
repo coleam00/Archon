@@ -433,7 +433,7 @@ export async function runEndedBindingCheck(
     problems.push(
       `workflow '${ended.name}' runs in place (worktree.enabled: false), so it leaves no checkout for checkout: ended-run`
     );
-  const started = selectStartedWorkflow(binding.launch, discovered.workflows);
+  const started = selectStartedWorkflow(binding.launch, discovered);
   if (
     runEnded.checkout !== undefined &&
     'workflow' in started &&

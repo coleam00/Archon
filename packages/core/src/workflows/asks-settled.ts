@@ -255,7 +255,7 @@ export async function asksSettledBindingCheck(
     deps.providers
   );
   const workflows = discovered.workflows.map(found => found.workflow);
-  const started = selectStartedWorkflow(binding.launch, discovered.workflows);
+  const started = selectStartedWorkflow(binding.launch, discovered);
   return [
     ...askingWorkflowProblems(asksSettled, workflows),
     ...checkoutProblems(asksSettled, started, workflows),

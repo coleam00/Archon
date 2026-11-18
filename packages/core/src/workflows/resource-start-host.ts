@@ -54,11 +54,7 @@ import {
   type ResourceStartDisposition,
   type ResourceStartRunMetadata,
 } from '@archon/workflows/schemas/resource-start';
-import {
-  findWorkflowLoadError,
-  type ResolvedWorkflow,
-  type WorkflowExecutionResult,
-} from '@archon/workflows/schemas/workflow';
+import type { ResolvedWorkflow, WorkflowExecutionResult } from '@archon/workflows/schemas/workflow';
 import {
   SUBRUN_METADATA_KEYS,
   WORKFLOW_SOURCE_METADATA_KEY,
@@ -115,14 +111,9 @@ async function selectBindingWorkflow(
     host.deps.providers,
     roots
   );
-  const started = selectStartedWorkflow(launch, discovered.workflows);
+  const started = selectStartedWorkflow(launch, discovered);
   if ('workflow' in started) return started.workflow;
-  const loadError = findWorkflowLoadError(discovered.errors, launch.workflowName);
-  throw new Error(
-    loadError
-      ? `Workflow '${launch.workflowName}' failed to load: ${loadError.error}`
-      : `The binding starts nothing: ${started.refused}.`
-  );
+  throw new Error(`The binding starts nothing: ${started.refused}.`);
 }
 
 async function assertBindingRequirements(

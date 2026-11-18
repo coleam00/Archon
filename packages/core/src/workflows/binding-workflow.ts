@@ -4,7 +4,11 @@
  */
 import { basename, dirname, join, resolve } from 'node:path';
 import { resolveWorkflowName } from '@archon/workflows/router';
-import type { ResolvedWorkflow, WorkflowWithSource } from '@archon/workflows/schemas/workflow';
+import {
+  findWorkflowLoadError,
+  type ResolvedWorkflow,
+  type WorkflowLoadResult,
+} from '@archon/workflows/schemas/workflow';
 import type { ResourceStartBindingIntent } from '@archon/workflows/schemas/resource-start';
 
 export type StartedWorkflow = { workflow: ResolvedWorkflow } | { refused: string };
@@ -14,22 +18,24 @@ export type StartedWorkflow = { workflow: ResolvedWorkflow } | { refused: string
  * come from `<discoveryCwd>/.archon/workflows`: another scope's copy of the same name would
  * run while the run records the directory as its source (#5853). Commands, scripts and
  * composed workflows may still resolve from other scopes; the started workflow may not.
+ * A refused name with a load error reports that error: the file exists but does not load.
  */
 export function selectStartedWorkflow(
   launch: Pick<ResourceStartBindingIntent['launch'], 'workflowName' | 'discoveryCwd'>,
-  discovered: readonly WorkflowWithSource[]
+  discovered: Pick<WorkflowLoadResult, 'workflows' | 'errors'>
 ): StartedWorkflow {
   const { workflowName, discoveryCwd } = launch;
   const workflow = resolveWorkflowName(
     workflowName,
-    discovered.map(entry => entry.workflow)
+    discovered.workflows.map(entry => entry.workflow)
   );
+  const scope = discovered.workflows.find(entry => entry.workflow === workflow)?.source;
+  if (workflow && (discoveryCwd === undefined || scope === 'project')) return { workflow };
+  const loadError = findWorkflowLoadError(discovered.errors, workflowName);
+  if (loadError)
+    return { refused: `workflow '${workflowName}' failed to load: ${loadError.error}` };
   if (discoveryCwd === undefined)
-    return workflow
-      ? { workflow }
-      : { refused: `workflow '${workflowName}' is not in this project` };
-  const scope = discovered.find(entry => entry.workflow === workflow)?.source;
-  if (workflow && scope === 'project') return { workflow };
+    return { refused: `workflow '${workflowName}' is not in this project` };
   const root = resolve(discoveryCwd);
   const checkout = checkoutRootAbove(root);
   return {
