@@ -365,7 +365,7 @@ describe('isolation-environments', () => {
 
       await updateMetadata('env-123', { pr_number: 42 });
 
-      expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('metadata = metadata ||'), [
+      expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('metadata = (metadata ||'), [
         '{"pr_number":42}',
         'env-123',
       ]);

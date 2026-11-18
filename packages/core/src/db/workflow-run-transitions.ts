@@ -430,12 +430,10 @@ export async function failWorkflowRun(
   const dialect = getDialect();
   // Both keys belong to ONE failure: the stop reason is written wholesale below, and a
   // quota schedule an older binary wrote with a previous failure is spent once the run
-  // ran again. A previous failure's copy is removed before the merge rather than merged
-  // into. Postgres `||` replaces a nested object while SQLite's json_patch recurses into
-  // it, and a run can reach 'running' again carrying a stale stop reason (resume, or a
-  // fan-out cancel recovery) — under json_patch alone that would leave a previous signal
-  // attached to a new reason, the #2673 defect through the same mechanism.
-  // A failed run is not paused at anything, so its last pause cause goes too.
+  // ran again. A previous failure's copy is removed before the merge, since a run can
+  // reach 'running' again carrying a stale stop reason (resume, or a fan-out cancel
+  // recovery) and a new failure need not write one. A failed run is not paused at
+  // anything, so its last pause cause goes too.
   const metadataWithoutPriorFailure = dialect.jsonRemove(
     'metadata',
     'scheduled_resume',
