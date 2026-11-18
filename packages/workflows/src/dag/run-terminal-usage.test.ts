@@ -1088,6 +1088,31 @@ describe('executeDagWorkflow -- the outcome is written when the run completes (#
     });
   });
 
+  // A replayed completion that kept only text: the binding reads what the terminal record
+  // holds, the text as a string, and nothing once the text passed the persisted cap.
+  it.each([
+    ['text within the cap', JSON.stringify({ green: true, plan: 'x' }), false],
+    ['text past the cap', JSON.stringify({ green: true, pad: 'x'.repeat(40_000) }), true],
+  ])('hands a binding the result its terminal record holds for %s', async (_, output, cut) => {
+    const store = createMockStore();
+    const seen: RunEndedFacts[] = [];
+
+    await run(store, [resultNode()], {
+      priorCompletedNodes: new Map([['result', { output }]]),
+      runEndedStarts: async ended => {
+        seen.push(ended);
+        return { receipts: [], linked: [] };
+      },
+    });
+
+    const replayed = persistedEvents(store).find(
+      e => e.event_type === 'node_skipped_prior_success'
+    );
+    expect(replayed?.data?.node_output_truncated === true).toBe(cut);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.result).toEqual(cut ? undefined : output);
+  });
+
   it('fails the run naming the reason when its run-ended triggers cannot be read', async () => {
     mockStructuredResult({ green: true });
     const store = createMockStore();

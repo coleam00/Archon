@@ -143,6 +143,15 @@ describe('validate check selection', () => {
     }
   });
 
+  test('the Windows set runs on Windows', () => {
+    const job = readWorkflow().jobs['windows-set'];
+    const checks = (job.steps ?? []).flatMap(step => stepChecks(job, step.run ?? ''));
+    expect({ runsOn: job['runs-on'], runsSet: checks.includes('windows-tests') }).toEqual({
+      runsOn: 'windows-latest',
+      runsSet: true,
+    });
+  });
+
   test.each([
     ['pack-tests', 'run-pack-tests'],
     ['workflow-fixtures', 'run-pack-fixtures'],

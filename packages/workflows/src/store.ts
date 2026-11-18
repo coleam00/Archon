@@ -136,6 +136,8 @@ export interface MetricRecordRow {
   completedAt: string;
   /** The raw `structured_output.metrics` value; the engine parses it. */
   metrics: unknown;
+  /** The raw `structured_output.metric_dimensions` value, when the output has one. */
+  metricDimensions?: unknown;
 }
 
 /**

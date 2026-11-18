@@ -78,12 +78,13 @@ export const cliArgOptions: CliArgOptions = {
   'if-revision': { type: 'string' },
   prefix: { type: 'string' },
   project: { type: 'string' },
-  // `archon metrics` window, subject filter, cohort cut and model split.
+  // `archon metrics` window, subject filter, cohort cut, model and dimension split.
   since: { type: 'string' },
   until: { type: 'string' },
   subject: { type: 'string' },
   compare: { type: 'string' },
   'by-model': { type: 'string' },
+  'by-dimension': { type: 'string' },
   install: { type: 'boolean' },
   raw: { type: 'boolean' },
   values: { type: 'boolean' },
@@ -107,6 +108,9 @@ export const cliArgOptions: CliArgOptions = {
   'pause-at-gates': { type: 'boolean' },
   // Repeatable: `--input a=1 --input b=2` yields ['a=1', 'b=2'] (#2554).
   input: { type: 'string', multiple: true },
+  // Repeatable `name=path`: the input's value is the file's contents, read once at the
+  // invocation gate.
+  'input-file': { type: 'string', multiple: true },
   // Repeatable sparse tier/@alias rebinding for one workflow invocation (#2481).
   model: { type: 'string', multiple: true },
   config: { type: 'string' },

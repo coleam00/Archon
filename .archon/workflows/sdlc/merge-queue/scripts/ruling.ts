@@ -84,7 +84,7 @@ function main(): void {
     });
     if (effect !== 'return') return recorded;
     const brief = `${asked.brief}\n\nThe maintainer chose "${choice.label}": ${choice.does}${heading === '' ? '' : ` The ruling is the issue body's "${heading}" section, which is part of the contract.`}`;
-    return withBuild(recorded, { at, run_id: runId, round: null, entry, status: 'next', brief, release: true });
+    return withBuild(recorded, { at, run_id: runId, round: null, entry, status: 'next', brief });
   });
   emit({
     decision: effect,

@@ -31,6 +31,7 @@ export function isContinueSubcommand(subcommand: string | undefined): boolean {
 const KEPT_ON_CONTINUE = {
   model: 'the model bindings',
   input: 'the inputs',
+  'input-file': 'the inputs',
   base: 'the base branch',
 } as const;
 
@@ -51,6 +52,23 @@ export function rejectRunFlagsOnContinue(
       );
   }
   return undefined;
+}
+
+/**
+ * Refuses `--input-file` on any command but `workflow run`, so `trigger fire`, whose own
+ * file form is `--inputs <file>`, cannot start work with the input silently dropped.
+ * Continuations are left to {@link rejectRunFlagsOnContinue}, which says why.
+ */
+export function rejectInputFileOutsideRun(
+  command: string | undefined,
+  subcommand: string | undefined,
+  inputFile: unknown
+): string | undefined {
+  if (inputFile === undefined) return undefined;
+  if (command === 'workflow' && (subcommand === 'run' || isContinueSubcommand(subcommand))) {
+    return undefined;
+  }
+  return 'Error: --input-file can only be used with workflow run.';
 }
 
 /**
@@ -75,4 +93,16 @@ export function rejectConfigOutsideRun(
     return 'Error: --config can only be used with workflow run, trigger fire, trigger schedule, or pack bindings.';
   }
   return undefined;
+}
+
+/** The flags another command would otherwise ignore, refused before any command runs. */
+export function rejectRunFlagsOutsideRun(
+  command: string | undefined,
+  subcommand: string | undefined,
+  values: { config?: unknown; 'config-from-run'?: unknown; 'input-file'?: unknown }
+): string | undefined {
+  return (
+    rejectConfigOutsideRun(command, subcommand, values.config, values['config-from-run']) ??
+    rejectInputFileOutsideRun(command, subcommand, values['input-file'])
+  );
 }

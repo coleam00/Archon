@@ -22,6 +22,10 @@ import {
   type WorkflowRunConfigSource,
 } from '@archon/workflows/schemas/run-config';
 import { readWorkflowRunConfigMetadata } from '@archon/workflows/run-config';
+import {
+  isAttentionDegraded,
+  type AttentionRead,
+} from '@archon/workflows/schemas/attention-degraded';
 import { encryptToken, getEncryptionKey } from '../utils/token-crypto';
 import type { GlobalConfig, RepoConfig } from './config-types';
 import { unsealWorkflowRunConfigStructure } from './run-config-handoff';
@@ -315,4 +319,25 @@ export function workflowRunConfigFromRun(run: {
     layer: unsealWorkflowRunConfig(sealed),
     source: { kind: sealed.source.kind, label: `run ${run.id} (${sealed.source.label})` },
   };
+}
+
+/**
+ * The run config an item's later start carries: the one its most recent run (last of
+ * `runs`, in start order) was started with, labelled `run <id> (<label>)` so the new run
+ * records where it came from. Undefined when the item has no run or its latest run
+ * recorded no config. An unreadable latest run throws: reading an older run instead, or
+ * none, would silently start on a config the item may have left.
+ */
+export function itemRunConfig(
+  itemKey: string,
+  runs: readonly AttentionRead<{ id: string; metadata?: Record<string, unknown> }>[]
+): WorkflowRunConfigInput | undefined {
+  const latest = runs.at(-1);
+  if (!latest) return undefined;
+  if (isAttentionDegraded(latest)) {
+    throw new Error(
+      `Run ${latest.runId}, the most recent on item '${itemKey}', cannot be read, so the run config the item runs on is unknown.`
+    );
+  }
+  return workflowRunConfigFromRun(latest);
 }

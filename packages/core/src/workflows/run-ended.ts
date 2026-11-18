@@ -36,11 +36,11 @@ import {
 import type { WorkflowItem, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowDeps } from '@archon/workflows/deps';
 import { declaredOutcome, outcomeValues } from '@archon/workflows/completed-outcome';
-import { resolveWorkflowName } from '@archon/workflows/router';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
 import { getArchonHome } from '@archon/paths';
+import { selectStartedWorkflow, type StartedWorkflow } from './binding-workflow';
 
 /** `ARCHON_HOME/triggers`: where run-ended trigger files are read from. */
 export function getTriggersPath(): string {
@@ -466,25 +466,26 @@ export async function runEndedBindingCheck(
     problems.push(
       `workflow '${ended.name}' runs in place (worktree.enabled: false), so it leaves no checkout for checkout: ended-run`
     );
-  const target = resolveWorkflowName(binding.launch.workflowName, workflows);
-  if (runEnded.checkout !== undefined && target?.worktree?.enabled === false)
+  const started = selectStartedWorkflow(binding.launch, discovered);
+  if (
+    runEnded.checkout !== undefined &&
+    'workflow' in started &&
+    started.workflow.worktree?.enabled === false
+  )
     problems.push(
-      `workflow '${target.name}' runs in place (worktree.enabled: false), so it cannot take the ended run's checkout`
+      `workflow '${started.workflow.name}' runs in place (worktree.enabled: false), so it cannot take the ended run's checkout`
     );
-  problems.push(
-    ...startedWorkflowProblems(binding.launch.workflowName, runEnded.inputs, workflows)
-  );
+  problems.push(...startedWorkflowProblems(started, runEnded.inputs));
   return problems;
 }
 
-/** The started workflow exists and declares every input a binding maps into it. */
+/** The started workflow is the one a fire would start, and declares every input it maps. */
 export function startedWorkflowProblems(
-  workflowName: string,
-  inputs: Readonly<Record<string, unknown>> | undefined,
-  workflows: readonly ResolvedWorkflow[]
+  started: StartedWorkflow,
+  inputs: Readonly<Record<string, unknown>> | undefined
 ): string[] {
-  const target = resolveWorkflowName(workflowName, workflows);
-  if (!target) return [`workflow '${workflowName}' is not in this project`];
+  if ('refused' in started) return [started.refused];
+  const target = started.workflow;
   const declared = declaredInputNames(target);
   return Object.keys(inputs ?? {})
     .filter(name => !declared.includes(name))

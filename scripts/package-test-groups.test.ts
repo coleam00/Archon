@@ -4,11 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
+  hasWindowsTestDirective,
   parseTestPart,
   partitionTestGroups,
   resolvePackageTestConcurrency,
   resolvePackageTestGroups,
   TEST_ISOLATION_DIRECTIVE,
+  WINDOWS_TEST_DIRECTIVE,
 } from './package-test-groups';
 import weights from './test-weights.json';
 import { inspectPackage, isCollectedByRepositoryTest } from './test-inventory.test';
@@ -26,7 +28,7 @@ test('discovers suffixes and dot directories, partitions exact directives, and i
   const root = fixture();
   write(root, 'src/a.test.ts', TEST_ISOLATION_DIRECTIVE);
   write(root, 'src/b.spec.ts', `\uFEFF${TEST_ISOLATION_DIRECTIVE}\r\n`);
-  write(root, 'src/nested/c.test.tsx', `\n${TEST_ISOLATION_DIRECTIVE}`);
+  write(root, 'src/nested/c.test.tsx', `// ${TEST_ISOLATION_DIRECTIVE}`);
   write(root, 'src/.hidden/d.spec.tsx', `${TEST_ISOLATION_DIRECTIVE} extra`);
   write(root, 'src/not-a-test.ts');
   write(root, 'outside.test.ts');
@@ -41,6 +43,34 @@ test('discovers suffixes and dot directories, partitions exact directives, and i
     'src/nested/c.test.tsx',
     'src/new.test.ts',
   ]);
+});
+
+test('the Windows directive counts anywhere in the leading comment lines, and only there', () => {
+  expect(hasWindowsTestDirective(`${WINDOWS_TEST_DIRECTIVE}\nimport 'x';`)).toBe(true);
+  expect(
+    hasWindowsTestDirective(`\uFEFF${TEST_ISOLATION_DIRECTIVE}\r\n${WINDOWS_TEST_DIRECTIVE}\r\n`)
+  ).toBe(true);
+  expect(hasWindowsTestDirective(`import 'x';\n${WINDOWS_TEST_DIRECTIVE}`)).toBe(false);
+  expect(hasWindowsTestDirective(`/** doc */\n${WINDOWS_TEST_DIRECTIVE}`)).toBe(false);
+  expect(hasWindowsTestDirective(`${WINDOWS_TEST_DIRECTIVE} because`)).toBe(false);
+});
+
+test('an isolation directive below the Windows marker fails discovery instead of being ignored', () => {
+  const root = fixture();
+  write(root, 'src/a.test.ts', `${WINDOWS_TEST_DIRECTIVE}\r\n${TEST_ISOLATION_DIRECTIVE}\r\n`);
+  expect(() => resolvePackageTestGroups(root, {})).toThrow('below line 1');
+  // A manifest group names the file, which skips discovery's grouping but not this check.
+  expect(() => resolvePackageTestGroups(root, { testGroups: [['src/']] })).toThrow('below line 1');
+  // Past the leading comment lines the text is not a directive, such as a CRLF fixture's.
+  const padding = Array.from({ length: 20 }, (_, index) => `// ${String(index)}`).join('\r\n');
+  write(
+    root,
+    'src/a.test.ts',
+    `${padding}\r\nconst fixture = \`import 'x';\r\n${TEST_ISOLATION_DIRECTIVE}\r\n\`;\r\n`
+  );
+  expect(resolvePackageTestGroups(root, {})).toEqual([['src/a.test.ts']]);
+  write(root, 'src/a.test.ts', `${TEST_ISOLATION_DIRECTIVE}\n${WINDOWS_TEST_DIRECTIVE}\n`);
+  expect(resolvePackageTestGroups(root, {})).toEqual([['src/a.test.ts']]);
 });
 
 test('a direct mock.module() call without the directive fails discovery', () => {
