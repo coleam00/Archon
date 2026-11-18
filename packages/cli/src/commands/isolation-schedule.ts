@@ -1,5 +1,5 @@
 /**
- * `archon isolation cleanup schedule`: the macOS timer that runs the merged cleanup on an
+ * `archon isolation cleanup schedule`: the OS timer that runs the merged cleanup on an
  * install with no server. A server already sweeps on its own cleanup schedule.
  */
 import { createHash } from 'node:crypto';
@@ -8,9 +8,9 @@ import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
 import {
-  inspectMacosNativeSchedule,
-  installMacosNativeSchedule,
-  removeMacosNativeSchedule,
+  inspectNativeSchedule,
+  installNativeSchedule,
+  removeNativeSchedule,
   type NativeScheduleConfig,
 } from '../triggers/native-schedule';
 
@@ -33,6 +33,7 @@ export function isolationCleanupScheduleConfig(
     archonHome,
     path: env.PATH ?? '',
     schedule: { intervalSeconds, runAtLoad: true },
+    output: 'log',
     removeCommand: 'archon isolation cleanup schedule remove',
   };
 }
@@ -66,16 +67,16 @@ interface Outcome {
 const NOT_INSTALLED = 'No merged cleanup timer is installed.';
 
 async function install(config: NativeScheduleConfig): Promise<Outcome> {
-  const path = await installMacosNativeSchedule(config);
+  const { path, log } = await installNativeSchedule(config);
   const every = String(config.schedule.intervalSeconds);
   return {
-    result: { path },
+    result: { path, log },
     text: `Installed the merged cleanup timer (every ${every}s): ${path}`,
   };
 }
 
 async function remove(config: NativeScheduleConfig): Promise<Outcome> {
-  const removed = await removeMacosNativeSchedule(config.id);
+  const removed = await removeNativeSchedule(config);
   return {
     result: { removed },
     text: removed ? 'Removed the merged cleanup timer.' : NOT_INSTALLED,
@@ -83,16 +84,20 @@ async function remove(config: NativeScheduleConfig): Promise<Outcome> {
 }
 
 async function status(config: NativeScheduleConfig): Promise<Outcome> {
-  const installed = await inspectMacosNativeSchedule(config.id);
+  const installed = await inspectNativeSchedule(config);
   if (!installed) return { result: { installed: false }, text: NOT_INSTALLED };
   const result = { installed: true, ...installed };
-  if (installed.registered)
-    return { result, text: `The merged cleanup timer is installed: ${installed.path}` };
+  if (!installed.registered)
+    return {
+      result,
+      text:
+        `The merged cleanup timer is installed, but the scheduler has not loaded it: ${installed.path}. ` +
+        'Install it again with the same --interval to load it, or remove it.',
+    };
+  const ran = installed.lastRunAt ? `Last ran ${installed.lastRunAt}` : 'It has not run yet';
   return {
     result,
-    text:
-      `The merged cleanup timer's plist exists but launchd has not loaded it: ${installed.path}. ` +
-      `Load it with \`launchctl bootstrap gui/$(id -u) '${installed.path}'\`.`,
+    text: `The merged cleanup timer is installed: ${installed.path}. ${ran} (output: ${installed.log}).`,
   };
 }
 

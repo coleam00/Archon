@@ -104,7 +104,6 @@
     ],
     "packages/cli/src/commands/workflow-continuation-source.test.ts": ["../utils/stdout"],
     "packages/cli/src/commands/workflow-continuations.test.ts": [
-      "../triggers/native-schedule",
       "../utils/stdout",
       "@archon/core/workflows/continuation-resume"
     ],
@@ -2217,10 +2216,6 @@
       "markDatabaseRouteLoaded",
       "registerProviders",
       "usesDatabaseStore"
-    ],
-    "packages/cli/src/triggers/native-schedule.ts": [
-      "MACOS_TRIGGER_JOB_LABEL_PREFIX",
-      "renderMacosLaunchAgent"
     ],
     "packages/cli/src/utils/stdout.ts": ["writeJsonLine", "writeStderr"],
     "packages/core/src/config/config-loader.ts": [

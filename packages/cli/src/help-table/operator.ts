@@ -171,8 +171,8 @@ export const operatorHelp: HelpGroup = {
     {
       command: 'trigger',
       subcommand: 'schedule',
-      spec: 'trigger schedule <install|remove> --config <file>',
-      description: 'Manage the configured native macOS LaunchAgent',
+      spec: 'trigger schedule <install|remove|status> --config <file>',
+      description: "Manage the binding's OS timer (launchd, systemd user timer, Task Scheduler)",
     },
     {
       command: 'trigger',
