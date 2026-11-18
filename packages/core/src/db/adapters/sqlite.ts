@@ -881,8 +881,14 @@ export const sqliteDialect: SqlDialect = {
   },
 
   jsonMerge(column: string, paramIndex: number): string {
-    // Use $N placeholder (not raw ?) so convertPlaceholders can reorder params correctly
-    return `json_patch(${column}, $${String(paramIndex)})`;
+    // Top-level, as Postgres `||`: json_patch is RFC 7396, which recurses and deletes a
+    // null at any depth, so a stored input that resolved to null was lost (#5939).
+    // `->` copies each kept value whole; $N (not ?) lets convertPlaceholders bind each use.
+    const patch = `$${String(paramIndex)}`;
+    return `(SELECT json_group_object(key, json(v)) FROM (
+      SELECT key, ${column} -> fullkey AS v FROM json_each(${column})
+        WHERE key NOT IN (SELECT key FROM json_each(${patch}))
+      UNION ALL SELECT key, ${patch} -> fullkey FROM json_each(${patch}) WHERE type <> 'null'))`;
   },
 
   nowMinusDays(paramIndex: number): string {

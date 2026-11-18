@@ -426,7 +426,7 @@ export const postgresDialect: SqlDialect = {
 
   jsonMerge(column: string, paramIndex: number): string {
     // `||` alone stores a patch's null values. Subtracting the null-valued top-level
-    // keys makes `{ key: null }` remove the key, as SQLite's json_patch does, so both
+    // keys makes `{ key: null }` remove the key, as the SQLite merge does, so both
     // databases hold the same shape after a clear.
     const patch = `$${String(paramIndex)}::jsonb`;
     return `(${column} || ${patch}) - ARRAY(SELECT key FROM jsonb_each(${patch}) WHERE jsonb_typeof(value) = 'null')`;
