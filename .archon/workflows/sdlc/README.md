@@ -633,7 +633,7 @@ agent that can raise an attention item names `attention.md`, what a person needs
 decide without opening the run. Review's lenses and the simplify pass name
 `review-lens.md`, how a lens stays read-only and records findings and discoveries.
 Review's code and ux lenses name `ui-check.md`, how they start the project's app to use a
-user-facing change in a browser through the playwright-cli skill, which their prompts
+user-facing change in a browser through `playwright-cli` or `agent-browser`, which the policy
 names rather than a `skills:` entry for the reason the build queue's route does.
 Agents interpret
 them; anything that must be exact, such as label names, stays in code or typed configuration.
