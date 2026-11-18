@@ -3,6 +3,22 @@ import { join } from 'node:path';
 
 export const TEST_ISOLATION_DIRECTIVE = '// @archon-test-isolated';
 
+/**
+ * Marks a test file as part of the Windows set: the files CI runs on Windows for a push to
+ * `dev` (`bun run test --windows`). It may sit on any line of the file's leading `//` comment
+ * lines, so it can follow `TEST_ISOLATION_DIRECTIVE`, which must be line 1.
+ */
+export const WINDOWS_TEST_DIRECTIVE = '// @archon-test-windows';
+
+/** Whether a test file's source carries `WINDOWS_TEST_DIRECTIVE` in its leading comment lines. */
+export function hasWindowsTestDirective(source: string): boolean {
+  for (const line of source.replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    if (line === WINDOWS_TEST_DIRECTIVE) return true;
+    if (!line.startsWith('//')) return false;
+  }
+  return false;
+}
+
 export function resolvePackageTestGroups(
   packageDirectory: string,
   declaration: unknown,

@@ -1,13 +1,16 @@
 # What runs when:
-#   - A pull request runs the Linux jobs its change can affect. The Windows legs, the macOS job,
+#   - A pull request runs the Linux jobs its change can affect. The Windows jobs, the macOS job,
 #     the Docker image build and the release-binary smoke wait for the push, unless the change
 #     touches a path that job exists to check or one that can break any job (the workflows, the
 #     install, the scripts that run the checks). scripts/should-run-test-suite.ts holds both lists.
-#   - A push to `dev` or `main` runs every job on every platform. That run is the complete
+#   - A push to `dev` or `main` runs every job on every platform. On Windows a push to `dev` runs
+#     only the Windows set (`windows-set`); a push to `main` also runs the whole suite there
+#     (`test-windows`, `test-scripts-windows`, `test-pack-windows`). That run is the complete
 #     verification of a merge. It is skipped only when a pull request run already passed every
 #     job, the push-only ones included, on the same tree.
 #   - To run every job on a branch before it merges, dispatch this workflow on it:
 #     `gh workflow run test.yml --ref <branch>`. The results appear on the branch's pull request.
+#     Add `-f windows-full-suite=true` for the whole suite on Windows too.
 name: Test Suite
 
 on:
@@ -19,6 +22,10 @@ on:
         default: false
       pack-fixtures:
         description: 'Also run the workflow fixtures (bun run validate --only workflow-fixtures)'
+        type: boolean
+        default: false
+      windows-full-suite:
+        description: 'Also run the whole suite on Windows, as a push to main does'
         type: boolean
         default: false
   push:
@@ -55,6 +62,7 @@ jobs:
       run-pack-tests: ${{ steps.decision.outputs.run-pack-tests }}
       run-pack-fixtures: ${{ steps.decision.outputs.run-pack-fixtures }}
       run-full-matrix: ${{ steps.decision.outputs.run-full-matrix }}
+      run-windows-full-suite: ${{ steps.decision.outputs.run-windows-full-suite }}
       run-docker-build: ${{ steps.decision.outputs.run-docker-build }}
       run-serve-binary: ${{ steps.decision.outputs.run-serve-binary }}
     steps:
@@ -70,9 +78,11 @@ jobs:
       # The script reads the event from GITHUB_EVENT_NAME and GITHUB_EVENT_PATH. A pull
       # request is judged on its whole diff. A push skips only when a pull request run
       # already passed every job on the same tree (proofFromPullRequestRun in the script),
-      # and otherwise runs every job. A dispatch runs every job, and the pack checks only when
-      # its `pack-tests` or `pack-fixtures` input asks. `run-full-matrix` selects the Windows
-      # legs and the macOS job; `run-docker-build` and `run-serve-binary` each select one job.
+      # and otherwise runs every job. A dispatch runs every job, and the pack checks and the
+      # whole Windows suite only when its `pack-tests`, `pack-fixtures` or `windows-full-suite`
+      # input asks. `run-full-matrix` selects the Windows set and the macOS job;
+      # `run-windows-full-suite` the whole suite on Windows, which a push runs only on `main`;
+      # `run-docker-build` and `run-serve-binary` each select one job.
       # Assign before echoing. A failing command substituted into another command's arguments
       # does not trip `set -e`, so `echo "run-tests=$(...)"` would report success and write an
       # empty decision that every downstream `== 'true'` gate reads as "skip".
@@ -92,6 +102,8 @@ jobs:
           echo "run-pack-fixtures=$run_pack_fixtures" >> "$GITHUB_OUTPUT"
           run_full_matrix=$(bun scripts/should-run-test-suite.ts --full-matrix)
           echo "run-full-matrix=$run_full_matrix" >> "$GITHUB_OUTPUT"
+          run_windows_full_suite=$(bun scripts/should-run-test-suite.ts --windows-full-suite)
+          echo "run-windows-full-suite=$run_windows_full_suite" >> "$GITHUB_OUTPUT"
           run_docker_build=$(bun scripts/should-run-test-suite.ts --docker-build)
           echo "run-docker-build=$run_docker_build" >> "$GITHUB_OUTPUT"
           run_serve_binary=$(bun scripts/should-run-test-suite.ts --serve-binary)
@@ -105,9 +117,10 @@ jobs:
   # workspace shards run here, the root scripts shard in `test-scripts`, and the pack shard in
   # `test-pack`. They are separate jobs because each has its own gate, and a job-level `if`
   # cannot read the matrix. For the same reason each has a `-windows` twin gated on
-  # `run-full-matrix`, which a pull request skips unless its change runs every job. A skipped
-  # job, unlike a skipped step, keeps a pull request run from proving its merge, so the push
-  # then runs every job.
+  # `run-windows-full-suite`: the whole suite on Windows runs for a push to `main`, and on a
+  # pull request whose change runs every job. A push to `dev` runs `windows-set` instead. A
+  # skipped job, unlike a skipped step, keeps a pull request run from proving its merge, so the
+  # push then runs every job.
   test:
     needs: changes
     if: needs.changes.outputs.run-workspace-tests == 'true'
@@ -153,7 +166,7 @@ jobs:
   # The workspace shards on Windows. The steps differ from `test` only where Windows needs it.
   test-windows:
     needs: changes
-    if: needs.changes.outputs.run-full-matrix == 'true'
+    if: needs.changes.outputs.run-windows-full-suite == 'true'
     strategy:
       fail-fast: false
       # @archon/cli and @archon/core have their own shards: with every package on one 4-vCPU
@@ -210,7 +223,8 @@ jobs:
 
       # The test checks use the shared 20 s per-test budget in scripts/bun-test-command.ts;
       # see coleam00/Archon#3294. The temp-disk and git-launcher settings below apply to
-      # every Windows test step, here, in `test-scripts-windows` and in `test-pack-windows`.
+      # every Windows test step: here, in `test-scripts-windows`, in `test-pack-windows` and in
+      # `windows-set`.
       #
       # Temp goes to the runner's local disk (`runner.temp`, D:). C: is the remote-backed
       # OS disk that Windows background maintenance also reads from: measured on this
@@ -276,7 +290,7 @@ jobs:
   # The root scripts shard on Windows.
   test-scripts-windows:
     needs: changes
-    if: needs.changes.outputs.run-full-matrix == 'true'
+    if: needs.changes.outputs.run-windows-full-suite == 'true'
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -352,7 +366,7 @@ jobs:
   # The pack shard and the workflow fixtures on Windows, with the same step gates as `test-pack`.
   test-pack-windows:
     needs: changes
-    if: needs.changes.outputs.run-full-matrix == 'true'
+    if: needs.changes.outputs.run-windows-full-suite == 'true'
     runs-on: windows-latest
     timeout-minutes: 45
     env:
@@ -400,6 +414,44 @@ jobs:
         run: |
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
           bun run validate --only workflow-fixtures
+
+  # Windows proves only what can differ on Windows: the test files marked
+  # `// @archon-test-windows` (CONTRIBUTING.md says which files join), and the generated-file
+  # and import-boundary checks, whose scripts normalize Windows path separators. Everything else
+  # Linux already proved; on this runner the whole suite failed mostly on timing (#5926). The
+  # whole suite still runs on Windows for a push to `main` (the `-windows` jobs above).
+  # Install, temp and git settings: see `test-windows`.
+  windows-set:
+    needs: changes
+    if: needs.changes.outputs.run-full-matrix == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
+
+      - name: Warm uv
+        run: uv run python -c "print('uv warm')"
+
+      - name: Validate
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
+          bun run validate --only cli-import-boundary,package-edges,generated-files,windows-tests
 
   file-store-primitives-macos:
     needs: changes
@@ -772,6 +824,7 @@ jobs:
         static,
         test,
         test-windows,
+        windows-set,
         test-scripts,
         test-scripts-windows,
         test-pack,

@@ -1,7 +1,8 @@
-import { existsSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import { archonCliInvocation } from '@archon/paths/cli-command';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
+import { discoverPackageTestFiles, hasWindowsTestDirective } from './package-test-groups';
 import { junitDestination, parseTestArguments } from './package-test-requests';
 import { runReportedGroup, writeCombinedReport } from './package-test-reports';
 
@@ -26,6 +27,11 @@ import { runReportedGroup, writeCombinedReport } from './package-test-reports';
  * runner so they finish side by side; `pack` runs only when the change touches the pack
  * (`PACK_INPUTS` in `should-run-test-suite.ts`). A workspace shard too slow
  * for one runner runs in parts across runners; `ARCHON_TEST_PART` in `package-tests.ts`.
+ *
+ * `--windows` runs only the test files that carry `WINDOWS_TEST_DIRECTIVE`
+ * (`package-test-groups.ts`), across every workspace package and root test directory. It is
+ * the Windows set CI runs for a push to `dev`; each file still runs with its own package's
+ * isolation groups.
  */
 
 /**
@@ -278,7 +284,50 @@ async function runRequested(requested: string[]): Promise<number> {
   return code;
 }
 
+/**
+ * Every test file that carries the Windows directive, as a repository-relative path: the
+ * workspace packages' discovered tests and the root-owned directories' tests.
+ */
+export function windowsTestFiles(root = REPO_ROOT): string[] {
+  const packageFiles = [...new Bun.Glob('packages/*/package.json').scanSync({ cwd: root })]
+    .map(manifest => normalizePath(dirname(manifest)))
+    .flatMap(packageDirectory =>
+      discoverPackageTestFiles(join(root, packageDirectory)).map(
+        file => `${packageDirectory}/${file}`
+      )
+    );
+  const rootFiles = ROOT_TEST_PLAN.flatMap((step: RootTestStep): string[] =>
+    step.kind === 'root'
+      ? step.selectors.flatMap(selector =>
+          [
+            ...new Bun.Glob('**/*.{test,spec}.{ts,tsx}').scanSync({
+              cwd: resolve(root, selector),
+              onlyFiles: true,
+            }),
+          ]
+            .filter(file => !normalizePath(file).split('/').includes('node_modules'))
+            .map(file => normalizePath(relative(root, resolve(root, selector, file))))
+        )
+      : []
+  );
+  return [...packageFiles, ...rootFiles]
+    .filter(file => hasWindowsTestDirective(readFileSync(join(root, file), 'utf8')))
+    .sort();
+}
+
+async function runWindowsSet(): Promise<number> {
+  const files = windowsTestFiles();
+  if (files.length === 0) {
+    // A green run that tested nothing would read as "Windows is fine".
+    console.error('No test file carries the Windows directive, so there is no Windows set to run.');
+    return 1;
+  }
+  console.log(`Windows set: ${String(files.length)} files\n${files.join('\n')}`);
+  return await runRequested(files);
+}
+
 async function main(requested: string[]): Promise<number> {
+  if (requested.length === 1 && requested[0] === '--windows') return await runWindowsSet();
   let shard: TestShard | undefined;
   try {
     shard = planShard(requested);

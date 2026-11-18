@@ -113,12 +113,14 @@ bun run test --plan pack                    # when changing .archon/workflows or
 A ready pull request runs the Linux jobs its change can affect: `static` (type-check, lint,
 format, generated files, the ratchet), the Linux test jobs (`test`, `test-scripts`,
 `test-pack`), `schema-upgrade` and `postgres-parity`. A push to `dev` or `main` runs every
-job on every platform, and that run is the complete verification of a merge. These jobs wait
-for the push:
+job on every platform, and that run is the complete verification of a merge. On Windows a push
+to `dev` runs only the Windows set (`windows-set`, see "How a test joins the Windows set"
+below); a push to `main` also runs the whole suite there. These jobs wait for the push:
 
 | Job | Also runs on a pull request that changes |
 | --- | --- |
-| `test-windows`, `test-scripts-windows`, `test-pack-windows`, `file-store-primitives-macos` | nothing narrower than the list below |
+| `windows-set`, `file-store-primitives-macos` | nothing narrower than the list below |
+| `test-windows`, `test-scripts-windows`, `test-pack-windows` (the whole suite on Windows) | nothing narrower than the list below; a push runs them only on `main` |
 | `docker-build` | `Dockerfile`, `.dockerignore`, `docker-entrypoint.sh`, or a script the image build or its upgrade test runs |
 | `serve-binary` | `scripts/build-binaries.sh` or a smoke test the job runs |
 
@@ -131,10 +133,11 @@ authoritative lists.
 To run every job on a branch before it merges, for example when a change touches path
 handling, process spawning or anything else that differs on Windows or macOS, dispatch the
 workflow on the branch: `gh workflow run test.yml --ref <branch>`. The results appear in the
-pull request's checks. Dispatching needs write access, and the branch must be in this
+pull request's checks. A dispatch runs the Windows set; add `-f windows-full-suite=true` for
+the whole suite on Windows, as a push to `main` runs it. Dispatching needs write access, and the branch must be in this
 repository, so on a pull request from a fork a maintainer decides whether to push the branch
 here and dispatch it. A break that only another platform shows otherwise appears in the push
-run on `dev`.
+run on `dev`, or, when no test in the Windows set reaches it, in the push run on `main`.
 
 A change touching only prose or files no check reads skips the test, service and binary jobs.
 `scripts/should-run-test-suite.ts` decides which files those are: Markdown and the docs site
@@ -153,7 +156,8 @@ a pull request run already passed every job on the same tree, the ones that wait
 included, and otherwise runs them, so a prose change's test-visible effects are checked on `dev`.
 
 The tests under `.archon/scripts/` (the SDLC pack's script tests) and the workflow fixtures
-run in the `test-pack` job (and `test-pack-windows` when it runs) when a pull request or an unproven push changes the pack or a
+run in the `test-pack` job (and `test-pack-windows` when it runs, which a push does only on
+`main`) when a pull request or an unproven push changes the pack or a
 contract it is written against: `PACK_INPUTS` in `scripts/should-run-test-suite.ts` lists
 those paths. Run them locally with `bun run test --plan pack` and
 `bun run validate --only workflow-fixtures`; a single test file runs with
@@ -168,6 +172,30 @@ estimated the previous total at about 25 minutes under load, including fixtures 
 formatting. Workflow fixtures require explicit selection; formatting runs by default.
 Each validate run prints its actual elapsed time per check. A local success does not predict service, build,
 or other-platform CI results.
+
+#### How a test joins the Windows set
+
+On a push to `dev`, Windows runs only the Windows set: the test files whose first comment
+lines include `// @archon-test-windows` (below `// @archon-test-isolated` when a file has
+both). Everything else on Windows only repeats what Linux proved, so it runs there only on a
+push to `main` or a dispatch with `windows-full-suite=true`.
+
+Mark a file when its subject behaves differently on Windows and the test exercises the real
+platform, not an injected `win32` path API or a mocked `process.platform`, which Linux proves
+equally well:
+
+- path spelling and separators that reach the file system or an operator's screen;
+- starting and stopping process trees;
+- file locks, renames and removal;
+- shell resolution and quoting;
+- or the file has caught a fault that only Windows showed.
+
+A marked file runs every one of its tests on Windows. A case that cannot run there (a chmod
+denial, a symlink Git-Bash cannot make) goes in an unmarked sibling file, not behind a
+`win32` skip. `skipIf(process.platform !== 'win32')` for a Windows-only case is fine.
+
+Run the set with `bun run test --windows` or `bun run validate --only windows-tests`; the
+runner prints the files it selected. `scripts/package-test-groups.ts` reads the marker.
 
 **Important:** Use `bun run test` (not `bun test` from the repo root) to avoid mock pollution across packages.
 

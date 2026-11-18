@@ -1,3 +1,4 @@
+// @archon-test-windows
 // @archon-test-isolated
 import { expect, test } from 'bun:test';
 import { execFileAsync } from '@archon/git';

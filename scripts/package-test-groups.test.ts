@@ -4,11 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
+  hasWindowsTestDirective,
   parseTestPart,
   partitionTestGroups,
   resolvePackageTestConcurrency,
   resolvePackageTestGroups,
   TEST_ISOLATION_DIRECTIVE,
+  WINDOWS_TEST_DIRECTIVE,
 } from './package-test-groups';
 import weights from './test-weights.json';
 import { inspectPackage, isCollectedByRepositoryTest } from './test-inventory.test';
@@ -41,6 +43,16 @@ test('discovers suffixes and dot directories, partitions exact directives, and i
     'src/nested/c.test.tsx',
     'src/new.test.ts',
   ]);
+});
+
+test('the Windows directive counts anywhere in the leading comment lines, and only there', () => {
+  expect(hasWindowsTestDirective(`${WINDOWS_TEST_DIRECTIVE}\nimport 'x';`)).toBe(true);
+  expect(
+    hasWindowsTestDirective(`\uFEFF${TEST_ISOLATION_DIRECTIVE}\r\n${WINDOWS_TEST_DIRECTIVE}\r\n`)
+  ).toBe(true);
+  expect(hasWindowsTestDirective(`import 'x';\n${WINDOWS_TEST_DIRECTIVE}`)).toBe(false);
+  expect(hasWindowsTestDirective(`/** doc */\n${WINDOWS_TEST_DIRECTIVE}`)).toBe(false);
+  expect(hasWindowsTestDirective(`${WINDOWS_TEST_DIRECTIVE} because`)).toBe(false);
 });
 
 test('a direct mock.module() call without the directive fails discovery', () => {
