@@ -68,6 +68,11 @@ export const orderedFlags: FlagHelp[] = [
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
+    spec: '--input-file <name>=<path>',
+    description: "Supply a declared workflow input from a file's contents; repeat per input",
+    owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
     spec: '--model <name>=<spec>',
     description: 'Rebind small/medium/large or @alias for one run; repeat per binding',
     owners: [{ command: 'workflow', subcommand: 'run' }],
