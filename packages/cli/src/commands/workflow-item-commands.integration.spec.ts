@@ -8,7 +8,18 @@
  */
 import { afterAll, beforeAll, beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -74,7 +85,7 @@ beforeAll(async () => {
   // Every test reads these: two runs on item-1, one on item-2 and one with no item.
   await run({ item: 'item-1' });
   await seedRuns(['item-1', 'item-2', undefined]);
-  cpSync(root, seeded, { recursive: true, verbatimSymlinks: true });
+  copyTree(root, seeded);
 });
 
 afterAll(async () => {
@@ -94,8 +105,34 @@ beforeEach(async () => {
   // removeTempTree only warns when removal fails; copying over a leftover tree would keep
   // what the last test wrote.
   if (existsSync(root)) throw new Error(`Could not clear the previous test's state at ${root}`);
-  cpSync(seeded, root, { recursive: true, verbatimSymlinks: true });
+  copyTree(seeded, root);
 });
+
+/**
+ * Copies a fixture tree, links included. Registration links the project source with a
+ * junction on Windows, which needs no privilege; `cpSync` recreates a link as a symbolic
+ * link, which needs Developer Mode there. So links are skipped by the copy and made again
+ * afterwards, a directory link as a junction on Windows, once the tree they point into exists.
+ */
+function copyTree(from: string, to: string): void {
+  const links: [string, string][] = [];
+  cpSync(from, to, {
+    recursive: true,
+    filter: (source, destination) => {
+      if (!lstatSync(source).isSymbolicLink()) return true;
+      links.push([source, destination]);
+      return false;
+    },
+  });
+  for (const [source, destination] of links) {
+    const directory = statSync(source).isDirectory();
+    symlinkSync(
+      readlinkSync(source),
+      destination,
+      directory ? (process.platform === 'win32' ? 'junction' : 'dir') : 'file'
+    );
+  }
+}
 
 /** One command in-process; its exit code, stdout (console and JSON lines) and stderr. */
 async function invoke(
