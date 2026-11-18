@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:te
 import { mkdtemp } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'path';
+import { isDeepStrictEqual } from 'node:util';
 import type { IWorkflowPlatform } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
 import type { WorkflowRun } from './schemas';
@@ -340,19 +341,17 @@ describe('concurrent-run guard', () => {
       },
       recheck: async () => undefined,
     };
+    let persistedBeforeDag = false;
     mockExecuteDagWorkflow.mockImplementationOnce(async () => {
-      expect(
-        mocked(store.updateWorkflowRun).mock.calls.some(([, update]) => {
-          const inputs = update.metadata?.[SUBRUN_METADATA_KEYS.inputsValues] as
-            | Record<string, unknown>
-            | undefined;
-          return (
-            JSON.stringify(update.metadata?.trusted_text) === JSON.stringify(trustedText) &&
-            JSON.stringify(inputs?.trusted_item) ===
-              JSON.stringify({ title: 'Accepted', body: 'Snapshot' })
-          );
-        })
-      ).toBe(true);
+      persistedBeforeDag = mocked(store.updateWorkflowRun).mock.calls.some(([, update]) => {
+        const inputs = update.metadata?.[SUBRUN_METADATA_KEYS.inputsValues] as
+          | Record<string, unknown>
+          | undefined;
+        return (
+          isDeepStrictEqual(update.metadata?.trusted_text, trustedText) &&
+          isDeepStrictEqual(inputs?.trusted_item, { title: 'Accepted', body: 'Snapshot' })
+        );
+      });
       return undefined;
     });
     await startWorkflow({
@@ -370,10 +369,10 @@ describe('concurrent-run guard', () => {
       }),
       options: resumeOf(run),
     });
+    expect(persistedBeforeDag).toBe(true);
     expect(
-      mocked(store.updateWorkflowRun).mock.calls.some(
-        ([, update]) =>
-          JSON.stringify(update.metadata?.trusted_text) === JSON.stringify(trustedText)
+      mocked(store.updateWorkflowRun).mock.calls.some(([, update]) =>
+        isDeepStrictEqual(update.metadata?.trusted_text, trustedText)
       )
     ).toBe(true);
     expect(dagCall(0)?.workflowRun.metadata.inputs_values).toMatchObject({
@@ -409,9 +408,8 @@ describe('concurrent-run guard', () => {
           | Record<string, unknown>
           | undefined;
         if (
-          JSON.stringify(update.metadata?.trusted_text) === JSON.stringify(trustedText) &&
-          JSON.stringify(inputs?.trusted_item) ===
-            JSON.stringify({ title: 'Accepted', body: 'Snapshot' })
+          isDeepStrictEqual(update.metadata?.trusted_text, trustedText) &&
+          isDeepStrictEqual(inputs?.trusted_item, { title: 'Accepted', body: 'Snapshot' })
         ) {
           expect(update.metadata).not.toHaveProperty('execution_owner');
           transitions.push('metadata');
