@@ -7,18 +7,14 @@
  * recorded only when it asked or found the pull request already Ready; then apply takes it out of draft. A push the answer declared is made whatever the run
  * decided, since a round's work belongs on its pull request even when a person is
  * asked about it. The push comes first, then the work item, in one conditional
- * write that also releases the claim unless a person is asked; a run that asks keeps
- * its claim until the ruling node records the answer. The round carries the review
- * verdicts its delivery published and the latest validation its CI agent ran. A
- * continue then starts the item's next round at once through the operator's
- * build-queue binding; if it does not start, the item waits for the next queue run.
+ * write. The round carries the review verdicts its delivery published and the latest
+ * validation its CI agent ran. The run's outcome is the decision; the build-pick the
+ * engine starts when the run ends starts a continue's next round.
  *
- * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ORDER and INPUTS_HANDOFF,
- * the order's and the handoff's summaries, empty when skipped; INPUTS_ROUTE,
+ * Bound inputs: INPUTS_PATH, INPUTS_ITEM and INPUTS_READ_AT from facts; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-build's report) and INPUTS_ANSWER, each the whole output of its
- * node, "null" when it was skipped; INPUTS_PULL_REQUEST from facts;
- * INPUTS_BUILD_QUEUE_BINDING, the workflow's input; INPUTS_REVIEWS and INPUTS_CI, every
- * `review-report` and `ci-report` output of this run.
+ * node, "null" when it was skipped; INPUTS_PULL_REQUEST from facts; INPUTS_REVIEWS and
+ * INPUTS_CI, every `review-report` and `ci-report` output of this run.
  */
 
 import {
@@ -26,7 +22,6 @@ import {
   type BuildAsk,
   type BuildRound,
   type BuildStatus,
-  nextRound,
   roundPrNumber,
   type Validation,
   withBuild,
@@ -40,8 +35,7 @@ import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { runReviews } from '../../.shared/review-rounds.ts';
 import { announce, type DecisionEntry } from '../../.shared/queue.ts';
-import { idleOutcome, stuckItems } from '../../.shared/stuck.ts';
-import { updateClaimed } from '../../.shared/workitem.ts';
+import { updateWorkItem } from '../../.shared/workitem.ts';
 
 type RouteOutput = NodeOutput<'archon-build-queue', 'route'>;
 type AnswerOutput = NodeOutput<'archon-build-queue', 'answer'>;
@@ -153,33 +147,6 @@ const STATUS = {
   asked: 'asking',
 } as const satisfies Record<Exclude<Decision['kind'], 'launch'>, BuildStatus>;
 
-function summaryOf(item: QualifiedPr | null, decision: Decision): string {
-  const subject = item === null ? '' : `Issue ${String(item.number)}: `;
-  return `${subject}${decision.kind}. ${decision.reason}`;
-}
-
-/** The summary once the writes are done; a continue starts the next round now instead of waiting for the next queue run. */
-function afterWrite(summary: string, wrote: string | null, decision: Decision, item: QualifiedPr, runId: string): string {
-  const written = wrote === null ? summary : `${summary} (${wrote})`;
-  return decision.kind === 'continue' ? `${written}; ${nextRound(item, runId)}` : written;
-}
-
-/** The summary of a path with no item, so nothing is written or asked; null on an item's path. */
-function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; summary: string; healthy: boolean } | null {
-  switch (path) {
-    case 'idle':
-      return {
-        decision: path,
-        ...idleOutcome('No item waits for the build queue.', stuckItems(workflowRunId(), 'build')),
-      };
-    case 'order':
-      return { decision: path, summary: input('order'), healthy: true };
-    case 'handoff':
-      return { decision: path, summary: input('handoff'), healthy: true };
-    default:
-      return null;
-  }
-}
 
 /**
  * The review verdicts this run's delivery published, for the round's record. Unreadable
@@ -247,11 +214,6 @@ function announceDecision(decision: Decision, item: string, pr: string): void {
 
 function main(): void {
   const path = input('path').trim();
-  const noItem = noItemSummary(path);
-  if (noItem !== null) {
-    emit({ ...noItem, ...NO_ASK, item: '', pr: '' });
-    return;
-  }
   const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
   const ending = nullableJson(input('ending')) as ShipReport | null;
@@ -277,11 +239,9 @@ function main(): void {
   const links = round === null ? [] : [round.pr_url, round.artifacts].filter(link => link !== '');
   const result = {
     decision: decision.kind,
-    summary: summaryOf(item, decision),
     ...(asking === null ? NO_ASK : raisedAsk(asking)),
     item: String(item.number),
     pr: prLabel(round),
-    healthy: true,
   };
 
   if (decision.kind === 'launch') throw new Error('a launch reached apply without its round');
@@ -294,19 +254,18 @@ function main(): void {
     reason: wrote === null ? decision.reason : `${decision.reason} (${wrote})`,
     links,
   };
-  updateClaimed(item, runId, doc =>
+  updateWorkItem(item, doc =>
     withBuild(doc, {
-      at,
+      at: input('read_at'),
       run_id: runId,
       round,
       entry,
       status: STATUS[decision.kind],
       brief: decision.kind === 'continue' ? decision.brief : '',
-      release: asking === null,
     })
   );
   announceDecision(decision, result.item, result.pr);
-  emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId) });
+  emit({ ...result, summary: `Issue ${result.item}: ${decision.kind}. ${entry.reason}` });
 }
 
 try {

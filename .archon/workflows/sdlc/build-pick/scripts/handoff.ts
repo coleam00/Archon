@@ -34,5 +34,5 @@ function main(): void {
 try {
   main();
 } catch (error) {
-  refuse(`build-queue handoff: ${error instanceof Error ? error.message : String(error)}`);
+  refuse(`build-pick handoff: ${error instanceof Error ? error.message : String(error)}`);
 }

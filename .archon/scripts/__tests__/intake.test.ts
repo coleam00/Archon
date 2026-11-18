@@ -474,6 +474,23 @@ describe('the intake scripts', () => {
     }
   }, 60_000);
 
+  test('a run ends with the build route only while the issue waits for a round: an edit after its build ends unchanged', () => {
+    const at = install();
+    const first = facts(at, { runId: 'run-1' }).output;
+    expect(JSON.parse(outcome(at, { runId: 'run-1' }, first, READY_VERDICT).stdout)).toMatchObject({ outcome: 'deliver' });
+    // The build queue finished the item; the author then edits the issue.
+    const built = stored(at);
+    const build = { status: 'ready', brief: '', rounds: [], decisions: [], at: new Date().toISOString() };
+    inProcess(at, () =>
+      expect(state.put('work/7', { ...built.value, facts: { ...built.value.facts, build } }, { ifRevision: built.revision }).ok).toBe(true)
+    );
+    const edited = facts(at, { runId: 'run-2', action: 'edited' }).output;
+    expect(edited).toMatchObject({ path: 'quiet' });
+    const applied = JSON.parse(outcome(at, { runId: 'run-2', action: 'edited' }, edited, SKIPPED_TRIAGE).stdout) as unknown;
+    expect(applied).toMatchObject({ path: 'quiet', outcome: 'unchanged' });
+    expect(stored(at).value.stage).toBe('deliver');
+  }, 60_000);
+
   test('labels that fail to write leave the stage stored and the claim held, and the next pickup writes them', () => {
     const at = install();
     const decided = facts(at, { runId: 'run-1' }).output;
