@@ -226,8 +226,7 @@ jobs:
       # `ARCHON_TEST_REPORT_DIR` makes each test process write a JUnit report, and the next
       # step lists every test that used more than half its time limit in the job summary.
       # Windows is the slowest runner, so a test drifting toward its limit shows here before
-      # it fails (#5835). With the JUnit reporter Bun prints failures and totals but no
-      # `(pass)` line per test; the summary has the times.
+      # it fails (#5835).
       - name: Validate
         env:
           ARCHON_TEST_PART: ${{ matrix.part }}
