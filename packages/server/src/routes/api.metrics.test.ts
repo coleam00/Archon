@@ -143,6 +143,29 @@ describe('GET /api/metrics', () => {
     );
   });
 
+  test('byDimension splits each group by the value its records carry', async () => {
+    const routed = { ...row, metricDimensions: [{ route: 'plan' }] };
+    const response = await app({ listMetricRecords: async () => [routed] }).request(
+      '/api/metrics?since=2026-10-01&until=2026-10-30&byDimension=route'
+    );
+    expect(response.status).toBe(200);
+    const [instrument] =
+      metricsReportSchema.parse(await response.json()).metrics[0]?.instruments ?? [];
+    expect(instrument?.by_dimension?.groups.map(group => group.split)).toEqual(['value']);
+  });
+
+  test('a byDimension key no record carries returns 400', async () => {
+    const response = await app().request(
+      '/api/metrics?since=2026-10-01&until=2026-10-30&byDimension=route'
+    );
+    expect(response.status).toBe(400);
+  });
+
+  test('byDimension with byModel returns 400', async () => {
+    const response = await app().request('/api/metrics?byDimension=route&byModel=review');
+    expect(response.status).toBe(400);
+  });
+
   test('a malformed since returns 400', async () => {
     const response = await app().request('/api/metrics?since=yesterday');
     expect(response.status).toBe(400);
