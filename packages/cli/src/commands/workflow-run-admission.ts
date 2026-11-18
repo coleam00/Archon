@@ -547,8 +547,7 @@ export async function readSuppliedInputs(
   options: Pick<WorkflowRunOptions, 'inputs' | 'inputFiles'>
 ): Promise<Record<string, string> | undefined> {
   const supplied = options.inputs ? parseInputAssignments(options.inputs) : {};
-  const paths = options.inputFiles ? parseInputAssignments(options.inputFiles, 'path') : {};
-  for (const [name, path] of Object.entries(paths)) {
+  for (const [name, path] of Object.entries(options.inputFiles ?? {})) {
     if (Object.hasOwn(supplied, name)) {
       throw new WorkflowInputContractError(
         `Input '${name}' is given by both --input and --input-file: supply it once.`

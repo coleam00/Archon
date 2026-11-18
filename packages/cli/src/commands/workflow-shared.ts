@@ -139,12 +139,12 @@ export interface WorkflowRunOptions {
    */
   inputs?: string[];
   /**
-   * `--input-file name=path` assignments, one per occurrence of the flag. The value is
-   * the file's exact contents, read once at the invocation gate. The route resolves each
-   * path from `--cwd`, as it does `--config`, before the run's cwd is normalized to the
-   * repository root.
+   * `--input-file name=path`, parsed by the `--input` grammar into input name → absolute
+   * path. The route resolves each path from `--cwd`, as it does `--config`, before the
+   * run's cwd is normalized to the repository root. The value is the file's exact
+   * contents, read once at the invocation gate.
    */
-  inputFiles?: string[];
+  inputFiles?: Readonly<Record<string, string>>;
   /** Raw repeatable `--model name=spec` mappings; parsed once at the invocation gate. */
   modelAssignments?: string[];
   /** Local YAML file supplying a sparse configuration layer for this run. */
