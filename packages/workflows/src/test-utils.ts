@@ -190,8 +190,8 @@ export function unsetStoreMethods(
 type NotInferred<T> = [T][T extends unknown ? 0 : never];
 
 /**
- * A workflow store double built from only the methods a test needs: `implemented` gets
- * `unsetStoreMethods(fallback)` as its prototype. Adding a method to the store needs no
+ * A workflow store double built from only the methods a test needs: a copy of `implemented`
+ * with `unsetStoreMethods(fallback)` as its prototype. Adding a method to the store needs no
  * edit in a double that never calls it, and a test that reaches one it did not set up
  * still fails naming it. An entry set to `undefined` counts as not set up.
  *
@@ -204,10 +204,14 @@ export function workflowStoreDouble<S extends object = IWorkflowStore>(
   implemented: Partial<NotInferred<S>>,
   fallback?: (method: string) => unknown
 ): NotInferred<S> {
-  // An own `undefined` would shadow the fallback and fail as "is not a function".
-  for (const [key, value] of Object.entries(implemented)) {
-    if (value === undefined) Reflect.deleteProperty(implemented, key);
+  // A fresh double, so no own `undefined` can shadow the fallback and fail as "is not a
+  // function": copy every property of `implemented` except those whose value is undefined.
+  const double = Object.create(unsetStoreMethods(fallback)) as object;
+  for (const [key, property] of Object.entries(Object.getOwnPropertyDescriptors(implemented))) {
+    if (!('value' in property) || property.value !== undefined) {
+      Object.defineProperty(double, key, property);
+    }
   }
-  // Sound: every key `implemented` lacks resolves through the prototype's fallback.
-  return Object.setPrototypeOf(implemented, unsetStoreMethods(fallback)) as NotInferred<S>;
+  // Sound: every key the copy lacks resolves through the prototype's fallback.
+  return double as NotInferred<S>;
 }
