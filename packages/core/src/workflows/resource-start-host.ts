@@ -318,6 +318,13 @@ async function prepareBinding(
     await recordSelectedWorkflow(source.anchor.root, workflow.name);
     await assertBindingRequirements(host, intent, workflow);
     const codebase = await findOrRegisterCodebase(host, cwd);
+    const preparedAi = await prepareRunAiConfiguration(host.deps, workflow, cwd, {
+      codebaseId: codebase.id,
+      userId: intent.runAsUserId,
+      runConfig,
+    });
+    // Check declared forge access before trusted-text preparation performs its own forge read.
+    await assertRunForgeAccess(host.deps, workflow, preparedAi, { cwd, codebaseId: codebase.id });
     const trustedText = await authorizeTrustedBinding(
       host,
       intent,
@@ -342,13 +349,6 @@ async function prepareBinding(
       receiptId: identity.receiptId,
       bindingId: identity.bindingId,
     };
-    const preparedAi = await prepareRunAiConfiguration(host.deps, workflow, cwd, {
-      codebaseId: codebase.id,
-      userId: intent.runAsUserId,
-      runConfig,
-    });
-    // Before admission, so a binding its forge cannot serve never takes a slot.
-    await assertRunForgeAccess(host.deps, workflow, preparedAi, { cwd, codebaseId: codebase.id });
     const launch: PreparedWorkflowLaunch = {
       version: 2,
       run: {
