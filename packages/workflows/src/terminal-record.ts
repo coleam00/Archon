@@ -1,6 +1,9 @@
 import { getRunArtifactsDirForRoot, resolveRunStorageRoot } from '@archon/paths/archon-paths';
 import {
   type ArtifactManifest,
+  RESULT_COMMIT_METADATA_KEY,
+  resultCommitSchema,
+  type ResultCommit,
   RUN_GRAPH_METADATA_KEY,
   runGraphSchema,
   terminalRecordSchema,
@@ -198,6 +201,7 @@ function foldNodeRecord(
             node_id: nodeId,
             state: 'failed',
             ...(typeof data.error === 'string' ? { error: data.error } : {}),
+            ...(data.failure_kind !== undefined ? { failure_kind: data.failure_kind } : {}),
           },
           data.fan_out_outcome
         )
@@ -337,6 +341,17 @@ function readWorktreeDisposition(
   }
 }
 
+/**
+ * The executor samples a completed run's checkout and stores where its result holds in run
+ * metadata before the terminal write. Only a completed run has a result. A malformed value
+ * throws: it is engine-written, so it is damage, not "no commit".
+ */
+function readResultCommit(run: Pick<WorkflowRun, 'status' | 'metadata'>): ResultCommit | undefined {
+  if (run.status !== 'completed') return undefined;
+  const value = run.metadata?.[RESULT_COMMIT_METADATA_KEY];
+  return value === undefined ? undefined : resultCommitSchema.parse(value);
+}
+
 function selectRecordedReturn({ graph, nodes, outputs }: NodeEventFold): TerminalRecord['returns'] {
   const selected = graph?.returns;
   if (selected === undefined) {
@@ -431,6 +446,7 @@ export function buildTerminalRecord(input: {
   const folded = foldNodeEvents(run, events);
   const { nodes, failureOrder } = folded;
   const worktreeDisposition = readWorktreeDisposition(run);
+  const resultCommit = readResultCommit(run);
   return terminalRecordSchema.parse({
     run_id: run.id,
     status: terminalStatusSchema.parse(run.status),
@@ -442,6 +458,7 @@ export function buildTerminalRecord(input: {
     returns: selectRecordedReturn(folded),
     artifacts,
     ...(worktreeDisposition ? { worktree_disposition: worktreeDisposition } : {}),
+    ...(resultCommit ? { result_commit: resultCommit } : {}),
   });
 }
 
@@ -480,6 +497,13 @@ export function firstFailedNodeEvent<E extends TerminalRecordEvent>(
     if (event?.event_type === 'node_failed' && event.step_name === node) return event;
   }
   return undefined;
+}
+
+/** The per-node state of a record's `first_failed_node`, when it has one. */
+export function firstFailedNodeState(
+  record: Pick<TerminalRecord, 'first_failed_node' | 'nodes'>
+): TerminalRecord['nodes'][number] | undefined {
+  return record.nodes.find(node => node.node_id === record.first_failed_node);
 }
 
 /** The failure kind a `node_failed` event recorded; undefined when it recorded none. */
@@ -534,11 +558,16 @@ export function failedOutcomeReason(record: TerminalRecord | null): string[] {
 /**
  * Why a run that ended needs a look, for a reader of that one run: the failed-outcome
  * reason, or for a failed run the first line of its first failed node's error, or else of
- * the run's own. Error text is whatever a command or provider printed, so it stays out of
- * the attention stream, which uses structured failure facts instead.
+ * the run's own, led by that node's recorded failure kind. Error text is whatever a
+ * command or provider printed, so it stays out of the attention stream, which uses
+ * structured failure facts instead.
  */
 export function terminalReason(record: TerminalRecord | null): string[] {
   if (record?.status !== 'failed') return failedOutcomeReason(record);
-  const failed = record.nodes.find(node => node.node_id === record.first_failed_node);
-  return boundedReason([firstLine(failed?.error ?? record.error ?? '') ?? '']);
+  const failed = firstFailedNodeState(record);
+  const reason = boundedReason([firstLine(failed?.error ?? record.error ?? '') ?? '']);
+  const kind = failed?.failure_kind;
+  return kind === undefined
+    ? reason
+    : reason.map((line, i) => (i === 0 ? `(${kind}) ${line}` : line));
 }

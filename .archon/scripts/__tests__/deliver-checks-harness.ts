@@ -105,8 +105,6 @@ export interface TrackerIssue {
 export type ForgeFake =
   /** The stateful fake forge, seeded from `tracker`. The default. */
   | { readonly kind: 'state' }
-  /** No `ARCHON_CLI_COMMAND` at all. */
-  | { readonly kind: 'no-host' }
   /** The real CLI with a scratch Archon home whose config holds this `forge:` section. */
   | { readonly kind: 'home'; readonly config: Readonly<Record<string, unknown>> }
   /**
@@ -380,7 +378,6 @@ function forgeEnv(
   forge: ForgeFake,
   logs: { forge: string; requests: string; reads: string }
 ): Record<string, string> {
-  if (forge.kind === 'no-host') return { ARCHON_CLI_COMMAND: '' };
   // Never executed: the preload answers every `forge` call under this command.
   if (forge.kind === 'state') return { ARCHON_CLI_COMMAND: JSON.stringify([process.execPath, join(root, 'fake-forge')]) };
   if (forge.kind === 'command') return { ARCHON_CLI_COMMAND: JSON.stringify(forge.argv) };

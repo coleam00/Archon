@@ -152,7 +152,6 @@ describe('pushHead', () => {
     const run = runPackScript('../../scripts/__tests__/push-pr-head', {
       cwd,
       inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) },
-      preload: 'Bun.sleepSync = () => {};',
     });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('refused');

@@ -10,6 +10,10 @@ import {
 
 import { beforeEach, afterEach, describe, it, expect, spyOn, mock } from 'bun:test';
 
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { workflowRunCommand } from './workflow-run-owned';
 
@@ -222,3 +226,106 @@ for (const selection of ['flag', 'workflow', 'config'] as const) {
     expect(mockFolderBackendDestroy).toHaveBeenCalledWith('container-env-auth');
   });
 }
+
+const trackTempRoot = trackTempRoots();
+
+/**
+ * A stand-in for the host CLI the run reaches the forge through: it records the
+ * `forge check` request it was handed and answers that no plugin claims the host.
+ */
+function stubForgeCli(): { command: string; requestFile: string } {
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-cli-')));
+  const requestFile = join(dir, 'received.json');
+  const script = join(dir, 'archon.ts');
+  writeFileSync(
+    script,
+    `const args = process.argv.slice(2);
+const dataFile = args[args.indexOf('--data-file') + 1];
+await Bun.write(${JSON.stringify(requestFile)}, await Bun.file(dataFile).text());
+console.log(JSON.stringify({
+  operationId: 'op',
+  ok: false,
+  error: { kind: 'no_plugin_for_host', message: 'no forge plugin claims git.example' },
+  remedy: 'Install a forge plugin that claims this host.',
+}));
+process.exitCode = 1;
+`
+  );
+  return {
+    command: JSON.stringify([process.execPath, '--no-env-file', script]),
+    requestFile,
+  };
+}
+
+describe('workflow run forge refusal', () => {
+  let savedCliCommand: string | undefined;
+  beforeEach(() => {
+    savedCliCommand = process.env.ARCHON_CLI_COMMAND;
+  });
+  afterEach(() => {
+    if (savedCliCommand === undefined) delete process.env.ARCHON_CLI_COMMAND;
+    else process.env.ARCHON_CLI_COMMAND = savedCliCommand;
+  });
+
+  it.each([false, true])(
+    'a pack whose forge no plugin serves is refused before its run row, worktree and nodes (detach: %p)',
+    async detach => {
+      const isolation = await import('@archon/isolation');
+      const codebases = await import('@archon/core/db/codebases');
+      const { executeWorkflow } = await import('@archon/workflows/executor');
+      const entry = makeTestWorkflowWithSource({ name: 'forge-run', provider: 'claude' });
+      // Only discovery sets a pack, so the fixture attaches the declaration it would read.
+      entry.workflow.pack = {
+        key: 'factory',
+        source: 'project',
+        forge: { operations: ['pr.view'] },
+      };
+      mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({ workflows: [entry], errors: [] });
+      // The check reads the remotes of a real checkout and runs the host CLI in it.
+      const project = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-project-')));
+      (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'cb',
+        name: 'test/repo',
+        default_cwd: project,
+        kind: 'repo',
+      });
+      Bun.spawnSync(['git', 'init', '-q', project]);
+      Bun.spawnSync([
+        'git',
+        '-C',
+        project,
+        'remote',
+        'add',
+        'origin',
+        'https://git.example/o/r.git',
+      ]);
+      const cli = stubForgeCli();
+      process.env.ARCHON_CLI_COMMAND = cli.command;
+      (isolation.getIsolationProvider as ReturnType<typeof mock>).mockClear();
+      (executeWorkflow as ReturnType<typeof mock>).mockClear();
+      mockCreateWorkflowRun.mockClear();
+
+      const error = await workflowRunCommand(createTestWorkflowHost(), project, 'forge-run', 'go', {
+        detach,
+      }).catch((caught: unknown) => caught as Error);
+
+      expect(error).toMatchObject({
+        name: 'ForgeRequirementError',
+        failures: [
+          {
+            remote: 'origin',
+            reason: 'no_plugin_for_host',
+            remedy: 'Install a forge plugin that claims this host.',
+          },
+        ],
+      });
+      expect(JSON.parse(await Bun.file(cli.requestFile).text())).toEqual({
+        remote: 'https://git.example/o/r.git',
+        operations: ['pr.view'],
+      });
+      expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+      expect(isolation.getIsolationProvider).not.toHaveBeenCalled();
+      expect(executeWorkflow).not.toHaveBeenCalled();
+    }
+  );
+});

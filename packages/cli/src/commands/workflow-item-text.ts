@@ -101,7 +101,13 @@ function runLines(run: ItemRun): string[] {
   const lines = [
     `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow}${outcome}  ${minute(run.startedAt)}${ended}${causeText(run.cause)}`,
   ];
-  if (run.hasResult) lines.push(`            result: archon workflow get ${run.id} --json`);
+  // A result can hold at a commit without being readable (a truncated untyped result).
+  const holds = run.resultCommit ? `holds at ${run.resultCommit.slice(0, 12)}` : null;
+  if (run.hasResult)
+    lines.push(
+      `            result: archon workflow get ${run.id} --json${holds ? `, ${holds}` : ''}`
+    );
+  else if (holds) lines.push(`            result: ${holds}`);
   const waiting = run.awaitingExecution;
   if (waiting)
     lines.push(
@@ -178,7 +184,11 @@ function answerLine(answer: ItemAnswer): string {
 
 /** The item read as lines a terminal prints, each section saying `none` when empty. */
 export function itemReadLines(read: ItemRead): string[] {
-  const lines = [`Item ${read.item.key} (${read.item.projectKey})`, '', 'Runs:'];
+  const lines = [`Item ${read.item.key} (${read.item.projectKey})`];
+  if (read.merged !== null) lines.push(`Merged ${minute(read.merged.at)}: ${read.merged.change}`);
+  if (read.degraded.some(report => report.reason === 'merge_unreadable'))
+    lines.push('The merge recorded on this item could not be read.');
+  lines.push('', 'Runs:');
   if (read.runs.length === 0) lines.push('  none');
   for (const run of read.runs) lines.push(...runLines(run));
   lines.push(...startSectionLines(read));

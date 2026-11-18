@@ -15,6 +15,7 @@
             "rate_limited",
             "overloaded",
             "transient",
+            "schema_unmet",
             "unknown"
           ]
         },

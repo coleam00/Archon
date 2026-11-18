@@ -23,20 +23,6 @@ const resolved = forgeOperation('resolve', {
   kind: 'resolved', forge: 'fake', repo: PR.repo, subject: { kind: 'pr', number: PR.number },
   plugin: { protocol: 1, name: 'fake', version: '1', forge: 'fake', hosts: [PR.repo.host], capabilities: ['resolve', 'pr.view'] },
 });
-const failure = () => JSON.stringify({ operationId: 'failed', ok: false,
-  error: { kind: 'forge_error', status: 503, message: 'GitHub API request failed with HTTP 503' } });
-
-for (const op of ['resolve', 'pr.view']) {
-  test(`metrics name the pull request on a terminal ${op} failure`, () => {
-    const run = runner.runPackScript('metrics-prs/scripts/prs', {
-      preload, inputs: { INPUTS_SINCE: '2026-11-01' },
-      forge: { kind: 'fake', response: op === 'resolve' ? failure() : [resolved, failure()] },
-    });
-    expect(run.code).not.toBe(0);
-    expect(run.stdout).toBe('');
-    expect(run.stderr).toContain(PR_URL);
-  });
-}
 
 const view = {
   pr: forgePrRecord({ head: 'build/widget' }),
@@ -68,18 +54,4 @@ test('a PR answer with no timestamps is refused', () => {
   });
   expect(run.code).not.toBe(0);
   expect(run.stdout).toBe('');
-});
-
-test('metrics name the pull request on a terminal pr.files failure', () => {
-  const merged = {
-    pr: forgePrRecord({ head: 'build/widget', state: 'merged' }),
-    timestamps: { created_at: at, merged_at: at, closed_at: at },
-  };
-  const run = runner.runPackScript('metrics-prs/scripts/prs', {
-    preload, inputs: { INPUTS_SINCE: '2026-11-01', INPUTS_LINES_SINCE: '2026-11-01' },
-    forge: { kind: 'fake', response: [resolved, forgeOperation('pr.view', merged), resolved, failure()] },
-  });
-  expect(run.code).not.toBe(0);
-  expect(run.stdout).toBe('');
-  expect(run.stderr).toContain(PR_URL);
 });

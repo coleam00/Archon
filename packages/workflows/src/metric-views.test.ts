@@ -5,7 +5,7 @@ import { dirname, join } from 'path';
 import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import * as bundleInventory from './defaults/bundle-inventory';
-import { discoverMetricViews } from './metric-views';
+import { discoverItemMetrics, discoverMetricViews } from './metric-views';
 import { DEFAULT_WORKFLOW_SOURCE_CONFIG } from './workflow-source';
 import type { LiveWorkflowSourceRoots } from './workflow-source/roots';
 
@@ -144,4 +144,22 @@ test('an installed pack lists as owner/name', async () => {
   expect(listing.packs.map(({ pack, source }) => [pack, source])).toEqual([
     ['acme/factory-kit', 'installed'],
   ]);
+});
+
+test("a pack's item metrics are found where its views are, and a definition the schema does not know is an error", async () => {
+  const itemMetrics = (packDir: string): string => join(packDir, '.shared', 'item-metrics.json');
+  const mergeRate = { name: 'factory.merge_rate', op: 'share', where: { merged: true } } as const;
+  await write(itemMetrics(join(roots.project ?? '', '.archon', 'workflows', 'factory')), {
+    metrics: [mergeRate],
+  });
+  // An expression is not a definition: the file is refused, not half read.
+  await write(itemMetrics(join(roots.globalWorkflows, 'clever')), {
+    metrics: [{ name: 'clever.rounds', op: 'count', of: 'runs', value: 'rounds / items' }],
+  });
+  // A pack's metric views do not make it declare item metrics.
+  await write(declaration(join(roots.globalWorkflows, 'views-only')), { cards: [card('Views')] });
+
+  const listing = await discoverItemMetrics(roots);
+  expect(listing.packs).toEqual([{ pack: 'factory', source: 'project', metrics: [mergeRate] }]);
+  expect(listing.errors.map(({ pack, source }) => [pack, source])).toEqual([['clever', 'global']]);
 });

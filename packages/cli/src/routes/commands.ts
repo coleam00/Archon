@@ -178,10 +178,36 @@ export async function runMetrics({ positionals, values }: CliRouteContext): Prom
   });
 }
 
+const TRACKER_USAGE =
+  'Usage: archon tracker sync [--json]\n       archon tracker release <project> [--json]';
+
+export async function runTracker({
+  subcommand,
+  positionals,
+  json,
+  forgeTrustedEnv,
+}: CliRouteContext): Promise<number> {
+  const project = positionals[2];
+  const known =
+    (subcommand === 'sync' && project === undefined) ||
+    (subcommand === 'release' && project !== undefined && positionals[3] === undefined);
+  if (!known) return await fail(json, TRACKER_USAGE);
+  const { trackerSyncCommand, trackerReleaseCommand, syncConfiguredProjects } = await loadRoute(
+    () => import('../commands/tracker'),
+    { database: true }
+  );
+  if (project !== undefined) return await trackerReleaseCommand(project, { json: json === true });
+  return await trackerSyncCommand({
+    json: json === true,
+    sync: () => syncConfiguredProjects(forgeTrustedEnv),
+  });
+}
+
 export async function runTrigger({
   subcommand,
   positionals,
   values,
+  forgeTrustedEnv,
 }: CliRouteContext): Promise<number> {
   const { triggerCommand, spawnAdmitted } = await loadRoute(() => import('../commands/trigger'), {
     database: await usesDatabaseStore(),
@@ -190,7 +216,7 @@ export async function runTrigger({
   // A `trigger execute` process serves the host it runs for, so the run it ends admits
   // that host's next start.
   const host = await createCliWorkflowHost(
-    true,
+    { forgeTrustedEnv },
     cliOwnTriggerHost(
       subcommand === 'execute' && typeof values.host === 'string' ? values.host : undefined
     )
@@ -388,13 +414,14 @@ export async function runValidate({
   positionals,
   effectiveCwd,
   json,
+  forgeTrustedEnv,
 }: CliRouteContext): Promise<number> {
   const { validateWorkflowsCommand, validateCommandsCommand } = await loadRoute(
     () => import('../commands/validate')
   );
   switch (subcommand) {
     case 'workflows':
-      return await validateWorkflowsCommand(effectiveCwd, positionals[2], json);
+      return await validateWorkflowsCommand(effectiveCwd, positionals[2], json, forgeTrustedEnv);
 
     case 'commands':
       return await validateCommandsCommand(effectiveCwd, positionals[2], json);

@@ -135,7 +135,11 @@ export function AttentionAnswerPanel({
         {attention.form === 'message' || attention.form === 'multi_select' ? (
           <button
             type="button"
-            disabled={busy || (attention.form === 'multi_select' && chosen.length === 0)}
+            disabled={
+              busy ||
+              (attention.form === 'multi_select' && chosen.length === 0) ||
+              (attention.form === 'message' && text.trim() === '')
+            }
             onClick={() => void answer(chosen)}
             className={button}
           >

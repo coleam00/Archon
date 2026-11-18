@@ -2767,6 +2767,22 @@ describe('typed failures (#1797, #3524)', () => {
     expect(result.cost).toBeCloseTo(0.51);
   });
 
+  test('a structured-output-retries result reports schema_unmet and keeps its subtype', async () => {
+    const result = await resultOf({
+      type: 'result',
+      subtype: 'error_max_structured_output_retries',
+      is_error: true,
+      errors: ['Failed to provide valid structured output after 5 attempts'],
+      session_id: 'sid-schema',
+    });
+    expect(result.failure).toEqual({
+      class: 'schema_unmet',
+      evidence:
+        'error_max_structured_output_retries: Failed to provide valid structured output after 5 attempts',
+    });
+    expect(result.errorSubtype).toBe('error_max_structured_output_retries');
+  });
+
   test('an error_during_execution result keeps its subtype and reports unknown', async () => {
     sdkYields({
       type: 'result',

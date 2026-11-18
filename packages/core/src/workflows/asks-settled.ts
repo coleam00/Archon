@@ -8,6 +8,12 @@
  *
  * The files are the ones run-ended bindings live in, read the same way (`readOnBindings`),
  * fresh at every close of an ask, so removing a file turns it off.
+ *
+ * A binding with `checkout: "asking-run"` starts its stage in the checkout the asking run
+ * left. That checkout is read when the asking run completes (`createAsksCheckout`) and
+ * recorded on its row, and the completion keeps the run's worktree. When the asks settle,
+ * the start is refused if that worktree is gone; otherwise preparation treats it as a
+ * run-ended hand-off, which refuses a branch that moved off the recorded commit.
  */
 import { existsSync } from 'node:fs';
 import type { WorkflowDeps } from '@archon/workflows/deps';
@@ -15,12 +21,16 @@ import type { JsonValue } from '@archon/workflows/output-ref';
 import { chosenAskOption, type StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import {
   ASKS_SETTLED_SOURCE_ACTOR,
+  readAsksCheckout,
+  type AsksCheckout,
   type AsksSettledTrigger,
+  type EndedCheckout,
   type SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { readAsksResult, readSubrunMetadata } from '@archon/workflows/schemas/run-metadata';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { resolveWorkflowName } from '@archon/workflows/router';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import {
   bindingProjectKey,
@@ -116,12 +126,96 @@ export function createAsksSettledStarts(
               itemKey,
             },
             mappedInputs(candidate.asksSettled.inputs, from),
-            undefined,
+            candidate.asksSettled.checkout === undefined
+              ? undefined
+              : recordedCheckout(runId, run, candidate.asksSettled.workflowName),
             now
           )
         );
     };
   };
+}
+
+/** The checkout the asking run recorded when it completed, or why a start cannot take one. */
+function recordedCheckout(
+  runId: string,
+  run: AskingRunRow | null,
+  workflowName: string
+): EndedCheckout {
+  const again = `run '${workflowName}' again on the item`;
+  if (run === null)
+    return { refused: `run '${runId}', which left the asks, no longer exists; ${again}` };
+  const recorded = readAsksCheckout({ id: runId, metadata: run.metadata });
+  if (recorded === undefined)
+    return {
+      refused: `run '${runId}' recorded no checkout when it ended (the binding's checkout was added after it ended, or an older Archon ran it); ${again}`,
+    };
+  if (!('handoff' in recorded)) return recorded;
+  // Branch recreation would hand on a checkout the asking run no longer has, so a removed
+  // worktree refuses here, where the reason lands on the receipt. Execution checks again
+  // (`assertAskingWorktree`), for a start that runs later.
+  const gone = askingWorktreeGone(runId, recorded);
+  return gone === undefined ? { handoff: recorded.handoff } : { refused: `${gone}; ${again}` };
+}
+
+/** Why a recorded asks hand-off's worktree can no longer be handed over, or undefined. */
+export function askingWorktreeGone(
+  runId: string,
+  recorded: Extract<AsksCheckout, { handoff: unknown }>
+): string | undefined {
+  return existsSync(recorded.worktree)
+    ? undefined
+    : `the worktree at '${recorded.worktree}' that holds the checkout run '${runId}' left is gone, so it cannot be handed over`;
+}
+
+/**
+ * At the completion of a run on an item that leaves asks: the checkout it left, when an
+ * asks-settled binding with `checkout` matches it (its workflow, in the item's project),
+ * else undefined. Read once however many bindings match.
+ */
+export function createAsksCheckout(
+  dependencies: Omit<RunEndedStartsDependencies, 'now'> & {
+    getRun: (id: string) => Promise<WorkflowRun | null>;
+  }
+): (run: WorkflowRun) => Promise<AsksCheckout | undefined> {
+  return async run => {
+    if (!run.item_id) return undefined;
+    const candidates = (await readAsksSettledBindings(dependencies.triggersDirectory())).filter(
+      candidate =>
+        candidate.asksSettled.workflowName === run.workflow_name &&
+        candidate.asksSettled.checkout !== undefined
+    );
+    if (candidates.length === 0) return undefined;
+    const item = await dependencies.getItem(run.item_id);
+    if (!item) throw new Error(`Run '${run.id}' names item '${run.item_id}', which is missing`);
+    for (const candidate of candidates)
+      if ((await bindingProjectKey(candidate, dependencies)) === item.projectKey)
+        return withWorktree(run, await dependencies.endedCheckout(run), dependencies.getRun);
+    return undefined;
+  };
+}
+
+/**
+ * The hand-off with the worktree that holds it, so settling and execution can tell whether
+ * that checkout is still there: the run's own, or for a run that worked on a copy, the one
+ * its source run left. A source whose worktree is unknown or already gone is refused now.
+ */
+async function withWorktree(
+  run: WorkflowRun,
+  checkout: EndedCheckout,
+  getRun: (id: string) => Promise<WorkflowRun | null>
+): Promise<AsksCheckout> {
+  if (!('handoff' in checkout)) return checkout;
+  const { handoff } = checkout;
+  const holder = handoff.runId === run.id ? run : await getRun(handoff.runId);
+  const worktree = holder?.working_path;
+  if (!worktree)
+    return {
+      refused: `run '${handoff.runId}', whose checkout run '${run.id}' worked on, has no recorded worktree`,
+    };
+  const recorded = { handoff, worktree };
+  const gone = askingWorktreeGone(run.id, recorded);
+  return gone === undefined ? recorded : { refused: gone };
 }
 
 /**
@@ -148,7 +242,8 @@ function settledAnswer(row: StoredItemAsk): JsonValue {
 /**
  * Every problem with an asks-settled binding, read against the workflows of the project it
  * launches in: the asking workflow exists, declares `returns.asks` and every input the
- * binding reads, and the started workflow exists and declares every input it maps.
+ * binding reads, and the started workflow exists and declares every input it maps. With
+ * `checkout: "asking-run"`, neither workflow may be pinned in place.
  */
 export async function asksSettledBindingCheck(
   { binding, asksSettled }: AsksSettledBinding,
@@ -162,8 +257,32 @@ export async function asksSettledBindingCheck(
   const workflows = discovered.workflows.map(found => found.workflow);
   return [
     ...askingWorkflowProblems(asksSettled, workflows),
+    ...checkoutProblems(asksSettled, binding.launch.workflowName, workflows),
     ...startedWorkflowProblems(binding.launch.workflowName, asksSettled.inputs, workflows),
   ];
+}
+
+/** With `checkout`, both runs need a worktree: one to leave it, one to take it. */
+function checkoutProblems(
+  asksSettled: AsksSettledTrigger,
+  started: string,
+  workflows: readonly ResolvedWorkflow[]
+): string[] {
+  if (asksSettled.checkout === undefined) return [];
+  const problems: string[] = [];
+  // A folder project leaves no worktree either; that is known only when a start is
+  // prepared, which refuses it then, naming it.
+  const asking = workflows.find(workflow => workflow.name === asksSettled.workflowName);
+  if (asking?.worktree?.enabled === false)
+    problems.push(
+      `workflow '${asking.name}' runs in place (worktree.enabled: false), so it leaves no checkout for checkout: asking-run`
+    );
+  const target = resolveWorkflowName(started, workflows);
+  if (target?.worktree?.enabled === false)
+    problems.push(
+      `workflow '${target.name}' runs in place (worktree.enabled: false), so it cannot take the asking run's checkout`
+    );
+  return problems;
 }
 
 function askingWorkflowProblems(
