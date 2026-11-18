@@ -22,9 +22,7 @@ import {
   resolveRunStorageRoot,
 } from '@archon/paths/archon-paths';
 import { artifactPointerSchema } from './schemas/artifact-pointer';
-import type { StoredItemAsk } from './schemas/item-ask';
 import {
-  OTHER_ATTENTION_OPTION,
   attentionFormSchema,
   attentionLabelKeySchema,
   attentionLabelsSchema,
@@ -202,6 +200,11 @@ export function isHeldByRun(item: AttentionQueueItem): item is RunAttentionQueue
 export function heldRunOf(item: AttentionQueueItem): RunAttentionQueueItem['run'] | undefined {
   return isHeldByRun(item) ? item.run : undefined;
 }
+/** The occurrence an answer to `item` resolves; null for an item nobody answers. */
+export function itemOccurrence(item: AttentionQueueItem): string | null {
+  const run = heldRunOf(item);
+  return run !== undefined && 'occurrence' in run ? run.occurrence : null;
+}
 /** The completed run that left an item no run holds (an ask or overdue waits), else undefined. */
 export function leftByRun(
   item: AttentionQueueItem
@@ -235,61 +238,6 @@ export function askIdOfRef(ref: string): string | undefined {
   return ref.startsWith(ASK_REF_PREFIX) && ref.length > ASK_REF_PREFIX.length
     ? ref.slice(ASK_REF_PREFIX.length)
     : undefined;
-}
-
-/** The store reads an ask's queue item needs. */
-export type AskItemStore = Pick<
-  IWorkflowStore,
-  'listOpenItemAsks' | 'getItem' | 'getWorkflowRun' | 'getCodebase'
->;
-
-/**
- * The queue item an ask is: a `select` question with the reserved `other` option, held by
- * no run. Its project is the run's that left it, by the rule every item uses, or, once
- * that run is gone, the item's own project key.
- */
-export async function askQueueItem(
-  store: Omit<AskItemStore, 'listOpenItemAsks'>,
-  ask: StoredItemAsk,
-  codebases: CodebaseCache = new Map()
-): Promise<AskQueueItem> {
-  const item = await store.getItem(ask.itemId);
-  const run = await store.getWorkflowRun(ask.runId);
-  const project =
-    run !== null
-      ? await runProject({ store }, run, codebases)
-      : item !== null && stateProjectKeySchema.safeParse(item.projectKey).success
-        ? projectRef(item.projectKey, null)
-        : null;
-  return {
-    kind: 'attention',
-    ref: askItemRef(ask.id),
-    project,
-    ...(item === null ? {} : { item }),
-    revision: 1,
-    labels: {},
-    pausedAt: ask.openedAt,
-    message: ask.ask.question,
-    form: 'select',
-    options: [
-      ...ask.ask.options.map(option => ({ id: option.id, does: option.does, cost: option.cost })),
-      OTHER_ATTENTION_OPTION,
-    ],
-    other: true,
-    recommendation: { option: ask.ask.recommendation.option, why: ask.ask.recommendation.why },
-    context: ask.ask.context,
-    artifacts: ask.ask.artifacts.map(({ type, run_id, path }) => ({ type, run_id, path })),
-    askedIn: { runId: ask.runId, workflow: ask.workflowName },
-  };
-}
-
-/** The open asks as queue items, for `AttentionQueueSource.itemsWithoutRun`. */
-export async function openAskItems(store: AskItemStore): Promise<AttentionRead<AskQueueItem>[]> {
-  const codebases: CodebaseCache = new Map();
-  const items: AttentionRead<AskQueueItem>[] = [];
-  for (const ask of await store.listOpenItemAsks())
-    items.push(isAttentionDegraded(ask) ? ask : await askQueueItem(store, ask, codebases));
-  return items;
 }
 
 const WAIT_REF_PREFIX = 'wait:';
@@ -469,8 +417,8 @@ export interface AttentionQueueSource {
   /** The branch of a run's checkout; null when the host has no record of one. */
   branchOf(run: WorkflowRun): Promise<string | null>;
   /**
-   * The open items no run holds: the asks completed runs left (`openAskItems`) and their
-   * overdue waits (`overdueWaitItems`), which a host sets here. It is where a source of such items joins the one reader. An entry
+   * The open items no run holds: the asks completed runs left and their overdue waits
+   * (`openAskItems`, `overdueWaitItems` in `queue-items-without-run.ts`), which a host sets here. It is where a source of such items joins the one reader. An entry
    * that does not read is reported in its place.
    */
   itemsWithoutRun?(): Promise<readonly AttentionRead<AttentionQueueItemWithoutRun>[]>;

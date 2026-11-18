@@ -1,20 +1,82 @@
 /**
- * Overdue waits as attention queue items: the sets of waits completed runs left on their
- * items (`returns.waits`, see `schemas/item-wait.ts`) that are still open past a deadline.
- * A deadline raises attention and wakes nothing; the set stays open until an event meets it,
- * a newer run of its workflow replaces it, or it is withdrawn by its `wait:` ref.
+ * The attention queue's items that no run holds: the asks completed runs left
+ * (`returns.asks`, see `schemas/item-ask.ts`) and their waits still open past a deadline
+ * (`returns.waits`, see `schemas/item-wait.ts`). A host joins them to the one reader through
+ * `AttentionQueueSource.itemsWithoutRun`. A wait's deadline raises attention and wakes
+ * nothing; the set stays open until an event meets it, a newer run of its workflow replaces
+ * it, or it is withdrawn by its `wait:` ref.
  */
+import { isAttentionDegraded, type AttentionRead } from './schemas/attention-degraded';
 import {
+  askItemRef,
   projectRef,
   runProject,
   waitItemRef,
+  type AskQueueItem,
   type AttentionQueueItemWithoutRun,
   type CodebaseCache,
   type OverdueWaitQueueItem,
 } from './attention-queue';
+import type { StoredItemAsk } from './schemas/item-ask';
 import type { StoredItemWait } from './schemas/item-wait';
+import { OTHER_ATTENTION_OPTION } from './schemas/wait-node';
 import { stateProjectKeySchema } from './state-document-store';
 import type { IWorkflowStore } from './store';
+
+/** The store reads an ask's queue item needs. */
+export type AskItemStore = Pick<
+  IWorkflowStore,
+  'listOpenItemAsks' | 'getItem' | 'getWorkflowRun' | 'getCodebase'
+>;
+
+/**
+ * The queue item an ask is: a `select` question with the reserved `other` option, held by
+ * no run. Its project is the run's that left it, by the rule every item uses, or, once
+ * that run is gone, the item's own project key.
+ */
+export async function askQueueItem(
+  store: Omit<AskItemStore, 'listOpenItemAsks'>,
+  ask: StoredItemAsk,
+  codebases: CodebaseCache = new Map()
+): Promise<AskQueueItem> {
+  const item = await store.getItem(ask.itemId);
+  const run = await store.getWorkflowRun(ask.runId);
+  const project =
+    run !== null
+      ? await runProject({ store }, run, codebases)
+      : item !== null && stateProjectKeySchema.safeParse(item.projectKey).success
+        ? projectRef(item.projectKey, null)
+        : null;
+  return {
+    kind: 'attention',
+    ref: askItemRef(ask.id),
+    project,
+    ...(item === null ? {} : { item }),
+    revision: 1,
+    labels: {},
+    pausedAt: ask.openedAt,
+    message: ask.ask.question,
+    form: 'select',
+    options: [
+      ...ask.ask.options.map(option => ({ id: option.id, does: option.does, cost: option.cost })),
+      OTHER_ATTENTION_OPTION,
+    ],
+    other: true,
+    recommendation: { option: ask.ask.recommendation.option, why: ask.ask.recommendation.why },
+    context: ask.ask.context,
+    artifacts: ask.ask.artifacts.map(({ type, run_id, path }) => ({ type, run_id, path })),
+    askedIn: { runId: ask.runId, workflow: ask.workflowName },
+  };
+}
+
+/** The open asks as queue items, for `AttentionQueueSource.itemsWithoutRun`. */
+export async function openAskItems(store: AskItemStore): Promise<AttentionRead<AskQueueItem>[]> {
+  const codebases: CodebaseCache = new Map();
+  const items: AttentionRead<AskQueueItem>[] = [];
+  for (const ask of await store.listOpenItemAsks())
+    items.push(isAttentionDegraded(ask) ? ask : await askQueueItem(store, ask, codebases));
+  return items;
+}
 
 /** The store reads an overdue wait's queue item needs. */
 export type WaitItemStore = Pick<

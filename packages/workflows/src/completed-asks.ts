@@ -144,3 +144,34 @@ export function readCompletedWaits(
     ? { kind: 'invalid', error: `${subject}: ${parsed.problem}` }
     : { kind: 'waits', waits: parsed.waits };
 }
+
+/** The asks and waits a completed run leaves on its item, each present when declared. */
+export interface CompletedItemFacts {
+  readonly asks?: readonly ItemAsk[];
+  readonly waits?: readonly ItemWait[];
+}
+
+/**
+ * The asks and waits a run completes with, or the first that is not of its declared form,
+ * with the site the run's failure is logged under. Each is present, even empty, whenever
+ * the run declares it: the completing write replaces the open set.
+ */
+export function readCompletedItemFacts(
+  workflow: Pick<WorkflowDefinition, 'returns' | 'result' | 'name'>,
+  run: Pick<WorkflowRun, 'parent_run_id'>,
+  nodeOutputs: ReadonlyMap<string, NodeOutput>
+):
+  | { readonly kind: 'facts'; readonly facts: CompletedItemFacts }
+  | { readonly kind: 'invalid'; readonly error: string; readonly site: string } {
+  const asks = readCompletedAsks(workflow, run, nodeOutputs);
+  if (asks.kind === 'invalid') return { ...asks, site: 'dag.asks_invalid_fail' };
+  const waits = readCompletedWaits(workflow, run, nodeOutputs);
+  if (waits.kind === 'invalid') return { ...waits, site: 'dag.waits_invalid_fail' };
+  return {
+    kind: 'facts',
+    facts: {
+      ...(asks.kind === 'asks' ? { asks: asks.asks } : {}),
+      ...(waits.kind === 'waits' ? { waits: waits.waits } : {}),
+    },
+  };
+}

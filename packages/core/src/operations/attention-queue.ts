@@ -5,13 +5,16 @@
 import { canonicalizeProjectPath } from '@archon/paths';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import {
-  openAskItems,
   projectRef,
-  type AskItemStore,
   type AttentionQueueSource,
   type ProjectRef,
 } from '@archon/workflows/attention-queue';
-import { overdueWaitItems, type WaitItemStore } from '@archon/workflows/overdue-waits';
+import {
+  overdueWaitItems,
+  type WaitItemStore,
+  openAskItems,
+  type AskItemStore,
+} from '@archon/workflows/queue-items-without-run';
 import { stateProjectKeySchema } from '@archon/workflows/state-document-store';
 import type { Codebase } from '../schemas/codebase';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';

@@ -27,6 +27,7 @@ import {
   type ProjectRef,
   type RunAttentionQueueItem,
   heldRunOf,
+  itemOccurrence,
   leftByRun,
 } from './attention-queue';
 import type {
@@ -239,12 +240,6 @@ export type AttentionWatchStore = Pick<
   | 'listWorkflowRuns'
   | 'listEventsForRuns'
 >;
-
-/** The occurrence an answer resolves; null for an item nobody answers. */
-function occurrenceOf(item: AttentionQueueItem): string | null {
-  const run = heldRunOf(item);
-  return run !== undefined && 'occurrence' in run ? run.occurrence : null;
-}
 
 /** What the queue reports for one run now: its row, its own item, its project. */
 interface RunView {
@@ -629,7 +624,7 @@ export async function watchAttentionQueue(
     run: WorkflowRun | null
   ): Promise<void> => {
     const runId = prev.run.id;
-    const occurrence = occurrenceOf(prev);
+    const occurrence = itemOccurrence(prev);
     const fromRow = run === null ? undefined : rowResolution(run, occurrence);
     const origin = occurrence === null ? undefined : answers.get(answerKey(runId, occurrence));
     const answered: Answered | undefined =
@@ -732,7 +727,7 @@ export async function watchAttentionQueue(
   ): Promise<void> => {
     if (filtersLabels && event.event_type === 'attention_labeled' && view?.item) {
       const { item } = view;
-      const occurrence = occurrenceOf(item);
+      const occurrence = itemOccurrence(item);
       if (
         occurrence !== null &&
         occurrence === event.data.occurrence &&

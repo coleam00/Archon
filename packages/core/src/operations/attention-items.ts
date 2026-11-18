@@ -7,7 +7,6 @@
  */
 import {
   askIdOfRef,
-  askQueueItem,
   isHeldByRun,
   leftByRun,
   readAttentionQueueItemByRef,
@@ -18,7 +17,7 @@ import {
   type AttentionQueueSource,
   type RunAttentionQueueItem,
 } from '@archon/workflows/attention-queue';
-import { waitQueueItem } from '@archon/workflows/overdue-waits';
+import { waitQueueItem, askQueueItem } from '@archon/workflows/queue-items-without-run';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import type { RecordSurface } from '@archon/workflows/schemas/record-surface';

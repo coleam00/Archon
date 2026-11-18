@@ -23,7 +23,7 @@ import { getWorkflowEventEmitter } from '../event-emitter';
 import { requireTerminalStatusWrite } from '../terminal-status-write';
 import { rootOutputFields, type DeclaredOutputPaths, type JsonValue } from '../output-ref';
 import { declaredOutcome, readCompletedOutcome } from '../completed-outcome';
-import { readCompletedAsks, readCompletedWaits } from '../completed-asks';
+import { readCompletedItemFacts, type CompletedItemFacts } from '../completed-asks';
 import {
   asksCheckoutMetadata,
   type AsksCheckout,
@@ -162,10 +162,7 @@ function completionResult(
 }
 
 /** What the run's returns node said the engine records with the completion. */
-type ReturnedResult = Omit<
-  NonNullable<Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3]>,
-  'startReceipts'
->;
+type ReturnedResult = CompletedItemFacts & { outcome?: RunCompletedOutcome };
 
 /**
  * The outcome, asks and waits the run completes with, or undefined when one is not of its
@@ -182,22 +179,12 @@ async function readReturnedResult(
     await failAtCompletion(ctx, outcome.error, runTranscriptUsage, 'dag.outcome_invalid_fail');
     return undefined;
   }
-  const asks = readCompletedAsks(workflow, workflowRun, nodeOutputs);
-  if (asks.kind === 'invalid') {
-    await failAtCompletion(ctx, asks.error, runTranscriptUsage, 'dag.asks_invalid_fail');
+  const left = readCompletedItemFacts(workflow, workflowRun, nodeOutputs);
+  if (left.kind === 'invalid') {
+    await failAtCompletion(ctx, left.error, runTranscriptUsage, left.site);
     return undefined;
   }
-  const waits = readCompletedWaits(workflow, workflowRun, nodeOutputs);
-  if (waits.kind === 'invalid') {
-    await failAtCompletion(ctx, waits.error, runTranscriptUsage, 'dag.waits_invalid_fail');
-    return undefined;
-  }
-  return {
-    ...(outcome.kind === 'outcome' ? { outcome: outcome.outcome } : {}),
-    // Present, even empty, whenever the run declares them: the write replaces the open set.
-    ...(asks.kind === 'asks' ? { asks: asks.asks } : {}),
-    ...(waits.kind === 'waits' ? { waits: waits.waits } : {}),
-  };
+  return { ...(outcome.kind === 'outcome' ? { outcome: outcome.outcome } : {}), ...left.facts };
 }
 
 /**

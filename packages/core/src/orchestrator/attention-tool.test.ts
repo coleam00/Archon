@@ -5,7 +5,8 @@ import type {
   AttentionQueueItem,
   AttentionQueueItemWithoutRun,
 } from '@archon/workflows/attention-queue';
-import { askQueueItem, projectRef, heldRunOf } from '@archon/workflows/attention-queue';
+import { projectRef, heldRunOf } from '@archon/workflows/attention-queue';
+import { askQueueItem } from '@archon/workflows/queue-items-without-run';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
