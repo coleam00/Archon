@@ -489,6 +489,7 @@ mock.module('../workflows/store-adapter', () => ({
 
 mock.module('../db/workflows', () => ({
   pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   getPausedWorkflowRun: mockGetPausedWorkflowRun,

@@ -17,14 +17,17 @@ const requested = {
 };
 
 function setup(run: WorkflowRun, owner: { owned?: boolean; answering?: boolean } = {}) {
-  const write = mock<IWorkflowStore['updateWorkflowRunMetadataIfRunning']>(async () => true);
+  const write = mock<IWorkflowStore['requestOperatorPause']>(async (_id, requested) => ({
+    requested,
+    alreadyRequested: false,
+  }));
   const operations = createWorkflowOperations({
     getUserRole: async () => undefined,
     store: {
       ...store,
       getWorkflowRun: async () => run,
       getRunAncestry: async () => [],
-      updateWorkflowRunMetadataIfRunning: write,
+      requestOperatorPause: write,
     },
     hostStore: { isolation: isolationStore },
     requestDetachedRunStop: mockRequestDetachedRunStop,
@@ -63,19 +66,7 @@ describe('pauseWorkflow', () => {
 
     expect(result.alreadyRequested).toBe(false);
     expect(result.requested).toMatchObject({ via: 'cli', by: { declared: 'ops' } });
-    expect(write).toHaveBeenCalledWith(run.id, {
-      operator_pause: { requested: result.requested },
-    });
-  });
-
-  test('a pending request is reported, not written again', async () => {
-    const run = running({ metadata: { operator_pause: requested } });
-    const { operations, write } = setup(run, { owned: true });
-
-    const result = await operations.pauseWorkflow(run.id, { kind: 'operator' }, 'cli');
-
-    expect(result).toMatchObject({ alreadyRequested: true, requested: requested.requested });
-    expect(write).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledWith(run.id, result.requested);
   });
 
   test.each([

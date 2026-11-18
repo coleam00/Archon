@@ -55,6 +55,7 @@ import type { DagResumeSnapshot } from './store/resume-snapshot';
 import type { WorkflowRunFailureOptions } from './workflow-run-failure';
 import type {
   FanOutCancelReason,
+  OperatorPauseRequest,
   SourceReleaseWrite,
   WorkflowCancellationEventDetails,
   WorkflowWaitCompletion,
@@ -611,6 +612,15 @@ export interface IWorkflowStore
     release: SourceReleaseWrite,
     beforePublish?: () => Promise<void>
   ): Promise<{ released: boolean }>;
+  /**
+   * Record an operator's pause request on a running run (`operatorPauseRequestWrite`),
+   * checked and written atomically: a request already pending is returned unchanged, so
+   * concurrent requests agree on one. Undefined when the run is missing or not running.
+   */
+  requestOperatorPause(
+    id: string,
+    requested: OperatorPauseRequest['requested']
+  ): Promise<OperatorPauseRequest | undefined>;
   /**
    * Claim-checked transition from running to paused for an operator's pending pause
    * request (`operatorPauseWrite`): records when it paused, `pause_cause: operator`, and

@@ -71,8 +71,7 @@ mock.module('@archon/core/workflows/sql-host', () => ({
         findChildRuns: (...args) => operationWorkflowDb.findChildRuns(...args),
         getRunAncestry: (...args) => operationWorkflowDb.getRunAncestry(...args),
         cancelWorkflowRun: (...args) => operationWorkflowDb.cancelWorkflowRun(...args),
-        updateWorkflowRunMetadataIfRunning: (...args) =>
-          operationWorkflowDb.updateWorkflowRunMetadataIfRunning(...args),
+        requestOperatorPause: (...args) => operationWorkflowDb.requestOperatorPause(...args),
         resolveApprovalGate: (...args) => operationWorkflowDb.resolveApprovalGate(...args),
         resolveAndCancelApprovalGate: (...args) =>
           operationWorkflowDb.resolveAndCancelApprovalGate(...args),

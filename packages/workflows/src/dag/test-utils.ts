@@ -263,6 +263,7 @@ export function createMockStore(): MockWorkflowStore {
       }
     ),
     pauseWorkflowRunForOperator: mock(unexpected('pauseWorkflowRunForOperator')),
+    requestOperatorPause: mock(unexpected('requestOperatorPause')),
     releasePausedRunSlot: mock(async () => ({ released: false })),
     answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
       throw new Error('Unexpected answerAttentionWait');

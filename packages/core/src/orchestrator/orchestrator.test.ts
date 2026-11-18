@@ -567,6 +567,7 @@ mock.module('../services/title-generator', () => ({
 // exercise the resume path. The default null return keeps execution on the "fresh run" branch.
 mock.module('../db/workflows', () => ({
   pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   getWorkflowRunForAttention: mock(async () => null),

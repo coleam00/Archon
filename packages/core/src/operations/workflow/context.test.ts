@@ -47,7 +47,10 @@ describe('run action authorization precedes effects and state validation', () =>
             resolveApprovalGate: write,
             resolveAndCancelApprovalGate: write,
             cancelWorkflowRun: write,
-            updateWorkflowRunMetadataIfRunning: async () => Boolean(await write()),
+            requestOperatorPause: async (_id, requested) => {
+              await write();
+              return { requested, alreadyRequested: false };
+            },
             signalWorkflowWait: write,
             deleteWorkflowRun: async () => {
               await write();
@@ -191,7 +194,10 @@ describe('starter, admin and operator can act through core', () => {
             resolveApprovalGate: write,
             resolveAndCancelApprovalGate: write,
             cancelWorkflowRun: write,
-            updateWorkflowRunMetadataIfRunning: async () => Boolean(await write()),
+            requestOperatorPause: async (_id, requested) => {
+              await write();
+              return { requested, alreadyRequested: false };
+            },
             signalWorkflowWait: async (id, cursor, payload) => {
               expect(workflowWaitContextSchema.parse(cursor)).toEqual(cursor);
               expect(cursor).not.toHaveProperty('futureField');

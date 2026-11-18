@@ -19,8 +19,10 @@ import {
   EXECUTION_CLAIM_METADATA_KEY,
   currentExecutionOwner,
   sourceReleasedEvent,
+  operatorPauseRequestWrite,
   operatorPauseWrite,
   type FanOutCancelReason,
+  type OperatorPauseRequest,
   type SourceReleaseWrite,
   type WorkflowCancellationEventDetails,
 } from '@archon/workflows/store';
@@ -635,6 +637,38 @@ export async function releaseRunForUnreadableSource(
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_source_release_failed');
     throw new Error(`Failed to release workflow run for unreadable source: ${err.message}`);
+  }
+}
+
+/** Record an operator's pause request on a running run (see `IWorkflowStore`). */
+export async function requestOperatorPause(
+  id: string,
+  requested: OperatorPauseRequest['requested']
+): Promise<OperatorPauseRequest | undefined> {
+  const dialect = getDialect();
+  try {
+    return await getDatabase().withTransaction(async query => {
+      const row = await lockedRunRow(query, id);
+      const write =
+        row &&
+        operatorPauseRequestWrite(
+          { status: row.status, metadata: normalizeMetadata(row.metadata) },
+          requested
+        );
+      if (write?.metadata) {
+        await query(
+          `UPDATE remote_agent_workflow_runs
+           SET metadata = ${dialect.jsonMerge('metadata', 2)}
+           WHERE id = $1 AND status = 'running'`,
+          [id, JSON.stringify(write.metadata)]
+        );
+      }
+      return write?.request;
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_operator_pause_request_failed');
+    throw new Error(`Failed to record an operator's pause request: ${err.message}`);
   }
 }
 

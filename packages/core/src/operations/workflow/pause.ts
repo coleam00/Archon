@@ -1,8 +1,5 @@
-import {
-  OPERATOR_PAUSE_METADATA_KEY,
-  operatorPause,
-  type OperatorPause,
-} from '@archon/workflows/schemas/operator-pause';
+import { operatorPause } from '@archon/workflows/schemas/operator-pause';
+import type { OperatorPauseRequest } from '@archon/workflows/store';
 import type { RecordSurface } from '@archon/workflows/schemas/record-surface';
 import { readExecutionOwner, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { itemAct } from '../item-act';
@@ -34,10 +31,8 @@ export class PauseRefusedError extends Error {
 }
 
 /** The recorded request; `alreadyRequested` when an earlier one was pending and nothing was written. */
-export interface PauseWorkflowResult {
+export interface PauseWorkflowResult extends OperatorPauseRequest {
   run: WorkflowRun;
-  requested: OperatorPause['requested'];
-  alreadyRequested: boolean;
 }
 
 /**
@@ -64,19 +59,14 @@ export async function pauseWorkflow(
   }
   assertPausable(run);
   await assertOwnerAnswers(ctx, run);
-  const pending = operatorPause(run);
-  if (pending !== null) return { run, requested: pending.requested, alreadyRequested: true };
-
   const requested = { at: new Date().toISOString(), ...(await itemAct(ctx.store, actor, via)) };
-  const recorded = await ctx.store.updateWorkflowRunMetadataIfRunning(run.id, {
-    [OPERATOR_PAUSE_METADATA_KEY]: { requested },
-  });
-  if (!recorded) {
+  const request = await ctx.store.requestOperatorPause(run.id, requested);
+  if (request === undefined) {
     const latest = await ctx.getRunOrThrow(run.id, 'operations.workflow_pause_lookup_failed');
     assertPausable(latest);
     throw new Error(`Run ${run.id} changed while its pause was being recorded; try again.`);
   }
-  return { run, requested, alreadyRequested: false };
+  return { run, ...request };
 }
 
 function assertPausable(run: WorkflowRun): void {

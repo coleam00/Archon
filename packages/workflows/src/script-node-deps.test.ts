@@ -164,6 +164,9 @@ function createMockStore(): IWorkflowStore {
     pauseWorkflowRunForOperator: mock<IWorkflowStore['pauseWorkflowRunForOperator']>(() => {
       throw new Error('Unexpected pauseWorkflowRunForOperator');
     }),
+    requestOperatorPause: mock<IWorkflowStore['requestOperatorPause']>(() => {
+      throw new Error('Unexpected requestOperatorPause');
+    }),
     releasePausedRunSlot: mock<IWorkflowStore['releasePausedRunSlot']>(() =>
       Promise.resolve({ released: false })
     ),

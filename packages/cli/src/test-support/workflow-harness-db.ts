@@ -95,6 +95,7 @@ export const mockCancelWorkflowRunCommand = mock<
 
 mock.module('@archon/core/db/workflows', () => ({
   pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   updateWorkflowRunMetadataIfRunning: mock(async () => true),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),

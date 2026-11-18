@@ -145,8 +145,8 @@ export const store: WorkflowOperationsDeps['store'] = {
   listWorkflowRuns: mockListWorkflowRuns,
   findWorkflowRunsByIdPrefix: async () => [],
   cancelWorkflowRun: mockCancelWorkflowRun,
-  updateWorkflowRunMetadataIfRunning: async () => {
-    throw new Error('Unexpected updateWorkflowRunMetadataIfRunning');
+  requestOperatorPause: async () => {
+    throw new Error('Unexpected requestOperatorPause');
   },
   cancelResumableRunsForConversation: mockCancelResumableRunsForConversation,
   findChildRuns: mockFindChildRuns,

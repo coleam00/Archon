@@ -77,6 +77,7 @@ export {
   cancelResumableRunsForConversation,
   releaseRunForUnreadableSource,
   pauseWorkflowRunForOperator,
+  requestOperatorPause,
   type WorkflowRunInsert,
 } from './workflow-run-transitions';
 export {

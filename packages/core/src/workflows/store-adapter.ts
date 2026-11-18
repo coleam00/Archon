@@ -269,6 +269,7 @@ export function createWorkflowStore(): IWorkflowStore {
     deferWorkflowContinuation: workflowDb.deferWorkflowContinuation,
     releaseRunForUnreadableSource: workflowDb.releaseRunForUnreadableSource,
     pauseWorkflowRunForOperator: workflowDb.pauseWorkflowRunForOperator,
+    requestOperatorPause: workflowDb.requestOperatorPause,
     answerAttentionWait: workflowDb.answerAttentionWait,
     labelAttentionWait: workflowDb.labelAttentionWait,
     listAttentionQueueRows: () => workflowDb.listAttentionQueueRows(),

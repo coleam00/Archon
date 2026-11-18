@@ -16,9 +16,10 @@ async function running(store: IWorkflowStore) {
 
 async function requested(store: IWorkflowStore) {
   const run = await running(store);
-  expect(await store.updateWorkflowRunMetadataIfRunning(run.id, { operator_pause: request })).toBe(
-    true
-  );
+  expect(await store.requestOperatorPause(run.id, request.requested)).toEqual({
+    requested: request.requested,
+    alreadyRequested: false,
+  });
   return run;
 }
 
@@ -27,6 +28,36 @@ export function describeOperatorPauseConformance(getStore: () => IWorkflowStore)
     let store: IWorkflowStore;
     beforeEach(() => {
       store = getStore();
+    });
+
+    test('records one request; a later one gets the pending request back unwritten', async () => {
+      const run = await requested(store);
+      const later = { ...request.requested, at: '2026-01-01T00:05:00.000Z', via: 'web' };
+
+      expect(await store.requestOperatorPause(run.id, later)).toEqual({
+        requested: request.requested,
+        alreadyRequested: true,
+      });
+      expect(readOperatorPauseRecord((await store.getWorkflowRun(run.id))?.metadata)).toEqual(
+        request
+      );
+    });
+
+    test('records no request on a run that is missing or not running', async () => {
+      const pending = await store.createWorkflowRun({
+        workflow_name: 'operator-pause',
+        user_message: '',
+      });
+      const gated = await running(store);
+      await store.pauseWorkflowRun(gated.id, approval);
+      for (const id of [pending.id, gated.id]) {
+        const before = await store.getWorkflowRun(id);
+        expect(await store.requestOperatorPause(id, request.requested)).toBeUndefined();
+        expect(await store.getWorkflowRun(id)).toEqual(before);
+      }
+      expect(await store.requestOperatorPause(crypto.randomUUID(), request.requested)).toBe(
+        undefined
+      );
     });
 
     test('pauses only a running run with a pending request under its own claim', async () => {
@@ -41,6 +72,7 @@ export function describeOperatorPauseConformance(getStore: () => IWorkflowStore)
         [gated.id, executionClaim(gated.metadata)],
         [unrequested.id, executionClaim(unrequested.metadata)],
         [otherClaim.id, 'another-owner'],
+        [crypto.randomUUID(), null],
       ];
       for (const [id, claimId] of refusals) {
         const before = await store.getWorkflowRun(id);

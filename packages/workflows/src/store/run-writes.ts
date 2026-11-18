@@ -6,7 +6,9 @@ import type { RunCancelReason } from '../schemas/run-terminal-reason';
 import type { ExecutionOwnerRecord } from '../schemas/run-metadata';
 import {
   OPERATOR_PAUSE_METADATA_KEY,
+  operatorPause,
   readOperatorPauseRecord,
+  type OperatorPause,
   type OperatorPauseRecord,
 } from '../schemas/operator-pause';
 import type { WorkflowRun } from '../schemas/workflow-run';
@@ -133,6 +135,32 @@ export function sourceReleasedEvent(
       error: release.error,
       retry_at: release.retryAt,
     },
+  };
+}
+
+/** The pause request a running run holds after an operator asked; `alreadyRequested` when an earlier one was pending. */
+export interface OperatorPauseRequest {
+  requested: OperatorPause['requested'];
+  alreadyRequested: boolean;
+}
+
+/**
+ * What every store's `requestOperatorPause` does to `run`, decided under its lock: nothing
+ * when the run is not running, nothing but report the pending request when one is, otherwise
+ * write `requested` as the run's request.
+ */
+export function operatorPauseRequestWrite(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>,
+  requested: OperatorPause['requested']
+): { request: OperatorPauseRequest; metadata?: Record<string, unknown> } | undefined {
+  if (run.status !== 'running') return undefined;
+  const pending = operatorPause(run);
+  if (pending !== null)
+    return { request: { requested: pending.requested, alreadyRequested: true } };
+  const record: OperatorPauseRecord = { requested };
+  return {
+    request: { requested, alreadyRequested: false },
+    metadata: { [OPERATOR_PAUSE_METADATA_KEY]: record },
   };
 }
 
