@@ -131,6 +131,14 @@ export function createFileAdmissionStore(
     };
   }
   return {
+    // The file store keeps no install hold: it is never set, and setting it is refused.
+    getInstallHold: async () => null,
+    setInstallHold: async () => {
+      throw new FileStoreUnsupportedError('install hold');
+    },
+    liftInstallHold: async () => null,
+    listHeldStarts: async () => [],
+    listHeldItemStarts: async () => [],
     admitResourceStart: intent => write((tx, runs) => tx.admit(intent, runs)),
     admitPendingRun: ({ resource, capacity, launch }) =>
       write(tx => tx.admitPending(resource, capacity, preparedWorkflowLaunchSchema.parse(launch))),

@@ -241,6 +241,23 @@ export async function runTrigger({
   return 0;
 }
 
+export async function runHold({
+  subcommand,
+  values,
+  forgeTrustedEnv,
+}: CliRouteContext): Promise<number> {
+  const { holdCommand } = await loadRoute(() => import('../commands/hold'), {
+    database: await usesDatabaseStore(),
+  });
+  const { spawnAdmitted } = await import('../commands/trigger');
+  const { createCliWorkflowHost } = await import('../utils/workflow-host');
+  // Lifting prepares the held starts and admits them, as `trigger drain` does.
+  const host = await createCliWorkflowHost({ forgeTrustedEnv });
+  return await holdCommand(host, subcommand, { json: values.json === true }, (requestId, hostId) =>
+    spawnAdmitted(host, requestId, hostId)
+  );
+}
+
 export async function runVersion(): Promise<number> {
   const { versionCommand } = await import('../commands/version');
   await versionCommand();
