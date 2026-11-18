@@ -35,7 +35,7 @@ import { declaredOutcome, outcomeValues } from '@archon/workflows/completed-outc
 import { resolveWorkflowName } from '@archon/workflows/router';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import type { EndedCheckout } from './ended-checkout';
+import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
 import { getArchonHome } from '@archon/paths';
 
 /** `ARCHON_HOME/triggers`: where run-ended trigger files are read from. */
@@ -225,8 +225,9 @@ export interface RunEndedStartsDependencies {
    */
   projectKeyOf: (cwd: string) => Promise<string | null>;
   /**
-   * The checkout the ended run left, for a binding with `checkout: "ended-run"`. Read at
-   * most once per completion, and only when such a binding matches.
+   * The checkout the ended run left, for a binding with `checkout: "ended-run"` (or, at
+   * the completion of an asking run, `checkout: "asking-run"`). Read at most once per
+   * completion, and only when such a binding matches.
    */
   endedCheckout: (run: WorkflowRun) => Promise<EndedCheckout>;
   now?: () => Date;
@@ -316,7 +317,8 @@ export async function bindingProjectKey(
  * The receipt one matched binding writes: matched with the mapped inputs as event inputs,
  * or unmatched naming the input that did not resolve or the checkout that was refused.
  * Keyed by the binding's source and `deliveryId` (the run the start is about), so a replay
- * never starts it twice. `checkout` is read only for a run-ended `checkout: "ended-run"`.
+ * never starts it twice. `checkout` is given only for a binding that takes another run's
+ * checkout (`checkout: "ended-run"` or `checkout: "asking-run"`).
  */
 export function bindingReceipt(
   candidate: OnBindingFile,

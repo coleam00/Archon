@@ -3,6 +3,7 @@
  * whether it is replayed from a prior pass, skipped, or dispatched, and folding each
  * layer's results into the shared run context.
  */
+import { observeReturnsCheckout } from '../run-result';
 import { ParentStatusReadError } from '../parent-status-read';
 import { isWorkflowExecutionInterruption } from '../execution-interruption';
 import { peerAdmissions } from '../interaction-admission';
@@ -141,6 +142,9 @@ async function runLayerPhase(
     ctx.interactionAdmission && layer.some(canSuspend)
       ? peerAdmissions(ctx.interactionAdmission, layer.length)
       : undefined;
+  // Mixed checkout guards still require sequential execution within each phase.
+  const sequential = serializeLayer && layer.some(isCheckoutGuarded);
+  const mayRun = sequential ? undefined : new Set(layer.map(node => node.id));
   const nodeThunks = layer.map(
     (node, index): (() => Promise<LayerNodeResult>) =>
       async (): Promise<LayerNodeResult> => {
@@ -157,6 +161,7 @@ async function runLayerPhase(
         };
         try {
           const admitted = await admitNode(nodeCtx, node);
+          if (admitted !== undefined) mayRun?.delete(node.id);
           if (admitted !== undefined) {
             await releaseAdmittedScratch(
               nodeCtx,
@@ -174,6 +179,8 @@ async function runLayerPhase(
                 () => dispatchNode(nodeCtx, node, isParallelLayer)
               )
             ));
+          if (admitted === undefined)
+            await observeReturnsCheckout(nodeCtx, node.id, result.output, mayRun);
           if (result.output.state === 'failed') nodeCtx.interactionAdmission?.failed(node.id);
           return result;
         } catch (error) {
@@ -187,11 +194,9 @@ async function runLayerPhase(
         }
       }
   );
-  // Mixed checkout guards still require sequential execution within each phase.
-  const layerResults =
-    serializeLayer && layer.some(isCheckoutGuarded)
-      ? await settleSequentially(nodeThunks)
-      : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
+  const layerResults = sequential
+    ? await settleSequentially(nodeThunks)
+    : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
 
   const layerHadFailure = await aggregateLayerResults(ctx, layer, layerResults, isParallelLayer);
   settledValuesOrThrow(layerResults, ctx.workflowRun.id);

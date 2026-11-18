@@ -8,7 +8,7 @@ import type { WebAdapter } from './adapters/web';
 import { registerApiRoutes } from './routes/api';
 import type { AppCommit } from './routes/schemas/system.schemas';
 import type { AttentionRouter } from './services/attention-router';
-import type { ItemTracker } from './services/item-tracker';
+import type { ItemTracker } from '@archon/adapters/item-tracker/item-tracker';
 import type { WebPushDestination } from './services/web-push';
 import {
   registerGiteaWebhookRoute,

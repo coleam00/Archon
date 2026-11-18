@@ -301,6 +301,14 @@ function convert(schema: unknown, path: string, enums: Enums): string {
   if (!isRecord(schema)) {
     throw new UnsupportedSchemaError('schema', path, 'must be an object or a boolean');
   }
+  // `{ not: {} }` admits nothing, like `false`; zod states its never type this way.
+  if (
+    Object.keys(schema).length === 1 &&
+    isRecord(schema.not) &&
+    Object.keys(schema.not).length === 0
+  ) {
+    return 'never';
+  }
   const unsupported = Object.keys(schema).find(
     key => !SHAPE_KEYWORDS.has(key) && !SHAPELESS_KEYWORDS.has(key)
   );

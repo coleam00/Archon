@@ -16,6 +16,7 @@ import { type Ask, clipped, type DecisionEntry, withDecision } from './queue.ts'
 import {
   type Claim,
   type HistoryEntry,
+  itemKey,
   newest,
   type Pickup,
   parseWorkItem,
@@ -294,7 +295,9 @@ export function nextRound(item: QualifiedPr, runId: string): string {
     input('build_queue_binding'),
     `build-round:${host}/${path}#${String(item.number)}:${runId}`,
     { repo_host: host, repo_path: path, number: String(item.number) },
-    'its next round'
+    'its next round',
+    undefined,
+    itemKey(item.number)
   );
 }
 

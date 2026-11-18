@@ -76,7 +76,7 @@ the Archon user their platform identity resolves to; link it to your existing us
 
 ## Show progress on the item's tracker
 
-`archon serve` can keep one status comment on the issue or pull request an [item](/reference/cli/#items) is about, and post a new comment when someone has to act or the work is over, so someone reading the tracker sees what Archon is doing with it without opening Archon. It is off unless `~/.archon/config.yaml` turns it on; repository config cannot carry it:
+Archon can keep one status comment on the issue or pull request an [item](/reference/cli/#items) is about, and post a new comment when someone has to act or the work is over, so someone reading the tracker sees what Archon is doing with it without opening Archon. It is off unless `~/.archon/config.yaml` turns it on; repository config cannot carry it:
 
 ```yaml
 itemTracker:
@@ -104,9 +104,17 @@ Answer from the commands; a reply on the tracker is not read.
 
 Archon adds no local paths, user names or ids, prompts, chat messages, node progress, logs, run results or error text to a comment; a failed run shows only its status. The text of a question, an ask or a ruling is posted as it was written, without redaction, so what its author put in it is what the tracker shows. Cost and token counts appear only with `includeUsage: true`.
 
-Writes go through the forge plugin's `workitem.comment.upsert` operation. At startup the server checks each project's plugin once: a plugin that does not claim the host, lacks the operation or has no credential is logged as `item_tracker.misconfigured`, shows as `tracker:<project>` with state `misconfigured` in `/api/health`, and writes nothing until a restart. A write that fails is logged as `item_tracker.write_failed` and retried on the next scan; one the forge refuses for good, such as a key naming an issue that does not exist, is not retried until a restart. A failed write never fails or delays a run.
+A server is optional. Three paths bring the tracker up to date, each with the same pass over every tracked project:
 
-Turning the tracker on writes nothing for what an item already holds: the first startup records its ended runs, open questions, open asks and rulings as shown. The tracker counts as on from the first time `archon serve` finds a run on the project; a run that starts and ends while the server is down before then is treated as history too. Only `archon serve` writes the comment; a CLI-only install writes none. Two installs, or two projects, that map the same issue edit the same comment, which is not supported.
+- **`archon serve`** runs a pass every 5 seconds.
+- **A CLI process that may have started, paused, resumed or ended a run**, such as `workflow run`, `workflow approve`, `workflow cancel` or `trigger fire`, runs one pass on its way out, after the command's work. A detached run's own process runs one when the run ends. A tracker pass never changes the command's exit code; a pass it could not finish is logged and left for the next one.
+- **[`archon tracker sync`](/reference/cli/#tracker)** runs one pass on demand, for example from a schedule, and reports what it posted.
+
+One pass per project runs at a time, across every process on the database, so a server and a CLI process never post the same comment twice or edit the status comment out of order. A pass that finds another process running the project's pass asks it for one more pass and leaves the work to it; the server's timer does not ask, since it comes back in 5 seconds. A pass held by a process that is gone is taken over once the holder's own host can prove it gone. A holder on another host stays held until that host runs a pass, or until `archon tracker release <project>` lets go of it. The release cannot check whether a holder on another host stopped: a holder still running its pass keeps posting while the next pass runs, so the two can post a comment twice or edit the status comment out of order. Release a holder on another host only after confirming its process is gone.
+
+Writes go through the forge plugin's `workitem.comment.upsert` operation. Each process checks each project's plugin once, before its first pass, so a running server checks only at startup. A plugin that does not claim the host, lacks the operation or has no credential is logged as `item_tracker.misconfigured`, and that project gets nothing from that process: the server shows it as `tracker:<project>` with state `misconfigured` in `/api/health` until a restart, and `tracker sync` reports it and exits 1. A write that fails is logged as `item_tracker.write_failed` and stays owed for the next pass; one the forge refuses for good, such as a key naming an issue that does not exist, is not retried by the same process, so a running server tries it again only after a restart and each CLI pass tries it once. A failed write never fails or delays a run.
+
+Turning the tracker on writes nothing for what an item already holds: the first process to activate a project records the ended runs, open questions, open asks and rulings already there as shown. The server activates at startup, a CLI process before it can start, resume or pause a run, and `tracker sync` before its pass. The tracker counts as on from that first activation; anything that happens after it is posted by the next pass, whichever process runs it. Two installs, or two projects, that map the same issue edit the same comment, which is not supported.
 
 ## Find your run-as user ID
 
@@ -396,7 +404,7 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
 
 ### See how a pack's stages connect
 
-`archon pack graph <pack> --json`, or `GET /api/packs/{pack}/graph?codebaseId=<id>`, reads a pack's stages and the run-ended arrows between them for one project. A drawing, a console view or an agent can build from it alone. A pack with stages `plan`, `build` and `ship`, whose `.pack/pack.yaml` declares `build-after-plan` and `ship-after-build`, with only the first file copied into the triggers directory:
+`archon pack graph <pack> --json`, or `GET /api/packs/{pack}/graph?codebaseId=<id>`, reads a pack's stages and the arrows between them for one project: a run that ended with an outcome, or the settling of the asks a run left. A drawing, a console view or an agent can build from it alone. A pack with stages `plan`, `build` and `ship`, whose `.pack/pack.yaml` declares `build-after-plan` and `ship-after-build`, with only the first file copied into the triggers directory:
 
 ```json
 {
@@ -476,6 +484,7 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
 - `nodes` are the stage's nodes after includes are expanded, under the ids its runs record (`<include>__<id>`); `blocks` names the include each came from, outermost first. A `loop_group` is a node, and its body follows it: each body node has `loopGroup` set to the group's id, and its `id` and `dependsOn` are the step names its runs are recorded under (`<group>.<id>`, composing across nested groups, as in `rounds.review__check`). A body's included blocks are named the same way (`rounds.review`). An `include:` with `fan_out:` is one `compose_fan_out` node, because its width is known only at run time; its `fanOut.workflow` names its body in `fanOutBlocks`, which lists each such body's nodes once, including bodies a body fans out to.
 - An arrow is `active` when a trigger file launches it in this project. A declared arrow with no file is reported with `active: false`, not left out. `to` may be a workflow outside the pack. An active arrow's `installed.problems` is what `archon trigger check` reports as the check a run gets before it starts: when it is not empty, every run of `from.stage` on an item is refused before it starts, so the arrow starts nothing until the file is fixed. A file whose `launch.cwd` no longer exists is in no project, so the end of a run never starts it; it is shown with that problem because which project it was meant for cannot be known.
 - A declared binding that names a workflow which is not a stage as the pack loaded keeps the name as written, and its `declared.problems` says so. When that stage failed to load, its load error is in `discoveryErrors`; the rest of the graph is still read.
+- An arrow from an [asks-settled binding](#start-a-stage-again-when-its-asks-are-answered) has `from: { "stage", "settled" }` in place of `outcome`, where `settled` is the binding's `answered`, `withdrawn` or `any`. It starts nothing for an outcome, so it does not change `startsNothing`.
 - `startsNothing` marks an outcome no active arrow without problems leaves. With `asks: false` such an outcome ends in silence; whether that is right is the pack's call.
 - `discoveryErrors` lists every workflow that failed to load from the source the pack was read from. A stage that failed is missing from `stages`, so a non-empty list means the graph may be incomplete.
 - When the pack's workflows are not in the checkout, pass `--workflow-source <dir>` (`workflowSource=` on the API), the directory a binding's `launch.discoveryCwd` names. The arrows are still those of the checkout's project.
@@ -596,6 +605,8 @@ The values are resolved when the set settles and frozen into the start's receipt
 archon trigger fire --config ~/.archon/triggers/build-after-answers.json --item <key> --inputs inputs.json
 ```
 
+A binding with `checkout`, which a fire refuses, is recovered [as below](#work-in-the-checkout-the-asking-run-left).
+
 The start is written in the same database transaction that records the settlement, so it exists exactly when the settlement does, and a set settles once, so answering the last ask twice starts the stage once. The files are read at every close of an ask. A file that is not JSON or has an invalid `on`, or two files with `on` that share a `sourceInstanceId`, refuses the close that would settle a set, naming the file, and nothing is recorded; fix the file and answer again. A run on an item is refused before it starts when an asks-settled binding for its workflow in its project names a missing stage or an input either workflow does not declare, so a broken binding is found before the asking stage does any work.
 
 Answering is not starting. Who may answer or withdraw an ask is unchanged: the rule of the run that left it. The started run acts as the binding's `runAsUserId`, as any binding start does, so an operator who may answer and may not start work still only answers.
@@ -603,6 +614,44 @@ Answering is not starting. Who may answer or withdraw an ask is unchanged: the r
 `archon workflow runs --item <key>` shows the started run's `cause` as `{"kind": "asks_settled", "runId"}`, naming the run whose asks they were. The receipt records that run as its `sourceActor` (`{"source": "archon-asks-settled", "id": <run id>, "display": "answered" | "withdrawn"}`) and uses its ID as the delivery ID. `archon trigger check` lists asks-settled bindings under `asksSettled` and reports one whose asking workflow declares no `returns.asks`.
 
 Asks-settled bindings need the database store, as asks do. A [`wait: attention`](/reference/workflow-language/) node is unchanged: it pauses its own run and resumes it with the answer, and starts nothing.
+
+A workflow pack can declare this binding as an [`asks_settled:` binding](/reference/workflow-language/#pack-bindings); [`archon pack bindings`](/reference/cli/#pack-bindings) writes it, checked, and `archon trigger add` registers it.
+
+### Work in the checkout the asking run left
+
+By default the started run gets a fresh worktree cut from the base branch. With `"checkout": "asking-run"` in `on.asksSettled`, it works on the branch of the run that left the asks, at the commit that run ended on: a build that stopped to ask continues its change once the answer is in. The rules are those of [`checkout: "ended-run"`](#work-in-the-checkout-the-ended-run-left): the binding's `launch.isolation` must be `{ "kind": "default" }`, a workflow that changes its checkout continues on the branch, one with `mutates_checkout: false` gets a worktree of its own cut at the commit, and a start never falls back to the base branch.
+
+```json
+"on": {
+  "asksSettled": {
+    "workflowName": "build",
+    "settled": "answered",
+    "checkout": "asking-run",
+    "inputs": { "decisions": { "answers": true } }
+  }
+}
+```
+
+The branch and commit are read when the asking run completes, not when its asks settle, and kept on that run's record with the worktree that holds them: the run's own, or, for an asking run with `mutates_checkout: false`, the worktree of the run whose checkout it was given. Completion keeps the asking run's own worktree, where it would otherwise have removed it: its terminal record says `retained` with reason `in_use`. Nothing else holds a worktree while the asks are open, so `archon isolation cleanup` can still remove it, and then the start is refused. When the last ask closes and the worktree is still there, the branch and commit are handed to the start and shown on its receipt as `checkoutFrom`. The start checks the worktree again when it runs, so one removed while the start waited for its host or its resource is refused too; unlike `checkout: "ended-run"`, the branch is never checked out again in a new worktree.
+
+The start is refused, naming why:
+
+- **The asking run left no branch** (it ran in place, its worktree was gone or on another branch when it completed), **its worktree is gone when the asks settle**, **its record is gone**, or **it recorded no checkout**, because the file gained `checkout` after the run completed or an older Archon ran it. The receipt is `unmatched` with a `reason` that begins `Checkout:`; `archon trigger list` shows it.
+- **The worktree is gone when the start runs.** The started run fails before its first node with `launch_failed`, naming the worktree.
+- **The branch moved after the asking run's commit, or is gone.** This holds for a stage with `mutates_checkout: false` too: its copy is cut only while the branch is still at that commit. The started run fails before its first node with `launch_failed`, and `archon workflow get <run-id>` shows the branch, the commit it is at and the commit the asking run ended on.
+
+`archon trigger check`, and the check a run gets before it starts, report a binding whose asking or started workflow pins `worktree.enabled: false`. `archon trigger fire` refuses a file with `checkout`, because a fire has no asking run.
+
+To start a refused stage by hand, adopt the run that holds the checkout, not necessarily the asking run. It is `metadata.asks_checkout.handoff.runId` in `archon workflow get <asking-run-id> --json`: the asking run itself, or, for an asking stage with `mutates_checkout: false`, the run whose checkout it was given. The read-only stage's own copy is throwaway, and adopting it is refused once it is cleaned up, as for [a read-only check](#work-in-the-checkout-the-ended-run-left). When the answer that settled the set prints the stage as not started, it names that run in the command it prints.
+
+Pass what the binding would have passed, too. `--adopt` carries the checkout, not the answers or inputs, and a stage started without its answers runs without the decisions. Read the answers from `archon workflow runs --item <key> --json` (the `answers` entries of kind `ask` whose `runId` is the asking run) and the asking run's inputs from `archon workflow get <asking-run-id> --json`, then give each input the binding maps with `--input`:
+
+```bash
+archon workflow run build --adopt <holder-run-id> --item <key> \
+  --input decisions="$(cat decisions.json)" --input plan="<the asking run's plan>"
+```
+
+When `asks_checkout` records a refusal or nothing, or the worktree or branch is gone, or the branch moved, run the asking workflow again on the item instead: adoption continues the branch as it is now and does not check the commit.
 
 ### Who prepares the start
 

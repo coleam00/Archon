@@ -9,6 +9,7 @@
     "./run-preflight": "./src/run-preflight.ts",
     "./start-refusal": "./src/start-refusal.ts",
     "./run-credential-env": "./src/run-credential-env.ts",
+    "./run-forge-access": "./src/run-forge-access.ts",
     "./run-paths": "./src/run-paths.ts",
     "./run-source": "./src/run-source.ts",
     "./resume-transition": "./src/resume-transition.ts",
@@ -26,6 +27,8 @@
     "./attention-watch": "./src/attention-watch.ts",
     "./attention-needs": "./src/attention-needs.ts",
     "./item-read": "./src/item-read.ts",
+    "./item-window": "./src/item-window.ts",
+    "./item-metrics": "./src/item-metrics.ts",
     "./item-hold": "./src/item-hold.ts",
     "./pack-graph": "./src/pack-graph.ts",
     "./workflow-notice": "./src/workflow-notice.ts",
@@ -92,6 +95,7 @@
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
+    "@archon/forge": "workspace:*",
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",
     "@archon/provider-contract": "workspace:*",

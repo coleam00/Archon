@@ -10,6 +10,7 @@ import {
   type PreparedRunAiConfiguration,
   WorkflowCredentialPreflightError,
 } from '@archon/workflows/run-preflight';
+import { assertRunForgeAccess } from '@archon/workflows/run-forge-access';
 import {
   requireTerminalStatusWrite,
   TerminalStatusWriteError,
@@ -335,10 +336,7 @@ async function prepareBinding(
       isolation = resolveBindingIsolation(intent.launch.isolation, workflow, codebase);
     }
 
-    source = await finalizeWorkflowSource(host.deps, source, {
-      cwd,
-      codebaseId: codebase.id,
-    });
+    source = await finalizeWorkflowSource(host.deps, source, { cwd, codebaseId: codebase.id });
     owner.hold(source);
     const origin: ResourceStartRunMetadata = {
       receiptId: identity.receiptId,
@@ -349,6 +347,8 @@ async function prepareBinding(
       userId: intent.runAsUserId,
       runConfig,
     });
+    // Before admission, so a binding its forge cannot serve never takes a slot.
+    await assertRunForgeAccess(host.deps, workflow, preparedAi, { cwd, codebaseId: codebase.id });
     const launch: PreparedWorkflowLaunch = {
       version: 2,
       run: {

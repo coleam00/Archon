@@ -187,6 +187,14 @@ export function workItemName(number: number): string {
   return `work/${String(number)}`;
 }
 
+/**
+ * The engine item an issue's runs are on. The event bindings in `.pack/pack.yaml` map the
+ * same key, so every run about one issue reads as one history (`archon workflow runs --item`).
+ */
+export function itemKey(number: number): string {
+  return `issue-${String(number)}`;
+}
+
 export function bodyDigest(body: string): string {
   return `sha256:${createHash('sha256').update(body, 'utf8').digest('hex')}`;
 }

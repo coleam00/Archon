@@ -182,6 +182,41 @@ describe('validateWorkflowsCommand', () => {
     }
   });
 
+  test('warns about a declared forge operation no installed plugin advertises', async () => {
+    const entry = discoverPackWorkflow();
+    entry.workflow.pack = {
+      key: 'example',
+      source: 'project',
+      forge: { operations: ['pr.view', 'made.up'] },
+    };
+    // An install with only the source GitHub plugin, which advertises `pr.view`.
+    const home = join(validationCwd, 'home');
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, 'config.yaml'), 'forge:\n  scanPath: false\n');
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      expect(
+        await validateWorkflowsCommand(validationCwd, 'packed', true, {
+          HOME: home,
+          ARCHON_HOME: home,
+          PATH: process.env.PATH,
+        })
+      ).toBe(0);
+      const output = JSON.parse(String(write.mock.calls[0]?.[0]));
+      expect(output.results[0].issues).toEqual([
+        expect.objectContaining({
+          level: 'warning',
+          field: 'pack_forge',
+          message: expect.stringContaining(
+            "pack 'example' needs forge operation 'made.up', which no installed forge plugin advertises (installed: github"
+          ),
+        }),
+      ]);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   test('accepts valid or absent pack settings without requiring invocation inputs', async () => {
     discoverPackWorkflow();
     expect(await validateWorkflowsCommand(validationCwd)).toBe(0);

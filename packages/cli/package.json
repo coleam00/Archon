@@ -192,6 +192,9 @@
       "src/commands/metrics.test.ts"
     ],
     [
+      "src/commands/tracker.test.ts"
+    ],
+    [
       "src/cli.test.ts",
       "src/workflow-scope-boot.test.ts",
       "src/help.test.ts",
@@ -201,7 +204,8 @@
       "src/utils/safe-console.test.ts",
       "src/utils/cli-start-telemetry.test.ts",
       "src/utils/cli-program-arguments.test.ts",
-      "src/utils/run-job-escape.test.ts"
+      "src/utils/run-job-escape.test.ts",
+      "src/utils/tracker-exit.test.ts"
     ],
     [
       "src/utils/detached-resume-receipt.test.ts"

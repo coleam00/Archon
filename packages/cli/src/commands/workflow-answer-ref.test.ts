@@ -37,6 +37,7 @@ describe('the starts a settling answer reports', () => {
       getStartReceipt: async () => {
         throw new Error('receipt read unavailable');
       },
+      getWorkflowRun: async () => null,
     });
     expect(starts.json).toEqual({
       startsUnread: { receiptIds: [CAUSED.receipt.id], error: 'receipt read unavailable' },

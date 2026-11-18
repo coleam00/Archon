@@ -20,6 +20,7 @@ import type { MergedConfig } from '../config/config-types';
 import * as itemsDb from '../db/items';
 import * as itemLinksDb from '../db/item-links';
 import * as itemRulingsDb from '../db/item-rulings';
+import * as itemMergesDb from '../db/item-merges';
 import * as itemAsksDb from '../db/item-asks';
 import * as workflowDb from '../db/workflows';
 import * as resourceStarts from '../db/resource-starts';
@@ -47,7 +48,11 @@ import {
   launchProjectKey,
   type RunEndedStartsDependencies,
 } from './run-ended';
-import { createAsksSettledPreflight, createAsksSettledStarts } from './asks-settled';
+import {
+  createAsksCheckout,
+  createAsksSettledPreflight,
+  createAsksSettledStarts,
+} from './asks-settled';
 import { createEndedCheckout } from './ended-checkout';
 import { registeredProjectKeyForPath } from '../services/codebase-checkout-resolver';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
@@ -176,6 +181,9 @@ export function createWorkflowStore(): IWorkflowStore {
     listItemRulings: itemRulingsDb.listItemRulings,
     recordItemRuling: itemRulingsDb.recordItemRuling,
     withdrawItemRuling: itemRulingsDb.withdrawItemRuling,
+    listItemsInWindow: itemsDb.listItemsInWindow,
+    getItemMerge: itemMergesDb.getItemMerge,
+    recordItemMerge: itemMergesDb.recordItemMerge,
     listItemLinks: itemLinksDb.listItemLinks,
     recordItemLink: itemLinksDb.recordItemLink,
     endItemLink: itemLinksDb.endItemLink,
@@ -366,6 +374,10 @@ export function createWorkflowDeps(
   };
   const runEndedPreflight = createRunEndedPreflight(onBindings);
   const asksSettledPreflight = createAsksSettledPreflight(onBindings);
+  // Only the SQL store records items, so only its runs reach this.
+  const endedCheckout = createEndedCheckout({
+    findEnvironmentByPath: isolationEnvironmentsDb.findLatestByCodebaseAndWorkingPath,
+  });
   return {
     store,
     ...(credentialStore === 'database'
@@ -377,12 +389,11 @@ export function createWorkflowDeps(
         }
       : {}),
     credentialStore,
-    runEndedStarts: createRunEndedStarts({
+    runEndedStarts: createRunEndedStarts({ ...onBindings, endedCheckout }),
+    asksCheckout: createAsksCheckout({
       ...onBindings,
-      // Only the SQL store records items, so only its runs reach this.
-      endedCheckout: createEndedCheckout({
-        findEnvironmentByPath: isolationEnvironmentsDb.findLatestByCodebaseAndWorkingPath,
-      }),
+      endedCheckout,
+      getRun: id => store.getWorkflowRun(id),
     }),
     // A run is refused before it starts for a broken binding its end or its asks could fire.
     checkRunEndedBindings: async run => {

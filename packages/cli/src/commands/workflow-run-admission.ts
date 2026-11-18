@@ -12,6 +12,7 @@ import {
   assertRunCredentials,
   type PreparedRunAiConfiguration,
 } from '@archon/workflows/run-preflight';
+import { assertRunForgeAccess } from '@archon/workflows/run-forge-access';
 import {
   prepareWorkflowSource,
   recordSelectedWorkflow,
@@ -570,10 +571,32 @@ export type LaneConfigSource =
   | { kind: 'checkout'; cwd: string; recapture: boolean; codebaseId: string | undefined };
 
 /**
- * Prepare and preflight the run's AI configuration from the checkout its lane executes.
+ * Prepare and preflight the run's AI configuration from the checkout its lane executes,
+ * then, for a fresh run, its pack's forge needs against the repository's remotes.
  * Without an explicit source, an adopted lane's own `.archon` is recaptured first.
  */
 export async function prepareLaneAiConfiguration(
+  request: OwnedRunRequest,
+  admission: OwnedRunAdmission,
+  lane: LaneConfigSource,
+  executesInContainer: boolean
+): Promise<PreparedRunAiConfiguration> {
+  const prepared = await prepareLaneCredentials(request, admission, lane, executesInContainer);
+  if (!admission.isContinuation) {
+    // A branch lane's config is read from an archive of the branch, which has no remotes.
+    const repository =
+      lane.kind === 'branch'
+        ? { cwd: lane.codebase.default_cwd, codebaseId: lane.codebase.id }
+        : { cwd: lane.cwd, codebaseId: lane.codebaseId };
+    await assertRunForgeAccess(request.host.deps, admission.workflow, prepared, {
+      ...repository,
+      inContainer: executesInContainer,
+    });
+  }
+  return prepared;
+}
+
+async function prepareLaneCredentials(
   request: OwnedRunRequest,
   admission: OwnedRunAdmission,
   lane: LaneConfigSource,

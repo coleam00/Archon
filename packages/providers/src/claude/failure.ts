@@ -10,6 +10,7 @@
 import type {
   SDKAssistantMessageError,
   SDKRateLimitInfo,
+  SDKResultMessage,
   SDKStartupFailureReason,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { ProviderFailure, ProviderFailureClass } from '@archon/provider-contract';
@@ -142,12 +143,14 @@ function classOfStartupFailure(reason: SDKStartupFailureReason): ProviderFailure
 
 /** Classify an error result the SDK ended the turn with, when no API error preceded it. */
 export function classifyClaudeErrorResult(
-  subtype: string,
+  subtype: SDKResultMessage['subtype'],
   httpStatus: number | null | undefined,
   startupFailureReason: SDKStartupFailureReason | undefined,
   evidence: string
 ): ProviderFailure {
   if (subtype === 'error_max_budget_usd') return failureOf('budget_exceeded', evidence);
+  // The SDK's own structured-output retries ran out; a fresh attempt usually gets past it.
+  if (subtype === 'error_max_structured_output_retries') return failureOf('schema_unmet', evidence);
   if (startupFailureReason !== undefined) {
     return failureOf(classOfStartupFailure(startupFailureReason), evidence);
   }

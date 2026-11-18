@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { getArchonConfigPath, getArchonHome } from '@archon/paths/archon-paths';
 import { getPluginsPath } from '@archon/paths';
-import { discoverPlugins, type SourcePlugin } from '@archon/forge/discovery';
+import { discoverPlugins, type PluginDiscovery, type SourcePlugin } from '@archon/forge/discovery';
 import { readForgeConfig, sourceForgePlugins } from '@archon/forge/host-plugins';
 import { checkForgeAccess, dispatchForge, type ForgeOperationAudit } from '@archon/forge/dispatch';
 import { type ForgePluginConfig, forgePluginConfigSchema } from '@archon/forge/plugin-config';
@@ -155,12 +155,14 @@ async function readForgeInput(
 }
 
 /**
- * Where metadata, check and dispatch all find plugins, so a preflight never answers
- * for a different plugin than the one dispatch runs.
+ * Where metadata, check, dispatch and `validate workflows` all find plugins, so a
+ * preflight never answers for a different plugin than the one dispatch runs.
  */
-function trustedDiscovery(
-  { archonHome, config }: ForgeInput,
-  { trustedEnv, dependencies }: ForgeCommandContext
+function discoveryOptions(
+  archonHome: string,
+  config: ForgePluginConfig,
+  trustedEnv: NodeJS.ProcessEnv,
+  sourcePlugins: readonly SourcePlugin[] = sourceForgePlugins()
 ): {
   config: ForgePluginConfig;
   env: NodeJS.ProcessEnv;
@@ -172,8 +174,26 @@ function trustedDiscovery(
     env: trustedEnv,
     // The trusted directory `archon plugin add` writes; repo env cannot move it.
     pluginsDir: getPluginsPath(archonHome),
-    sourcePlugins: dependencies.sourcePlugins ?? sourceForgePlugins(),
+    sourcePlugins,
   };
+}
+
+function trustedDiscovery(
+  { archonHome, config }: ForgeInput,
+  { trustedEnv, dependencies }: ForgeCommandContext
+): ReturnType<typeof discoveryOptions> {
+  return discoveryOptions(archonHome, config, trustedEnv, dependencies.sourcePlugins);
+}
+
+/** The forge plugins this install loads, discovered as every `archon forge` command does. */
+export async function discoverInstalledForgePlugins(
+  trustedEnv: NodeJS.ProcessEnv
+): Promise<PluginDiscovery> {
+  const archonHome = getArchonHome(trustedEnv);
+  const config = forgePluginConfigSchema.parse(
+    await readForgeConfig(getArchonConfigPath(archonHome))
+  );
+  return discoverPlugins(discoveryOptions(archonHome, config, trustedEnv));
 }
 
 /**
@@ -218,18 +238,24 @@ async function answerCheck(input: ForgeInput, context: ForgeCommandContext): Pro
     credentialEnv: env,
   });
   if (!check.ok) {
-    const { error, unsupported } = check;
-    await write({ operationId, ok: false, error, ...(unsupported ? { unsupported } : {}) });
+    const { error, unsupported, remedy } = check;
+    await write({
+      operationId,
+      ok: false,
+      error,
+      ...(unsupported ? { unsupported } : {}),
+      ...(remedy ? { remedy } : {}),
+    });
     return 1;
   }
-  const { plugin, credentialSource } = check;
+  const { host, plugin, credentialSource } = check;
   await write({
     operationId,
     ok: true,
     result: {
       op: 'check',
       value: {
-        host: request.host.toLowerCase(),
+        host,
         plugin,
         operations: request.operations,
         ...(credentialSource ? { credentialSource } : {}),
@@ -322,11 +348,26 @@ const NAMED_FIELDS = 6;
  * the request. Schema messages describe the expected type, never the supplied value.
  */
 function invalidFields(error: z.ZodError): string {
-  const named = error.issues
+  const issues = refusedIssues(error.issues);
+  const named = issues
     .slice(0, NAMED_FIELDS)
     .map(issue => `${issue.path.join('.') || '(request)'}: ${issue.message}`);
-  const rest = error.issues.length - named.length;
+  const rest = issues.length - named.length;
   return [...named, ...(rest > 0 ? [`and ${rest} more`] : [])].join('; ');
+}
+
+/** A request no alternative admits is named by the alternative it came closest to. */
+function refusedIssues(issues: readonly z.core.$ZodIssue[]): z.core.$ZodIssue[] {
+  return issues.flatMap(issue => {
+    if (issue.code !== 'invalid_union' || issue.errors.length === 0) return [issue];
+    const closest = issue.errors.reduce((best, errors) =>
+      errors.length < best.length ? errors : best
+    );
+    return refusedIssues(closest).map(nested => ({
+      ...nested,
+      path: [...issue.path, ...nested.path],
+    }));
+  });
 }
 
 function writeResponse(

@@ -385,12 +385,14 @@ export async function watchAttentionQueue(
     waiters.get(runId)?.controller.abort();
     waiters.delete(runId);
   };
+  const isWatched = (run: WorkflowRun, claim = executionClaim(run.metadata)): boolean =>
+    waiters.get(run.id)?.claim === claim || lost.get(run.id) === claim;
   const arm = (run: WorkflowRun, project: ProjectRef | null): void => {
     const watchOwner = host.ownerLoss;
     if (watchOwner === undefined || closed) return;
     const runId = run.id;
     const claim = executionClaim(run.metadata);
-    if (waiters.get(runId)?.claim === claim || lost.get(runId) === claim) return;
+    if (isWatched(run, claim)) return;
     disarm(runId);
     const controller = new AbortController();
     const { signal } = controller;
@@ -460,8 +462,27 @@ export async function watchAttentionQueue(
   let unreadableAskRuns = new Set(degraded.map(report => report.runId));
   await emit({ type: 'ready', cursor: start });
 
-  // 2. Arm liveness for every run already running in scope.
-  const armRunning = async (): Promise<void> => {
+  // 2. Arm liveness for every run running in scope, at start and on every caught-up read:
+  // a claim commits no event, and an owner can die before it writes its first one.
+  // A rescan skips a row whose project it cannot read and retries it next tick, so one
+  // unreadable row cannot keep later claims unwatched; at start the failure still stops it.
+  /** The run's project; undefined when a rescan could not read it. */
+  const scannedProject = async (
+    run: WorkflowRun,
+    rescan: boolean
+  ): Promise<ProjectRef | null | undefined> => {
+    try {
+      return await runProject(source, run);
+    } catch (error) {
+      if (!rescan) throw error;
+      getLog().warn(
+        { err: error as Error, runId: run.id },
+        'workflow.attention_watch_run_project_read_failed'
+      );
+      return undefined;
+    }
+  };
+  const armRunning = async (rescan = false): Promise<void> => {
     if (host.ownerLoss === undefined) return;
     for (let offset = 0; ; offset += RUNNING_PAGE_LIMIT) {
       const page = await store.listWorkflowRuns({
@@ -470,8 +491,9 @@ export async function watchAttentionQueue(
         offset,
       });
       for (const run of page.runs) {
-        const project = await runProject(source, run);
-        if (isInAttentionScope(project, scope)) arm(run, project);
+        if (closed || isWatched(run)) continue;
+        const project = await scannedProject(run, rescan);
+        if (project !== undefined && isInAttentionScope(project, scope)) arm(run, project);
       }
       if (page.runs.length < RUNNING_PAGE_LIMIT || offset + RUNNING_PAGE_LIMIT >= page.total) break;
     }
@@ -788,7 +810,13 @@ export async function watchAttentionQueue(
         answers = indexAnswers(page);
       },
       onCaughtUp: async () => {
-        await reconcileItemsWithoutRun();
+        // Owner-loss discovery must not wait on an unrelated read: the reconcile's failure
+        // still reaches the follower, after the scan ran.
+        try {
+          await reconcileItemsWithoutRun();
+        } finally {
+          await armRunning(true);
+        }
         if (Date.now() - lastLineAt >= bookmarkIntervalMs)
           emit({ type: 'bookmark', cursor: position() });
       },

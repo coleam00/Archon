@@ -182,7 +182,14 @@ async function startFreshRun(
     if (stamped.stopped) return stamped;
     run = stamped.value;
   }
-  const resolved = await resolveResultInputs(deps, platform, conversationId, run, resultInputs);
+  const resolved = await resolveResultInputs(
+    deps,
+    platform,
+    conversationId,
+    run,
+    resultInputs,
+    claimed.value
+  );
   if (resolved.stopped) return resolved;
   return {
     stopped: false,

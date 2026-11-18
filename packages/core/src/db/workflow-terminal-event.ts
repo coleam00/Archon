@@ -6,6 +6,7 @@ import {
   type TerminalRecordEvent,
 } from '@archon/workflows/terminal-record';
 import type { RunTerminalStatus, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { TerminalRecord } from '@archon/workflows/schemas/terminal-record';
 import type { IDatabase } from './adapters/types';
 import { getDatabase } from './connection';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
@@ -32,7 +33,7 @@ export async function insertTerminalWorkflowEvent(
     event_type: `workflow_${RunTerminalStatus}`;
   },
   artifacts: TerminalArtifacts
-): Promise<void> {
+): Promise<TerminalRecord> {
   const runResult = await query<WorkflowRunRow>(
     'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
     [event.workflow_run_id]
@@ -50,11 +51,7 @@ export async function insertTerminalWorkflowEvent(
   const manifest = terminalArtifactsFor(run, observed);
   if (manifest !== observed)
     getLog().warn({ workflowRunId: run.id }, 'db.workflow_terminal_artifacts_not_observed');
-  await insertWorkflowEvent(query, {
-    ...event,
-    data: {
-      ...event.data,
-      terminal_record: buildTerminalRecord({ run, events: eventResult.rows, artifacts: manifest }),
-    },
-  });
+  const record = buildTerminalRecord({ run, events: eventResult.rows, artifacts: manifest });
+  await insertWorkflowEvent(query, { ...event, data: { ...event.data, terminal_record: record } });
+  return record;
 }

@@ -449,6 +449,7 @@ function renderTimelineEntry(entry: TimelineEntry): ReactElement {
           fanOutOutcome={entry.node.fanOutOutcome}
           output={entry.node.output}
           error={entry.node.error}
+          failureKind={entry.node.failureKind}
           showDetail={entry.showDetail}
           waiting={entry.waiting}
         />

@@ -1,5 +1,6 @@
 import { resolveRunContinuation } from '../../operations/workflow-continuation';
 import { assertRunCredentials } from '@archon/workflows/run-preflight';
+import { assertRunForgeAccess } from '@archon/workflows/run-forge-access';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import * as db from '../../db/conversations';
 import { createWorkflowDeps } from '../../workflows/store-adapter';
@@ -113,6 +114,14 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
       workflow
     );
     return;
+  }
+
+  // The background path above checks its own start; this is the foreground's.
+  if (!willContinueExistingRun && preparedAiConfiguration) {
+    await assertRunForgeAccess(createWorkflowDeps(), workflow, preparedAiConfiguration, {
+      cwd: codebase.default_cwd,
+      codebaseId: codebase.id,
+    });
   }
 
   await dispatchForeground(scope, {
