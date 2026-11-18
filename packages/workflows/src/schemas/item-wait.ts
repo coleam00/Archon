@@ -20,7 +20,7 @@ export const ITEM_WAITS_DESCRIPTION = [
   'When an event a binding maps to one of them arrives with exactly the `about` value you named, the set is met and the next stage starts on the item.',
   'An event about any other value (an older commit, say) starts nothing.',
   'The waits are alternatives: the first one met closes them all.',
-  'When none is met within its time, the item is listed for an operator as overdue, naming what it waits for.',
+  'When the set is still open past the time of any of them, the item is listed for an operator as overdue, naming what it waits for.',
   'A later completed run of this workflow on the same item replaces the waits still open.',
   'Leave the list empty when the item waits for nothing.',
 ].join(' ');
