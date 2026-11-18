@@ -86,15 +86,15 @@ function groupDiscoveredTestFiles(packageDirectory: string, files: readonly stri
     else if (source.includes('mock.module(')) unmarkedMocks.push(file);
     else shared.push(file);
   }
-  // A direct mock.module() call in the shared process would leak into every other
-  // unmarked file. Mocks reached through a helper cannot be seen here; those files
-  // still need the directive by hand.
   // Below line 1 the isolation directive is ignored, so the file would share a process unseen.
   if (misplaced.length > 0) {
     throw new Error(
       `These tests carry "${TEST_ISOLATION_DIRECTIVE}" below line 1, where it has no effect; move it to line 1: ${misplaced.join(', ')}`
     );
   }
+  // A direct mock.module() call in the shared process would leak into every other
+  // unmarked file. Mocks reached through a helper cannot be seen here; those files
+  // still need the directive by hand.
   if (unmarkedMocks.length > 0) {
     throw new Error(
       `These tests call mock.module() but do not start with "${TEST_ISOLATION_DIRECTIVE}": ${unmarkedMocks.join(', ')}`
