@@ -270,28 +270,44 @@ export function createRunEndedStarts(
     const receipts: SourceReceiptAcceptance[] = [];
     const linked: LinkedRunEndedStart[] = [];
     let checkout: Promise<EndedCheckout> | undefined;
+    const endedCheckout = (): Promise<EndedCheckout> =>
+      (checkout ??= dependencies.endedCheckout(run));
     for (const candidate of candidates) {
-      // A binding that launches in another project is not about this item, even when a
-      // workflow there has the same name.
-      if ((await bindingProjectKey(candidate, dependencies)) !== item.projectKey) continue;
-      const problems = runEndedBindingProblems(candidate.runEnded, ended);
-      if (problems.length > 0)
-        throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
-      if (candidate.runEnded.outcome !== ended.outcome.value) continue;
-      if (candidate.runEnded.checkout !== undefined) checkout ??= dependencies.endedCheckout(run);
-      const acceptance = bindingReceipt(
-        candidate,
-        { deliveryId: run.id, sourceActor: runEndedActor(ended), itemKey: item.key },
-        mappedInputs(candidate.runEnded.inputs, { ...ended, itemKey: item.key }),
-        candidate.runEnded.checkout === undefined ? undefined : await checkout,
-        dependencies.now?.() ?? new Date()
-      );
+      const acceptance = await matchedReceipt(candidate, ended, item, dependencies, endedCheckout);
+      if (!acceptance) continue;
       const link = candidate.runEnded.linked;
       if (link) linked.push({ link, endedRunId: run.id, endedItemId: item.id, acceptance });
       else receipts.push(acceptance);
     }
     return { receipts, linked };
   };
+}
+
+/**
+ * The receipt one binding writes for the end of `ended` on `item`, or undefined when the
+ * binding is not about this end. Its problems throw naming the file.
+ */
+async function matchedReceipt(
+  candidate: RunEndedBinding,
+  ended: RunEndedFacts,
+  item: WorkflowItem,
+  dependencies: RunEndedStartsDependencies,
+  endedCheckout: () => Promise<EndedCheckout>
+): Promise<SourceReceiptAcceptance | undefined> {
+  // A binding that launches in another project is not about this item, even when a
+  // workflow there has the same name.
+  if ((await bindingProjectKey(candidate, dependencies)) !== item.projectKey) return undefined;
+  const problems = runEndedBindingProblems(candidate.runEnded, ended);
+  if (problems.length > 0)
+    throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
+  if (candidate.runEnded.outcome !== ended.outcome.value) return undefined;
+  return bindingReceipt(
+    candidate,
+    { deliveryId: ended.run.id, sourceActor: runEndedActor(ended), itemKey: item.key },
+    mappedInputs(candidate.runEnded.inputs, { ...ended, itemKey: item.key }),
+    candidate.runEnded.checkout === undefined ? undefined : await endedCheckout(),
+    dependencies.now?.() ?? new Date()
+  );
 }
 
 /** The source actor of a start a run's end caused: the run, and its outcome when it has one. */
