@@ -26,9 +26,10 @@ const AGENT_READ_OPERATIONS: readonly ForgeRequest['op'][] = ['workitem.search',
 
 test('the forge needs the pack declares are the forge operations it calls', () => {
   const root = join(import.meta.dir, '../.archon/workflows/sdlc');
-  const sources = [...new Bun.Glob('**/*.{ts,md}').scanSync({ cwd: root, dot: true })].map(
-    file => ({ file, text: readFileSync(join(root, file), 'utf8') })
-  );
+  const sources = [...new Bun.Glob('**/*.{ts,md}').scanSync({ cwd: root, dot: true })]
+    // The setup guide names operations in examples an operator runs, not in calls the pack makes.
+    .filter(file => file !== 'README.md')
+    .map(file => ({ file, text: readFileSync(join(root, file), 'utf8') }));
   const named = (op: string, kind: '.ts' | '.md'): string[] =>
     sources
       .filter(

@@ -83,14 +83,15 @@ checks them each time a run of a pack workflow starts, before a worktree or any 
 plugin must advertise every one and have a credential. A refusal says what to fix: a
 missing plugin, an operation the plugin lacks, or no credential.
 
-To check without starting a run:
+To check without starting a run, name the operations to check. This example names three;
+pass the whole list from `.pack/pack.yaml` to check what a pack run checks:
 
 ```bash
 archon forge check --json --data '{"host":"github.com","operations":["pr.view","pr.create","pr.merge"]}'
 ```
 
 It contacts no forge. A pass names the credential source it used. Neither check proves
-what the token may read or write; the first forge call of a run does. A run in a container
+what the token may read or write: each forge call of a run proves only the access it uses. A run in a container
 has no path to the forge and refuses when it starts.
 
 ### 4. Name the maintainers
