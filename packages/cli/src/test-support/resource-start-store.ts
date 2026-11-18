@@ -46,7 +46,6 @@ export function createInMemoryResourceStartStore(
 } {
   const requests = new Map<string, ResourceStartRequestInspection>();
   const receipts = new Map<string, StartReceiptInspection>();
-  const receiptCreatedAt = new Map<string, string>();
   const capacities = new Map<string, number>();
   const installed = new Map<string, number>();
   // Holders are implicit: an admitted request whose run is live, unless it gave its slot back.
@@ -294,7 +293,6 @@ export function createInMemoryResourceStartStore(
           })),
         ],
       });
-      receiptCreatedAt.set(input.receipt.id, new Date().toISOString());
       return { receiptId: input.receipt.id, replay: false };
     },
     getStartReceipt: async (id): ReturnType<IResourceStartStore['getStartReceipt']> => {
@@ -322,33 +320,14 @@ export function createInMemoryResourceStartStore(
       hostId,
       limit = 100,
       receiptIds,
-      after,
     }): ReturnType<IResourceStartStore['listPendingStartBindings']> =>
       structuredClone(
         [...receipts.values()]
           .filter(receipt => !receiptIds || receiptIds.includes(receipt.id))
-          .flatMap(receipt =>
-            receipt.bindings.map(binding => ({
-              ...binding,
-              createdAt: receiptCreatedAt.get(receipt.id) ?? receipt.receivedAt,
-            }))
-          )
+          .flatMap(receipt => receipt.bindings)
           .filter(
             item =>
-              item.hostId === hostId &&
-              (item.status === 'pending' || item.status === 'failed') &&
-              (!after ||
-                compareCodeUnits(item.createdAt, after.createdAt) > 0 ||
-                (item.createdAt === after.createdAt &&
-                  (compareCodeUnits(item.bindingId, after.bindingId) > 0 ||
-                    (item.bindingId === after.bindingId &&
-                      compareCodeUnits(item.receiptId, after.receiptId) > 0))))
-          )
-          .sort(
-            (a, b) =>
-              compareCodeUnits(a.createdAt, b.createdAt) ||
-              compareCodeUnits(a.bindingId, b.bindingId) ||
-              compareCodeUnits(a.receiptId, b.receiptId)
+              item.hostId === hostId && (item.status === 'pending' || item.status === 'failed')
           )
           .slice(0, limit)
       ),
