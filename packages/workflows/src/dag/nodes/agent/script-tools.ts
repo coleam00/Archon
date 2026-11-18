@@ -39,6 +39,7 @@ const inputSchema = z.strictObject({
 
 export interface ScriptToolRuntime {
   nativeTools: NativeTool[];
+  cancel(): void;
   settle(): Promise<void>;
   unknownOutcome(): { callId: string; error: string } | undefined;
 }
@@ -52,6 +53,11 @@ export async function prepareScriptTools(
   abortSignal?: AbortSignal
 ): Promise<{ runtime?: ScriptToolRuntime; error?: string }> {
   if (node.tools === undefined) return {};
+  if (ctx.execContext.kind === 'container') {
+    return {
+      error: 'Script-backed tools cannot run in a container because cancellation is host-only',
+    };
+  }
   if ((node.sandbox ?? ctx.workflowLevelOptions.sandbox)?.enabled === true) {
     return {
       error:
@@ -162,6 +168,10 @@ export async function buildScriptTools(
   abortSignal?: AbortSignal
 ): Promise<ScriptToolRuntime> {
   const declarations = Object.entries(node.tools ?? {});
+  const toolAbort = new AbortController();
+  const toolSignal = abortSignal
+    ? AbortSignal.any([abortSignal, toolAbort.signal])
+    : toolAbort.signal;
   let unknown: UnknownOutcome | undefined;
   const calls: CallResults = new Map();
   const replayOnly = await loadCallHistory(ctx, execution, calls, failure => {
@@ -178,7 +188,7 @@ export async function buildScriptTools(
           context,
           calls,
           replayOnly,
-          abortSignal,
+          abortSignal: toolSignal,
           setUnknown: failure => {
             unknown = failure;
           },
@@ -188,6 +198,7 @@ export async function buildScriptTools(
   });
   return {
     nativeTools,
+    cancel: () => toolAbort.abort(),
     settle: async () => {
       await Promise.allSettled([...calls.values()].map(call => call.result));
     },

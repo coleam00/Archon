@@ -232,6 +232,9 @@ export function assertRunCapabilities(
   execContext: ExecutionContext
 ): void {
   visitProviderInvokingNodes(workflow.nodes, workflowProvider, aiProfile, node => {
+    if ('tools' in node && node.tools !== undefined && execContext.kind === 'container') {
+      throw new Error(`Node '${node.id}' script-backed tools cannot run in a container`);
+    }
     if (
       'tools' in node &&
       node.tools !== undefined &&

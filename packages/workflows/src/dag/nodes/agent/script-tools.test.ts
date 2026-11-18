@@ -19,6 +19,7 @@ import {
   createMockStore,
   dagOptions,
   makeWorkflowRun,
+  mockCodexCapabilities,
   mockSendQueryDag,
   persistedEvents,
 } from '../../test-utils';
@@ -109,6 +110,13 @@ describe('workflow script tools', () => {
       kind: 'agent',
       tools,
     });
+    expect(() =>
+      dagNodeSchema.parse({
+        id: 'actor',
+        prompt: 'record',
+        tools: { record: { ...tools!.record, script: 'merge gate' } },
+      })
+    ).toThrow('named script');
   });
 
   it.each(['codex', 'claude', 'pi'] as const)(
@@ -429,6 +437,22 @@ describe('workflow script tools', () => {
     expect(mockSendQueryDag).not.toHaveBeenCalled();
   });
 
+  it('refuses container-backed script tools before a model call', async () => {
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          cwd: testDir,
+          execContext: { kind: 'container', containerId: 'tool-container' },
+          workflowProvider: 'claude',
+          workflowRun: makeWorkflowRun('container-tools'),
+          workflow: { name: 'container-tools', nodes: [agent('claude')] },
+        })
+      )
+    ).rejects.toThrow('cannot run in a container');
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+  });
+
   it('refuses inherited workflow sandbox before a model call', async () => {
     await expect(
       executeDagWorkflow(
@@ -525,6 +549,62 @@ describe('workflow script tools', () => {
       expect(
         events.findIndex(event => event.event_type === 'node_failed' && event.step_name === 'actor')
       ).toBeGreaterThan(unknown);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('aborts a running tool before reporting an unsettled provider stream', async () => {
+    await writeFile(join(testDir, '.archon', 'scripts', 'record.ts'), 'console.log("{}")');
+    const entered = Promise.withResolvers<void>();
+    let aborted = false;
+    const spy = spyOn(subprocess, 'runSubprocess').mockImplementation(
+      async (_context, _command, _args, options) => {
+        entered.resolve();
+        await new Promise<void>(resolve =>
+          options.abortSignal!.addEventListener(
+            'abort',
+            () => {
+              aborted = true;
+              resolve();
+            },
+            { once: true }
+          )
+        );
+        throw Object.assign(new Error('cancelled tool'), { cancelled: true });
+      }
+    );
+    try {
+      mockSendQueryDag.mockImplementation(async function* (_prompt, _cwd, _session, queryOptions) {
+        void queryOptions!
+          .nativeTools![0].handler({ value: 'x' }, { providerCallId: 'unsettled-call' })
+          .catch(() => undefined);
+        await entered.promise;
+        yield { type: 'agent_message_chunk', text: 'partial text' };
+      });
+      const store = createMockStore();
+      const deps = createMockDeps(store);
+      deps.getAgentProvider = () => ({
+        sendQuery: mockSendQueryDag,
+        checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
+        getType: () => 'codex',
+        getCapabilities: mockCodexCapabilities,
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd: testDir,
+          workflowProvider: 'codex',
+          workflowRun: makeWorkflowRun('unsettled-tools'),
+          workflow: { name: 'unsettled-tools', nodes: [agent()] },
+        })
+      );
+      expect(aborted).toBe(true);
+      const failure = persistedEvents(store).find(
+        event => event.event_type === 'node_failed' && event.step_name === 'actor'
+      );
+      expect(failure?.data?.error).toContain('provider stream ended without signalling');
+      expect(failure?.data?.failure_kind).not.toBe('cancelled');
     } finally {
       spy.mockRestore();
     }

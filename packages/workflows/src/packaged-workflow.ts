@@ -11,6 +11,7 @@ import {
 import { workflowSourceSchema } from './schemas/workflow';
 import { isValidCommandName } from './command-validation';
 import { resolveWorkflowName } from './router';
+import { isInlineScript } from './executor-shared';
 
 export const PACK_SHARED_DIRECTORY = '.shared';
 
@@ -97,10 +98,6 @@ export function unqualifiedResourceName(reference: string): string {
   return parsePackagedResourceReference(reference)?.name ?? reference;
 }
 
-function isNamedScript(script: string): boolean {
-  return !script.includes('\n') && !/[;(){}&|<>$`"' ]/.test(script);
-}
-
 function qualifyResourceReference(reference: string, owner: WorkflowResourceOwner): string {
   if (parsePackagedResourceReference(reference) !== null) return reference;
   return formatPackagedResourceReference(owner, reference);
@@ -114,7 +111,7 @@ function qualifyNodeResources(
   // prior behavior — it fell through every check unmutated before #2486 too).
   if (isIncludeDirective(node)) return;
   if (isAgentNode(node)) qualifyAgentResources(node, owner);
-  if (isExecNode(node) && node.runtime !== 'sh' && isNamedScript(node.script)) {
+  if (isExecNode(node) && node.runtime !== 'sh' && !isInlineScript(node.script)) {
     node.script = qualifyResourceReference(node.script, owner);
   }
   if (isLoopNode(node) && node.loop.command !== undefined) {
@@ -133,7 +130,7 @@ function qualifyAgentResources(
     node.source.name = qualifyResourceReference(node.source.name, owner);
   }
   for (const tool of Object.values(node.tools ?? {})) {
-    if (isNamedScript(tool.script)) tool.script = qualifyResourceReference(tool.script, owner);
+    if (!isInlineScript(tool.script)) tool.script = qualifyResourceReference(tool.script, owner);
   }
 }
 

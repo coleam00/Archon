@@ -1500,7 +1500,8 @@ A retry after a completed tool may replay its existing call, but refuses new cal
 the operator must reconcile completed effects before starting new work. Claude MCP
 request IDs are scoped to the SDK server instance rather than treated as global IDs.
 Provider `sandbox.enabled: true` with script-backed tools is refused before model
-invocation; use container isolation without a provider sandbox when isolation is needed.
+invocation. Container-backed script tools are refused too, because tool cancellation is
+currently host-only.
 
 Later `bash:` and `script:` nodes receive `TOOL_CALLS_FILE`, a JSON listing shaped as
 `{ "runId": "...", "calls": [...] }`. Select a call by `call_id` (or verify its

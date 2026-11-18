@@ -3,6 +3,7 @@
  * (`betas`, `sandbox`), the Pi extension posture (`pi`), and the `mcp:` declaration.
  */
 import { z } from 'zod';
+import { isInlineScript } from '../executor-shared';
 
 /**
  * Claude Agent SDK beta header list. Non-empty array of non-empty strings —
@@ -108,7 +109,11 @@ export const scriptToolSchema = z.strictObject({
   description: z.string().trim().min(1),
   input_schema: z.record(z.string(), z.unknown()),
   output_schema: z.record(z.string(), z.unknown()),
-  script: z.string().trim().min(1),
+  script: z
+    .string()
+    .trim()
+    .min(1)
+    .refine(script => !isInlineScript(script), 'script must be a named script, not inline code'),
   timeout: z.number().positive().finite().optional(),
 });
 

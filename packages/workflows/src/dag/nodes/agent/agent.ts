@@ -282,7 +282,7 @@ type WorkloadResult =
       retryable?: false;
     };
 
-/** How a thrown attempt is recorded: a cancellation wins over whatever error the abort caused. */
+/** How a thrown attempt is recorded: an existing cancellation wins over a later NodeFailure. */
 function attemptFailure(
   err: Error,
   cancelled: boolean,
@@ -295,6 +295,14 @@ function attemptFailure(
   providerFailure?: ProviderFailure;
   retryable?: false;
 } {
+  if (err instanceof NodeFailure && !cancelled) {
+    return {
+      message: nodeMcp.kind === 'missing' ? `${err.message}\n${nodeMcp.diagnostic}` : err.message,
+      kind: err.kind,
+      providerFailure: err.providerFailure,
+      retryable: err.retryable,
+    };
+  }
   const unknownTool = scriptTools?.unknownOutcome();
   if (unknownTool !== undefined) {
     return {
@@ -357,11 +365,14 @@ async function runWorkload(
     session.resumeIntent === 'source-fork'
   );
 
+  // An unsettled provider turn must cancel tool work before we wait for it, without
+  // misreporting the provider failure as a user cancellation.
+  if (!state.settled && state.cutOff === undefined) scriptTools?.cancel();
   await scriptTools?.settle();
-  assertScriptToolsSettled(scriptTools);
 
   const failed = await finishTurnOutput(pc, state);
   if (failed !== undefined) return failed;
+  assertScriptToolsSettled(scriptTools);
 
   if (session.namedResumeSourceNodeId !== undefined) {
     assertNamedSessionResumed(node.id, state, session, session.namedResumeSourceNodeId);
