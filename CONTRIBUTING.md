@@ -124,8 +124,9 @@ for the push:
 
 A pull request runs every job, as a push does, when it changes `.github/workflows/`, the root
 `package.json`, `bun.lock`, `bunfig.toml`, `scripts/validate.ts`, `scripts/repo-tests.ts` or a
-script they import, or the two scripts that decide and judge the run.
-`EVERY_JOB_INPUTS` and `PUSH_ONLY_MODES` in `scripts/should-run-test-suite.ts` are the
+script they import, the two scripts that decide and judge the run, or
+`scripts/near-limit-tests.ts`, which the Windows jobs run after their tests to list, in the job
+summary, every test that used more than half its time limit. `EVERY_JOB_INPUTS` and `PUSH_ONLY_MODES` in `scripts/should-run-test-suite.ts` are the
 authoritative lists.
 
 To run every job on a branch before it merges, for example when a change touches path
