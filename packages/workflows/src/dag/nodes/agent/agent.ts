@@ -281,6 +281,15 @@ type WorkloadResult =
       failureKind: NodeFailureKind;
       retryable?: false;
     };
+type WorkloadFailure = Extract<WorkloadResult, { state: 'failed' }>;
+
+/** An ambiguous tool side effect forbids retry without replacing the original failure. */
+function withScriptToolRetryability<T extends { retryable?: false }>(
+  failure: T,
+  scriptTools: ScriptToolRuntime | undefined
+): T {
+  return scriptTools?.unknownOutcome() === undefined ? failure : { ...failure, retryable: false };
+}
 
 /** How a thrown attempt is recorded: an existing cancellation wins over a later NodeFailure. */
 function attemptFailure(
@@ -296,12 +305,15 @@ function attemptFailure(
   retryable?: false;
 } {
   if (err instanceof NodeFailure && !cancelled) {
-    return {
-      message: nodeMcp.kind === 'missing' ? `${err.message}\n${nodeMcp.diagnostic}` : err.message,
-      kind: err.kind,
-      providerFailure: err.providerFailure,
-      retryable: err.retryable,
-    };
+    return withScriptToolRetryability(
+      {
+        message: nodeMcp.kind === 'missing' ? `${err.message}\n${nodeMcp.diagnostic}` : err.message,
+        kind: err.kind,
+        providerFailure: err.providerFailure,
+        retryable: err.retryable,
+      },
+      scriptTools
+    );
   }
   const unknownTool = scriptTools?.unknownOutcome();
   if (unknownTool !== undefined) {
@@ -371,7 +383,7 @@ async function runWorkload(
   await scriptTools?.settle();
 
   const failed = await finishTurnOutput(pc, state);
-  if (failed !== undefined) return failed;
+  if (failed !== undefined) return withScriptToolRetryability(failed, scriptTools);
   assertScriptToolsSettled(scriptTools);
 
   if (session.namedResumeSourceNodeId !== undefined) {
@@ -415,7 +427,7 @@ async function runWorkload(
 async function finishTurnOutput(
   pc: AgentPassContext,
   state: AgentAttemptState
-): Promise<WorkloadResult | undefined> {
+): Promise<WorkloadFailure | undefined> {
   // If cancelled during streaming (not idle timeout or an end-turn request), return as failed with cancel reason
   if (pc.abortController.signal.aborted && !state.cutOff) {
     const duration = Date.now() - pc.nodeStartTime;
@@ -466,7 +478,7 @@ function assertTurnSettled(pc: AgentPassContext, state: AgentAttemptState): void
   );
 }
 
-function emptyOutputFailure(pc: AgentPassContext, state: AgentAttemptState): WorkloadResult {
+function emptyOutputFailure(pc: AgentPassContext, state: AgentAttemptState): WorkloadFailure {
   const nodeId = pc.node.id;
   const duration = Date.now() - pc.nodeStartTime;
   const emptyError =

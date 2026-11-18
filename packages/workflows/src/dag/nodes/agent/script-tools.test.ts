@@ -554,7 +554,7 @@ describe('workflow script tools', () => {
     }
   });
 
-  it('aborts a running tool before reporting an unsettled provider stream', async () => {
+  it('keeps an unsettled provider failure non-retryable after aborting a running tool', async () => {
     await writeFile(join(testDir, '.archon', 'scripts', 'record.ts'), 'console.log("{}")');
     const entered = Promise.withResolvers<void>();
     let aborted = false;
@@ -596,15 +596,22 @@ describe('workflow script tools', () => {
           cwd: testDir,
           workflowProvider: 'codex',
           workflowRun: makeWorkflowRun('unsettled-tools'),
-          workflow: { name: 'unsettled-tools', nodes: [agent()] },
+          workflow: {
+            name: 'unsettled-tools',
+            nodes: [{ ...agent(), retry: { max_attempts: 2, delay_ms: 1, on_error: 'all' } }],
+          },
         })
       );
       expect(aborted).toBe(true);
-      const failure = persistedEvents(store).find(
+      const events = persistedEvents(store);
+      const failure = events.find(
         event => event.event_type === 'node_failed' && event.step_name === 'actor'
-      );
-      expect(failure?.data?.error).toContain('provider stream ended without signalling');
-      expect(failure?.data?.failure_kind).not.toBe('cancelled');
+      )?.data;
+      expect(failure?.error).toContain('provider stream ended without signalling');
+      expect(failure).toMatchObject({ failure_kind: 'unknown', retryable: false });
+      expect(
+        events.filter(event => event.event_type === 'node_started' && event.step_name === 'actor')
+      ).toHaveLength(1);
     } finally {
       spy.mockRestore();
     }
@@ -839,7 +846,7 @@ describe('workflow script tools', () => {
     }
   });
 
-  it('fails closed when a receipt cannot be persisted', async () => {
+  it('keeps empty output non-retryable when receipt persistence fails', async () => {
     const store = createMockStore();
     store.persistWorkflowEvent.mockImplementation(async event => {
       if (event.event_type === 'workflow_tool_call') throw new Error('receipt store unavailable');
@@ -851,28 +858,30 @@ describe('workflow script tools', () => {
       await expect(
         tool.handler({ value: 'hello' }, { providerCallId: 'no-receipt' })
       ).rejects.toThrow('receipt store unavailable');
-      yield { type: 'agent_message_chunk', text: 'no receipt' };
       yield { type: 'result', sessionId: 'codex-session' };
     });
+    const nodes: DagNode[] = [
+      { ...agent(), retry: { max_attempts: 2, delay_ms: 1, on_error: 'all' } },
+    ];
     await executeDagWorkflow(
       dagOptions({
         deps: createMockDeps(store),
         cwd: testDir,
         workflowProvider: 'codex',
-        workflow: { name: 'script-tools-no-receipt', nodes: [agent()] },
+        workflow: { name: 'script-tools-no-receipt', nodes },
         workflowRun: makeWorkflowRun('script-tools-no-receipt-run'),
       })
     );
+    const events = persistedEvents(store);
+    const failure = events.find(
+      event => event.event_type === 'node_failed' && event.step_name === 'actor'
+    )?.data;
+    expect(failure?.error).toContain('produced no assistant output');
+    expect(failure).toMatchObject({ retryable: false, failure_kind: 'transient' });
     expect(
-      persistedEvents(store).find(
-        event => event.event_type === 'node_failed' && event.step_name === 'actor'
-      )?.data
-    ).toMatchObject({ retryable: false, failure_kind: 'exec_failed' });
-    expect(
-      persistedEvents(store).some(
-        event => event.event_type === 'node_completed' && event.step_name === 'actor'
-      )
-    ).toBe(false);
+      events.filter(event => event.event_type === 'node_started' && event.step_name === 'actor')
+    ).toHaveLength(1);
+    expect(events.some(event => event.event_type === 'node_completed')).toBe(false);
   });
 
   it('refuses a provider without native tools before model invocation', async () => {
