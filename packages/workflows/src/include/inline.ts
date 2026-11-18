@@ -1,11 +1,18 @@
 import type { DagNode, IncludeDirective, ResolvedWorkflow } from '../schemas';
-import { isIncludeDirective, isLoopGroupNode, startsSequentialSession } from '../schemas';
+import {
+  isComposeFanOutNode,
+  isIncludeDirective,
+  isLoopGroupNode,
+  startsSequentialSession,
+} from '../schemas';
 import type { JsonValue } from '../output-ref';
 import { validateDagStructure } from '../loader/dag-structure';
 import {
   COMPOSED_NODE,
   readComposedMeta,
   cloneNodeWithEngineMetadata,
+  attachForwardedFanOutWith,
+  readForwardedFanOutWith,
   type ComposedBlockBoundary,
   type ComposedNodeMeta,
   type IncludeCommandContent,
@@ -65,6 +72,7 @@ function markComposedNode(node: DagNode, patch: ComposedNodeMeta): void {
       existing.boundaries = [...cloneBoundaries(patch.boundaries), ...(existing.boundaries ?? [])];
     }
   }
+  narrowForwarded(node, existing, patch.forwarded);
   // A loop_group body node was authored in the same file and reads the same inputs, so
   // it carries the same record — minus `blockSessionStart`, which is a position in the
   // OUTER graph and means nothing inside a body (a body's first iteration starts fresh). A body node is likewise never the entry of an
@@ -74,6 +82,30 @@ function markComposedNode(node: DagNode, patch: ComposedNodeMeta): void {
     for (const body of node.loop_group.nodes) {
       if (!isIncludeDirective(body)) markComposedNode(body, inherited);
     }
+  }
+}
+
+/**
+ * A name an inner level forwarded stays the run's setting only while every level out
+ * forwards it too: in the composition record an earlier level wrote, and in a composed
+ * fan-out node's `with:`.
+ */
+function narrowForwarded(
+  node: DagNode,
+  existing: ComposedNodeMeta | undefined,
+  forwardedAt: readonly string[] | undefined
+): void {
+  const forwardedHere = forwardedAt ?? [];
+  if (existing !== undefined) {
+    const kept = (existing.forwarded ?? []).filter(name => forwardedHere.includes(name));
+    if (kept.length > 0) existing.forwarded = kept;
+    else delete existing.forwarded;
+  }
+  if (isComposeFanOutNode(node)) {
+    attachForwardedFanOutWith(
+      node,
+      readForwardedFanOutWith(node).filter(name => forwardedHere.includes(name))
+    );
   }
 }
 
@@ -87,6 +119,7 @@ function bodyComposedMeta(patch: ComposedNodeMeta): ComposedNodeMeta {
     origin: patch.origin,
     ...(patch.pack !== undefined ? { pack: patch.pack } : {}),
     ...(patch.inputs !== undefined ? { inputs: patch.inputs } : {}),
+    ...(patch.forwarded !== undefined ? { forwarded: patch.forwarded } : {}),
     ...(patch.boundaries !== undefined ? { boundaries: patch.boundaries.map(bodyBoundary) } : {}),
   };
 }
@@ -115,6 +148,8 @@ interface InlineScope {
   entryTriggerRules: ComposedBlockBoundary['entryTriggerRules'];
   hasActivationBoundary: boolean;
   resolvedInputs: Record<string, JsonValue>;
+  /** Names in `resolvedInputs` forwarded implicitly from the includer's `$INPUTS`. */
+  forwarded: readonly string[];
   missingInputs: Set<string>;
 }
 
@@ -142,7 +177,7 @@ function inlineInclude(
   }
   const fromOwnPack = isSamePack(includerPack, child.pack);
   const passed = includeInputs(includeNode, child, fromOwnPack);
-  let scope = inlineScope(includeNode, child, commandContents, includeId, passed);
+  let scope = inlineScope(includeNode, child, commandContents, includeId, passed, []);
   let namespaced = child.nodes.map(cn => inlineChildNode(scope, cn));
 
   // From its own pack, a block reads the run's settings as it does run directly: each
@@ -153,10 +188,14 @@ function inlineInclude(
   const forwardedSettings = fromOwnPack ? readUnpassedSettings(scope, namedScripts) : [];
   if (forwardedSettings.length > 0) {
     const forwarded = Object.fromEntries(forwardedSettings.map(name => [name, `$INPUTS.${name}`]));
-    scope = inlineScope(includeNode, child, commandContents, includeId, {
-      ...passed,
-      ...forwarded,
-    });
+    scope = inlineScope(
+      includeNode,
+      child,
+      commandContents,
+      includeId,
+      { ...passed, ...forwarded },
+      forwardedSettings
+    );
     namespaced = child.nodes.map(cn => inlineChildNode(scope, cn));
   }
 
@@ -263,7 +302,8 @@ function inlineScope(
   child: ResolvedWorkflow,
   commandContents: ReadonlyMap<string, IncludeCommandContent>,
   includeId: string,
-  resolvedInputs: Record<string, JsonValue>
+  resolvedInputs: Record<string, JsonValue>,
+  forwarded: readonly string[]
 ): InlineScope {
   const prefix = `${includeNode.id}__`;
   const childTopLevelIds = new Set(child.nodes.map(n => n.id));
@@ -289,6 +329,7 @@ function inlineScope(
     entryTriggerRules: [firstEntryTriggerRule, ...remainingEntryTriggerRules],
     hasActivationBoundary: parentDeps.length > 0 || includeNode.when !== undefined,
     resolvedInputs,
+    forwarded,
     missingInputs: new Set<string>(),
   };
 }
@@ -372,6 +413,7 @@ function composedMeta(scope: InlineScope, cn: DagNode, wasEntry: boolean): Compo
     origin: scope.child.name,
     ...(pack !== undefined ? { pack: { source: pack.source, key: pack.key } } : {}),
     ...(Object.keys(resolvedInputs).length > 0 ? { inputs: { ...resolvedInputs } } : {}),
+    ...(scope.forwarded.length > 0 ? { forwarded: [...scope.forwarded] } : {}),
     ...(scope.sessionColdIds.has(cn.id) ? { blockSessionStart: true as const } : {}),
     ...(scope.hasActivationBoundary ? { boundaries: [blockBoundary(scope, cn, wasEntry)] } : {}),
   };

@@ -499,8 +499,55 @@ nodes:
       const outputs = store.events
         .filter(e => e.workflow_run_id === runId && e.event_type === 'node_completed')
         .map(e => String(e.data?.node_output));
-      expect(outputs.some(o => o.includes('mood=[]'))).toBe(true);
+      expect(outputs.some(o => o.startsWith('mood=[]'))).toBe(true);
       if (name === 'gamma-host') expect(outputs.some(o => o.includes('item-mood=[]'))).toBe(true);
+    }
+  });
+
+  it('an explicit with: of an input the run lacks still fails the block', async () => {
+    const reads = (name: string, inputs: string): string =>
+      `name: ${name}\ndescription: reads x\n${inputs}nodes:\n  - id: shell\n    bash: echo "x=[$INPUTS_X]"\n`;
+    await writePackWorkflow('beta', 'beta-x', reads('beta-x', ''));
+    await writePackWorkflow(
+      'beta',
+      'beta-x-default',
+      reads('beta-x-default', 'inputs:\n  x:\n    default: fallback\n')
+    );
+    await writePackWorkflow(
+      'beta',
+      'beta-x-item',
+      reads('beta-x-item', 'inputs:\n  item: {}\n  x:\n    default: fallback\n')
+    );
+    const hosts: Record<string, string> = {
+      'alpha-x': '  - id: blk\n    include: beta-x\n    with:\n      x: $INPUTS.x\n',
+      'alpha-x-default':
+        '  - id: blk\n    include: beta-x-default\n    with:\n      x: $INPUTS.x\n',
+      'alpha-x-fan':
+        '  - id: fan\n    include: beta-x-item\n    with:\n      x: $INPUTS.x\n    fan_out:\n      items: \'["a"]\'\n      as: item\n',
+    };
+    for (const [name, nodes] of Object.entries(hosts)) {
+      await writePackWorkflow(
+        'alpha',
+        name,
+        `name: ${name}\ndescription: passes x\nnodes:\n${nodes}`
+      );
+    }
+
+    for (const name of Object.keys(hosts)) {
+      const store = new InMemoryStore();
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        await discover(name),
+        'goal',
+        { conversationId: 'conv-db' },
+        { baseBranch: 'main' }
+      );
+      expect(result.success).toBe(false);
+      const failed = store.events.find(e => e.event_type === 'node_failed');
+      expect(String(failed?.data?.error)).toContain("Unknown input '$INPUTS.x'");
     }
   });
 

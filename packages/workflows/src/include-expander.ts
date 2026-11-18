@@ -57,7 +57,7 @@ import {
   validateWorkflowResultContract,
 } from './loader/contracts';
 import { resolveWorkflow } from './graph-plan';
-import type { IncludeCommandContent } from './compiled-command';
+import { attachForwardedFanOutWith, type IncludeCommandContent } from './compiled-command';
 import { IncludeExpansionError } from './include/expansion-error';
 import {
   boundaryIdComponent,
@@ -395,17 +395,19 @@ function expandComposeFanOut(
   // A setting forwarded from the block's own pack is written into the node's `with:`, so
   // each runtime item receives it as a passed value, and an outer include from another
   // pack sees `$INPUTS.<name>` in a `with:` slot it must supply.
-  list.expandedNodes.push(
-    forwardedSettings.length === 0
-      ? node
-      : {
-          ...node,
-          with: {
-            ...(node.with ?? {}),
-            ...Object.fromEntries(forwardedSettings.map(name => [name, `$INPUTS.${name}`])),
-          },
-        }
-  );
+  if (forwardedSettings.length === 0) {
+    list.expandedNodes.push(node);
+    return;
+  }
+  const forwarding: ComposeFanOutNode = {
+    ...node,
+    with: {
+      ...(node.with ?? {}),
+      ...Object.fromEntries(forwardedSettings.map(name => [name, `$INPUTS.${name}`])),
+    },
+  };
+  attachForwardedFanOutWith(forwarding, forwardedSettings);
+  list.expandedNodes.push(forwarding);
 }
 
 function expandIncludeDirective(

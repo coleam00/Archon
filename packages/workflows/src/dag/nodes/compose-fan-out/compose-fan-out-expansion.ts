@@ -7,7 +7,7 @@ import type {
 } from '../../../schemas';
 import { isAbsentInputForward, type JsonValue } from '../../../output-ref';
 import { resolveRunInputs } from '../../references';
-import type { IncludeCommandContent } from '../../../compiled-command';
+import { readForwardedFanOutWith, type IncludeCommandContent } from '../../../compiled-command';
 import {
   boundaryIdComponent,
   instantiateResolvedInclude,
@@ -74,8 +74,9 @@ export async function planComposeInstances(
   }
 
   const runInputs = resolveRunInputs(ctx.workflowRun);
+  const forwarded = readForwardedFanOutWith(node);
   const withMap = Object.entries(node.with ?? {}).filter(
-    ([name, value]) => !isAbsentInputForward(name, value, runInputs)
+    ([name, value]) => !isAbsentInputForward(name, value, runInputs, forwarded)
   );
   const staticInputs = resolveFanOutStaticInputs(
     { id: node.id, with: Object.fromEntries(withMap) },

@@ -204,18 +204,19 @@ export function parseWholeInputsRef(text: string): string | undefined {
 }
 
 /**
- * A `with:` or composed input `<name>: $INPUTS.<name>` passes the run's own value on
- * unchanged. When the run has no value for the name, the receiver has none either, as
- * a node of the run reading `INPUTS_<NAME>` directly has none: the entry is left out
- * rather than failing as an unknown input. A same-pack include forwards an optional
- * pack setting with no value this way.
+ * Whether one implicitly forwarded pack setting (see ComposedNodeMeta.forwarded) is
+ * absent from the run, so its receiver leaves it unset instead of failing as an unknown
+ * input. `forwarded` lists only those implicit forwards: an explicit binding of an
+ * absent input is not one of them and still fails.
  */
 export function isAbsentInputForward(
   name: string,
   value: JsonValue,
-  runInputs: Record<string, JsonValue> | undefined
+  runInputs: Record<string, JsonValue> | undefined,
+  forwarded: readonly string[]
 ): boolean {
   return (
+    forwarded.includes(name) &&
     typeof value === 'string' &&
     parseWholeInputsRef(value) === name &&
     !Object.hasOwn(runInputs ?? {}, name)

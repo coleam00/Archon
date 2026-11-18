@@ -117,9 +117,13 @@ export function inputEnvVars(
   }
   const ownWith =
     isExecNode(node) && node.runtime !== 'sh' && node.with !== undefined ? node.with : undefined;
-  for (const [name, value] of Object.entries(readComposedMeta(node)?.inputs ?? {})) {
+  const composed = readComposedMeta(node);
+  for (const [name, value] of Object.entries(composed?.inputs ?? {})) {
     // Overridden by the node's own binding below, so never resolved (it could fail the node).
-    if (!Object.hasOwn(ownWith ?? {}, name) && !isAbsentInputForward(name, value, runInputs))
+    if (
+      !Object.hasOwn(ownWith ?? {}, name) &&
+      !isAbsentInputForward(name, value, runInputs, composed?.forwarded ?? [])
+    )
       env[inputEnvKey(name)] = composedInputText(node.id, name, value, ctx, runInputs);
   }
   // Node-local bindings (#2637): a script node's own `with:` map, the NEAREST source, so it
