@@ -415,11 +415,11 @@ jobs:
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
           bun run validate --only workflow-fixtures
 
-  # Windows proves only what can differ on Windows: the test files marked
-  # `// @archon-test-windows` (CONTRIBUTING.md says which files join), and the generated-file
-  # and import-boundary checks, whose scripts normalize Windows path separators. Everything else
-  # Linux already proved; on this runner the whole suite failed mostly on timing (#5926). The
-  # whole suite still runs on Windows for a push to `main` (the `-windows` jobs above).
+  # The Windows set: the test files marked `// @archon-test-windows` (CONTRIBUTING.md says which
+  # files join), and the generated-file and import-boundary checks, whose scripts normalize
+  # Windows path separators. On this runner the whole suite failed mostly on timing (#5926), so
+  # the `-windows` jobs above run it only for a push to `main`, a pull request whose change runs
+  # every job, or a dispatch with `windows-full-suite`.
   # Install, temp and git settings: see `test-windows`.
   windows-set:
     needs: changes
