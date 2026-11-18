@@ -1687,7 +1687,7 @@ A reject that cancels a managed container run reclaims its container once no exe
 
 ### `workflow pause`
 
-Pause a running run at its next node boundary. The nodes running now finish; the run starts no node after them, and waits paused until you resume it.
+Request a pause of a running run before its next node. The nodes running now finish; the run starts no node after them, and waits paused until you resume it.
 
 ```bash
 archon workflow pause <run-id>

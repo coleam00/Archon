@@ -213,7 +213,7 @@ export async function workflowCancelCommand(
 }
 
 /**
- * Ask the executor that owns a running run to pause it once its running nodes finish
+ * Ask the executor that owns a running run to pause it before its next node
  * (`pauseWorkflow`). Returns at once; the run reads `pause requested` until it pauses.
  */
 export async function workflowPauseCommand(
@@ -249,8 +249,8 @@ export async function workflowPauseCommand(
       : `Pause requested for run ${run.id} (${run.workflow_name}).`
   );
   console.log(
-    'It pauses when the nodes running now finish and starts no node after them. ' +
-      'Its checkout, results, resource slot and item stay held.'
+    'It pauses before its next node starts, once the nodes running now finish; ' +
+      'if no node is left, it completes instead. A paused run keeps its checkout, results, resource slot and item.'
   );
   console.log(
     `Once \`archon workflow status\` shows it paused, resume it: archon workflow resume ${run.id}`
