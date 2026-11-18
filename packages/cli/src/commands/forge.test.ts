@@ -766,7 +766,7 @@ test('forge check reads a remote or repository and refuses a credential the forg
     expect(accepted.code).toBe(0);
     expect(accepted.response).toMatchObject({
       ok: true,
-      result: { op: 'check', value: { host: 'forge.example', read: true } },
+      result: { op: 'check', value: { host: 'forge.example' } },
     });
 
     const expired = await checkForge({ ...target, operations }, env('expired-token'), 'access');
@@ -793,14 +793,14 @@ test('forge check reads a remote or repository and refuses a credential the forg
     env('expired-token'),
     'access'
   );
-  expect(byHost.response).toMatchObject({ ok: true, result: { value: { read: false } } });
+  expect(byHost.response).toMatchObject({ ok: true });
 
   // A plugin with no pr.view has no read to serve: the check passes as it did before.
   const noRead = await checkForge(
     { remote: 'git@forge.example:a/b.git', operations: ['checks.state'] },
     env('expired-token')
   );
-  expect(noRead.response).toMatchObject({ ok: true, result: { value: { read: false } } });
+  expect(noRead.response).toMatchObject({ ok: true });
 });
 
 test('forge check under a source checkout answers for the source GitHub plugin', async () => {

@@ -248,7 +248,6 @@ describe('forgeCheckFailure', () => {
               host: 'github.com',
               plugin: { name: 'github', version: '1' },
               operations: [],
-              read: true,
             },
           },
         }),

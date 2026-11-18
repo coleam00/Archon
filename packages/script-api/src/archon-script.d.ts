@@ -1534,7 +1534,6 @@ declare module 'archon:script' {
         };
         readonly operations: ReadonlyArray<string>;
         readonly credentialSource?: string;
-        readonly read: boolean;
       };
     };
   }

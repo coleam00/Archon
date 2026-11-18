@@ -408,8 +408,6 @@ export type ForgeAccessCheck =
       host: string;
       plugin: NonNullable<ForgeDispatchResult['plugin']>;
       credentialSource?: string;
-      /** Whether the credential read the repository; see {@link checkForgeAccess}. */
-      read: boolean;
     }
   | { ok: false; error: ForgeError; unsupported?: string[]; remedy?: string };
 
@@ -486,10 +484,9 @@ export async function checkForgeAccess(
     host,
     plugin: { name, version },
     ...(credential.kind === 'selected' ? { credentialSource: credential.source } : {}),
-    read: false,
   };
   // A `host` check names no repository, and a plugin without `pr.view` has no read to
-  // serve: both stop at the credential, and say so with `read: false`.
+  // serve: both stop at the credential.
   if (request.host !== undefined || !capabilities.includes('pr.view')) return passed;
   return readRepository(request, passed, { ...options, discovery });
 }
@@ -526,7 +523,7 @@ async function readRepository(
   };
   const { response, retries = 0 } = await dispatch(read, options);
   const answer = named(read, response, retries);
-  if (answer.ok) return { ...passed, read: true };
+  if (answer.ok) return passed;
   const { error } = answer;
   if (error.kind === 'authorization') {
     const source = passed.credentialSource ? ` from ${passed.credentialSource}` : '';

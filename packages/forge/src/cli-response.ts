@@ -37,9 +37,6 @@ const cliForgeCheckSchema = z.object({
   operations: z.array(z.string().min(1)),
   // Where the credential was found, never the credential. Absent when the plugin needs none.
   credentialSource: z.string().min(1).optional(),
-  // Whether the check read the repository with the credential: false for a `host` check,
-  // which names no repository, and for a plugin that advertises no `pr.view`.
-  read: z.boolean(),
 });
 
 const [success, failure] = forgeResponseSchema.options;

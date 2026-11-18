@@ -232,7 +232,7 @@ async function answerCheck(input: ForgeInput, context: ForgeCommandContext): Pro
     });
     return 1;
   }
-  const { host, plugin, credentialSource, read } = check;
+  const { host, plugin, credentialSource } = check;
   await write({
     operationId,
     ok: true,
@@ -243,7 +243,6 @@ async function answerCheck(input: ForgeInput, context: ForgeCommandContext): Pro
         plugin,
         operations: request.operations,
         ...(credentialSource ? { credentialSource } : {}),
-        read,
       },
     },
   });
