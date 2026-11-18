@@ -30,14 +30,21 @@
  */
 import { buildProviderSubprocessEnv } from '@archon/provider-contract';
 import type { CredentialStatus, ProviderDiagnostics } from '@archon/provider-contract';
-import { query, type Options, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import {
+  query,
+  type Options,
+  type HookCallback,
+  type PostToolUseFailureHookInput,
+  type PostToolUseHookInput,
+  type SDKUserMessage,
+} from '@anthropic-ai/claude-agent-sdk';
 import type {
   IAgentProvider,
   SendQueryOptions,
   MessageChunk,
   ProviderCapabilities,
 } from '../types';
-import { sessionPreview } from '@archon/provider-contract';
+import { sessionPreview, truncateToolOutput } from '@archon/provider-contract';
 import { parseClaudeConfig, resolveSettingSources } from './config';
 import { CLAUDE_CAPABILITIES } from './capabilities';
 import { buildContainerSpawn } from './container-spawn';
@@ -57,7 +64,7 @@ import { ClaudeFirstEventTimeoutError, thrownErrorChunks } from './failure';
 import { applyNodeConfig, isWorkflowNode } from './node-config';
 import { requireMcpConnections } from '../mcp/readiness';
 import { streamClaudeMessages, type ToolResultEntry } from './stream';
-import { buildProviderHooks } from './hooks';
+import { holdStructuredOutputWhileSubtasksRun } from './structured-output-hold';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -279,7 +286,10 @@ function buildBaseClaudeOptions(
   cwd: string,
   requestOptions: SendQueryOptions | undefined,
   assistantDefaults: ReturnType<typeof parseClaudeConfig>,
-  run: QueryRun,
+  controller: AbortController,
+  stderrLines: string[],
+  toolResultQueue: ToolResultEntry[],
+  openSubtaskIds: ReadonlySet<string>,
   env: NodeJS.ProcessEnv,
   cliPath: string | undefined,
   settingSources: (typeof SETTING_SOURCES)[number][]
@@ -312,7 +322,7 @@ function buildBaseClaudeOptions(
     ...spawnOverride,
     env,
     model: requestOptions?.model ?? assistantDefaults.model,
-    abortController: run.controller,
+    abortController: controller,
     ...(requestOptions?.outputFormat !== undefined
       ? { outputFormat: requestOptions.outputFormat }
       : {}),
@@ -343,15 +353,16 @@ function buildBaseClaudeOptions(
     // enables (`hook_progress`) falls through — it is only emitted for
     // async hooks, which Archon does not register today.
     includeHookEvents: true,
-    hooks: buildProviderHooks(
-      run.toolResultQueue,
-      run.openSubtaskIds,
-      requestOptions?.outputFormat !== undefined
-    ),
+    hooks: {
+      ...buildToolCaptureHooks(toolResultQueue),
+      ...(requestOptions?.outputFormat !== undefined
+        ? { PreToolUse: [holdStructuredOutputWhileSubtasksRun(openSubtaskIds)] }
+        : {}),
+    },
     stderr: (data: string): void => {
       const output = data.trim();
       if (!output) return;
-      run.stderrLines.push(output);
+      stderrLines.push(output);
 
       const isError =
         output.toLowerCase().includes('error') ||
@@ -370,6 +381,59 @@ function buildBaseClaudeOptions(
         getLog().error({ stderr: output }, 'subprocess_error');
       }
     },
+  };
+}
+
+// ─── Tool Capture Hooks ──────────────────────────────────────────────────
+
+/**
+ * Build SDK hooks that capture tool use results into a shared queue.
+ * The queue is drained during stream normalization.
+ */
+function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hooks'] {
+  return {
+    PostToolUse: [
+      {
+        hooks: [
+          (async (input: PostToolUseHookInput): Promise<{ continue: true }> => {
+            try {
+              const response = input.tool_response;
+              const text = typeof response === 'string' ? response : JSON.stringify(response ?? '');
+              const update: ToolResultEntry = {
+                type: 'tool_call_update',
+                toolCallId: input.tool_use_id,
+                status: 'completed',
+                ...truncateToolOutput(text),
+              };
+              toolResultQueue.push(update);
+            } catch (e) {
+              getLog().error({ err: e, input }, 'claude.post_tool_use_hook_error');
+            }
+            return { continue: true };
+          }) as HookCallback,
+        ],
+      },
+    ],
+    PostToolUseFailure: [
+      {
+        hooks: [
+          (async (input: PostToolUseFailureHookInput): Promise<{ continue: true }> => {
+            try {
+              const update: ToolResultEntry = {
+                type: 'tool_call_update',
+                toolCallId: input.tool_use_id,
+                status: input.is_interrupt === true ? 'cancelled' : 'failed',
+                ...truncateToolOutput(input.error),
+              };
+              toolResultQueue.push(update);
+            } catch (e) {
+              getLog().error({ err: e, input }, 'claude.post_tool_use_failure_hook_error');
+            }
+            return { continue: true };
+          }) as HookCallback,
+        ],
+      },
+    ],
   };
 }
 
@@ -415,7 +479,10 @@ async function* buildQueryOptions(
     cwd,
     requestOptions,
     assistantDefaults,
-    run,
+    run.controller,
+    run.stderrLines,
+    run.toolResultQueue,
+    run.openSubtaskIds,
     env,
     resolvedCliPath,
     [...settingSources]
