@@ -393,8 +393,9 @@ function expandComposeFanOut(
   );
   list.includedRequirements.push(...(child.requires ?? []));
   // A setting forwarded from the block's own pack is written into the node's `with:`, so
-  // each runtime item receives it as a passed value, and an outer include from another
-  // pack sees `$INPUTS.<name>` in a `with:` slot it must supply.
+  // an outer include from another pack sees `$INPUTS.<name>` in a `with:` slot it must
+  // supply, and each runtime item receives what it supplied. A forward still standing at
+  // run time is left to each item's own same-pack instantiation (planComposeInstances).
   if (forwardedSettings.length === 0) {
     list.expandedNodes.push(node);
     return;

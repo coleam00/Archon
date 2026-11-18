@@ -407,6 +407,9 @@ inputs:
 nodes:
   - id: shell
     bash: echo "item-env=$INPUTS_ITEM-$INPUTS_TONE"
+  - id: gated
+    bash: echo "item-gated"
+    when: "$INPUTS.tone == 'beta-project'"
 `
     );
     await writePackWorkflow(
@@ -449,6 +452,7 @@ nodes:
           .filter(e => e.workflow_run_id === runId && e.event_type === 'node_completed')
           .map(e => String(e.data?.node_output));
         expect(outputs.some(o => o.includes('item-env=a-beta-project'))).toBe(true);
+        expect(outputs.some(o => o.includes('item-gated'))).toBe(true);
       }
     }
   });

@@ -228,7 +228,7 @@ function inlineInclude(
  * block's own pack, `with:` may also pass one of the pack's settings the block does not
  * declare: the block reads that setting either way, and the passed value overrides the
  * run's. (A runtime compose_fan_out instance relies on this: its node's `with:` carries
- * the settings its load-time instantiation forwarded.)
+ * a forwarded setting that an outer include from another pack supplied.)
  */
 function includeInputs(
   includeNode: IncludeDirective,

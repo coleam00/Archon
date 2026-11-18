@@ -5,8 +5,7 @@ import type {
   IncludeDirective,
   ResolvedWorkflow,
 } from '../../../schemas';
-import { isAbsentInputForward, type JsonValue } from '../../../output-ref';
-import { resolveRunInputs } from '../../references';
+import { parseWholeInputsRef, type JsonValue } from '../../../output-ref';
 import { readForwardedFanOutWith, type IncludeCommandContent } from '../../../compiled-command';
 import {
   boundaryIdComponent,
@@ -73,15 +72,23 @@ export async function planComposeInstances(
     return { snapshots: persistedSnapshots };
   }
 
-  const runInputs = resolveRunInputs(ctx.workflowRun);
+  // An implicit same-pack forward still standing as `$INPUTS.<name>` reaches the run's own
+  // setting. It is left out of the snapshot, so each instance's same-pack instantiation
+  // forwards it again as a reference, exactly as a static include does. Resolved here, its
+  // value would be spliced into text surfaces at instantiation, and a `when:` such as
+  // `$INPUTS.enabled == true` would become the unparseable `true == true`.
   const forwarded = readForwardedFanOutWith(node);
   const withMap = Object.entries(node.with ?? {}).filter(
-    ([name, value]) => !isAbsentInputForward(name, value, runInputs, forwarded)
+    ([name, value]) =>
+      !(
+        forwarded.includes(name) &&
+        typeof value === 'string' &&
+        parseWholeInputsRef(value) === name
+      )
   );
   const staticInputs = resolveFanOutStaticInputs(
     { id: node.id, with: Object.fromEntries(withMap) },
-    ctx,
-    runInputs
+    ctx
   );
   if ('error' in staticInputs) {
     return {
