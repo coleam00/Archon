@@ -87,8 +87,8 @@ afterAll(async () => {
 
 // Each test gets its own copy of the seeded project and database, so no test reads what
 // another wrote and the order they run in cannot change a result.
-beforeEach(() => {
-  rmSync(root, { recursive: true, force: true });
+beforeEach(async () => {
+  await removeTempTree(root);
   cpSync(seeded, root, { recursive: true, verbatimSymlinks: true });
 });
 
