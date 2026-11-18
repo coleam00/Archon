@@ -66,7 +66,7 @@ const TEST_SHARDS: readonly TestShard[] = [
  * CLI `rootTestEnv` names, which no other `bun test` under the repository root has.
  */
 export function rootTestCommand(selectors: readonly string[]): string[] {
-  const [bun, test, ...rest] = bunTestCommand(selectors);
+  const [bun, test, ...rest] = bunTestCommand(selectors, REPO_ROOT);
   return [
     bun as string,
     test as string,
@@ -169,10 +169,11 @@ export function rootTestEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Proces
   };
 }
 
-async function run(command: string[], cwd: string): Promise<number> {
+/** Runs one command: a root `bun test` process, or a package's own runner. */
+async function run(command: string[], cwd: string, runner: boolean): Promise<number> {
   const child = Bun.spawn(command, {
     cwd,
-    env: bunTestEnv(cwd === REPO_ROOT ? rootTestEnv() : process.env),
+    env: bunTestEnv(cwd === REPO_ROOT ? rootTestEnv() : process.env, { runner }),
     stdio: ['inherit', 'inherit', 'inherit'],
   });
   return await child.exited;
@@ -181,7 +182,7 @@ async function run(command: string[], cwd: string): Promise<number> {
 async function runPlan(shard?: TestShard): Promise<number> {
   for (const step of ROOT_TEST_PLAN) {
     if (shard !== undefined && step.shard !== shard) continue;
-    const code = await run(planStepCommand(step), REPO_ROOT);
+    const code = await run(planStepCommand(step), REPO_ROOT, step.kind !== 'root');
     if (code !== 0) return code;
   }
   return 0;
@@ -261,10 +262,9 @@ async function runRequested(requested: string[]): Promise<number> {
   let code = 0;
   for (const { owner, args } of runs) {
     const runOwner = (ownerArgs: string[]) =>
-      run(
-        owner.cwd === REPO_ROOT ? rootTestCommand(ownerArgs) : ['bun', 'run', 'test', ...ownerArgs],
-        owner.cwd
-      );
+      owner.cwd === REPO_ROOT
+        ? run(rootTestCommand(ownerArgs), owner.cwd, false)
+        : run(['bun', 'run', 'test', ...ownerArgs], owner.cwd, true);
     if (destination === undefined) {
       code = await runOwner(args);
     } else {

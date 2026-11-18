@@ -275,6 +275,7 @@ const EVERY_JOB_INPUTS = [
   'bunfig.toml',
   'scripts/should-run-test-suite.ts',
   'scripts/test-suite-outcome.ts',
+  'scripts/near-limit-tests.ts',
 ];
 
 /**

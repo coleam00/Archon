@@ -671,6 +671,7 @@ describe('what a pull request leaves to the push', () => {
     'scripts/bun-test-command.ts',
     'scripts/should-run-test-suite.ts',
     'scripts/test-suite-outcome.ts',
+    'scripts/near-limit-tests.ts',
   ])('a change to %s runs every job', file => {
     expect(shouldRunEveryJob(['README.md', file], runner)).toBe(true);
   });

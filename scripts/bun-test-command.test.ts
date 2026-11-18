@@ -2,8 +2,19 @@ import { describe, expect, it } from 'bun:test';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { removeTempTree, testTimeout, DEFAULT_TEST_TIMEOUT_MS } from '@archon/paths/test-utils';
-import { TEST_TRANSPILER_CACHE, bunTestCommand, bunTestEnv } from './bun-test-command';
+import { mkdtempSync } from 'node:fs';
+import {
+  removeTempTree,
+  testTimeout,
+  trackTempRoots,
+  DEFAULT_TEST_TIMEOUT_MS,
+} from '@archon/paths/test-utils';
+import {
+  TEST_REPORT_DIR_ENV,
+  TEST_TRANSPILER_CACHE,
+  bunTestCommand,
+  bunTestEnv,
+} from './bun-test-command';
 
 describe('bunTestCommand', () => {
   it('sets the default per-test budget to 20 seconds', () => {
@@ -25,6 +36,25 @@ describe('bunTestCommand', () => {
       '--bail',
       'logger',
     ]);
+  });
+});
+
+describe('the near-limit report directory', () => {
+  const track = trackTempRoots();
+  it('gives a runner a JUnit report per process, keyed by its directory, unless it names one', () => {
+    const reports = track(mkdtempSync(join(tmpdir(), 'near-limit-reports-')));
+    const env = { [TEST_REPORT_DIR_ENV]: reports };
+    const cwd = join(import.meta.dir, '..', 'packages', 'cli');
+    const outfile = bunTestCommand(['src/a.test.ts'], cwd, env).find(arg =>
+      arg.startsWith('--reporter-outfile=')
+    );
+    expect(outfile).toStartWith(`--reporter-outfile=${join(reports, 'packages', 'cli')}`);
+    expect(bunTestCommand(['src/a.test.ts', '--reporter=dots'], cwd, env)).not.toContain(
+      '--reporter=junit'
+    );
+    // A test process never sees it, so a runner a test starts reports nothing there.
+    expect(bunTestEnv(env)[TEST_REPORT_DIR_ENV]).toBeUndefined();
+    expect(bunTestEnv(env, { runner: true })[TEST_REPORT_DIR_ENV]).toBe(reports);
   });
 });
 

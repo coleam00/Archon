@@ -47,6 +47,7 @@ import {
   runWorkflowReject,
 } from '../routes/workflow';
 import { workflowContinuationCommand } from './workflow-continuations';
+import { workflowAttentionCommand } from './workflow-attention';
 const scopes: CliTestScope[] = [];
 let originalEnv: NodeJS.ProcessEnv;
 let originalLogLevel: ReturnType<typeof getLogLevel>;
@@ -1386,10 +1387,20 @@ test('independent questions survive separate CLI processes and apply second firs
   const f = fixture();
   for (const [name, yaml] of Object.entries(multiAttentionWorkflows))
     writeFileSync(join(f.project, '.archon/workflows', `${name}.yaml`), yaml);
+  // The subject is that the questions outlive the process that opened them and each answer
+  // comes from its own CLI process. The queue reads between them only read the store, so they
+  // run in-process.
   const started = await cli(f, ['workflow', 'run', 'questions', '--folder', '--no-worktree']);
   expect(started, started.output + started.error).toMatchObject({ code: 0 });
+  setLogLevel('error');
+  process.env = { ...f.env };
+  const host = await createFileWorkflowHost(join(f.home, 'store'));
+  const attention = (runId?: string) =>
+    commandResult(() =>
+      workflowAttentionCommand(host, f.project, runId, { json: true, labels: [] })
+    );
   const queue = async () => {
-    const result = await cli(f, ['workflow', 'attention', '--json']);
+    const result = await attention();
     expect(result, result.error).toMatchObject({ code: 0 });
     return attentionQueueItemSchema
       .array()
@@ -1400,7 +1411,7 @@ test('independent questions survive separate CLI processes and apply second firs
   expect(items).toHaveLength(2);
   const [first, second] = items;
   for (const item of items) {
-    const read = await cli(f, ['workflow', 'attention', item.run.id, '--json']);
+    const read = await attention(item.run.id);
     expect(read, read.error).toMatchObject({ code: 0 });
     expect(JSON.parse(read.output).item).toEqual(item);
   }

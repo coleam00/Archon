@@ -38,7 +38,7 @@ const manifestPath = join(packageDir, 'package.json');
 const manifest: unknown = await Bun.file(manifestPath).json();
 
 const run = async (args: string[]): Promise<number> => {
-  const child = Bun.spawn(bunTestCommand(args), {
+  const child = Bun.spawn(bunTestCommand(args, packageDir), {
     cwd: packageDir,
     env: bunTestEnv(),
     stdio: ['inherit', 'inherit', 'inherit'],
@@ -105,7 +105,7 @@ const timed = async (group: string[], runGroup: (group: string[]) => Promise<num
 
 const runBuffered = async (group: string[]): Promise<number> => {
   console.log(`▶ ${selectedFiles(group)[0] ?? 'Test process'}`);
-  const child = Bun.spawn(bunTestCommand(group), {
+  const child = Bun.spawn(bunTestCommand(group, packageDir), {
     cwd: packageDir,
     env: bunTestEnv(),
     stdin: 'ignore',

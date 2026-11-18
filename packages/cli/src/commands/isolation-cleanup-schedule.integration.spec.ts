@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
+import { captureWorkflowCommand } from '../test-support/command';
 import { isolationCleanupScheduleConfig } from './isolation-schedule';
+import { workflowRunCommand } from './workflow-run-owned';
 
 const trackTempRoot = trackTempRoots();
 const CLI_ENTRY = resolve(import.meta.dir, '..', 'cli.ts');
@@ -75,15 +77,15 @@ function readEnvironments(
 describe('isolation cleanup schedule', () => {
   test('one scheduled pass releases a merged worktree and keeps one with uncommitted changes', async () => {
     const fixture = createFixture();
+    // The worktrees are setup, so they are made in-process; the scheduled pass is the subject.
     for (const [workflow, branch] of [
       ['land', 'land-branch'],
       ['dirty', 'dirty-branch'],
     ]) {
-      const run = Bun.spawnSync(
-        [process.execPath, CLI_ENTRY, 'workflow', 'run', workflow, '--branch', branch, '--json'],
-        { cwd: fixture.repo, env: fixture.env }
+      const run = await captureWorkflowCommand(fixture.home, host =>
+        workflowRunCommand(host, fixture.repo, workflow, '', { branchName: branch })
       );
-      if (run.exitCode !== 0) throw new Error(run.stderr.toString());
+      if (run.status !== 0) throw new Error(run.output);
     }
     const before = readEnvironments(fixture.home);
     expect(before.map(env => [env.branch_name, env.status]).sort()).toEqual([
