@@ -637,8 +637,9 @@ const WINDOWS_FULL_SUITE_REF = 'refs/heads/main';
 
 /**
  * A manual dispatch runs every job on every platform, and the opt-in checks only when their
- * input asks. The event file carries a boolean input as `true` or the string `"true"`; any other value but `false`, `"false"`
- * or an absent input is a wiring bug, so it throws rather than publish a guess.
+ * input asks. The event file carries a boolean input as `true` or the string `"true"`; any
+ * other value but `false`, `"false"` or an absent input is a wiring bug, so it throws rather
+ * than publish a guess.
  */
 export function dispatchDecision(mode: Mode, event: EventPayload): boolean {
   if (!OPT_IN_MODES.has(mode)) return true;
