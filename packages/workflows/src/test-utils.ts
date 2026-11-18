@@ -204,13 +204,10 @@ export function workflowStoreDouble<S extends object = IWorkflowStore>(
   implemented: Partial<NotInferred<S>>,
   fallback?: (method: string) => unknown
 ): NotInferred<S> {
-  // A fresh double, so no own `undefined` can shadow the fallback and fail as "is not a
-  // function": copy every property of `implemented` except those whose value is undefined.
-  const double = Object.create(unsetStoreMethods(fallback)) as object;
-  for (const [key, property] of Object.entries(Object.getOwnPropertyDescriptors(implemented))) {
-    if (!('value' in property) || property.value !== undefined) {
-      Object.defineProperty(double, key, property);
-    }
+  // A fresh copy without the `undefined` entries, so none of them shadows its fallback.
+  const double: Record<string, unknown> = Object.create(unsetStoreMethods(fallback));
+  for (const [key, value] of Object.entries(implemented)) {
+    if (value !== undefined) double[key] = value;
   }
   // Sound: every key the copy lacks resolves through the prototype's fallback.
   return double as NotInferred<S>;
