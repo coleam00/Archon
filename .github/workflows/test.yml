@@ -222,24 +222,14 @@ jobs:
       # `Git\bin\git.exe` on the runner's PATH is a launcher that starts
       # `mingw64\bin\git.exe` as a second process, so every git call cost two processes
       # (about 4,700 extra per leg). Putting the real binary first removes the launcher.
-      #
-      # `ARCHON_TEST_REPORT_DIR` makes each test process write a JUnit report, and the next
-      # step lists the tests that used more than half their time limit in the job summary.
-      # Windows is the slowest runner, so a test drifting toward its limit shows here before
-      # it fails (#5835).
       - name: Validate
         env:
           ARCHON_TEST_PART: ${{ matrix.part }}
-          ARCHON_TEST_REPORT_DIR: ${{ runner.temp }}/test-reports
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
         run: |
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
           bun run validate --only ${{ matrix.check }}
-
-      - name: Tests near their time limit
-        if: always()
-        run: bun scripts/near-limit-tests.ts "${{ runner.temp }}/test-reports"
 
   # The root scripts shard. Root tests read the packages, so it runs whenever the suite does.
   test-scripts:
@@ -312,19 +302,14 @@ jobs:
       # The generated-file and import-boundary checks ride this shard as well as `static`
       # because their scripts normalize Windows path separators, and only a Windows run proves
       # that; they cost seconds. The installer check is POSIX-only (validate skips it on
-      # Windows). Temp, git and test report settings: see the validate step in `test-windows`.
+      # Windows). Temp and git settings: see the validate step in `test-windows`.
       - name: Validate
         env:
-          ARCHON_TEST_REPORT_DIR: ${{ runner.temp }}/test-reports
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
         run: |
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
           bun run validate --only cli-import-boundary,package-edges,generated-files,script-tests
-
-      - name: Tests near their time limit
-        if: always()
-        run: bun scripts/near-limit-tests.ts "${{ runner.temp }}/test-reports"
 
   # The pack shard and the workflow fixtures, which dry-run the bundled workflows (almost all of
   # them the SDLC pack's). They run when the change touches the pack or a contract it is written
@@ -397,20 +382,15 @@ jobs:
         if: env.RUN_PACK == 'true'
         run: uv run python -c "print('uv warm')"
 
-      # Temp, git and test report settings: see the validate step in `test-windows`.
+      # Temp and git settings: see the validate step in `test-windows`.
       - name: Pack script tests
         if: needs.changes.outputs.run-pack-tests == 'true'
         env:
-          ARCHON_TEST_REPORT_DIR: ${{ runner.temp }}/test-reports
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
         run: |
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
           bun run validate --only pack-tests
-
-      - name: Tests near their time limit
-        if: always() && needs.changes.outputs.run-pack-tests == 'true'
-        run: bun scripts/near-limit-tests.ts "${{ runner.temp }}/test-reports"
 
       - name: Workflow fixtures
         if: needs.changes.outputs.run-pack-fixtures == 'true'
