@@ -77,7 +77,7 @@ archon metrics sdlc.issues_built --by-dimension route --since 30d
 archon metrics sdlc.issue_asks --by-dimension route --compare <when this checkout picked up a pack change>
 ```
 
-Records written before the route became a dimension sit under the old per-route names, such as `sdlc.issues_merged.plan`, until they age out of the window.
+The split covers only records written after the route became a dimension. Earlier records keep their route only in the old per-route names, such as `sdlc.issues_merged.plan`, which still read as before until they age out of the window. Their totals carry no dimension, so a window that mixes old and new records counts them in the `none` group, and a window holding only old records fails `--by-dimension route` with `no record carries a dimension "route"`. Read the old per-route names for that period.
 
 A work item keeps its last ten build rounds and its last twenty decisions per queue, so an issue past either undercounts its rounds or asks, and one whose first round fell out can move to its next round's route.
 

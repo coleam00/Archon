@@ -442,8 +442,9 @@ curl 'http://localhost:3090/api/metrics?name=repo.commits&since=7d'
 
 Each metric reports its `value` (the sum or the mean), `n` (the records counted), its
 `interval`, the `cost` of its producing runs, its latest record and a daily `series`, per
-instrument and `measured_by`, a `compare` block when a cut is given, a `by_model`
-block when a node is, and a `by_dimension` block when a dimension key is. `archon metrics` exits `4` when it
+instrument and `measured_by`, a `compare` block when a cut is given without a dimension
+key, a `by_model` block when a node is, and a `by_dimension` block when a dimension key
+is, with a `compare` block in each of its groups instead when a cut is also given. `archon metrics` exits `4` when it
 refused a record, and prints each refusal to stderr. See
 [`archon metrics`](/reference/cli/#metrics-name) and
 [`GET /api/metrics`](/reference/api/#metrics) for every option.

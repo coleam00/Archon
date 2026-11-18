@@ -2726,7 +2726,7 @@ of at least two records, the latest record, and the instrument with the models t
 `instrument_node`, such as `[judge-v1 on claude/claude-opus-5-5@high]`. An indented line
 gives the cost and tokens of the producing runs, with how many runs recorded no cost, no
 tokens, only partial cost, or no longer exist. Other instruments follow with the same
-lines, indented further. With `--compare`, each
+lines, indented further. With `--compare` and no `--by-dimension`, each
 entry adds the `before` and `after` cohorts with their value, `n` and interval, the delta
 with its 95% interval, whether that interval excludes zero (`separated`), and how many
 records were `straddling` the cut or `unattributed`, and the output ends with a line that

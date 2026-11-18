@@ -587,7 +587,7 @@ instrument's records at), `byModel` (a node id to split them by the model that r
 The window is half-open. It returns the same `MetricsReport` `archon metrics --json`
 prints: per name, its definition and one entry per instrument and `measured_by` with
 `value`, `n`, `interval`, `cost`, `latest` and a daily `series`, a `compare` block when
-`compare` is given, a `by_model` block when `byModel` is, or a `by_dimension` block when
+`compare` is given without `byDimension`, a `by_model` block when `byModel` is, or a `by_dimension` block when
 `byDimension` is (each of its groups with its own `compare` block when `compare` is also
 given), plus `refused[]`. Returns **400** for a malformed window, `compare` or `byDimension`
 key, an empty `byModel`, `byModel` with `compare` or `byDimension`, a `byModel` node none
