@@ -464,6 +464,7 @@ describe('executeDagWorkflow -- script nodes', () => {
       const fault = spyOn(sourceLoader, 'assertWorkflowSourceIntegrity').mockRejectedValue(
         new WorkflowSourceUnavailableError(join(testDir, 'capture'), new Error('read denied'))
       );
+      const dockerProbe = stubMissingContainer();
       const stop = mock(async () => undefined);
       const backend = {
         prepareSuspend: mock(async (_envId: string, containerId: string) => {
@@ -530,6 +531,7 @@ describe('executeDagWorkflow -- script nodes', () => {
         await expect(readFile(marker)).rejects.toThrow();
       } finally {
         fault.mockRestore();
+        dockerProbe.mockRestore();
       }
     }
   );
