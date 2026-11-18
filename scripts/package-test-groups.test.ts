@@ -61,6 +61,12 @@ test('an isolation directive below line 1 fails discovery instead of being ignor
   expect(() => resolvePackageTestGroups(root, {})).toThrow('below line 1');
   write(root, 'src/a.test.ts', `import 'x';\n\n${TEST_ISOLATION_DIRECTIVE}\n`);
   expect(() => resolvePackageTestGroups(root, {})).toThrow('below line 1');
+  // A manifest group names the file, which skips discovery's grouping but not this check.
+  write(root, 'src/a.test.ts', `${WINDOWS_TEST_DIRECTIVE}\n${TEST_ISOLATION_DIRECTIVE}\n`);
+  expect(() => resolvePackageTestGroups(root, { testGroups: [['src/']] })).toThrow('below line 1');
+  // The same text inside a fixture's template literal is not a directive.
+  write(root, 'src/a.test.ts', `const fixture = \`import 'x';\n${TEST_ISOLATION_DIRECTIVE}\n\`;\n`);
+  expect(resolvePackageTestGroups(root, {})).toEqual([['src/a.test.ts']]);
   write(root, 'src/a.test.ts', `${TEST_ISOLATION_DIRECTIVE}\n${WINDOWS_TEST_DIRECTIVE}\n`);
   expect(resolvePackageTestGroups(root, {})).toEqual([['src/a.test.ts']]);
 });

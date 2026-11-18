@@ -207,8 +207,12 @@ async function startWindowsRunOwner(
     );
   } catch (error) {
     // The caller's cleanup never runs for a fixture that did not become ready, and a
-    // `spawner` owner would keep starting children; end its whole tree here.
-    await killWindowsProcessesNaming(marker);
+    // `spawner` owner would keep starting children; end its whole tree here. The readiness
+    // error stays the one reported.
+    const leftovers = await killWindowsProcessesNaming(marker).catch((cleanup: unknown) => [
+      String(cleanup),
+    ]);
+    if (leftovers.length > 0) console.error(`Fixture cleanup: ${leftovers.join('; ')}`);
     throw error;
   }
   return { runId, dir, marker, store };
@@ -241,28 +245,88 @@ function cancellationOperations(
 }
 
 /**
- * Kill whatever `marker` still names, after a test that may have left survivors. The query
- * and the kill are one WMI pass, so only a process whose command line carries `marker` at
- * the moment of the kill is ended. A PID listed earlier is never killed by number: Windows
- * reuses PIDs within seconds, and once handed one to TrustedInstaller.exe (see below).
+ * How long cleanup keeps ending a fixture tree. A `spawner` owner starts a child every 10 ms
+ * until it is itself ended, so one pass can miss a child started after its listing; passes
+ * repeat until one finds nothing.
  */
-async function killWindowsProcessesNaming(marker: string): Promise<void> {
-  const script = [
-    '$matched = @(Get-CimInstance -ClassName Win32_Process -Filter "CommandLine LIKE \'%$($env:ARCHON_SPEC_MARKER)%\'")',
-    // A process that exits between the query and its kill fails here; the test's own
-    // assertion has already reported it as a survivor, so the failure is ignored.
-    '$matched | Invoke-CimMethod -MethodName Terminate -ErrorAction SilentlyContinue | Out-Null',
-  ].join('\n');
-  await execFileAsync(
-    'powershell.exe',
-    [
-      '-NoProfile',
-      '-NonInteractive',
-      '-EncodedCommand',
-      Buffer.from(script, 'utf16le').toString('base64'),
-    ],
-    { env: { ...process.env, ARCHON_SPEC_MARKER: marker }, windowsHide: true }
-  );
+const CLEANUP_DEADLINE_MS = 30_000;
+
+/**
+ * One pass: end every process whose command line carries the marker now. A listed PID is
+ * never killed by number: Windows reuses PIDs within seconds, and once handed one to
+ * TrustedInstaller.exe (see below). Each process is opened first; the handle names that one
+ * process for good, and its start time must match the listing's, so a process that reused
+ * the PID since is left alone. A handle that cannot be opened is not one of this test's
+ * processes, which run as the same user. Prints how many matched and every kill that failed.
+ */
+const KILL_PASS_SCRIPT = [
+  "$ErrorActionPreference = 'Stop'",
+  '$found = @(Get-CimInstance -ClassName Win32_Process -Filter "CommandLine LIKE \'%$($env:ARCHON_SPEC_MARKER)%\'")',
+  '$failed = @()',
+  'foreach ($entry in $found) {',
+  '  try { $process = [System.Diagnostics.Process]::GetProcessById([int]$entry.ProcessId); $null = $process.Handle } catch { continue }',
+  '  try {',
+  '    if ([Math]::Abs(($process.StartTime - $entry.CreationDate).TotalMilliseconds) -gt 100) { continue }',
+  '    $process.Kill()',
+  '    if (-not $process.WaitForExit(5000)) { $failed += "$($entry.ProcessId) did not exit after Kill" }',
+  '  } catch {',
+  '    if (-not $process.HasExited) { $failed += "$($entry.ProcessId): $($_.Exception.Message)" }',
+  '  } finally { $process.Dispose() }',
+  '}',
+  'ConvertTo-Json -Compress -InputObject @{ found = $found.Count; failed = @($failed) }',
+].join('\n');
+
+/**
+ * End whatever `marker` still names, after a test that may have left survivors. Returns what
+ * could not be ended: empty when a pass found nothing left.
+ */
+async function killWindowsProcessesNaming(marker: string): Promise<string[]> {
+  const deadline = Date.now() + CLEANUP_DEADLINE_MS;
+  for (;;) {
+    const { stdout } = await execFileAsync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-EncodedCommand',
+        Buffer.from(KILL_PASS_SCRIPT, 'utf16le').toString('base64'),
+      ],
+      { env: { ...process.env, ARCHON_SPEC_MARKER: marker }, windowsHide: true }
+    );
+    const pass = JSON.parse(stdout) as { found: number; failed: string[] };
+    if (pass.found === 0) return [];
+    if (Date.now() >= deadline) {
+      return [`${String(pass.found)} processes still name ${marker}`, ...pass.failed];
+    }
+  }
+}
+
+/**
+ * Run `body`, then always `cleanup`, which returns what it could not end. A cleanup problem
+ * fails a test that passed; after a failed test it is logged, so the test's own failure is
+ * the one reported.
+ */
+async function withFixtureCleanup(
+  body: () => Promise<void>,
+  cleanup: () => Promise<string[]>
+): Promise<void> {
+  let failure: { error: unknown } | undefined;
+  try {
+    await body();
+  } catch (error) {
+    failure = { error };
+  }
+  let leftovers: string[];
+  try {
+    leftovers = await cleanup();
+  } catch (error) {
+    leftovers = [`cleanup failed: ${error instanceof Error ? error.message : String(error)}`];
+  }
+  if (failure !== undefined) {
+    if (leftovers.length > 0) console.error(`Fixture cleanup: ${leftovers.join('; ')}`);
+    throw failure.error;
+  }
+  if (leftovers.length > 0) throw new Error(`Fixture cleanup: ${leftovers.join('; ')}`);
 }
 
 describe('detached run tree stop', () => {
@@ -285,49 +349,52 @@ describe('detached run tree stop', () => {
         stdio: 'ignore',
       });
       if (owner.pid === undefined) throw new Error('Failed to spawn detached owner fixture');
+      const ownerPid = owner.pid;
 
-      try {
-        await waitForFixtureProcess(() => existsSync(readyPath));
-        const pids = JSON.parse(readFileSync(readyPath, 'utf8')) as {
-          owner: number;
-          leakWriter: number;
-        };
-        // The descendant is live and armed before the stop: if the coming stop
-        // failed to take the process group, it would remain able to act on the
-        // go signal, so its death is a meaningful (not vacuous) transition.
-        expect(pids.leakWriter).toBeGreaterThan(0);
-        expect(processExists(pids.leakWriter)).toBe(true);
-        const target = await requestDetachedRunStop(runId);
-        await target.stop();
-        // The deadline starts once the stop resolves, so it measures the stop's effect
-        // and not fixture startup on a loaded runner.
-        await waitForFixtureProcess(() => owner.exitCode !== null || owner.signalCode !== null);
-        // Event-driven proof instead of a fixed sleep: wait for the descendant's
-        // observable death. A dead process cannot act on any future signal. Windows
-        // reuses a dead PID fast enough that the recorded one may already name an
-        // unrelated process, so there the descendant is found by the fixture directory
-        // on its command line instead.
-        if (process.platform === 'win32') {
-          expect(await windowsProcessesNaming(basename(fixtureDir))).toEqual([]);
-        } else {
-          await waitForFixtureProcess(() => !processExists(pids.leakWriter));
-        }
-        writeFileSync(goPath, 'go');
-        expect(existsSync(leakPath)).toBe(false);
-      } finally {
-        // The descendant can outlive the owner (a stop that ended only the owner), and it
-        // polls for the go signal forever, so it is ended whether or not the owner exited.
-        if (process.platform === 'win32') {
-          await killWindowsProcessesNaming(basename(fixtureDir));
-        } else {
+      await withFixtureCleanup(
+        async () => {
+          await waitForFixtureProcess(() => existsSync(readyPath));
+          const pids = JSON.parse(readFileSync(readyPath, 'utf8')) as {
+            owner: number;
+            leakWriter: number;
+          };
+          // The descendant is live and armed before the stop: if the coming stop
+          // failed to take the process group, it would remain able to act on the
+          // go signal, so its death is a meaningful (not vacuous) transition.
+          expect(pids.leakWriter).toBeGreaterThan(0);
+          expect(processExists(pids.leakWriter)).toBe(true);
+          const target = await requestDetachedRunStop(runId);
+          await target.stop();
+          // The deadline starts once the stop resolves, so it measures the stop's effect
+          // and not fixture startup on a loaded runner.
+          await waitForFixtureProcess(() => owner.exitCode !== null || owner.signalCode !== null);
+          // Event-driven proof instead of a fixed sleep: wait for the descendant's
+          // observable death. A dead process cannot act on any future signal. Windows
+          // reuses a dead PID fast enough that the recorded one may already name an
+          // unrelated process, so there the descendant is found by the fixture directory
+          // on its command line instead.
+          if (process.platform === 'win32') {
+            expect(await windowsProcessesNaming(basename(fixtureDir))).toEqual([]);
+          } else {
+            await waitForFixtureProcess(() => !processExists(pids.leakWriter));
+          }
+          writeFileSync(goPath, 'go');
+          expect(existsSync(leakPath)).toBe(false);
+        },
+        async () => {
+          // The descendant can outlive the owner (a stop that ended only the owner), and it
+          // polls for the go signal forever, so it is ended whether or not the owner exited.
+          if (process.platform === 'win32')
+            return await killWindowsProcessesNaming(basename(fixtureDir));
           try {
-            process.kill(-owner.pid, 'SIGKILL');
+            process.kill(-ownerPid, 'SIGKILL');
           } catch {
             // ESRCH: the group is already gone. The primary assertion reports failures.
           }
           rmSync(runLiveOwnerPath(runId), { force: true });
+          return [];
         }
-      }
+      );
     },
     STOP_TEST_TIMEOUT_MS
   );
@@ -340,27 +407,28 @@ describe('detached run tree stop', () => {
       // detached, which takes it out of the runtime's own kill-on-close job.
 
       const { runId, dir, marker, store } = await startWindowsRunOwner('orphan');
-      try {
-        const grandchild = Number(readFileSync(join(dir, 'grandchild'), 'utf8'));
-        // The premise, asserted rather than assumed: the orphan is alive before the stop.
-        expect(await windowsProcessesNaming(marker)).toContain(grandchild);
+      await withFixtureCleanup(
+        async () => {
+          const grandchild = Number(readFileSync(join(dir, 'grandchild'), 'utf8'));
+          // The premise, asserted rather than assumed: the orphan is alive before the stop.
+          expect(await windowsProcessesNaming(marker)).toContain(grandchild);
 
-        let recorded = false;
-        const operations = cancellationOperations(store, async () => {
-          expect((await store.getWorkflowRun(runId))?.status).toBe('running');
-          expect(await windowsProcessesNaming(marker)).toEqual([]);
-          recorded = true;
-        });
-        const result = await operations.cancelWorkflow(runId, { kind: 'operator' });
-        expect(result.kind).toBe('stopped');
-        expect(recorded).toBe(true);
-        expect((await store.getWorkflowRun(runId))?.status).toBe('cancelled');
+          let recorded = false;
+          const operations = cancellationOperations(store, async () => {
+            expect((await store.getWorkflowRun(runId))?.status).toBe('running');
+            expect(await windowsProcessesNaming(marker)).toEqual([]);
+            recorded = true;
+          });
+          const result = await operations.cancelWorkflow(runId, { kind: 'operator' });
+          expect(result.kind).toBe('stopped');
+          expect(recorded).toBe(true);
+          expect((await store.getWorkflowRun(runId))?.status).toBe('cancelled');
 
-        const survivors = await windowsProcessesNaming(marker);
-        expect(survivors).toEqual([]);
-      } finally {
-        await killWindowsProcessesNaming(marker);
-      }
+          const survivors = await windowsProcessesNaming(marker);
+          expect(survivors).toEqual([]);
+        },
+        () => killWindowsProcessesNaming(marker)
+      );
     },
     RACING_STOP_TEST_TIMEOUT_MS
   );
@@ -382,19 +450,20 @@ describe('detached run tree stop', () => {
       // check below finds a survivor. A recorded PID cannot: Windows hands a killed child's
       // PID to unrelated processes within the stop's own runtime, and one such reuser
       // (TrustedInstaller.exe) once failed this test as a "survivor".
-      try {
-        // The owner is spawning before the stop begins.
-        await waitForFixtureProcess(() => readdirSync(join(dir, 'kids')).length >= 3);
-        const target = await requestDetachedRunStop(runId);
-        await target.stop();
+      await withFixtureCleanup(
+        async () => {
+          // The owner is spawning before the stop begins.
+          await waitForFixtureProcess(() => readdirSync(join(dir, 'kids')).length >= 3);
+          const target = await requestDetachedRunStop(runId);
+          await target.stop();
 
-        // A stop that resolves claims the whole tree is gone. Check that claim against
-        // every process that belongs to the tree, the owner included.
-        const survivors = await windowsProcessesNaming(marker);
-        expect(survivors).toEqual([]);
-      } finally {
-        await killWindowsProcessesNaming(marker);
-      }
+          // A stop that resolves claims the whole tree is gone. Check that claim against
+          // every process that belongs to the tree, the owner included.
+          const survivors = await windowsProcessesNaming(marker);
+          expect(survivors).toEqual([]);
+        },
+        () => killWindowsProcessesNaming(marker)
+      );
     },
     RACING_STOP_TEST_TIMEOUT_MS
   );
@@ -409,44 +478,45 @@ describe('detached run tree stop', () => {
         // the operator's call.
 
         const { runId, dir, marker, store } = await startWindowsRunOwner(mode);
-        const childRunId = readFileSync(join(dir, 'child-run-id'), 'utf8');
-        const childStore = await createFileWorkflowStore({ root: join(dir, 'home', 'store') });
-        try {
-          await waitFor(() => existsSync(join(dir, 'child-ready')), NESTED_LAUNCH_DEADLINE_MS);
-          const childPid = Number(readFileSync(join(dir, 'child-ready'), 'utf8'));
-          // The lease only reads the child owner's PID; it is released before the parent's
-          // cancel so that nothing this test holds keeps the child owner busy.
-          const childLease = await requestDetachedRunStop(childRunId);
-          const childOwnerPid = childLease.pid;
-          childLease.release();
+        await withFixtureCleanup(
+          async () => {
+            const childRunId = readFileSync(join(dir, 'child-run-id'), 'utf8');
+            const childStore = await createFileWorkflowStore({ root: join(dir, 'home', 'store') });
+            await waitFor(() => existsSync(join(dir, 'child-ready')), NESTED_LAUNCH_DEADLINE_MS);
+            const childPid = Number(readFileSync(join(dir, 'child-ready'), 'utf8'));
+            // The lease only reads the child owner's PID; it is released before the parent's
+            // cancel so that nothing this test holds keeps the child owner busy.
+            const childLease = await requestDetachedRunStop(childRunId);
+            const childOwnerPid = childLease.pid;
+            childLease.release();
 
-          const operations = cancellationOperations(store, async () => {
-            expect((await store.getWorkflowRun(runId))?.status).toBe('running');
-          });
-          const parent = await operations.cancelWorkflow(runId, { kind: 'operator' });
-          if (parent.kind !== 'stopped') throw new Error('Parent was not stopped');
-          expect((await store.getWorkflowRun(runId))?.status).toBe('cancelled');
+            const operations = cancellationOperations(store, async () => {
+              expect((await store.getWorkflowRun(runId))?.status).toBe('running');
+            });
+            const parent = await operations.cancelWorkflow(runId, { kind: 'operator' });
+            if (parent.kind !== 'stopped') throw new Error('Parent was not stopped');
+            expect((await store.getWorkflowRun(runId))?.status).toBe('cancelled');
 
-          const remaining = await windowsProcessesNaming(marker);
-          expect(remaining).toContain(childPid);
-          expect(remaining).toContain(childOwnerPid);
-          expect(remaining).not.toContain(parent.pid);
-          expect((await childStore.getWorkflowRun(childRunId))?.status).toBe('running');
-          // The child is still owned: its owner hands out a fresh lease, and that lease stops it.
-          const ownedChild = await requestDetachedRunStop(childRunId);
-          try {
-            expect(ownedChild.pid).toBe(childOwnerPid);
-          } catch (error) {
-            ownedChild.release();
-            throw error;
-          }
-          await ownedChild.stop();
+            const remaining = await windowsProcessesNaming(marker);
+            expect(remaining).toContain(childPid);
+            expect(remaining).toContain(childOwnerPid);
+            expect(remaining).not.toContain(parent.pid);
+            expect((await childStore.getWorkflowRun(childRunId))?.status).toBe('running');
+            // The child is still owned: its owner hands out a fresh lease, and that lease stops it.
+            const ownedChild = await requestDetachedRunStop(childRunId);
+            try {
+              expect(ownedChild.pid).toBe(childOwnerPid);
+            } catch (error) {
+              ownedChild.release();
+              throw error;
+            }
+            await ownedChild.stop();
 
-          const survivors = await windowsProcessesNaming(marker);
-          expect(survivors).toEqual([]);
-        } finally {
-          await killWindowsProcessesNaming(marker);
-        }
+            const survivors = await windowsProcessesNaming(marker);
+            expect(survivors).toEqual([]);
+          },
+          () => killWindowsProcessesNaming(marker)
+        );
       },
       RACING_STOP_TEST_TIMEOUT_MS
     );

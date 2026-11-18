@@ -97,11 +97,14 @@ async function runAbortedWrapper(): Promise<{
   );
   try {
     await waitUntil('the grandchild to start', () => existsSync(started));
-  } finally {
-    // On a readiness failure too: the caller releases the recorder next, which would leave a
-    // still-running tree behind. The readiness error stays the one reported.
+  } catch (readiness) {
+    // The caller releases the recorder next, so the tree is ended and settled first. `node`
+    // never rejects, so the readiness error stays the one reported.
     controller.abort();
+    await node;
+    throw readiness;
   }
+  controller.abort();
   const error = await node;
   await new Promise<void>(resolve => setTimeout(resolve, 2000));
   return { error, leaked: existsSync(marker) };

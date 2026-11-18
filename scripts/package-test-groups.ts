@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import ts from 'typescript';
 
 export const TEST_ISOLATION_DIRECTIVE = '// @archon-test-isolated';
 
@@ -29,6 +30,58 @@ export function selectWindowsTestFiles(directory: string, files: readonly string
   return files.filter(file => hasWindowsTestDirective(readFileSync(join(directory, file), 'utf8')));
 }
 
+function readTestSource(packageDirectory: string, file: string): string {
+  try {
+    return readFileSync(join(packageDirectory, file), 'utf8').replace(/^\uFEFF/, '');
+  } catch (cause) {
+    throw new Error(`Cannot read test file ${file}: ${String(cause)}`, { cause });
+  }
+}
+
+/**
+ * Whether the isolation directive is a `//` comment on some line after line 1, where it has
+ * no effect. The same text inside a string or template literal (a test fixture) is not a
+ * directive, so a candidate line is parsed and checked against the file's literals.
+ */
+function hasMisplacedIsolationDirective(file: string, source: string): boolean {
+  const lines = source.split(/\r?\n/);
+  if (!lines.slice(1).some(line => line.trimStart() === TEST_ISOLATION_DIRECTIVE)) return false;
+  const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+  const literals: { start: number; end: number }[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteralLike(node) || ts.isTemplateLiteral(node) || ts.isJsxText(node)) {
+      literals.push({ start: node.getStart(parsed), end: node.end });
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parsed);
+  let offset = 0;
+  return lines.some((line, index) => {
+    const lineStart = offset;
+    offset += line.length + 1;
+    if (index === 0 || line.trimStart() !== TEST_ISOLATION_DIRECTIVE) return false;
+    const at = lineStart + line.indexOf(TEST_ISOLATION_DIRECTIVE);
+    return !literals.some(literal => literal.start <= at && at < literal.end);
+  });
+}
+
+/**
+ * Below line 1 the isolation directive is ignored, wherever it sits (after a blank line, a
+ * block comment or an import), so the file would share a process unseen. Checked for every
+ * file before grouping, so a file a manifest group names is held to it too.
+ */
+function assertIsolationDirectivesPlaced(packageDirectory: string, files: readonly string[]): void {
+  const misplaced = files.filter(file =>
+    hasMisplacedIsolationDirective(file, readTestSource(packageDirectory, file))
+  );
+  if (misplaced.length > 0) {
+    throw new Error(
+      `These tests carry "${TEST_ISOLATION_DIRECTIVE}" below line 1, where it has no effect; move it to line 1: ${misplaced.join(', ')}`
+    );
+  }
+}
+
 export function resolvePackageTestGroups(
   packageDirectory: string,
   declaration: unknown,
@@ -37,6 +90,8 @@ export function resolvePackageTestGroups(
   if (typeof declaration !== 'object' || declaration === null || Array.isArray(declaration)) {
     throw new Error('Package test declaration must be an object');
   }
+  const candidates = selectedFiles ?? discoverPackageTestFiles(packageDirectory);
+  assertIsolationDirectivesPlaced(packageDirectory, candidates);
   const groups = 'testGroups' in declaration ? declaration.testGroups : undefined;
   if (groups !== undefined) {
     if (
@@ -52,7 +107,7 @@ export function resolvePackageTestGroups(
       )
     )
       throw new Error('testGroups must contain nonempty arrays of string selectors');
-    const files = selectedFiles ?? discoverPackageTestFiles(packageDirectory);
+    const files = candidates;
     const selects = (group: string[], file: string) =>
       group.some(selector => file.includes(selector));
     const declared =
@@ -67,10 +122,7 @@ export function resolvePackageTestGroups(
       : [...declared, ...groupDiscoveredTestFiles(packageDirectory, undeclared)];
   }
 
-  return groupDiscoveredTestFiles(
-    packageDirectory,
-    selectedFiles ?? discoverPackageTestFiles(packageDirectory)
-  );
+  return groupDiscoveredTestFiles(packageDirectory, candidates);
 }
 
 function groupDiscoveredTestFiles(packageDirectory: string, files: readonly string[]): string[][] {
@@ -78,26 +130,11 @@ function groupDiscoveredTestFiles(packageDirectory: string, files: readonly stri
   const isolated: string[][] = [];
   const shared: string[] = [];
   const unmarkedMocks: string[] = [];
-  const misplaced: string[] = [];
   for (const file of files) {
-    let source: string;
-    try {
-      source = readFileSync(join(packageDirectory, file), 'utf8').replace(/^\uFEFF/, '');
-    } catch (cause) {
-      throw new Error(`Cannot read test file ${file}: ${String(cause)}`, { cause });
-    }
-    const lines = source.split(/\r?\n/);
-    if (lines[0] === TEST_ISOLATION_DIRECTIVE) isolated.push([file]);
-    else if (lines.includes(TEST_ISOLATION_DIRECTIVE)) misplaced.push(file);
+    const source = readTestSource(packageDirectory, file);
+    if (source.split(/\r?\n/, 1)[0] === TEST_ISOLATION_DIRECTIVE) isolated.push([file]);
     else if (source.includes('mock.module(')) unmarkedMocks.push(file);
     else shared.push(file);
-  }
-  // Below line 1 the isolation directive is ignored, wherever it sits (after a blank line, a
-  // block comment or an import), so the file would share a process unseen.
-  if (misplaced.length > 0) {
-    throw new Error(
-      `These tests carry "${TEST_ISOLATION_DIRECTIVE}" below line 1, where it has no effect; move it to line 1: ${misplaced.join(', ')}`
-    );
   }
   // A direct mock.module() call in the shared process would leak into every other
   // unmarked file. Mocks reached through a helper cannot be seen here; those files

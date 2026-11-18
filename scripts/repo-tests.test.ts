@@ -17,6 +17,8 @@ import {
   planStepCommand,
   ROOT_TEST_PLAN,
   type RootTestStep,
+  PACKAGE_TEST_RUNNER,
+  windowsSetRuns,
   windowsTestFiles,
 } from './repo-tests';
 import { WINDOWS_TEST_DIRECTIVE } from './package-test-groups';
@@ -177,6 +179,45 @@ describe('windowsTestFiles', () => {
       'packages/a/src/marked.test.ts',
       'scripts/marked.test.ts',
     ]);
+  });
+});
+
+describe('windowsSetRuns', () => {
+  const track = trackTempRoots();
+
+  test('runs each package through its runner, and each root directory in its own process', () => {
+    const root = track(mkdtempSync(join(tmpdir(), 'windows-runs-')));
+    mkdirSync(join(root, 'packages/a'), { recursive: true });
+    writeFileSync(
+      join(root, 'packages/a/package.json'),
+      JSON.stringify({ scripts: { test: PACKAGE_TEST_RUNNER } })
+    );
+    const runs = windowsSetRuns(
+      [
+        'packages/a/src/x.test.ts',
+        'packages/a/src/y.test.ts',
+        'scripts/s.test.ts',
+        '.archon/scripts/__tests__/p.test.ts',
+      ],
+      root
+    );
+    expect(runs.map(({ owner, args }) => ({ label: owner.label, args }))).toEqual([
+      { label: 'packages/a', args: ['--windows'] },
+      { label: 'scripts', args: ['./scripts/s.test.ts'] },
+      { label: '.archon/scripts', args: ['./.archon/scripts/__tests__/p.test.ts'] },
+    ]);
+  });
+
+  test('refuses a package whose test script cannot select the Windows set', () => {
+    const root = track(mkdtempSync(join(tmpdir(), 'windows-runs-')));
+    mkdirSync(join(root, 'packages/a'), { recursive: true });
+    writeFileSync(
+      join(root, 'packages/a/package.json'),
+      JSON.stringify({ scripts: { test: 'bun test src/a.test.ts && bun test src/b.test.ts' } })
+    );
+    expect(() => windowsSetRuns(['packages/a/src/a.test.ts'], root)).toThrow(
+      'the only runner that selects them'
+    );
   });
 });
 

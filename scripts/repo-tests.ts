@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { archonCliInvocation } from '@archon/paths/cli-command';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
@@ -313,24 +313,52 @@ export function windowsTestFiles(root = REPO_ROOT): string[] {
   return selectWindowsTestFiles(root, [...packageFiles, ...rootFiles]).sort();
 }
 
+/** The shared package test script: the one that reads `--windows`. */
+export const PACKAGE_TEST_RUNNER = 'bun run ../../scripts/package-tests.ts';
+
+function assertSharedPackageRunner(packageDirectory: string, label: string): void {
+  const manifest: unknown = JSON.parse(
+    readFileSync(join(packageDirectory, 'package.json'), 'utf8')
+  );
+  const scripts =
+    typeof manifest === 'object' && manifest !== null && 'scripts' in manifest
+      ? manifest.scripts
+      : undefined;
+  const script =
+    typeof scripts === 'object' && scripts !== null && 'test' in scripts ? scripts.test : undefined;
+  if (typeof script !== 'string' || script.trim() !== PACKAGE_TEST_RUNNER) {
+    throw new Error(
+      `${label} has tests in the Windows set, but its test script is not "${PACKAGE_TEST_RUNNER}", the only runner that selects them`
+    );
+  }
+}
+
 /**
  * The runs of the Windows set. Each package with a marked file runs its own `--windows` form,
- * which keeps its isolation groups; the root's marked files run together. Every file is named
- * by its exact `./` path, never as a substring filter that could pick up an unmarked file.
+ * which keeps its isolation groups. Root files run one plan step at a time, in that step's own
+ * process as the plan runs them, so `./scripts/` and `./.archon/scripts/` never share mocks.
+ * Every file is named by its exact `./` path, never as a substring filter that could pick up
+ * an unmarked file.
+ *
+ * Only the shared package runner reads `--windows`. A package with marked files and any other
+ * test script is refused: Bun would read the flag as nothing and run every file it has.
  */
-export function windowsSetRuns(files: readonly string[]): RequestedRun[] {
+export function windowsSetRuns(files: readonly string[], root = REPO_ROOT): RequestedRun[] {
   const runs = new Map<string, RequestedRun>();
   for (const file of files) {
     const packageMatch = /^packages\/([^/]+)\//.exec(file);
     if (packageMatch !== null) {
       const label = `packages/${packageMatch[1]}`;
-      runs.set(label, { owner: { label, cwd: join(REPO_ROOT, label) }, args: ['--windows'] });
-    } else {
-      const label = 'the repository root';
-      const run = runs.get(label) ?? { owner: { label, cwd: REPO_ROOT }, args: [] };
-      run.args.push(`./${file}`);
-      runs.set(label, run);
+      if (runs.has(label)) continue;
+      assertSharedPackageRunner(join(root, label), label);
+      runs.set(label, { owner: { label, cwd: join(root, label) }, args: ['--windows'] });
+      continue;
     }
+    const step = ROOT_OWNED_DIRECTORIES.find(directory => file.startsWith(`${directory}/`));
+    if (step === undefined) throw new Error(`${file} belongs to no test owner`);
+    const run = runs.get(step) ?? { owner: { label: step, cwd: root }, args: [] };
+    run.args.push(`./${file}`);
+    runs.set(step, run);
   }
   return [...runs.values()];
 }
@@ -344,7 +372,14 @@ async function runWindowsSet(): Promise<number> {
   }
   console.log(`Windows set: ${String(files.length)} files\n${files.join('\n')}`);
   let firstFailure = 0;
-  for (const { owner, args } of windowsSetRuns(files)) {
+  let runs: RequestedRun[];
+  try {
+    runs = windowsSetRuns(files);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+  for (const { owner, args } of runs) {
     const command =
       owner.cwd === REPO_ROOT ? rootTestCommand(args) : ['bun', 'run', 'test', ...args];
     const code = await run(command, owner.cwd);
