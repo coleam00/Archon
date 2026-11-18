@@ -960,14 +960,15 @@ describe("an item's later starts", () => {
       inputsFile(fixture),
     ]);
     const [, , , d] = await waitFor(() => completedRuns(fixture, 4), 'the fired round');
-    // A rerun that names no item inherits the one of the run it supersedes, and its config.
+    // A rerun that names no item inherits the one of the run it supersedes, and its config,
+    // also when it names that run by a short prefix.
     await fixture.cli([
       'workflow',
       'run',
       'stage-b',
       '--no-worktree',
       '--supersedes',
-      String(d?.id),
+      String(d?.id).slice(0, 8),
       '--input',
       'plan=p3',
       '--input',

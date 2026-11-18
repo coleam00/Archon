@@ -68,8 +68,10 @@ async function itemLaunchRunConfig(
     // No registered project means no item yet: the run registers it and writes the item.
     item = projectKey ? { projectKey, key: options.item } : null;
   } else if (options.supersedesRunId) {
+    // Resolved within the launch project, as the supersession itself resolves it: a short
+    // prefix passed through unresolved would find no run and silently drop the config.
     const superseded = await host.deps.store.getWorkflowRun(
-      await resolveRunIdArg(host, options.supersedesRunId)
+      await resolveRunIdArg(host, options.supersedesRunId, cwd)
     );
     item = superseded?.item_id ? await host.deps.store.getItem(superseded.item_id) : null;
   }
