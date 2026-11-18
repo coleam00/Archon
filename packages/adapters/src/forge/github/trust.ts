@@ -20,15 +20,41 @@ const editProvenanceSchema = z.object({
   repository: z.object({
     issue: z
       .object({
+        title: z.string(),
+        body: z.string(),
         editor: z.object({ login: z.string() }).nullable(),
         lastEditedAt: z.string().nullable(),
+        timelineItems: z.object({
+          nodes: z.array(
+            z
+              .object({
+                actor: z.object({ login: z.string() }).nullable(),
+                createdAt: z.string(),
+                currentTitle: z.string(),
+              })
+              .nullable()
+          ),
+        }),
       })
       .nullable()
       .optional(),
     pullRequest: z
       .object({
+        title: z.string(),
+        body: z.string(),
         editor: z.object({ login: z.string() }).nullable(),
         lastEditedAt: z.string().nullable(),
+        timelineItems: z.object({
+          nodes: z.array(
+            z
+              .object({
+                actor: z.object({ login: z.string() }).nullable(),
+                createdAt: z.string(),
+                currentTitle: z.string(),
+              })
+              .nullable()
+          ),
+        }),
       })
       .nullable()
       .optional(),
@@ -43,17 +69,31 @@ async function readEditProvenance(request: TrustRequest, fetch: Fetch, token: st
       fetch,
       token,
       request.subject.ref.repo,
-      `query trustedTextProvenance($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){${field}(number:$number){editor{login} lastEditedAt}}}`,
+      `query trustedTextProvenance($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){${field}(number:$number){title body editor{login} lastEditedAt timelineItems(itemTypes:[RENAMED_TITLE_EVENT],last:1){nodes{... on RenamedTitleEvent{actor{login} createdAt currentTitle}}}}}}`,
       { owner, name: repo, number: request.subject.ref.number }
     )
   );
   const value = response.repository[field];
   if (!value) throw new GitHubError({ kind: 'not_found', message: 'Work item was not found' });
+  const renamed = value.timelineItems.nodes.at(-1);
+  const sourceActor = (login: string) => ({
+    host: request.subject.ref.repo.host,
+    id: login,
+    login,
+  });
   return {
-    editor: value.editor
-      ? { host: request.subject.ref.repo.host, id: value.editor.login, login: value.editor.login }
-      : null,
+    title: value.title,
+    body: value.body,
+    editor: value.editor ? sourceActor(value.editor.login) : null,
     lastEditedAt: value.lastEditedAt,
+    ...(renamed === undefined
+      ? { titleEditor: null, titleEditedAt: null }
+      : renamed?.currentTitle === value.title
+        ? {
+            titleEditor: renamed.actor ? sourceActor(renamed.actor.login) : null,
+            titleEditedAt: renamed.createdAt,
+          }
+        : {}),
   };
 }
 
@@ -96,13 +136,14 @@ async function readTrust(request: TrustRequest, fetch: Fetch, token: string): Pr
     .map(login => login.toLowerCase());
   const item = await readIssue(fetch, token, request.subject.ref);
   const provenance = await readEditProvenance(request, fetch, token);
+  const { title, body, ...editProvenance } = provenance;
   return {
     subject: subjectRecord(request.subject, item),
-    title: item.title,
-    body: item.body ?? '',
-    contentDigest: trustedTextDigest(item.title, item.body ?? ''),
+    title,
+    body,
+    contentDigest: trustedTextDigest(title, body),
     ...('user' in item ? { author: actor(repo.host, item.user ?? null) } : {}),
-    ...provenance,
+    ...editProvenance,
     policy: {
       maintainersPath: request.maintainersPath,
       head: head.revision,

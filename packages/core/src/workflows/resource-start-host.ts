@@ -280,6 +280,7 @@ async function authorizeTrustedBinding(
   if (!intent.trustedText) return undefined;
   if (!host.deps.trustedText) throw new Error('trusted_text_host_unavailable');
   assertTrustedTextWorkflowSupported(workflow);
+  assertTrustedInputDeclared(workflow, intent.trustedText.input);
   if (
     Object.hasOwn(intent.launch.inputs, intent.trustedText.input) ||
     Object.hasOwn(intent.eventInputs ?? {}, intent.trustedText.input)
@@ -314,6 +315,8 @@ async function prepareBinding(
     );
     await recordSelectedWorkflow(source.anchor.root, workflow.name);
     await assertBindingRequirements(host, intent, workflow);
+    // Ordinary input errors must not register a checkout as a side effect.
+    const ordinaryInputs = intent.trustedText ? undefined : resolveBindingInputs(intent, workflow);
     const codebase = await findOrRegisterCodebase(host, cwd);
     const preparedAi = await prepareRunAiConfiguration(host.deps, workflow, cwd, {
       codebaseId: codebase.id,
@@ -329,7 +332,7 @@ async function prepareBinding(
       codebase,
       identity.receiptId
     );
-    const inputs = resolveBindingInputs(intent, workflow, trustedText);
+    const inputs = ordinaryInputs ?? resolveBindingInputs(intent, workflow, trustedText);
     let isolation: PreparedWorkflowLaunch['execution']['isolation'];
     let handoff: CheckoutHandoffRunMetadata | undefined;
     if (intent.checkoutFrom) {
@@ -406,7 +409,9 @@ async function prepareClaimedBinding(
       await host.deps.store.failStartBindingPreparation({
         ...identity,
         retryable:
-          error instanceof TrustedTextRefusedError && error.reason === 'waiting_acceptance',
+          error instanceof TrustedTextRefusedError &&
+          (error.reason === 'waiting_acceptance' ||
+            error.reason === 'acceptance_requirement_changed'),
         error: error instanceof TrustedTextRefusedError ? error.reason : `${stage}_failed`,
         ...(error instanceof ForgeRequirementError
           ? { forgeRefusal: { pack: error.packKey, failures: error.failures } }

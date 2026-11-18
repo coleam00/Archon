@@ -4,6 +4,7 @@ import type { ResolvedWorkflow } from './schemas';
 import type { WorkflowDeps } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
 import type { WorkflowRun } from './schemas/workflow-run';
+import { readSubrunMetadata, runInputsMetadata } from './schemas/run-metadata';
 import type { ProviderCapabilities } from '@archon/provider-contract';
 
 const actorSchema = z.object({
@@ -50,21 +51,34 @@ export interface TrustedTextEvidence {
   author?: z.infer<typeof actorSchema> | null;
   editor?: z.infer<typeof actorSchema> | null;
   lastEditedAt?: string | null;
+  titleEditor?: z.infer<typeof actorSchema> | null;
+  titleEditedAt?: string | null;
   policy: TrustedTextRunMetadata['policy'] & { maintainersPath: string };
 }
 
 export function trustedTextActor(
-  evidence: Pick<TrustedTextEvidence, 'author' | 'editor' | 'lastEditedAt'>,
+  evidence: Pick<
+    TrustedTextEvidence,
+    'author' | 'editor' | 'lastEditedAt' | 'titleEditor' | 'titleEditedAt'
+  >,
   policy: TrustedTextEvidence['policy']
 ): boolean {
   const trustedActor = (actor: z.infer<typeof actorSchema> | null | undefined): boolean =>
     actor?.login !== null &&
     actor?.login !== undefined &&
     policy.maintainers.some(login => login.toLowerCase() === actor.login?.toLowerCase());
-  if (evidence.lastEditedAt === null && evidence.editor === null)
-    return trustedActor(evidence.author);
-  if (typeof evidence.lastEditedAt === 'string') return trustedActor(evidence.editor);
-  return false;
+  const producerTrusted = (
+    editor: z.infer<typeof actorSchema> | null | undefined,
+    editedAt: string | null | undefined
+  ): boolean => {
+    if (editedAt === null && editor === null) return trustedActor(evidence.author);
+    if (typeof editedAt === 'string') return trustedActor(editor);
+    return false;
+  };
+  return (
+    producerTrusted(evidence.editor, evidence.lastEditedAt) &&
+    producerTrusted(evidence.titleEditor, evidence.titleEditedAt)
+  );
 }
 
 export interface WorkflowTrustedTextHost {
@@ -157,9 +171,16 @@ export async function persistTrustedTextAdmission(
   deps: WorkflowDeps,
   run: WorkflowRun
 ): Promise<void> {
-  if (!readTrustedTextMetadata(run)) return;
-  // Persist before claimPendingRun: a crash must not leave running work without its snapshot.
-  await deps.store.updateWorkflowRun(run.id, { metadata: run.metadata });
+  const snapshot = readTrustedTextMetadata(run);
+  if (!snapshot) return;
+  const inputs = readSubrunMetadata(run.metadata).inputs;
+  // Do not merge a stale execution_owner over a concurrent claimant's ownership record.
+  await deps.store.updateWorkflowRun(run.id, {
+    metadata: {
+      [TRUSTED_TEXT_METADATA_KEY]: snapshot,
+      ...(inputs ? runInputsMetadata(inputs, true) : {}),
+    },
+  });
 }
 
 export class TrustedTextAdmissionError extends Error {}

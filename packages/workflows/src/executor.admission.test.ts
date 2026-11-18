@@ -178,14 +178,12 @@ describe('concurrent-run guard', () => {
       options: { preCreatedRun: run },
     });
     const updates = mocked(store.updateWorkflowRun).mock.calls.map(([, update]) => update.metadata);
-    expect(updates.some(metadata => metadata?.trusted_text === trustedText)).toBe(true);
-    expect(
-      updates.some(
-        metadata =>
-          (metadata?.[SUBRUN_METADATA_KEYS.inputsValues] as Record<string, unknown> | undefined)
-            ?.trusted_item !== undefined
-      )
-    ).toBe(true);
+    expect(updates.find(metadata => metadata?.trusted_text)).toMatchObject({
+      trusted_text: trustedText,
+      [SUBRUN_METADATA_KEYS.inputsValues]: {
+        trusted_item: { title: 'Title', body: 'Body' },
+      },
+    });
   });
   it('reuses the persisted snapshot on resume without re-authorizing it as caller input', async () => {
     const trustedText: TrustedTextRunMetadata = {
@@ -342,6 +340,21 @@ describe('concurrent-run guard', () => {
       },
       recheck: async () => undefined,
     };
+    mockExecuteDagWorkflow.mockImplementationOnce(async () => {
+      expect(
+        mocked(store.updateWorkflowRun).mock.calls.some(([, update]) => {
+          const inputs = update.metadata?.[SUBRUN_METADATA_KEYS.inputsValues] as
+            | Record<string, unknown>
+            | undefined;
+          return (
+            JSON.stringify(update.metadata?.trusted_text) === JSON.stringify(trustedText) &&
+            JSON.stringify(inputs?.trusted_item) ===
+              JSON.stringify({ title: 'Accepted', body: 'Snapshot' })
+          );
+        })
+      ).toBe(true);
+      return undefined;
+    });
     await startWorkflow({
       deps,
       workflow: makeWorkflow({
@@ -359,7 +372,8 @@ describe('concurrent-run guard', () => {
     });
     expect(
       mocked(store.updateWorkflowRun).mock.calls.some(
-        ([, update]) => update.metadata?.trusted_text === trustedText
+        ([, update]) =>
+          JSON.stringify(update.metadata?.trusted_text) === JSON.stringify(trustedText)
       )
     ).toBe(true);
     expect(dagCall(0)?.workflowRun.metadata.inputs_values).toMatchObject({
@@ -383,11 +397,25 @@ describe('concurrent-run guard', () => {
       contentDigest: 'a'.repeat(64),
       policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
     };
-    const run = makeRun({ status: 'pending', item_id: 'item-7', metadata: {} });
+    const run = makeRun({
+      status: 'pending',
+      item_id: 'item-7',
+      metadata: { execution_owner: { ownerId: 'stale-owner' } },
+    });
     const transitions: string[] = [];
     const store = makeStore({
-      updateWorkflowRun: mock(async () => {
-        transitions.push('metadata');
+      updateWorkflowRun: mock(async (_id, update) => {
+        const inputs = update.metadata?.[SUBRUN_METADATA_KEYS.inputsValues] as
+          | Record<string, unknown>
+          | undefined;
+        if (
+          JSON.stringify(update.metadata?.trusted_text) === JSON.stringify(trustedText) &&
+          JSON.stringify(inputs?.trusted_item) ===
+            JSON.stringify({ title: 'Accepted', body: 'Snapshot' })
+        ) {
+          expect(update.metadata).not.toHaveProperty('execution_owner');
+          transitions.push('metadata');
+        }
       }),
       claimPendingWorkflowRun: mock(async () => {
         transitions.push('claim');

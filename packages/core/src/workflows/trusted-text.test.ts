@@ -4,6 +4,7 @@ import { trustedTextDigest } from '@archon/forge';
 import type { Codebase } from '../schemas/codebase';
 import { CoreTrustedTextHost, TrustedTextRefusedError } from './trusted-text';
 import type { TrustedTextRunMetadata } from '@archon/workflows/trusted-text';
+import { trustedTextRunMetadataSchema } from '@archon/workflows/trusted-text';
 import { isDeepStrictEqual } from 'node:util';
 
 const maintainer = { host: 'github.com', id: '1', login: 'alice' };
@@ -38,6 +39,8 @@ function evidence(title = 'Title', body = 'Body', maintainers = ['alice']): Trus
     author: outsider,
     editor: null,
     lastEditedAt: null,
+    titleEditor: null,
+    titleEditedAt: null,
     policy: {
       head: 'a'.repeat(40),
       digest: 'b'.repeat(64),
@@ -172,7 +175,13 @@ describe('CoreTrustedTextHost', () => {
     expect(result).toMatchObject({ title: 'Title' });
     expect(result.acceptedBy).toBeUndefined();
 
-    h.set({ ...evidence(), editor: maintainer, lastEditedAt: '2026-11-18T00:00:00Z' });
+    h.set({
+      ...evidence(),
+      editor: maintainer,
+      lastEditedAt: '2026-11-18T00:00:00Z',
+      titleEditor: maintainer,
+      titleEditedAt: '2026-11-18T00:00:00Z',
+    });
     const edited = await h.host.authorize(changedRequirement, { codebase, itemKey: 'issue-7' });
     expect(edited.acceptedBy).toBeUndefined();
 
@@ -187,6 +196,61 @@ describe('CoreTrustedTextHost', () => {
       ).resolves.toMatchObject({ acceptedBy: maintainer });
     }
   });
+
+  test('a title-only outside edit cannot inherit a maintainer author or body editor', async () => {
+    const h = harness();
+    for (const current of [
+      {
+        ...evidence(),
+        author: maintainer,
+        titleEditor: outsider,
+        titleEditedAt: '2026-11-18T00:00:00Z',
+      },
+      {
+        ...evidence(),
+        author: maintainer,
+        editor: maintainer,
+        lastEditedAt: '2026-11-18T00:00:00Z',
+        titleEditor: outsider,
+        titleEditedAt: '2026-11-18T00:01:00Z',
+      },
+    ]) {
+      h.set(current);
+      await expect(h.host.authorize(requirement, { codebase, itemKey: 'issue-7' })).rejects.toThrow(
+        'waiting_acceptance'
+      );
+    }
+    h.set({
+      ...evidence(),
+      author: maintainer,
+      titleEditor: maintainer,
+      titleEditedAt: '2026-11-18T00:00:00Z',
+    });
+    await expect(
+      h.host.authorize(requirement, { codebase, itemKey: 'issue-7' })
+    ).resolves.toMatchObject({ title: 'Title' });
+  });
+
+  test.each([
+    ['marked explicit default port', { host: 'github.com:443', hostClaim: true as const }],
+    ['unmarked bare host', { host: 'github.com' }],
+  ])('accept, store, read and recheck preserve the %s repo reference', async (_label, repo) => {
+    const h = harness();
+    const subject = {
+      kind: 'issue' as const,
+      ref: { repo: { path: 'owner/repo', ...repo }, number: 7 },
+    };
+    h.set({ ...evidence(), subject });
+    const stored = await h.host.accept({ ...acceptance(), subject });
+    const persisted = trustedTextRunMetadataSchema.parse(
+      h.accepted.values().next().value as TrustedTextRunMetadata
+    );
+    expect(persisted).toEqual(stored);
+    expect(persisted.requirement.subject.ref.repo).toEqual({ path: 'owner/repo', ...repo });
+    await h.host.recheck(persisted);
+    expect(h.requests.at(-1)).toMatchObject({ op: 'workitem.trust', subject });
+  });
+
   test('outside text waits for exact acceptance and a trusted author needs none', async () => {
     const h = harness();
     await expect(h.host.authorize(requirement, { codebase, itemKey: 'issue-7' })).rejects.toThrow(

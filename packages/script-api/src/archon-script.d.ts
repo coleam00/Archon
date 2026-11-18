@@ -295,6 +295,13 @@ declare module 'archon:script' {
           readonly type?: 'user' | 'bot' | 'organization' | null;
         } | null;
         readonly lastEditedAt?: string | null;
+        readonly titleEditor?: {
+          readonly host: string;
+          readonly id: string;
+          readonly login: string | null;
+          readonly type?: 'user' | 'bot' | 'organization' | null;
+        } | null;
+        readonly titleEditedAt?: string | null;
         readonly policy: {
           readonly maintainersPath: string;
           readonly head: string;
@@ -372,6 +379,13 @@ declare module 'archon:script' {
           readonly type?: 'user' | 'bot' | 'organization' | null;
         } | null;
         readonly lastEditedAt?: string | null;
+        readonly titleEditor?: {
+          readonly host: string;
+          readonly id: string;
+          readonly login: string | null;
+          readonly type?: 'user' | 'bot' | 'organization' | null;
+        } | null;
+        readonly titleEditedAt?: string | null;
         readonly policy: {
           readonly maintainersPath: string;
           readonly head: string;

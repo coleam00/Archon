@@ -1,5 +1,5 @@
 import { create as createIsolationEnvironment } from './isolation-environments';
-import { toBranchName } from '@archon/git';
+import { execFileAsync, toBranchName } from '@archon/git';
 // @archon-test-isolated
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -25,6 +25,7 @@ import { addResourceSlotHolder, liveResourceSlotHolders, lockResourceSlot } from
 import {
   resourceStartIntentSchema,
   type PreparedWorkflowLaunch,
+  type ResourceStartBindingIntent,
   type SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import {
@@ -77,6 +78,60 @@ function launch(id: string): PreparedWorkflowLaunch {
       isolation: { kind: 'in-place' },
     },
   };
+}
+
+async function acceptTestBinding(options: {
+  cwd: string;
+  workflowName: string;
+  inputs?: ResourceStartBindingIntent['launch']['inputs'];
+  trustedText?: TrustedTextRunMetadata['requirement'];
+}): Promise<string> {
+  const receiptId = crypto.randomUUID();
+  await acceptStartReceipt({
+    receipt: {
+      id: receiptId,
+      sourceInstanceId: 'github',
+      deliveryId: receiptId,
+      contentDigest: 'digest',
+      receivedAt: new Date().toISOString(),
+      occurredAt: null,
+      sourceActor: null,
+    },
+    outcome: 'matched',
+    bindings: [
+      {
+        bindingId: 'binding',
+        bindingRevision: '1',
+        hostId: 'host',
+        runAsUserId: '22222222-2222-4222-8222-222222222222',
+        resource: 'repo:test',
+        overlap: 'queue',
+        launch: {
+          cwd: options.cwd,
+          workflowName: options.workflowName,
+          inputs: options.inputs ?? {},
+          isolation: { kind: 'in-place' },
+        },
+        ...(options.trustedText ? { itemKey: 'issue-7', trustedText: options.trustedText } : {}),
+      },
+    ],
+  });
+  return receiptId;
+}
+
+function testResourceHost(started: string[] = []): ResourceStartHost {
+  setPlatformPolicies([]);
+  registerBuiltinProviders();
+  const host: ResourceStartHost = {
+    ...createSqlWorkflowHost(),
+    hostId: 'host',
+    startAdmitted: async requestId => {
+      started.push(requestId);
+    },
+  };
+  const loadConfig = host.deps.loadConfig;
+  host.deps.loadConfig = async cwd => ({ ...(await loadConfig(cwd)), assistant: 'claude' });
+  return host;
 }
 
 async function holdSqliteWriterLock(): Promise<ReturnType<typeof Bun.spawn>> {
@@ -349,6 +404,121 @@ nodes:
     await expect(drainResourceStartHost(host)).rejects.toBeInstanceOf(ResourceStartDrainError);
     expect(started).toHaveLength(2);
   }, 60_000);
+
+  test('ordinary input validation finishes before an unregistered checkout is registered', async () => {
+    const projectPath = join(root, 'ordinary-project');
+    await mkdir(join(projectPath, '.archon', 'workflows'), { recursive: true });
+    const project = await realpath(projectPath);
+    await execFileAsync('git', ['init', '-q', '-b', 'main', project]);
+    await writeFile(
+      join(project, '.archon', 'workflows', 'ordinary.yaml'),
+      `name: ordinary
+description: ordinary input
+inputs:
+  required_item:
+    required: true
+nodes:
+  - id: read
+    prompt: Read
+`
+    );
+    await acceptTestBinding({ cwd: project, workflowName: 'ordinary' });
+    const host = testResourceHost();
+    const failure = await drainResourceStartHost(host).catch((error: unknown) => error);
+    if (!(failure instanceof ResourceStartDrainError)) throw failure;
+    expect(failure.failures[0]?.error).toMatchObject({
+      message: expect.stringContaining('required_item'),
+    });
+    const registered = await getDatabase().query<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM remote_agent_codebases WHERE default_cwd = $1',
+      [project]
+    );
+    expect(registered.rows[0]?.count).toBe(0);
+  });
+
+  test('trusted input declaration precedes requirement persistence and obsolete acceptance stays retryable', async () => {
+    const projectPath = join(root, 'protected-project');
+    await mkdir(join(projectPath, '.archon', 'workflows'), { recursive: true });
+    const project = await realpath(projectPath);
+    await getDatabase().query('UPDATE remote_agent_codebases SET default_cwd = $1 WHERE id = $2', [
+      project,
+      CODEBASE_ID,
+    ]);
+    await writeFile(
+      join(project, '.archon', 'workflows', 'protected.yaml'),
+      `name: protected
+description: protected input
+webSearchMode: disabled
+inputs:
+  trusted_item:
+    required: true
+nodes:
+  - id: read
+    prompt: Read the accepted item
+    allowed_tools: [Read]
+`
+    );
+    const requirement: TrustedTextRunMetadata['requirement'] = {
+      subject: {
+        kind: 'issue',
+        ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+      },
+      maintainersPath: '.archon/maintainers.json',
+      input: 'missing_input',
+    };
+    await acceptTestBinding({ cwd: project, workflowName: 'protected', trustedText: requirement });
+    const started: string[] = [];
+    const host = testResourceHost(started);
+    let declarations = 0;
+    host.deps.trustedText = {
+      declare: async () => {
+        declarations++;
+      },
+      authorize: async () => {
+        throw new Error('authorize must not run for an undeclared input');
+      },
+      readEvidence: async () => {
+        throw new Error('not used');
+      },
+      recheck: async () => undefined,
+    };
+    const missingInput = await drainResourceStartHost(host).catch((error: unknown) => error);
+    if (!(missingInput instanceof ResourceStartDrainError)) throw missingInput;
+    expect(missingInput.failures[0]?.error).toMatchObject({
+      message: expect.stringContaining('missing_input'),
+    });
+    expect(declarations).toBe(0);
+    expect(await listPendingStartBindings({ hostId: 'host' })).toHaveLength(0);
+
+    const retryReceipt = await acceptTestBinding({
+      cwd: project,
+      workflowName: 'protected',
+      trustedText: { ...requirement, input: 'trusted_item' },
+    });
+    host.deps.trustedText.authorize = async () => {
+      throw new TrustedTextRefusedError('acceptance_requirement_changed');
+    };
+    const obsolete = await drainResourceStartHost(host).catch((error: unknown) => error);
+    if (!(obsolete instanceof ResourceStartDrainError)) throw obsolete;
+    expect(obsolete.failures[0]?.error).toMatchObject({
+      message: 'acceptance_requirement_changed',
+    });
+    expect(
+      (await listPendingStartBindings({ hostId: 'host' })).map(row => row.receiptId)
+    ).toContain(retryReceipt);
+
+    host.deps.trustedText.authorize = async requested => ({
+      schemaVersion: 1,
+      requirement: requested,
+      title: 'Accepted',
+      body: 'Snapshot',
+      contentDigest: 'a'.repeat(64),
+      policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+      acceptedBy: { host: 'github.com', id: '1', login: 'alice' },
+    });
+    await drainResourceStartHost(host);
+    expect(started).toHaveLength(1);
+  });
 
   test('a waiting-acceptance preparation remains drainable after its prerequisite changes', async () => {
     const receiptId = crypto.randomUUID();

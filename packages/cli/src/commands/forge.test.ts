@@ -104,7 +104,7 @@ test('acceptance is persisted from the original digest request, not a caller sna
   expect(accepted[0]).not.toHaveProperty('policy');
 });
 
-test('acceptance revalidation keeps the selected plugin and trusted credential environment', async () => {
+test('acceptance persists and returns the single validated dispatch evidence', async () => {
   const root = await mkdtemp(join(tmpdir(), 'forge-trust-context-'));
   const priorHome = process.env.ARCHON_HOME;
   const priorDatabase = process.env.DATABASE_URL;
@@ -186,9 +186,8 @@ test('acceptance revalidation keeps the selected plugin and trusted credential e
       }
     );
     expect(code).toBe(0);
-    expect(observed).toHaveLength(2);
-    expect(observed[1]).toEqual(observed[0]);
-    expect(operations).toEqual(['workitem.accept', 'workitem.accept']);
+    expect(observed).toHaveLength(1);
+    expect(operations).toEqual(['workitem.accept']);
     const accepted = await getDatabase().query<{ count: number }>(
       'SELECT COUNT(*) AS count FROM remote_agent_item_text_acceptances'
     );

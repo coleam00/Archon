@@ -45,7 +45,10 @@ interface ForgeCommandOptions {
 
 interface ForgeCommandDependencies {
   dispatch?: typeof dispatchForge;
-  accept?: (request: Extract<ForgeRequest, { op: 'workitem.accept' }>) => Promise<unknown>;
+  accept?: (
+    request: Extract<ForgeRequest, { op: 'workitem.accept' }>,
+    dispatched: ForgeDispatchResult
+  ) => Promise<unknown>;
   readConfig?: () => Promise<unknown>;
   sourcePlugins?: readonly SourcePlugin[];
   audit?: typeof persistAudit;
@@ -106,14 +109,13 @@ export async function forgeCommand(
       ]);
       if (context.attempt.request?.op !== 'workitem.accept')
         throw new Error('Acceptance request identity changed');
-      if (context.dependencies.accept) await context.dependencies.accept(context.attempt.request);
+      if (context.dependencies.accept)
+        await context.dependencies.accept(context.attempt.request, result);
       else
-        await new CoreTrustedTextHost(createWorkflowHostStore(), request =>
-          (context.dependencies.dispatch ?? dispatchForge)(request, {
-            ...trustedDiscovery(input, context),
-            credentialEnv: context.env,
-          })
-        ).accept(context.attempt.request);
+        await new CoreTrustedTextHost(createWorkflowHostStore()).accept(
+          context.attempt.request,
+          result
+        );
     }
     response = result.response;
     const auditFailure = await auditOperation(result.audit, response, context);

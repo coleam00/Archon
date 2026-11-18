@@ -26,6 +26,9 @@ export const trustedTextSchema = z.object({
   /** Actor who produced the current title/body, and when. Null means no edit. */
   editor: sourceActorSchema.nullable().optional(),
   lastEditedAt: z.iso.datetime({ offset: true }).nullable().optional(),
+  /** Title edits have separate provenance; missing evidence must not inherit body trust. */
+  titleEditor: sourceActorSchema.nullable().optional(),
+  titleEditedAt: z.iso.datetime({ offset: true }).nullable().optional(),
   policy: trustedTextPolicySchema,
 });
 export type TrustedText = z.infer<typeof trustedTextSchema>;

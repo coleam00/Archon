@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { forgeSubjectRefSchema } from '@archon/forge';
 import { isJsonPointer } from '../json-pointer';
 import { jsonValueSchema } from '../output-ref';
 import { ITEM_KEY_MAX_LENGTH, itemKeySchema, workflowRunOriginSchema } from './workflow-run';
@@ -314,13 +315,7 @@ export type ItemMapping = z.infer<typeof itemMappingSchema>;
 
 export const trustedTextBindingSchema = z
   .object({
-    subject: z.object({
-      kind: z.enum(['issue', 'pr']),
-      ref: z.object({
-        repo: z.object({ host: z.string().min(1), path: z.string().min(1) }),
-        number: z.number().int().positive(),
-      }),
-    }),
+    subject: forgeSubjectRefSchema,
     maintainersPath: z.string().min(1),
     /** The declared workflow input that receives the frozen title/body snapshot. */
     input: z.string().min(1),

@@ -160,11 +160,12 @@ export class CoreTrustedTextHost implements WorkflowTrustedTextHost {
   }
 
   async accept(
-    request: Extract<ForgeRequest, { op: 'workitem.accept' }>
+    request: Extract<ForgeRequest, { op: 'workitem.accept' }>,
+    dispatched?: Pick<ForgeDispatchResult, 'response'>
   ): Promise<TrustedTextRunMetadata> {
     const store = this.records.trustedText;
     if (!store) throw new TrustedTextRefusedError('trusted_text_store_unavailable');
-    const { response } = await this.dispatch(request);
+    const { response } = dispatched ?? (await this.dispatch(request));
     if (!response.ok || response.result.op !== 'workitem.accept') {
       if (response.ok) throw new TrustedTextRefusedError('acceptance_evidence_invalid');
       throw new TrustedTextRefusedError(
@@ -183,6 +184,7 @@ export class CoreTrustedTextHost implements WorkflowTrustedTextHost {
       acceptance.subject.ref.number !== request.subject.ref.number ||
       acceptance.subject.ref.repo.host !== request.subject.ref.repo.host ||
       acceptance.subject.ref.repo.path !== request.subject.ref.repo.path ||
+      acceptance.subject.ref.repo.hostClaim !== request.subject.ref.repo.hostClaim ||
       acceptance.policy.maintainersPath !== request.maintainersPath ||
       acceptance.scope.codebaseId !== request.scope.codebaseId ||
       acceptance.scope.itemKey !== request.scope.itemKey ||
