@@ -123,9 +123,11 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
       // A run of another workflow, or of one that declares no waits, touches nothing.
       await completeWithWaits(harness, [checks(OLD)], { workflow: 'other' });
       await completeWithWaits(harness, undefined);
-      expect((await harness.store.listOpenItemWaits()).map(wait => wait.runId)).toEqual([
-        first,
-        expect.any(String),
+      // Two sets opened in one millisecond have no order between them.
+      const opened = await harness.store.listOpenItemWaits();
+      expect(opened.map(wait => [wait.workflowName, wait.runId === first]).sort()).toEqual([
+        ['host', true],
+        ['other', false],
       ]);
       const second = await completeWithWaits(harness, [checks(HEAD)]);
       const open = await harness.store.listOpenItemWaits();
