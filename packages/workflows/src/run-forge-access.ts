@@ -113,7 +113,8 @@ export interface RunForgeAccessSite {
  * have a plugin that advertises every declared capability, a credential that resolves, and,
  * when the plugin advertises `pr.view`, accept that credential in one read of the
  * repository. The repository is the one the run's start inputs name through the pack's
- * `forge.repository`; when they name none, some remote of the checkout must pass. A run whose pack declares nothing returns at once.
+ * `forge.repository`; when they name none, some remote of the checkout must pass. A run
+ * whose pack declares nothing returns at once.
  *
  * @throws ForgeRequirementError naming each typed reason and its remedy.
  */
