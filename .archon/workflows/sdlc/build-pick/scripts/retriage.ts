@@ -29,5 +29,5 @@ function main(): void {
 try {
   main();
 } catch (error) {
-  refuse(`build-queue retriage: ${error instanceof Error ? error.message : String(error)}`);
+  refuse(`build-pick retriage: ${error instanceof Error ? error.message : String(error)}`);
 }

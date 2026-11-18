@@ -1,3 +1,4 @@
+// @archon-test-windows
 import { expect, mock, test } from 'bun:test';
 import { execFile } from 'node:child_process';
 import { win32 } from 'node:path';

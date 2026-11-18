@@ -2,7 +2,7 @@
  * How a DAG pass ends once its layers have run: the node-outcome tally, the failure and
  * usage-limit dispositions, the write-back gate, and the completion write.
  */
-import type { RunEndedFacts, WorkflowDeps } from '../deps';
+import type { RunEndedFacts, RunEndedStarts, WorkflowDeps } from '../deps';
 import type {
   NodeOutput,
   ResolvedWorkflow,
@@ -132,31 +132,33 @@ export async function finishRun(
 
   const handOffs = await readHandOffs(ctx, returned, runTranscriptUsage);
   if (handOffs === undefined) return;
-  const { startReceipts, asksCheckout, result } = handOffs;
+  const { starts, asksCheckout, result } = handOffs;
 
   const terminal = selectTerminalOutput(workflow, workflowRun, nodeOutputs);
-  await completeRun(
+  const written = await completeRun(
     ctx,
     nodeCounts,
     terminal,
     runTranscriptUsage,
-    completionResult(returned, startReceipts),
+    completionResult(returned, starts),
     asksCheckout,
     result
   );
   await reportNoOutcome(ctx, outcome);
-  await reportUnstartedStages(ctx, startReceipts);
+  // The receipts the write wrote, which include those it resolved for linked starts.
+  await reportUnstartedStages(ctx, written.startReceipts);
   return terminal.output;
 }
 
 /** What the completing write records beside the status, or nothing when there is none. */
 function completionResult(
   returned: ReturnedResult,
-  startReceipts: readonly SourceReceiptAcceptance[]
+  starts: RunEndedStarts
 ): Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3] {
   const result = {
     ...returned,
-    ...(startReceipts.length > 0 ? { startReceipts } : {}),
+    ...(starts.receipts.length > 0 ? { startReceipts: starts.receipts } : {}),
+    ...(starts.linked.length > 0 ? { linkedStarts: starts.linked } : {}),
   };
   return Object.keys(result).length > 0 ? result : undefined;
 }
@@ -242,7 +244,7 @@ async function readHandOffs(
   runTranscriptUsage: WorkflowUsage
 ): Promise<
   | {
-      startReceipts: readonly SourceReceiptAcceptance[];
+      starts: RunEndedStarts;
       asksCheckout: AsksCheckout | undefined;
       result: JsonValue | undefined;
     }
@@ -255,12 +257,12 @@ async function readHandOffs(
       startsOnEnd || asks !== undefined
         ? await readCompletingResult(deps.store, workflowRun, workflow.returns)
         : undefined;
-    const startReceipts =
+    const starts =
       outcome === undefined || !deps.runEndedStarts
-        ? []
+        ? { receipts: [], linked: [] }
         : await deps.runEndedStarts(runEndedFacts(workflow, workflowRun, outcome, result));
     const asksCheckout = asks?.length ? await deps.asksCheckout?.(workflowRun) : undefined;
-    return { startReceipts, asksCheckout, result };
+    return { starts, asksCheckout, result };
   } catch (error) {
     await failAtCompletion(
       ctx,
@@ -465,7 +467,7 @@ async function completeRun(
   result: Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3],
   asksCheckout: AsksCheckout | undefined,
   returnedValue: JsonValue | undefined
-): Promise<void> {
+): ReturnType<WorkflowDeps['store']['completeWorkflowRun']> {
   const { deps, workflow, workflowRun, logDir } = ctx;
   const duration = Date.now() - ctx.startedAt;
 
@@ -485,8 +487,9 @@ async function completeRun(
   );
   const resultCommit = await sampleResultCommit(ctx, workflowRun.id);
 
+  let written: Awaited<ReturnType<WorkflowDeps['store']['completeWorkflowRun']>>;
   try {
-    await requireTerminalStatusWrite(
+    written = await requireTerminalStatusWrite(
       deps.store.completeWorkflowRun(
         workflowRun.id,
         { duration_ms: duration },
@@ -566,6 +569,7 @@ async function completeRun(
     const lost = wouldBeLost(worktreeDisposition);
     if (lost) await sendRetentionWarning(ctx, keptPath, lost);
   }
+  return written;
 }
 
 /** What removing a kept checkout would lose, or undefined when keeping it needs no warning. */

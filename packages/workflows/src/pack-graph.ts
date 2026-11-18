@@ -242,6 +242,11 @@ export interface InstalledArrow {
   sourceInstanceId: string;
   from: PackGraphArrowFrom;
   launchWorkflow: string;
+  /**
+   * The file starts its stage on the items linked to the ended run's item
+   * (`on.runEnded.linked`). A pack declares only same-item arrows, so it matches none.
+   */
+  linked: boolean;
   problems: readonly string[];
 }
 
@@ -387,7 +392,7 @@ function graphArrows(input: GraphInput): PackGraphArrow[] {
   for (const { binding, from, to } of declaredArrows(input)) {
     const ends = { from, to };
     const files = input.installed.filter(
-      entry => arrowKey(entry.from, entry.launchWorkflow) === arrowKey(from, to)
+      entry => !entry.linked && arrowKey(entry.from, entry.launchWorkflow) === arrowKey(from, to)
     );
     if (files.length === 0)
       arrows.push({ ...ends, active: false, declared: binding, installed: null });

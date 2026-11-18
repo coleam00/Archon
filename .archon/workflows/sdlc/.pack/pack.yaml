@@ -116,22 +116,25 @@ bindings:
       action: { event: event.action }
       label: { event: label.name }
       label_actor: { event: label.actor.login }
+  # Nothing schedules a build: `archon-build-pick` fires this binding once per waiting
+  # issue, and the merge queue fires it for an item it returns. Each start is on the
+  # issue's item, where the engine admits one build run at a time; a start that finds
+  # the issue held or every slot busy is skipped, and the next pick fires it again.
   build-queue:
     workflow: archon-build-queue
     resource: build
     capacity: 10
     overlap: skip
     isolation: { kind: worktree }
-    schedule: { interval_seconds: 1800 }
+    item: { field: number, prefix: issue- }
     inputs:
       repo_host: { repo: host }
       repo_path: { repo: path }
-      build_queue_binding: { binding: build-queue }
   # The engine starts the routed issue's first round when its intake run ends, on the
   # issue's item, with no node that fires anything. It names the issue, and a named issue
   # is built whatever `orders_only` says: an install that builds only work orders leaves
   # this binding unregistered. A start that finds every slot busy is skipped, and the
-  # scheduled run picks the issue up.
+  # next pick starts the issue.
   build-after-intake:
     workflow: archon-build-queue
     resource: build
@@ -145,6 +148,31 @@ bindings:
       repo_host: { input: repo_host }
       repo_path: { input: repo_path }
       number: { input: number }
+  # Starts every waiting issue's build, in pickup order, and holds no build slot. One
+  # pick at a time, and a pick that finds one running is skipped.
+  build-pick:
+    workflow: archon-build-pick
+    resource: build-pick
+    overlap: skip
+    schedule: { interval_seconds: 1800 }
+    inputs:
+      repo_host: { repo: host }
+      repo_path: { repo: path }
+      build_queue_binding: { binding: build-queue }
+  # A build run that ends has freed a slot, and may have left its issue waiting for
+  # another round, so the engine starts a pick then instead of leaving both to the
+  # schedule. Queued, not skipped: a pick already running may have listed the items
+  # before this run recorded its decision.
+  build-pick-after-build:
+    workflow: archon-build-pick
+    resource: build-pick
+    overlap: queue
+    run_ended:
+      workflow: archon-build-queue
+      outcome: [parked, ready, continue, asked]
+    inputs:
+      repo_host: { input: repo_host }
+      repo_path: { input: repo_path }
       build_queue_binding: { binding: build-queue }
   split-queue:
     workflow: archon-split

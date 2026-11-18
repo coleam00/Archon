@@ -7,7 +7,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import ts from 'typescript';
 import { resolvePackageTestGroups } from './package-test-groups';
-import { ROOT_TEST_PLAN } from './repo-tests';
+import { PACKAGE_TEST_RUNNER, ROOT_TEST_PLAN } from './repo-tests';
 
 interface InventoryMismatch {
   packageName: string;
@@ -24,8 +24,6 @@ interface SelectorParseResult {
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const PACKAGES_DIR = join(REPO_ROOT, 'packages');
-/** Every workspace sits at `packages/<name>`, so the runner path is the same for all of them. */
-const PACKAGE_TEST_RUNNER = 'bun run ../../scripts/package-tests.ts';
 /** The root script must be the runner that walks `ROOT_TEST_PLAN`, or this guard reads a plan nothing executes. */
 const ROOT_TEST_RUNNER = 'bun run scripts/repo-tests.ts';
 const TEST_FILE_PATTERN = /\.(?:test|spec)\.tsx?$/;
