@@ -16,6 +16,7 @@ import type {
   ItemSkippedStart,
 } from '@archon/workflows/item-read';
 import { describeOperatorPause } from '@archon/workflows/schemas/operator-pause';
+import { landingSourceText } from '@archon/workflows/item-landing';
 import { answererText, attentionItemLines } from './workflow-attention-text';
 
 /** A recorded time to the minute, or the stored text when it does not parse. */
@@ -198,12 +199,22 @@ function answerLine(answer: ItemAnswer): string {
   return `  ${minute(answer.at)}  ${answer.runId.slice(0, 8)}  ${answer.node ?? '(node not recorded)'}  ${answerText(answer)}${via}`;
 }
 
-/** The item read as lines a terminal prints, each section saying `none` when empty. */
-export function itemReadLines(read: ItemRead): string[] {
-  const lines = [`Item ${read.item.key} (${read.item.projectKey})`];
+/** The facts under the item's name: its merge and the branch it lands on. */
+function itemFactLines(read: ItemRead): string[] {
+  const lines: string[] = [];
   if (read.merged !== null) lines.push(`Merged ${minute(read.merged.at)}: ${read.merged.change}`);
   if (read.degraded.some(report => report.reason === 'merge_unreadable'))
     lines.push('The merge recorded on this item could not be read.');
+  if (read.landing !== null)
+    lines.push(`Lands on: ${read.landing.branch} (${landingSourceText(read.landing)})`);
+  for (const report of read.degraded)
+    if (report.reason === 'landing_unresolved') lines.push(`Lands on: unknown. ${report.message}`);
+  return lines;
+}
+
+/** The item read as lines a terminal prints, each section saying `none` when empty. */
+export function itemReadLines(read: ItemRead): string[] {
+  const lines = [`Item ${read.item.key} (${read.item.projectKey})`, ...itemFactLines(read)];
   lines.push('', 'Runs:');
   if (read.runs.length === 0) lines.push('  none');
   for (const run of read.runs) lines.push(...runLines(run));

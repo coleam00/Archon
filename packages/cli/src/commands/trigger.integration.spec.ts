@@ -404,6 +404,88 @@ describe('trigger CLI durable execution', () => {
     expect(started.map(run => run.item_key)).toEqual(['item-1', 'item-1']);
   }, 90_000);
 
+  test('a stage on an item is cut from the landing branch of the item it is part of, and a missing one is refused', async () => {
+    const fixture = await heldTriggerRun('landing');
+    const root = join(fixture.projectRoot, '..');
+    const out = join(root, 'landing.out');
+    const git = async (args: string[], cwd = fixture.projectRoot) =>
+      expect(await Bun.spawn(['git', ...args], { cwd, stdout: 'ignore' }).exited).toBe(0);
+    // A remote with `main` and `feat/order`, which holds a file `main` does not.
+    await git(['init', '-q', '--bare', '--initial-branch=main', join(root, 'remote.git')], root);
+    await git([
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@t',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'base',
+    ]);
+    await git(['branch', '-M', 'main']);
+    await git(['remote', 'add', 'origin', join(root, 'remote.git')]);
+    await git(['push', '-q', 'origin', 'main']);
+    await git(['checkout', '-q', '-b', 'feat/order']);
+    writeFileSync(join(fixture.projectRoot, 'on-feat'), '');
+    await git(['add', 'on-feat']);
+    await git(['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'feat']);
+    await git(['push', '-q', 'origin', 'feat/order']);
+    await git(['checkout', '-q', 'main']);
+    fixture.writeWorkflow(
+      `echo "$BASE_BRANCH $([ -f on-feat ] && echo from-feat || echo from-base)" > '${out}'`
+    );
+    const configPath = join(root, 'trigger.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.binding.launch.isolation = { kind: 'default' };
+    writeFileSync(configPath, JSON.stringify(config));
+    const invoke = (args: string[]) =>
+      runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, args);
+
+    const completed = (count: number, label: string) =>
+      waitFor(
+        () =>
+          fixture.runs().filter(run => run.status === 'completed').length === count
+            ? true
+            : undefined,
+        label
+      );
+    // Before anything is recorded, a run on the item is cut from the base as before. The
+    // fire also registers the project, which the record commands resolve the item in.
+    await invoke(['trigger', 'fire', '--config', configPath, '--item', 'WO-1']);
+    await completed(1, 'the first run to complete').catch(error => {
+      throw new Error(`${String(error)} ${JSON.stringify(fixture.runs())}`);
+    });
+    expect(readFileSync(out, 'utf8').trim()).toBe('main from-base');
+
+    await invoke(['workflow', 'landing', '--item', 'WO-1', '--branch', 'feat/order']);
+    await invoke(['workflow', 'link', '--item', 'member', '--kind', 'part_of', '--to', 'WO-1']);
+    await invoke(['trigger', 'fire', '--config', configPath, '--item', 'member']);
+    await completed(2, 'the member run to complete');
+    expect(readFileSync(out, 'utf8').trim()).toBe('feat/order from-feat');
+    const read = itemReadSchema.parse(
+      JSON.parse((await invoke(['workflow', 'runs', '--item', 'member', '--json'])).stdout)
+    );
+    expect(read.landing).toMatchObject({
+      branch: 'feat/order',
+      from: { kind: 'part_of', item: { key: 'WO-1' } },
+    });
+    expect((await invoke(['workflow', 'runs', '--item', 'member'])).stdout).toContain(
+      'Lands on: feat/order (part_of WO-1)'
+    );
+
+    // A branch the remote does not have refuses the run before its node.
+    writeFileSync(out, 'untouched');
+    await invoke(['workflow', 'landing', '--item', 'lonely', '--branch', 'feat/missing']);
+    await invoke(['trigger', 'fire', '--config', configPath, '--item', 'lonely']);
+    const failed = await waitFor(
+      () => fixture.runs().find(run => run.status === 'failed'),
+      'the lonely run to be refused'
+    );
+    expect(JSON.parse(failed.metadata).error).toContain("'feat/missing' is not on remote 'origin'");
+    expect(readFileSync(out, 'utf8')).toBe('untouched');
+  }, 60_000);
+
   // Which item wins is decided in-process (trigger.test.ts); this fire proves a mapped key
   // reaches the started run.
   test("a binding's item mapping puts the started run on the item its --inputs name", async () => {

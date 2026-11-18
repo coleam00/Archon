@@ -6,6 +6,9 @@ import {
   workflowRunConfigFromRun,
 } from '@archon/core/config';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import { resolveRunLanding } from '@archon/core/workflows/item-landing';
+import type { Codebase } from '@archon/core/schemas/codebase';
+import { landingSourceText } from '@archon/workflows/item-landing';
 import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import { resolveRunIdArg, type WorkflowRunOptions } from './workflow-shared';
@@ -62,20 +65,70 @@ async function itemLaunchRunConfig(
   cwd: string
 ): Promise<WorkflowRunConfigInput | undefined> {
   if (options.adoptRunId) return undefined;
+  const found = await launchItemRuns(host, options.item, options.supersedesRunId, cwd);
+  return found ? itemRunConfig(found.item.key, found.runs) : undefined;
+}
+
+/**
+ * The item a fresh start is on and its runs: the one `--item` names in the project of
+ * `cwd`, else that of the run it continues (`--supersedes` or `--adopt`), which the start
+ * inherits. Null when there is no such item yet.
+ */
+async function launchItemRuns(
+  host: WorkflowHost,
+  itemKey: string | undefined,
+  continuedRunId: string | undefined,
+  cwd: string
+): Promise<Awaited<ReturnType<WorkflowHost['deps']['store']['getItemRuns']>>> {
   let item: { projectKey: string; key: string } | null = null;
-  if (options.item) {
+  if (itemKey) {
     const projectKey = await registeredProjectKeyForPath(cwd, host.records.codebases);
     // No registered project means no item yet: the run registers it and writes the item.
-    item = projectKey ? { projectKey, key: options.item } : null;
-  } else if (options.supersedesRunId) {
-    // Resolved within the launch project, as the supersession itself resolves it: a short
-    // prefix passed through unresolved would find no run and silently drop the config.
-    const superseded = await host.deps.store.getWorkflowRun(
-      await resolveRunIdArg(host, options.supersedesRunId, cwd)
+    item = projectKey ? { projectKey, key: itemKey } : null;
+  } else if (continuedRunId) {
+    // Resolved within the launch project, as the continuation itself resolves it: a short
+    // prefix passed through unresolved would find no run and silently drop the item.
+    const continued = await host.deps.store.getWorkflowRun(
+      await resolveRunIdArg(host, continuedRunId, cwd)
     );
-    item = superseded?.item_id ? await host.deps.store.getItem(superseded.item_id) : null;
+    item = continued?.item_id ? await host.deps.store.getItem(continued.item_id) : null;
   }
-  if (!item) return undefined;
-  const found = await host.deps.store.getItemRuns(item.projectKey, item.key);
-  return found ? itemRunConfig(item.key, found.runs) : undefined;
+  return item ? host.deps.store.getItemRuns(item.projectKey, item.key) : null;
+}
+
+/**
+ * The base a fresh launch is cut from and proposes against, and where it came from:
+ * `--base`, else the landing branch of the item it starts on (its own, or the nearest
+ * item it is `part_of`). Undefined leaves the base to repo config, the codebase default
+ * and detection. A continuation keeps the base it recorded, so it takes neither.
+ */
+export interface LaunchBase {
+  branch: string;
+  /** For a reader: `--base`, or which item's landing branch. */
+  source: string;
+}
+
+/** Throws when the item's landing branch is missing on the remote or cannot be resolved. */
+export async function resolveLaunchBase(
+  host: WorkflowHost,
+  options: WorkflowRunOptions,
+  cwd: string,
+  admission: { isContinuation: boolean; flagBase: string | undefined },
+  codebase: Codebase | null
+): Promise<LaunchBase | undefined> {
+  if (admission.flagBase) return { branch: admission.flagBase, source: '--base' };
+  if (admission.isContinuation || codebase === null) return undefined;
+  const found = await launchItemRuns(
+    host,
+    options.item,
+    options.supersedesRunId ?? options.adoptRunId,
+    cwd
+  );
+  if (!found) return undefined;
+  const landing = await resolveRunLanding(host.deps.store, codebase, found.item);
+  if (!landing) return undefined;
+  return {
+    branch: landing.branch,
+    source: `landing branch of item ${found.item.key}, ${landingSourceText(landing)}`,
+  };
 }

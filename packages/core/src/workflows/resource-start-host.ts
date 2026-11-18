@@ -80,6 +80,7 @@ import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { executionLane, handoffIsolation } from './resource-start-lanes';
 import { selectStartedWorkflow } from './binding-workflow';
+import { resolveRunLanding } from './item-landing';
 
 const log = createLogger('resource-start-host');
 
@@ -706,7 +707,7 @@ async function prepareAdmittedResourceSubmission(
     }
   );
   await assertRunCredentials(deps, preparedAiConfiguration, { cwd: launch.execution.cwd });
-  const lane = launch.execution.isolation;
+  const { lane, baseOverride } = await landingLane(host, codebase, run, launch.execution.isolation);
   const execution = await executionLane(host, {
     run,
     lane,
@@ -738,7 +739,8 @@ async function prepareAdmittedResourceSubmission(
       baseBranch,
       ownedWorktree: execution.ownedWorktree,
       ...(execution.cutFromCommit !== undefined ? { cutFromCommit: execution.cutFromCommit } : {}),
-      ...(lane.kind === 'worktree' && lane.baseOverride ? { baseOverride: lane.baseOverride } : {}),
+      // Every lane, so an in-place or hand-off stage also gets the item's `$BASE_BRANCH`.
+      ...(baseOverride ? { baseOverride } : {}),
       resolveChildIsolation: createCodebaseChildResolver(
         host.records.isolation,
         codebase,
@@ -753,6 +755,30 @@ async function prepareAdmittedResourceSubmission(
       ...runConfig,
     },
   };
+}
+
+/**
+ * The prepared lane with the base the run takes. The item's landing branch outranks the
+ * trigger file's static `baseOverride`, which is the same for every item the file starts.
+ * Read now, not at preparation, so a queued start takes the branch the item records when
+ * it runs, and the persisted launch keeps its shape; a missing branch refuses it here.
+ */
+async function landingLane(
+  host: WorkflowHost,
+  codebase: Codebase,
+  run: { item_id: string | null },
+  prepared: PreparedWorkflowLaunch['execution']['isolation']
+): Promise<{ lane: PreparedWorkflowLaunch['execution']['isolation']; baseOverride?: string }> {
+  let landing: string | undefined;
+  if (run.item_id) {
+    const item = await host.deps.store.getItem(run.item_id);
+    if (!item) throw new Error(`The run's item '${run.item_id}' is missing from the store.`);
+    landing = (await resolveRunLanding(host.deps.store, codebase, item))?.branch;
+  }
+  if (prepared.kind !== 'worktree')
+    return landing ? { lane: prepared, baseOverride: landing } : { lane: prepared };
+  const baseOverride = landing ?? prepared.baseOverride;
+  return baseOverride ? { lane: { ...prepared, baseOverride }, baseOverride } : { lane: prepared };
 }
 
 async function loadAdmittedResourceStart(input: StartAdmittedResourceStartInput) {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
 import type { ItemMerge } from './schemas/item-merge';
+import type { ItemLanding } from './schemas/item-landing';
 import type { StoredItemAsk } from './schemas/item-ask';
 import type { ItemLink } from './schemas/item-link';
 import type { ItemRuling } from './schemas/item-ruling';
@@ -156,6 +157,11 @@ const merge: ItemMerge = {
   via: 'cli',
   fromRun: null,
 };
+const landing: ItemLanding = {
+  branch: 'feat/order-1',
+  recordedAt: '2026-11-01T08:00:00.000Z',
+  fromRun: null,
+};
 const other: WorkflowItem = { id: 'other-row', projectKey: 'acme/web', key: 'issue-3' };
 const whole: WorkflowItem = { id: 'whole-row', projectKey: 'acme/web', key: 'order-1' };
 const linkAct = { at: '2026-11-01T09:00:00.000Z', via: 'cli', by: null, fromRun: null } as const;
@@ -189,6 +195,7 @@ const source: ItemReadSource = {
     listItemAsks: async () => [],
     listItemRulings: async id => (id === item.id ? rulings : []),
     getItemMerge: async id => (id === item.id ? merge : null),
+    getItemLanding: async id => (id === item.id ? landing : null),
     listItemLinks: async id => (id === item.id ? links : []),
     getResourceStartRequest: async () => null,
     listSkippedItemStarts: async () => [],
@@ -363,7 +370,28 @@ describe('reading an item', () => {
       },
     ]);
     expect(read?.merged).toEqual(merge);
+    expect(read?.landing).toEqual({ branch: 'feat/order-1', from: { kind: 'own' } });
     expect(read?.degraded).toEqual([]);
+  });
+
+  test('a landing that cannot be resolved is reported, and the rest of the item still reads', async () => {
+    const unreadable: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        getItemLanding: async id => ({
+          type: 'degraded',
+          reason: 'landing_unreadable',
+          itemId: id,
+        }),
+      },
+    };
+    const read = await readItem(unreadable, item.projectKey, item.key);
+    expect(read?.landing).toBeNull();
+    expect(read?.merged).toEqual(merge);
+    expect(read?.degraded).toEqual([
+      expect.objectContaining({ reason: 'landing_unresolved', message: expect.any(String) }),
+    ]);
   });
 
   test('an unknown key reads as null, an item with no runs as empty but for its rulings', async () => {
@@ -386,6 +414,7 @@ describe('reading an item', () => {
       questions: [],
       answers: rulings,
       merged: merge,
+      landing: { branch: 'feat/order-1', from: { kind: 'own' } },
       links: [],
       degraded: [],
     });

@@ -814,6 +814,18 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_merges (
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
+-- The branch an item's change lands on (`archon workflow landing`): a fresh run on the item,
+-- or on an item `part_of` it, is cut from it and proposes against it. One row per item;
+-- recording again replaces the row, and a run already started keeps the base it recorded.
+-- from_run_id has no foreign key, so run cleanup keeps the fact.
+CREATE TABLE IF NOT EXISTS remote_agent_item_landings (
+  item_id UUID PRIMARY KEY REFERENCES remote_agent_items(id),
+  branch TEXT NOT NULL,
+  from_run_id TEXT,
+  from_node_path TEXT,
+  recorded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
 -- One row per item tracker destination ('tracker:<project>'). The row exists once the
 -- destination's activation baseline is committed, so a later activation does not baseline
 -- again. The pass_owner_* columns name the process running the destination's pass, NULL
@@ -835,7 +847,8 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_tracker_destinations (
 -- ending a link writes the ended_* columns once, so the original fact and who ended it and
 -- when stay readable. Rows are never deleted. While active, the same (from, to, kind) is
 -- stored once (idx_item_links_active). The schema lets a link join items of two projects.
--- The engine stores and reports links and gives the kinds no meaning. id is TEXT, as for
+-- The engine stores and reports links; only an active part_of carries meaning, the landing
+-- branch of the item it points at (remote_agent_item_landings). id is TEXT, as for
 -- rulings; from_run_id and ended_from_run_id have no foreign key.
 CREATE TABLE IF NOT EXISTS remote_agent_item_links (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,

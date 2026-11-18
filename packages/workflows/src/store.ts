@@ -268,6 +268,21 @@ export interface IWorkflowStore
   recordItemMerge(
     input: import('./schemas/item-merge').ItemMergeReport
   ): Promise<import('./schemas/item-merge').ItemMergeRecorded | null>;
+  /** The landing branch recorded on an item; null when none is. An unreadable row is reported, not thrown. */
+  getItemLanding(
+    itemId: string
+  ): Promise<
+    | import('./schemas/item-landing').ItemLanding
+    | import('./schemas/item-landing').ItemLandingDegraded
+    | null
+  >;
+  /**
+   * Record the branch the item `key` names lands on, writing the item on first use.
+   * Recording again replaces the branch.
+   */
+  recordItemLanding(
+    input: import('./schemas/item-landing').ItemLandingReport
+  ): Promise<import('./schemas/item-landing').ItemLanding>;
   /**
    * Every link from or to an item, ended ones included, in recording order. A row that does
    * not read is reported as unreadable in its place, not thrown.

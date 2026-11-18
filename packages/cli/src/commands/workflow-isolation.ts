@@ -19,6 +19,7 @@ import {
   type PreparedEnv,
 } from '@archon/isolation';
 import * as git from '@archon/git';
+import type { LaunchBase } from './workflow-run-config';
 import { mkdir } from 'node:fs/promises';
 import { loadRepoConfig } from '@archon/core/config/config-loader';
 import type { OverlayMode } from '@archon/workflows/container-context';
@@ -138,18 +139,18 @@ function folderWorktreeOptionError(): Error {
 }
 
 /**
- * Warn that `--base` is only HALF applied when an existing worktree is adopted
- * by `--branch` reuse: its cut-from is already fixed, but the
- * override still reaches `$BASE_BRANCH` and retargets the PR.
+ * Warn that a base override (`--base`, or the item's landing branch) is only HALF applied
+ * when an existing worktree is adopted by `--branch` reuse: its cut-from is already fixed,
+ * but the override still reaches `$BASE_BRANCH` and retargets the PR.
  */
-export function warnBaseOverrideOnReuse(workingPath: string, flagBase: string): void {
+export function warnBaseOverrideOnReuse(workingPath: string, base: LaunchBase): void {
   getLog().warn(
-    { path: workingPath, baseBranch: flagBase },
+    { path: workingPath, baseBranch: base.branch, source: base.source },
     'worktree.reuse_base_override_partial'
   );
   console.warn(
     `Warning: Reusing existing worktree at ${workingPath}. ` +
-      `--base ${flagBase} did not change the cut-from (worktree already exists); ` +
+      `The base ${base.branch} (${base.source}) did not change the cut-from (worktree already exists); ` +
       'it still applies to the PR target.'
   );
 }
@@ -605,11 +606,11 @@ async function containerMounts(
 export async function warnOnReusedWorktree(
   existingEnv: IsolationEnvironmentRow,
   codebase: Codebase,
-  flagBase: string | undefined,
+  base: LaunchBase | undefined,
   codebaseDefaultBranch: string | undefined
 ): Promise<void> {
-  if (flagBase) {
-    warnBaseOverrideOnReuse(existingEnv.working_path, flagBase);
+  if (base) {
+    warnBaseOverrideOnReuse(existingEnv.working_path, base);
   }
   // Validate base branch before reuse (warning-only — non-blocking)
   try {
@@ -618,13 +619,13 @@ export async function warnOnReusedWorktree(
     const repoPath = git.toRepoPath(codebase.default_cwd);
     const remote = repoConfig?.worktree?.remote?.trim() || (await git.getDefaultRemote(repoPath));
     if (!remote) throw new Error('Set worktree.remote to select a git remote.');
-    // Four-level fallback: --base override → repo config → codebase default →
+    // Four-level fallback: base override (--base or the item's landing branch) → repo config → codebase default →
     // git auto-detect. Mirrors WorktreeProvider and executeWorkflow, so the
     // reuse check validates against the base this dispatch actually asked
     // for instead of reporting a mismatch nobody requested.
     let configuredBase: git.BranchName;
-    if (flagBase) {
-      configuredBase = git.toBranchName(flagBase);
+    if (base) {
+      configuredBase = git.toBranchName(base.branch);
     } else if (rawBase) {
       configuredBase = git.toBranchName(rawBase);
     } else if (codebaseDefaultBranch) {

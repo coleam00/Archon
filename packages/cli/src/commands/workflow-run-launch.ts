@@ -66,6 +66,7 @@ import {
   type OwnedRunAdmission,
   type OwnedRunRequest,
 } from './workflow-run-admission';
+import { resolveLaunchBase, type LaunchBase } from './workflow-run-config';
 
 /**
  * Preflight before handing execution to a detached child. Refusals must reach the
@@ -98,6 +99,9 @@ export async function launchDetachedOwnedRun(
   if (!options.noWorktree && admission.wantsIsolation) {
     assertCodebaseResolvedForIsolation(detachResolved);
   }
+  // The item's landing branch is checked here so a missing one refuses before `Started`;
+  // the child resolves it again when it cuts the worktree.
+  await resolveLaunchBase(host, options, cwd, admission, detachCodebase);
   // Never pin a worktree branch on the child for a folder project. The --folder flag
   // declares it; an already-registered folder project is read off the resolution.
   const detachIsFolder = options.folder === true || detachCodebase?.kind === 'folder';
@@ -250,6 +254,12 @@ export interface ForegroundLaunch {
    * $BASE_BRANCH resolution all derive from this one value).
    */
   readonly codebaseDefaultBranch: string | undefined;
+  /**
+   * The per-dispatch base override, `--base` or the item's landing branch. It wins over
+   * repo config and the codebase default for both the worktree cut-from (the provider
+   * request's `baseOverride`) and `$BASE_BRANCH` (executeWorkflow's `baseOverride`).
+   */
+  readonly base: LaunchBase | undefined;
   readonly continuation: LaunchContinuation;
   /** The prior run a resume continues; the executor performs no implicit resume detection. */
   readonly resumable: WorkflowRun | null;
@@ -284,6 +294,8 @@ export async function prepareForegroundLaunch(
     );
   }
 
+  // Before any worktree, so a landing branch missing on the remote refuses the run.
+  const base = await resolveLaunchBase(host, options, cwd, admission, codebase);
   const workspace: RunWorkspace = {
     workingCwd: cwd,
     isolationEnvId: undefined,
@@ -326,6 +338,7 @@ export async function prepareForegroundLaunch(
     codebase,
     isFolderCodebase,
     codebaseDefaultBranch: codebase?.default_branch?.trim() || undefined,
+    base,
     continuation,
     resumable,
     resumeBranch,
@@ -620,12 +633,7 @@ async function provisionWorktree(
     options.fromBranch
   );
   if (existingEnv) {
-    await warnOnReusedWorktree(
-      existingEnv,
-      codebase,
-      admission.flagBase,
-      launch.codebaseDefaultBranch
-    );
+    await warnOnReusedWorktree(existingEnv, codebase, launch.base, launch.codebaseDefaultBranch);
     await recordWorktreeAdoption(host.records.isolation, existingEnv, codebase.default_cwd);
     workspace.workingCwd = existingEnv.working_path;
     workspace.isolationEnvId = existingEnv.id;
@@ -691,7 +699,7 @@ async function createRunWorktree(
       identifier: branchIdentifier,
       taskBranch: worktreeTaskBranch(options, launch.continuation.adoptedTaskBranch),
       baseBranch: codebaseDefaultBranch ? git.toBranchName(codebaseDefaultBranch) : undefined,
-      baseOverride: admission.flagBase ? git.toBranchName(admission.flagBase) : undefined,
+      baseOverride: launch.base ? git.toBranchName(launch.base.branch) : undefined,
       codebaseId: codebase.id,
       // owner/repo name lets resolveOwnerRepo use the registered identity
       // instead of the _local/<basename> path fallback (#2022, #2227)
