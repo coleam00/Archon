@@ -27,6 +27,10 @@ export const metricsQuerySchema = z.object({
   }),
   byModel: z.string().optional().openapi({
     description:
-      'A node id. Each group also reports its records split by the model label that ran this node in their producing runs and the runs below them. Not combined with `compare`; a node no producing run ran is a 400 listing the AI nodes they ran.',
+      'A node id. Each group also reports its records split by the model label that ran this node in their producing runs and the runs below them. Not combined with `compare` or `byDimension`; a node no producing run ran is a 400 listing the AI nodes they ran.',
+  }),
+  byDimension: z.string().optional().openapi({
+    description:
+      "A dimension key. Each group also reports its records split by the value they carry for this key in their `dimensions`, each value's group with its own `compare` when `compare` is given. Not combined with `byModel`; a key no record in the window carries is a 400 listing the keys they carry.",
   }),
 });

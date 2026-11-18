@@ -582,14 +582,17 @@ curl 'http://localhost:3090/api/metrics?name=factory.prs_merged&since=7d'
 Query parameters, all optional: `since` (a duration such as `40m`, `24h`, `7d` or `2w`, or an ISO
 date or time; default 30 days before `until`), `until` (an ISO date or time; default now),
 `name`, `subject`, `codebaseId`, `compare` (an ISO date or time to split each
-instrument's records at) and `byModel` (a node id to split them by the model that ran it).
+instrument's records at), `byModel` (a node id to split them by the model that ran it) and
+`byDimension` (a dimension key to split them by the value each record carries for it).
 The window is half-open. It returns the same `MetricsReport` `archon metrics --json`
 prints: per name, its definition and one entry per instrument and `measured_by` with
 `value`, `n`, `interval`, `cost`, `latest` and a daily `series`, a `compare` block when
-`compare` is given or a `by_model` block when `byModel` is, plus `refused[]`. Returns
-**400** for a malformed window or `compare`, an empty `byModel`, `compare` with `byModel`, and a
-`byModel` node none of the window's existing producing runs ran, with the AI node ids they
-did run in the error. The node is not checked when no producing run still exists: a window
+`compare` is given, a `by_model` block when `byModel` is, or a `by_dimension` block when
+`byDimension` is (each of its groups with its own `compare` block when `compare` is also
+given), plus `refused[]`. Returns **400** for a malformed window, `compare` or `byDimension`
+key, an empty `byModel`, `byModel` with `compare` or `byDimension`, a `byModel` node none
+of the window's existing producing runs ran, with the AI node ids they did run in the
+error, and a `byDimension` key no record in the window carries, with the keys they carry. The node is not checked when no producing run still exists: a window
 with no records returns an empty report, and records whose runs were all deleted are
 `unattributed`.
 

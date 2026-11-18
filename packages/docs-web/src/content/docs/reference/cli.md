@@ -2704,6 +2704,7 @@ archon metrics sdlc.tests_unprotective --subject https://github.com/acme/widgets
 archon metrics --project acme/widgets
 archon metrics sdlc.pr_merge_rate --since 60d --compare 2026-10-15T09:30:00Z
 archon metrics sdlc.pr_merge_rate --since 60d --by-model ship__deliver__rounds.review__code
+archon metrics sdlc.issues_merged --since 30d --by-dimension route
 ```
 
 The window is `[--since, --until)`. `--until` defaults to now and takes an ISO date or a
@@ -2714,7 +2715,10 @@ codebase. A name's definition is install-wide either way: a record another codeb
 stored first still fixes it. `--compare <ISO>` takes an ISO date or a time with an offset
 and splits each instrument's records by when their producing runs started: before the cut,
 or at or after it. `--by-model <node>` splits them instead by the model label that ran
-`<node>` in their producing runs and the runs below them. The two cannot be combined.
+`<node>` in their producing runs and the runs below them, and cannot be combined with
+`--compare`. `--by-dimension <key>` splits them by the value each record carries for `<key>`
+in its `dimensions`; with `--compare`, each value is compared on its own. `--by-model` and
+`--by-dimension` cannot be combined.
 
 Text output prints one line per metric for its newest instrument: name, kind and unit,
 `value` (the sum for a `count`, the mean for a `score`), `n`, the 95% interval for a score
@@ -2729,7 +2733,10 @@ records were `straddling` the cut or `unattributed`, and the output ends with a 
 the comparison is observational. With `--by-model`, each entry adds one line per model label,
 then `(mixed)` and `(none)`, with its value, `n`, interval, its difference from the other
 model labels combined (`vs rest`, with its interval and `separated`), the requested models
-it merges, and its cost, and the output ends with a line that the split is observational. `--json` prints one `MetricsReport` document, the same
+it merges, and its cost, and the output ends with a line that the split is observational.
+With `--by-dimension`, each entry adds a `by <key>:` line, then one line per value and
+`(none)` with the same figures but no models; with `--compare`, an indented `compare` and
+`delta` line follows each value, and the output ends with both observational lines. `--json` prints one `MetricsReport` document, the same
 shape `GET /api/metrics` returns, with names and instruments in sorted order.
 
 A record that conflicts with its name's first definition is left out and reported on
@@ -2737,19 +2744,21 @@ stderr as `error: metric <name> is <definition>; run <id> node <node> offered
 <definition>`, where each `<definition>` is `<kind>/<unit>`, followed by
 ` calibrates <metric>` for a score that calibrates another metric. A stored output the record schema rejects is reported the same way when
 no name is given. Exit codes: `0` success, `1` usage (including a malformed window or
-`--compare`, an empty `--by-model`, or `--compare` with `--by-model`), `2` the window has existing producing runs and
+`--compare`, an empty `--by-model`, a malformed `--by-dimension` key, or `--by-model` with
+`--compare` or `--by-dimension`), `2` the window has existing producing runs and
 none ran the `--by-model` node, with the AI node ids they did run (at most 50) on stderr
 (with no existing producing run the node is not checked and the query exits `0`: a window
-with no records reports none, and records whose runs were all deleted are `unattributed`), `4` the report refused a
-record.
+with no records reports none, and records whose runs were all deleted are `unattributed`),
+or the window has records and none carries the `--by-dimension` key, with the keys they do
+carry (at most 50) on stderr, `4` the report refused a record.
 
-With `--project` and none of `--subject`, `--compare` or `--by-model`, the report also
+With `--project` and none of `--subject`, `--compare`, `--by-model` or `--by-dimension`, the report also
 evaluates the [item metrics](/guides/metrics/#item-metrics-a-pack-declares) the project's
 packs declare, over every item with a run in the same window; a positional `[name]` keeps
 only that metric. Text output adds a block of their figures per pack. `--json` adds
 `item_metrics`: `{ project, window, items, degraded_items, packs, errors }`, where each pack
 lists its metrics' figures and `errors` names a declaration that could not be read, also
-reported on stderr. `item_metrics` is null without `--project`, with one of those three
+reported on stderr. `item_metrics` is null without `--project`, with one of those four
 flags, and on the file store, which says so on stderr. A bad declaration does not change the
 exit code.
 

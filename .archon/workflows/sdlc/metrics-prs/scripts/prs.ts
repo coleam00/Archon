@@ -2,8 +2,8 @@
  * Metric records for the pull requests the build queue opened: opened, merged,
  * abandoned and the merge rate, and for each merged one the review rounds it took to
  * reach Ready, each attributed to the build-queue runs that built it; and for each issue
- * the queue worked, whether it was built and merged, its lead time, rounds and asks, in
- * total and per route. Pull requests a
+ * the queue worked, whether it was built and merged, its lead time, rounds and asks, with
+ * its route. Pull requests a
  * round only continued, and merged ones whose rounds cannot be counted, are reported in
  * `skipped`.
  * Merged pull requests merged at or after `lines_since` also record the test and

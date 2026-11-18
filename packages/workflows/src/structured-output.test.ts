@@ -84,6 +84,7 @@ describe('validateStructuredOutput: reserved metrics key', () => {
           runs: ['0123456789abcdef0123456789abcdef', '01234567-89ab-cdef-0123-456789abcdef'],
           instrument: 'judge@sha256:abc',
           instrument_node: 'judge',
+          dimensions: { route: 'plan', size: 'm' },
         },
       ])
     ).toEqual([]);
@@ -96,6 +97,29 @@ describe('validateStructuredOutput: reserved metrics key', () => {
     ['calibrates on a count', { ...count, calibrates: 'factory.prs' }, '/metrics/1'],
     ['a time without an offset', { ...count, at: '2026-10-24T10:00:00' }, '/metrics/1/at'],
     ['a malformed run id', { ...count, runs: ['not-a-run'] }, '/metrics/1/runs/0'],
+    [
+      'a dimension key outside [a-z0-9_]',
+      { ...count, dimensions: { Route: 'plan' } },
+      '/metrics/1/dimensions/Route',
+    ],
+    [
+      'a dimension value over 64 characters',
+      { ...count, dimensions: { route: 'x'.repeat(65) } },
+      '/metrics/1/dimensions/route',
+    ],
+    [
+      'a dimension value with free text',
+      { ...count, dimensions: { route: 'the plan' } },
+      '/metrics/1/dimensions/route',
+    ],
+    [
+      'more than 8 dimensions',
+      {
+        ...count,
+        dimensions: Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`k${String(i)}`, 'v'])),
+      },
+      '/metrics/1/dimensions',
+    ],
     [
       'a repeated run id',
       { ...count, runs: ['0123456789abcdef0123456789abcdef', '0123456789abcdef0123456789abcdef'] },

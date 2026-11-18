@@ -69,13 +69,15 @@ A pull request is the factory's product; a closed issue is its purpose. `archon-
 
 Each record names its issue as the subject and the build-queue runs that worked it as its producing runs, so `archon metrics sdlc.issues_merged --json` reports what those runs cost.
 
-Every record is also written under its route: `sdlc.issues_merged.plan`, `sdlc.issue_asks.investigate` and so on, for `investigate`, `plan`, `deliver` and `continue`. A metric record has no field to split by, so the route is in the name. An issue's route is the one the first of its recorded build rounds that declares a route took. When none declares one, the item's intake stage stands in while it is still a route, and otherwise the issue counts only in the totals. Judge a route by its share merged, its cost and its asks:
+Each record carries its issue's route as the `route` dimension: `investigate`, `plan`, `deliver` or `continue`. An issue's route is the one the first of its recorded build rounds that declares a route took. When none declares one, the item's intake stage stands in while it is still a route, and otherwise the record carries no route and falls in the split's `none` group. Judge a route by its share merged, its cost and its asks, split by the dimension (see [Splitting by a dimension](/guides/metrics/#splitting-by-a-dimension)):
 
 ```bash
-archon metrics sdlc.issues_merged.plan --since 30d
-archon metrics sdlc.issues_built.plan --since 30d
-archon metrics sdlc.issue_asks.plan --compare <when this checkout picked up a pack change>
+archon metrics sdlc.issues_merged --by-dimension route --since 30d
+archon metrics sdlc.issues_built --by-dimension route --since 30d
+archon metrics sdlc.issue_asks --by-dimension route --compare <when this checkout picked up a pack change>
 ```
+
+Records written before the route became a dimension sit under the old per-route names, such as `sdlc.issues_merged.plan`, until they age out of the window.
 
 A work item keeps its last ten build rounds and its last twenty decisions per queue, so an issue past either undercounts its rounds or asks, and one whose first round fell out can move to its next round's route.
 

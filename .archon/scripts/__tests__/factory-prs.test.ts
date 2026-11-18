@@ -41,8 +41,8 @@ test('a successful forge answer produces the complete PR metric records', () => 
   expect(output.metrics).toEqual([
     { ...base, name: 'sdlc.prs_opened', value: 1 },
     { ...base, name: 'sdlc.prs_abandoned', value: 0 },
-    { ...base, name: 'sdlc.issues_built', value: 1, unit: 'issues', subject: `${PR.repo.host}/${PR.repo.path}#42` },
-    { ...base, name: 'sdlc.issues_built.plan', value: 1, unit: 'issues', subject: `${PR.repo.host}/${PR.repo.path}#42` },
+    { ...base, name: 'sdlc.issues_built', value: 1, unit: 'issues', subject: `${PR.repo.host}/${PR.repo.path}#42`,
+      dimensions: { route: 'plan' } },
   ]);
   expect(run.forge).toHaveLength(2);
 });

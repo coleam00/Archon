@@ -238,6 +238,32 @@ test('--by-model prints a line per model label and labels the split observationa
   expect(text).toContain('The split is observational');
 });
 
+test('--by-dimension with --compare prints a line per value with its cohorts', async () => {
+  const { invoke, stdout } = await fixture([
+    { dimensions: { route: 'plan' } },
+    { dimensions: { route: 'deliver' }, value: 3 },
+    {},
+  ]);
+  expect(await invoke({ byDimension: 'route', compare: '2026-01-01' })).toBe(0);
+  const text = stdout.join('');
+  expect(text).toContain('  by route:\n    deliver: value 3 (n 1)  vs rest 1  separated: no;');
+  expect(text).toContain('    plan: value 2 (n 1)  vs rest -1  separated: no;');
+  expect(text).toContain('    (none): value 2 (n 1)  vs rest -3  separated: no;');
+  expect(text).toContain(
+    '      compare at 2026-01-01T00:00:00.000Z: before none (n 0), after 3 (n 1)'
+  );
+  expect(text).toContain('each value covers different work');
+  expect(text).toContain('The comparison is observational');
+});
+
+test('--by-dimension with a key no record carries exits 2 and lists the keys they carry', async () => {
+  const { invoke, stderr } = await fixture([{ dimensions: { route: 'plan' } }]);
+  expect(await invoke({ byDimension: 'size' })).toBe(2);
+  expect(stderr.join('')).toContain(
+    'no record carries a dimension "size"; dimensions they carry: route'
+  );
+});
+
 test('the headline is the newest judge model, and each instrument line names its models', async () => {
   const judge = { kind: 'score', unit: 'ratio', instrument: 'judge-v1', instrument_node: 'judge' };
   const { invoke, stdout, store, runIds } = await fixture([
