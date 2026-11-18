@@ -183,7 +183,7 @@ export async function executeAgentNode(
     const message = unknownWrite
       ? `${failure.message}\nTool write outcome unknown: ${unknownWrite}`
       : failure.message;
-    return failAgentNode(message, failure.kind, {
+    return failAgentNode(message, unknownWrite ? 'unknown' : failure.kind, {
       providerFailure: failure.providerFailure,
       providerNotCalled: !workloadStarted,
     });

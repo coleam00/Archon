@@ -51,23 +51,21 @@ export function buildPiNativeToolDefinitions(nativeTools: NativeTool[]): ToolDef
       label: spec.name,
       description: spec.description,
       parameters: nativeToolInputToTypeBox(spec.inputSchema),
-      execute: async (
-        _toolCallId,
-        params
-      ): Promise<{ content: { type: 'text'; text: string }[]; details: undefined }> => ({
-        content: [
-          {
-            type: 'text',
-            text: await spec.handler(
-              'jsonSchema' in spec.inputSchema
-                ? (params as Record<string, unknown>)
-                : nativeToolInputParser(spec.inputSchema).parse(params),
-              { providerCallId: _toolCallId }
-            ),
-          },
-        ],
-        details: undefined,
-      }),
+      execute: async (_toolCallId, params) => {
+        const parsed = nativeToolInputParser(spec.inputSchema).parse(params);
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: await spec.handler(
+                'jsonSchema' in spec.inputSchema ? (params as Record<string, unknown>) : parsed,
+                { providerCallId: _toolCallId }
+              ),
+            },
+          ],
+          details: undefined,
+        };
+      },
     })
   );
 }

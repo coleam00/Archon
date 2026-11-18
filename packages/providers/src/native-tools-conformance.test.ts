@@ -67,8 +67,8 @@ describe('native tool input schema conformance', () => {
       description: 'lookup',
       inputSchema: { jsonSchema },
       handler: async (args, context) => {
-        expect(args).toEqual(input);
         seen.push(context);
+        expect(args).toEqual(input);
         return 'ok';
       },
     };
@@ -150,6 +150,12 @@ describe('native tool input schema conformance', () => {
     } finally {
       await server.instance.close();
     }
+  });
+  test('JSON Schema not keywords work without changing input', () => {
+    const schema = { type: 'object', not: { required: ['blocked'] } };
+    const parser = nativeToolInputParser({ jsonSchema: schema });
+    expect(parser.safeParse({}).success).toBe(true);
+    expect(parser.safeParse({ blocked: true }).success).toBe(false);
   });
   test('Claude, Pi and Codex accept and reject the same inputs', async () => {
     const zodObject = nativeToolInputParser(SCHEMA);

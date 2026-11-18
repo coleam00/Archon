@@ -1,10 +1,12 @@
 // @archon-test-isolated
 import { afterEach, beforeEach, expect, test, spyOn } from 'bun:test';
+import * as fs from 'node:fs/promises';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import * as runControl from '../../run-control';
+import { NodeFailure } from '../../ai-turn';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { renderOutputTypes } from '../../../output-types';
 import { qualifyWorkflowResources } from '../../../packaged-workflow';
@@ -17,6 +19,7 @@ import {
   makeWorkflowRun,
   mockSendQueryDag,
   persistedEvents,
+  minimalConfig,
   spyOnNodeExec,
   type MockWorkflowStore,
 } from '../../test-utils';
@@ -65,7 +68,7 @@ const agent = (writes = false): AgentNode => ({
     required: ['summary'],
   },
 });
-const run = (nodes: DagNode[] = [agent()], provider = 'claude') =>
+const run = (nodes: DagNode[] = [agent()], provider = 'claude', credentials?: string[]) =>
   executeDagWorkflow(
     dagOptions({
       deps,
@@ -74,6 +77,9 @@ const run = (nodes: DagNode[] = [agent()], provider = 'claude') =>
       workflowRun: makeWorkflowRun(),
       workflowProvider: provider,
       workflow: { name: 'tools', nodes },
+      config: credentials
+        ? { ...minimalConfig, protectedCredentialValues: credentials }
+        : minimalConfig,
     })
   );
 beforeEach(async () => {
@@ -172,7 +178,10 @@ test('write timeout stops the node non-retryably and preserves provider failure'
   try {
     mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
       await expect(options?.nativeTools?.[0].handler(args)).rejects.toThrow();
-      throw new Error('provider transport failed');
+      throw new NodeFailure('rate_limited', 'provider transport failed', {
+        class: 'rate_limited',
+        evidence: 'rate limited',
+      });
       yield reply();
     });
     const node = {
@@ -183,6 +192,10 @@ test('write timeout stops the node non-retryably and preserves provider failure'
     const failed = events('node_failed')[0];
     expect(failed?.data).toMatchObject({ retryable: false });
     expect(failed?.data?.error).toContain('provider transport failed');
+    expect(failed?.data).toMatchObject({
+      failure_kind: 'unknown',
+      provider_failure: { class: 'rate_limited' },
+    });
     expect(mockSendQueryDag.mock.calls).toHaveLength(1);
     expect(events('script_tool_call')[0]?.data?.status).toBe('unknown');
   } finally {
@@ -225,13 +238,17 @@ test('no-schema agent keeps its original text output', async () => {
 });
 
 test('an unsettled provider with a pending write is cancelled and cannot complete or retry', async () => {
+  const started = Promise.withResolvers<void>();
   const exec = spyOn(runControl, 'runSubprocessUntilRunStops').mockImplementation(
     async (_store, _runId, _nodeId, _context, _cmd, _args, options) => {
       const signal = options.abortSignal;
       if (!signal) throw new Error('Missing abort signal');
-      await new Promise<void>(resolve =>
-        signal.addEventListener('abort', () => resolve(), { once: true })
-      );
+      started.resolve();
+      if (!signal.aborted) {
+        await new Promise<void>(resolve =>
+          signal.addEventListener('abort', () => resolve(), { once: true })
+        );
+      }
       throw Object.assign(new Error('write cancelled'), { cancelled: true, code: null });
     }
   );
@@ -240,6 +257,7 @@ test('an unsettled provider with a pending write is cancelled and cannot complet
     mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
       work = options?.nativeTools?.[0].handler(args);
       void work?.catch(() => undefined);
+      await started.promise;
       yield reply();
     });
     await run([agent(true)]);
@@ -306,4 +324,128 @@ test('a no-tools schema failure after the model retains provider spend', async (
     failure_kind: 'config',
     cost_usd: 0.01,
   });
+});
+
+test('a certified null result stays null in the call event', async () => {
+  const node = agent();
+  if (!node.tools) throw new Error('Missing tool declaration');
+  node.tools.lookup.output_schema = { type: 'null' };
+  await writeFile(join(root, '.archon', 'scripts', 'lookup.ts'), 'console.log("null");');
+  mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
+    expect(await options?.nativeTools?.[0].handler(args)).toBe('null');
+    yield reply();
+  });
+  await run([node]);
+  expect(events('script_tool_call')[0]?.data?.output).toBeNull();
+});
+
+test('call events recursively redact protected values without changing the tool result', async () => {
+  const node = agent();
+  if (!node.tools) throw new Error('Missing tool declaration');
+  node.tools.lookup.output_schema = {
+    type: 'object',
+    properties: {
+      nested: {
+        type: 'object',
+        properties: {
+          secret: { type: 'string' },
+          count: { type: 'number' },
+          values: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+  };
+  await writeFile(
+    join(root, '.archon', 'scripts', 'lookup.ts'),
+    'const input=JSON.parse(await Bun.stdin.text()); console.log(JSON.stringify({nested:{secret:`prefix ${input.payload}`,count:7,values:[input.payload]}}));'
+  );
+  mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
+    const result = await options?.nativeTools?.[0].handler({
+      ...args,
+      payload: 'secret-value',
+    });
+    expect(result).toContain('secret-value');
+    yield reply();
+  });
+  await run([node], 'claude', ['secret-value']);
+  expect(events('script_tool_call')[0]?.data).toMatchObject({
+    input: { payload: '[REDACTED]' },
+    output: { nested: { secret: 'prefix [REDACTED]', count: 7, values: ['[REDACTED]'] } },
+  });
+});
+
+test('a stalled unknown-event write cannot block shutdown past the second grace', async () => {
+  const launched = Promise.withResolvers<void>();
+  const exec = spyOn(runControl, 'runSubprocessUntilRunStops').mockImplementation(async () => {
+    launched.resolve();
+    return new Promise<never>(() => undefined);
+  });
+  const persist = deps.store.persistWorkflowEvent.getMockImplementation();
+  if (!persist) throw new Error('Missing persistWorkflowEvent implementation');
+  deps.store.persistWorkflowEvent.mockImplementation(async event => {
+    if (event.event_type === 'script_tool_call') return new Promise<void>(() => undefined);
+    return persist(event);
+  });
+  try {
+    mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
+      const work = options?.nativeTools?.[0].handler(args);
+      void work?.catch(() => undefined);
+      await launched.promise;
+      yield reply();
+    });
+    const started = Date.now();
+    await run([agent(true)]);
+    expect(Date.now() - started).toBeLessThan(3500);
+    expect(events('node_failed')[0]?.data).toMatchObject({
+      failure_kind: 'unknown',
+      retryable: false,
+      error: expect.stringContaining('did not settle'),
+    });
+    expect(events('script_tool_call')).toHaveLength(0);
+  } finally {
+    exec.mockRestore();
+  }
+});
+
+test('a stopped attempt cannot launch a write after its source recheck', async () => {
+  const gate = Promise.withResolvers<void>();
+  const rechecking = Promise.withResolvers<void>();
+  const readFile = fs.readFile;
+  let checking = false;
+  const read = spyOn(fs, 'readFile').mockImplementation((async (
+    path: Parameters<typeof fs.readFile>[0],
+    options?: Parameters<typeof fs.readFile>[1]
+  ) => {
+    if (checking && String(path).endsWith('lookup.ts')) {
+      rechecking.resolve();
+      await gate.promise;
+    }
+    return readFile(path, options);
+  }) as typeof fs.readFile);
+  const exec = spyOn(runControl, 'runSubprocessUntilRunStops').mockResolvedValue({
+    stdout: '{"green":false}',
+    stderr: '',
+    credentialValues: [],
+  });
+  try {
+    let work: Promise<string> | undefined;
+    mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
+      checking = true;
+      work = options?.nativeTools?.[0].handler(args);
+      void work?.catch(() => undefined);
+      await rechecking.promise;
+      yield reply();
+      setTimeout(() => gate.resolve(), 20);
+    });
+    await run([agent(true)]);
+    await expect(work).rejects.toThrow('before script start');
+    expect(exec).not.toHaveBeenCalled();
+    expect(events('node_failed')[0]?.data).toMatchObject({
+      failure_kind: 'unknown',
+      retryable: false,
+    });
+  } finally {
+    read.mockRestore();
+    exec.mockRestore();
+  }
 });

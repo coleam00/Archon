@@ -11,6 +11,10 @@ import { formatSubprocessFailure } from '../../../executor-shared';
 import type { RunLayersContext } from '../../run-context';
 import { prepareToolScript, runScript } from '../exec/script';
 import { ExecOutputContractError } from '../exec/exec-output';
+import {
+  collectCredentialValues,
+  redactCredentialValues,
+} from '@archon/paths/credential-redaction';
 
 const STOP_GRACE_MS = 1_000;
 
@@ -18,6 +22,7 @@ interface ToolOutcome {
   output: JsonValue;
   status: 'completed' | 'failed' | 'unknown';
   error?: string;
+  credentialValues?: readonly string[];
 }
 
 export async function createScriptTools(
@@ -56,6 +61,13 @@ export async function createScriptTools(
         const record = async (outcome: ToolOutcome): Promise<void> => {
           if (recorded) return;
           recorded = true;
+          const credentialValues =
+            outcome.credentialValues ??
+            collectCredentialValues(
+              prepared.env,
+              ctx.config.protectedEnvKeys,
+              ctx.config.protectedCredentialValues
+            );
           try {
             await persistNodeEvent(ctx.deps.store, {
               workflow_run_id: ctx.workflowRun.id,
@@ -70,9 +82,11 @@ export async function createScriptTools(
                   ? { provider_call_scope: context.providerCallScope }
                   : {}),
                 status: outcome.status,
-                input: jsonInput,
-                output: outcome.output,
-                ...(outcome.error ? { error: outcome.error } : {}),
+                input: redactJson(jsonInput, credentialValues),
+                output: redactJson(outcome.output, credentialValues),
+                ...(outcome.error
+                  ? { error: redactCredentialValues(outcome.error, credentialValues) }
+                  : {}),
               },
             });
           } catch (cause) {
@@ -100,6 +114,15 @@ export async function createScriptTools(
           } catch (cause) {
             return { output: null, status: 'failed', error: (cause as Error).message };
           }
+          if (closed || toolAbort.signal.aborted || abortController.signal.aborted) {
+            const error = 'Tool attempt stopped before script start';
+            if (declaration.writes) {
+              unknownWrite ??= error;
+              abortController.abort();
+              return { output: null, status: 'unknown', error };
+            }
+            return { output: null, status: 'failed', error };
+          }
           try {
             const result = await runScript(
               ctx,
@@ -108,7 +131,12 @@ export async function createScriptTools(
               prepared.env,
               AbortSignal.any([toolAbort.signal, abortController.signal])
             );
-            return { output: result.structuredOutput ?? result.output, status: 'completed' };
+            return {
+              output:
+                result.structuredOutput === undefined ? result.output : result.structuredOutput,
+              status: 'completed',
+              credentialValues: result.credentialValues,
+            };
           } catch (cause) {
             const error =
               cause instanceof ExecOutputContractError
@@ -161,17 +189,34 @@ export async function createScriptTools(
       closed = true;
       toolAbort.abort();
       if (pendingWrites.size === 0) return;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timedOut = await Promise.race([
-        Promise.allSettled([...pendingWrites]).then(() => false),
-        new Promise<boolean>(resolve => {
-          timer = setTimeout(() => resolve(true), STOP_GRACE_MS);
-        }),
-      ]);
-      if (timer) clearTimeout(timer);
-      if (timedOut) await Promise.allSettled([...timeoutWrites].map(timeout => timeout()));
+      if (await exceedsGrace(Promise.allSettled([...pendingWrites]))) {
+        await exceedsGrace(Promise.allSettled([...timeoutWrites].map(timeout => timeout())));
+      }
     },
   };
+}
+
+async function exceedsGrace(promise: Promise<unknown>): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = await Promise.race([
+    promise.then(() => false),
+    new Promise<boolean>(resolve => {
+      timer = setTimeout(() => resolve(true), STOP_GRACE_MS);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+  return timedOut;
+}
+
+function redactJson(value: JsonValue, credentialValues: readonly string[]): JsonValue {
+  if (typeof value === 'string') return redactCredentialValues(value, credentialValues);
+  if (Array.isArray(value)) return value.map(item => redactJson(item, credentialValues));
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, redactJson(item, credentialValues)])
+    );
+  }
+  return value;
 }
 
 function knownScriptFailure(ctx: RunLayersContext, cause: unknown): boolean {

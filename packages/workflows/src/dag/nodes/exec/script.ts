@@ -311,7 +311,7 @@ export async function runScript(
   { command, args, input }: ScriptInvocation,
   env: NodeJS.ProcessEnv,
   abortSignal?: AbortSignal
-): Promise<ReturnType<typeof certifyExecOutput>> {
+): Promise<ReturnType<typeof certifyExecOutput> & { credentialValues: readonly string[] }> {
   const { workflowRun } = ctx;
   const { stdout, stderr, credentialValues } = await runSubprocessUntilRunStops(
     ctx.deps.store,
@@ -355,7 +355,7 @@ export async function runScript(
   // this node's stdout a contract, and the canonical document replaces the raw text.
   const certified = certifyExecOutput(node, trimmedStdout, credentialValues);
   await assertExecArtifactPointers(workflowRun, node, certified.structuredOutput);
-  return certified;
+  return { ...certified, credentialValues };
 }
 
 async function recordScriptFailure(

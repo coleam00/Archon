@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import Ajv from 'ajv';
 import {
   nativeToolInputSchema,
   type NativeToolInputSchema,
@@ -25,15 +26,18 @@ export function nativeToolInputParser(
 ): z.ZodType<Record<string, unknown>> {
   nativeToolInputSchema.parse(input);
   if ('jsonSchema' in input) {
-    const validator = z.fromJSONSchema(input.jsonSchema);
+    const validate = new Ajv({ allErrors: true, strict: false }).compile(input.jsonSchema);
     return z
       .looseObject({})
       .meta(input.jsonSchema)
       .superRefine((value, context) => {
-        const result = validator.safeParse(value);
-        if (!result.success)
-          for (const issue of result.error.issues)
-            context.addIssue({ code: 'custom', message: issue.message, path: issue.path });
+        if (validate(value)) return;
+        for (const issue of validate.errors ?? []) {
+          context.addIssue({
+            code: 'custom',
+            message: `${issue.instancePath || '(root)'}: ${issue.message ?? 'invalid'}`,
+          });
+        }
       });
   }
   const shape: Record<string, z.ZodType<string | boolean | undefined>> = {};
