@@ -392,6 +392,7 @@ export async function runIsolation({
       if (values.merged) {
         return await isolationCleanupMergedCommand({
           includeClosed: Boolean(values['include-closed']),
+          json: Boolean(json),
         });
       } else {
         const days = parseInt(positionals[2] ?? '7', 10);

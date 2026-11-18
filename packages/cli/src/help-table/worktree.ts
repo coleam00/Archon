@@ -18,7 +18,7 @@ export const worktreeHelp: HelpGroup = {
     {
       command: 'isolation',
       subcommand: 'cleanup',
-      spec: 'isolation cleanup --merged',
+      spec: 'isolation cleanup --merged [--json]',
       description: 'Remove worktrees covered by Git integration or a merged PR',
       scopedFlags: [
         {

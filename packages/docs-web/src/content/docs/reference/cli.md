@@ -2188,6 +2188,22 @@ evidence, cleanup reports
 `no pull request covers all local work — a local commit was not found in the configured repository`
 and keeps the environment, including during scheduled cleanup.
 
+When a project's checkout directory no longer exists, for example a checkout under a
+temporary directory a restart emptied or a disk that is not mounted, `--merged` does not
+check that project's worktree environments. It reports the missing directory once, lists
+each environment with its worktree path, and keeps every record. These environments are not
+failures and do not change the exit status. Archon does not judge whether the project was
+deleted or the disk is only unmounted. To release a record, delete its worktree directory once
+nothing in it is needed, then run `archon isolation list`, which retires a record whose worktree
+is missing unless a run can still claim it; the next cleanup pass does the same. A checkout that exists but cannot be read
+still fails the pass.
+
+With `--json`, `--merged` prints one document, `{ "codebases": [...] }`. Each entry carries
+`codebaseId`, `repositoryUrl`, `path`, and a `kind`: `swept` with the sweep's `result`
+(`removed`, `skipped`, `warnings`, `releasedFailedRuns`, `errors`); `repository-gone` with
+`environments` (`branchName`, `workingPath`); or `failed` with `error`. The exit status is
+the same as without `--json`.
+
 Manual `--merged` cleanup reports ordinary retained work as
 `no cleanup evidence covers all local tips`. A missing branch ref with no discovered PR is
 reported as `merge state unverifiable`. The scheduled sweep uses the same merged
