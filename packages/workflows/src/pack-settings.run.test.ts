@@ -384,6 +384,75 @@ nodes:
     expect(dispatchOf(run)).toMatchObject({ pack: 'alpha', inputs_resolved: true });
   });
 
+  it('a block included from its own pack reads the run setting, as it does run directly', async () => {
+    const block = `
+name: beta-block
+description: reads its pack's tone and declares nothing
+nodes:
+  - id: speak
+    prompt: "beta says $INPUTS.tone"
+  - id: shell
+    bash: echo "beta-env=$INPUTS_TONE"
+    depends_on: [speak]
+`;
+    await writePackWorkflow('beta', 'beta-block', block);
+    await writePackWorkflow(
+      'beta',
+      'beta-item',
+      `
+name: beta-item
+description: a fan-out body that declares only its item
+inputs:
+  item: {}
+nodes:
+  - id: shell
+    bash: echo "item-env=$INPUTS_ITEM-$INPUTS_TONE"
+`
+    );
+    await writePackWorkflow(
+      'beta',
+      'beta-host',
+      `
+name: beta-host
+description: includes two blocks of its own pack and passes nothing
+nodes:
+  - id: blk
+    include: beta-block
+  - id: fan
+    include: beta-item
+    fan_out:
+      items: '["a"]'
+      as: item
+`
+    );
+
+    for (const name of ['beta-host', 'beta-block']) {
+      const store = new InMemoryStore();
+      const { deps, prompts } = recordingDeps(store);
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        await discover(name),
+        'goal',
+        { conversationId: 'conv-db' },
+        { baseBranch: 'main' }
+      );
+      expect(result.success).toBe(true);
+      expect(prompts.some(p => p.includes('beta says beta-project'))).toBe(true);
+      const runId = runNamed(store, name)?.id;
+      const shell = name === 'beta-host' ? 'blk__shell' : 'shell';
+      expect(nodeOutput(store, runId, shell)).toContain('beta-env=beta-project');
+      if (name === 'beta-host') {
+        const outputs = store.events
+          .filter(e => e.workflow_run_id === runId && e.event_type === 'node_completed')
+          .map(e => String(e.data?.node_output));
+        expect(outputs.some(o => o.includes('item-env=a-beta-project'))).toBe(true);
+      }
+    }
+  });
+
   it("refuses an included block's raw $INPUTS_<setting> read its includer does not pass", async () => {
     await writePackWorkflow(
       'beta',

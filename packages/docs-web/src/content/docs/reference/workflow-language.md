@@ -2689,13 +2689,20 @@ result on its row; a resumed run keeps those values even if the project file cha
   pack's default, never the project file.
   Two different names that fold to the same `INPUTS_*` key across a workflow's inputs and its
   pack's settings are a load error.
-- **An `include:`d block takes nothing from its pack.** Its `$INPUTS.<name>` references read
-  what its includer passes through `with:`, and a reference nothing supplies fails the load. A
-  block that wants a setting gets it from its includer:
+- **An `include:`d block from its includer's own pack reads the run's settings**, as it does
+  when run directly: it needs no `inputs:` entry for a setting and the includer no `with:` line.
+  The includer may still pass a setting through `with:`, which overrides the run's value for
+  that block, and a default the block declares under `inputs:` for a setting's name wins over
+  the run's value when included. Through a chain of includes the setting travels the same way
+  as far as the pack stays the same; where the chain enters another pack, that includer passes
+  it as below.
+- **An `include:`d block from another pack takes nothing from its pack.** Its
+  `$INPUTS.<name>` references read what its includer passes through `with:`, and a reference
+  nothing supplies fails the load. A block that wants a setting gets it from its includer:
 
   ```yaml
   - id: review
-    include: review-block
+    include: review-block   # a block of another pack
     with:
       forge: $INPUTS.forge   # the including run's setting, passed in
   ```
@@ -2861,7 +2868,7 @@ or a finer token such as `resolve:subject`. The list must not be empty; any othe
 Every fresh run of a workflow of the pack is checked when it starts, before a worktree, a
 queue slot or any node: started by hand, from chat or the Web UI, by a trigger binding (before
 admission, so a refused binding takes no slot), or as a `workflow:` sub-run, which is checked
-against its own pack. An `include:`d block takes nothing from its pack. A resumed or approved
+against its own pack. An `include:`d block's own pack is not checked. A resumed or approved
 run is not checked again. The engine asks
 [`archon forge check`](/reference/forge/#check-forge-access-before-a-run-spends) for each
 remote of the project's checkout, with the run's GitHub credential; the run starts when one

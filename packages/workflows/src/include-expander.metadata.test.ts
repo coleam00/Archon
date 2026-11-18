@@ -302,7 +302,8 @@ describe('expandWorkflowIncludes — composed-node metadata survives nesting', (
         identity,
         {},
         workflows.get('middle')!,
-        new Map()
+        new Map(),
+        undefined
       );
       if ('error' in expanded) throw new Error(expanded.error);
       owners.push(composedBoundaries(expanded.nodes[1])?.[0]?.boundary.includeId);
@@ -336,6 +337,7 @@ describe('expandWorkflowIncludes — composed-node metadata survives nesting', (
         {},
         workflows.get('middle')!,
         new Map(),
+        undefined,
         includeId
       );
       if ('error' in expanded) throw new Error(expanded.error);

@@ -24,6 +24,23 @@ export interface ExpandedInclude {
   sinks: string[];
   /** First sink in child definition order — the include's `$id.output` terminal. */
   primarySink: string;
+  /**
+   * Pack settings the block reads that its includer did not pass, forwarded from the
+   * includer's own `$INPUTS` because both are in one pack. Empty across packs.
+   */
+  forwardedSettings: string[];
+}
+
+/** The pack a workflow was loaded from, as a composition record names it. */
+export type PackIdentity = ComposedNodeMeta['pack'];
+
+function isSamePack(left: PackIdentity, right: PackIdentity): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    left.source === right.source &&
+    left.key === right.key
+  );
 }
 
 /**
@@ -111,7 +128,8 @@ function inlineInclude(
   child: ResolvedWorkflow,
   commandContents: ReadonlyMap<string, IncludeCommandContent>,
   namedScripts: ReadonlyMap<string, ExecInputSource>,
-  includeId: string
+  includeId: string,
+  includerPack: PackIdentity
 ): ExpandedInclude {
   // Prove the child's lexical boundary before its nodes share the parent's flat id/output
   // maps. Discovery already parsed each file independently; this repeat is intentional so
@@ -122,8 +140,25 @@ function inlineInclude(
       `Node '${includeNode.id}': included workflow '${child.name}' is not hermetic: ${childStructureError}`
     );
   }
-  const scope = inlineScope(includeNode, child, commandContents, includeId);
-  const namespaced = child.nodes.map(cn => inlineChildNode(scope, cn));
+  const fromOwnPack = isSamePack(includerPack, child.pack);
+  const passed = includeInputs(includeNode, child, fromOwnPack);
+  let scope = inlineScope(includeNode, child, commandContents, includeId, passed);
+  let namespaced = child.nodes.map(cn => inlineChildNode(scope, cn));
+
+  // From its own pack, a block reads the run's settings as it does run directly: each
+  // setting it reads and its includer does not pass is forwarded as `$INPUTS.<name>`,
+  // which the includer's level resolves in turn (the root run's value, the next
+  // includer's `with:`, or a load error). Only read names are forwarded: every forwarded
+  // name becomes a composed input, and each one resolves for every exec node of the block.
+  const forwardedSettings = fromOwnPack ? readUnpassedSettings(scope, namedScripts) : [];
+  if (forwardedSettings.length > 0) {
+    const forwarded = Object.fromEntries(forwardedSettings.map(name => [name, `$INPUTS.${name}`]));
+    scope = inlineScope(includeNode, child, commandContents, includeId, {
+      ...passed,
+      ...forwarded,
+    });
+    namespaced = child.nodes.map(cn => inlineChildNode(scope, cn));
+  }
 
   if (scope.missingInputs.size > 0) {
     const names = [...scope.missingInputs].sort().map(name => `$INPUTS.${name}`);
@@ -145,13 +180,54 @@ function inlineInclude(
     // still covers every terminal node.
     // A valid non-empty DAG always has ≥1 sink; sinkOriginalIds[0] is defined.
     primarySink: scope.prefix + (child.returns ?? sinkOriginalIds[0] ?? ''),
+    forwardedSettings,
   };
 }
 
 /**
- * Settings belong to the run: an included block reads only what its includer passes.
- * A raw `INPUTS_<NAME>` read of one of the block's own pack settings would get the
- * including run's value at run time, so it fails here like a missing `$INPUTS.<name>`.
+ * The includer's `with:` resolved against the block's declared `inputs:`. From the
+ * block's own pack, `with:` may also pass one of the pack's settings the block does not
+ * declare: the block reads that setting either way, and the passed value overrides the
+ * run's. (A runtime compose_fan_out instance relies on this: its node's `with:` carries
+ * the settings its load-time instantiation forwarded.)
+ */
+function includeInputs(
+  includeNode: IncludeDirective,
+  child: ResolvedWorkflow,
+  fromOwnPack: boolean
+): Record<string, JsonValue> {
+  if (!fromOwnPack || child.inputs === undefined || includeNode.with === undefined) {
+    return resolveIncludeInputs(includeNode, child);
+  }
+  const declared = child.inputs;
+  const settings = child.pack?.settings ?? {};
+  const isUndeclaredSetting = (name: string): boolean =>
+    Object.hasOwn(settings, name) && !Object.hasOwn(declared, name);
+  const entries = Object.entries(includeNode.with);
+  const settingPasses = Object.fromEntries(entries.filter(([name]) => isUndeclaredSetting(name)));
+  const rest = Object.fromEntries(entries.filter(([name]) => !isUndeclaredSetting(name)));
+  return { ...resolveIncludeInputs({ ...includeNode, with: rest }, child), ...settingPasses };
+}
+
+/** The block's pack settings it reads that its includer does not pass. */
+function readUnpassedSettings(
+  scope: InlineScope,
+  namedScripts: ReadonlyMap<string, ExecInputSource>
+): string[] {
+  const { child, resolvedInputs, missingInputs } = scope;
+  const settings = Object.keys(child.pack?.settings ?? {});
+  const passed = (name: string): boolean => Object.hasOwn(resolvedInputs, name);
+  const rawReads = findUnpassedPackSettingReads(child.nodes, settings, passed, namedScripts);
+  const read = new Set([...missingInputs, ...rawReads.map(r => r.setting)]);
+  return settings.filter(name => !passed(name) && read.has(name));
+}
+
+/**
+ * Settings belong to the run. A block included from another pack reads only what its
+ * includer passes: a raw `INPUTS_<NAME>` read of one of its own pack settings would get
+ * the including run's value at run time, so it fails here like a missing
+ * `$INPUTS.<name>`. From the same pack, a read setting was forwarded from the includer's
+ * `$INPUTS` before this check, so it finds nothing for it.
  */
 function assertPackSettingReadsPassed(
   scope: InlineScope,
@@ -178,7 +254,7 @@ function assertPackSettingReadsPassed(
       ? "Pass the setting through 'with:'."
       : "Declare the setting under the block's 'inputs:' and pass it through 'with:'.";
   throw new IncludeExpansionError(
-    `Node '${includeNode.id}': included block '${includeNode.include}' reads pack settings this include does not pass: ${details}. An included block reads only what its includer passes, never the including run's settings. ${fix}`
+    `Node '${includeNode.id}': included block '${includeNode.include}' reads pack settings this include does not pass: ${details}. A block included from another pack reads only what its includer passes, never the including run's settings. ${fix}`
   );
 }
 
@@ -186,7 +262,8 @@ function inlineScope(
   includeNode: IncludeDirective,
   child: ResolvedWorkflow,
   commandContents: ReadonlyMap<string, IncludeCommandContent>,
-  includeId: string
+  includeId: string,
+  resolvedInputs: Record<string, JsonValue>
 ): InlineScope {
   const prefix = `${includeNode.id}__`;
   const childTopLevelIds = new Set(child.nodes.map(n => n.id));
@@ -211,7 +288,7 @@ function inlineScope(
     parentDeps,
     entryTriggerRules: [firstEntryTriggerRule, ...remainingEntryTriggerRules],
     hasActivationBoundary: parentDeps.length > 0 || includeNode.when !== undefined,
-    resolvedInputs: resolveIncludeInputs(includeNode, child),
+    resolvedInputs,
     missingInputs: new Set<string>(),
   };
 }
@@ -361,14 +438,27 @@ function attachIncludeGate(scope: InlineScope, clone: DagNode, cn: DagNode): voi
 export function instantiateResolvedInclude(
   includeNode: IncludeDirective,
   child: ResolvedWorkflow,
-  commandContents: ReadonlyMap<string, IncludeCommandContent> = new Map(),
-  // Named script sources by reference, read by discovery. A runtime compose_fan_out
-  // instance passes none: the load-time instantiation of the same block already checked
-  // its named scripts' pack-setting reads.
-  namedScripts: ReadonlyMap<string, ExecInputSource> = new Map(),
-  includeId = boundaryIdComponent(includeNode.id)
+  options: {
+    commandContents?: ReadonlyMap<string, IncludeCommandContent>;
+    /**
+     * Named script sources by reference, read by discovery. A runtime compose_fan_out
+     * instance passes none: the load-time instantiation of the same block already
+     * checked its named scripts' pack-setting reads.
+     */
+    namedScripts?: ReadonlyMap<string, ExecInputSource>;
+    includeId?: string;
+    /** The pack of the workflow that authored the include, undefined outside a pack. */
+    includerPack?: PackIdentity;
+  } = {}
 ): ExpandedInclude {
-  return inlineInclude(includeNode, child, commandContents, namedScripts, includeId);
+  return inlineInclude(
+    includeNode,
+    child,
+    options.commandContents ?? new Map(),
+    options.namedScripts ?? new Map(),
+    options.includeId ?? boundaryIdComponent(includeNode.id),
+    options.includerPack
+  );
 }
 
 // URI encoding leaves "_" and "." intact, but those delimit include ancestry.
