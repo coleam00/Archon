@@ -70,7 +70,13 @@ import {
 } from '@archon/workflows/utils/workflow-requirements';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { WorkflowInputContractError } from '@archon/workflows/workflow-inputs';
-import { loadWorkflowRunConfigFile, unsealWorkflowRunConfig } from '../config/run-config';
+import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
+import { projectKeyForCodebase } from '@archon/paths/archon-paths';
+import {
+  itemRunConfig,
+  loadWorkflowRunConfigFile,
+  unsealWorkflowRunConfig,
+} from '../config/run-config';
 import type { Codebase } from '../schemas/codebase';
 import type { WorkflowHost } from './host-store';
 import { registerRepository } from '../handlers/clone';
@@ -255,7 +261,7 @@ async function prepareBinding(
   host: WorkflowHost,
   intent: ResourceStartBindingIntent,
   identity: BindingIdentity,
-  runConfig: Awaited<ReturnType<typeof loadWorkflowRunConfigFile>> | undefined
+  runConfig: WorkflowRunConfigInput | undefined
 ): Promise<PreparationResult> {
   const cwd = await canonicalizeProjectPath(intent.launch.cwd);
   const sourceRoot = resolve(intent.launch.discoveryCwd ?? cwd);
@@ -331,6 +337,29 @@ async function prepareBinding(
   });
 }
 
+/**
+ * The run config of the item a binding start is on (see `itemRunConfig`). The item is the
+ * one admission's `namedItem` writes the run onto: the binding's key, else the receipt's,
+ * in the project of the launch cwd. Undefined for a start on no item or an item not
+ * written yet.
+ */
+async function bindingItemRunConfig(
+  host: WorkflowHost,
+  intent: ResourceStartBindingIntent,
+  receiptId: string
+): Promise<WorkflowRunConfigInput | undefined> {
+  const itemKey = intent.itemKey ?? (await host.deps.store.getStartReceipt(receiptId))?.itemKey;
+  if (!itemKey) return undefined;
+  // No registered project means no item yet: admission registers it and writes the item new.
+  const { codebase } = await resolveCodebaseForPath(intent.launch.cwd, host.records.codebases);
+  if (!codebase) return undefined;
+  const found = await host.deps.store.getItemRuns(
+    projectKeyForCodebase(codebase, codebase.default_cwd),
+    itemKey
+  );
+  return found ? itemRunConfig(itemKey, found.runs) : undefined;
+}
+
 async function prepareClaimedBinding(
   host: WorkflowHost,
   intent: ResourceStartBindingIntent,
@@ -342,9 +371,14 @@ async function prepareClaimedBinding(
       throw new Error('The configured run-as user no longer exists.');
     }
     stage = 'run_configuration';
-    const runConfig = intent.launch.configSource
-      ? await loadWorkflowRunConfigFile(intent.launch.configSource)
-      : undefined;
+    // The item's own config wins over `configSource`: a binding file's config is written
+    // once for the install (`pack bindings --config`), a default for an item's first run,
+    // not a change to this item's config.
+    const runConfig =
+      (await bindingItemRunConfig(host, intent, identity.receiptId)) ??
+      (intent.launch.configSource
+        ? await loadWorkflowRunConfigFile(intent.launch.configSource)
+        : undefined);
     stage = 'launch_preparation';
     return await prepareBinding(host, intent, identity, runConfig);
   } catch (error) {

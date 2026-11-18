@@ -21,7 +21,7 @@ import type { ResultCommit, TerminalRecord } from './schemas/terminal-record';
 import { readSubrunMetadata, runInputsMetadata, SUBRUN_METADATA_KEYS } from './schemas';
 import { splitAttentionRead } from './schemas/attention-degraded';
 import type { IWorkflowStore } from './store';
-import { getTerminalRecord, type TerminalRecordEvent } from './terminal-record';
+import { getTerminalRecord, recordedReturn, type TerminalRecordEvent } from './terminal-record';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -44,7 +44,11 @@ export function readCompletedRunResult(
   if (run.status !== 'completed') return { kind: 'none', reason: `it is ${run.status}` };
   const record = getTerminalRecord(run.status, events);
   if (record === null) return { kind: 'none', reason: 'it has no terminal record' };
-  const { returns } = record;
+  return resultOfReturns(record.returns);
+}
+
+/** A recorded return as a reader that needs a value reads it (see `recordedReturn`). */
+function resultOfReturns(returns: TerminalRecord['returns']): RunResultRead {
   switch (returns.availability) {
     case 'available':
       return { kind: 'result', value: jsonValueSchema.parse(returns.value) };
@@ -56,6 +60,22 @@ export function readCompletedRunResult(
     case 'unavailable':
       return { kind: 'none', reason: `its result is unavailable (${returns.reason})` };
   }
+}
+
+/**
+ * The result a completing run's terminal record will hold, read by the same rule from the
+ * same node events, which are all written before the run completes: a binding reads none
+ * where the record reports none.
+ */
+export async function readCompletingResult(
+  store: Pick<IWorkflowStore, 'listWorkflowEvents'>,
+  run: Pick<WorkflowRun, 'id' | 'metadata'>,
+  returnsNode: string | undefined
+): Promise<JsonValue | undefined> {
+  if (returnsNode === undefined) return undefined;
+  const events = await store.listWorkflowEvents(run.id);
+  const read = resultOfReturns(recordedReturn(run, events, returnsNode));
+  return read.kind === 'result' ? read.value : undefined;
 }
 
 /**

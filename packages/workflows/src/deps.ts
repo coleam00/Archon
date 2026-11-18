@@ -280,7 +280,10 @@ export interface RunEndedFacts {
   /** The form of the declared outcome, so a binding can be checked against it. */
   outcomeForm: OutcomeForm;
   outcome: RunCompletedOutcome;
-  /** The run's result: its `returns:` node output, parsed. */
+  /**
+   * The run's result: the value its terminal record holds as `returns` (see
+   * `recordedReturn`), undefined when the record has none.
+   */
   result: JsonValue | undefined;
   /** The run's own inputs, as `$INPUTS` saw them. */
   inputs: Readonly<Record<string, JsonValue>>;

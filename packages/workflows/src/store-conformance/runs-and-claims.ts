@@ -66,6 +66,23 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
       });
     });
 
+    test('a metadata write merges top-level keys and keeps the nulls inside a value', async () => {
+      // A run's `$INPUTS` live in metadata, and an input can resolve to null, alone or
+      // inside an object: a resume must read the same null back (#5939).
+      const run = await create(store, {
+        metadata: { preserved: true, replaced: { stale: 1 } },
+      });
+      const inputs = { before: null, held: { commit: 'abc', result: null }, list: [null] };
+      await store.updateWorkflowRun(run.id, {
+        metadata: { inputs_values: inputs, replaced: { fresh: 2 } },
+      });
+      expect((await store.getWorkflowRun(run.id))?.metadata).toEqual({
+        preserved: true,
+        replaced: { fresh: 2 },
+        inputs_values: { before: null, held: { commit: 'abc', result: null }, list: [null] },
+      });
+    });
+
     test.each(['spawn', null, 42, undefined])(
       'top-level creation strips caller-supplied child provenance: %s',
       async marker => {
