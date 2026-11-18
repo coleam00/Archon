@@ -164,7 +164,7 @@ describe('authored forge bindings', () => {
     ).toThrow();
   });
 
-  test('selects a review by its state and maps the commit it was made on', () => {
+  test('selects a review at the head by its state and maps the commit it was made on', () => {
     const reviewed = {
       kind: 'review.changed',
       action: 'submitted',
@@ -174,6 +174,7 @@ describe('authored forge bindings', () => {
         state: 'approved',
         nativeState: 'APPROVED',
         commit: 'abc123',
+        atHead: true,
         author: { host: 'github.com', id: '42', login: 'octo' },
       },
     } as const;
@@ -182,7 +183,10 @@ describe('authored forge bindings', () => {
         kind: 'review.changed',
         actions: ['submitted'],
         subject: { kind: 'pr', number: 7 },
-        predicates: [{ field: 'review.state', in: ['approved', 'changes_requested'] }],
+        predicates: [
+          { field: 'review.state', in: ['approved', 'changes_requested'] },
+          { field: 'review.atHead', equals: true },
+        ],
       },
       inputs: {
         number: { source: 'field', field: 'subject.number' },
@@ -196,6 +200,11 @@ describe('authored forge bindings', () => {
         review: { ...reviewed.review, state: 'commented' },
       })
     ).toBe(false);
+    // A review of a commit the pull request has moved past, or one the forge could not place.
+    for (const atHead of [false, null])
+      expect(
+        matchForgeEvent(binding.selector, { ...reviewed, review: { ...reviewed.review, atHead } })
+      ).toBe(false);
     expect(mapForgeInputs(binding.inputs, reviewed)).toEqual({
       ok: true,
       inputs: { number: 7, commit: 'abc123' },
@@ -209,6 +218,16 @@ describe('authored forge bindings', () => {
           kind: 'review.changed',
           actions: ['submitted'],
           subject: { kind: 'issue', number: 7 },
+        },
+        inputs: {},
+      })
+    ).toThrow();
+    expect(() =>
+      createForgeBindingSchema(z.string()).parse({
+        selector: {
+          kind: 'review.changed',
+          actions: ['submitted'],
+          predicates: [{ field: 'check.atHead', equals: true }],
         },
         inputs: {},
       })

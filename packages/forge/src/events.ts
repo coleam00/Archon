@@ -66,6 +66,13 @@ export const reviewStateSchema = z.enum([
 export type ReviewState = z.infer<typeof reviewStateSchema>;
 
 /**
+ * Whether an event's commit is the pull request's head when the forge sent it, so a binding
+ * can ignore a review or check about a commit the change has moved past. The source plugin
+ * computes it from its own payload; null when the payload does not say.
+ */
+const atHeadSchema = z.boolean().nullable();
+
+/**
  * A review submitted on a pull request, or dismissed. `commit` is the commit the review
  * was made on, null when the forge does not say. Its body stays on the forge.
  */
@@ -78,6 +85,7 @@ export const reviewChangedEventSchema = z.object({
     state: reviewStateSchema,
     nativeState: z.string().min(1),
     commit: gitObjectIdSchema.nullable(),
+    atHead: atHeadSchema,
     author: sourceActorSchema.nullable(),
   }),
 });
@@ -111,6 +119,8 @@ export const checkChangedEventSchema = z.object({
   nativeResult: z.string().min(1).nullable(),
   result: checkResultSchema.nullable(),
   pullRequests: z.array(prRefSchema),
+  /** True when `revision` is the head of every listed pull request, false when it is not the head of one. */
+  atHead: atHeadSchema,
 });
 
 export const forgeEventSchema = z.discriminatedUnion('kind', [

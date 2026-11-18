@@ -196,6 +196,53 @@ describe('GitHub source plugin', () => {
     ]);
   });
 
+  test('a binding filtered on atHead starts nothing for a review of a commit the PR moved past', async () => {
+    const recorded = recorder();
+    const github = await adapter(
+      config([
+        binding({
+          bindingId: 'review-at-head',
+          selector: {
+            kind: 'review.changed',
+            actions: ['submitted'],
+            predicates: [{ field: 'review.atHead', equals: true }],
+          },
+          inputMapping: { commit: { source: 'field', field: 'review.commit' } },
+          item: { field: 'subject.number', prefix: 'pr-' },
+        }),
+      ]),
+      recorded.intake
+    );
+    const reviewed = (commit: string) =>
+      JSON.stringify({
+        action: 'submitted',
+        repository: { full_name: 'owner/repo' },
+        sender: { id: 3, login: 'reviewer' },
+        pull_request: { number: 7, head: { sha: 'current-head' } },
+        review: {
+          id: 300,
+          user: { id: 3, login: 'reviewer' },
+          body: 'private review text',
+          state: 'commented',
+          commit_id: commit,
+        },
+      });
+
+    const old = reviewed('old-head');
+    const current = reviewed('current-head');
+    await github.receiveWebhook(old, sign(old), 'delivery-old', 'pull_request_review');
+    await github.receiveWebhook(current, sign(current), 'delivery-current', 'pull_request_review');
+
+    expect(recorded.calls.map(call => call.bindings)).toMatchObject([
+      [],
+      [{ bindingId: 'review-at-head', itemKey: 'pr-7', eventInputs: { commit: 'current-head' } }],
+    ]);
+    expect(recorded.calls[0]?.evaluatedBindings).toMatchObject([
+      { bindingId: 'review-at-head', status: 'unmatched' },
+    ]);
+    expect(JSON.stringify(recorded.calls)).not.toContain('private review text');
+  });
+
   test('authenticates signed delivery and resolves its configured binding', async () => {
     const recorded = recorder();
     const github = await adapter(config(), recorded.intake);

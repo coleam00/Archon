@@ -253,13 +253,13 @@ describe('GitHub inbound normalization', () => {
 
   test('a submitted review carries its state, commit and author, never its text', () => {
     // Trimmed from a real GitHub pull_request_review delivery.
-    const reviewed = (action: string, state: string) =>
+    const reviewed = (action: string, state: string, head: object | null = { sha: '4c1f0d2e6b' }) =>
       normalizeGitHubWebhook(
         {
           action,
           repository: { full_name: 'org/repo' },
           sender: { id: 1, login: 'reviewer', type: 'User' },
-          pull_request: { number: 6, state: 'open' },
+          pull_request: { number: 6, state: 'open', head },
           review: {
             id: 2_811_100_442,
             node_id: 'PRR_kwDOAbc',
@@ -288,6 +288,7 @@ describe('GitHub inbound normalization', () => {
             state: 'changes_requested',
             nativeState: 'changes_requested',
             commit: '4c1f0d2e6b',
+            atHead: true,
             author: { id: '3', login: 'coderabbitai[bot]', type: 'bot' },
           },
         },
@@ -297,6 +298,15 @@ describe('GitHub inbound normalization', () => {
     expect(reviewed('submitted', 'APPROVED')).toMatchObject({
       envelope: { event: { review: { state: 'approved', nativeState: 'APPROVED' } } },
     });
+    expect(reviewed('submitted', 'commented')).toMatchObject({
+      envelope: { event: { review: { state: 'commented' } } },
+    });
+    expect(reviewed('submitted', 'approved', { sha: 'newer-head' })).toMatchObject({
+      envelope: { event: { review: { atHead: false } } },
+    });
+    expect(reviewed('submitted', 'approved', null)).toMatchObject({
+      envelope: { event: { review: { atHead: null } } },
+    });
     expect(reviewed('submitted', 'pending')).toMatchObject({
       envelope: { event: { review: { state: 'unknown' } } },
     });
@@ -304,6 +314,38 @@ describe('GitHub inbound normalization', () => {
       envelope: { occurredAt: null, event: { action: 'dismissed' } },
     });
     expect(reviewed('edited', 'commented').status).toBe('unsupported');
+  });
+
+  test('a check is at the head only when every pull request it lists has it as head', () => {
+    const checked = (pullRequests: object[]) => {
+      const result = normalizeGitHubWebhook(
+        {
+          action: 'completed',
+          repository: { full_name: 'org/repo' },
+          check_run: {
+            id: 1,
+            name: 'build',
+            head_sha: 'h1',
+            status: 'completed',
+            conclusion: 'success',
+            pull_requests: pullRequests,
+          },
+        },
+        { ...context, eventName: 'check_run' }
+      );
+      return result.status === 'normalized' && result.envelope.event.kind === 'check.changed'
+        ? result.envelope.event.atHead
+        : 'not normalized';
+    };
+    expect(checked([{ number: 1, head: { sha: 'h1' } }])).toBe(true);
+    expect(
+      checked([
+        { number: 1, head: { sha: 'h1' } },
+        { number: 2, head: { sha: 'h2' } },
+      ])
+    ).toBe(false);
+    expect(checked([{ number: 1 }])).toBeNull();
+    expect(checked([])).toBeNull();
   });
 
   test('keeps opaque object IDs and zero check PR associations', () => {

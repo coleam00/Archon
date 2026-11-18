@@ -112,8 +112,12 @@ const issueCommentSchema = baseSchema.extend({
     created_at: z.iso.datetime({ offset: true }).nullable().optional(),
   }),
 });
+const headSchema = z
+  .object({ sha: z.string().min(1) })
+  .nullable()
+  .optional();
 const pullRequestReviewSchema = baseSchema.extend({
-  pull_request: z.object({ number: z.number().int().positive() }),
+  pull_request: z.object({ number: z.number().int().positive(), head: headSchema }),
   review: z.object({
     id: z.union([z.string().min(1), z.number().int()]),
     user: userSchema,
@@ -131,7 +135,7 @@ const checkRunSchema = baseSchema.extend({
     conclusion: z.string().min(1).nullable().optional(),
     started_at: z.iso.datetime({ offset: true }).nullable().optional(),
     completed_at: z.iso.datetime({ offset: true }).nullable().optional(),
-    pull_requests: z.array(z.object({ number: z.number().int().positive() })),
+    pull_requests: z.array(z.object({ number: z.number().int().positive(), head: headSchema })),
   }),
 });
 const statusSchema = z.object({
@@ -371,6 +375,20 @@ function reviewState(state: string): ReviewState {
   }
 }
 
+/**
+ * Whether `commit` is the head of every pull request in `heads`, as the payload reports them.
+ * False as soon as one head differs; null when there is no commit, no pull request, or a
+ * pull request without a head.
+ */
+function atHead(
+  commit: string | null | undefined,
+  heads: readonly ({ sha: string } | null | undefined)[]
+): boolean | null {
+  if (!commit || heads.length === 0) return null;
+  if (heads.some(head => head && head.sha !== commit)) return false;
+  return heads.every(head => head) ? true : null;
+}
+
 function normalizePullRequestReview(
   payload: unknown,
   context: GitHubEnvelopeContext
@@ -397,6 +415,7 @@ function normalizePullRequestReview(
       state: reviewState(value.review.state),
       nativeState: value.review.state,
       commit: value.review.commit_id ?? null,
+      atHead: atHead(value.review.commit_id, [value.pull_request.head]),
       author: actor(context.host, value.review.user),
     },
   };
@@ -431,6 +450,10 @@ function normalizeCheckRun(
       repo: { host: context.host, path: value.repository.full_name },
       number: pr.number,
     })),
+    atHead: atHead(
+      value.check_run.head_sha,
+      value.check_run.pull_requests.map(pr => pr.head)
+    ),
   };
   return normalizeEnvelope(event, context, sourceActor, occurredAt);
 }
@@ -465,6 +488,8 @@ function normalizeStatus(
           ? 'failure'
           : 'unknown',
     pullRequests: [],
+    // A status names no pull request, so whether its commit is still a head is unknown.
+    atHead: null,
   };
   return normalizeEnvelope(event, context, sourceActor, occurredAt);
 }

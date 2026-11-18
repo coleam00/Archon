@@ -38,9 +38,11 @@ export const forgeEventFieldSchema = z.enum([
   'review.state',
   'review.nativeState',
   'review.commit',
+  'review.atHead',
   'review.author.id',
   'review.author.login',
   'check.revision',
+  'check.atHead',
   'check.unit.kind',
   'check.unit.id',
   'check.unit.name',
@@ -73,6 +75,8 @@ const predicateSchema = z.union([
       in: z.array(reviewStateSchema).min(1).optional(),
     })
     .refine(value => (value.equals === undefined) !== (value.in === undefined)),
+  // An absent `atHead` (null) matches neither true nor false.
+  z.object({ field: z.enum(['review.atHead', 'check.atHead']), equals: z.boolean() }),
   z
     .object({
       field: z.literal('check.result'),
@@ -193,6 +197,7 @@ const fieldsByKind = {
     'review.state',
     'review.nativeState',
     'review.commit',
+    'review.atHead',
     'review.author.id',
     'review.author.login',
   ]),
@@ -202,6 +207,7 @@ const fieldsByKind = {
     'repository.host',
     'repository.path',
     'check.revision',
+    'check.atHead',
     'check.unit.kind',
     'check.unit.id',
     'check.unit.name',
@@ -362,9 +368,11 @@ const FIELD_READERS: Readonly<Record<ForgeEventField, FieldReader>> = {
   'review.state': fieldOf('review.changed', event => event.review.state),
   'review.nativeState': fieldOf('review.changed', event => event.review.nativeState),
   'review.commit': fieldOf('review.changed', event => event.review.commit),
+  'review.atHead': fieldOf('review.changed', event => event.review.atHead),
   'review.author.id': fieldOf('review.changed', event => event.review.author?.id),
   'review.author.login': fieldOf('review.changed', event => event.review.author?.login),
   'check.revision': fieldOf('check.changed', event => event.revision),
+  'check.atHead': fieldOf('check.changed', event => event.atHead),
   'check.unit.kind': fieldOf('check.changed', event => event.unit.kind),
   'check.unit.id': fieldOf('check.changed', event => event.unit.id),
   'check.unit.name': fieldOf('check.changed', event => event.unit.name),
