@@ -55,7 +55,8 @@ describe('readClaudePluginIds', () => {
   });
 
   test.each([
-    ['killed by a signal', 'kill -TERM $$'],
+    // Windows has no signals: a killed child there reports an exit code, not a signal.
+    ...(process.platform === 'win32' ? [] : [['killed by a signal', 'kill -TERM $$']]),
     ['reporting a signal as exit status 128+N', 'exit 143'],
   ])('a listing %s is transient', async (_, script) => {
     const cmd = { ...fakeCli(''), args: ['-c', script] };
