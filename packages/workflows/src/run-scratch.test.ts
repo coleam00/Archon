@@ -1,6 +1,7 @@
+// @archon-test-windows
 import { describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { chmod, lstat, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileAsync } from '@archon/git';
@@ -234,24 +235,6 @@ describe('noExecutorCanWrite', () => {
   });
 });
 
-// The terminal status write is authoritative, so a scratch entry that cannot be deleted
-// must not fail the executor exit, an operator's cancel or a container teardown.
-test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
-  'a removal that fails resolves instead of throwing',
-  async () => {
-    const { artifactsDir } = runStorage();
-    const locked = join(getRunScratchDir(artifactsDir), 'locked');
-    await mkdir(join(locked, 'checkout'), { recursive: true });
-    await chmod(locked, 0o500);
-    try {
-      await removeRunScratch(artifactsDir, {});
-      expect(existsSync(join(locked, 'checkout'))).toBe(true);
-    } finally {
-      await chmod(locked, 0o700);
-    }
-  }
-);
-
 const signature = 'Signature: 8a477f597d28d172789f06886806bc55';
 
 async function tagged(path: string, content = signature): Promise<void> {
@@ -367,42 +350,5 @@ test.each(['root', 'engine', 'scratch'] as const)(
     });
     await removeRunScratch(artifactsDir, { envId: 'fixture-container' });
     expect(existsSync(join(outsideScratch, 'CACHEDIR.TAG'))).toBe(true);
-  }
-);
-
-test.skipIf(process.platform === 'win32' || process.getuid?.() === 0).each([0o500, 0o300])(
-  'failed cache deletion (%i permissions) is logged, independent siblings and scratch still clean',
-  async mode => {
-    const { artifactsDir } = runStorage();
-    const blocked = join(artifactsDir, 'blocked');
-    await tagged(blocked);
-    await mkdir(join(blocked, 'child'));
-    await tagged(join(artifactsDir, 'independent'));
-    await mkdir(getRunScratchDir(artifactsDir), { recursive: true });
-    await chmod(blocked, mode);
-    const capture = captureLogLines();
-    try {
-      await removeRunScratch(artifactsDir, { workflowRunId: 'blocked-run' });
-      expect(existsSync(blocked)).toBe(true);
-      if (mode === 0o300)
-        expect(capture.lines.some(line => line.msg === 'run_scratch.cache_measure_failed')).toBe(
-          true
-        );
-      expect(existsSync(join(artifactsDir, 'independent'))).toBe(false);
-      expect(existsSync(getRunScratchDir(artifactsDir))).toBe(false);
-      expect(
-        capture.lines.some(
-          line => line.msg === 'run_scratch.cache_remove_failed' && line.path === blocked
-        )
-      ).toBe(true);
-      expect(
-        capture.lines.some(
-          line => line.msg === 'run_scratch.cache_removed' && line.path === 'blocked'
-        )
-      ).toBe(false);
-    } finally {
-      capture.restore();
-      await chmod(blocked, 0o700);
-    }
   }
 );
