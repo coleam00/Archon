@@ -413,7 +413,10 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
     try {
       await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
-      expect(assertForge.mock.calls[0]?.[3]).toMatchObject({ cwd: '/repos/test-repo' });
+      expect(assertForge.mock.calls[0]?.[3]).toMatchObject({
+        cwd: '/repos/test-repo',
+        settingsCwd: '/repos/test-repo',
+      });
       expect(platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n')).toContain(
         '(no_forge_remote)'
       );

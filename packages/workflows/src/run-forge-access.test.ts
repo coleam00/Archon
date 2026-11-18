@@ -36,7 +36,7 @@ function site(
   inContainer = false,
   supplied?: RunForgeAccessSite['supplied']
 ): RunForgeAccessSite {
-  return { cwd, codebaseId: undefined, inContainer, supplied };
+  return { cwd, settingsCwd: cwd, codebaseId: undefined, inContainer, supplied };
 }
 
 /** The common call: a declaring pack, freshly prepared, on the host. */
@@ -221,24 +221,52 @@ describe('assertRunForgeAccess', () => {
       ]);
     });
 
-    test('reads the repository from the project settings when the run supplies none', async () => {
-      const cwd = capableMirror();
+    const settingNaming = {
+      ...naming,
+      pack: {
+        ...naming.pack,
+        settings: { repo_host: { type: 'string' }, repo_path: { type: 'string' } },
+      },
+    } as const;
+    function namingSettings(cwd: string, repoPath: string): string {
       mkdirSync(join(cwd, '.archon', 'packs'), { recursive: true });
       writeFileSync(
         join(cwd, '.archon', 'packs', 'factory.yaml'),
-        'settings:\n  repo_host: github.com\n  repo_path: o/target\n'
+        `settings:\n  repo_host: github.com\n  repo_path: ${repoPath}\n`
       );
-      const settingNaming = {
-        ...naming,
-        pack: {
-          ...naming.pack,
-          settings: { repo_host: { type: 'string' }, repo_path: { type: 'string' } },
-        },
-      } as const;
+      return cwd;
+    }
+
+    test('reads the repository from the project settings when the run supplies none', async () => {
       const check = mock<ForgeCheck>(async () => undefined);
-      await assertRunForgeAccess(noGithub, settingNaming, prepared, site(cwd), check);
+      await assertRunForgeAccess(
+        noGithub,
+        settingNaming,
+        prepared,
+        site(namingSettings(capableMirror(), 'o/target')),
+        check
+      );
       expect(check.mock.calls.map(([request]) => request)).toEqual([
         { repo: { host: 'github.com', path: 'o/target' }, operations: ['pr.view'] },
+      ]);
+    });
+
+    test('reads the settings of the checkout the run starts in, not the project checkout', async () => {
+      const project = namingSettings(capableMirror(), 'o/project');
+      const adoptedWorktree = namingSettings(
+        trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-access-'))),
+        'o/worktree'
+      );
+      const check = mock<ForgeCheck>(async () => undefined);
+      await assertRunForgeAccess(
+        noGithub,
+        settingNaming,
+        prepared,
+        { ...site(project), settingsCwd: adoptedWorktree },
+        check
+      );
+      expect(check.mock.calls.map(([request]) => request)).toEqual([
+        { repo: { host: 'github.com', path: 'o/worktree' }, operations: ['pr.view'] },
       ]);
     });
 

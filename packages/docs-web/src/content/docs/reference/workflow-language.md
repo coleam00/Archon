@@ -2871,7 +2871,8 @@ run's GitHub credential, about the repository the run acts on:
 
 - When the run's inputs, with its pack settings and input defaults merged in as the run
   starts with them, set both inputs `repository` names, the check judges that repository
-  alone. The checkout's remotes are not read, so a capable mirror cannot start a run whose
+  alone. The settings are read where the run reads its other configuration at start: an
+  adopted run's worktree or branch, or else the project's checkout. The checkout's remotes are not read, so a capable mirror cannot start a run whose
   repository fails.
 - When they set neither, or the pack declares no `repository`, the check asks for each remote
   of the project's checkout, and the run starts when one remote passes. A mirror no plugin

@@ -184,12 +184,6 @@ async function dispatchBackgroundWorkflowOwned(
   if (!prepared) return;
   const { workflow, preparedAiConfiguration } = prepared;
   let { preparedSource } = prepared;
-  // Remotes are read from the project, never from a branch lane's archived config.
-  await assertRunForgeAccess(workflowDeps, workflow, preparedAiConfiguration, {
-    cwd: estate.codebase?.default_cwd ?? ctx.cwd,
-    codebaseId: ctx.codebaseId,
-    supplied: ctx.inputs,
-  });
 
   const { workerPlatformId, workerConv } = await createWorkerConversation(ctx);
 
@@ -338,6 +332,14 @@ async function prepareLaunch(
     }
   );
   await assertRunCredentials(workflowDeps, preparedAiConfiguration, { cwd: launchConfigCwd });
+  // Remotes are read from the project, since a branch lane's snapshot is an archive with
+  // none; the pack settings come from the checkout the run's configuration does.
+  await assertRunForgeAccess(workflowDeps, workflow, preparedAiConfiguration, {
+    cwd: codebase?.default_cwd ?? ctx.cwd,
+    settingsCwd: launchConfigCwd,
+    codebaseId: ctx.codebaseId,
+    supplied: ctx.inputs,
+  });
 
   return { workflow, preparedSource, preparedAiConfiguration };
 }

@@ -335,7 +335,7 @@ console.log(JSON.stringify({ operationId: input.operationId, ok: true, result: {
           },
           executionUserId: 'user-1',
         },
-        { cwd: repo, codebaseId: undefined, supplied: undefined }
+        { cwd: repo, settingsCwd: repo, codebaseId: undefined, supplied: undefined }
       );
     try {
       const refused = await start(undefined).then(

@@ -299,6 +299,7 @@ async function prepareBinding(
     // Before admission, so a binding its forge cannot serve never takes a slot.
     await assertRunForgeAccess(host.deps, workflow, preparedAi, {
       cwd,
+      settingsCwd: cwd,
       codebaseId: codebase.id,
       supplied: inputs,
     });

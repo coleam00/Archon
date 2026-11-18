@@ -3,6 +3,7 @@ import { assertRunCredentials } from '@archon/workflows/run-preflight';
 import { assertRunForgeAccess } from '@archon/workflows/run-forge-access';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import * as db from '../../db/conversations';
+import { withBranchLaunchSource } from '../../workflows/branch-launch-source';
 import { createWorkflowDeps } from '../../workflows/store-adapter';
 import { getLog } from '../agent-log';
 import { dispatchBackgroundWorkflow } from './background';
@@ -117,13 +118,19 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
     return;
   }
 
-  // The background path above checks its own start; this is the foreground's.
+  // The background path above checks its own start; this is the foreground's. A branch
+  // lane's run executes that branch, so its pack settings come from a snapshot of it.
   if (!willContinueExistingRun && preparedAiConfiguration) {
-    await assertRunForgeAccess(createWorkflowDeps(), workflow, preparedAiConfiguration, {
-      cwd: codebase.default_cwd,
-      codebaseId: codebase.id,
-      supplied: resolvedInputs,
-    });
+    const checkForge = (settingsCwd: string): Promise<void> =>
+      assertRunForgeAccess(createWorkflowDeps(), workflow, preparedAiConfiguration, {
+        cwd: codebase.default_cwd,
+        settingsCwd,
+        codebaseId: codebase.id,
+        supplied: resolvedInputs,
+      });
+    await (adoptionLane?.kind === 'checkout-branch'
+      ? withBranchLaunchSource(codebase.default_cwd, adoptionLane.taskBranch.branch, checkForge)
+      : checkForge(launchConfigCwd));
   }
 
   await dispatchForeground(scope, {

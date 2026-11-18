@@ -98,6 +98,12 @@ export type ForgeCheck = (
 export interface RunForgeAccessSite {
   /** The project checkout the run is cut from; a worktree of it has the same remotes. */
   readonly cwd: string;
+  /**
+   * The checkout whose `.archon/packs/` settings the run starts with: the one its other
+   * start preflights read configuration from, such as an adopted worktree. It may hold
+   * settings that name a different repository than the project checkout's.
+   */
+  readonly settingsCwd: string;
   readonly codebaseId: string | undefined;
   readonly inContainer?: boolean;
   /**
@@ -197,7 +203,7 @@ async function forgeTarget(
   const inputs =
     names === undefined
       ? undefined
-      : (await resolveRunStartInputs(site.cwd, workflow, site.supplied)).inputs;
+      : (await resolveRunStartInputs(site.settingsCwd, workflow, site.supplied)).inputs;
   const named = namedRepository(names, inputs);
   if ('missing' in named) {
     return {

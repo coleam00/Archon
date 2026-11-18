@@ -380,6 +380,7 @@ async function prepareChildAiConfiguration(
       // A child run executes on the host; it does not inherit a parent's container.
       await assertRunForgeAccess(deps, childWorkflow, childPrepared, {
         cwd: configCwd,
+        settingsCwd: configCwd,
         codebaseId: args.codebaseId,
         supplied: inputs,
       });
