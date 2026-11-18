@@ -21,19 +21,24 @@ import * as resolver from './binary-resolver';
 
 describe('resolveCodexBinaryPath on Windows (binary mode)', () => {
   const originalEnv = process.env.CODEX_BIN_PATH;
+  const originalAppData = process.env.APPDATA;
   let pathKindSpy: ReturnType<typeof spyOn> | undefined;
 
   afterEach(() => {
     pathKindSpy?.mockRestore();
     if (originalEnv !== undefined) process.env.CODEX_BIN_PATH = originalEnv;
     else delete process.env.CODEX_BIN_PATH;
+    if (originalAppData !== undefined) process.env.APPDATA = originalAppData;
+    else delete process.env.APPDATA;
   });
 
   test.skipIf(process.platform !== 'win32')(
     'autodetects npm global install at %APPDATA%\\npm\\codex.cmd',
     async () => {
       delete process.env.CODEX_BIN_PATH;
-      const appData = process.env.APPDATA ?? 'C:\\Users\\test\\AppData\\Roaming';
+      // The resolver probes %APPDATA% only when it is set, so the test sets its own.
+      const appData = 'C:\\Users\\test\\AppData\\Roaming';
+      process.env.APPDATA = appData;
       const expected = `${appData}\\npm\\codex.cmd`;
       pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) =>
         path === expected ? 'file' : 'missing'

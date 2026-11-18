@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { archonCliInvocation } from '@archon/paths/cli-command';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
-import { discoverPackageTestFiles, hasWindowsTestDirective } from './package-test-groups';
+import { discoverPackageTestFiles, selectWindowsTestFiles } from './package-test-groups';
 import { junitDestination, parseTestArguments } from './package-test-requests';
 import { runReportedGroup, writeCombinedReport } from './package-test-reports';
 
@@ -310,9 +310,29 @@ export function windowsTestFiles(root = REPO_ROOT): string[] {
         )
       : []
   );
-  return [...packageFiles, ...rootFiles]
-    .filter(file => hasWindowsTestDirective(readFileSync(join(root, file), 'utf8')))
-    .sort();
+  return selectWindowsTestFiles(root, [...packageFiles, ...rootFiles]).sort();
+}
+
+/**
+ * The runs of the Windows set. Each package with a marked file runs its own `--windows` form,
+ * which keeps its isolation groups; the root's marked files run together. Every file is named
+ * by its exact `./` path, never as a substring filter that could pick up an unmarked file.
+ */
+export function windowsSetRuns(files: readonly string[]): RequestedRun[] {
+  const runs = new Map<string, RequestedRun>();
+  for (const file of files) {
+    const packageMatch = /^packages\/([^/]+)\//.exec(file);
+    if (packageMatch !== null) {
+      const label = `packages/${packageMatch[1]}`;
+      runs.set(label, { owner: { label, cwd: join(REPO_ROOT, label) }, args: ['--windows'] });
+    } else {
+      const label = 'the repository root';
+      const run = runs.get(label) ?? { owner: { label, cwd: REPO_ROOT }, args: [] };
+      run.args.push(`./${file}`);
+      runs.set(label, run);
+    }
+  }
+  return [...runs.values()];
 }
 
 async function runWindowsSet(): Promise<number> {
@@ -323,7 +343,14 @@ async function runWindowsSet(): Promise<number> {
     return 1;
   }
   console.log(`Windows set: ${String(files.length)} files\n${files.join('\n')}`);
-  return await runRequested(files);
+  let firstFailure = 0;
+  for (const { owner, args } of windowsSetRuns(files)) {
+    const command =
+      owner.cwd === REPO_ROOT ? rootTestCommand(args) : ['bun', 'run', 'test', ...args];
+    const code = await run(command, owner.cwd);
+    if (firstFailure === 0) firstFailure = code;
+  }
+  return firstFailure;
 }
 
 async function main(requested: string[]): Promise<number> {

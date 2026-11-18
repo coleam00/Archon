@@ -24,6 +24,11 @@ export function hasWindowsTestDirective(source: string): boolean {
   return inLeadingComments(source, WINDOWS_TEST_DIRECTIVE);
 }
 
+/** The files among `files` (relative to `directory`) that carry `WINDOWS_TEST_DIRECTIVE`. */
+export function selectWindowsTestFiles(directory: string, files: readonly string[]): string[] {
+  return files.filter(file => hasWindowsTestDirective(readFileSync(join(directory, file), 'utf8')));
+}
+
 export function resolvePackageTestGroups(
   packageDirectory: string,
   declaration: unknown,
@@ -81,12 +86,14 @@ function groupDiscoveredTestFiles(packageDirectory: string, files: readonly stri
     } catch (cause) {
       throw new Error(`Cannot read test file ${file}: ${String(cause)}`, { cause });
     }
-    if (source.split(/\r?\n/, 1)[0] === TEST_ISOLATION_DIRECTIVE) isolated.push([file]);
-    else if (inLeadingComments(source, TEST_ISOLATION_DIRECTIVE)) misplaced.push(file);
+    const lines = source.split(/\r?\n/);
+    if (lines[0] === TEST_ISOLATION_DIRECTIVE) isolated.push([file]);
+    else if (lines.includes(TEST_ISOLATION_DIRECTIVE)) misplaced.push(file);
     else if (source.includes('mock.module(')) unmarkedMocks.push(file);
     else shared.push(file);
   }
-  // Below line 1 the isolation directive is ignored, so the file would share a process unseen.
+  // Below line 1 the isolation directive is ignored, wherever it sits (after a blank line, a
+  // block comment or an import), so the file would share a process unseen.
   if (misplaced.length > 0) {
     throw new Error(
       `These tests carry "${TEST_ISOLATION_DIRECTIVE}" below line 1, where it has no effect; move it to line 1: ${misplaced.join(', ')}`

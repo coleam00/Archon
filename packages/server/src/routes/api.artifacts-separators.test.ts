@@ -22,16 +22,19 @@ import { join } from 'path';
 
 describe('GET /api/artifacts/:runId/* path separators', () => {
   const originalMockHome = mockArchonHome;
+  /** The home this test created; teardown removes only that, never the harness default. */
+  let createdHome: string | undefined;
   beforeEach(async () => {
-    setMockArchonHome(await mkdtemp(join(tmpdir(), 'archon-artifacts-home-')));
+    createdHome = await mkdtemp(join(tmpdir(), 'archon-artifacts-home-'));
+    setMockArchonHome(createdHome);
     mockGetWorkflowRun.mockReset();
     mockGetCodebase.mockReset();
   });
 
   afterEach(async () => {
-    const used = mockArchonHome;
     setMockArchonHome(originalMockHome);
-    await removeTempTree(used);
+    if (createdHome !== undefined) await removeTempTree(createdHome);
+    createdHome = undefined;
   });
 
   test('a backslash climb out of the artifacts directory is refused on Windows', async () => {

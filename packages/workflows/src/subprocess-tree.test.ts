@@ -95,8 +95,13 @@ async function runAbortedWrapper(): Promise<{
     () => undefined,
     (e: unknown) => e as RawSubprocessRejection
   );
-  await waitUntil('the grandchild to start', () => existsSync(started));
-  controller.abort();
+  try {
+    await waitUntil('the grandchild to start', () => existsSync(started));
+  } finally {
+    // On a readiness failure too: the caller releases the recorder next, which would leave a
+    // still-running tree behind. The readiness error stays the one reported.
+    controller.abort();
+  }
   const error = await node;
   await new Promise<void>(resolve => setTimeout(resolve, 2000));
   return { error, leaked: existsSync(marker) };

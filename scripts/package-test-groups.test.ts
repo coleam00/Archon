@@ -28,7 +28,7 @@ test('discovers suffixes and dot directories, partitions exact directives, and i
   const root = fixture();
   write(root, 'src/a.test.ts', TEST_ISOLATION_DIRECTIVE);
   write(root, 'src/b.spec.ts', `\uFEFF${TEST_ISOLATION_DIRECTIVE}\r\n`);
-  write(root, 'src/nested/c.test.tsx', `\n${TEST_ISOLATION_DIRECTIVE}`);
+  write(root, 'src/nested/c.test.tsx', `// ${TEST_ISOLATION_DIRECTIVE}`);
   write(root, 'src/.hidden/d.spec.tsx', `${TEST_ISOLATION_DIRECTIVE} extra`);
   write(root, 'src/not-a-test.ts');
   write(root, 'outside.test.ts');
@@ -58,6 +58,8 @@ test('the Windows directive counts anywhere in the leading comment lines, and on
 test('an isolation directive below line 1 fails discovery instead of being ignored', () => {
   const root = fixture();
   write(root, 'src/a.test.ts', `${WINDOWS_TEST_DIRECTIVE}\n${TEST_ISOLATION_DIRECTIVE}\n`);
+  expect(() => resolvePackageTestGroups(root, {})).toThrow('below line 1');
+  write(root, 'src/a.test.ts', `import 'x';\n\n${TEST_ISOLATION_DIRECTIVE}\n`);
   expect(() => resolvePackageTestGroups(root, {})).toThrow('below line 1');
   write(root, 'src/a.test.ts', `${TEST_ISOLATION_DIRECTIVE}\n${WINDOWS_TEST_DIRECTIVE}\n`);
   expect(resolvePackageTestGroups(root, {})).toEqual([['src/a.test.ts']]);

@@ -198,12 +198,20 @@ async function startWindowsRunOwner(
   });
   if (owner.pid === undefined) throw new Error('Failed to spawn the Windows run owner fixture');
   owner.unref();
-  // A nested launch starts two owners and the job broker of each, so it gets a wider window.
-  await waitFor(
-    () => existsSync(join(dir, 'ready')),
-    mode.startsWith('nested') ? NESTED_LAUNCH_DEADLINE_MS : FIXTURE_STATE_DEADLINE_MS
-  );
-  return { runId, dir, marker: basename(dir), store };
+  const marker = basename(dir);
+  try {
+    // A nested launch starts two owners and the job broker of each, so it gets a wider window.
+    await waitFor(
+      () => existsSync(join(dir, 'ready')),
+      mode.startsWith('nested') ? NESTED_LAUNCH_DEADLINE_MS : FIXTURE_STATE_DEADLINE_MS
+    );
+  } catch (error) {
+    // The caller's cleanup never runs for a fixture that did not become ready, and a
+    // `spawner` owner would keep starting children; end its whole tree here.
+    await killWindowsProcessesNaming(marker);
+    throw error;
+  }
+  return { runId, dir, marker, store };
 }
 
 function cancellationOperations(
@@ -232,18 +240,29 @@ function cancellationOperations(
   });
 }
 
-/** Kill whatever `marker` still names, after a test that may have left survivors. */
-async function killWindowsProcessesNaming(
-  marker: string,
-  listed: number[] | undefined
-): Promise<void> {
-  for (const pid of listed ?? (await windowsProcessesNaming(marker))) {
-    try {
-      process.kill(pid);
-    } catch {
-      // Already gone: the test's own assertion reports a survivor.
-    }
-  }
+/**
+ * Kill whatever `marker` still names, after a test that may have left survivors. The query
+ * and the kill are one WMI pass, so only a process whose command line carries `marker` at
+ * the moment of the kill is ended. A PID listed earlier is never killed by number: Windows
+ * reuses PIDs within seconds, and once handed one to TrustedInstaller.exe (see below).
+ */
+async function killWindowsProcessesNaming(marker: string): Promise<void> {
+  const script = [
+    '$matched = @(Get-CimInstance -ClassName Win32_Process -Filter "CommandLine LIKE \'%$($env:ARCHON_SPEC_MARKER)%\'")',
+    // A process that exits between the query and its kill fails here; the test's own
+    // assertion has already reported it as a survivor, so the failure is ignored.
+    '$matched | Invoke-CimMethod -MethodName Terminate -ErrorAction SilentlyContinue | Out-Null',
+  ].join('\n');
+  await execFileAsync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-EncodedCommand',
+      Buffer.from(script, 'utf16le').toString('base64'),
+    ],
+    { env: { ...process.env, ARCHON_SPEC_MARKER: marker }, windowsHide: true }
+  );
 }
 
 describe('detached run tree stop', () => {
@@ -296,15 +315,18 @@ describe('detached run tree stop', () => {
         writeFileSync(goPath, 'go');
         expect(existsSync(leakPath)).toBe(false);
       } finally {
-        if (owner.exitCode === null && owner.signalCode === null) {
+        // The descendant can outlive the owner (a stop that ended only the owner), and it
+        // polls for the go signal forever, so it is ended whether or not the owner exited.
+        if (process.platform === 'win32') {
+          await killWindowsProcessesNaming(basename(fixtureDir));
+        } else {
           try {
-            if (process.platform === 'win32') owner.kill();
-            else process.kill(-owner.pid, 'SIGKILL');
+            process.kill(-owner.pid, 'SIGKILL');
           } catch {
-            // The primary assertion reports failures; cleanup is best-effort for an already-gone fixture.
+            // ESRCH: the group is already gone. The primary assertion reports failures.
           }
+          rmSync(runLiveOwnerPath(runId), { force: true });
         }
-        if (process.platform !== 'win32') rmSync(runLiveOwnerPath(runId), { force: true });
       }
     },
     STOP_TEST_TIMEOUT_MS
@@ -318,7 +340,6 @@ describe('detached run tree stop', () => {
       // detached, which takes it out of the runtime's own kill-on-close job.
 
       const { runId, dir, marker, store } = await startWindowsRunOwner('orphan');
-      let survivors: number[] | undefined;
       try {
         const grandchild = Number(readFileSync(join(dir, 'grandchild'), 'utf8'));
         // The premise, asserted rather than assumed: the orphan is alive before the stop.
@@ -335,10 +356,10 @@ describe('detached run tree stop', () => {
         expect(recorded).toBe(true);
         expect((await store.getWorkflowRun(runId))?.status).toBe('cancelled');
 
-        survivors = await windowsProcessesNaming(marker);
+        const survivors = await windowsProcessesNaming(marker);
         expect(survivors).toEqual([]);
       } finally {
-        await killWindowsProcessesNaming(marker, survivors);
+        await killWindowsProcessesNaming(marker);
       }
     },
     RACING_STOP_TEST_TIMEOUT_MS
@@ -348,8 +369,10 @@ describe('detached run tree stop', () => {
     'does not report a Windows tree stopped while a descendant the first kill missed is alive',
     async () => {
       // #3466: a kill that walks the tree misses a descendant spawned during the walk. The
-      // owner here spawns a detached child every few milliseconds, so every stop races at
-      // least one spawn. Each child is created inside the owner's job object, so the stop
+      // owner here keeps spawning a detached child every 10 ms, so a stop is likely to race
+      // a spawn; nothing forces one to overlap, so a run where none does still passes. What
+      // the test proves either way is the claim a resolved stop makes: no process of the
+      // tree survives. Each child is created inside the owner's job object, so the stop
       // keeps terminating the job until it holds no process. A detached child leaves only
       // the runtime's own job, not the owner's. POSIX is out of scope: a detached child
       // there leaves the process group on purpose.
@@ -359,19 +382,18 @@ describe('detached run tree stop', () => {
       // check below finds a survivor. A recorded PID cannot: Windows hands a killed child's
       // PID to unrelated processes within the stop's own runtime, and one such reuser
       // (TrustedInstaller.exe) once failed this test as a "survivor".
-      let survivors: number[] | undefined;
       try {
-        // The owner is spawning before the stop begins, so the race is live.
+        // The owner is spawning before the stop begins.
         await waitForFixtureProcess(() => readdirSync(join(dir, 'kids')).length >= 3);
         const target = await requestDetachedRunStop(runId);
         await target.stop();
 
         // A stop that resolves claims the whole tree is gone. Check that claim against
         // every process that belongs to the tree, the owner included.
-        survivors = await windowsProcessesNaming(marker);
+        const survivors = await windowsProcessesNaming(marker);
         expect(survivors).toEqual([]);
       } finally {
-        await killWindowsProcessesNaming(marker, survivors);
+        await killWindowsProcessesNaming(marker);
       }
     },
     RACING_STOP_TEST_TIMEOUT_MS
@@ -389,11 +411,14 @@ describe('detached run tree stop', () => {
         const { runId, dir, marker, store } = await startWindowsRunOwner(mode);
         const childRunId = readFileSync(join(dir, 'child-run-id'), 'utf8');
         const childStore = await createFileWorkflowStore({ root: join(dir, 'home', 'store') });
-        let survivors: number[] | undefined;
         try {
           await waitFor(() => existsSync(join(dir, 'child-ready')), NESTED_LAUNCH_DEADLINE_MS);
           const childPid = Number(readFileSync(join(dir, 'child-ready'), 'utf8'));
-          const child = await requestDetachedRunStop(childRunId);
+          // The lease only reads the child owner's PID; it is released before the parent's
+          // cancel so that nothing this test holds keeps the child owner busy.
+          const childLease = await requestDetachedRunStop(childRunId);
+          const childOwnerPid = childLease.pid;
+          childLease.release();
 
           const operations = cancellationOperations(store, async () => {
             expect((await store.getWorkflowRun(runId))?.status).toBe('running');
@@ -404,17 +429,23 @@ describe('detached run tree stop', () => {
 
           const remaining = await windowsProcessesNaming(marker);
           expect(remaining).toContain(childPid);
-          expect(remaining).toContain(child.pid);
+          expect(remaining).toContain(childOwnerPid);
           expect(remaining).not.toContain(parent.pid);
           expect((await childStore.getWorkflowRun(childRunId))?.status).toBe('running');
+          // The child is still owned: its owner hands out a fresh lease, and that lease stops it.
           const ownedChild = await requestDetachedRunStop(childRunId);
-          expect(ownedChild.pid).toBe(child.pid);
-          await child.stop();
+          try {
+            expect(ownedChild.pid).toBe(childOwnerPid);
+          } catch (error) {
+            ownedChild.release();
+            throw error;
+          }
+          await ownedChild.stop();
 
-          survivors = await windowsProcessesNaming(marker);
+          const survivors = await windowsProcessesNaming(marker);
           expect(survivors).toEqual([]);
         } finally {
-          await killWindowsProcessesNaming(marker, survivors);
+          await killWindowsProcessesNaming(marker);
         }
       },
       RACING_STOP_TEST_TIMEOUT_MS
