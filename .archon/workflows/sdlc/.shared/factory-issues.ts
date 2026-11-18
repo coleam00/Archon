@@ -2,16 +2,15 @@
  * The issues the build queue worked, and the metric records their outcomes make.
  *
  * The pull-request metrics say what happened to each pull request. These say what
- * happened to each issue, which is what the factory is for, and say it again per route,
- * so a route can be judged by what it costs and what it closes. Every figure is read
- * from the work item; nothing is read from the forge.
+ * happened to each issue, which is what the factory is for, and carry the issue's route
+ * as the `route` dimension, so `archon metrics --by-dimension route` judges a route by
+ * what it costs and what it closes. A record keeps its dimensions here; `metricOutput`
+ * moves them beside the records, where the engine reads them. Every figure is read from
+ * the work item; nothing is read from the forge.
  *
  * Each record names its issue as the subject and the build-queue runs that worked it as
  * `runs`, so the engine places it, and its cost, in the cohort of those runs. The engine
  * keeps the latest record per name and subject, so a re-run replaces rather than adds.
- *
- * A metric record has no dimension to split by, so each record is emitted twice: under
- * its name, and under `<name>.<route>` when the issue's route is known.
  */
 
 import { LAUNCH_STAGES } from './build.ts';
@@ -26,13 +25,14 @@ export interface IssueMetricRecord {
   readonly subject: string;
   readonly at: string;
   readonly runs: readonly string[];
+  readonly dimensions?: { readonly route: string };
 }
 
 /**
  * The route the issue entered the build queue on: the one its first recorded round
  * declares. A round recorded before rounds carried their route has none, so the item's
  * intake stage stands in while it is still a route; otherwise the route is unknown and
- * the issue counts only in the totals.
+ * the issue's records carry no route.
  */
 function routeOf(doc: WorkItem): string | null {
   const declared = doc.facts.build?.rounds.find(round => round.route !== undefined)?.route;
@@ -49,7 +49,7 @@ const HOUR_MS = 60 * 60 * 1000;
  * The work item keeps its last ten rounds and twenty decisions per queue, so an issue
  * past either undercounts.
  */
-function outcomes(doc: WorkItem): Omit<IssueMetricRecord, 'subject' | 'runs'>[] {
+function outcomes(doc: WorkItem): Omit<IssueMetricRecord, 'subject' | 'runs' | 'dimensions'>[] {
   const build = doc.facts.build;
   const first = build?.rounds[0];
   if (build === undefined || first === undefined) return [];
@@ -85,8 +85,21 @@ export function inWindow(time: string, window: Window): boolean {
 }
 
 /**
- * The outcome records, in total and under its route, of every built issue with a record
- * in the window: an issue built or merged in it.
+ * The output a metrics node emits: its records, and each record's dimensions at the same
+ * position under `metric_dimensions`, `{}` for a record without any.
+ */
+export function metricOutput<T extends object>(
+  records: readonly (T & { readonly dimensions?: Readonly<Record<string, string>> })[],
+): { metrics: Omit<T, 'dimensions'>[]; metric_dimensions: Readonly<Record<string, string>>[] } {
+  return {
+    metrics: records.map(({ dimensions: _, ...record }) => record),
+    metric_dimensions: records.map(record => record.dimensions ?? {}),
+  };
+}
+
+/**
+ * The outcome records of every built issue with a record in the window: an issue built
+ * or merged in it. Each carries the issue's route when it is known.
  */
 export function issueMetricRecords(items: readonly WorkItem[], window: Window): IssueMetricRecord[] {
   return items.flatMap(doc => {
@@ -96,9 +109,11 @@ export function issueMetricRecords(items: readonly WorkItem[], window: Window): 
     const subject = `${repo.host}/${repo.path}#${String(number)}`;
     const runs = [...new Set((doc.facts.build?.rounds ?? []).map(round => round.run_id))].slice(0, MAX_RUNS);
     const route = routeOf(doc);
-    return records.flatMap(outcome => [
-      { ...outcome, subject, runs },
-      ...(route === null ? [] : [{ ...outcome, name: `${outcome.name}.${route}`, subject, runs }]),
-    ]);
+    return records.map(outcome => ({
+      ...outcome,
+      subject,
+      runs,
+      ...(route === null ? {} : { dimensions: { route } }),
+    }));
   });
 }

@@ -10,7 +10,7 @@ import {
   workflowWaitDue,
   type WorkflowRun,
 } from '../schemas/workflow-run';
-import type { IWorkflowStore } from '../store';
+import type { IWorkflowStore, MetricRecordRow } from '../store';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import type { DashboardWorkflowRun } from '../schemas/workflow-run-listing';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
@@ -79,6 +79,14 @@ function readMetrics(event: WorkflowEventRow): unknown {
   const structured = event.data.structured_output;
   if (typeof structured !== 'object' || structured === null) return undefined;
   return (structured as { metrics?: unknown }).metrics ?? undefined;
+}
+
+/** `structured_output.metric_dimensions`, when the output has one. */
+function readMetricDimensions(event: WorkflowEventRow): Pick<MetricRecordRow, 'metricDimensions'> {
+  const structured = event.data.structured_output as { metric_dimensions?: unknown };
+  return structured.metric_dimensions === undefined
+    ? {}
+    : { metricDimensions: structuredClone(structured.metric_dimensions) };
 }
 
 /** The read side of a transaction view: queries over the transaction's runs and events. */
@@ -189,6 +197,7 @@ export function createTransactionReads(
               nodeType: typeof event.data.type === 'string' ? event.data.type : null,
               completedAt: event.created_at,
               metrics: structuredClone(metrics),
+              ...readMetricDimensions(event),
             },
           ];
         }),

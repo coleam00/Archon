@@ -162,7 +162,7 @@ export async function runMetrics({ positionals, values }: CliRouteContext): Prom
   if (positionals[2] !== undefined) {
     return await fail(
       values.json === true,
-      'Usage: archon metrics [name] [--since <40m|7d|24h|2w|ISO>] [--until <ISO>] [--subject <s>] [--compare <ISO> | --by-model <node>] [--project <id|name|key>] [--json]'
+      'Usage: archon metrics [name] [--since <40m|7d|24h|2w|ISO>] [--until <ISO>] [--subject <s>] [--by-model <node> | [--compare <ISO>] [--by-dimension <key>]] [--project <id|name|key>] [--json]'
     );
   }
   const option = (key: string): string | undefined =>
@@ -173,6 +173,7 @@ export async function runMetrics({ positionals, values }: CliRouteContext): Prom
     subject: option('subject'),
     compare: option('compare'),
     byModel: option('by-model'),
+    byDimension: option('by-dimension'),
     project: option('project'),
     json: values.json === true,
   });

@@ -1023,7 +1023,7 @@ The server drains accepted and queued work. Re-polling sends a fresh timestamp b
 
 ## Preparation and retained records
 
-The receipt freezes the evaluated bindings and resolved inputs. The execution host later captures the workflow source and reads any `configSource` run configuration. Queue admission freezes that prepared source and configuration; editing live files afterward does not change queued work.
+The receipt freezes the evaluated bindings and resolved inputs. The execution host later captures the workflow source and resolves the run configuration: on an item, the config the item's most recent run was started with, else any `configSource` file (see [Items](/reference/cli/#items)). Queue admission freezes that prepared source and configuration; editing live files afterward does not change queued work.
 
 An input mapped from the event, by CLI `--inputs`, a Standard Webhooks JSON Pointer, or a GitHub `field` mapping, reaches only a workflow that declares it under `inputs:`. Preparation rejects a binding that maps event values into a workflow without that declaration. Literal inputs you write into `launch.inputs` or a GitHub `literal` mapping pass through to a workflow without `inputs:`, as they do for a direct run. A workflow that declares `inputs:` rejects any undeclared name, literal or mapped.
 
