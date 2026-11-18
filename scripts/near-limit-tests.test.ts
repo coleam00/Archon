@@ -1,9 +1,15 @@
 import { describe, expect, test } from 'bun:test';
-import { DEFAULT_TEST_TIMEOUT_MS } from '@archon/paths/test-utils';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DEFAULT_TEST_TIMEOUT_MS, trackTempRoots } from '@archon/paths/test-utils';
+import { bunTestCommand, bunTestEnv } from './bun-test-command';
 import { nearLimit, reportTimes, testLimits } from './near-limit-tests';
 
+const track = trackTempRoots();
+
 describe('testLimits', () => {
-  test('reads each form a test call gives its limit, by the line the call starts on', () => {
+  test('reads each form a test call gives its limit, by the line of its name', () => {
     const source = [
       "import { testTimeout } from '@archon/paths/test-utils';",
       'const SLOW = 45_000;',
@@ -27,6 +33,49 @@ describe('testLimits', () => {
       [9, 60_000],
       [10, 25_000],
       [11, undefined],
+    ]);
+  });
+
+  // Bun is the subject: the line it reports is the key, and a multiline call reports its
+  // name's line, not the call's first line.
+  test('finds the limit of every test at the line Bun reports it', () => {
+    const root = track(mkdtempSync(join(tmpdir(), 'near-limit-bun-')));
+    const source = [
+      "import { test } from 'bun:test';",
+      "test('single line', () => {}, 1_000);",
+      'test.each([1])(',
+      "  'each row %s',",
+      '  () => {},',
+      '  2_000',
+      ');',
+      'test.skipIf(false)(',
+      "  'skip if',",
+      '  () => {},',
+      '  3_000',
+      ');',
+      'test(',
+      "  'plain',",
+      '  () => {},',
+      '  4_000',
+      ');',
+    ].join('\n');
+    writeFileSync(join(root, 'a.test.ts'), source);
+    const report = join(root, 'report.xml');
+    const run = Bun.spawnSync(
+      bunTestCommand(['./a.test.ts', '--reporter=junit', `--reporter-outfile=${report}`]),
+      { cwd: root, env: bunTestEnv(), stdout: 'pipe', stderr: 'pipe' }
+    );
+    expect(run.exitCode, run.stderr.toString()).toBe(0);
+    const limits = testLimits(source);
+    const resolved = reportTimes(readFileSync(report, 'utf8'), 'root').map(time => [
+      time.name,
+      limits.get(time.line),
+    ]);
+    expect(resolved).toEqual([
+      ['single line', 1_000],
+      ['each row %s', 2_000],
+      ['skip if', 3_000],
+      ['plain', 4_000],
     ]);
   });
 });

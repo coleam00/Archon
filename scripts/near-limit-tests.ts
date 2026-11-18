@@ -11,7 +11,7 @@ import ts from 'typescript';
  * before it fails on a slow runner (#5835). It reports and never gates.
  *
  * Bun's JUnit report has each test's time, file and line, but not its limit, so the limit is
- * read from the `test`/`it` call that starts on that line. `<report-dir>/<cwd-key>/` names the
+ * read from the `test`/`it` call whose name is on that line. `<report-dir>/<cwd-key>/` names the
  * directory the test process ran in, which a report's `file` is relative to.
  */
 
@@ -65,7 +65,7 @@ function numberValue(node: ts.Expression, constants: ReadonlyMap<string, number>
   return undefined;
 }
 
-/** The limit of every test call in one source file, by the line the call starts on. */
+/** The limit of every test call in one source file, by the line Bun reports it at. */
 export function testLimits(source: string): Map<number, Limit> {
   const file = ts.createSourceFile('test.ts', source, ts.ScriptTarget.Latest, true);
   const constants = new Map<string, number>();
@@ -84,15 +84,18 @@ export function testLimits(source: string): Map<number, Limit> {
   const limits = new Map<number, Limit>();
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && testCallee(node.expression)) {
-      const line = file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
+      // Bun reports a test at the line of its name, which is not the call's first line when
+      // the call spans lines. Only the outermost call registers a test, so the inner
+      // `test.each(rows)` or `test.skipIf(x)` of the chain is not visited.
+      const name = node.arguments[0] ?? node;
+      const line = file.getLineAndCharacterOfPosition(name.getStart(file)).line + 1;
       const limit = node.arguments[2];
-      // The outermost call on a line is the one Bun reports; `.each(rows)` inside it is not.
-      if (!limits.has(line)) {
-        limits.set(
-          line,
-          limit === undefined ? DEFAULT_TEST_TIMEOUT_MS : numberValue(limit, constants)
-        );
-      }
+      limits.set(
+        line,
+        limit === undefined ? DEFAULT_TEST_TIMEOUT_MS : numberValue(limit, constants)
+      );
+      for (const argument of node.arguments) visit(argument);
+      return;
     }
     ts.forEachChild(node, visit);
   };
