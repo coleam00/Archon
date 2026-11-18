@@ -1,9 +1,10 @@
 import { rmSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
+import { checkoutRootAbove } from '@archon/core/workflows/binding-workflow';
 import {
   parseRunModelAssignments,
   type RunModelOverrides,
@@ -434,16 +435,6 @@ function checkoutRootHint(root: string): string[] {
   return checkout === undefined
     ? []
     : [`--workflow-source takes the checkout root; did you mean ${checkout}?`];
-}
-
-/** The checkout whose `.archon/workflows` contains `path`, when the path sits inside one. */
-function checkoutRootAbove(path: string): string | undefined {
-  for (let dir = path; dirname(dir) !== dir; dir = dirname(dir)) {
-    if (basename(dir) === 'workflows' && basename(dirname(dir)) === '.archon') {
-      return dirname(dirname(dir));
-    }
-  }
-  return undefined;
 }
 
 function unknownWorkflowError(

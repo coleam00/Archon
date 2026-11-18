@@ -39,7 +39,6 @@ import {
   withCapturedSource,
 } from '@archon/workflows/run-source';
 import { canonicalValueText, type JsonValue } from '@archon/workflows/output-ref';
-import { resolveWorkflowName } from '@archon/workflows/router';
 import {
   readWorkflowRunConfigMetadata,
   WORKFLOW_RUN_CONFIG_METADATA_KEY,
@@ -78,6 +77,7 @@ import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { executionLane, handoffIsolation } from './resource-start-lanes';
+import { selectStartedWorkflow } from './binding-workflow';
 
 const log = createLogger('resource-start-host');
 
@@ -105,7 +105,7 @@ async function findOrRegisterCodebase(host: WorkflowHost, cwd: string): Promise<
 
 async function selectBindingWorkflow(
   host: WorkflowHost,
-  workflowName: string,
+  launch: ResourceStartBindingIntent['launch'],
   cwd: string,
   roots: Parameters<typeof discoverWorkflowsWithConfig>[3]
 ): Promise<ResolvedWorkflow> {
@@ -115,16 +115,13 @@ async function selectBindingWorkflow(
     host.deps.providers,
     roots
   );
-  const workflow = resolveWorkflowName(
-    workflowName,
-    discovered.workflows.map(entry => entry.workflow)
-  );
-  if (workflow) return workflow;
-  const loadError = findWorkflowLoadError(discovered.errors, workflowName);
+  const started = selectStartedWorkflow(launch, discovered.workflows);
+  if ('workflow' in started) return started.workflow;
+  const loadError = findWorkflowLoadError(discovered.errors, launch.workflowName);
   throw new Error(
     loadError
-      ? `Workflow '${workflowName}' failed to load: ${loadError.error}`
-      : `Workflow '${workflowName}' not found.`
+      ? `Workflow '${launch.workflowName}' failed to load: ${loadError.error}`
+      : `The binding starts nothing: ${started.refused}.`
   );
 }
 
@@ -264,12 +261,7 @@ async function prepareBinding(
     let source = await prepareWorkflowSource(host.deps, { sourceRoot });
     owner.hold(source);
 
-    const workflow = await selectBindingWorkflow(
-      host,
-      intent.launch.workflowName,
-      cwd,
-      source.roots
-    );
+    const workflow = await selectBindingWorkflow(host, intent.launch, cwd, source.roots);
     await recordSelectedWorkflow(source.anchor.root, workflow.name);
     await assertBindingRequirements(host, intent, workflow);
     const inputs = resolveBindingInputs(intent, workflow);
