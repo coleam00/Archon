@@ -54,10 +54,16 @@ describe('git utilities', () => {
       execSpy.mockRestore();
       const realExec = git.execFileAsync;
       let killed = false;
+      // The product's 10 s limit is asserted, then a short one stands in for it, so the
+      // kill still comes from the real exec without waiting out 10 s.
       execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (_file, args, options) => {
         expect(args).toContain('--get-all');
+        expect(options?.timeout).toBe(10000);
         try {
-          return await realExec(process.execPath, ['-e', 'setTimeout(() => {}, 12000)'], options);
+          return await realExec(process.execPath, ['-e', 'setTimeout(() => {}, 12000)'], {
+            ...options,
+            timeout: 200,
+          });
         } catch (error) {
           killed = error instanceof Error && 'killed' in error && error.killed === true;
           throw error;

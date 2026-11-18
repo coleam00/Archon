@@ -2058,8 +2058,9 @@ describe('log output channel (#3444)', () => {
       join(workflows, 'listed.yaml'),
       'name: listed\ndescription: The listed workflow.\nnodes:\n  - id: a\n    bash: echo a\n'
     );
-    // Another workflow with an authoring problem: discovery parses it on every
-    // listing, but only `validate` should report it.
+    // Another workflow with an authoring problem: discovery parses it on every listing,
+    // which must not log it at the default level. `validate` rendering such a parse
+    // warning is proved in commands/validate.test.ts.
     writeFileSync(
       join(workflows, 'typo.yaml'),
       'name: typo\ndescription: Has a typo.\nnodes:\n  - id: b\n    bash: echo b\n    contxt: fresh\n'
@@ -2105,9 +2106,6 @@ describe('log output channel (#3444)', () => {
       expect(logRecords(verbose.stderr)).toContainEqual(
         expect.objectContaining({ level: 20, msg: 'node_unknown_key_ignored' })
       );
-
-      const validated = run(['validate', 'workflows', 'typo']);
-      expect(validated.stdout).toContain("unknown key 'contxt' will be ignored");
     } finally {
       await removeTempTree(root);
     }
