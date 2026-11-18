@@ -54,6 +54,14 @@ describe('readClaudePluginIds', () => {
     expect(error.message).toContain('config unreadable');
   });
 
+  test.each([
+    ['killed by a signal', 'kill -TERM $$'],
+    ['reporting a signal as exit status 128+N', 'exit 143'],
+  ])('a listing %s is transient', async (_, script) => {
+    const cmd = { ...fakeCli(''), args: ['-c', script] };
+    expect((await failureOf(readClaudePluginIds(cmd))).failureClass).toBe('transient');
+  });
+
   test('a failure without stderr does not echo the command line, which can hold credentials', async () => {
     const cmd = {
       ...fakeCli('', 3),
