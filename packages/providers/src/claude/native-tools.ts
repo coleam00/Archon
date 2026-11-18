@@ -4,12 +4,14 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import { nativeToolInputParser } from '@archon/provider-contract';
 import type { NativeTool } from '../types';
+import { randomUUID } from 'node:crypto';
 
 /** The in-process MCP server name; tools are callable as `mcp__archon__<name>`. */
 export const ARCHON_TOOL_SERVER = 'archon';
 
 export function buildArchonMcpServer(nativeTools: NativeTool[]): McpSdkServerConfigWithInstance {
   const server = createSdkMcpServer({ name: ARCHON_TOOL_SERVER, version: '1.0.0', tools: [] });
+  const providerCallScope = randomUUID();
   for (const spec of nativeTools) {
     const schema = nativeToolInputParser(spec.inputSchema);
     // The SDK types use an older Zod minor; MCP accepts this Zod 4 schema at runtime.
@@ -24,8 +26,16 @@ export function buildArchonMcpServer(nativeTools: NativeTool[]): McpSdkServerCon
         inputSchema: schema as unknown as SdkInput,
         _meta: { 'anthropic/alwaysLoad': true },
       },
-      async (args: unknown) => ({
-        content: [{ type: 'text', text: await spec.handler(schema.parse(args)) }],
+      async (args: unknown, extra: { requestId: string | number }) => ({
+        content: [
+          {
+            type: 'text',
+            text: await spec.handler(schema.parse(args), {
+              providerCallId: String(extra.requestId),
+              providerCallScope,
+            }),
+          },
+        ],
       })
     );
   }

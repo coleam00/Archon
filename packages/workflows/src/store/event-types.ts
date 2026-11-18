@@ -50,12 +50,14 @@ export const DURABLE_WORKFLOW_EVENT_TYPES = [
   ...WORKTREE_SETUP_EVENT_TYPES,
   DEFERRED_NODE_USAGE_EVENT_TYPE,
   RUN_BUDGET_WORK_UNIT_EVENT_TYPE,
+  'script_tool_call',
 ] as const;
 export type DurableWorkflowEventType = (typeof DURABLE_WORKFLOW_EVENT_TYPES)[number];
 export type DurableNodeEventInput =
   | NodeStateEventInput
   | SerializedDeferredNodeUsageEvent
-  | RunBudgetWorkUnitEvent;
+  | RunBudgetWorkUnitEvent
+  | WorkflowEventInput<'script_tool_call'>;
 
 export const WORKFLOW_EVENT_TYPES = [
   'run_attention_changed',

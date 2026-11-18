@@ -91,6 +91,7 @@ function providerFields(data: DagNodeFields) {
       'skills',
       'plugins',
       'agents',
+      'tools',
       'pi',
       'effort',
       'maxBudgetUsd',

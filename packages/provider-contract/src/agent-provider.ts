@@ -161,7 +161,7 @@ export type NativeToolProperty = z.infer<typeof nativeToolPropertySchema>;
  * provider maps this to its SDK's schema form, so the supported subset lives
  * here once instead of being re-derived by each converter.
  */
-export const nativeToolInputSchema = z
+const legacyNativeToolInputSchema = z
   .object({
     properties: z.record(z.string(), nativeToolPropertySchema),
     required: z.array(z.string()).readonly(),
@@ -170,6 +170,14 @@ export const nativeToolInputSchema = z
     message: 'Required tool keys must be declared in properties',
     path: ['required'],
   });
+export const nativeToolInputSchema = z.union([
+  legacyNativeToolInputSchema,
+  z.object({
+    jsonSchema: z.record(z.string(), z.json()).refine(schema => schema.type === 'object', {
+      message: 'Native tool parameters must declare type: object',
+    }),
+  }),
+]);
 export type NativeToolInputSchema = z.infer<typeof nativeToolInputSchema>;
 
 /**
@@ -200,7 +208,10 @@ export interface NativeTool {
   name: string;
   description: string;
   inputSchema: NativeToolInputSchema;
-  handler: (input: Record<string, unknown>) => Promise<string>;
+  handler: (
+    input: Record<string, unknown>,
+    context?: { providerCallId: string; providerCallScope?: string }
+  ) => Promise<string>;
 }
 
 /**

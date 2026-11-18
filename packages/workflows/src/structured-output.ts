@@ -100,6 +100,15 @@ export function validateStructuredOutput(
   schema: Record<string, unknown>,
   onCompileError?: (message: string) => void
 ): StructuredValidationResult {
+  const validated = validateJsonSchema(value, schema, onCompileError);
+  return validated.valid ? validateMetricRecords(value) : validated;
+}
+
+export function validateJsonSchema(
+  value: unknown,
+  schema: Record<string, unknown>,
+  onCompileError?: (message: string) => void
+): StructuredValidationResult {
   let validate = validatorCache.get(schema);
   if (!validate) {
     try {
@@ -113,7 +122,7 @@ export function validateStructuredOutput(
   }
 
   if (!validate(value)) return { valid: false, errors: formatSchemaErrors(validate.errors) };
-  return validateMetricRecords(value);
+  return { valid: true };
 }
 
 /**

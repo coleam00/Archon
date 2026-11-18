@@ -45,6 +45,84 @@ const CASES: { label: string; input: unknown; accept: boolean }[] = [
 ];
 
 describe('native tool input schema conformance', () => {
+  test('complex JSON Schema arguments and call IDs survive all three adapters', async () => {
+    const input = { count: 2.5, items: [{ id: 7 }], metadata: { owner: 'ops' } };
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        count: { type: 'number' },
+        items: {
+          type: 'array',
+          items: { type: 'object', properties: { id: { type: 'integer' } } },
+        },
+        metadata: { type: 'object', properties: { owner: { type: 'string' } } },
+      },
+      required: ['count', 'items', 'metadata'],
+      additionalProperties: false,
+    };
+    const seen: unknown[] = [];
+    const tool: NativeTool = {
+      name: 'lookup',
+      description: 'lookup',
+      inputSchema: { jsonSchema },
+      handler: async (args, context) => {
+        expect(args).toEqual(input);
+        seen.push(context);
+        return 'ok';
+      },
+    };
+    const codex = buildCodexNativeTools([tool]);
+    expect(codex.specs[0]).toMatchObject({ inputSchema: jsonSchema });
+    expect(
+      (
+        await codex.call(
+          {
+            threadId: 't',
+            turnId: 'u',
+            callId: 'codex-7',
+            namespace: null,
+            tool: 'lookup',
+            arguments: input,
+          },
+          't',
+          'u'
+        )
+      ).success
+    ).toBe(true);
+    const pi = buildPiNativeToolDefinitions([tool])[0];
+    expect(nativeToolInputToTypeBox(tool.inputSchema)).toMatchObject(jsonSchema);
+    await Reflect.apply(pi.execute, undefined, ['pi-7', input]);
+    const server = buildArchonMcpServer([tool]);
+    type Transport = Parameters<typeof server.instance.connect>[0];
+    const response = Promise.withResolvers<unknown>();
+    const transport: Transport = {
+      start: async () => {},
+      close: async () => {},
+      send: async message => {
+        if ('id' in message) response.resolve(message);
+      },
+    };
+    try {
+      await server.instance.connect(transport);
+      transport.onmessage?.({
+        jsonrpc: '2.0',
+        id: 7,
+        method: 'tools/call',
+        params: { name: 'lookup', arguments: input },
+      });
+      expect(await response.promise).toMatchObject({
+        result: { content: [{ type: 'text', text: 'ok' }] },
+      });
+      expect(seen).toEqual([
+        { providerCallId: 'codex-7' },
+        { providerCallId: 'pi-7' },
+        { providerCallId: '7', providerCallScope: expect.any(String) },
+      ]);
+      expect(z.toJSONSchema(nativeToolInputParser(tool.inputSchema))).toMatchObject(jsonSchema);
+    } finally {
+      await server.instance.close();
+    }
+  });
   test('Claude, Pi and Codex accept and reject the same inputs', async () => {
     const zodObject = nativeToolInputParser(SCHEMA);
     const validatePi = new Ajv({ strict: false }).compile(nativeToolInputToTypeBox(SCHEMA));

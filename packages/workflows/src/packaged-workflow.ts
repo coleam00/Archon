@@ -116,6 +116,11 @@ function qualifyNodeResources(
   if (isAgentNode(node) && node.source.kind === 'command') {
     node.source.name = qualifyResourceReference(node.source.name, owner);
   }
+  if (isAgentNode(node) && node.tools) {
+    for (const tool of Object.values(node.tools)) {
+      tool.script = qualifyResourceReference(tool.script, owner);
+    }
+  }
   if (isExecNode(node) && node.runtime !== 'sh' && isNamedScript(node.script)) {
     node.script = qualifyResourceReference(node.script, owner);
   }

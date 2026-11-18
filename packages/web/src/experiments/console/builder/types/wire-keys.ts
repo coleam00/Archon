@@ -39,6 +39,7 @@ export const WIRE_KEY_ROLES = {
   skills: 'base',
   plugins: 'base',
   agents: 'base',
+  tools: 'base',
   effort: 'base',
   maxBudgetUsd: 'base',
   systemPrompt: 'base',

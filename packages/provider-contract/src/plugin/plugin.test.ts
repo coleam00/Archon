@@ -637,6 +637,48 @@ test('concurrent native tools remain scoped to their owning session', async () =
   );
 });
 
+test('JSON Schema input and provider call identity cross the plugin wire unchanged', async () => {
+  const input = { count: 2.5, items: [{ id: 7 }] };
+  const context = { providerCallId: 'call-7', providerCallScope: 'mcp-1' };
+  await withProvider(
+    fixtureProvider({
+      async *sendQuery(_p, _c, _r, options) {
+        const tool = options?.nativeTools?.[0];
+        if (!tool) throw new Error('Missing tool');
+        yield { type: 'result', text: await tool.handler(input, context) };
+        yield { type: 'settled' };
+      },
+    }),
+    async client => {
+      await collect(
+        client.sendQuery('call', '/', undefined, {
+          nativeTools: [
+            {
+              name: 'lookup',
+              description: 'lookup',
+              inputSchema: {
+                jsonSchema: {
+                  type: 'object',
+                  properties: {
+                    count: { type: 'number' },
+                    items: { type: 'array', items: { type: 'object' } },
+                  },
+                  required: ['count', 'items'],
+                },
+              },
+              handler: async (actual, identity) => {
+                expect(actual).toEqual(input);
+                expect(identity).toEqual(context);
+                return 'ok';
+              },
+            },
+          ],
+        })
+      );
+    }
+  );
+});
+
 test('host env stays off the wire while container env travels as request data', async () => {
   const requests: unknown[] = [];
   await withProvider(

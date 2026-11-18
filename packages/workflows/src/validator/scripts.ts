@@ -42,6 +42,7 @@ export async function validateScriptNode(
   validation: ResourceValidation,
   node: DagNode
 ): Promise<void> {
+  await validateToolScripts(validation, node);
   if (!isExecNode(node) || node.runtime === 'sh') return;
   const { issues } = validation;
   const script = node.script;
@@ -147,4 +148,19 @@ export async function validateScript(
     valid: issues.filter(i => i.level === 'error').length === 0,
     issues,
   };
+}
+
+async function validateToolScripts(validation: ResourceValidation, node: DagNode): Promise<void> {
+  if (node.kind === 'agent' && node.tools) {
+    for (const [name, tool] of Object.entries(node.tools)) {
+      const result = await validateScript(tool.script, validation.cwd);
+      validation.issues.push(
+        ...result.issues.map(issue => ({
+          ...issue,
+          nodeId: node.id,
+          field: `tools.${name}.script`,
+        }))
+      );
+    }
+  }
 }

@@ -37,6 +37,7 @@ import {
 } from './loop';
 import { validateNodeHooks } from './hooks';
 import type { AgentNode } from './agent-node';
+import { nodeOutputSchema } from './tool-output';
 import {
   dagNodeBaseSchema,
   isNodeContextResume,
@@ -407,7 +408,7 @@ export const dagNodeSchema: z.ZodType<DagNode | IncludeDirective> = z
  * time.
  */
 export function definedOutputPaths(node: DagNode): DeclaredOutputPaths | undefined {
-  return isLoopGroupNode(node) ? undefined : declaredOutputPathsFromSchema(node.output_format);
+  return isLoopGroupNode(node) ? undefined : declaredOutputPathsFromSchema(nodeOutputSchema(node));
 }
 
 // ---------------------------------------------------------------------------

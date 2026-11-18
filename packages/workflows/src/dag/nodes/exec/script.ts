@@ -83,6 +83,23 @@ export async function executeScriptNode(
 
 type ScriptInvocation = ReturnType<typeof scriptInvocation>;
 
+export async function prepareToolScript(
+  ctx: RunLayersContext,
+  node: ExecNode,
+  execution: NodeExecutionRecord
+): Promise<{ invocation: ScriptInvocation; env: NodeJS.ProcessEnv; recheck: () => Promise<void> }> {
+  const listings = await writeInvocationListings(ctx);
+  const source = await captureScriptSource(ctx, node.script, execution.path);
+  const invocation = resolveScriptInvocation(ctx, node, node.script, source.namedScripts);
+  if ('errorMsg' in invocation) throw new Error(invocation.errorMsg);
+  await recheckNamedScriptSource(source, node.script, execution.path);
+  return {
+    invocation,
+    env: scriptEnvironment(ctx, node, listings, execution),
+    recheck: () => recheckNamedScriptSource(source, node.script, execution.path),
+  };
+}
+
 /** Discovered named scripts, the discovery error, or undefined for an inline script. */
 interface ScriptSource {
   verifiedScriptFiles: ReadonlySet<string> | undefined;
@@ -288,11 +305,12 @@ async function recheckNamedScriptSource(
   }
 }
 
-async function runScript(
+export async function runScript(
   ctx: RunLayersContext,
   node: ExecNode,
   { command, args, input }: ScriptInvocation,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  abortSignal?: AbortSignal
 ): Promise<ReturnType<typeof certifyExecOutput>> {
   const { workflowRun } = ctx;
   const { stdout, stderr, credentialValues } = await runSubprocessUntilRunStops(
@@ -308,6 +326,7 @@ async function runScript(
       endTreeOnTimeout: true,
       input,
       env,
+      abortSignal,
       protectedEnvKeys: ctx.config.protectedEnvKeys,
       protectedCredentialValues: ctx.config.protectedCredentialValues,
       retention: {
