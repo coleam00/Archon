@@ -195,3 +195,11 @@ describe('workflowRunCommand — --input declared inputs (#2554)', () => {
     expect(opts.inputs).toBeUndefined();
   });
 });
+
+describe('readSuppliedInputs (#5678)', () => {
+  it('keeps an --input value that names an existing file as that string', async () => {
+    const { readSuppliedInputs } = await import('./workflow-run-admission');
+    const path = import.meta.path; // this test file: it exists
+    expect(await readSuppliedInputs({ inputs: [`big=${path}`] })).toEqual({ big: path });
+  });
+});

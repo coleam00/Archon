@@ -2069,11 +2069,9 @@ describe('buildDetachedRunCmd', () => {
   // fixture modelled a compiled argv with no argv[1] at all, which is why
   // #2248 (detached child dies with `Unknown command: B:/~BUN/root/...`)
   // shipped green.
-  // `--input` is the first repeatable flag in the tree (#2554). Nothing here handles
-  // repetition specially — argv is forwarded verbatim — so this pins the property a
-  // future change to the argv rebuild could silently break, turning a detached run into
-  // one that starts with its inputs missing instead of failing.
-  it('forwards every repeated --input to the detached child', () => {
+  // The child gates on the inputs its launcher recorded on the row (#5678): an input
+  // file is read once, before the run starts, and no input value rides the child's argv.
+  it('drops --input and --input-file, with their values, from the detached child', () => {
     const cmd = buildDetachedRunCmd(
       false,
       '/path/to/bun',
@@ -2085,18 +2083,25 @@ describe('buildDetachedRunCmd', () => {
         'review-block',
         '--input',
         'diff=D1',
-        '--input',
-        'style=terse',
+        '--input=style=terse',
+        '--input-file',
+        'notes=notes.md',
+        '--input-file=plan=plan.json',
         '--detach',
       ],
       '/abs/cwd',
       []
     );
 
-    expect(cmd.filter(arg => arg === '--input')).toHaveLength(2);
-    expect(cmd).toContain('diff=D1');
-    expect(cmd).toContain('style=terse');
-    expect(cmd).not.toContain('--detach');
+    expect(cmd).toEqual([
+      '/path/to/bun',
+      '/abs/cli.ts',
+      'workflow',
+      'run',
+      'review-block',
+      '--cwd',
+      '/abs/cwd',
+    ]);
   });
 
   it('binary mode: uses [execPath] only (no duplicated entry arg), drops the Bun SFE virtual argv[1]', () => {

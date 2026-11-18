@@ -2589,6 +2589,9 @@ archon workflow run review-block --input diff="$(git diff)" --input style=terse
 
 # the trailing message is still $ARGUMENTS, independent of --input
 archon workflow run review-block --input diff=... "focus on the auth changes"
+
+# a large value from a file: the input is the file's exact contents
+archon workflow run review-block --input-file diff=changes.diff --input style=terse
 ```
 
 In the **web console**, a workflow that declares `inputs:` renders a field per input in the run
