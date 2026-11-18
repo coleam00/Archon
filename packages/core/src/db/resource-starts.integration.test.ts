@@ -1,6 +1,6 @@
-// @archon-test-isolated
 import { create as createIsolationEnvironment } from './isolation-environments';
 import { toBranchName } from '@archon/git';
+// @archon-test-isolated
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { mkdtemp, writeFile } from 'node:fs/promises';

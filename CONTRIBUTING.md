@@ -179,7 +179,7 @@ On a push to `dev`, Windows runs only the Windows set: the test files whose lead
 lines include `// @archon-test-windows`. Those lines must start the file and follow one
 another: a blank line, a block comment or an import before the marker hides it. When a file
 has both, `// @archon-test-isolated` stays on line 1 and the Windows marker follows it;
-discovery refuses the isolation directive as a comment on any later line. Every other test
+discovery refuses the isolation directive anywhere else in those leading lines. Every other test
 runs on Windows only on a push to `main`, on a pull request whose change runs every job (see
 `EVERY_JOB_INPUTS` above), or on a dispatch with `windows-full-suite=true`. Most of those
 prove nothing Linux does not, but not all: a Windows branch in an unmarked file, such as an

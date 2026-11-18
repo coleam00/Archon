@@ -55,17 +55,19 @@ test('the Windows directive counts anywhere in the leading comment lines, and on
   expect(hasWindowsTestDirective(`${WINDOWS_TEST_DIRECTIVE} because`)).toBe(false);
 });
 
-test('an isolation directive below line 1 fails discovery instead of being ignored', () => {
+test('an isolation directive below the Windows marker fails discovery instead of being ignored', () => {
   const root = fixture();
-  write(root, 'src/a.test.ts', `${WINDOWS_TEST_DIRECTIVE}\n${TEST_ISOLATION_DIRECTIVE}\n`);
-  expect(() => resolvePackageTestGroups(root, {})).toThrow('below line 1');
-  write(root, 'src/a.test.ts', `import 'x';\n\n${TEST_ISOLATION_DIRECTIVE}\n`);
+  write(root, 'src/a.test.ts', `${WINDOWS_TEST_DIRECTIVE}\r\n${TEST_ISOLATION_DIRECTIVE}\r\n`);
   expect(() => resolvePackageTestGroups(root, {})).toThrow('below line 1');
   // A manifest group names the file, which skips discovery's grouping but not this check.
-  write(root, 'src/a.test.ts', `${WINDOWS_TEST_DIRECTIVE}\n${TEST_ISOLATION_DIRECTIVE}\n`);
   expect(() => resolvePackageTestGroups(root, { testGroups: [['src/']] })).toThrow('below line 1');
-  // The same text inside a fixture's template literal is not a directive.
-  write(root, 'src/a.test.ts', `const fixture = \`import 'x';\n${TEST_ISOLATION_DIRECTIVE}\n\`;\n`);
+  // Past the leading comment lines the text is not a directive, such as a CRLF fixture's.
+  const padding = Array.from({ length: 20 }, (_, index) => `// ${String(index)}`).join('\r\n');
+  write(
+    root,
+    'src/a.test.ts',
+    `${padding}\r\nconst fixture = \`import 'x';\r\n${TEST_ISOLATION_DIRECTIVE}\r\n\`;\r\n`
+  );
   expect(resolvePackageTestGroups(root, {})).toEqual([['src/a.test.ts']]);
   write(root, 'src/a.test.ts', `${TEST_ISOLATION_DIRECTIVE}\n${WINDOWS_TEST_DIRECTIVE}\n`);
   expect(resolvePackageTestGroups(root, {})).toEqual([['src/a.test.ts']]);

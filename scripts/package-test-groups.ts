@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import ts from 'typescript';
 
 export const TEST_ISOLATION_DIRECTIVE = '// @archon-test-isolated';
 
@@ -11,18 +10,16 @@ export const TEST_ISOLATION_DIRECTIVE = '// @archon-test-isolated';
  */
 export const WINDOWS_TEST_DIRECTIVE = '// @archon-test-windows';
 
-/** Whether `directive` is one of the `//` lines a test file's source starts with. */
-function inLeadingComments(source: string, directive: string): boolean {
-  for (const line of source.replace(/^\uFEFF/, '').split(/\r?\n/)) {
-    if (line === directive) return true;
-    if (!line.startsWith('//')) return false;
-  }
-  return false;
+/** The consecutive `//` lines a test file's source starts with. */
+function leadingCommentLines(source: string): string[] {
+  const lines = source.replace(/^\uFEFF/, '').split(/\r?\n/);
+  const end = lines.findIndex(line => !line.startsWith('//'));
+  return end === -1 ? lines : lines.slice(0, end);
 }
 
 /** Whether a test file's source carries `WINDOWS_TEST_DIRECTIVE` in its leading comment lines. */
 export function hasWindowsTestDirective(source: string): boolean {
-  return inLeadingComments(source, WINDOWS_TEST_DIRECTIVE);
+  return leadingCommentLines(source).includes(WINDOWS_TEST_DIRECTIVE);
 }
 
 /** The files among `files` (relative to `directory`) that carry `WINDOWS_TEST_DIRECTIVE`. */
@@ -39,41 +36,16 @@ function readTestSource(packageDirectory: string, file: string): string {
 }
 
 /**
- * Whether the isolation directive is a `//` comment on some line after line 1, where it has
- * no effect. The same text inside a string or template literal (a test fixture) is not a
- * directive, so a candidate line is parsed and checked against the file's literals.
- */
-function hasMisplacedIsolationDirective(file: string, source: string): boolean {
-  const lines = source.split(/\r?\n/);
-  if (!lines.slice(1).some(line => line.trimStart() === TEST_ISOLATION_DIRECTIVE)) return false;
-  const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
-  const literals: { start: number; end: number }[] = [];
-  const visit = (node: ts.Node): void => {
-    if (ts.isStringLiteralLike(node) || ts.isTemplateLiteral(node) || ts.isJsxText(node)) {
-      literals.push({ start: node.getStart(parsed), end: node.end });
-      return;
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(parsed);
-  let offset = 0;
-  return lines.some((line, index) => {
-    const lineStart = offset;
-    offset += line.length + 1;
-    if (index === 0 || line.trimStart() !== TEST_ISOLATION_DIRECTIVE) return false;
-    const at = lineStart + line.indexOf(TEST_ISOLATION_DIRECTIVE);
-    return !literals.some(literal => literal.start <= at && at < literal.end);
-  });
-}
-
-/**
- * Below line 1 the isolation directive is ignored, wherever it sits (after a blank line, a
- * block comment or an import), so the file would share a process unseen. Checked for every
- * file before grouping, so a file a manifest group names is held to it too.
+ * The Windows marker shares the leading comment lines with the isolation directive, which only
+ * counts on line 1. A file with the marker above the directive would silently lose its own
+ * process, so the directive anywhere else in those lines is refused. Checked for every file
+ * before grouping, so a file a manifest group names is held to it too.
  */
 function assertIsolationDirectivesPlaced(packageDirectory: string, files: readonly string[]): void {
   const misplaced = files.filter(file =>
-    hasMisplacedIsolationDirective(file, readTestSource(packageDirectory, file))
+    leadingCommentLines(readTestSource(packageDirectory, file))
+      .slice(1)
+      .includes(TEST_ISOLATION_DIRECTIVE)
   );
   if (misplaced.length > 0) {
     throw new Error(
