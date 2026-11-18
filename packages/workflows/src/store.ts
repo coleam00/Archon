@@ -14,6 +14,7 @@ import type { SourceReceiptAcceptance } from './schemas/resource-start';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { ProviderEventQuery, ProviderEventRecord } from './schemas/provider-event';
 import type { WorkflowEventRow } from './schemas/workflow-event';
+import type { NodeFailureKind } from './schemas/node-execution';
 import type { ExpectedApprovalGate } from './schemas/workflow-run';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
 import type {
@@ -236,6 +237,34 @@ export interface IWorkflowStore
   withdrawItemRuling(
     input: { rulingId: string; projectKey?: string } & ItemAct
   ): Promise<import('./schemas/item-ruling').ItemRuling>;
+  /**
+   * The items of a project with one of their own runs (`item_id` set, so not a
+   * `workflow:` child) started in `[since, until)`, ordered by item id, after
+   * `afterItemId` when given. The id order is a resume key, not a ranking.
+   */
+  listItemsInWindow(query: {
+    projectKey: string;
+    since: Date;
+    until: Date;
+    afterItemId: string | null;
+    limit: number;
+  }): Promise<import('./schemas/workflow-run').WorkflowItem[]>;
+  /** The merge recorded on an item; null when none is. An unreadable row is reported, not thrown. */
+  getItemMerge(
+    itemId: string
+  ): Promise<
+    | import('./schemas/item-merge').ItemMerge
+    | import('./schemas/item-merge').ItemMergeDegraded
+    | null
+  >;
+  /**
+   * Record that the item `key` names merged, as the forge reported it. Recorded once: a
+   * second report keeps the first and returns it with `recorded: false`. Null when the
+   * project has no item under the key; a merge never creates an item.
+   */
+  recordItemMerge(
+    input: import('./schemas/item-merge').ItemMergeReport
+  ): Promise<import('./schemas/item-merge').ItemMergeRecorded | null>;
   /**
    * Every link from or to an item, ended ones included, in recording order. A row that does
    * not read is reported as unreadable in its place, not thrown.
@@ -547,7 +576,14 @@ export interface IWorkflowStore
     id: string,
     error: string,
     options?: WorkflowRunFailureOptions
-  ): Promise<{ failed: boolean }>;
+  ): Promise<{
+    failed: boolean;
+    /**
+     * When this call failed the run: the recorded kind of the node it failed at, from the
+     * terminal record written in the same transaction. Absent when no node failure caused it.
+     */
+    failureKind?: NodeFailureKind;
+  }>;
   /**
    * Pause a running run for human review, stamping the approval context. Optional
    * `extraMetadata` is folded into the SAME atomic metadata write (e.g. the

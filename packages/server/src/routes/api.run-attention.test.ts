@@ -6,6 +6,7 @@ import {
   mockFindLatestEnvironment,
   mockLabelAttentionWait,
   mockGetItemRuns,
+  mockListItemsInWindow,
   mockListEventsForRuns,
   mockListCodebases,
   mockListItemRulings,
@@ -26,6 +27,7 @@ import {
 } from '../test/api-workflow-runs-harness';
 import { describe, test, expect } from 'bun:test';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import { itemWindowSchema } from '@archon/workflows/item-window';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import {
   ItemRulingNotFoundError,
@@ -355,6 +357,27 @@ describe('reading an item over HTTP', () => {
     );
     expect(unknown.status).toBe(404);
     expect((await app.request('/api/items?key=nope')).status).toBe(400);
+  });
+
+  test('a window read returns the page of items readItemWindow builds, and refuses a bad cursor', async () => {
+    mockListItemsInWindow.mockImplementationOnce(async () => [item]);
+    mockListAttentionQueueRows.mockImplementationOnce(async () => []);
+    mockGetItemRuns.mockImplementationOnce(async () => ({
+      item,
+      runs: [asking],
+      descendantIds: [],
+    }));
+    const { app } = makeApp();
+    const project = encodeURIComponent(item.projectKey);
+    const response = await app.request(`/api/items/window?project=${project}&since=7d`);
+    expect(response.status).toBe(200);
+    const page = itemWindowSchema.parse(await response.json());
+    expect(page.items.map(read => [read.item.key, read.runs.map(run => run.id)])).toEqual([
+      [item.key, ['run-item']],
+    ]);
+    expect(page.next).toBeNull();
+    expect((await app.request(`/api/items/window?project=${project}&after=nope`)).status).toBe(400);
+    expect((await app.request('/api/items/window?project=no-such')).status).toBe(400);
   });
 
   test('a database failure while resolving the project is an opaque 500, not a 400', async () => {

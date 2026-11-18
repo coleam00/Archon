@@ -10,6 +10,7 @@ import {
   PR_VIEW_ANY_STATE,
   RESOLVE_SUBJECT,
   temporaryErrorKinds,
+  type ForgeAccessRefusalKind,
   type ForgeError,
   type ForgeMutationRequest,
   type ForgeRequest,
@@ -29,7 +30,7 @@ import { runPluginProcess, type PluginProcessResult } from './plugin-process';
 import { selectCredential } from './credentials';
 import { GH_DOTCOM_TOKEN_KEYS } from '@archon/paths/github-token-env';
 import { parseRemoteUrl } from './remote-url';
-import { httpsDefaultPortHost, matchesForgeOperationResponse } from './response-match';
+import { httpsDefaultPortRemoteHost, matchesForgeOperationResponse } from './response-match';
 
 export type ForgeOperationAudit = z.infer<typeof forgeOperationAuditSchema>;
 export interface ForgeDispatchResult {
@@ -110,7 +111,12 @@ function remoteHost(remote: string | null): string | undefined {
 
 function selectHost(discovery: PluginDiscovery, request: ForgeRequest, host: string): string {
   if (request.op !== 'resolve') return requestRepo(request).hostClaim ? host.slice(0, -4) : host;
-  if (!discovery.byHost.has(host)) return httpsDefaultPortHost(request) ?? host;
+  return request.remote === null ? host : remotePluginHost(discovery, request.remote, host);
+}
+
+/** The claim whose plugin serves `remote`, whose own host is `host`: what `resolve` selects. */
+function remotePluginHost(discovery: PluginDiscovery, remote: string, host: string): string {
+  if (!discovery.byHost.has(host)) return httpsDefaultPortRemoteHost(remote) ?? host;
   return host;
 }
 
@@ -346,17 +352,29 @@ function pluginCredential(
   options: DispatchOptions
 ): Promise<OperationCredential> {
   const env = options.env ?? process.env;
+  const { names, github } = credentialEnvNames(plugin, discovery, selectedHost);
+  return selectCredential(names, github, selectedHost, options.credentialEnv ?? env, env);
+}
+
+/**
+ * The environment variables a plugin's credential is read from: a `token_env` configured
+ * under `forge.hosts` or `forge.plugins` replaces the plugin's own list.
+ */
+function credentialEnvNames(
+  plugin: DiscoveredPlugin,
+  discovery: PluginDiscovery,
+  selectedHost: string
+): { names: readonly string[]; override?: string; github: boolean } {
   const metadata = plugin.metadata;
   const override =
     discovery.hostConfig.get(selectedHost)?.token_env ??
     discovery.pluginTokenEnv.get(metadata.name);
+  if (override) return { names: [override], override, github: false };
   const github =
     metadata.forge === 'github' &&
-    !override &&
     metadata.token_env.length > 0 &&
     metadata.token_env.every(name => GH_DOTCOM_TOKEN_KEYS.some(key => key === name));
-  const names = override ? [override] : github ? GH_DOTCOM_TOKEN_KEYS : metadata.token_env;
-  return selectCredential(names, github, selectedHost, options.credentialEnv ?? env, env);
+  return { names: github ? GH_DOTCOM_TOKEN_KEYS : metadata.token_env, github };
 }
 
 function credentialFailure(
@@ -383,62 +401,115 @@ function discover(options: DispatchOptions): Promise<PluginDiscovery> | PluginDi
   );
 }
 
-/** What a preflight learns about one host: the plugin that serves it, or why a run cannot use it. */
+/** What a preflight learns about one forge: the plugin that serves it, or why a run cannot use it. */
 export type ForgeAccessCheck =
-  | { ok: true; plugin: NonNullable<ForgeDispatchResult['plugin']>; credentialSource?: string }
-  | { ok: false; error: ForgeError; unsupported?: string[] };
+  | {
+      ok: true;
+      host: string;
+      plugin: NonNullable<ForgeDispatchResult['plugin']>;
+      credentialSource?: string;
+    }
+  | { ok: false; error: ForgeError; unsupported?: string[]; remedy?: string };
 
 /**
- * Whether a forge operation on `host` could start: a plugin claims the host, it
- * advertises every capability in `operations`, and its credential resolves. It reads
- * discovery metadata and the credential sources only; no plugin operation runs, so it
- * proves nothing about what the credential may read or write.
+ * Whether a forge operation could start: a plugin claims the forge, it advertises every
+ * capability in `operations`, and its credential resolves. The forge is `host`, or the
+ * plugin a `resolve` of `remote` selects. It reads discovery metadata and the credential
+ * sources only; no plugin operation runs, so it proves nothing about what the credential
+ * may read or write. A refusal the operator can fix carries their next step.
  */
 export async function checkForgeAccess(
-  request: { host: string; operations: readonly string[] },
+  request: { host?: string; remote?: string; operations: readonly string[] },
   options: DispatchOptions = {}
 ): Promise<ForgeAccessCheck> {
-  const host = normalizeHost(request.host);
+  const own =
+    request.remote !== undefined
+      ? remoteHost(request.remote)
+      : request.host !== undefined
+        ? normalizeHost(request.host)
+        : undefined;
+  if (!own) {
+    // The remote is not echoed: its URL can carry a credential in its userinfo.
+    return refused({ kind: 'no_plugin_for_host', message: 'the remote names no forge host' });
+  }
   let discovery: PluginDiscovery;
   try {
     discovery = await discover(options);
   } catch (error) {
     return { ok: false, error: discoveryFailure(error) };
   }
+  const host =
+    request.remote !== undefined ? remotePluginHost(discovery, request.remote, own) : own;
   const plugin = discovery.byHost.get(host);
   if (!plugin) {
     const unavailable = discovery.unavailable.map(error => error.message).join('; ');
-    return {
-      ok: false,
-      error: unavailable
-        ? {
+    return unavailable
+      ? {
+          ok: false,
+          error: {
             kind: 'process_failed',
             message: `forge discovery could not resolve ${host}: ${unavailable}`,
-          }
-        : { kind: 'no_plugin_for_host', message: `no forge plugin claims ${host}` },
-    };
+          },
+        }
+      : refused({ kind: 'no_plugin_for_host', message: `no forge plugin claims ${host}` });
   }
   const { name, version, capabilities } = plugin.metadata;
   const unsupported = request.operations.filter(operation => !capabilities.includes(operation));
   if (unsupported.length > 0) {
     return {
-      ok: false,
-      error: {
-        kind: 'unsupported_op',
-        message: `plugin ${name} does not support ${unsupported.join(', ')}`,
-      },
+      ...refused(
+        {
+          kind: 'unsupported_op',
+          message: `plugin ${name} ${version} does not support ${unsupported.join(', ')}`,
+        },
+        plugin.metadata
+      ),
       unsupported,
     };
   }
   const credential = await pluginCredential(plugin, discovery, host, options);
-  if (credential.kind === 'failed' || credential.kind === 'missing') {
-    return { ok: false, error: credentialFailure(credential) };
+  if (credential.kind === 'failed') return { ok: false, error: credentialFailure(credential) };
+  if (credential.kind === 'missing') {
+    return refused(
+      { kind: 'no_credential', message: credential.message },
+      plugin.metadata,
+      credentialEnvNames(plugin, discovery, host).override
+    );
   }
   return {
     ok: true,
+    host,
     plugin: { name, version },
     ...(credential.kind === 'selected' ? { credentialSource: credential.source } : {}),
   };
+}
+
+/** A refusal the operator fixes, with their next step: the plugin's text, else forge's. */
+function refused(
+  error: ForgeError & { kind: ForgeAccessRefusalKind },
+  metadata?: PluginMetadata,
+  tokenEnvOverride?: string
+): Extract<ForgeAccessCheck, { ok: false }> {
+  return { ok: false, error, remedy: remedy(error.kind, metadata, tokenEnvOverride) };
+}
+
+function remedy(
+  kind: ForgeAccessRefusalKind,
+  metadata: PluginMetadata | undefined,
+  tokenEnvOverride: string | undefined
+): string {
+  if (kind === 'no_plugin_for_host' || metadata === undefined) {
+    return "Install a forge plugin that claims this host with `archon plugin add`, or map the host to an installed plugin under `forge.hosts` in Archon's config.";
+  }
+  // The plugin's own text names the variables it declares, which a configured token_env replaces.
+  if (kind === 'no_credential' && tokenEnvOverride) {
+    return `Set ${tokenEnvOverride}, the token_env Archon's config names for plugin ${metadata.name}, in Archon's env file or the run's environment.`;
+  }
+  const own = metadata.remedies?.[kind];
+  if (own) return own;
+  return kind === 'unsupported_op'
+    ? `Update plugin ${metadata.name} (installed ${metadata.version}) with \`archon plugin update\`; \`archon plugin list\` shows what is installed.`
+    : `Supply the credential plugin ${metadata.name} reads${metadata.token_env.length > 0 ? ` (${metadata.token_env.join(', ')})` : ''} in Archon's env file or the run's environment.`;
 }
 
 async function runOperation(

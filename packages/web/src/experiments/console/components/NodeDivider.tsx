@@ -31,6 +31,8 @@ interface NodeDividerProps {
   output?: NodeRun['output'];
   /** A failed node's error. */
   error?: string | null;
+  /** A failed node's recorded failure kind, shown beside its error. */
+  failureKind?: string | null;
   /** When true, surface skip reason / stop reason inline. */
   showDetail?: boolean;
   /** The run is paused at this node; its engine state is still `running`. */
@@ -133,11 +135,13 @@ function NodeResult({
   nodeName,
   output,
   error,
-}: Pick<NodeDividerProps, 'nodeName' | 'output' | 'error'>): ReactElement {
+  failureKind,
+}: Pick<NodeDividerProps, 'nodeName' | 'output' | 'error' | 'failureKind'>): ReactElement {
   return (
     <>
       {error !== null && error !== undefined && error !== '' ? (
         <pre className="ml-17 max-h-60 overflow-y-auto whitespace-pre-wrap rounded border border-error/30 bg-error/[0.06] px-3 py-2 font-mono text-console-12 text-text-primary [overflow-wrap:anywhere]">
+          {failureKind ? `(${failureKind}) ` : ''}
           {error}
         </pre>
       ) : null}
@@ -185,6 +189,7 @@ export function NodeDivider({
   fanOutOutcome,
   output,
   error,
+  failureKind,
   showDetail = false,
   waiting = false,
 }: NodeDividerProps): ReactElement {
@@ -274,7 +279,7 @@ export function NodeDivider({
           ) : null}
         </div>
       ) : null}
-      <NodeResult nodeName={nodeName} output={output} error={error} />
+      <NodeResult nodeName={nodeName} output={output} error={error} failureKind={failureKind} />
       <FanOutQualifier outcome={fanOutOutcome} />
     </div>
   );

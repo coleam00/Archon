@@ -439,8 +439,12 @@ const unusedItemWrite = mock(async () => {
 export const mockGetItem = mock<typeof import('@archon/core/db/items')['getItem']>(
   async () => null
 );
+export const mockListItemsInWindow = mock<
+  typeof import('@archon/core/db/items')['listItemsInWindow']
+>(async () => []);
 mock.module('@archon/core/db/items', () => ({
   getItemRuns: mockGetItemRuns,
+  listItemsInWindow: mockListItemsInWindow,
   getItem: mockGetItem,
   ensureItem: unusedItemWrite,
   ensureItemInProject: unusedItemWrite,
@@ -473,6 +477,11 @@ mock.module('@archon/core/db/item-rulings', () => ({
   recordItemRuling: mockRecordItemRuling,
   withdrawItemRuling: mockWithdrawItemRuling,
 }));
+mock.module('@archon/core/db/item-merges', () => ({
+  getItemMerge: mock(async () => null),
+  recordItemMerge: unusedItemWrite,
+}));
+
 type ItemLinksDb = typeof import('@archon/core/db/item-links');
 mock.module('@archon/core/db/item-links', () => ({
   listItemLinks: mock<ItemLinksDb['listItemLinks']>(async () => []),

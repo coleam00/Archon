@@ -272,6 +272,13 @@ function validInputSpecs(
       getLog().warn({ filename, name }, 'contradictory_workflow_input_result_of_ignored');
       continue;
     }
+    if (parsed.data.at !== undefined && parsed.data.result_of === undefined) {
+      getLog().warn(
+        { filename, name },
+        'contradictory_workflow_input_at_without_result_of_ignored'
+      );
+      continue;
+    }
     valid[name] = parsed.data;
   }
   return valid;

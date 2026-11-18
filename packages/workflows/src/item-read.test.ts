@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
+import type { ItemMerge } from './schemas/item-merge';
 import type { StoredItemAsk } from './schemas/item-ask';
 import type { ItemLink } from './schemas/item-link';
 import type { ItemRuling } from './schemas/item-ruling';
@@ -78,6 +79,7 @@ const first = run('first', {
   completed_outcome: 'built',
   started_at: new Date('2026-11-01T09:00:00.000Z'),
   completed_at: new Date('2026-11-01T09:30:00.000Z'),
+  metadata: { total_cost_usd: 0.42, total_tokens_in: 1200, total_tokens_out: 300 },
 });
 // The second run was started by the end of the first; its receipt holds that cause.
 const SECOND_RECEIPT = '5a4f7f9e-2b0e-4a4c-9d36-1c1f1f6f3a10';
@@ -146,6 +148,14 @@ const rulings: ItemRuling[] = [
   },
 ];
 
+const merge: ItemMerge = {
+  change: 'https://github.com/acme/web/pull/12',
+  commit: null,
+  at: '2026-11-01T12:30:00.000Z',
+  recordedAt: '2026-11-01T12:31:00.000Z',
+  via: 'cli',
+  fromRun: null,
+};
 const other: WorkflowItem = { id: 'other-row', projectKey: 'acme/web', key: 'issue-3' };
 const whole: WorkflowItem = { id: 'whole-row', projectKey: 'acme/web', key: 'order-1' };
 const linkAct = { at: '2026-11-01T09:00:00.000Z', via: 'cli', by: null, fromRun: null } as const;
@@ -178,6 +188,7 @@ const source: ItemReadSource = {
     getItem: async id => (id === item.id ? item : null),
     listItemAsks: async () => [],
     listItemRulings: async id => (id === item.id ? rulings : []),
+    getItemMerge: async id => (id === item.id ? merge : null),
     listItemLinks: async id => (id === item.id ? links : []),
     getResourceStartRequest: async () => null,
     listSkippedItemStarts: async () => [],
@@ -276,8 +287,10 @@ describe('reading an item', () => {
         completedAt: '2026-11-01T09:30:00.000Z',
         cause: null,
         awaitingExecution: null,
+        spend: { usd: 0.42, inputTokens: 1200, outputTokens: 300 },
         heldBehind: null,
         hasResult: false,
+        resultCommit: null,
       },
       {
         id: 'second',
@@ -288,8 +301,10 @@ describe('reading an item', () => {
         completedAt: null,
         cause: { kind: 'run_ended', runId: 'first', sourceInstanceId: 'review-after-deliver' },
         awaitingExecution: null,
+        spend: { usd: null, inputTokens: null, outputTokens: null },
         heldBehind: null,
         hasResult: false,
+        resultCommit: null,
       },
     ]);
     // The children's questions are the item's, under their own run ids, oldest first; the
@@ -343,6 +358,7 @@ describe('reading an item', () => {
         text: 'ship it',
       },
     ]);
+    expect(read?.merged).toEqual(merge);
     expect(read?.degraded).toEqual([]);
   });
 
@@ -363,6 +379,7 @@ describe('reading an item', () => {
       skipped: [],
       questions: [],
       answers: rulings,
+      merged: merge,
       links: [],
       degraded: [],
     });
@@ -466,6 +483,11 @@ describe('reading an item', () => {
         listItemRulings: async () => [
           { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'lost-ruling' },
         ],
+        getItemMerge: async () => ({
+          type: 'degraded',
+          reason: 'merge_unreadable',
+          itemId: item.id,
+        }),
         listItemLinks: async () => [
           { type: 'degraded', reason: 'link_unreadable', linkId: 'lost-link' },
         ],
@@ -484,8 +506,10 @@ describe('reading an item', () => {
       { ...unreadable, runId: 'lost-root' },
       { ...unreadable, runId: 'lost-child' },
       { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'lost-ruling' },
+      { type: 'degraded', reason: 'merge_unreadable', itemId: item.id },
       { type: 'degraded', reason: 'link_unreadable', linkId: 'lost-link' },
     ]);
+    expect(read?.merged).toBeNull();
   });
 
   test('a start held behind the run of its workflow on the item names that run and its owner', async () => {

@@ -1,20 +1,14 @@
 /**
  * The checkout a run left when it ended, for a run-ended binding with
- * `checkout: "ended-run"`: its worktree's branch and the commit it ended on. Resolved in
- * the completion, before the write that ends the run, so the start records the commit
- * the run actually ended on.
+ * `checkout: "ended-run"` or an asks-settled binding with `checkout: "asking-run"`: its
+ * worktree's branch and the commit it ended on. Resolved in the completion, before the
+ * write that ends the run, so the start records the commit the run actually ended on.
  */
 import { existsSync } from 'node:fs';
 import { execFileAsync, getCurrentBranchStrict, toRepoPath } from '@archon/git';
 import type { IsolationEnvironmentRow } from '@archon/isolation/types';
-import {
-  readCheckoutHandoff,
-  type CheckoutHandoff,
-} from '@archon/workflows/schemas/resource-start';
+import { readCheckoutHandoff, type EndedCheckout } from '@archon/workflows/schemas/resource-start';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-
-/** The hand-off, or why the ended run left none. */
-export type EndedCheckout = { handoff: CheckoutHandoff } | { refused: string };
 
 export interface EndedCheckoutDependencies {
   findEnvironmentByPath: (

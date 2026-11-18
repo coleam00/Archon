@@ -47,7 +47,7 @@ export const PACKAGE_LAYERING: Layering = {
   forge: { runtime: ['paths'] },
   providers: { runtime: ['paths', 'provider-contract'] },
   workflows: {
-    runtime: ['git', 'paths', 'plugin-manifest', 'provider-contract', 'script-api'],
+    runtime: ['forge', 'git', 'paths', 'plugin-manifest', 'provider-contract', 'script-api'],
     test: ['providers'],
   },
   isolation: { runtime: ['git', 'paths', 'provider-contract', 'workflows'] },

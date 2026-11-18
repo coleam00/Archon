@@ -63,7 +63,7 @@ export async function captureWorkflowCommand(
     registerGitHubAppAuthProvider(null);
     try {
       await registerHostProviders();
-      await command(await createCliWorkflowHost(true));
+      await command(await createCliWorkflowHost({ forgeTrustedEnv: process.env }));
     } finally {
       clearRegistry();
       registerGitHubAppAuthProvider(null);

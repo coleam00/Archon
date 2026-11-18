@@ -15,7 +15,7 @@ export type WorkflowRoute = CliRouteContext & { commands: WorkflowCommands; host
 
 /** `workflow wake|signal`, routed before the project gate. */
 export async function runWorkflowContinuation(
-  { positionals, values }: CliRouteContext,
+  { positionals, values, forgeTrustedEnv }: CliRouteContext,
   subcommand: 'wake' | 'signal'
 ): Promise<number> {
   // `workflow wake schedule` installs an OS timer and never opens the store or a provider.
@@ -27,7 +27,7 @@ export async function runWorkflowContinuation(
   if (wakeSchedule) return await workflowWakeScheduleCommand(positionals.slice(2), values);
   const { createCliWorkflowHost } = await import('../utils/workflow-host');
   return await workflowContinuationCommand(
-    await createCliWorkflowHost(true),
+    await createCliWorkflowHost({ forgeTrustedEnv }),
     subcommand,
     positionals.slice(2),
     values
@@ -108,7 +108,9 @@ export async function prepareWorkflowRoute(ctx: CliRouteContext): Promise<Workfl
   // execute a workflow initialize it first. A misconfigured App fails here,
   // before any run row exists; query commands stay usable without it.
   const executesWorkflow = subcommand === 'run' || isContinueSubcommand(subcommand);
-  const host = await createCliWorkflowHost(executesWorkflow);
+  const host = await createCliWorkflowHost(
+    executesWorkflow ? { forgeTrustedEnv: ctx.forgeTrustedEnv } : undefined
+  );
   return { ...ctx, commands, host };
 }
 
@@ -622,6 +624,48 @@ export async function runWorkflowRule(route: WorkflowRoute): Promise<number> {
   return await commands.workflowRuleCommand(route.host, effectiveCwd, request, json);
 }
 
+export async function runWorkflowItems(route: WorkflowRoute): Promise<number> {
+  const { positionals, values, json, commands, effectiveCwd } = route;
+  if (positionals[2] !== undefined) return await fail(json, commands.WORKFLOW_ITEMS_USAGE);
+  const rawLimit = values.limit as string | undefined;
+  const limit = rawLimit === undefined ? undefined : Number(rawLimit);
+  const since = values.since as string | undefined;
+  const until = values.until as string | undefined;
+  const after = values.after as string | undefined;
+  return await commands.workflowItemsCommand(
+    route.host,
+    effectiveCwd,
+    {
+      ...(since === undefined ? {} : { since }),
+      ...(until === undefined ? {} : { until }),
+      ...(after === undefined ? {} : { after }),
+      ...(limit === undefined ? {} : { limit }),
+    },
+    json
+  );
+}
+
+export async function runWorkflowMerged(route: WorkflowRoute): Promise<number> {
+  const { positionals, values, json, commands, effectiveCwd } = route;
+  const item = values.item as string | undefined;
+  const change = values.change as string | undefined;
+  const at = values.at as string | undefined;
+  const commit = values.commit as string | undefined;
+  if (
+    item === undefined ||
+    change === undefined ||
+    at === undefined ||
+    positionals[2] !== undefined
+  )
+    return await fail(json, commands.WORKFLOW_MERGED_USAGE);
+  return await commands.workflowMergedCommand(
+    route.host,
+    effectiveCwd,
+    { item, change, at, ...(commit === undefined ? {} : { commit }) },
+    json
+  );
+}
+
 export async function runWorkflowLink(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, commands, effectiveCwd } = route;
   const item = values.item as string | undefined;
@@ -695,6 +739,6 @@ export async function runUnknownWorkflowSubcommand({
       : `Unknown workflow subcommand: ${subcommand}`;
   return await fail(
     json,
-    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, link, cleanup, reset-sessions, event, notice, wake, signal`
+    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, link, items, merged, cleanup, reset-sessions, event, notice, wake, signal`
   );
 }

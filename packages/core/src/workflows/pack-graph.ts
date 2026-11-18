@@ -2,8 +2,8 @@
  * The stage graph of one pack as this install has it (`buildPackGraph`), read for the
  * project at `cwd`: the pack's workflows discovered from there (or from `workflowSource`,
  * as a binding's `launch.discoveryCwd` discovers them), its declared bindings, and the
- * run-ended trigger files whose binding launches in that project, each checked as a run
- * is checked before it starts. The CLI's `archon pack graph` and
+ * run-ended and asks-settled trigger files whose binding launches in that project, each
+ * checked as a run is checked before it starts. The CLI's `archon pack graph` and
  * `GET /api/packs/{pack}/graph` both read it here.
  */
 import { loadStoreSelection } from '../config/store-selection';
@@ -19,18 +19,27 @@ import {
   type PackGraph,
 } from '@archon/workflows/pack-graph';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { asksSettledBindingCheck } from './asks-settled';
 import {
   bindingProjectKey,
-  readRunEndedBindings,
+  readOnBindings,
   runEndedBindingCheck,
+  type OnBinding,
   type RunEndedStartsDependencies,
 } from './run-ended';
 
 type GraphDeps = Pick<WorkflowDeps, 'loadConfig' | 'providers'> &
   Pick<RunEndedStartsDependencies, 'triggersDirectory' | 'projectKeyOf'>;
 
+/** Where an installed file's arrow starts, as the file spells it. */
+function installedFrom(file: OnBinding): InstalledArrow['from'] {
+  return 'runEnded' in file
+    ? { stage: file.runEnded.workflowName, outcome: file.runEnded.outcome }
+    : { stage: file.asksSettled.workflowName, settled: file.asksSettled.settled };
+}
+
 /**
- * The run-ended files that touch the pack and launch in the project of `cwd`, each with
+ * The run-ended and asks-settled files that touch the pack and launch in the project of `cwd`, each with
  * what keeps the engine from starting it. `touches` says whether a workflow name is one of
  * the pack's: a stage, or a name its declared bindings use, so a file about a stage that
  * failed to load still shows.
@@ -40,12 +49,12 @@ async function installedArrows(
   touches: (workflowName: string) => boolean,
   deps: GraphDeps
 ): Promise<InstalledArrow[]> {
-  const files = await readRunEndedBindings(deps.triggersDirectory());
+  const files = await readOnBindings(deps.triggersDirectory());
   if (files.length === 0) return [];
-  // The file store has no items, so a run-ended binding can never start anything there.
+  // The file store has no items, so a binding with `on` can never start anything there.
   if ((await loadStoreSelection()) === 'files')
     throw new FileStoreUnsupportedError(
-      `Run-ended triggers (${files.map(entry => entry.file).join(', ')})`
+      `Run-ended and asks-settled triggers (${files.map(entry => entry.file).join(', ')})`
     );
   // A path no project is registered at yet is a project of its own, as `trigger check`
   // counts it.
@@ -53,11 +62,12 @@ async function installedArrows(
   const installed: InstalledArrow[] = [];
   for (const file of files) {
     const launchWorkflow = file.binding.launch.workflowName;
-    if (!touches(file.runEnded.workflowName) && !touches(launchWorkflow)) continue;
+    const from = installedFrom(file);
+    if (!touches(from.stage) && !touches(launchWorkflow)) continue;
     const entry = {
       file: file.file,
       sourceInstanceId: file.sourceInstanceId,
-      runEnded: file.runEnded,
+      from,
       launchWorkflow,
     };
     // A start from a missing checkout is in no project, so the end of a run never starts
@@ -74,8 +84,12 @@ async function installedArrows(
     }
     const launches = (await bindingProjectKey(file, deps)) ?? file.binding.launch.cwd;
     if (launches !== project) continue;
-    // The preflight check: a binding it refuses fails every item run of its ended stage.
-    installed.push({ ...entry, problems: await runEndedBindingCheck(file, deps) });
+    // The preflight check: a binding it refuses fails every item run of its source stage.
+    const problems =
+      'runEnded' in file
+        ? await runEndedBindingCheck(file, deps)
+        : await asksSettledBindingCheck(file, deps);
+    installed.push({ ...entry, problems });
   }
   return installed;
 }

@@ -237,8 +237,10 @@ export interface GlobalConfig {
   attentionNotices?: AttentionNoticeRoute[];
 
   /**
-   * Work items whose tracker shows a status comment written by `archon serve`. Global
-   * only: repository config never carries it. Absent means off.
+   * Work items whose tracker shows a status comment, kept current by `archon serve`, by a
+   * CLI process that started, paused or ended a run before it exits, and by
+   * `archon tracker sync`. Global only: repository config never carries it. Absent means
+   * off.
    */
   itemTracker?: ItemTrackerConfig;
 

@@ -19,6 +19,8 @@ import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { toBranchName } from '@archon/git';
 import { createFileWorkflowHost, isolationSchema } from './file-host';
+import { setPlatformPolicies } from '../platforms/registry';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { FileStoreUnsupportedError, commit } from '@archon/workflows/file-store';
 const roots = trackTempRoots();
 // Restore the keys in place: assigning a new object to process.env drops
@@ -997,3 +999,76 @@ for (const [damage, owner] of [
     ]);
   });
 }
+
+test('a binding whose pack forge this checkout cannot reach is refused before admission', async () => {
+  const root = roots(await mkdtemp(join(tmpdir(), 'host-forge-')));
+  process.env.ARCHON_HOME = join(root, 'home');
+  // Preparing a binding loads the project's config, which needs the host's policies and providers.
+  setPlatformPolicies([]);
+  registerBuiltinProviders();
+  const project = join(root, 'project');
+  const pack = join(project, '.archon', 'workflows', 'factory');
+  await mkdir(join(pack, '.pack'), { recursive: true });
+  await mkdir(join(pack, 'deliver'), { recursive: true });
+  await writeFile(join(pack, '.pack', 'pack.yaml'), 'forge:\n  operations: [pr.view]\n');
+  await writeFile(
+    join(pack, 'deliver', 'deliver.yaml'),
+    'name: deliver\ndescription: d\nnodes:\n  - id: work\n    bash: echo SHOULD_NOT_RUN\n'
+  );
+  // A checkout with no remote names no forge.
+  execFileSync('git', ['init', '-q', project]);
+  const host = await createFileWorkflowHost(join(root, 'host'));
+  const store = host.deps.store;
+  const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
+  if (!user) throw new Error('expected the operator user');
+  const receiptId = crypto.randomUUID();
+  await store.acceptStartReceipt({
+    receipt: {
+      id: receiptId,
+      sourceInstanceId: 'source',
+      deliveryId: null,
+      contentDigest: 'digest',
+      receivedAt: '2026-01-01T00:00:00.000Z',
+      occurredAt: null,
+      sourceActor: null,
+    },
+    outcome: 'matched',
+    bindings: [
+      {
+        bindingId: 'binding',
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: user.id,
+        resource: 'deliver',
+        capacity: 1,
+        overlap: 'queue',
+        launch: {
+          cwd: project,
+          workflowName: 'deliver',
+          inputs: {},
+          isolation: { kind: 'in-place' },
+        },
+      },
+    ],
+  });
+
+  const started: string[] = [];
+  const error = await drainResourceStartHost({
+    ...host,
+    hostId: 'host',
+    startAdmitted: async id => {
+      started.push(id);
+    },
+  }).catch((caught: unknown) => caught);
+
+  if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
+  expect(error.failures).toMatchObject([
+    {
+      receiptId,
+      error: { name: 'ForgeRequirementError', failures: [{ reason: 'no_forge_remote' }] },
+    },
+  ]);
+  expect(started).toEqual([]);
+  expect(await store.listQueuedResourceStartsForHost('host')).toEqual([]);
+  expect(await store.listPendingStartBindings({ hostId: 'host' })).toEqual([]);
+});

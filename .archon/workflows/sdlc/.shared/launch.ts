@@ -11,13 +11,14 @@ import { archonCommand } from './host.ts';
 import { type QualifiedPr } from './identity.ts';
 import { nullableJson } from './inputs.ts';
 import { gitOrThrow } from './git.ts';
-import { enqueue } from './workitem.ts';
+import { enqueue, itemKey } from './workitem.ts';
 
-export function launchDetached(workflow: string, inputs: Record<string, string>): string {
+/** The run is on the item of the issue `inputs.number` names. */
+export function launchDetached(workflow: string, inputs: Record<string, string> & { number: string }): string {
   const root = dirname(gitOrThrow('rev-parse', '--path-format=absolute', '--git-common-dir').trim());
   const args = Object.entries(inputs).flatMap(([name, value]) => ['--input', `${name}=${value}`]);
   const result = Bun.spawnSync(
-    [...archonCommand(), 'workflow', 'run', workflow, '--cwd', root, ...args, '--detach', '--json'],
+    [...archonCommand(), 'workflow', 'run', workflow, '--cwd', root, ...args, '--item', itemKey(Number(inputs.number)), '--detach', '--json'],
     { env: process.env, stdout: 'pipe', stderr: 'pipe' }
   );
   if (result.exitCode !== 0) throw new Error(`${workflow} did not start: ${result.stderr.toString().trim()}`);

@@ -782,6 +782,12 @@ describe('retry config parsing', () => {
       { max_attempts: 2, delay_ms: 4000, on_error: 'transient' },
       isAgentNode,
     ],
+    [
+      'prompt with on_error: schema_unmet',
+      '    prompt: "Check the change"\n    retry:\n      max_attempts: 1\n      on_error: schema_unmet',
+      { max_attempts: 1, on_error: 'schema_unmet' },
+      isAgentNode,
+    ],
   ])('should parse retry config on a DAG %s node', (_, fields, retry, isKind) => {
     const node = parsedNodes(withNodes(`  - id: n\n${fields}\n`))[0];
     expect(isKind(node)).toBe(true);
