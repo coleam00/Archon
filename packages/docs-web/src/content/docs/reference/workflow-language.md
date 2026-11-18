@@ -2167,7 +2167,10 @@ input referenced by the block is a load error. Whether **extra** caller keys are
 depends on whether the block declares `inputs:` (see
 [Workflow Signature](#workflow-signature-inputs-returns-and-inputs)): a block with no
 `inputs:` ignores unrecognized keys; a block that declares `inputs:` rejects an undeclared
-key at load.
+key at load. The exception is a block included from its includer's own pack: it reads that
+pack's settings without declaring them, so a setting it reads need not be passed, and a
+setting passed through `with:` is not refused. Any other undeclared key is still refused (see
+[Pack settings](#pack-settings)).
 
 An object value is a literal, with two exceptions. An object with exactly the shape
 `{ from, if_skipped }` (`if_skipped` optional) is the binding directive, with the same
