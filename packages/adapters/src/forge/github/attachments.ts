@@ -77,6 +77,77 @@ async function create(
   ).sha;
 }
 
+interface Stored {
+  name: string;
+  digest: string;
+  bytes: number;
+  htmlUrl: string;
+}
+
+function storedResult(request: PutRequest, stored: Stored, changed: boolean, commit: string) {
+  return applied(request, {
+    changed,
+    attachment: {
+      url: `${stored.htmlUrl}/blob/${commit}/${stored.name}?raw=true`,
+      digest: stored.digest,
+      bytes: stored.bytes,
+      contentType: request.contentType,
+    },
+  });
+}
+
+/**
+ * One read of the branch and, when the file is not on it, one commit that adds it.
+ * `moved` means GitHub refused the ref write because another writer moved the
+ * branch since it was read; nothing references the new commit.
+ */
+async function storeOnce(
+  request: PutRequest,
+  stored: Stored,
+  fetchImpl: Fetch,
+  token: string,
+  api: string,
+  submit: Submit
+): Promise<ForgeResponse | 'moved'> {
+  const parent = await readBranch(fetchImpl, token, api);
+  if (parent?.names.has(stored.name)) return storedResult(request, stored, false, parent.commit);
+  const blob = await create(fetchImpl, token, `${api}/git/blobs`, {
+    content: request.content,
+    encoding: 'base64',
+  });
+  const tree = await create(fetchImpl, token, `${api}/git/trees`, {
+    ...(parent ? { base_tree: parent.tree } : {}),
+    tree: [{ path: stored.name, mode: '100644', type: 'blob', sha: blob }],
+  });
+  const commit = await create(fetchImpl, token, `${api}/git/commits`, {
+    message: `Add attachment ${stored.name}`,
+    tree,
+    parents: parent ? [parent.commit] : [],
+  });
+  submit('submitted');
+  const response = await githubSend(
+    fetchImpl,
+    token,
+    parent ? `${api}/git/refs/heads/${BRANCH}` : `${api}/git/refs`,
+    parent
+      ? { method: 'PATCH', body: JSON.stringify({ sha: commit, force: false }) }
+      : { method: 'POST', body: JSON.stringify({ ref: `refs/heads/${BRANCH}`, sha: commit }) }
+  );
+  // GitHub answers 422 when the branch was created or advanced since it was read.
+  if (response.status === 422) return 'moved';
+  if (!response.ok) throw githubResponseError(response);
+  submit('acknowledged');
+  // The ref write answers with where the branch now points, which is the read-back.
+  const moved = refSchema.safeParse(await response.json().catch(() => null));
+  if (!moved.success || moved.data.object.sha !== commit)
+    return unverified(
+      request,
+      'The attachment branch did not answer with the new commit',
+      `branch ${BRANCH} may point at commit ${commit}`
+    );
+  return storedResult(request, stored, true, commit);
+}
+
 export async function putAttachment(
   request: PutRequest,
   fetchImpl: Fetch,
@@ -94,57 +165,15 @@ export async function putAttachment(
   }
   const bytes = Buffer.from(request.content, 'base64');
   const digest = createHash('sha256').update(bytes).digest('hex');
-  const name = `${digest}.${extensions[request.contentType]}`;
-  const result = (changed: boolean, commit: string) =>
-    applied(request, {
-      changed,
-      attachment: {
-        url: `${repository.html_url}/blob/${commit}/${name}?raw=true`,
-        digest,
-        bytes: bytes.byteLength,
-        contentType: request.contentType,
-      },
-    });
-
+  const stored = {
+    name: `${digest}.${extensions[request.contentType]}`,
+    digest,
+    bytes: bytes.byteLength,
+    htmlUrl: repository.html_url,
+  };
   for (let attempt = 1; attempt <= REF_ATTEMPTS; attempt++) {
-    const parent = await readBranch(fetchImpl, token, api);
-    if (parent?.names.has(name)) return result(false, parent.commit);
-    const blob = await create(fetchImpl, token, `${api}/git/blobs`, {
-      content: request.content,
-      encoding: 'base64',
-    });
-    const tree = await create(fetchImpl, token, `${api}/git/trees`, {
-      ...(parent ? { base_tree: parent.tree } : {}),
-      tree: [{ path: name, mode: '100644', type: 'blob', sha: blob }],
-    });
-    const commit = await create(fetchImpl, token, `${api}/git/commits`, {
-      message: `Add attachment ${name}`,
-      tree,
-      parents: parent ? [parent.commit] : [],
-    });
-    submit('submitted');
-    const response = await githubSend(
-      fetchImpl,
-      token,
-      parent ? `${api}/git/refs/heads/${BRANCH}` : `${api}/git/refs`,
-      parent
-        ? { method: 'PATCH', body: JSON.stringify({ sha: commit, force: false }) }
-        : { method: 'POST', body: JSON.stringify({ ref: `refs/heads/${BRANCH}`, sha: commit }) }
-    );
-    // 422 is GitHub refusing the move: the branch was created or advanced by another
-    // writer since it was read. Nothing referenced the new commit, so read again.
-    if (response.status === 422) continue;
-    if (!response.ok) throw githubResponseError(response);
-    submit('acknowledged');
-    // The ref write answers with where the branch now points, which is the read-back.
-    const moved = refSchema.safeParse(await response.json().catch(() => null));
-    if (!moved.success || moved.data.object.sha !== commit)
-      return unverified(
-        request,
-        'The attachment branch did not answer with the new commit',
-        `branch ${BRANCH} may point at commit ${commit}`
-      );
-    return result(true, commit);
+    const outcome = await storeOnce(request, stored, fetchImpl, token, api, submit);
+    if (outcome !== 'moved') return outcome;
   }
   return refused(request, {
     kind: 'conflict',

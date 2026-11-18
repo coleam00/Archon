@@ -29,11 +29,7 @@ function gitGitHub(options: { push?: boolean; moveOnce?: boolean } = {}) {
     commits.set(sha, { tree: treeSha, parents });
     return sha;
   };
-  const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    const method = init?.method ?? 'GET';
-    const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
-    if (method !== 'GET') writes.push(`${method} ${url.slice(API.length)}`);
+  const read = (url: string): Response => {
     if (url === API)
       return json({
         html_url: 'https://github.com/archon/test',
@@ -42,12 +38,24 @@ function gitGitHub(options: { push?: boolean; moveOnce?: boolean } = {}) {
     if (url === `${API}/git/ref/heads/archon-attachments`)
       return branch ? json({ object: { sha: branch } }) : json({ message: 'Not Found' }, 404);
     const commit = /\/git\/commits\/(\w+)$/.exec(url);
-    if (commit && method === 'GET') {
-      const found = commits.get(commit[1]);
-      return json({ sha: commit[1], tree: { sha: found?.tree } });
-    }
+    if (commit) return json({ sha: commit[1], tree: { sha: commits.get(commit[1])?.tree } });
     const tree = /\/git\/trees\/(\w+)$/.exec(url);
     if (tree) return json({ tree: (trees.get(tree[1]) ?? []).map(path => ({ path })) });
+    return json({ message: `unexpected GET ${url}` }, 404);
+  };
+  const moveRef = (method: string, sha: string): Response => {
+    if (moveOnce) {
+      moveOnce = false;
+      branch = commitOf(['other.png'], branch ? [branch] : []);
+      return json({ message: 'Reference already exists' }, 422);
+    }
+    if (method === 'POST' ? branch !== null : commits.get(sha)?.parents[0] !== branch)
+      return json({ message: 'Update is not a fast forward' }, 422);
+    branch = sha;
+    return json({ ref: 'refs/heads/archon-attachments', object: { sha } }, 201);
+  };
+  const write = (url: string, method: string, body: Record<string, unknown>): Response => {
+    writes.push(`${method} ${url.slice(API.length)}`);
     if (url === `${API}/git/blobs`) return json({ sha: id('blob') }, 201);
     if (url === `${API}/git/trees`) {
       const base = typeof body.base_tree === 'string' ? (trees.get(body.base_tree) ?? []) : [];
@@ -60,19 +68,12 @@ function gitGitHub(options: { push?: boolean; moveOnce?: boolean } = {}) {
       commits.set(sha, { tree: String(body.tree), parents: body.parents as string[] });
       return json({ sha }, 201);
     }
-    if (url === `${API}/git/refs` || url === `${API}/git/refs/heads/archon-attachments`) {
-      if (moveOnce) {
-        moveOnce = false;
-        branch = commitOf(['other.png'], branch ? [branch] : []);
-        return json({ message: 'Reference already exists' }, 422);
-      }
-      const sha = String(body.sha);
-      if (method === 'POST' ? branch !== null : commits.get(sha)?.parents[0] !== branch)
-        return json({ message: 'Update is not a fast forward' }, 422);
-      branch = sha;
-      return json({ ref: 'refs/heads/archon-attachments', object: { sha } }, 201);
-    }
-    return json({ message: `unexpected ${method} ${url}` }, 404);
+    return moveRef(method, String(body.sha));
+  };
+  const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const method = init?.method ?? 'GET';
+    if (method === 'GET') return read(String(input));
+    return write(String(input), method, JSON.parse(String(init?.body)) as Record<string, unknown>);
   }) as typeof globalThis.fetch;
   return { fetch, writes, commits, trees, branch: () => branch };
 }
