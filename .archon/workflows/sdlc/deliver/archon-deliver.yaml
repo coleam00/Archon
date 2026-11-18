@@ -74,12 +74,6 @@ inputs:
 returns: { node: report, outcome: ready }
 
 nodes:
-  # Refuses the run before any agent spends when the forge plugin cannot
-  # act: no plugin for the host, or no usable credential.
-  - id: forge
-    script: forge-check
-    runtime: bun
-
   # One round: implement → draft PR → review ∥ simplify → settle-threads → CI →
   # threads. Open review findings, simplify's smaller shapes, an unresolved review
   # thread, or a check the change turned red start another round. Each round's
@@ -89,7 +83,6 @@ nodes:
   # step runs every round, so every round's commits are pushed before the review
   # reads the pull request's remote head.
   - id: rounds
-    depends_on: [forge]
     loop_group:
       until_bash: |
         done=$round.output.done

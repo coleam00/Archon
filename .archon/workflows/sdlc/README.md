@@ -44,7 +44,6 @@ If you are an agent doing this for a user:
 ```bash
 archon doctor
 archon validate workflows
-archon workflow list archon-forge-check
 ```
 
 `doctor` exits 0 when no check fails. `validate workflows` reports every bundled
@@ -79,14 +78,20 @@ the other cases.
 
 ### 3. Check the forge
 
+The pack lists the forge operations it calls in `.pack/pack.yaml`, under `forge:`. Archon
+checks them each time a run of a pack workflow starts, before a worktree or any agent: the
+plugin must advertise every one and have a credential. A refusal says what to fix: a
+missing plugin, an operation the plugin lacks, or no credential.
+
+To check without starting a run:
+
 ```bash
-archon workflow run archon-forge-check
+archon forge check --json --data '{"host":"github.com","operations":["pr.view","pr.create","pr.merge"]}'
 ```
 
-It reads only. A pass names the credential source it used. A refusal says what to fix:
-a missing plugin, a plugin that lacks an operation the pack needs, or a credential that
-cannot read the repository. It proves read access; the first write proves write access.
-A run in a container has no path to the forge and refuses here.
+It contacts no forge. A pass names the credential source it used. Neither check proves
+what the token may read or write; the first forge call of a run does. A run in a container
+has no path to the forge and refuses when it starts.
 
 ### 4. Name the maintainers
 
@@ -437,7 +442,6 @@ The setup is complete when all of these hold:
 
 ```bash
 archon validate workflows                                                 # every workflow ok
-archon workflow run archon-forge-check                                    # passes
 git show origin/<default-branch>:.archon/sdlc/policy/maintainers.json    # lists the pack's account
 archon state get work/42                                                  # the item from step 8
 archon workflow attention                                                 # lists what waits for the user

@@ -49,7 +49,7 @@ Verify your Archon setup. Runs a checklist of common failure points: installed p
 archon doctor
 ```
 
-Doctor does not check forge access for the bundled SDLC pack. Run `archon workflow run archon-forge-check` from the checkout for that; it names the credential source it used or says why it refused. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
+Doctor does not check forge access for the bundled SDLC pack. The engine checks it when a run of a pack workflow starts, and [`archon forge check`](/reference/forge/#check-forge-access-before-a-run-spends) answers the same question without starting one. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
 
 Without a resolved default provider, doctor checks discoverable workflows using the runtime provider resolver. If a workflow needs a default, doctor fails and names `archon ai default <provider>` and `archon setup`. Workflows that explicitly select their providers remain supported without a default. When every workflow file loads and no workflow needs a provider (including an empty workflow set), a healthy empty provider inventory is skipped. Otherwise, no registered providers fails and prints `archon provider add <claude|codex|pi>`. The Workflow files check discovers workflows whether or not a default provider is set and fails naming each file that does not load. Broken installed plugins still fail. Stale maintained plugins fail with their installed and CLI versions and the reinstall command.
 

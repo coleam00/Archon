@@ -57,17 +57,10 @@ inputs:
 returns: { node: build, outcome: delivered }
 
 nodes:
-  # Refuses the run before any agent spends when the forge plugin cannot
-  # act: no plugin for the host, or no usable credential.
-  - id: forge
-    script: forge-check
-    runtime: bun
-
   # The source is history, not a work order. Triage checks it against current
   # code and direction before deciding which kind of reasoning is still owed.
   - id: triage
     include: archon-triage-block
-    depends_on: [forge]
     with:
       target: "$INPUTS.target"
       publish: "$INPUTS.publish"
