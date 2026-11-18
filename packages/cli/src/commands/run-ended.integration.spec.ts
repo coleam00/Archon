@@ -891,6 +891,100 @@ describe('trigger check', () => {
   }, 90_000);
 });
 
+describe("an item's later starts", () => {
+  const runConfig = (run: RunRow | undefined): { source?: { label: string }; keys?: string[] } =>
+    (JSON.parse(run?.metadata ?? '{}') as { run_config?: object }).run_config ?? {};
+  const inputsFile = (fixture: Fixture): string => {
+    const path = join(fixture.root, 'inputs.json');
+    writeFileSync(path, JSON.stringify({ plan: 'p', issue: 'i' }));
+    return path;
+  };
+
+  test('run on the config the item was started with, through a run end and a fire on the item', async () => {
+    const fixture = await makeFixture('item-config');
+    fixture.bind('build-after-plan', RUN_ENDED);
+    const config = join(fixture.root, 'a.yaml');
+    writeFileSync(config, 'env:\n  CONFIG_PROOF: a\n');
+    await fixture.cli([
+      'workflow',
+      'run',
+      'stage-a',
+      '--no-worktree',
+      '--config',
+      config,
+      '--item',
+      'issue-1',
+      '--input',
+      'plan=p1',
+      '--input',
+      'issue=i1',
+    ]);
+    const [a, b] = await waitFor(() => completedRuns(fixture, 2), 'A and the B its end started');
+    // A binding file with no config of its own: what the SDLC pack fires for a next round,
+    // an answered ask and a merge-queue return.
+    const again = fixture.fireConfig('again', 'stage-b', 'stage-b');
+    await fixture.cli([
+      'trigger',
+      'fire',
+      '--config',
+      again,
+      '--item',
+      'issue-1',
+      '--inputs',
+      inputsFile(fixture),
+    ]);
+    const runs = await waitFor(() => completedRuns(fixture, 3), 'the fired round');
+
+    expect(runConfig(a).source?.label).toBe('a.yaml');
+    expect(runConfig(b)).toMatchObject({
+      source: { label: `run ${a?.id} (a.yaml)` },
+      keys: ['env.CONFIG_PROOF'],
+    });
+    expect(runConfig(runs[2])).toMatchObject({
+      source: { label: `run ${b?.id} (run ${a?.id} (a.yaml))` },
+      keys: ['env.CONFIG_PROOF'],
+    });
+  }, 90_000);
+
+  test("an item started on no config keeps none, and a binding's config applies while it has none", async () => {
+    const fixture = await makeFixture('item-no-config');
+    fixture.bind('build-after-plan', RUN_ENDED);
+    await fixture.cli([
+      'workflow',
+      'run',
+      'stage-a',
+      '--no-worktree',
+      '--item',
+      'issue-1',
+      '--input',
+      'plan=p1',
+      '--input',
+      'issue=i1',
+    ]);
+    const ran = await waitFor(() => completedRuns(fixture, 2), 'A and the B its end started');
+    expect(ran.map(runConfig)).toEqual([{}, {}]);
+
+    const config = join(fixture.root, 'b.yaml');
+    writeFileSync(config, 'env:\n  CONFIG_PROOF: b\n');
+    const configured = fixture.fireConfig('configured', 'stage-b', 'stage-b');
+    const file = JSON.parse(readFileSync(configured, 'utf8'));
+    file.binding.launch.configSource = config;
+    writeFileSync(configured, JSON.stringify(file));
+    await fixture.cli([
+      'trigger',
+      'fire',
+      '--config',
+      configured,
+      '--item',
+      'issue-1',
+      '--inputs',
+      inputsFile(fixture),
+    ]);
+    const runs = await waitFor(() => completedRuns(fixture, 3), 'the fired round');
+    expect(runConfig(runs[2]).source?.label).toBe('b.yaml');
+  }, 90_000);
+});
+
 describe('a run end on a trigger host', () => {
   test('admits the queued starts its slot held back, with no further command', async () => {
     const fixture = await makeFixture('capacity');

@@ -70,7 +70,14 @@ import {
 } from '@archon/workflows/utils/workflow-requirements';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { WorkflowInputContractError } from '@archon/workflows/workflow-inputs';
-import { loadWorkflowRunConfigFile, unsealWorkflowRunConfig } from '../config/run-config';
+import { isAttentionDegraded } from '@archon/workflows/schemas/attention-degraded';
+import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
+import { projectKeyForCodebase } from '@archon/paths/archon-paths';
+import {
+  loadWorkflowRunConfigFile,
+  unsealWorkflowRunConfig,
+  workflowRunConfigFromRun,
+} from '../config/run-config';
 import type { Codebase } from '../schemas/codebase';
 import type { WorkflowHost } from './host-store';
 import { registerRepository } from '../handlers/clone';
@@ -255,7 +262,7 @@ async function prepareBinding(
   host: WorkflowHost,
   intent: ResourceStartBindingIntent,
   identity: BindingIdentity,
-  runConfig: Awaited<ReturnType<typeof loadWorkflowRunConfigFile>> | undefined
+  runConfig: WorkflowRunConfigInput | undefined
 ): Promise<PreparationResult> {
   const cwd = await canonicalizeProjectPath(intent.launch.cwd);
   const sourceRoot = resolve(intent.launch.discoveryCwd ?? cwd);
@@ -331,6 +338,39 @@ async function prepareBinding(
   });
 }
 
+/**
+ * The run config the item of a binding start last ran on: the one its most recent run
+ * sealed, labelled `run <id> (<label>)`. A later round thus keeps the config the item was
+ * started with, and its record names the run it came from. Undefined for a start on no
+ * item, an item not written yet, or one whose latest run sealed none. The item is the one
+ * admission's `namedItem` writes the run onto: the binding's key, else the receipt's, in
+ * the project of the launch cwd. An unreadable latest run fails the start; reading an
+ * older run instead would carry a config the item may have left.
+ */
+async function itemRunConfig(
+  host: WorkflowHost,
+  intent: ResourceStartBindingIntent,
+  receiptId: string
+): Promise<WorkflowRunConfigInput | undefined> {
+  const itemKey = intent.itemKey ?? (await host.deps.store.getStartReceipt(receiptId))?.itemKey;
+  if (!itemKey) return undefined;
+  // No registered project means no item yet: admission registers it and writes the item new.
+  const { codebase } = await resolveCodebaseForPath(intent.launch.cwd, host.records.codebases);
+  if (!codebase) return undefined;
+  const found = await host.deps.store.getItemRuns(
+    projectKeyForCodebase(codebase, codebase.default_cwd),
+    itemKey
+  );
+  const latest = found?.runs.at(-1);
+  if (!latest) return undefined;
+  if (isAttentionDegraded(latest)) {
+    throw new Error(
+      `Run ${latest.runId}, the most recent on item '${itemKey}', cannot be read, so the run config it ran on cannot be carried to this start.`
+    );
+  }
+  return workflowRunConfigFromRun(latest);
+}
+
 async function prepareClaimedBinding(
   host: WorkflowHost,
   intent: ResourceStartBindingIntent,
@@ -342,9 +382,14 @@ async function prepareClaimedBinding(
       throw new Error('The configured run-as user no longer exists.');
     }
     stage = 'run_configuration';
-    const runConfig = intent.launch.configSource
-      ? await loadWorkflowRunConfigFile(intent.launch.configSource)
-      : undefined;
+    // The item's own config wins over `configSource`: a binding file's config is written
+    // once for the install (`pack bindings --config`), a default for an item's first run,
+    // not a change to this item's config.
+    const runConfig =
+      (await itemRunConfig(host, intent, identity.receiptId)) ??
+      (intent.launch.configSource
+        ? await loadWorkflowRunConfigFile(intent.launch.configSource)
+        : undefined);
     stage = 'launch_preparation';
     return await prepareBinding(host, intent, identity, runConfig);
   } catch (error) {
