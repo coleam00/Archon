@@ -1,3 +1,4 @@
+import { workflowCheckoutSchema } from '@archon/workflows/schemas/workflow-checkout';
 import { z } from '@hono/zod-openapi';
 import { workflowRunConfigLayerSchema } from '@archon/workflows/schemas/run-config';
 import { MAX_FILES_PER_MESSAGE, MAX_UPLOAD_BYTES } from '../api-message-dispatch';
@@ -31,6 +32,7 @@ const sharedLaunchSchema = z.object({
 
 export const workflowRunLaunchJsonSchema = sharedLaunchSchema
   .extend({
+    checkout: workflowCheckoutSchema.optional(),
     adopt_run_id: z.string().min(1).optional(),
     supersedes_run_id: z.string().min(1).optional(),
   })

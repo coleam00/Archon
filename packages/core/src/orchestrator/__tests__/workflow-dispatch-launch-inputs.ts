@@ -25,6 +25,48 @@ import {
 import { handleMessage } from '../orchestrator-agent';
 import type { setupRoutingTests } from './workflow-dispatch-adoption';
 export function registerLaunchInputTests(fixture: ReturnType<typeof setupRoutingTests>) {
+  test('HTTP checkout starts foreground work in fresh isolation at the exact revision', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
+    const checkout = { revision: 'a'.repeat(40), base_branch: 'release/stable' };
+    await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
+      workflowCheckout: checkout,
+    });
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalledWith(
+      expect.objectContaining({ isolation_env_id: null }),
+      expect.anything(),
+      expect.anything(),
+      'conv-1',
+      expect.objectContaining({
+        workflowType: 'task',
+        taskBranch: { kind: 'new', fromBranch: checkout.revision },
+        baseOverride: checkout.base_branch,
+      }),
+      false,
+      undefined,
+      expect.anything()
+    );
+    expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.baseOverride).toBe(checkout.base_branch);
+  });
+
+  test('HTTP checkout cannot silently resume an existing run', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([makeResumableRun({ status: 'paused' })])
+    );
+    await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
+      workflowCheckout: { revision: 'a'.repeat(40), base_branch: 'main' },
+    });
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+  });
+
   test('foreground_resume_detected: falls through to fresh run when hydration returns null', async () => {
     // When listResumableRunsByParentConversation returns a run but
     // hydrateResumableRun finds nothing worth resuming (zero completed nodes,

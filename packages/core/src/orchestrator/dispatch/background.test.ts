@@ -1274,6 +1274,18 @@ describe('dispatchBackgroundWorkflow', () => {
     ).toHaveLength(0);
   });
 
+  test('an explicit checkout cuts a fresh worker at the immutable revision and preserves its base', async () => {
+    const checkout = { revision: 'a'.repeat(40), base_branch: 'release/test' };
+    await dispatchBackgroundWorkflow(makeRoutingCtx({ checkout }), makeWorkflow());
+    expect(mockResolve.mock.calls[0]?.[0]?.hints).toMatchObject({
+      workflowType: 'task',
+      taskBranch: { kind: 'new', fromBranch: checkout.revision },
+      baseOverride: checkout.base_branch,
+    });
+    await flushBackgroundExecution();
+    expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.baseOverride).toBe(checkout.base_branch);
+  });
+
   test('missing-worktree adoption materializes the exact branch for a background run', async () => {
     mockResolveWorkflowSourceRoot.mockResolvedValue('/canonical/repo');
     const workflow = makeWorkflow();

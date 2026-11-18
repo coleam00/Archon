@@ -1364,3 +1364,48 @@ describe('POST /api/workflows/:name/run', () => {
     }
   });
 });
+
+describe('immutable HTTP checkout start', () => {
+  beforeEach(() => {
+    mockFindConversationByPlatformId.mockReset();
+    mockFindConversationByPlatformId.mockResolvedValue(MOCK_CONV);
+    mockHandleMessage.mockReset();
+    mockAddMessage.mockReset();
+    mockWorkflowStartRefusal.mockResolvedValue(undefined);
+  });
+  const checkout = { revision: 'a'.repeat(40), base_branch: 'release/test' };
+  test('carries the exact revision and independent base through typed dispatch context', async () => {
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/test-workflow/run', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Apply feedback', checkout }),
+    });
+    expect(response.status).toBe(200);
+    expect(mockWorkflowStartRefusal).toHaveBeenCalledWith(expect.objectContaining({ checkout }));
+    expect(mockHandleMessage.mock.calls.at(-1)?.at(-1)).toMatchObject({
+      workflowCheckout: checkout,
+    });
+  });
+  test.each([
+    { checkout: { ...checkout, revision: 'main' } },
+    { checkout: { ...checkout, revision: checkout.revision + '\n' } },
+    { checkout: { ...checkout, base_branch: '../main' } },
+    { checkout, adopt_run_id: 'old-run' },
+    { checkout, supersedes_run_id: 'old-run' },
+  ])('refuses ambiguous checkout before dispatch: %j', async fields => {
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/test-workflow/run', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        conversationId: 'web-test-abc',
+        message: 'Apply feedback',
+        ...fields,
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockAddMessage).not.toHaveBeenCalled();
+  });
+});

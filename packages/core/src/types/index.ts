@@ -1,3 +1,4 @@
+import type { WorkflowCheckout } from '@archon/workflows/schemas/workflow-checkout';
 /**
  * Core type definitions for the Remote Coding Agent platform
  */
@@ -60,6 +61,8 @@ export interface HandleMessageContext {
    * so no word in it can change the run (#4159).
    */
   readonly workflowName?: string;
+  /** Exact checkout start supplied by the HTTP workflow launch route. */
+  readonly workflowCheckout?: WorkflowCheckout;
   /**
    * Declared workflow inputs supplied by the caller (#2554), keyed by input name.
    *

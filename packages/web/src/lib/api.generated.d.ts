@@ -6383,6 +6383,10 @@ export interface components {
         [key: string]: string;
       } | null;
       config?: components['schemas']['WorkflowRunLaunchConfig'];
+      checkout?: {
+        revision: string;
+        base_branch: string;
+      };
       adopt_run_id?: string;
       supersedes_run_id?: string;
     };

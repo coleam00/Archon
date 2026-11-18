@@ -1,9 +1,11 @@
+import type { WorkflowCheckout } from '@archon/workflows/schemas/workflow-checkout';
 import { continuationInheritsEstate } from '@archon/workflows/schemas/workflow-run';
 import type { ResolvedRunContinuation } from '../../operations/workflow-continuation';
 // Background dispatch: run a workflow in a hidden worker conversation, bridged to the
 // parent, and return once the run is submitted. Its phases, in order: estate, source and
 // AI configuration, worker conversation, pre-created run, worker checkout, announcement,
 // then the detached run in background-run.ts.
+import { toBranchName } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import type { IsolationHints } from '@archon/isolation';
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
@@ -105,6 +107,8 @@ export interface WorkflowRoutingContext {
    * other, independently of the chat notification.
    */
   readonly parseWarnings?: readonly string[];
+  /** Immutable start for a fresh checkout, independent of the merge destination. */
+  readonly checkout?: WorkflowCheckout;
   /**
    * Declared inputs supplied by the caller (#2554), already validated at the dispatch
    * gate. This path PRE-CREATES the run row (so the UI can fetch it immediately), which
@@ -492,7 +496,7 @@ async function resolveWorkerCheckout(input: WorkerCheckoutInput): Promise<Worker
     },
     workflowDeps
   );
-  const shared = { baseBranch, resolveChildIsolation };
+  const shared = { baseBranch, baseOverride: ctx.checkout?.base_branch, resolveChildIsolation };
   if (workflow.worktree?.enabled === false && !adoptedEnvironment) {
     // Respect an explicit worktree opt-out: skip isolation and run in the parent's cwd.
     getLog().info(
@@ -561,7 +565,16 @@ async function createWorkerWorktree(
           workflowId: workerPlatformId,
           taskBranch: ctx.adoptionLane.taskBranch,
         }
-      : { workflowType: 'task', workflowId: workerPlatformId };
+      : {
+          workflowType: 'task',
+          workflowId: workerPlatformId,
+          ...(ctx.checkout
+            ? {
+                taskBranch: { kind: 'new', fromBranch: toBranchName(ctx.checkout.revision) },
+                baseOverride: toBranchName(ctx.checkout.base_branch),
+              }
+            : {}),
+        };
   const result = await validateAndResolveIsolation(
     workerConv,
     codebase,

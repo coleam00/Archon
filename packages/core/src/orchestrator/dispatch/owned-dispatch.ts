@@ -46,6 +46,7 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
   const continuation = await detectContinuation(scope, target.request, requested);
   if (continuation === undefined) return;
   const { willContinueExistingRun } = continuation;
+  assertCheckoutIsFresh(scope, requested, willContinueExistingRun);
 
   const executable = await prepareExecutableSource(
     scope,
@@ -109,6 +110,7 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
         inputs: resolvedInputs,
         modelOverrides: options?.modelOverrides,
         runConfig: options?.runConfig,
+        checkout: options?.checkout,
         declaredContinuation,
         adoptionLane,
       },
@@ -162,4 +164,20 @@ async function offerResumeChoice(
     buildFailedRunResumePrompt(platform, workflow.name, resumableRun, userMessage)
   );
   return true;
+}
+
+function assertCheckoutIsFresh(
+  scope: DispatchScope,
+  workflow: ResolvedWorkflow,
+  willContinue: boolean
+): void {
+  if (!scope.options?.checkout) return;
+  if (
+    willContinue ||
+    scope.declaredContinuation ||
+    workflow.worktree?.enabled === false ||
+    scope.codebase.kind === 'folder'
+  ) {
+    throw new Error('An explicit checkout requires a fresh, worktree-isolated repository run');
+  }
 }

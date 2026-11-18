@@ -1,3 +1,7 @@
+import {
+  workflowCheckoutSchema,
+  type WorkflowCheckout,
+} from '@archon/workflows/schemas/workflow-checkout';
 import { CONTINUATION_MODES, type ContinuationMode } from '@archon/workflows/schemas/workflow-run';
 import {
   resolveRunContinuation,
@@ -161,6 +165,7 @@ type FormValue = string | File | (string | File)[];
 interface RunLaunchRequest {
   conversationId: string;
   message: string;
+  checkout?: WorkflowCheckout;
   workflowInputs?: Record<string, string>;
   workflowModelOverrides?: RunModelOverrides;
   workflowRunConfig?: WorkflowRunConfigInput;
@@ -271,6 +276,8 @@ async function parseMultipartRunRequest(
     return { ok: false, error: 'conversationId must be a non-empty alphanumeric string' };
   }
   if (body.configPath !== undefined) return { ok: false, error: CONFIG_PATH_REFUSAL };
+  if (body.checkout !== undefined)
+    return { ok: false, error: 'checkout requires a JSON launch request' };
 
   const options = parseMultipartRunOptions(body, workflowName);
   if (!options.ok) return options;
@@ -336,6 +343,11 @@ async function parseJsonRunRequest(c: Context): Promise<Parsed<RunLaunchRequest>
 
   const inputs = parseRunInputsField(body.inputs);
   if (!inputs.ok) return inputs;
+  const checkout = workflowCheckoutSchema.optional().safeParse(body.checkout);
+  if (!checkout.success)
+    return { ok: false, error: 'checkout must contain a full revision and valid base_branch' };
+  if (checkout.data && (body.adopt_run_id !== undefined || body.supersedes_run_id !== undefined))
+    return { ok: false, error: 'checkout cannot be combined with adoption or supersession' };
   const continuation = parseContinuationFields(body);
   if (!continuation.ok) return continuation;
   const overrides = parseRunModelOverridesFields(body.tiers, body.aliases);
@@ -352,6 +364,7 @@ async function parseJsonRunRequest(c: Context): Promise<Parsed<RunLaunchRequest>
       workflowModelOverrides: overrides.overrides,
       workflowRunConfig: runConfig.value,
       ...continuation.value,
+      checkout: checkout.data,
       fileEntries: [],
     },
   };
@@ -456,6 +469,7 @@ function launchContext(launch: RunLaunch): Omit<HandleMessageContext, 'isolation
     workflowName: launch.workflowName,
     ...(savedFiles.length > 0 ? { attachedFiles: savedFiles } : {}),
     ...(workflowInputs ? { workflowInputs } : {}),
+    ...(request.checkout ? { workflowCheckout: request.checkout } : {}),
     ...(workflowModelOverrides ? { workflowModelOverrides } : {}),
     ...(workflowRunConfig ? { workflowRunConfig } : {}),
     ...(request.adoptRunId ? { workflowAdoptRunId: request.adoptRunId } : {}),
@@ -520,6 +534,7 @@ async function launchWorkflowRun(
       conversation: access.conversation,
       workflowName,
       inputs: request.workflowInputs,
+      checkout: request.checkout,
       adoptRunId: request.adoptRunId,
       actor: access.actor,
     });

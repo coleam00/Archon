@@ -28,6 +28,7 @@ export interface WorkerCheckout {
   cutFromCommit?: string;
   ownedWorktree?: OwnedWorktree;
   baseBranch?: string;
+  baseOverride?: string;
   resolveChildIsolation?: ReturnType<typeof createCodebaseChildResolver>;
 }
 
@@ -97,6 +98,7 @@ function submitRun(run: BackgroundRun): Promise<SubmitResult> {
       source: ctx.source,
       parseWarnings: ctx.parseWarnings,
       baseBranch: checkout.baseBranch,
+      baseOverride: checkout.baseOverride,
       resolveChildIsolation: checkout.resolveChildIsolation,
       preparedSource: run.preparedSource,
       preparedAiConfiguration: run.preparedAiConfiguration,

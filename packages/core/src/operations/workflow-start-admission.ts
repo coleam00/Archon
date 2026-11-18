@@ -1,8 +1,9 @@
+import type { WorkflowCheckout } from '@archon/workflows/schemas/workflow-checkout';
 import * as codebaseDb from '../db/codebases';
 import { startWorkflow } from '../handlers/command-handler';
 import { judgeSignatureGates } from '../orchestrator/dispatch/gates';
 import { dispatchAnswersContinuation, readContinuation } from '../orchestrator/dispatch/request';
-import type { Conversation } from '../types';
+import type { Codebase, Conversation } from '../types';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
 import type { RunActor } from './run-authorization';
 
@@ -13,6 +14,7 @@ export interface WorkflowStart {
   /** The conversation's row; `null` when the dispatch will create it. */
   conversation: Conversation | null;
   workflowName: string;
+  checkout?: WorkflowCheckout;
   inputs: Readonly<Record<string, string>> | undefined;
   /** Set when the start adopts another run's estate. */
   adoptRunId: string | undefined;
@@ -42,14 +44,9 @@ export async function workflowStartRefusal(start: WorkflowStart): Promise<string
   const codebase = conversation?.codebase_id
     ? await codebaseDb.getCodebase(conversation.codebase_id)
     : null;
-  if (conversation && codebase) {
-    // When git cannot say where this checkout's workflows come from, the dispatch owns that
-    // failure too: it re-resolves the conversation's checkout before it reads the source.
-    const sourceRoot = await resolveWorkflowSourceRoot(
-      conversation.cwd ?? codebase.default_cwd
-    ).catch(() => 'unknown');
-    if (sourceRoot !== undefined) return undefined;
-  }
+  const checkoutRefusal = checkoutConversationRefusal(start, codebase);
+  if (checkoutRefusal) return checkoutRefusal;
+  if (await dispatchOwnsWorkflowSource(conversation, codebase)) return undefined;
 
   const command = await startWorkflow(
     conversation ?? { codebase_id: null, cwd: null },
@@ -60,10 +57,14 @@ export async function workflowStartRefusal(start: WorkflowStart): Promise<string
   );
   const request = command.workflow;
   if (request?.kind !== 'start') return command.message;
+  if (start.checkout) {
+    if (request.definition.worktree?.enabled === false)
+      return 'checkout requires a workflow with worktree isolation';
+  }
 
   if (conversation && codebase) {
     const read = await readContinuation({ conversation, codebase }, request, request.definition);
-    if (dispatchAnswersContinuation(read)) return undefined;
+    if (dispatchAnswersContinuation(read)) return continuationRefusal(start);
   }
   const verdict = await judgeSignatureGates(
     {
@@ -75,4 +76,31 @@ export async function workflowStartRefusal(start: WorkflowStart): Promise<string
     false
   );
   return verdict.ok ? undefined : verdict.reason;
+}
+
+function checkoutConversationRefusal(
+  start: WorkflowStart,
+  codebase: Codebase | null
+): string | undefined {
+  if (!start.checkout) return undefined;
+  if (!codebase || codebase.kind === 'folder' || start.conversation?.isolation_env_id) {
+    return 'checkout requires a fresh conversation attached to a repository';
+  }
+  return undefined;
+}
+
+function continuationRefusal(start: WorkflowStart): string | undefined {
+  return start.checkout ? 'checkout cannot resume an existing run' : undefined;
+}
+
+async function dispatchOwnsWorkflowSource(
+  conversation: Conversation | null,
+  codebase: Codebase | null
+): Promise<boolean> {
+  if (!conversation || !codebase) return false;
+  // A worktree or unresolvable checkout is re-resolved by dispatch before loading its workflow.
+  const sourceRoot = await resolveWorkflowSourceRoot(
+    conversation.cwd ?? codebase.default_cwd
+  ).catch(() => 'unknown');
+  return sourceRoot !== undefined;
 }

@@ -1,3 +1,4 @@
+import { toBranchName } from '@archon/git';
 import { randomUUID } from 'node:crypto';
 import { IsolationBlockedError, recordWorktreeAdoption } from '@archon/isolation';
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
@@ -103,7 +104,9 @@ async function resolveNewIsolation(
       {
         ...conversation,
         codebase_id: codebase.id,
-        ...(adoptionLane?.kind === 'checkout-branch' ? { isolation_env_id: null } : {}),
+        ...(adoptionLane?.kind === 'checkout-branch' || scope.options?.checkout
+          ? { isolation_env_id: null }
+          : {}),
       },
       codebase,
       platform,
@@ -117,7 +120,17 @@ async function resolveNewIsolation(
             workflowType: 'task',
             taskBranch: adoptionLane.taskBranch,
           }
-        : isolationHints,
+        : scope.options?.checkout
+          ? {
+              workflowId: randomUUID(),
+              workflowType: 'task',
+              taskBranch: {
+                kind: 'new',
+                fromBranch: toBranchName(scope.options.checkout.revision),
+              },
+              baseOverride: toBranchName(scope.options.checkout.base_branch),
+            }
+          : isolationHints,
       false,
       userId,
       setupRun && preparedAiConfiguration

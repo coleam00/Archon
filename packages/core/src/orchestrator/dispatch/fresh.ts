@@ -86,6 +86,7 @@ export async function submitFreshForeground(
         preCreatedRun: setupRun,
         parseWarnings,
         baseBranch: codebaseBaseBranch,
+        baseOverride: options?.checkout?.base_branch,
         resolveChildIsolation,
         capturedSourceOwner: owner,
         inputs: resolvedInputs,

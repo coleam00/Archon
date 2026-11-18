@@ -485,6 +485,7 @@ async function handleDeterministicCommand(
         // Declared inputs (#2554) arrive on the request context, not in the
         // command text — the run route is the only caller that sets them.
         inputs: context.workflowInputs,
+        checkout: context.workflowCheckout,
         modelOverrides: context.workflowModelOverrides,
         runConfig: context.workflowRunConfig,
         // Between-run continuation (#2747), same channel.

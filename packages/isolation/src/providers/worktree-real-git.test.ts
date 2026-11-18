@@ -1314,6 +1314,41 @@ describe('WorktreeProvider against real git', () => {
     expect(adopted.workingPath).toBe(worktreePath);
     expect(adopted.metadata.adopted).toBe(true);
   });
+  test('an immutable remote-only start is fetched without moving the base or adopting its branch', async () => {
+    const remote = join(root, 'remote.git');
+    const writer = join(root, 'writer');
+    await git(root, 'clone', '--bare', '-q', repoPath, remote);
+    await git(root, 'clone', '-q', remote, writer);
+    await git(writer, 'config', 'user.name', 'Offline writer');
+    await git(writer, 'config', 'user.email', 'offline@example.invalid');
+    await git(writer, 'checkout', '-qb', 'feature/feedback');
+    await writeFile(join(writer, 'feedback.txt'), 'previous feature');
+    await git(writer, 'add', '.');
+    await git(writer, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Earlier feature');
+    const revision = (await git(writer, 'rev-parse', 'HEAD')).trim();
+    await git(writer, 'push', '-q', 'origin', 'HEAD');
+    await git(repoPath, 'remote', 'add', 'origin', remote);
+    const base = (await git(repoPath, 'rev-parse', 'main')).trim();
+    await expect(git(repoPath, 'cat-file', '-e', `${revision}^{commit}`)).rejects.toThrow();
+    const created = await provider.create({
+      ...request,
+      workflowType: 'task',
+      baseOverride: toBranchName('main'),
+      taskBranch: {
+        kind: 'new',
+        branch: toBranchName('fresh-feedback'),
+        fromBranch: toBranchName(revision),
+      },
+    });
+    expect((await git(created.workingPath, 'rev-parse', 'HEAD')).trim()).toBe(revision);
+    expect(created.metadata.adopted).toBe(false);
+    expect(created.branchName).toBe(toBranchName('fresh-feedback'));
+    expect((await git(repoPath, 'rev-parse', 'main')).trim()).toBe(base);
+    expect(await readFile(join(created.workingPath, 'feedback.txt'), 'utf8')).toBe(
+      'previous feature'
+    );
+  });
+
   test('fresh creation stamps identity; adoption never grants it; recreation gets a new generation', async () => {
     await git(repoPath, 'remote', 'add', 'origin', repoPath);
     const freshRequest: IsolationRequest = {

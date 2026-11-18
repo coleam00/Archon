@@ -513,6 +513,7 @@ describe('IsolationResolver', () => {
       hints: {
         workflowType: 'task',
         workflowId: 'test-adapters',
+        baseOverride: git.toBranchName('release/test'),
         taskBranch: {
           kind: 'new',
           fromBranch: git.toBranchName('feature/extract-adapters'),
@@ -525,6 +526,7 @@ describe('IsolationResolver', () => {
       expect.objectContaining({
         workflowType: 'task',
         identifier: 'test-adapters',
+        baseOverride: 'release/test',
         taskBranch: {
           kind: 'new',
           fromBranch: git.toBranchName('feature/extract-adapters'),

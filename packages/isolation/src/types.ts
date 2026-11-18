@@ -302,6 +302,8 @@ export function isPRIsolationRequest(request: IsolationRequest): request is PRIs
 // --- Isolation Hints & Block Reasons ---
 
 export interface IsolationHints {
+  /** Explicit per-run merge destination, independent of the task start. */
+  baseOverride?: BranchName;
   workflowType?: IsolationWorkflowType;
   workflowId?: string;
 

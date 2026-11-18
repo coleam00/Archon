@@ -121,6 +121,7 @@ function newIsolationRequest(
     codebaseName: codebase.name,
     canonicalRepoPath: canonicalPath,
     baseBranch: codebase.defaultBranch ?? undefined,
+    baseOverride: hints?.baseOverride,
     identifier: workflowId,
   };
   if (workflowType === 'pr') {

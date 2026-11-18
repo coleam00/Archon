@@ -7,6 +7,7 @@ import { createHash } from 'crypto';
 
 import {
   execFileAsync,
+  GitFailure,
   fetchWithRetry,
   listWorktrees,
   isSameWorktreePath,
@@ -377,6 +378,23 @@ async function branchHolderFailure(
   );
 }
 
+/** Fetch remote-only immutable starts without substituting a moving branch tip. */
+async function ensureStartCommit(
+  repoPath: string,
+  remote: string,
+  revision: string | undefined
+): Promise<void> {
+  if (!revision || !/^[a-f0-9]{40}$/.test(revision)) return;
+  try {
+    await execFileAsync('git', ['-C', repoPath, 'cat-file', '-e', `${revision}^{commit}`]);
+  } catch (error) {
+    if (!(error instanceof GitFailure) || error.code !== 128) throw error;
+    await fetchWithRetry(toRepoPath(repoPath), ['--no-tags', remote, revision], {
+      timeout: GIT_OPERATION_TIMEOUT_MS,
+    });
+  }
+}
+
 async function checkOutNewBranch(
   request: IsolationRequest,
   repoPath: string,
@@ -395,6 +413,7 @@ async function checkOutNewBranch(
   const localExists = await localBranchExists(repoPath, branchName);
   const remoteExists = await remoteBranchExists(repoPath, remote, branchName);
   if (!localExists && !remoteExists) {
+    await ensureStartCommit(repoPath, remote, fromBranch);
     const checkout = await cutBranch(
       repoPath,
       worktreePath,

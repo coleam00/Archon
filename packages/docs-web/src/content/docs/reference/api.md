@@ -359,6 +359,15 @@ curl -X POST http://localhost:3090/api/workflows/archon-investigate/run \
   -F "files=@screenshot.png"
 ```
 
+**Immutable checkout starts.** JSON launches may include
+`"checkout": {"revision": "<full 40-character lowercase commit SHA>", "base_branch": "main"}`.
+This creates a fresh engine-owned worktree at that exact commit while retaining the independent
+merge destination. If the commit is absent locally, the worktree provider fetches that SHA from
+the configured remote; it never substitutes a branch tip. Use a fresh conversation attached to
+a repository. Checkout starts cannot adopt, supersede, resume, run in a folder project, or use
+a workflow that disables worktree isolation. Multipart checkout starts are not supported.
+A queued launch still needs its normal run confirmation; HTTP acceptance alone is not completion.
+
 **Adoption and supersede.** JSON requests may supply `adopt_run_id` or `supersedes_run_id`,
 but cannot supply both. Unique prefixes resolve within the conversation's selected project;
 a prefix without a selected project is refused. Full IDs select the exact run without prefix
