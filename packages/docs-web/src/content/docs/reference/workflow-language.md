@@ -2691,6 +2691,7 @@ result on its row; a resumed run keeps those values even if the project file cha
   pack's settings are a load error.
 - **An `include:`d block from its includer's own pack reads the run's settings**, as it does
   when run directly: it needs no `inputs:` entry for a setting and the includer no `with:` line.
+  An optional setting the run has no value for stays unset in the block, as it does run directly.
   The includer may still pass a setting through `with:`, which overrides the run's value for
   that block, and a default the block declares under `inputs:` for a setting's name wins over
   the run's value when included. Through a chain of includes the setting travels the same way

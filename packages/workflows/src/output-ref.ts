@@ -204,6 +204,25 @@ export function parseWholeInputsRef(text: string): string | undefined {
 }
 
 /**
+ * A `with:` or composed input `<name>: $INPUTS.<name>` passes the run's own value on
+ * unchanged. When the run has no value for the name, the receiver has none either, as
+ * a node of the run reading `INPUTS_<NAME>` directly has none: the entry is left out
+ * rather than failing as an unknown input. A same-pack include forwards an optional
+ * pack setting with no value this way.
+ */
+export function isAbsentInputForward(
+  name: string,
+  value: JsonValue,
+  runInputs: Record<string, JsonValue> | undefined
+): boolean {
+  return (
+    typeof value === 'string' &&
+    parseWholeInputsRef(value) === name &&
+    !Object.hasOwn(runInputs ?? {}, name)
+  );
+}
+
+/**
  * One reference grammar a template can contain, and how to resolve it (#4046). `pattern`
  * is sticky and starts with `\$`. `resolve` returns the replacement text, or undefined to
  * leave the match to a later token at the same `$`.

@@ -5,7 +5,8 @@ import type {
   IncludeDirective,
   ResolvedWorkflow,
 } from '../../../schemas';
-import { type JsonValue } from '../../../output-ref';
+import { isAbsentInputForward, type JsonValue } from '../../../output-ref';
+import { resolveRunInputs } from '../../references';
 import type { IncludeCommandContent } from '../../../compiled-command';
 import {
   boundaryIdComponent,
@@ -72,7 +73,15 @@ export async function planComposeInstances(
     return { snapshots: persistedSnapshots };
   }
 
-  const staticInputs = resolveFanOutStaticInputs(node, ctx);
+  const runInputs = resolveRunInputs(ctx.workflowRun);
+  const withMap = Object.entries(node.with ?? {}).filter(
+    ([name, value]) => !isAbsentInputForward(name, value, runInputs)
+  );
+  const staticInputs = resolveFanOutStaticInputs(
+    { id: node.id, with: Object.fromEntries(withMap) },
+    ctx,
+    runInputs
+  );
   if ('error' in staticInputs) {
     return {
       error: staticInputs.error,

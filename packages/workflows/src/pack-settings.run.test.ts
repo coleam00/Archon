@@ -453,6 +453,57 @@ nodes:
     }
   });
 
+  it('an optional setting with no value stays unset in a same-pack block, as run directly', async () => {
+    await writePackDeclaration('gamma', 'inputs:\n  mood: {}\n');
+    await writePackWorkflow(
+      'gamma',
+      'gamma-block',
+      'name: gamma-block\ndescription: raw read\nnodes:\n  - id: shell\n    bash: echo "mood=[$INPUTS_MOOD]"\n'
+    );
+    await writePackWorkflow(
+      'gamma',
+      'gamma-item',
+      'name: gamma-item\ndescription: body\ninputs:\n  item: {}\nnodes:\n  - id: shell\n    bash: echo "item-mood=[$INPUTS_MOOD]"\n'
+    );
+    await writePackWorkflow(
+      'gamma',
+      'gamma-host',
+      `
+name: gamma-host
+description: includes and fans out blocks of its own pack
+nodes:
+  - id: blk
+    include: gamma-block
+  - id: fan
+    include: gamma-item
+    fan_out:
+      items: '["a"]'
+      as: item
+`
+    );
+
+    for (const name of ['gamma-host', 'gamma-block']) {
+      const store = new InMemoryStore();
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        await discover(name),
+        'goal',
+        { conversationId: 'conv-db' },
+        { baseBranch: 'main' }
+      );
+      expect(result.success).toBe(true);
+      const runId = runNamed(store, name)?.id;
+      const outputs = store.events
+        .filter(e => e.workflow_run_id === runId && e.event_type === 'node_completed')
+        .map(e => String(e.data?.node_output));
+      expect(outputs.some(o => o.includes('mood=[]'))).toBe(true);
+      if (name === 'gamma-host') expect(outputs.some(o => o.includes('item-mood=[]'))).toBe(true);
+    }
+  });
+
   it("refuses an included block's raw $INPUTS_<setting> read its includer does not pass", async () => {
     await writePackWorkflow(
       'beta',
