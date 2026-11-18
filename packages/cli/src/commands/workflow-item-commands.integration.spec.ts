@@ -6,9 +6,9 @@
  * recorded; these prove each command's request, refusal codes and JSON and text output.
  * Which item a trigger start lands on needs detached runs and stays in the trigger spec.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, spyOn, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -48,22 +48,15 @@ let projectRoot = '';
 let archonHome = '';
 let database = '';
 
-beforeAll(() => {
+let seeded = '';
+
+// Seeding runs four workflows, which costs seconds on Windows, so it happens once. Each
+// test then starts from a copy of the seeded state at the same path, because the database
+// and the workspace link record absolute paths.
+beforeAll(async () => {
   Object.assign(process.env, callerEnv);
-});
-
-afterAll(() => {
-  scopeSpy.mockRestore();
-  for (const [key, value] of Object.entries(savedEnv)) {
-    if (value === undefined) Reflect.deleteProperty(process.env, key);
-    else process.env[key] = value;
-  }
-});
-
-// Each test gets its own project and database, seeded the same way, so no test reads what
-// another wrote and the order they run in cannot change a result.
-beforeEach(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-item-commands-')));
+  seeded = realpathSync(mkdtempSync(join(tmpdir(), 'archon-item-commands-seed-')));
   projectRoot = join(root, 'project');
   archonHome = join(root, 'home');
   database = join(archonHome, 'archon.db');
@@ -79,10 +72,24 @@ beforeEach(async () => {
   await run({ item: 'item-1' });
   await run({ item: 'item-2' });
   await run();
+  cpSync(root, seeded, { recursive: true, verbatimSymlinks: true });
 });
 
-afterEach(async () => {
+afterAll(async () => {
   await removeTempTree(root);
+  await removeTempTree(seeded);
+  scopeSpy.mockRestore();
+  for (const [key, value] of Object.entries(savedEnv)) {
+    if (value === undefined) Reflect.deleteProperty(process.env, key);
+    else process.env[key] = value;
+  }
+});
+
+// Each test gets its own copy of the seeded project and database, so no test reads what
+// another wrote and the order they run in cannot change a result.
+beforeEach(() => {
+  rmSync(root, { recursive: true, force: true });
+  cpSync(seeded, root, { recursive: true, verbatimSymlinks: true });
 });
 
 /** One command in-process; its exit code, stdout (console and JSON lines) and stderr. */
