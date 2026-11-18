@@ -19,12 +19,58 @@ import {
 } from '@archon/workflows/schemas/resource-start';
 
 export const githubSourceBindingSchema = resourceStartBindingIntentSchema
-  .omit({ bindingRevision: true, eventInputs: true, checkoutFrom: true, itemKey: true })
+  .omit({
+    bindingRevision: true,
+    eventInputs: true,
+    checkoutFrom: true,
+    itemKey: true,
+    wake: true,
+  })
   .extend({
     selector: forgeEventSelectorSchema,
     inputMapping: z.record(z.string(), createForgeInputBindingSchema(jsonValueSchema)),
     item: itemMappingSchema.extend({ field: forgeEventFieldSchema }).optional(),
+    /**
+     * Wake the open wait `wait` a run of `workflow` left on an item of this binding's
+     * project, when the event's `about` field holds exactly the value the wait names; the
+     * engine matches it when it accepts the receipt. The met wait is passed as input `input`
+     * when set. The start is on the wait's item, so `item` is left out.
+     */
+    wake: z
+      .object({
+        workflow: z.string().min(1),
+        wait: z.string().min(1),
+        about: z.object({ field: forgeEventFieldSchema }).strict(),
+        input: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
   });
+
+/** Why a binding's `wake` cannot be read against its selector, by path within the binding. */
+function wakeProblems(
+  binding: z.infer<typeof githubSourceBindingSchema>
+): { path: string[]; message: string }[] {
+  const { wake, selector } = binding;
+  if (wake === undefined) return [];
+  const problems: { path: string[]; message: string }[] = [];
+  if (binding.item)
+    problems.push({
+      path: ['item'],
+      message: 'A binding with wake starts on the item of the wait it wakes, so it maps no item',
+    });
+  if (!isForgeEventFieldAvailable(selector.kind, wake.about.field))
+    problems.push({
+      path: ['wake', 'about', 'field'],
+      message: `${wake.about.field} is unavailable for ${selector.kind}`,
+    });
+  if (wake.input !== undefined && Object.hasOwn(binding.inputMapping, wake.input))
+    problems.push({
+      path: ['wake', 'input'],
+      message: `input '${wake.input}' is also mapped from the event; name the met wait's input once`,
+    });
+  return problems;
+}
 
 export const githubWebhookSourceConfigSchema = z
   .object({
@@ -61,6 +107,12 @@ export const githubWebhookSourceConfigSchema = z
           code: 'custom',
           path: ['bindings', index, 'item', 'field'],
           message: `${binding.item.field} is unavailable for ${binding.selector.kind}`,
+        });
+      for (const problem of wakeProblems(binding))
+        context.addIssue({
+          code: 'custom',
+          path: ['bindings', index, ...problem.path],
+          message: problem.message,
         });
       if (!isAbsolute(binding.launch.cwd))
         context.addIssue({

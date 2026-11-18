@@ -5,7 +5,7 @@ import type {
   AttentionQueueItem,
   AttentionQueueItemWithoutRun,
 } from '@archon/workflows/attention-queue';
-import { askQueueItem, projectRef } from '@archon/workflows/attention-queue';
+import { askQueueItem, projectRef, heldRunOf } from '@archon/workflows/attention-queue';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -109,6 +109,9 @@ function harness(
       withdrawItemAsk: async () => {
         throw new Error('not used');
       },
+      withdrawItemWaits: async () => {
+        throw new Error('not used');
+      },
     },
     branchOf: async () => null,
     itemsWithoutRun: async () => itemsWithoutRun,
@@ -154,7 +157,7 @@ describe('attention tool', () => {
     const { tool } = harness([webAsk, apiAsk, webGate]);
     const items = listed(await tool.handler({ action: 'list' }));
 
-    expect(items.map(item => item.run?.id)).toEqual(['run-api', 'run-web', 'run-gate']);
+    expect(items.map(item => heldRunOf(item)?.id)).toEqual(['run-api', 'run-web', 'run-gate']);
     expect(items[0]).toMatchObject({
       kind: 'attention',
       run: { id: 'run-api', occurrence: 'pause-api' },
@@ -179,12 +182,14 @@ describe('attention tool', () => {
   test("a project chat lists its own project unless asked for 'all' or another project", async () => {
     const { tool } = harness([webAsk, apiAsk], WEB.id);
 
-    expect(listed(await tool.handler({ action: 'list' })).map(i => i.run?.id)).toEqual(['run-web']);
+    expect(listed(await tool.handler({ action: 'list' })).map(i => heldRunOf(i)?.id)).toEqual([
+      'run-web',
+    ]);
     expect(
-      listed(await tool.handler({ action: 'list', project: 'all' })).map(i => i.run?.id)
+      listed(await tool.handler({ action: 'list', project: 'all' })).map(i => heldRunOf(i)?.id)
     ).toEqual(['run-api', 'run-web']);
     expect(
-      listed(await tool.handler({ action: 'list', project: API.name })).map(i => i.run?.id)
+      listed(await tool.handler({ action: 'list', project: API.name })).map(i => heldRunOf(i)?.id)
     ).toEqual(['run-api']);
   });
 
@@ -194,7 +199,7 @@ describe('attention tool', () => {
     const { tool } = harness([mine, theirs], null, { kind: 'user', userId: 'user-1' });
     const out = await tool.handler({ action: 'list' });
 
-    expect(listed(out).map(item => item.run?.id)).toEqual(['run-web']);
+    expect(listed(out).map(item => heldRunOf(item)?.id)).toEqual(['run-web']);
     expect(out).not.toContain('run-api');
     expect(out).toContain('1 more item(s) in every project are not listed');
   });

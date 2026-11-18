@@ -18,7 +18,10 @@ export async function refusePendingStart(
   workflow: ResolvedWorkflow,
   run: WorkflowRun
 ): Promise<string | undefined> {
-  const reason = (await brokenRunEndedBinding(deps, run)) ?? asksWithoutItem(workflow, run);
+  const reason =
+    (await brokenRunEndedBinding(deps, run)) ??
+    itemResultWithoutItem(workflow, run, 'asks') ??
+    itemResultWithoutItem(workflow, run, 'waits');
   if (reason === undefined) return undefined;
   await requireTerminalStatusWrite(
     // Before the claim another dispatcher may own this row: cancel it only while pending.
@@ -58,16 +61,20 @@ async function brokenRunEndedBinding(
 }
 
 /**
- * A workflow that declares `returns.asks` leaves its asks on the run's item, so a top-level
- * run of it with no item is refused. A `workflow:` child carries no item and opens no asks,
- * so it is not refused. A store without items refuses the item at creation, so asks are
- * refused there before a run starts.
+ * A workflow that declares `returns.asks` or `returns.waits` leaves them on the run's item,
+ * so a top-level run of it with no item is refused. A `workflow:` child carries no item and
+ * opens neither, so it is not refused. A store without items refuses the item at creation,
+ * so they are refused there before a run starts.
  */
-function asksWithoutItem(workflow: ResolvedWorkflow, run: WorkflowRun): Refusal | undefined {
-  const field = workflow.result?.asks;
+function itemResultWithoutItem(
+  workflow: ResolvedWorkflow,
+  run: WorkflowRun,
+  key: 'asks' | 'waits'
+): Refusal | undefined {
+  const field = workflow.result?.[key];
   if (field === undefined || run.parent_run_id !== null || run.item_id !== null) return undefined;
   return {
-    text: `Workflow '${workflow.name}' declares returns.asks '${field}', so it runs on an item: start it with --item <key>`,
-    site: 'workflow.asks_without_item_refused',
+    text: `Workflow '${workflow.name}' declares returns.${key} '${field}', so it runs on an item: start it with --item <key>`,
+    site: `workflow.${key}_without_item_refused`,
   };
 }

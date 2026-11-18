@@ -234,6 +234,8 @@ function notAnswered(
           return `attention: item '${ref}' cannot be read (${result.item.reason}: ${result.item.detail}). Someone has to look at its run; it takes no answer.`;
         case 'owner_lost':
           return `attention: run ${result.item.run.id} lost its owner while it holds its item, so later starts wait behind it. It takes no answer: resume or abandon the run.`;
+        case 'overdue_wait':
+          return `attention: item '${ref}' waits for ${result.item.waits.map(wait => `'${wait.event}' about ${wait.about}`).join(' or ')}, due ${result.item.deadline}. It takes no answer: the event meets it, a new run of ${result.item.waitingIn.workflow} on the item replaces it, or \`archon workflow answer --withdraw ${ref}\` closes it.`;
       }
       return result.item satisfies never;
     case 'refused':

@@ -1964,6 +1964,49 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
     expect(empty.completeWorkflowRun.mock.calls[0]?.[3]).toEqual({ asks: [] });
   });
 
+  it('completes with the waits the run leaves, and fails naming the field when two name one event', async () => {
+    const waits = [{ event: 'checks', about: 'a'.repeat(40), within_minutes: 30 }];
+    mockStructuredResult({ summary: 'done', waits });
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-waits',
+        cwd: testDir,
+        workflow: {
+          name: 'waits',
+          nodes: [resultNode],
+          returns: 'decide',
+          result: { waits: 'waits' },
+        },
+        workflowRun: makeWorkflowRun('waits-run'),
+      })
+    );
+    expect(store.completeWorkflowRun.mock.calls[0]?.[3]).toEqual({ waits });
+
+    // The schema cannot hold "each event once"; the engine's check does.
+    mockStructuredResult({ summary: 'done', waits: [...waits, ...waits] });
+    const twice = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(twice),
+        conversationId: 'conv-waits',
+        cwd: testDir,
+        workflow: {
+          name: 'waits',
+          nodes: [resultNode],
+          returns: 'decide',
+          result: { waits: 'waits' },
+        },
+        workflowRun: makeWorkflowRun('waits-run'),
+      })
+    );
+    expect(twice.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(twice.failWorkflowRun.mock.calls[0]?.[1]).toContain(
+      "returns.waits 'waits' on node 'decide': [1].event 'checks' is named more than once"
+    );
+  });
+
   it('fails the run naming the field when an ask does not hold together, and opens none', async () => {
     // Valid JSON Schema, but the recommendation names no option: only the engine's check sees it.
     mockStructuredResult({

@@ -124,7 +124,10 @@ const itemBase = {
  * computed backoff for a rate limit) and needs no answer; `unreadable` is a paused run
  * nothing can describe, which someone has to look at and resume or abandon; `owner_lost`
  * is a run whose owner is gone while it holds its item and later starts of its workflow on
- * the item wait behind it (`holdsItem`), which only `resume` or `abandon` moves.
+ * the item wait behind it (`holdsItem`), which only `resume` or `abandon` moves;
+ * `overdue_wait` is an item whose waits a completed run left (`returns.waits`) are still
+ * open past their deadline, which the awaited event, another run of the waiting workflow
+ * on the item, or a withdrawal closes.
  *
  * `run` is the paused run that holds the item. A gate, a usage-limit wait and an
  * unreadable pause are always a run. A question may have none: then nothing is paused on
@@ -175,18 +178,47 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     /** The run's stored status, unchanged: the engine never ends it by itself. */
     observedStatus: workflowRunStatusSchema,
   }),
+  z.object({
+    kind: z.literal('overdue_wait'),
+    ...itemBase,
+    /** The completed run that left the waits, which holds nothing while the item waits. */
+    waitingIn: z.object({ runId: z.string(), workflow: z.string() }),
+    /** What the item waits for: any one of them meets the set. */
+    waits: z.array(z.object({ event: z.string(), about: z.string() })).min(1),
+    /** The earliest deadline of the set, which has passed. `pausedAt` is when it opened. */
+    deadline: z.string().datetime(),
+  }),
 ]);
 export type AttentionQueueItem = z.infer<typeof attentionQueueItemSchema>;
 /** An item a paused run holds. */
-export type RunAttentionQueueItem = AttentionQueueItem & { run: object };
+export type RunAttentionQueueItem = Exclude<AttentionQueueItem, { kind: 'overdue_wait' }> & {
+  run: object;
+};
 /** True when a paused run holds `item`; narrows to its `run`. */
 export function isHeldByRun(item: AttentionQueueItem): item is RunAttentionQueueItem {
-  return item.run !== undefined;
+  return 'run' in item && item.run !== undefined;
 }
-/** An item no run holds. */
-export type AttentionQueueItemWithoutRun = Extract<AttentionQueueItem, { kind: 'attention' }> & {
+/** The run that holds `item`, or undefined when no run holds it. */
+export function heldRunOf(item: AttentionQueueItem): RunAttentionQueueItem['run'] | undefined {
+  return isHeldByRun(item) ? item.run : undefined;
+}
+/** The completed run that left an item no run holds (an ask or overdue waits), else undefined. */
+export function leftByRun(
+  item: AttentionQueueItem
+): { runId: string; workflow: string } | undefined {
+  if (item.kind === 'attention') return item.askedIn;
+  return item.kind === 'overdue_wait' ? item.waitingIn : undefined;
+}
+/** An ask a completed run left: a question no run holds. */
+export type AskQueueItem = Extract<AttentionQueueItem, { kind: 'attention' }> & {
   run?: undefined;
 };
+/** An item no run holds: an ask, or an overdue wait. */
+export type AttentionQueueItemWithoutRun =
+  | AskQueueItem
+  | Extract<AttentionQueueItem, { kind: 'overdue_wait' }>;
+/** An overdue wait's queue item. */
+export type OverdueWaitQueueItem = Extract<AttentionQueueItem, { kind: 'overdue_wait' }>;
 
 const ASK_REF_PREFIX = 'ask:';
 
@@ -220,7 +252,7 @@ export async function askQueueItem(
   store: Omit<AskItemStore, 'listOpenItemAsks'>,
   ask: StoredItemAsk,
   codebases: CodebaseCache = new Map()
-): Promise<AttentionQueueItemWithoutRun> {
+): Promise<AskQueueItem> {
   const item = await store.getItem(ask.itemId);
   const run = await store.getWorkflowRun(ask.runId);
   const project =
@@ -252,14 +284,29 @@ export async function askQueueItem(
 }
 
 /** The open asks as queue items, for `AttentionQueueSource.itemsWithoutRun`. */
-export async function openAskItems(
-  store: AskItemStore
-): Promise<AttentionRead<AttentionQueueItemWithoutRun>[]> {
+export async function openAskItems(store: AskItemStore): Promise<AttentionRead<AskQueueItem>[]> {
   const codebases: CodebaseCache = new Map();
-  const items: AttentionRead<AttentionQueueItemWithoutRun>[] = [];
+  const items: AttentionRead<AskQueueItem>[] = [];
   for (const ask of await store.listOpenItemAsks())
     items.push(isAttentionDegraded(ask) ? ask : await askQueueItem(store, ask, codebases));
   return items;
+}
+
+const WAIT_REF_PREFIX = 'wait:';
+
+/**
+ * The ref of the waits a completed run left, as one item: the set is met, replaced or
+ * withdrawn together. `waitRunIdOfRef` reads it back.
+ */
+export function waitItemRef(runId: string): string {
+  return `${WAIT_REF_PREFIX}${runId}`;
+}
+
+/** The run a wait ref names, or undefined when the ref is not a wait's. */
+export function waitRunIdOfRef(ref: string): string | undefined {
+  return ref.startsWith(WAIT_REF_PREFIX) && ref.length > WAIT_REF_PREFIX.length
+    ? ref.slice(WAIT_REF_PREFIX.length)
+    : undefined;
 }
 
 const RUN_REF_SEPARATOR = ':';
@@ -422,8 +469,8 @@ export interface AttentionQueueSource {
   /** The branch of a run's checkout; null when the host has no record of one. */
   branchOf(run: WorkflowRun): Promise<string | null>;
   /**
-   * The open items no run holds: the asks completed runs left (`openAskItems`), which a
-   * host sets here. It is where a source of such items joins the one reader. An entry
+   * The open items no run holds: the asks completed runs left (`openAskItems`) and their
+   * overdue waits (`overdueWaitItems`), which a host sets here. It is where a source of such items joins the one reader. An entry
    * that does not read is reported in its place.
    */
   itemsWithoutRun?(): Promise<readonly AttentionRead<AttentionQueueItemWithoutRun>[]>;
@@ -674,8 +721,8 @@ export async function readAttentionQueueItemByRef(
     (item): item is AttentionQueueItemWithoutRun => !isAttentionDegraded(item) && item.ref === ref
   );
   if (withoutRun !== undefined) return { kind: 'found', item: withoutRun };
-  // An ask that closed is no longer an item: its ref names nothing open.
-  if (askIdOfRef(ref) !== undefined) return { kind: 'none' };
+  // An ask or a set of waits that closed is no longer an item: its ref names nothing open.
+  if (askIdOfRef(ref) !== undefined || waitRunIdOfRef(ref) !== undefined) return { kind: 'none' };
   const runId = runIdOfRef(ref);
   if (runId === '') return { kind: 'unknown' };
   const item = await readAttentionQueueItem(source, runId);

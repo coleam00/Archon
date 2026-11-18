@@ -23,8 +23,7 @@ import { getWorkflowEventEmitter } from '../event-emitter';
 import { requireTerminalStatusWrite } from '../terminal-status-write';
 import { rootOutputFields, type DeclaredOutputPaths, type JsonValue } from '../output-ref';
 import { declaredOutcome, readCompletedOutcome } from '../completed-outcome';
-import { readCompletedAsks } from '../completed-asks';
-import type { ItemAsk } from '../schemas/item-ask';
+import { readCompletedAsks, readCompletedWaits } from '../completed-asks';
 import {
   asksCheckoutMetadata,
   type AsksCheckout,
@@ -152,7 +151,7 @@ export async function finishRun(
 
 /** What the completing write records beside the status, or nothing when there is none. */
 function completionResult(
-  returned: { outcome?: RunCompletedOutcome; asks?: readonly ItemAsk[] },
+  returned: ReturnedResult,
   startReceipts: readonly SourceReceiptAcceptance[]
 ): Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3] {
   const result = {
@@ -162,15 +161,21 @@ function completionResult(
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+/** What the run's returns node said the engine records with the completion. */
+type ReturnedResult = Omit<
+  NonNullable<Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3]>,
+  'startReceipts'
+>;
+
 /**
- * The outcome and asks the run completes with, or undefined when either is not of its
+ * The outcome, asks and waits the run completes with, or undefined when one is not of its
  * declared form and the run was failed naming the field: no outcome is written and no
- * ask is opened.
+ * ask or wait is opened.
  */
 async function readReturnedResult(
   ctx: RunTerminalContext,
   runTranscriptUsage: WorkflowUsage
-): Promise<{ outcome?: RunCompletedOutcome; asks?: readonly ItemAsk[] } | undefined> {
+): Promise<ReturnedResult | undefined> {
   const { workflow, workflowRun, nodeOutputs } = ctx;
   const outcome = readCompletedOutcome(workflow, nodeOutputs);
   if (outcome.kind === 'invalid') {
@@ -182,10 +187,16 @@ async function readReturnedResult(
     await failAtCompletion(ctx, asks.error, runTranscriptUsage, 'dag.asks_invalid_fail');
     return undefined;
   }
+  const waits = readCompletedWaits(workflow, workflowRun, nodeOutputs);
+  if (waits.kind === 'invalid') {
+    await failAtCompletion(ctx, waits.error, runTranscriptUsage, 'dag.waits_invalid_fail');
+    return undefined;
+  }
   return {
     ...(outcome.kind === 'outcome' ? { outcome: outcome.outcome } : {}),
-    // Present, even empty, whenever the run declares asks: the write replaces the open set.
+    // Present, even empty, whenever the run declares them: the write replaces the open set.
     ...(asks.kind === 'asks' ? { asks: asks.asks } : {}),
+    ...(waits.kind === 'waits' ? { waits: waits.waits } : {}),
   };
 }
 
@@ -240,7 +251,7 @@ async function reportUnstartedStages(
  */
 async function readHandOffs(
   ctx: RunTerminalContext,
-  { outcome, asks }: { outcome?: RunCompletedOutcome; asks?: readonly ItemAsk[] },
+  { outcome, asks }: ReturnedResult,
   runTranscriptUsage: WorkflowUsage
 ): Promise<
   | {

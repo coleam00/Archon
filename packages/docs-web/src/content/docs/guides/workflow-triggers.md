@@ -836,6 +836,86 @@ On the first verified delivery, Archon records the source instance, delivery ID,
 
 GitHub does not automatically redeliver every failed webhook. Check delivery status in GitHub and use GitHub's explicit redelivery or your reconciliation process after a transport or processing failure. Archon retains safe receipt and disposition data for inspection; it does not retain the raw webhook body as a trigger archive.
 
+## Start a stage when what an item waits for happens
+
+A stage that has to wait for something outside Archon, such as a change's checks finishing or a review arriving, ends instead of sleeping. It says what its item now waits for as [waits](/reference/workflow-language/#waits-what-an-item-waits-for-outside-archon) in its result. The run completes and holds no agent session, checkout or capacity slot, and nothing polls the forge. When the event arrives, a GitHub source plugin binding with `wake` starts the next stage on the item.
+
+A host stage that reads a change's checks and reviews, and ends waiting when they are not in yet:
+
+```yaml
+name: host
+description: Read the change's checks and reviews; wait for the ones still coming
+inputs:
+  head: {}
+  waited: {}
+returns: { node: read, outcome: verdict, waits: waits }
+nodes:
+  - id: read
+    prompt: |
+      Read the checks and reviews on the change at commit $head. If any is still
+      running or expected, leave verdict 'waiting' and say what you wait for.
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string, enum: [clear, blocked, waiting] }
+      required: [verdict]
+```
+
+The engine adds `waits` to the node's output schema. A run that ends with checks still running at the head leaves:
+
+```json
+{
+  "verdict": "waiting",
+  "waits": [
+    { "event": "checks", "about": "<full head commit id>", "within_minutes": 60 },
+    { "event": "review", "about": "<full head commit id>", "within_minutes": 240 }
+  ]
+}
+```
+
+Two bindings in the pack wake it, one for a check and one for a review, each naming the field of the event that must equal the wait's `about`:
+
+```yaml
+bindings:
+  checks-done:
+    workflow: host
+    resource: host
+    overlap: queue
+    event:
+      kind: check.changed
+      actions: [changed]
+      predicates: [{ field: check.phase, equals: completed }]
+    wake: { workflow: host, wait: checks, about: check.revision }
+    inputs:
+      head: { event: check.revision }
+      waited: { wait: true }
+  reviewed:
+    workflow: host
+    resource: host
+    overlap: queue
+    event:
+      kind: review.changed
+      actions: [submitted, dismissed]
+    wake: { workflow: host, wait: review, about: review.commit }
+    inputs:
+      head: { event: review.commit }
+      waited: { wait: true }
+```
+
+Here the next stage is `host` again: it reads the change once more, and either ends with a verdict or waits again. A stage can as well start another workflow, which reads what the waiting run said with [`result_of: host`](/reference/workflow-language/) on one of its inputs. [`archon pack bindings`](/reference/cli/#pack-bindings) writes each as a binding for the GitHub source plugin's `bindings` array, with `wake` as `{ "workflow", "wait", "about": { "field" }, "input" }`. A binding with `wake` maps no `item`: its start is on the item of the wait it meets, so a pull request's check can wake an item keyed by its issue. `{ wait: true }` passes the met wait to the stage as `{ event, about, workflow, runId, waitingSince, deadline }`; the started workflow declares that input.
+
+What the engine holds to when the event arrives:
+
+- **The wake is decided when the event is recorded.** The plugin reads the `about` field and hands it on; it compares nothing. In the transaction that records the delivery, the engine looks for an open wait of `wait.workflow` named `wait` whose `about` is exactly that value, on an item of the project the binding's `launch.cwd` is in. A match closes the set as met and writes the start on its item. A binding whose field is missing or empty is recorded as `rejected`.
+- **Once.** A redelivery of the same delivery is a replay and starts nothing. Another delivery for the same set finds it met and is recorded `unmatched` with `no open wait 'checks' about '<commit>' from 'host'`. Two deliveries that arrive together start one stage.
+- **A commit the item has left starts nothing.** A later completed run of `host` on the item replaces its open waits with its own. A check or review of the older commit, however late or however GitHub marked it, finds no open wait about that commit and is recorded `unmatched`, naming the wait it looked for.
+- **No event by the deadline raises attention.** An open set past any of its waits' `within_minutes` is listed by `archon workflow attention` as an `overdue_wait` item with ref `wait:<run-id>`, naming what the item waits for and since when. It stays open, and a late event still meets it. Withdraw it with `archon workflow answer --withdraw wait:<run-id>`, or run `host` on the item again. `archon workflow runs --item <key>` lists the item's open waits under `Waiting for` before and after the deadline.
+- **Two items cannot share a wait.** When open waits on two items of the project match one event, nothing starts and the receipt is `rejected`, naming both items.
+
+Each completed check is its own event. A host stage waiting for `checks` is woken by the first completed check at its commit, reads the change, and may end waiting again; narrow the binding's selector with predicates when it should wake for fewer. An event that arrives while the waiting stage is still running finds no open wait, because the waits open only when the run completes, and is recorded `unmatched`. If no later event follows, the set goes overdue and appears in attention.
+
+Wake bindings need the database store and a registered project, as items do.
+
 ## Start workflows from any signed webhook
 
 The Standard Webhooks source plugin accepts the published [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md) `v1` HMAC-SHA256 scheme. It requires `webhook-id`, `webhook-timestamp`, and `webhook-signature`; vendor-specific signatures, `svix-*` aliases, and asymmetric signatures are unsupported. Every authenticated delivery with valid JSON evaluates every configured binding. Configure the sender to send only the events you need.

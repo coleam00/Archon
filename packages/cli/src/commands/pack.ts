@@ -44,6 +44,7 @@ import {
   kindedPackBinding,
   type PackBinding,
   type PackBindingInput,
+  type PackEventBinding,
   type PackBindingKind,
 } from '@archon/workflows/schemas/pack-bindings';
 import {
@@ -187,11 +188,13 @@ function generate(
   const literals: Record<string, string> = {};
   const fields: Record<string, { source: 'field'; field: string }> = {};
   const fromRun: Record<string, AsksSettledInputSource> = {};
+  let waitInput: string | undefined;
   const resolveInput = (name: string, input: PackBindingInput): void => {
     if (typeof input === 'string') literals[name] = input;
     else if ('repo' in input) literals[name] = target.repo[input.repo];
     else if ('binding' in input) literals[name] = bindingPath(target, input.binding);
     else if ('event' in input) fields[name] = { source: 'field', field: input.event };
+    else if ('wait' in input) waitInput = name;
     else fromRun[name] = input;
   };
   for (const [name, input] of Object.entries(binding.inputs)) resolveInput(name, input);
@@ -264,10 +267,29 @@ function generate(
             selector: { ...kinded.binding.event, repository: target.repo },
             inputMapping: fields,
             ...(kinded.binding.item ? { item: kinded.binding.item } : {}),
+            ...wakeDocument(kinded.binding.wake, pack, id, waitInput),
           },
         },
       ];
   }
+}
+
+/** The plugin's `wake` for a binding that declares one, with its workflow's installed name. */
+function wakeDocument(
+  wake: PackEventBinding['wake'],
+  pack: DeclaredPack,
+  id: string,
+  input: string | undefined
+): Record<string, unknown> {
+  if (wake === undefined) return {};
+  return {
+    wake: {
+      workflow: workflowNameFor(pack, id, wake.workflow),
+      wait: wake.wait,
+      about: { field: wake.about },
+      ...(input === undefined ? {} : { input }),
+    },
+  };
 }
 
 /**

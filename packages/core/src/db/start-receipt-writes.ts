@@ -3,7 +3,41 @@ import type {
   ResourceStartBindingIntent,
   SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
+import { getDatabase } from './connection';
+import { resolveWakes } from './item-waits';
 import type { TransactionQuery as Query } from './resource-slots';
+
+/**
+ * Record a receipt. A binding that wakes a wait is resolved against the open waits in the
+ * same transaction (`resolveWakes`), with its launch's project from `projectKeyOf`, read
+ * first; a delivery already recorded is left to `insertStartReceipt`, which answers replay
+ * or conflict and resolves nothing.
+ */
+export async function acceptStartReceipt(
+  input: SourceReceiptAcceptance,
+  projectKeyOf: (cwd: string) => Promise<string | null> = async () => null
+): Promise<{ receiptId: string; replay: boolean }> {
+  const projectKeys = new Map<string, string | null>();
+  for (const binding of input.bindings)
+    if (binding.wake !== undefined)
+      projectKeys.set(binding.bindingId, await projectKeyOf(binding.launch.cwd));
+  return getDatabase().withTransaction(async query => {
+    if (projectKeys.size === 0) return insertStartReceipt(query, input);
+    const { deliveryId, sourceInstanceId } = input.receipt;
+    const recorded =
+      deliveryId !== null &&
+      (
+        await query(
+          'SELECT 1 FROM remote_agent_start_receipts WHERE source_instance_id = $1 AND delivery_id = $2',
+          [sourceInstanceId, deliveryId]
+        )
+      ).rows.length > 0;
+    return insertStartReceipt(
+      query,
+      recorded ? input : await resolveWakes(query, input, projectKeys)
+    );
+  });
+}
 
 /**
  * Accept one receipt inside the caller's transaction: the one body behind
@@ -92,7 +126,8 @@ export async function insertStartReceipt(
 function storableIntent(
   binding: ResourceStartBindingIntent
 ): [string, string | null, string | null] {
-  const { eventInputs, checkoutFrom, itemKey: _itemKey, ...intent } = binding;
+  // A wake is resolved before a binding is written (`resolveWakes`); none is ever stored.
+  const { eventInputs, checkoutFrom, itemKey: _itemKey, wake: _wake, ...intent } = binding;
   const handoff = checkoutFrom ? JSON.stringify(checkoutFrom) : null;
   if (!eventInputs || Object.keys(eventInputs).length === 0)
     return [JSON.stringify(intent), null, handoff];

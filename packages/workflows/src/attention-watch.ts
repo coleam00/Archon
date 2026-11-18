@@ -26,6 +26,8 @@ import {
   type AttentionQueueSource,
   type ProjectRef,
   type RunAttentionQueueItem,
+  heldRunOf,
+  leftByRun,
 } from './attention-queue';
 import type {
   AttentionWatch,
@@ -240,7 +242,8 @@ export type AttentionWatchStore = Pick<
 
 /** The occurrence an answer resolves; null for an item nobody answers. */
 function occurrenceOf(item: AttentionQueueItem): string | null {
-  return item.run !== undefined && 'occurrence' in item.run ? item.run.occurrence : null;
+  const run = heldRunOf(item);
+  return run !== undefined && 'occurrence' in run ? run.occurrence : null;
 }
 
 /** What the queue reports for one run now: its row, its own item, its project. */
@@ -272,12 +275,12 @@ function lifecycleFields(
   };
 }
 
-/** The run fields of a line about `item`, from the run that holds it or, for an ask, left it. */
+/** The run fields of a line about `item`, from the run that holds it or the run that left it. */
 function itemContext(item: AttentionQueueItem): RunContext {
-  const askedIn = item.kind === 'attention' ? item.askedIn : undefined;
+  const run = heldRunOf(item);
   return {
-    workflow: item.run?.workflow ?? askedIn?.workflow ?? null,
-    parentRunId: item.run?.parentRunId ?? null,
+    workflow: run?.workflow ?? leftByRun(item)?.workflow ?? null,
+    parentRunId: run?.parentRunId ?? null,
   };
 }
 
@@ -299,7 +302,7 @@ async function itemKeyOf(store: AttentionWatchStore, run: WorkflowRun): Promise<
 function closedItemFields(item: AttentionQueueItem): { ref: string; runId?: string } & RunContext {
   return {
     ref: item.ref,
-    ...(item.run === undefined ? {} : { runId: item.run.id }),
+    ...(isHeldByRun(item) ? { runId: item.run.id } : {}),
     ...itemContext(item),
   };
 }
@@ -686,7 +689,7 @@ export async function watchAttentionQueue(
       if (!isHeldByRun(prev) && !now.has(prev.ref)) {
         // A degraded row names only its run, so any open ask of that run may be the one
         // that cannot be read: the watch cannot say it closed.
-        if (prev.askedIn !== undefined && unreadable.has(prev.askedIn.runId)) continue;
+        if (prev.kind === 'attention' && unreadable.has(prev.askedIn?.runId ?? '')) continue;
         await emit({
           type: 'resolved',
           cursor,
