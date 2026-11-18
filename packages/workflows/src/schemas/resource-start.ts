@@ -489,6 +489,8 @@ export type ResourceStartBindingIntent = z.infer<typeof resourceStartBindingInte
 export const startBindingInspectionSchema = z.object({
   receiptId: z.string(),
   bindingId: z.string(),
+  /** Stable host-drain cursor key; absent on entries read outside a drain page. */
+  createdAt: z.string().optional(),
   bindingRevision: z.string().nullable(),
   hostId: z.string().nullable(),
   status: startBindingPreparationStatusSchema,

@@ -2,12 +2,60 @@ import { z } from 'zod';
 import { contentDigest, type ForgeRequest, type ForgeResponse } from '@archon/forge/operations';
 import { trustedActor, trustedTextDigest, type TrustedText } from '@archon/forge';
 import { actor, userSchema } from './actor';
-import { GitHubError, githubRequest, location, type Fetch } from './api';
+import {
+  GitHubError,
+  githubGraphql,
+  githubRepository,
+  githubRequest,
+  location,
+  type Fetch,
+} from './api';
 import { defaultBranchHead } from './commit-checks';
 import { handleGithubRepoFile } from './files';
 import { readIssue, subjectRecord } from './workitems';
 
 type TrustRequest = Extract<ForgeRequest, { op: 'workitem.trust' | 'workitem.accept' }>;
+
+const editProvenanceSchema = z.object({
+  repository: z.object({
+    issue: z
+      .object({
+        editor: z.object({ login: z.string() }).nullable(),
+        lastEditedAt: z.string().nullable(),
+      })
+      .nullable()
+      .optional(),
+    pullRequest: z
+      .object({
+        editor: z.object({ login: z.string() }).nullable(),
+        lastEditedAt: z.string().nullable(),
+      })
+      .nullable()
+      .optional(),
+  }),
+});
+
+async function readEditProvenance(request: TrustRequest, fetch: Fetch, token: string) {
+  const { owner, repo } = githubRepository(request.subject.ref.repo);
+  const field = request.subject.kind === 'issue' ? 'issue' : 'pullRequest';
+  const response = editProvenanceSchema.parse(
+    await githubGraphql(
+      fetch,
+      token,
+      request.subject.ref.repo,
+      `query trustedTextProvenance($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){${field}(number:$number){editor{login} lastEditedAt}}}`,
+      { owner, name: repo, number: request.subject.ref.number }
+    )
+  );
+  const value = response.repository[field];
+  if (!value) throw new GitHubError({ kind: 'not_found', message: 'Work item was not found' });
+  return {
+    editor: value.editor
+      ? { host: request.subject.ref.repo.host, id: value.editor.login, login: value.editor.login }
+      : null,
+    lastEditedAt: value.lastEditedAt,
+  };
+}
 
 async function readTrust(request: TrustRequest, fetch: Fetch, token: string): Promise<TrustedText> {
   const repo = request.subject.ref.repo;
@@ -47,12 +95,14 @@ async function readTrust(request: TrustRequest, fetch: Fetch, token: string): Pr
     .parse(parsed)
     .map(login => login.toLowerCase());
   const item = await readIssue(fetch, token, request.subject.ref);
+  const provenance = await readEditProvenance(request, fetch, token);
   return {
     subject: subjectRecord(request.subject, item),
     title: item.title,
     body: item.body ?? '',
     contentDigest: trustedTextDigest(item.title, item.body ?? ''),
     ...('user' in item ? { author: actor(repo.host, item.user ?? null) } : {}),
+    ...provenance,
     policy: {
       maintainersPath: request.maintainersPath,
       head: head.revision,

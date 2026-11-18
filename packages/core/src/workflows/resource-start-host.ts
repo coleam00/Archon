@@ -1,5 +1,6 @@
 import type {
   PendingStartBindingInspection,
+  PendingStartBindingCursor,
   QueuedResourceStartInspection,
 } from '@archon/workflows/resource-start-store';
 import { createRunWorktreeSetupExecutor } from './worktree-setup';
@@ -457,10 +458,18 @@ function receiptIdOfLaunch(launch: PreparedWorkflowLaunch | undefined): string |
   return readResourceStartReceiptId(launch?.run.metadata);
 }
 
+function pendingCursor(
+  listed: readonly PendingStartBindingInspection[]
+): PendingStartBindingCursor | undefined {
+  const last = listed.at(-1);
+  if (!last || 'document' in last || !last.createdAt) return undefined;
+  return { createdAt: last.createdAt, bindingId: last.bindingId, receiptId: last.receiptId };
+}
+
 /**
- * Prepare a page of this host's pending bindings, or all of `receiptIds` page by page (a
- * page is read again until it brings nothing untried), and start each one admitted now.
- * Failures are collected, not thrown; a failed binding is not retried here.
+ * Prepare every pending binding on this host, or all of `receiptIds` page by page (a page
+ * is read again until it brings nothing untried), and start each one admitted now.
+ * Failures are collected, not thrown; each binding is attempted at most once per call.
  */
 async function preparePendingBindings(
   host: ResourceStartHost,
@@ -471,16 +480,23 @@ async function preparePendingBindings(
   const tried = new Set<string>();
   const key = (binding: PendingStartBindingInspection) =>
     'document' in binding ? binding.document : `${binding.receiptId}\n${binding.bindingId}`;
-  for (let offset = 0; offset < (receiptIds?.length ?? 1); ) {
+  const hostWide = receiptIds === undefined;
+  let after: PendingStartBindingCursor | undefined;
+  for (let offset = 0; hostWide || offset < (receiptIds?.length ?? 0); ) {
     const page = receiptIds?.slice(offset, offset + PAGE);
     const query = { hostId: host.hostId, receiptIds: page, limit: PAGE };
-    const listed = await host.deps.store.listPendingStartBindings(query);
+    const listed = await host.deps.store.listPendingStartBindings({ ...query, after });
     const fresh = listed.filter(binding => !tried.has(key(binding)));
     for (const binding of fresh) {
       tried.add(key(binding));
       await preparePendingBinding(host, failures, binding);
     }
-    if (!page || listed.length < PAGE || fresh.length === 0) offset += PAGE;
+    if (!hostWide) {
+      if (listed.length < PAGE || fresh.length === 0) offset += PAGE;
+      continue;
+    }
+    after = pendingCursor(listed);
+    if (listed.length < PAGE || !after) break;
   }
 }
 

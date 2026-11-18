@@ -23,6 +23,9 @@ export const trustedTextSchema = z.object({
   body: z.string(),
   contentDigest: z.string().regex(/^[0-9a-f]{64}$/),
   author: sourceActorSchema.nullable().optional(),
+  /** Actor who produced the current title/body, and when. Null means no edit. */
+  editor: sourceActorSchema.nullable().optional(),
+  lastEditedAt: z.iso.datetime({ offset: true }).nullable().optional(),
   policy: trustedTextPolicySchema,
 });
 export type TrustedText = z.infer<typeof trustedTextSchema>;

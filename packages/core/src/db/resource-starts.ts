@@ -335,6 +335,10 @@ function withEventInputs(
   };
 }
 
+function persistedDateText(value: unknown): string {
+  return value instanceof Date ? value.toISOString() : String(value);
+}
+
 function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
   const requestStatus =
     row.request_status === 'queued' ||
@@ -365,6 +369,7 @@ function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
   return {
     receiptId: String(row.receipt_id),
     bindingId: String(row.binding_id),
+    createdAt: persistedDateText(row.created_at),
     bindingRevision: typeof row.binding_revision === 'string' ? row.binding_revision : null,
     hostId: typeof row.host_id === 'string' ? row.host_id : null,
     status: row.preparation_status as StartBindingInspection['status'],
@@ -462,15 +467,21 @@ export async function listPendingStartBindings(options: {
   hostId: string;
   limit?: number;
   receiptIds?: readonly string[];
+  after?: { createdAt: string; bindingId: string; receiptId: string };
 }): Promise<StartBindingInspection[]> {
   const receiptIds = options.receiptIds;
   if (receiptIds?.length === 0) return [];
+  const after = options.after;
+  const cursorFilter = after
+    ? ' AND (created_at > $3 OR (created_at = $3 AND (binding_id > $4 OR (binding_id = $4 AND receipt_id > $5))))'
+    : '';
+  const cursorParams = after ? [after.createdAt, after.bindingId, after.receiptId] : [];
   const receiptFilter = receiptIds
-    ? ` AND receipt_id IN (${receiptIds.map((_, index) => `$${String(index + 3)}`).join(', ')})`
+    ? ` AND receipt_id IN (${receiptIds.map((_, index) => `$${String(index + 3 + cursorParams.length)}`).join(', ')})`
     : '';
   const result = await getDatabase().query<Record<string, unknown>>(
-    `SELECT * FROM remote_agent_start_receipt_bindings WHERE host_id = $1 AND preparation_status IN ('pending','failed')${receiptFilter} ORDER BY created_at, binding_id LIMIT $2`,
-    [options.hostId, options.limit ?? 100, ...(receiptIds ?? [])]
+    `SELECT * FROM remote_agent_start_receipt_bindings WHERE host_id = $1 AND preparation_status IN ('pending','failed')${cursorFilter}${receiptFilter} ORDER BY created_at, binding_id, receipt_id LIMIT $2`,
+    [options.hostId, options.limit ?? 100, ...cursorParams, ...(receiptIds ?? [])]
   );
   return result.rows.map(inspectBinding);
 }

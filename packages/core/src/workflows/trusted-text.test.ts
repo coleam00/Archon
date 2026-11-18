@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import type { ForgeRequest, ForgeResponse } from '@archon/forge';
+import type { ForgeRequest, ForgeResponse, TrustedText } from '@archon/forge';
 import { trustedTextDigest } from '@archon/forge';
 import type { Codebase } from '../schemas/codebase';
 import { CoreTrustedTextHost, TrustedTextRefusedError } from './trusted-text';
 import type { TrustedTextRunMetadata } from '@archon/workflows/trusted-text';
+import { isDeepStrictEqual } from 'node:util';
 
 const maintainer = { host: 'github.com', id: '1', login: 'alice' };
 const outsider = { host: 'github.com', id: '2', login: 'outside' };
@@ -28,13 +29,15 @@ const codebase: Codebase = {
   updated_at: new Date(),
 };
 
-function evidence(title = 'Title', body = 'Body', maintainers = ['alice']) {
+function evidence(title = 'Title', body = 'Body', maintainers = ['alice']): TrustedText {
   return {
     ...requirement,
     title,
     body,
     contentDigest: trustedTextDigest(title, body),
     author: outsider,
+    editor: null,
+    lastEditedAt: null,
     policy: {
       head: 'a'.repeat(40),
       digest: 'b'.repeat(64),
@@ -86,8 +89,11 @@ function harness() {
         declareRequirement: async () => undefined,
         requirementForItem: async () => null,
         readAcceptedItem: async () => accepted.values().next().value ?? null,
-        readAccepted: async (projectKey, itemKey) =>
-          accepted.get(`${projectKey}:${itemKey}`) ?? null,
+        readAccepted: async (projectKey, itemKey, requested) => {
+          if (!isDeepStrictEqual(requested, requirement))
+            throw new TrustedTextRefusedError('acceptance_requirement_changed');
+          return accepted.get(`${projectKey}:${itemKey}`) ?? null;
+        },
         writeAccepted: async (projectKey, itemKey, snapshot) => {
           accepted.set(`${projectKey}:${itemKey}`, snapshot);
         },
@@ -155,6 +161,31 @@ describe('CoreTrustedTextHost', () => {
     expect(authored.acceptedBy).toBeUndefined();
     h.set(evidence());
     await expect(h.host.recheck(authored)).rejects.toThrow('author_no_longer_trusted');
+  });
+
+  test('trusted-author fast path checks current edit provenance, not just the opener', async () => {
+    const h = harness();
+    await h.host.accept(acceptance());
+    const changedRequirement = { ...requirement, input: 'changed_input' };
+    h.set({ ...evidence(), author: maintainer });
+    const result = await h.host.authorize(changedRequirement, { codebase, itemKey: 'issue-7' });
+    expect(result).toMatchObject({ title: 'Title' });
+    expect(result.acceptedBy).toBeUndefined();
+
+    h.set({ ...evidence(), editor: maintainer, lastEditedAt: '2026-11-18T00:00:00Z' });
+    const edited = await h.host.authorize(changedRequirement, { codebase, itemKey: 'issue-7' });
+    expect(edited.acceptedBy).toBeUndefined();
+
+    for (const current of [
+      { ...evidence(), author: maintainer, editor: outsider, lastEditedAt: '2026-11-18T00:00:00Z' },
+      { ...evidence(), author: maintainer, editor: null, lastEditedAt: '2026-11-18T00:00:00Z' },
+      { ...evidence(), author: maintainer, editor: undefined, lastEditedAt: undefined },
+    ]) {
+      h.set(current);
+      await expect(
+        h.host.authorize(requirement, { codebase, itemKey: 'issue-7' })
+      ).resolves.toMatchObject({ acceptedBy: maintainer });
+    }
   });
   test('outside text waits for exact acceptance and a trusted author needs none', async () => {
     const h = harness();

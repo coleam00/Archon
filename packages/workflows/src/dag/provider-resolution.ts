@@ -26,6 +26,7 @@ import { safeSendMessage } from '../platform-messages';
 import { getLog } from './log';
 import type { RunLayersContext } from './run-context';
 import type { ScopedCapabilityMismatch } from './capability-preflight';
+import { readTrustedTextMetadata } from '../trusted-text';
 
 export function applyPresetOptions(
   providers: ProviderRegistry,
@@ -218,7 +219,14 @@ export async function resolveNodeProviderAndModel(
 
   const aiFields = resolveNodeAiFields(node, workflowLevelOptions, resolveAiText);
   const baseOptions = baseQueryOptions(ctx, node, model, aiFields);
-  const nodeConfig = buildNodeConfig(node, workflowLevelOptions, caps, declaredEffort, aiFields);
+  const nodeConfig = buildNodeConfig(
+    node,
+    workflowLevelOptions,
+    caps,
+    declaredEffort,
+    aiFields,
+    provider === 'claude' && readTrustedTextMetadata(ctx.workflowRun) !== undefined
+  );
 
   // Pass assistantConfig from config — provider parses internally
   const assistantConfig: Record<string, unknown> = { ...(config.assistants[provider] ?? {}) };
@@ -436,7 +444,8 @@ function buildNodeConfig(
   workflowLevelOptions: ProviderResolutionContext['workflowLevelOptions'],
   caps: ProviderCapabilities,
   declaredEffort: EffortLevel | undefined,
-  { systemPrompt, agents, fallbackModel }: NodeAiFields
+  { systemPrompt, agents, fallbackModel }: NodeAiFields,
+  disableAmbientHooks: boolean
 ): NodeConfig {
   return {
     nodeId: node.id,
@@ -463,7 +472,8 @@ function buildNodeConfig(
     maxBudgetUsd: node.maxBudgetUsd,
     systemPrompt,
     fallbackModel,
-    settingSources: node.settingSources,
+    // An empty list overrides both the node and install defaults, including ambient hooks.
+    settingSources: disableAmbientHooks ? [] : node.settingSources,
   };
 }
 

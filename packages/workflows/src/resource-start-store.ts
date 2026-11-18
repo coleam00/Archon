@@ -587,6 +587,7 @@ export interface IResourceStartStore {
     hostId: string;
     limit?: number;
     receiptIds?: readonly string[];
+    after?: PendingStartBindingCursor;
   }): Promise<PendingStartBindingInspection[]>;
   getResourceStartRequest(id: string): Promise<ResourceStartRequestInspection | null>;
   /**
@@ -628,4 +629,11 @@ export interface IResourceStartStore {
     bindingId: string;
     ownerId: string;
   }): Promise<boolean>;
+}
+
+/** The host-drain row after which the next page starts. */
+export interface PendingStartBindingCursor {
+  createdAt: string;
+  bindingId: string;
+  receiptId: string;
 }

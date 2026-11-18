@@ -39,6 +39,7 @@ import {
 import { WorkflowItemHeldError } from './store/errors';
 import { workflowPathPriorityTime } from './workflow-path-lock';
 import {
+  persistTrustedTextAdmission,
   TRUSTED_TEXT_METADATA_KEY,
   recheckTrustedTextAdmission,
   requirePreparedTrustedStart,
@@ -100,6 +101,7 @@ export async function admitWorkflowRun(
   }
 
   await recheckTrustedTextAdmission(deps, workflow, workflowRun);
+  await persistTrustedTextAdmission(deps, workflowRun);
 
   // A continuation's row already says everything this process adds: the store's resume
   // recorded this process as its owner.

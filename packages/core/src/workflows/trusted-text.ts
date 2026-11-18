@@ -3,6 +3,7 @@ import { trustedActor, trustedTextDigest, type ForgeRequest } from '@archon/forg
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import type { Codebase } from '../schemas/codebase';
 import type { IWorkflowHostStore } from './host-store';
+import { trustedTextActor } from '@archon/workflows/trusted-text';
 import type {
   TrustedTextEvidence,
   TrustedTextRunMetadata,
@@ -112,31 +113,39 @@ export class CoreTrustedTextHost implements WorkflowTrustedTextHost {
   ): Promise<TrustedTextRunMetadata> {
     const store = this.records.trustedText;
     if (!store) throw new TrustedTextRefusedError('trusted_text_store_unavailable');
+    const evidence = await this.readEvidence(requirement);
+    if (trustedTextActor(evidence, evidence.policy)) return metadata(evidence, requirement);
     const accepted = await store.readAccepted(
       projectKeyForCodebase(project.codebase, project.codebase.default_cwd),
       project.itemKey,
       requirement
     );
-    return await this.authorizeSnapshot(requirement, accepted);
+    return await this.authorizeSnapshot(requirement, accepted, evidence);
   }
 
   async authorizeItem(requirement: Requirement, itemId: string): Promise<TrustedTextRunMetadata> {
     const store = this.records.trustedText;
     if (!store) throw new TrustedTextRefusedError('trusted_text_store_unavailable');
-    return await this.authorizeSnapshot(requirement, await store.readAcceptedItem(itemId));
+    const evidence = await this.readEvidence(requirement);
+    return await this.authorizeSnapshot(
+      requirement,
+      await store.readAcceptedItem(itemId),
+      evidence
+    );
   }
 
   private async authorizeSnapshot(
     requirement: Requirement,
-    accepted: TrustedTextRunMetadata | null
+    accepted: TrustedTextRunMetadata | null,
+    evidence?: TrustedTextEvidence
   ): Promise<TrustedTextRunMetadata> {
-    const evidence = await this.readEvidence(requirement);
-    if (trustedActor(evidence.author, evidence.policy)) return metadata(evidence, requirement);
+    const current = evidence ?? (await this.readEvidence(requirement));
+    if (trustedTextActor(current, current.policy)) return metadata(current, requirement);
     if (accepted && !isDeepStrictEqual(accepted.requirement, requirement))
       throw new TrustedTextRefusedError('acceptance_requirement_changed');
-    if (!accepted || !sameText(accepted, evidence))
+    if (!accepted || !sameText(accepted, current))
       throw new TrustedTextRefusedError('waiting_acceptance');
-    if (!accepted.acceptedBy || !trustedActor(accepted.acceptedBy, evidence.policy))
+    if (!accepted.acceptedBy || !trustedActor(accepted.acceptedBy, current.policy))
       throw new TrustedTextRefusedError('waiting_acceptance');
     return accepted;
   }
@@ -146,7 +155,7 @@ export class CoreTrustedTextHost implements WorkflowTrustedTextHost {
     if (!sameText(snapshot, current)) throw new TrustedTextRefusedError('waiting_acceptance');
     if (snapshot.acceptedBy && !trustedActor(snapshot.acceptedBy, current.policy))
       throw new TrustedTextRefusedError('maintainer_removed');
-    if (!snapshot.acceptedBy && !trustedActor(current.author, current.policy))
+    if (!snapshot.acceptedBy && !trustedTextActor(current, current.policy))
       throw new TrustedTextRefusedError('author_no_longer_trusted');
   }
 

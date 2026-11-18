@@ -48,7 +48,23 @@ export interface TrustedTextEvidence {
   title: string;
   body: string;
   author?: z.infer<typeof actorSchema> | null;
+  editor?: z.infer<typeof actorSchema> | null;
+  lastEditedAt?: string | null;
   policy: TrustedTextRunMetadata['policy'] & { maintainersPath: string };
+}
+
+export function trustedTextActor(
+  evidence: Pick<TrustedTextEvidence, 'author' | 'editor' | 'lastEditedAt'>,
+  policy: TrustedTextEvidence['policy']
+): boolean {
+  const trustedActor = (actor: z.infer<typeof actorSchema> | null | undefined): boolean =>
+    actor?.login !== null &&
+    actor?.login !== undefined &&
+    policy.maintainers.some(login => login.toLowerCase() === actor.login?.toLowerCase());
+  if (evidence.lastEditedAt === null && evidence.editor === null)
+    return trustedActor(evidence.author);
+  if (typeof evidence.lastEditedAt === 'string') return trustedActor(evidence.editor);
+  return false;
 }
 
 export interface WorkflowTrustedTextHost {
@@ -135,6 +151,15 @@ export async function recheckTrustedTextAdmission(
   } catch (error) {
     throw new TrustedTextAdmissionError(error instanceof Error ? error.message : String(error));
   }
+}
+
+export async function persistTrustedTextAdmission(
+  deps: WorkflowDeps,
+  run: WorkflowRun
+): Promise<void> {
+  if (!readTrustedTextMetadata(run)) return;
+  // Persist before claimPendingRun: a crash must not leave running work without its snapshot.
+  await deps.store.updateWorkflowRun(run.id, { metadata: run.metadata });
 }
 
 export class TrustedTextAdmissionError extends Error {}

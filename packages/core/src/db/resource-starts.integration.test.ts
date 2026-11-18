@@ -143,6 +143,7 @@ afterEach(async () => {
 });
 
 describe('durable resource starts', () => {
+  // Cold preparation of 101 waiting bindings exceeds Bun's default twenty-second timeout.
   test('wait, accept and drain starts the same protected binding with its accepted input', async () => {
     const projectPath = join(root, 'project');
     await mkdir(join(projectPath, '.archon', 'workflows'), { recursive: true });
@@ -251,7 +252,103 @@ nodes:
     expect(run?.metadata.inputs_values).toMatchObject({
       trusted_item: { title: 'Accepted title', body: 'Accepted body' },
     });
-  });
+
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
+      [started[0]]
+    );
+    host.deps.trustedText.authorize = async requested => {
+      if (requested.subject.ref.number !== requirement.subject.ref.number)
+        throw new TrustedTextRefusedError('waiting_acceptance');
+      return snapshot;
+    };
+    for (let index = 0; index < 101; index++) {
+      const waitingReceiptId = crypto.randomUUID();
+      await acceptStartReceipt({
+        receipt: {
+          id: waitingReceiptId,
+          sourceInstanceId: 'github',
+          deliveryId: `waiting-${String(index)}`,
+          contentDigest: 'digest',
+          receivedAt: new Date().toISOString(),
+          occurredAt: null,
+          sourceActor: null,
+        },
+        outcome: 'matched',
+        bindings: [
+          {
+            bindingId: `waiting-${String(index)}`,
+            bindingRevision: '1',
+            hostId: 'host',
+            runAsUserId: '22222222-2222-4222-8222-222222222222',
+            resource: 'repo:test',
+            overlap: 'queue',
+            launch: {
+              cwd: project,
+              workflowName: 'protected',
+              inputs: {},
+              isolation: { kind: 'in-place' },
+            },
+            itemKey: `waiting-${String(index)}`,
+            trustedText: {
+              ...requirement,
+              subject: {
+                ...requirement.subject,
+                ref: { ...requirement.subject.ref, number: 100 + index },
+              },
+            },
+          },
+        ],
+      });
+      expect(
+        await claimStartBindingPreparation({
+          receiptId: waitingReceiptId,
+          bindingId: `waiting-${String(index)}`,
+          ownerId: 'owner',
+        })
+      ).toBe(true);
+      await failStartBindingPreparation({
+        receiptId: waitingReceiptId,
+        bindingId: `waiting-${String(index)}`,
+        ownerId: 'owner',
+        retryable: true,
+        error: 'waiting_acceptance',
+      });
+    }
+    const runnableReceiptId = crypto.randomUUID();
+    await acceptStartReceipt({
+      receipt: {
+        id: runnableReceiptId,
+        sourceInstanceId: 'github',
+        deliveryId: 'runnable-after-backlog',
+        contentDigest: 'digest',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: 'runnable-after-backlog',
+          bindingRevision: '1',
+          hostId: 'host',
+          runAsUserId: '22222222-2222-4222-8222-222222222222',
+          resource: 'repo:test',
+          overlap: 'queue',
+          launch: {
+            cwd: project,
+            workflowName: 'protected',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+          itemKey: 'issue-7',
+          trustedText: requirement,
+        },
+      ],
+    });
+    await expect(drainResourceStartHost(host)).rejects.toBeInstanceOf(ResourceStartDrainError);
+    expect(started).toHaveLength(2);
+  }, 60_000);
 
   test('a waiting-acceptance preparation remains drainable after its prerequisite changes', async () => {
     const receiptId = crypto.randomUUID();

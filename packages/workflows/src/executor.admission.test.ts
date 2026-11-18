@@ -310,6 +310,119 @@ describe('concurrent-run guard', () => {
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledWith(run.id);
   });
+
+  it('persists a newly authorized running continuation before any agent executes', async () => {
+    const trustedText: TrustedTextRunMetadata = {
+      schemaVersion: 1,
+      requirement: {
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        maintainersPath: '.archon/maintainers.json',
+        input: 'trusted_item',
+      },
+      title: 'Accepted',
+      body: 'Snapshot',
+      contentDigest: 'a'.repeat(64),
+      policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+    };
+    const run = makeRun({ status: 'running', item_id: 'item-7', metadata: {} });
+    const store = makeStore();
+    const deps = makeDeps(store);
+    deps.trustedText = {
+      requirementForItem: async () => trustedText.requirement,
+      authorizeItem: async () => trustedText,
+      readEvidence: async () => {
+        throw new Error('unexpected evidence read');
+      },
+      authorize: async () => {
+        throw new Error('unexpected authorization');
+      },
+      recheck: async () => undefined,
+    };
+    await startWorkflow({
+      deps,
+      workflow: makeWorkflow({
+        webSearchMode: 'disabled',
+        nodes: [
+          {
+            id: 'reader',
+            kind: 'agent',
+            source: { kind: 'inline', prompt: 'Read' },
+            allowed_tools: ['Read'],
+          },
+        ],
+      }),
+      options: resumeOf(run),
+    });
+    expect(
+      mocked(store.updateWorkflowRun).mock.calls.some(
+        ([, update]) => update.metadata?.trusted_text === trustedText
+      )
+    ).toBe(true);
+    expect(dagCall(0)?.workflowRun.metadata.inputs_values).toMatchObject({
+      trusted_item: { title: 'Accepted', body: 'Snapshot' },
+    });
+  });
+
+  it('persists a pending trusted snapshot before claiming execution ownership', async () => {
+    const trustedText: TrustedTextRunMetadata = {
+      schemaVersion: 1,
+      requirement: {
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        maintainersPath: '.archon/maintainers.json',
+        input: 'trusted_item',
+      },
+      title: 'Accepted',
+      body: 'Snapshot',
+      contentDigest: 'a'.repeat(64),
+      policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+    };
+    const run = makeRun({ status: 'pending', item_id: 'item-7', metadata: {} });
+    const transitions: string[] = [];
+    const store = makeStore({
+      updateWorkflowRun: mock(async () => {
+        transitions.push('metadata');
+      }),
+      claimPendingWorkflowRun: mock(async () => {
+        transitions.push('claim');
+        return { ...run, status: 'running' as const };
+      }),
+    });
+    const deps = makeDeps(store);
+    deps.trustedText = {
+      requirementForItem: async () => trustedText.requirement,
+      authorizeItem: async () => trustedText,
+      readEvidence: async () => {
+        throw new Error('unexpected evidence read');
+      },
+      authorize: async () => {
+        throw new Error('unexpected authorization');
+      },
+      recheck: async () => undefined,
+    };
+    await startWorkflow({
+      deps,
+      workflow: makeWorkflow({
+        webSearchMode: 'disabled',
+        nodes: [
+          {
+            id: 'reader',
+            kind: 'agent',
+            source: { kind: 'inline', prompt: 'Read' },
+            allowed_tools: ['Read'],
+          },
+        ],
+      }),
+      options: { preCreatedRun: run },
+    });
+    expect(transitions[0]).toBe('metadata');
+    expect(transitions).toContain('claim');
+  });
   it('blocks and cancels its own row when the active-workflow check fails', async () => {
     const cancelSpy = mock(async () => ({ cancelled: true }));
     const store = makeStore({

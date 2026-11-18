@@ -4,7 +4,10 @@ import {
   emitWorkflowNotice,
 } from '../workflow-notice';
 import { resourceStartFixtures } from '../resource-start-conformance';
-import { SourceReceiptDigestConflictError } from '../resource-start-store';
+import {
+  SourceReceiptDigestConflictError,
+  type StartBindingInspection,
+} from '../resource-start-store';
 import type {
   ResourceStartBindingIntent,
   SourceReceiptAcceptance,
@@ -408,6 +411,33 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
         })
       ).toMatchObject([{ receiptId: named.receipt.id }]);
       expect(await store.listPendingStartBindings({ hostId: 'host', receiptIds: [] })).toEqual([]);
+    });
+    test('pending cursor pages cover more than one hundred retryable bindings', async () => {
+      const store = harness.store;
+      for (let index = 0; index < 105; index++) {
+        const input = acceptance();
+        input.receipt.deliveryId = `cursor-${String(index)}`;
+        await store.acceptStartReceipt(input);
+      }
+      const first = await store.listPendingStartBindings({ hostId: 'host', limit: 100 });
+      expect(first).toHaveLength(100);
+      const validFirst = first.filter((row): row is StartBindingInspection => !('document' in row));
+      const last = validFirst.at(-1);
+      if (!last?.createdAt) throw new Error('Expected a cursor on the first page');
+      const second = await store.listPendingStartBindings({
+        hostId: 'host',
+        limit: 100,
+        after: {
+          createdAt: last.createdAt,
+          bindingId: last.bindingId,
+          receiptId: last.receiptId,
+        },
+      });
+      expect(second).toHaveLength(5);
+      const validSecond = second.filter(
+        (row): row is StartBindingInspection => !('document' in row)
+      );
+      expect(new Set([...validFirst, ...validSecond].map(row => row.receiptId)).size).toBe(105);
     });
     test('preparation failure and reset require the exact current owner', async () => {
       const store = harness.store,

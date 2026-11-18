@@ -60,12 +60,14 @@ export function createReceiptOperations(
   async function inspectBinding(
     tx: AdmissionTransaction,
     item: z.infer<typeof bindingSchema>,
-    requestId: string | null = null
+    requestId: string | null = null,
+    createdAt?: string
   ): Promise<StartBindingInspection> {
     const inspection = startBindingInspectionSchema.parse(item);
     const request = requestId ? await tx.request(requestId) : null;
     return {
       ...inspection,
+      ...(createdAt !== undefined ? { createdAt } : {}),
       requestStatus: request?.status ?? null,
       disposition: request && request.status !== 'withdrawn' ? disposition(request) : null,
     };
@@ -148,7 +150,7 @@ export function createReceiptOperations(
                   .sort((a, b) => compareCodeUnits(a.bindingId, b.bindingId))
                   .flatMap(item =>
                     (item.requestIds.length ? item.requestIds : [null]).map(requestId =>
-                      inspectBinding(tx, item, requestId)
+                      inspectBinding(tx, item, requestId, row.createdAt)
                     )
                   )
               ),
@@ -197,17 +199,24 @@ export function createReceiptOperations(
         const bindings = await Promise.all(
           rows
             .filter(
-              ({ binding }) =>
+              ({ binding, createdAt }) =>
                 binding.hostId === options.hostId &&
-                (binding.status === 'pending' || binding.status === 'failed')
+                (binding.status === 'pending' || binding.status === 'failed') &&
+                (!options.after ||
+                  compareCodeUnits(createdAt, options.after.createdAt) > 0 ||
+                  (createdAt === options.after.createdAt &&
+                    (compareCodeUnits(binding.bindingId, options.after.bindingId) > 0 ||
+                      (binding.bindingId === options.after.bindingId &&
+                        compareCodeUnits(binding.receiptId, options.after.receiptId) > 0))))
             )
             .sort(
               (a, b) =>
                 compareCodeUnits(a.createdAt, b.createdAt) ||
-                compareCodeUnits(a.binding.bindingId, b.binding.bindingId)
+                compareCodeUnits(a.binding.bindingId, b.binding.bindingId) ||
+                compareCodeUnits(a.binding.receiptId, b.binding.receiptId)
             )
             .slice(0, options.limit ?? 100)
-            .map(({ binding }) => inspectBinding(tx, binding))
+            .map(({ binding, createdAt }) => inspectBinding(tx, binding, null, createdAt))
         );
         return [...damaged, ...bindings];
       }),

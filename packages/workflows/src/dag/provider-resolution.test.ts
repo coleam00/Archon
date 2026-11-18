@@ -197,6 +197,46 @@ describe('executor capability ownership', () => {
     expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
   });
 
+  it.each([undefined, ['project', 'user'] as ('project' | 'user')[]])(
+    'disables ambient Claude hooks for protected nodes with settingSources=%j',
+    async settingSources => {
+      const deps = createMockDeps();
+      deps.trustedText = {
+        readEvidence: async () => {
+          throw new Error('unexpected evidence read');
+        },
+        authorize: async () => {
+          throw new Error('unexpected authorization');
+        },
+        recheck: async () => undefined,
+      };
+      mockSendQueryDag.mockClear();
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd,
+          workflowProvider: 'claude',
+          workflow: {
+            name: 'protected-claude-hooks',
+            webSearchMode: 'disabled',
+            nodes: [
+              {
+                id: 'reader',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'Read' },
+                allowed_tools: ['Read'],
+                ...(settingSources ? { settingSources } : {}),
+              },
+            ],
+          },
+          workflowRun: protectedRun(),
+        })
+      );
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.settingSources).toEqual([]);
+    }
+  );
+
   it('rechecks before a structured-output reask', async () => {
     const store = createMockStore();
     const deps = createMockDeps(
