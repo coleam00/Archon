@@ -930,6 +930,44 @@ describe('subtasks and settling', () => {
     expect(stream.chunks.some(chunk => chunk.type === 'settled')).toBe(false);
     expect(stream.chunks.filter(chunk => chunk.type === 'subtask')).toHaveLength(1);
   });
+
+  test('refuses the main agent its structured result while a subtask runs (#5923)', async () => {
+    const decisions: unknown[] = [];
+    mockQuery.mockImplementation(async function* ({ options }) {
+      const hold = options?.hooks?.PreToolUse?.find(m => m.matcher === 'StructuredOutput')
+        ?.hooks[0];
+      if (!hold) throw new Error('no StructuredOutput hook');
+      const ask = async (input: Record<string, unknown> = {}): Promise<void> => {
+        decisions.push(
+          await hold(
+            { hook_event_name: 'PreToolUse', tool_name: 'StructuredOutput', ...input } as never,
+            'so-id',
+            { signal: new AbortController().signal }
+          )
+        );
+      };
+      yield { type: 'system', subtype: 'task_started', task_id: 'helper' };
+      await ask();
+      await ask({ agent_id: 'helper' });
+      yield { type: 'system', subtype: 'task_notification', task_id: 'helper', status: 'failed' };
+      await ask();
+    });
+
+    await chunksOf('test', '/workspace', undefined, {
+      outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+    });
+
+    expect(decisions).toEqual([
+      {
+        hookSpecificOutput: expect.objectContaining({
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+        }),
+      },
+      { continue: true },
+      { continue: true },
+    ]);
+  });
 });
 
 describe('tool call closing', () => {
