@@ -87,6 +87,7 @@ function fakeForge(
     ok: true,
     host: 'github.com',
     plugin: { name: 'fake', version: '1' },
+    read: false,
   }
 ) {
   const comments = new Map<string, { body: string; posts: number; edits: number }>();

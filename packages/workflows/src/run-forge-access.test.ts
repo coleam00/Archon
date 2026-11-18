@@ -31,8 +31,12 @@ const declaring: { name: string; pack: WorkflowPack } = {
 };
 const prepared = { config: { envVars: {} }, executionUserId: undefined };
 
-function site(cwd: string, inContainer = false): RunForgeAccessSite {
-  return { cwd, codebaseId: undefined, inContainer };
+function site(
+  cwd: string,
+  inContainer = false,
+  inputs?: RunForgeAccessSite['inputs']
+): RunForgeAccessSite {
+  return { cwd, codebaseId: undefined, inContainer, inputs };
 }
 
 /** The common call: a declaring pack, freshly prepared, on the host. */
@@ -95,8 +99,8 @@ describe('assertRunForgeAccess', () => {
   });
 
   test('each remote is asked for the declared capabilities, and one that serves the run is enough', async () => {
-    const check = mock<ForgeCheck>(async ({ remote }) =>
-      remote.includes('mirror')
+    const check = mock<ForgeCheck>(async request =>
+      'remote' in request && request.remote.includes('mirror')
         ? { reason: 'no_plugin_for_host', message: 'no forge plugin claims mirror.example' }
         : undefined
     );
@@ -117,7 +121,9 @@ describe('assertRunForgeAccess', () => {
     Bun.spawnSync(['git', '-C', dir, 'config', 'include.path', included]);
     const check = mock<ForgeCheck>(async () => undefined);
     await assertFor(dir, check);
-    expect(check.mock.calls.map(([request]) => request.remote)).toEqual(['git@github.com:o/r.git']);
+    expect(check.mock.calls.map(([request]) => request)).toEqual([
+      { remote: 'git@github.com:o/r.git', operations: ['pr.view'] },
+    ]);
   });
 
   test('a remote is asked by the URL git fetches, after its insteadOf rewrite', async () => {
@@ -125,7 +131,9 @@ describe('assertRunForgeAccess', () => {
     Bun.spawnSync(['git', '-C', dir, 'config', 'url.git@github.com:.insteadOf', 'gh:']);
     const check = mock<ForgeCheck>(async () => undefined);
     await assertFor(dir, check);
-    expect(check.mock.calls.map(([request]) => request.remote)).toEqual(['git@github.com:o/r.git']);
+    expect(check.mock.calls.map(([request]) => request)).toEqual([
+      { remote: 'git@github.com:o/r.git', operations: ['pr.view'] },
+    ]);
   });
 
   test('a refusal names each remote with its typed reason and remedy, never its URL', async () => {
@@ -170,6 +178,51 @@ describe('assertRunForgeAccess', () => {
     expect(check.mock.calls[0]?.[1].env.GH_TOKEN).toBe('user-token');
   });
 
+  describe('a pack that names its repository by inputs', () => {
+    const naming: { name: string; pack: WorkflowPack } = {
+      name: 'merge-queue',
+      pack: {
+        ...declaring.pack,
+        forge: { operations: ['pr.view'], repository: { host: 'repo_host', path: 'repo_path' } },
+      },
+    };
+    const capableMirror = () => checkout({ mirror: 'git@github.com:mirror/r.git' });
+    const run = (inputs: RunForgeAccessSite['inputs'], check: ForgeCheck) =>
+      assertRunForgeAccess(noGithub, naming, prepared, site(capableMirror(), false, inputs), check);
+
+    test('is checked against that repository alone, so a capable remote cannot start it', async () => {
+      const check = mock<ForgeCheck>(async request =>
+        'repo' in request ? { reason: 'not_found', message: 'Not Found' } : undefined
+      );
+      const error = await run({ repo_host: 'github.com', repo_path: 'o/target' }, check).catch(
+        (caught: unknown) => caught as ForgeRequirementError
+      );
+      expect(error).toBeInstanceOf(ForgeRequirementError);
+      expect(error?.failures).toEqual([{ reason: 'not_found', message: 'Not Found' }]);
+      expect(error?.message).toContain("Repository 'github.com/o/target'");
+      expect(check.mock.calls.map(([request]) => request)).toEqual([
+        { repo: { host: 'github.com', path: 'o/target' }, operations: ['pr.view'] },
+      ]);
+    });
+
+    test('falls back to the checkout remotes when neither input is set', async () => {
+      const check = mock<ForgeCheck>(async () => undefined);
+      await run({ repo_host: '', repo_path: ' ' }, check);
+      await run(undefined, check);
+      expect(check.mock.calls.map(([request]) => request)).toEqual([
+        { remote: 'git@github.com:mirror/r.git', operations: ['pr.view'] },
+        { remote: 'git@github.com:mirror/r.git', operations: ['pr.view'] },
+      ]);
+    });
+
+    test('is refused without a check when only one input is set', async () => {
+      const check = mock<ForgeCheck>(async () => undefined);
+      const failures = await refusal(run({ repo_host: '', repo_path: 'o/target' }, check));
+      expect(failures).toEqual([expect.objectContaining({ reason: 'no_forge_repository' })]);
+      expect(check).not.toHaveBeenCalled();
+    });
+  });
+
   test('a host with no CLI command for the forge is refused', async () => {
     delete process.env.ARCHON_CLI_COMMAND;
     const failures = await refusal(
@@ -182,7 +235,7 @@ describe('assertRunForgeAccess', () => {
 describe('forgeCheckFailure', () => {
   const answer = (value: object): string => JSON.stringify({ operationId: 'op', ...value });
   const exited = (exitCode: number) => ({ exitCode, signalCode: null });
-  const ops = ['pr.view'];
+  const request = { remote: 'git@github.com:o/r.git', operations: ['pr.view'] };
 
   test('a passing answer lets the run start', () => {
     expect(
@@ -191,48 +244,57 @@ describe('forgeCheckFailure', () => {
           ok: true,
           result: {
             op: 'check',
-            value: { host: 'github.com', plugin: { name: 'github', version: '1' }, operations: [] },
+            value: {
+              host: 'github.com',
+              plugin: { name: 'github', version: '1' },
+              operations: [],
+              read: true,
+            },
           },
         }),
         exited(0),
-        ops
+        request
       )
     ).toBeUndefined();
   });
 
-  test.each(['no_plugin_for_host', 'unsupported_op', 'no_credential'] as const)(
-    'the forge refusal %s keeps its kind and remedy',
-    kind => {
-      expect(
-        forgeCheckFailure(
-          answer({ ok: false, error: { kind, message: 'm' }, remedy: 'do this' }),
-          exited(1),
-          ops
-        )
-      ).toEqual({ reason: kind, message: 'm', remedy: 'do this' });
-    }
-  );
+  test.each([
+    'no_plugin_for_host',
+    'unsupported_op',
+    'no_credential',
+    'authorization',
+    'not_found',
+  ] as const)('the forge refusal %s keeps its kind and remedy', kind => {
+    expect(
+      forgeCheckFailure(
+        answer({ ok: false, error: { kind, message: 'm' }, remedy: 'do this' }),
+        exited(1),
+        request
+      )
+    ).toEqual({ reason: kind, message: 'm', remedy: 'do this' });
+  });
 
   test('any other failure, or no answer at all, is a check that failed', () => {
     expect(
       forgeCheckFailure(
         answer({ ok: false, error: { kind: 'process_failed', message: 'discovery failed' } }),
         exited(1),
-        ops
+        request
       )
     ).toEqual({ reason: 'check_failed', message: 'discovery failed' });
   });
 
   test('a check with no answer names how it ended and how to rerun it, never its output', () => {
-    const stopped = forgeCheckFailure('', { exitCode: null, signalCode: 'SIGTERM' }, ops);
+    const stopped = forgeCheckFailure('', { exitCode: null, signalCode: 'SIGTERM' }, request);
     expect(stopped).toMatchObject({ reason: 'check_failed' });
     expect(stopped?.message).toContain('SIGTERM');
-    expect(forgeCheckFailure('', exited(3), ops)).toMatchObject({ reason: 'check_failed' });
-    const garbled = forgeCheckFailure('token=ghp_secret not json', exited(3), ops);
+    expect(forgeCheckFailure('', exited(3), request)).toMatchObject({ reason: 'check_failed' });
+    const garbled = forgeCheckFailure('token=ghp_secret not json', exited(3), request);
     expect(garbled?.message).toContain('3');
     expect(JSON.stringify(garbled)).not.toContain('ghp_secret');
     expect(garbled).toMatchObject({ reason: 'check_failed' });
     expect(garbled?.remedy).toContain('--data-file');
     expect(garbled?.remedy).toContain('pr.view');
+    expect(garbled?.remedy).not.toContain('o/r.git');
   });
 });

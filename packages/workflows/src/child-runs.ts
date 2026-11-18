@@ -188,7 +188,7 @@ export async function runChildWorkflow(
     if (guard.stopped) return guard.outcome;
     const inputs = resolveChildInputs(args, workflow);
     if (inputs.stopped) return inputs.outcome;
-    const prepared = await prepareChildAiConfiguration(launch, workflow);
+    const prepared = await prepareChildAiConfiguration(launch, workflow, inputs.value);
     if (prepared.stopped) return prepared.outcome;
     const placement = await resolveChildPlacement(launch, prepared.value);
     if (placement.stopped) return placement.outcome;
@@ -360,7 +360,8 @@ function resolveChildInputs(
 
 async function prepareChildAiConfiguration(
   { deps, args, resolvedModelOverrides, runConfig }: ChildLaunch,
-  childWorkflow: ResolvedWorkflow
+  childWorkflow: ResolvedWorkflow,
+  inputs: Record<string, JsonValue> | undefined
 ): Promise<ChildPhase<PreparedRunAiConfiguration>> {
   const { resumeChild } = args;
   const configCwd = resumeChild?.run.working_path ?? args.cwd;
@@ -380,6 +381,7 @@ async function prepareChildAiConfiguration(
       await assertRunForgeAccess(deps, childWorkflow, childPrepared, {
         cwd: configCwd,
         codebaseId: args.codebaseId,
+        inputs,
       });
     }
     return proceed(childPrepared);

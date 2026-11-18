@@ -408,26 +408,32 @@ export type ForgeAccessCheck =
       host: string;
       plugin: NonNullable<ForgeDispatchResult['plugin']>;
       credentialSource?: string;
+      /** Whether the credential read the repository; see {@link checkForgeAccess}. */
+      read: boolean;
     }
   | { ok: false; error: ForgeError; unsupported?: string[]; remedy?: string };
 
 /**
+ * A head no pull request uses: the read asks for its pull request, which the forge answers
+ * with none when the credential may read the repository.
+ */
+const ACCESS_READ_HEAD = 'archon-forge-check';
+
+/**
  * Whether a forge operation could start: a plugin claims the forge, it advertises every
- * capability in `operations`, and its credential resolves. The forge is `host`, or the
- * plugin a `resolve` of `remote` selects. It reads discovery metadata and the credential
- * sources only; no plugin operation runs, so it proves nothing about what the credential
- * may read or write. A refusal the operator can fix carries their next step.
+ * capability in `operations`, its credential resolves, and the forge accepts that
+ * credential for the repository. The forge is `host`, `repo`'s host, or the plugin a
+ * `resolve` of `remote` selects. A `remote` or `repo` check then makes one read, a `pr.view`
+ * by head (after a `resolve` of a remote to its repository), so a rejected or blind
+ * credential is refused. A `host` check names no repository and runs no plugin operation.
+ * No check proves what the credential may write. A refusal the operator can fix carries
+ * their next step.
  */
 export async function checkForgeAccess(
-  request: { host?: string; remote?: string; operations: readonly string[] },
+  request: { host?: string; remote?: string; repo?: RepoRef; operations: readonly string[] },
   options: DispatchOptions = {}
 ): Promise<ForgeAccessCheck> {
-  const own =
-    request.remote !== undefined
-      ? remoteHost(request.remote)
-      : request.host !== undefined
-        ? normalizeHost(request.host)
-        : undefined;
+  const own = accessHost(request);
   if (!own) {
     // The remote is not echoed: its URL can carry a credential in its userinfo.
     return refused({ kind: 'no_plugin_for_host', message: 'the remote names no forge host' });
@@ -438,8 +444,7 @@ export async function checkForgeAccess(
   } catch (error) {
     return { ok: false, error: discoveryFailure(error) };
   }
-  const host =
-    request.remote !== undefined ? remotePluginHost(discovery, request.remote, own) : own;
+  const host = accessClaim(discovery, request, own);
   const plugin = discovery.byHost.get(host);
   if (!plugin) {
     const unavailable = discovery.unavailable.map(error => error.message).join('; ');
@@ -476,17 +481,96 @@ export async function checkForgeAccess(
       credentialEnvNames(plugin, discovery, host).override
     );
   }
-  return {
-    ok: true,
+  const passed = {
+    ok: true as const,
     host,
     plugin: { name, version },
     ...(credential.kind === 'selected' ? { credentialSource: credential.source } : {}),
+    read: false,
   };
+  // A `host` check names no repository, and a plugin without `pr.view` has no read to
+  // serve: both stop at the credential, and say so with `read: false`.
+  if (request.host !== undefined || !capabilities.includes('pr.view')) return passed;
+  return readRepository(request, passed, { ...options, discovery });
 }
+
+/**
+ * The check's one read: a `pr.view` by head of the repository, which a `remote` names
+ * through a `resolve`. The forge's own read path runs it, so its retries and response
+ * checks are those of every forge read.
+ */
+async function readRepository(
+  request: { remote?: string; repo?: RepoRef },
+  passed: Extract<ForgeAccessCheck, { ok: true }>,
+  options: DispatchOptions
+): Promise<ForgeAccessCheck> {
+  let repo = request.repo;
+  if (repo === undefined) {
+    const { response } = await dispatch(
+      { operationId: crypto.randomUUID(), op: 'resolve', remote: request.remote ?? null },
+      options
+    );
+    if (!response.ok) return { ok: false, error: response.error };
+    if (response.result.op !== 'resolve' || response.result.value.kind !== 'resolved') {
+      return refused({
+        kind: 'no_plugin_for_host',
+        message: 'the remote names no forge repository',
+      });
+    }
+    repo = response.result.value.repo;
+  }
+  const read: ForgeRequest = {
+    operationId: crypto.randomUUID(),
+    op: 'pr.view',
+    selector: { kind: 'head', repo, headRepo: repo, head: ACCESS_READ_HEAD },
+  };
+  const { response, retries = 0 } = await dispatch(read, options);
+  const answer = named(read, response, retries);
+  if (answer.ok) return { ...passed, read: true };
+  const { error } = answer;
+  if (error.kind === 'authorization') {
+    const source = passed.credentialSource ? ` from ${passed.credentialSource}` : '';
+    return {
+      ok: false,
+      error,
+      remedy: `The forge rejected the credential${source}: replace or refresh it, or connect your GitHub identity again when per-user GitHub is on.`,
+    };
+  }
+  if (error.kind === 'not_found') {
+    return {
+      ok: false,
+      error,
+      remedy: `The credential cannot see ${repo.host}/${repo.path}, or the repository does not exist: check the repository and the credential's access to it.`,
+    };
+  }
+  return { ok: false, error };
+}
+
+/** The forge's own host for a check, as `dispatch` reads it for the same remote or repository. */
+function accessHost(request: {
+  host?: string;
+  remote?: string;
+  repo?: RepoRef;
+}): string | undefined {
+  if (request.remote !== undefined) return remoteHost(request.remote);
+  return normalizeHost(request.repo?.host ?? request.host ?? '') || undefined;
+}
+
+/** The claim whose plugin a check selects, as `selectHost` selects it for a dispatch. */
+function accessClaim(
+  discovery: PluginDiscovery,
+  request: { remote?: string; repo?: RepoRef },
+  own: string
+): string {
+  if (request.remote !== undefined) return remotePluginHost(discovery, request.remote, own);
+  return request.repo?.hostClaim ? own.slice(0, -4) : own;
+}
+
+type PreReadRefusalKind = Exclude<ForgeAccessRefusalKind, 'authorization' | 'not_found'>;
 
 /** A refusal the operator fixes, with their next step: the plugin's text, else forge's. */
 function refused(
-  error: ForgeError & { kind: ForgeAccessRefusalKind },
+  error: ForgeError & { kind: PreReadRefusalKind },
   metadata?: PluginMetadata,
   tokenEnvOverride?: string
 ): Extract<ForgeAccessCheck, { ok: false }> {
@@ -494,7 +578,7 @@ function refused(
 }
 
 function remedy(
-  kind: ForgeAccessRefusalKind,
+  kind: PreReadRefusalKind,
   metadata: PluginMetadata | undefined,
   tokenEnvOverride: string | undefined
 ): string {

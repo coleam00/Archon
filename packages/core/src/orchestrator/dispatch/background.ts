@@ -188,6 +188,7 @@ async function dispatchBackgroundWorkflowOwned(
   await assertRunForgeAccess(workflowDeps, workflow, preparedAiConfiguration, {
     cwd: estate.codebase?.default_cwd ?? ctx.cwd,
     codebaseId: ctx.codebaseId,
+    inputs: ctx.inputs,
   });
 
   const { workerPlatformId, workerConv } = await createWorkerConversation(ctx);
