@@ -72,7 +72,7 @@ export function holdTurnEndWhileSubtasksRun(subtasks: OpenSubtasks): HookCallbac
         return {
           decision: 'block',
           reason:
-            'The background work you started has finished. Read its results, then give the result. A result you give now replaces any earlier one.',
+            'The background work you started has finished. Read its results and continue your task. Give your result when the task is done; a result you give now replaces any earlier one.',
         };
       }) as HookCallback,
     ],
