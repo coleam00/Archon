@@ -16,6 +16,7 @@ import {
 } from '@archon/workflows/store';
 import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
+import type { HeldItemStart } from '@archon/workflows/resource-start-store';
 import type { MergedConfig } from '../config/config-types';
 import * as itemsDb from '../db/items';
 import * as itemLinksDb from '../db/item-links';
@@ -24,6 +25,7 @@ import * as itemMergesDb from '../db/item-merges';
 import * as itemAsksDb from '../db/item-asks';
 import * as workflowDb from '../db/workflows';
 import * as resourceStarts from '../db/resource-starts';
+import * as installHold from '../db/install-hold';
 import { toHydratedTimestamp } from '../db/timestamps';
 import * as workflowEventDb from '../db/workflow-events';
 import { listMetricRecords } from '../db/workflow-metrics';
@@ -132,6 +134,26 @@ function collectOAuthCredentialValues(
   }
 }
 
+const launchProjectKeyOf = launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb));
+
+/**
+ * The held binding starts on item `itemId`: those naming its key whose checkout is in its
+ * project. A binding is resolved to a project only when it is prepared, so the checkout
+ * decides it here the way it will then.
+ */
+async function listHeldItemStarts(itemId: string): Promise<HeldItemStart[]> {
+  const item = await itemsDb.getItem(itemId);
+  if (!item) return [];
+  const held: HeldItemStart[] = [];
+  for (const start of await installHold.listHeldStarts()) {
+    if (start.kind !== 'trigger' || start.itemKey !== item.key || start.cwd === null) continue;
+    if ((await launchProjectKeyOf(start.cwd)) !== item.projectKey) continue;
+    const { receiptId, bindingId, workflow, receivedAt } = start;
+    held.push({ receiptId, bindingId, workflow, receivedAt });
+  }
+  return held;
+}
+
 /** Where trigger files with `on` are read from and how a binding is placed in a project. */
 function onBindingDeps(
   getItem: IWorkflowStore['getItem']
@@ -139,7 +161,7 @@ function onBindingDeps(
   return {
     triggersDirectory: getTriggersPath,
     getItem,
-    projectKeyOf: launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb)),
+    projectKeyOf: launchProjectKeyOf,
   };
 }
 
@@ -152,6 +174,11 @@ export function createWorkflowStore(): IWorkflowStore {
   return {
     ...createSqlStateDocumentStore(getDatabase),
     setToolCallAttention: workflowDb.setToolCallAttention,
+    getInstallHold: installHold.getInstallHold,
+    setInstallHold: installHold.setInstallHold,
+    liftInstallHold: installHold.liftInstallHold,
+    listHeldStarts: installHold.listHeldStarts,
+    listHeldItemStarts,
     admitResourceStart: resourceStarts.admitResourceStart,
     admitPendingRun: resourceStarts.admitPendingRun,
     drainResourceStarts: resourceStarts.drainResourceStarts,

@@ -352,6 +352,14 @@ export function createInMemoryResourceStartStore(
           )
           .slice(0, limit)
       ),
+    // The install hold is proved against the SQL store; this one is never held.
+    getInstallHold: async () => null,
+    setInstallHold: async () => {
+      throw new Error('The test store has no install hold');
+    },
+    liftInstallHold: async () => null,
+    listHeldStarts: async () => [],
+    listHeldItemStarts: async () => [],
     listSkippedItemStarts: async () => [],
     listWaitedItemHolders: async () => [],
     getResourceStartRequest: async (

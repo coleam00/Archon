@@ -7994,6 +7994,17 @@ export interface components {
           owner: 'reachable' | 'unreachable' | 'unknown' | null;
         } | null;
       }[];
+      hold: {
+        setBy: string;
+        /** Format: date-time */
+        setAt: string;
+      } | null;
+      held: {
+        receiptId: string;
+        bindingId: string;
+        workflow: string | null;
+        receivedAt: string;
+      }[];
       questions: (
         | {
             /** @enum {string} */
@@ -8552,6 +8563,17 @@ export interface components {
             /** @enum {string|null} */
             owner: 'reachable' | 'unreachable' | 'unknown' | null;
           } | null;
+        }[];
+        hold: {
+          setBy: string;
+          /** Format: date-time */
+          setAt: string;
+        } | null;
+        held: {
+          receiptId: string;
+          bindingId: string;
+          workflow: string | null;
+          receivedAt: string;
         }[];
         questions: (
           | {

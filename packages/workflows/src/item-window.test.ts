@@ -91,6 +91,8 @@ function source(unreadable: string[] = []): ItemWindowSource {
       listItemAsks: async () => [],
       listQueuedItemStarts: async () => [],
       listSkippedItemStarts: async () => [],
+      getInstallHold: async () => null,
+      listHeldItemStarts: async () => [],
       getResourceStartRequest: async () => null,
       getStartReceipt: async () => null,
     },

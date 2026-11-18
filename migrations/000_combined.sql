@@ -621,6 +621,13 @@ CREATE TABLE IF NOT EXISTS remote_agent_resource_slots (
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
+-- The install hold (#5911): a row means no new run is admitted until an operator lifts it.
+CREATE TABLE IF NOT EXISTS remote_agent_install_hold (
+  id TEXT PRIMARY KEY,
+  set_by TEXT NOT NULL,
+  set_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS remote_agent_resource_slot_holders (
   resource_key TEXT NOT NULL REFERENCES remote_agent_resource_slots(resource_key),
   holder_kind VARCHAR(10) NOT NULL CHECK (holder_kind IN ('run', 'attempt')),

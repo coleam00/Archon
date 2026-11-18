@@ -259,6 +259,20 @@ export const queuedItemStartSchema = z.object({
 });
 export type QueuedItemStart = z.infer<typeof queuedItemStartSchema>;
 
+/**
+ * The install hold: while it is set, admission admits no new run from any source, and
+ * every start it holds back waits for the lift. `setBy` is the CLI identity that set it.
+ */
+export const installHoldSchema = z.object({
+  setBy: z.string(),
+  setAt: z.string().datetime(),
+});
+export type InstallHold = z.infer<typeof installHoldSchema>;
+
+export function describeInstallHold(hold: InstallHold): string {
+  return `set by ${hold.setBy} at ${hold.setAt}`;
+}
+
 export const resourceStartRequestStatusSchema = z.union([
   ...resourceStartDispositionSchema.options.map(option => option.shape.status),
   z.literal('withdrawn'),
