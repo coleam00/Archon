@@ -3,7 +3,7 @@ import { toBranchName } from '@archon/git';
 // @archon-test-isolated
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -35,6 +35,22 @@ import {
   WorkflowResourceBusyError,
 } from './workflows';
 import { getItemRuns } from './items';
+import {
+  claimStartBindingPreparation,
+  failStartBindingPreparation,
+  listPendingStartBindings,
+} from './resource-starts';
+import { writeItemTextAcceptance } from './item-text-acceptances';
+import { createSqlWorkflowHost } from '../workflows/sql-host';
+import {
+  drainResourceStartHost,
+  ResourceStartDrainError,
+  type ResourceStartHost,
+} from '../workflows/resource-start-host';
+import { TrustedTextRefusedError } from '../workflows/trusted-text';
+import type { TrustedTextRunMetadata } from '@archon/workflows/trusted-text';
+import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 
 let root = '';
 const CODEBASE_ID = '33333333-3333-4333-8333-333333333333';
@@ -117,6 +133,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  clearPlatformPolicies();
   await closeDatabase();
   if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
   else process.env.ARCHON_HOME = originalArchonHome;
@@ -126,6 +143,185 @@ afterEach(async () => {
 });
 
 describe('durable resource starts', () => {
+  test('wait, accept and drain starts the same protected binding with its accepted input', async () => {
+    const projectPath = join(root, 'project');
+    await mkdir(join(projectPath, '.archon', 'workflows'), { recursive: true });
+    const project = await realpath(projectPath);
+    await writeFile(
+      join(project, '.archon', 'workflows', 'protected.yaml'),
+      `name: protected
+description: protected input
+webSearchMode: disabled
+inputs:
+  trusted_item:
+    required: true
+nodes:
+  - id: read
+    prompt: Read the accepted item
+    allowed_tools: [Read]
+`
+    );
+    await getDatabase().query('UPDATE remote_agent_codebases SET default_cwd = $1 WHERE id = $2', [
+      project,
+      CODEBASE_ID,
+    ]);
+    const receiptId = crypto.randomUUID();
+    const requirement: TrustedTextRunMetadata['requirement'] = {
+      subject: {
+        kind: 'issue',
+        ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+      },
+      maintainersPath: '.archon/maintainers.json',
+      input: 'trusted_item',
+    };
+    const snapshot: TrustedTextRunMetadata = {
+      schemaVersion: 1,
+      requirement,
+      title: 'Accepted title',
+      body: 'Accepted body',
+      contentDigest: 'a'.repeat(64),
+      policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+      acceptedBy: { host: 'github.com', id: '1', login: 'alice' },
+    };
+    await acceptStartReceipt({
+      receipt: {
+        id: receiptId,
+        sourceInstanceId: 'github',
+        deliveryId: 'issue-7',
+        contentDigest: 'digest',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: 'protected',
+          bindingRevision: '1',
+          hostId: 'host',
+          runAsUserId: '22222222-2222-4222-8222-222222222222',
+          resource: 'repo:test',
+          overlap: 'queue',
+          launch: {
+            cwd: project,
+            workflowName: 'protected',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+          itemKey: 'issue-7',
+          trustedText: requirement,
+        },
+      ],
+    });
+    let accepted = false;
+    setPlatformPolicies([]);
+    registerBuiltinProviders();
+    const started: string[] = [];
+    const host: ResourceStartHost = {
+      ...createSqlWorkflowHost(),
+      hostId: 'host',
+      startAdmitted: async requestId => {
+        started.push(requestId);
+      },
+    };
+    const loadConfig = host.deps.loadConfig;
+    host.deps.loadConfig = async cwd => ({ ...(await loadConfig(cwd)), assistant: 'claude' });
+    host.deps.trustedText = {
+      declare: async () => undefined,
+      authorize: async () => {
+        if (!accepted) throw new TrustedTextRefusedError('waiting_acceptance');
+        return snapshot;
+      },
+      readEvidence: async () => {
+        throw new Error('not used by this preparation harness');
+      },
+      recheck: async () => undefined,
+    };
+    const failure = await drainResourceStartHost(host).catch((error: unknown) => error);
+    if (!(failure instanceof ResourceStartDrainError)) throw failure;
+    expect(failure.failures[0]?.error).toBeInstanceOf(TrustedTextRefusedError);
+    expect(started).toEqual([]);
+    expect((await getStartReceipt(receiptId))?.bindings[0]?.status).toBe('failed');
+    accepted = true;
+    await drainResourceStartHost(host);
+    expect(started).toHaveLength(1);
+    expect((await getStartReceipt(receiptId))?.bindings[0]?.status).toBe('complete');
+    const run = await getWorkflowRun(started[0]!);
+    expect(run?.metadata.trusted_text).toEqual(snapshot);
+    expect(run?.metadata.inputs_values).toMatchObject({
+      trusted_item: { title: 'Accepted title', body: 'Accepted body' },
+    });
+  });
+
+  test('a waiting-acceptance preparation remains drainable after its prerequisite changes', async () => {
+    const receiptId = crypto.randomUUID();
+    await acceptStartReceipt({
+      receipt: {
+        id: receiptId,
+        sourceInstanceId: 'github',
+        deliveryId: 'issue-7',
+        contentDigest: 'digest',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: 'protected',
+          bindingRevision: '1',
+          hostId: 'host',
+          runAsUserId: '22222222-2222-4222-8222-222222222222',
+          resource: 'repo:test',
+          overlap: 'queue',
+          launch: {
+            cwd: '/tmp/test',
+            workflowName: 'test',
+            inputs: {},
+            isolation: { kind: 'default' },
+          },
+        },
+      ],
+    });
+    expect(
+      await claimStartBindingPreparation({ receiptId, bindingId: 'protected', ownerId: 'owner' })
+    ).toBe(true);
+    expect(
+      await failStartBindingPreparation({
+        receiptId,
+        bindingId: 'protected',
+        ownerId: 'owner',
+        retryable: true,
+        error: 'waiting_acceptance',
+      })
+    ).toBe(true);
+    await writeItemTextAcceptance('project', 'issue-7', {
+      schemaVersion: 1,
+      requirement: {
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        maintainersPath: '.archon/maintainers.json',
+        input: 'trusted_item',
+      },
+      title: 'Title',
+      body: 'Body',
+      contentDigest: 'a'.repeat(64),
+      policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+      acceptedBy: { host: 'github.com', id: '1', login: 'alice' },
+    });
+    expect((await listPendingStartBindings({ hostId: 'host' }))[0]?.error).toBe(
+      'waiting_acceptance'
+    );
+    expect(
+      await claimStartBindingPreparation({
+        receiptId,
+        bindingId: 'protected',
+        ownerId: 'next-owner',
+      })
+    ).toBe(true);
+  });
   test('receipt inspection rejects invalid limits through the SQL store', async () => {
     for (const limit of [NaN, 1.5, 0, 1001]) {
       await expect(listStartReceipts(limit)).rejects.toThrow(

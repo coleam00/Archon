@@ -1,7 +1,11 @@
 // @archon-test-isolated
 import { describe, expect, test } from 'bun:test';
 import { parseWorkflowYaml } from './loader/test-utils';
-import { assertTrustedTextWorkflowSupported } from './trusted-text';
+import {
+  assertTrustedTextProviderSupported,
+  assertTrustedTextWorkflowSupported,
+  inheritedTrustedTextMetadata,
+} from './trusted-text';
 import type { DagNode } from './schemas';
 
 function workflow(node: string, webSearchMode = 'disabled') {
@@ -14,6 +18,14 @@ ${node}`).workflow;
 }
 
 describe('trusted text protected-mode boundary', () => {
+  test('propagates the accepted snapshot to child run metadata', () => {
+    const snapshot = { schemaVersion: 1, title: 'Accepted' };
+    expect(inheritedTrustedTextMetadata({ trusted_text: snapshot })).toEqual({
+      trusted_text: snapshot,
+    });
+    expect(inheritedTrustedTextMetadata({})).toEqual({});
+  });
+
   test('accepts only read-only agent nodes', () => {
     const value = workflow(`  - id: read
     prompt: Read the accepted item
@@ -25,6 +37,9 @@ describe('trusted text protected-mode boundary', () => {
     ['ambient tools', '    prompt: Read'],
     ['shell', '    prompt: Read\n    allowed_tools: [Read, Bash]'],
     ['MCP', '    prompt: Read\n    allowed_tools: [Read]\n    mcp: .archon/mcp.json'],
+    ['plugins', '    prompt: Read\n    allowed_tools: [Read]\n    plugins: [remote@marketplace]'],
+    ['hooks', '    prompt: Read\n    allowed_tools: [Read]\n    hooks:\n      PreToolUse: []'],
+    ['skills', '    prompt: Read\n    allowed_tools: [Read]\n    skills: [remote-reader]'],
     [
       'inline agents',
       '    prompt: Read\n    allowed_tools: [Read]\n    agents:\n      other:\n        description: Other\n        prompt: Other',
@@ -32,6 +47,18 @@ describe('trusted text protected-mode boundary', () => {
   ])('refuses %s before any provider starts', (_name, body) => {
     expect(() => assertTrustedTextWorkflowSupported(workflow(`  - id: read\n${body}`))).toThrow(
       'trusted_text_'
+    );
+  });
+
+  test('requires an effective provider tool restriction instead of trusting the authored list', () => {
+    expect(() => assertTrustedTextProviderSupported({ toolRestrictions: false }, 'codex')).toThrow(
+      'trusted_text_provider_cannot_restrict_tools'
+    );
+    expect(() =>
+      assertTrustedTextProviderSupported({ toolRestrictions: true }, 'claude')
+    ).not.toThrow();
+    expect(() => assertTrustedTextProviderSupported({ toolRestrictions: true }, 'pi')).toThrow(
+      'trusted_text_provider_cannot_restrict_tools'
     );
   });
 

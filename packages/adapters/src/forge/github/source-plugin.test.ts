@@ -111,6 +111,15 @@ async function adapter(triggerConfig: GitHubTriggerConfig, intake: Intake) {
 }
 
 describe('GitHub source plugin', () => {
+  test('rejects trusted-text declarations on check events before receiving a delivery', () => {
+    expect(() =>
+      config([
+        binding({
+          trustedText: { maintainersPath: '.archon/maintainers.json', input: 'trusted_item' },
+        }),
+      ])
+    ).toThrow('Trusted text requires an issue or pull request event');
+  });
   test('binds a trusted-text requirement without copying unaccepted event text', async () => {
     const recorded = recorder();
     const github = await adapter(

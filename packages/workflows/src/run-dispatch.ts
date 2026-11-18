@@ -38,6 +38,7 @@ import { executionClaim } from './store';
 import {
   readTrustedTextMetadata,
   TRUSTED_TEXT_METADATA_KEY,
+  TrustedTextAdmissionError,
   type TrustedTextRunMetadata,
 } from './trusted-text';
 
@@ -187,8 +188,12 @@ async function authorizePreCreatedTrustedText(
   run: ExecuteWorkflowOptions['preCreatedRun']
 ): Promise<void> {
   if (!run || readTrustedTextMetadata(run)) return;
-  const trustedText = await authorizeDeclaredItem(deps, run);
-  if (trustedText) stampTrustedText(run, trustedText);
+  try {
+    const trustedText = await authorizeDeclaredItem(deps, run);
+    if (trustedText) stampTrustedText(run, trustedText);
+  } catch (error) {
+    throw new TrustedTextAdmissionError(error instanceof Error ? error.message : String(error));
+  }
 }
 
 function stampTrustedText(

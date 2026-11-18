@@ -31,7 +31,7 @@ import type {
 } from './schemas';
 import { findWorkflowLoadError } from './schemas/workflow';
 import { SUBRUN_METADATA_KEYS, runInputsMetadata } from './schemas';
-import { TRUSTED_TEXT_METADATA_KEY } from './trusted-text';
+import { inheritedTrustedTextMetadata } from './trusted-text';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
@@ -608,9 +608,7 @@ function childRunMetadata(
     // applied), stamped at spawn. The child's own run start layers its pack's settings
     // under it and rewrites the row's inputs with the result, which a cold resume reads.
     ...(inputs !== undefined ? runInputsMetadata(inputs) : {}),
-    ...(parentMetadata[TRUSTED_TEXT_METADATA_KEY] !== undefined
-      ? { [TRUSTED_TEXT_METADATA_KEY]: parentMetadata[TRUSTED_TEXT_METADATA_KEY] }
-      : {}),
+    ...inheritedTrustedTextMetadata(parentMetadata),
     ...(placement.isolationEnv ? childIsolationMetadata(placement.isolationEnv) : {}),
   };
 }

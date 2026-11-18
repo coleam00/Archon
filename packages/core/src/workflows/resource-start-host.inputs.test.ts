@@ -5,6 +5,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { WorkflowPack } from '@archon/workflows/schemas/pack-settings';
 import { resolveBindingInputs } from './resource-start-host';
+import type { TrustedTextRunMetadata } from '@archon/workflows/trusted-text';
 
 const pack: WorkflowPack = {
   key: 'alpha',
@@ -15,6 +16,33 @@ const binding = (inputs: Record<string, unknown>) =>
   ({ launch: { inputs } }) as Parameters<typeof resolveBindingInputs>[0];
 
 describe('trigger binding inputs and pack settings', () => {
+  test('validates the required accepted input after adding the authenticated snapshot', () => {
+    const trustedText: TrustedTextRunMetadata = {
+      schemaVersion: 1,
+      requirement: {
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        maintainersPath: '.archon/maintainers.json',
+        input: 'trusted_item',
+      },
+      title: 'Title',
+      body: 'Body',
+      contentDigest: 'a'.repeat(64),
+      policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+    };
+    expect(
+      resolveBindingInputs(
+        binding({}),
+        { name: 'protected', inputs: { trusted_item: { required: true } } },
+        trustedText
+      )
+    ).toEqual({ trusted_item: { title: 'Title', body: 'Body' } });
+    expect(() =>
+      resolveBindingInputs(binding({}), { name: 'protected', inputs: {} }, trustedText)
+    ).toThrow('does not declare input');
+  });
   test('a pack setting is accepted as its checked text, beside a declared input', () => {
     const workflow = { name: 'packed', inputs: { count: {} }, pack };
     expect(resolveBindingInputs(binding({ count: 7, strict: true }), workflow)).toEqual({

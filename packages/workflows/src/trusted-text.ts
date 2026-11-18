@@ -4,6 +4,7 @@ import type { ResolvedWorkflow } from './schemas';
 import type { WorkflowDeps } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
 import type { WorkflowRun } from './schemas/workflow-run';
+import type { ProviderCapabilities } from '@archon/provider-contract';
 
 const actorSchema = z.object({
   host: z.string().min(1),
@@ -33,6 +34,13 @@ export function readTrustedTextMetadata(run: {
 }): TrustedTextRunMetadata | undefined {
   const value = run.metadata?.[TRUSTED_TEXT_METADATA_KEY];
   return value === undefined ? undefined : trustedTextRunMetadataSchema.parse(value);
+}
+
+export function inheritedTrustedTextMetadata(
+  parentMetadata: Record<string, unknown>
+): Record<string, unknown> {
+  const snapshot = parentMetadata[TRUSTED_TEXT_METADATA_KEY];
+  return snapshot === undefined ? {} : { [TRUSTED_TEXT_METADATA_KEY]: snapshot };
 }
 
 export interface TrustedTextEvidence {
@@ -86,12 +94,22 @@ function trustedNodeProblem(node: ResolvedWorkflow['nodes'][number]): string | u
   if (node.kind !== 'agent') return 'trusted_text_unsupported_node';
   if (node.mcp !== undefined) return 'trusted_text_mcp_bypass';
   if ((node.plugins?.length ?? 0) > 0) return 'trusted_text_plugin_bypass';
+  if ((node.skills?.length ?? 0) > 0) return 'trusted_text_skill_bypass';
+  if ('tools' in node && node.tools !== undefined) return 'trusted_text_tool_bypass';
   if (node.agents !== undefined) return 'trusted_text_subagent_bypass';
   if (node.hooks !== undefined) return 'trusted_text_hook_bypass';
   const tools = node.allowed_tools;
   if (!tools || tools.some(tool => !['Read', 'Grep', 'Glob'].includes(tool)))
     return 'trusted_text_direct_read_bypass';
   return undefined;
+}
+
+export function assertTrustedTextProviderSupported(
+  capabilities: Pick<ProviderCapabilities, 'toolRestrictions'>,
+  provider: string
+): void {
+  if (!capabilities.toolRestrictions || provider !== 'claude')
+    throw new Error(`trusted_text_provider_cannot_restrict_tools: ${provider}`);
 }
 
 export async function requirePreparedTrustedStart(
@@ -105,12 +123,18 @@ export async function requirePreparedTrustedStart(
 
 export async function recheckTrustedTextAdmission(
   deps: WorkflowDeps,
-  workflow: ResolvedWorkflow,
+  workflow: Pick<ResolvedWorkflow, 'nodes' | 'webSearchMode'>,
   run: WorkflowRun
 ): Promise<void> {
   const snapshot = readTrustedTextMetadata(run);
   if (!snapshot) return;
-  if (!deps.trustedText) throw new Error('trusted_text_host_unavailable');
-  assertTrustedTextWorkflowSupported(workflow);
-  await deps.trustedText.recheck(snapshot);
+  try {
+    if (!deps.trustedText) throw new Error('trusted_text_host_unavailable');
+    assertTrustedTextWorkflowSupported(workflow);
+    await deps.trustedText.recheck(snapshot);
+  } catch (error) {
+    throw new TrustedTextAdmissionError(error instanceof Error ? error.message : String(error));
+  }
 }
+
+export class TrustedTextAdmissionError extends Error {}

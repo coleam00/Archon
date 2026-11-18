@@ -13,6 +13,7 @@ import {
   writeItemTextAcceptance,
 } from './item-text-acceptances';
 import type { TrustedTextRunMetadata } from '@archon/workflows/trusted-text';
+import { createTrustedTextRecords } from '../workflows/trusted-text';
 
 let root = '';
 const originalHome = process.env.ARCHON_HOME;
@@ -70,6 +71,12 @@ test('declares once, reuses acceptance across runs and serializes competing acce
   expect(await readItemTextAcceptance(projectKey, 'issue-7')).toEqual(snapshot);
   expect(await readItemTextAcceptanceByItemId(id)).toEqual(snapshot);
   expect(await readItemTextAcceptance(projectKey, 'issue-8')).toBeNull();
+  await expect(
+    createTrustedTextRecords().readAccepted(projectKey, 'issue-7', {
+      ...requirement,
+      input: 'different_input',
+    })
+  ).rejects.toThrow('acceptance_requirement_changed');
   const rows = await getDatabase().query<{ count: number }>(
     'SELECT COUNT(*) AS count FROM remote_agent_item_text_acceptances'
   );

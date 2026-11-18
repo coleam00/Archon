@@ -107,7 +107,13 @@ export async function forgeCommand(
       if (context.attempt.request?.op !== 'workitem.accept')
         throw new Error('Acceptance request identity changed');
       if (context.dependencies.accept) await context.dependencies.accept(context.attempt.request);
-      else await new CoreTrustedTextHost(createWorkflowHostStore()).accept(context.attempt.request);
+      else
+        await new CoreTrustedTextHost(createWorkflowHostStore(), request =>
+          (context.dependencies.dispatch ?? dispatchForge)(request, {
+            ...trustedDiscovery(input, context),
+            credentialEnv: context.env,
+          })
+        ).accept(context.attempt.request);
     }
     response = result.response;
     const auditFailure = await auditOperation(result.audit, response, context);

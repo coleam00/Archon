@@ -61,6 +61,7 @@ import { PackSettingsError } from './pack-settings';
 import { enterRunExecution, releaseRunScratch } from './run-scratch';
 import { keepAwake } from './utils/keep-awake';
 import { defaultRunInputs } from './workflow-inputs';
+import { TrustedTextAdmissionError } from './trusted-text';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -297,15 +298,28 @@ export async function executeWorkflow(
         }),
         { workflowRunId: run.id, site: 'workflow.setup_failed', failure: error }
       );
+      if (error instanceof TrustedTextAdmissionError) await releaseResourcesOnExit(deps, run.id);
     }
-    // A pending row handed over for a fresh dispatch that its project's pack settings
-    // refuse can never start: nothing claimed it, and no retry would read the file any
-    // differently. Fail it here, so no launching surface leaves it pending.
-    if (run?.status === 'pending' && error instanceof PackSettingsError) {
+    // Refused pending launches must not leave their admitted resource slot occupied.
+    if (
+      run?.status === 'pending' &&
+      (error instanceof PackSettingsError || error instanceof TrustedTextAdmissionError)
+    ) {
       await requireTerminalStatusWrite(
-        deps.store.failWorkflowRun(run.id, error.message, { exitReason: 'launch_failed' }),
-        { workflowRunId: run.id, site: 'workflow.pack_settings_refused', failure: error }
+        deps.store.failWorkflowRun(run.id, error.message, {
+          exitReason: 'launch_failed',
+          pendingOnly: true,
+        }),
+        {
+          workflowRunId: run.id,
+          site:
+            error instanceof TrustedTextAdmissionError
+              ? 'workflow.trusted_text_refused'
+              : 'workflow.pack_settings_refused',
+          failure: error,
+        }
       );
+      await releaseResourcesOnExit(deps, run.id);
     }
     throw error;
   });

@@ -85,7 +85,7 @@ function harness() {
       trustedText: {
         declareRequirement: async () => undefined,
         requirementForItem: async () => null,
-        readAcceptedItem: async () => null,
+        readAcceptedItem: async () => accepted.values().next().value ?? null,
         readAccepted: async (projectKey, itemKey) =>
           accepted.get(`${projectKey}:${itemKey}`) ?? null,
         writeAccepted: async (projectKey, itemKey, snapshot) => {
@@ -124,6 +124,38 @@ function acceptance(): Extract<ForgeRequest, { op: 'workitem.accept' }> {
 }
 
 describe('CoreTrustedTextHost', () => {
+  test('item authorization cannot reuse an acceptance for another subject with identical text', async () => {
+    const h = harness();
+    await h.host.accept(acceptance());
+    for (const changed of [
+      {
+        ...requirement,
+        subject: { ...requirement.subject, ref: { ...requirement.subject.ref, number: 8 } },
+      },
+      { ...requirement, input: 'other_input' },
+      { ...requirement, maintainersPath: '.archon/other-maintainers.json' },
+    ]) {
+      await expect(h.host.authorizeItem(changed, 'same-item')).rejects.toThrow(
+        'acceptance_requirement_changed'
+      );
+    }
+  });
+
+  test('authorization and recheck require the original acceptor and author to remain trusted', async () => {
+    const h = harness();
+    const accepted = await h.host.accept(acceptance());
+    h.set(evidence('Title', 'Body', []));
+    await expect(h.host.authorize(requirement, { codebase, itemKey: 'issue-7' })).rejects.toThrow(
+      'waiting_acceptance'
+    );
+    await expect(h.host.recheck(accepted)).rejects.toThrow('maintainer_removed');
+
+    h.set({ ...evidence(), author: maintainer });
+    const authored = await h.host.authorize(requirement, { codebase, itemKey: 'issue-7' });
+    expect(authored.acceptedBy).toBeUndefined();
+    h.set(evidence());
+    await expect(h.host.recheck(authored)).rejects.toThrow('author_no_longer_trusted');
+  });
   test('outside text waits for exact acceptance and a trusted author needs none', async () => {
     const h = harness();
     await expect(h.host.authorize(requirement, { codebase, itemKey: 'issue-7' })).rejects.toThrow(
@@ -168,7 +200,7 @@ describe('CoreTrustedTextHost', () => {
     await expect(h.host.authorize(requirement, { codebase, itemKey: 'issue-7' })).rejects.toThrow(
       'waiting_acceptance'
     );
-    expect(JSON.stringify(h.accepted)).not.toContain('Second');
+    expect(JSON.stringify([...h.accepted.values()])).not.toContain('Second');
   });
 
   test('acceptance reads current evidence instead of trusting a stale caller snapshot', async () => {
@@ -177,7 +209,7 @@ describe('CoreTrustedTextHost', () => {
     h.set(evidence('Changed before accept', 'Body'));
     await expect(h.host.accept(request)).rejects.toThrow('content_changed_before_acceptance');
     expect(h.accepted.size).toBe(0);
-    expect(JSON.stringify(h.accepted)).not.toContain('Changed before accept');
+    expect(JSON.stringify([...h.accepted.values()])).not.toContain('Changed before accept');
   });
 
   test('digest is sensitive to field boundaries, CRLF and Unicode', () => {

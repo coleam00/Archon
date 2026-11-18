@@ -155,8 +155,10 @@ export function resolveBindingInputs(
   intent: Pick<ResourceStartBindingIntent, 'eventInputs'> & {
     launch: Pick<ResourceStartBindingIntent['launch'], 'inputs'>;
   },
-  workflow: Pick<ResolvedWorkflow, 'name' | 'inputs' | 'pack'>
+  workflow: Pick<ResolvedWorkflow, 'name' | 'inputs' | 'pack'>,
+  trustedText?: TrustedTextRunMetadata
 ): Record<string, JsonValue> {
+  if (trustedText) assertTrustedInputDeclared(workflow, trustedText.requirement.input);
   // The declared-input contract passes inputs through to a workflow without `inputs:`, which
   // operator-written literals rely on. Event inputs carry untrusted source content, so
   // they reach only a workflow that declares them.
@@ -176,7 +178,13 @@ export function resolveBindingInputs(
   try {
     // The same contract `--input` meets: the workflow's own inputs, or its pack's settings
     // checked against their declared types.
-    return resolveInvocationInputs(workflow, { ...intent.launch.inputs, ...intent.eventInputs });
+    return resolveInvocationInputs(workflow, {
+      ...intent.launch.inputs,
+      ...intent.eventInputs,
+      ...(trustedText
+        ? { [trustedText.requirement.input]: { title: trustedText.title, body: trustedText.body } }
+        : {}),
+    });
   } catch (error) {
     if (error instanceof WorkflowInputContractError && error.missingRequired.length > 0) {
       throw new Error(
@@ -187,6 +195,14 @@ export function resolveBindingInputs(
     }
     throw error;
   }
+}
+
+function assertTrustedInputDeclared(
+  workflow: Pick<ResolvedWorkflow, 'name' | 'inputs'>,
+  input: string
+): void {
+  if (!Object.hasOwn(workflow.inputs ?? {}, input))
+    throw new Error(`Workflow '${workflow.name}' does not declare input '${input}'.`);
 }
 
 /** Reconcile the requested isolation with the workflow's pin and the project kind. */
@@ -308,17 +324,7 @@ async function prepareBinding(
       codebase,
       identity.receiptId
     );
-    const inputs = {
-      ...resolveBindingInputs(intent, workflow),
-      ...(trustedText && intent.trustedText
-        ? {
-            [intent.trustedText.input]: {
-              title: trustedText.title,
-              body: trustedText.body,
-            },
-          }
-        : {}),
-    };
+    const inputs = resolveBindingInputs(intent, workflow, trustedText);
     let isolation: PreparedWorkflowLaunch['execution']['isolation'];
     let handoff: CheckoutHandoffRunMetadata | undefined;
     if (intent.checkoutFrom) {
@@ -400,7 +406,8 @@ async function prepareClaimedBinding(
     try {
       await host.deps.store.failStartBindingPreparation({
         ...identity,
-        retryable: false,
+        retryable:
+          error instanceof TrustedTextRefusedError && error.reason === 'waiting_acceptance',
         error: error instanceof TrustedTextRefusedError ? error.reason : `${stage}_failed`,
       });
     } catch (statusError) {

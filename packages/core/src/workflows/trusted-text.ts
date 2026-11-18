@@ -9,6 +9,7 @@ import type {
   WorkflowTrustedTextHost,
 } from '@archon/workflows/trusted-text';
 import * as acceptanceDb from '../db/item-text-acceptances';
+import { isDeepStrictEqual } from 'node:util';
 
 export function createTrustedTextRecords(): NonNullable<IWorkflowHostStore['trustedText']> {
   return {
@@ -18,7 +19,7 @@ export function createTrustedTextRecords(): NonNullable<IWorkflowHostStore['trus
     readAccepted: async (projectKey, itemKey, requirement) => {
       const snapshot = await acceptanceDb.readItemTextAcceptance(projectKey, itemKey);
       if (!snapshot) return null;
-      if (JSON.stringify(snapshot.requirement) !== JSON.stringify(requirement))
+      if (!isDeepStrictEqual(snapshot.requirement, requirement))
         throw new TrustedTextRefusedError('acceptance_requirement_changed');
       return snapshot;
     },
@@ -131,6 +132,8 @@ export class CoreTrustedTextHost implements WorkflowTrustedTextHost {
   ): Promise<TrustedTextRunMetadata> {
     const evidence = await this.readEvidence(requirement);
     if (trustedActor(evidence.author, evidence.policy)) return metadata(evidence, requirement);
+    if (accepted && !isDeepStrictEqual(accepted.requirement, requirement))
+      throw new TrustedTextRefusedError('acceptance_requirement_changed');
     if (!accepted || !sameText(accepted, evidence))
       throw new TrustedTextRefusedError('waiting_acceptance');
     if (!accepted.acceptedBy || !trustedActor(accepted.acceptedBy, evidence.policy))

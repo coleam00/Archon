@@ -32,6 +32,10 @@ export const githubSourceBindingSchema = resourceStartBindingIntentSchema
     inputMapping: z.record(z.string(), createForgeInputBindingSchema(jsonValueSchema)),
     item: itemMappingSchema.extend({ field: forgeEventFieldSchema }).optional(),
     trustedText: trustedTextDeclarationSchema.optional(),
+  })
+  .refine(binding => !(binding.trustedText && binding.selector.kind === 'check.changed'), {
+    path: ['trustedText'],
+    message: 'Trusted text requires an issue or pull request event',
   });
 
 export const githubWebhookSourceConfigSchema = z

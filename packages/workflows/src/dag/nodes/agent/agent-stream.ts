@@ -32,6 +32,7 @@ import {
   ACTIVITY_HEARTBEAT_INTERVAL_MS,
 } from '../../run-control';
 import type { NodeMcpResolution } from '../../provider-resolution';
+import { recheckTrustedTextAdmission } from '../../../trusted-text';
 import {
   type TurnCutOff,
   type WatchdogReset,
@@ -144,6 +145,12 @@ function passChunks(
   if (!pc.staleResumeRetry) return send(pass.resumeSessionId);
   return withStaleResumeRetry(send, pass.resumeSessionId, {
     logContext: { workflowRunId: pc.ctx.workflowRun.id, nodeId: pc.node.id },
+    onRetry: () =>
+      recheckTrustedTextAdmission(
+        pc.ctx.deps,
+        { nodes: [pc.node], webSearchMode: pc.ctx.workflowLevelOptions.webSearchMode },
+        pc.ctx.workflowRun
+      ),
   });
 }
 
@@ -158,6 +165,11 @@ export async function runStreamPass(
   prompt: string,
   pass: StructuredOutputPass
 ): Promise<void> {
+  await recheckTrustedTextAdmission(
+    pc.ctx.deps,
+    { nodes: [pc.node], webSearchMode: pc.ctx.workflowLevelOptions.webSearchMode },
+    pc.ctx.workflowRun
+  );
   resetPass(pc, state, pass);
   const providerEvents = createPassEventHandler(pc, state);
   const shouldStopStream = stopCheck(pc, state, providerEvents);

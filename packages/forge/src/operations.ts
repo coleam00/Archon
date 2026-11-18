@@ -399,7 +399,10 @@ export function forgeAuditResponse(response: ForgeResponse): ForgeAuditResponse 
         op: result.op,
         value: {
           subject: result.value.subject,
-          content: bodyAudit(trustedTextDigest(result.value.title, result.value.body)),
+          content: {
+            digest: trustedTextDigest(result.value.title, result.value.body),
+            bytes: Buffer.byteLength(result.value.title) + Buffer.byteLength(result.value.body),
+          },
         },
       },
     });

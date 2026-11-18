@@ -38,7 +38,11 @@ import {
 } from './run-result';
 import { WorkflowItemHeldError } from './store/errors';
 import { workflowPathPriorityTime } from './workflow-path-lock';
-import { recheckTrustedTextAdmission, requirePreparedTrustedStart } from './trusted-text';
+import {
+  TRUSTED_TEXT_METADATA_KEY,
+  recheckTrustedTextAdmission,
+  requirePreparedTrustedStart,
+} from './trusted-text';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -212,8 +216,8 @@ async function createWorkflowRunRow(
 ): Promise<RunPhase<WorkflowRun>> {
   const { preparedSource, codebaseId, issueContext, adoptedFromRunId, continuationMode } = opts;
   const { prepared, runSource } = dispatch;
+  await requirePreparedTrustedStart(deps, opts);
   try {
-    await requirePreparedTrustedStart(deps, opts);
     const workflowRun = await deps.store.createWorkflowRun({
       // Reserved by `prepareWorkflowSource` so the row and its already-written source
       // capture share one id; absent for callers that prepared nothing.
@@ -457,6 +461,9 @@ function runStartMetadata(
 ): Record<string, unknown> {
   return {
     [RUN_DISPATCH_METADATA_KEY]: dispatchMetadata,
+    ...(existingMetadata[TRUSTED_TEXT_METADATA_KEY] !== undefined
+      ? { [TRUSTED_TEXT_METADATA_KEY]: existingMetadata[TRUSTED_TEXT_METADATA_KEY] }
+      : {}),
     ...(startInputs !== undefined
       ? runInputsMetadata(
           startInputs,
