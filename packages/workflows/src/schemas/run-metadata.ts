@@ -159,8 +159,8 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
 }
 
 /**
- * The result a top-level run that declares `returns.asks` completed with: its `returns:`
- * node output, parsed. Written only by the completing write, and only when the value is
+ * The result a top-level run that declares `returns.asks` completed with: the value its
+ * terminal record holds as `returns` (see `recordedReturn`). Written only by the completing write, and only when the value is
  * defined, so an asks-settled binding can read the run's result once its asks settle,
  * long after the process that held its node outputs has exited.
  *

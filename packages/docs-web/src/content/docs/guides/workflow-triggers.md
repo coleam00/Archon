@@ -347,7 +347,7 @@ Two files that bind the same outcome of the same workflow to the same stage in o
 
 The started run is on the same item. `inputs` maps each input of the started workflow to data from the ended run, and nothing else:
 
-- `{ "result": "<JSON Pointer>" }` reads the ended run's result, the output of its `returns:` node, with an RFC 6901 pointer. `""` passes the whole result. It pins the result of the run whose end started the stage; a stage that declares a [`result_of` input](/reference/workflow-language/#reading-an-earlier-runs-result) instead reads the latest completed run's result when it starts, with no mapping.
+- `{ "result": "<JSON Pointer>" }` reads the ended run's result with an RFC 6901 pointer. The result is the value `archon workflow get <run-id> --json` shows at `terminal_record.returns.value`, the same value a `result_of` input reads: the `output_format` value of its `returns:` node, or an untyped node's text as a string, and nothing when that text passed the output cap. `""` passes the whole result. It pins the result of the run whose end started the stage; a stage that declares a [`result_of` input](/reference/workflow-language/#reading-an-earlier-runs-result) instead reads the latest completed run's result when it starts, with no mapping.
 - `{ "input": "<name>" }` passes one of the ended run's own inputs, so a stage can hand on what it was given, such as the item's text or a policy path. An input the run was not given passes nothing.
 
 The values are resolved when the run completes and frozen into the start's receipt, where `archon trigger inspect` shows them. As with other event inputs, they reach only a workflow that declares them under `inputs:`.
@@ -573,7 +573,7 @@ A binding starts once for a set of asks that meets all of these:
 `inputs` maps each input of the started workflow to data from the set and the run that left it, and nothing else:
 
 - `{ "answers": true }` passes the settled set as a list, in the order the run left the asks. Each entry is `{ question, closedAs, answer, option, by, via, at }`: `closedAs` is `answered` or `withdrawn`; `answer` is the stored answer (`decision` and `text`), or `null` for a withdrawn ask; `option` is the chosen option's `id` and what it `does`, or `null`; `by`, `via` and `at` say who closed it, through which surface and when.
-- `{ "result": "<JSON Pointer>" }` reads the result the run completed with, the output of its `returns:` node, which the run keeps on its record for this.
+- `{ "result": "<JSON Pointer>" }` reads the result the run completed with, which the run keeps on its record for this. It is the same value a run-ended binding's `result` reads.
 - `{ "input": "<name>" }` passes one of that run's own inputs.
 
 The values are resolved when the set settles and frozen into the start's receipt. A pointer that names nothing, or a run whose record is gone when a binding reads its result or inputs, writes the receipt as `unmatched` with the reason and starts nothing. The command that recorded the answer prints it with the `archon trigger inspect` command for the receipt, and so it does for a binding whose preparation failed, for example because the stage it names is gone. The receipt is the settlement's one hand-off, so fixing the file does not start the owed stage, and `trigger fire` does not rebuild the settlement's inputs. Fix the file, then start the stage by hand with the inputs the binding should have passed, written to a JSON file: the answers as `archon workflow runs --item <key> --json` lists them, and the asking run's inputs and result.
