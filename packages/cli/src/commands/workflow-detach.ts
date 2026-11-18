@@ -119,12 +119,19 @@ async function waitForDetachedStartup(
   );
 }
 
+/** Flags the detached child never receives, each with its value (separate or `=`-joined). */
+const DROPPED_VALUE_FLAGS = ['--base-branch', '--input', '--input-file'];
+
 /**
  * Build the argv for the detached re-invoke. Pure (no spawn / no process reads)
  * so both the dev (bun + entry script) and compiled-binary (execPath only)
  * branches are unit-testable — the binary branch is otherwise unreachable in
  * tests because `BUNDLED_IS_BINARY` is a module-level const. Drops `--detach`
  * and `--json` and appends `--cwd <cwd>` (last-wins) plus any extra flags.
+ *
+ * Drops `--input` and `--input-file` with their values: the child gates on the inputs
+ * this process recorded on the pre-created row, so the files are read once, before the
+ * run starts, and a value never travels on the child's command line (#5678).
  */
 export function buildDetachedRunCmd(
   isBinary: boolean,
@@ -152,11 +159,16 @@ export function buildDetachedRunCmd(
     const arg = supplied[index];
     if (arg === '--')
       return [...baseCmd, ...userArgs, '--cwd', cwd, ...extraArgs, ...supplied.slice(index)];
-    if (arg === '--base-branch') {
+    if (DROPPED_VALUE_FLAGS.includes(arg)) {
       index++;
       continue;
     }
-    if (arg.startsWith('--base-branch=') || arg === '--detach' || arg === '--json') continue;
+    if (
+      DROPPED_VALUE_FLAGS.some(flag => arg.startsWith(`${flag}=`)) ||
+      arg === '--detach' ||
+      arg === '--json'
+    )
+      continue;
     userArgs.push(arg);
   }
   // --cwd is appended last (parseArgs last-wins) so the child resolves the same

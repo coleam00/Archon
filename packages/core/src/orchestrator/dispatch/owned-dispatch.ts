@@ -9,6 +9,7 @@ import { dispatchBackgroundWorkflow } from './background';
 import { dispatchForeground } from './foreground';
 import { runSignatureGates, sendRunStartNotices } from './gates';
 import {
+  continuesImplicitly,
   detectContinuation,
   resolveDispatchAdoption,
   resolveRequestedWorkflow,
@@ -146,7 +147,7 @@ async function offerResumeChoice(
   workflow: ResolvedWorkflow,
   { resumableRun, explicitResumeRequested }: Continuation
 ): Promise<boolean> {
-  if (!resumableRun?.working_path || resumableRun.status === 'paused' || explicitResumeRequested)
+  if (!resumableRun?.working_path || continuesImplicitly(resumableRun) || explicitResumeRequested)
     return false;
   getLog().info(
     {

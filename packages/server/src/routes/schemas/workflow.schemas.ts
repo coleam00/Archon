@@ -1,4 +1,5 @@
 import { attentionDegradedSchema } from '@archon/workflows/schemas/attention-degraded';
+import { operatorPauseSchema } from '@archon/workflows/schemas/operator-pause';
 import {
   toolCallAttentionArraySchema,
   TOOL_CALL_ATTENTION_METADATA_KEY,
@@ -195,12 +196,18 @@ const ownerObservationSchema = runOwnerObservationSchema.nullable().openapi({
     "What this server observes about the run's execution owner while its state needs one (running, or paused on a sub-run that runs in its process), by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run needs no owner now (an ordinary pause, a pending or ended run). Observed per request; never stored.",
 });
 
+const operatorPauseFieldSchema = operatorPauseSchema.nullable().openapi({
+  description:
+    "An operator's pause (`archon workflow pause`): `requested` while the run still runs the nodes it had started and pauses once they finish, `paused` once it stopped at that boundary, with who asked, through which surface and when. Null when the run is in neither. Derived from the run row; a resume ends it.",
+});
+
 /** A workflow run record (wire shape with ISO string dates). */
 export const workflowRunSchema = engineWorkflowRunSchema
   .extend({
     outcome: workflowRunOutcomeSchema,
     metadata: workflowRunMetadataSchema,
     attention: nullableRunAttentionSchema,
+    operator_pause: operatorPauseFieldSchema,
     started_at: z.string(),
     active_phase_started_at: z.string().nullable(),
     completed_at: z.string().nullable(),
@@ -376,6 +383,7 @@ export const dashboardWorkflowRunSchema = coreDashboardWorkflowRunSchema
   .extend({
     metadata: workflowRunMetadataSchema,
     attention: nullableRunAttentionSchema,
+    operator_pause: operatorPauseFieldSchema,
     owner_observation: ownerObservationSchema,
     started_at: z.string(),
     active_phase_started_at: z.string().nullable(),

@@ -70,7 +70,7 @@ The first alias your config defines wins; `aliases:` in `.archon/config.yaml` se
 
 ## The forge and the repository
 
-Every pull-request, issue and check read and write the pack makes goes through `archon forge` and an installed forge plugin. When the plugin cannot answer (no plugin for the host, no credential, a failed operation), the node refuses; nothing falls back to another tool. [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack) covers the plugin, the credential order, which operations each stage needs, and the forge check that runs before delivery spends. Run that check alone with `archon workflow run archon-forge-check` from a checkout.
+Every pull-request, issue and check read and write the pack makes goes through `archon forge` and an installed forge plugin. When the plugin cannot answer (no plugin for the host, no credential, a failed operation), the node refuses; nothing falls back to another tool. [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack) covers the plugin, the credential order, which operations each stage needs, and the forge check the engine runs when a pack run starts.
 
 The queues take the repository from their `repo_host` and `repo_path` inputs, which a binding passes. Left empty, as in a run started by hand from a checkout, the repository is the one the forge's `resolve` operation finds for the checkout's remote: its only remote, or `origin` among several. A checkout whose remote resolves to no repository, or that has several remotes and no `origin`, refuses the run and says so. A checkout whose `origin` is a fork works on the fork; set both inputs to choose another repository.
 

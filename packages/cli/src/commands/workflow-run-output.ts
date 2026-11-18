@@ -168,7 +168,11 @@ export async function presentRunResult(
       return presentDurableWait(host, result.workflowRunId, result.waitCursor, destination);
     }
     // A paused run has no outcome: it is written only when the run completes.
-    console.log('\nWorkflow paused — waiting for approval.');
+    console.log(
+      result.byOperator
+        ? `\nWorkflow paused by an operator. Resume: archon workflow resume ${result.workflowRunId}`
+        : '\nWorkflow paused — waiting for approval.'
+    );
   } else if (result.success) {
     // Surface workflow result to Web UI as a result card (mirrors the background dispatch
     // result message in core's orchestrator/dispatch/background-run.ts).

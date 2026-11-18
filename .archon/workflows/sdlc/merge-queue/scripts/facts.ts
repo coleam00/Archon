@@ -34,7 +34,6 @@ import {
   type PrFacts,
   readBase,
   readPr,
-  requireMergeSource,
   UNREADABLE,
   waitedOn,
   withMerge,
@@ -159,7 +158,6 @@ function main(): void {
   const repo = workflowRepo();
   const runId = workflowRunId();
 
-  requireMergeSource(repo);
   const snapshot = snapshotReader(readMaintainers(repo));
   const inspection = inspectBase(repo);
   const items: Item[] = [];

@@ -17,6 +17,7 @@ import {
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import type { WorkflowStoreHarness } from '@archon/workflows/store-conformance';
+import { workflowStoreDouble } from '@archon/workflows/test-utils';
 import {
   createTransactionView,
   isConversationResetTarget,
@@ -30,6 +31,7 @@ import {
 import type { IWorkflowHostStore } from '@archon/core/workflows/host-store';
 import type { User } from '@archon/core/schemas/user';
 import type { Codebase } from '@archon/core/schemas/codebase';
+import { defaultCwdKey, isSameDefaultCwd } from '@archon/core/utils/codebase-path';
 
 const unsupported = async (): Promise<never> => {
   throw new Error('Unsupported test-store operation');
@@ -45,10 +47,15 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
       listCodebases: async () => [...codebases.values()],
       listCodebaseClaims: async () => [...codebases.values()],
       findCodebaseByDefaultCwd: async cwd =>
-        [...codebases.values()].find(row => row.default_cwd === cwd) ?? null,
+        [...codebases.values()].find(row => isSameDefaultCwd(row.default_cwd, cwd)) ?? null,
       findCodebaseByPathPrefix: async cwd =>
         [...codebases.values()]
-          .filter(row => isPathInside(row.default_cwd, cwd, { includeRoot: true, lexical: true }))
+          .filter(row =>
+            isPathInside(defaultCwdKey(row.default_cwd), defaultCwdKey(cwd), {
+              includeRoot: true,
+              lexical: true,
+            })
+          )
           .sort((a, b) => resolve(b.default_cwd).length - resolve(a.default_cwd).length)[0] ?? null,
       findCodebaseByName: async name =>
         [...codebases.values()].find(row => row.name === name) ?? null,
@@ -237,7 +244,7 @@ export function createInMemoryWorkflowStore(
     ): ((...args: Args) => Promise<Result>) =>
     (...args) =>
       serialize(() => operation(...args));
-  return {
+  return workflowStoreDouble<InMemoryWorkflowStore>({
     ...createInMemoryStateDocumentStore(id => runs.get(id)?.status ?? null),
     admitResourceStart: admit(admission.admitResourceStart.bind(admission)),
     admitPendingRun: admit(admission.admitPendingRun.bind(admission)),
@@ -322,6 +329,10 @@ export function createInMemoryWorkflowStore(
       write(view => view.pauseWorkflowRunForWait(id, wait, pause)),
     releaseRunForUnreadableSource: (id, release, beforePublish) =>
       write(view => view.releaseRunForUnreadableSource(id, release, beforePublish)),
+    requestOperatorPause: (id, requested) =>
+      write(view => view.requestOperatorPause(id, requested)),
+    pauseWorkflowRunForOperator: (id, claimId) =>
+      write(view => view.pauseWorkflowRunForOperator(id, claimId)),
     clearWorkflowWaitContext: (id, wait, completion) =>
       write(view => view.clearWorkflowWaitContext(id, wait, completion)),
     resolveApprovalGate: (id, metadata, gateEvents, expected) =>
@@ -402,22 +413,9 @@ export function createInMemoryWorkflowStore(
       write(view => view.findWorkflowRunsByIdPrefix(prefix, codebase)),
     findAdoptingRuns: id => write(view => view.findAdoptingRuns(id)),
     findOpenWorkRuns: options => write(view => view.findOpenWorkRuns(options)),
-    getItemRuns: unsupported,
-    getItem: unsupported,
-    listItemRulings: unsupported,
-    recordItemRuling: unsupported,
-    withdrawItemRuling: unsupported,
-    listItemsInWindow: unsupported,
-    getItemMerge: unsupported,
-    recordItemMerge: unsupported,
-    listItemLinks: unsupported,
-    recordItemLink: unsupported,
-    endItemLink: unsupported,
     listOpenItemAsks: async () => [],
     listItemAsks: async () => [],
     getItemAsk: async () => null,
-    answerItemAsk: unsupported,
-    withdrawItemAsk: unsupported,
     listWorkflowRuns: options => write(view => view.listWorkflowRuns(options)),
     listDueWorkflowContinuations: (now, limit) =>
       write(view => view.listDueWorkflowContinuations(now, limit)),
@@ -481,5 +479,5 @@ export function createInMemoryWorkflowStore(
           }
         return { deleted };
       }),
-  };
+  });
 }

@@ -1,4 +1,5 @@
 import { rmSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { Codebase } from '@archon/core/schemas/codebase';
@@ -24,7 +25,10 @@ import {
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName, suggestWorkflowNames } from '@archon/workflows/router';
 import { resolveTopLevelInputs } from '@archon/workflows/utils/workflow-requirements';
-import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
+import {
+  parseInputAssignments,
+  WorkflowInputContractError,
+} from '@archon/workflows/workflow-inputs';
 import {
   findWorkflowLoadError,
   type ResolvedWorkflow,
@@ -34,6 +38,7 @@ import {
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { readSubrunMetadata } from '@archon/workflows/schemas/run-metadata';
 import { DETACHED_LAUNCH_METADATA_KEY } from '@archon/workflows/store';
 import { loadWorkflows } from './workflow-list';
 import { resolveLaunchRunConfig } from './workflow-run-config';
@@ -121,6 +126,11 @@ export interface OwnedRunAdmission extends RunSelection {
   readonly pinnedEnabled: boolean | undefined;
   /** Reassigned by adoption resolution (#2747), which picks the lane. */
   wantsIsolation: boolean;
+  /**
+   * The inputs this invocation supplied, read once: an adopt lane re-gates this same map
+   * against its branch's YAML rather than reading `--input-file` again.
+   */
+  readonly suppliedInputs: Record<string, string> | undefined;
   resolvedInputs: Record<string, string> | undefined;
   aiConfigurationRun: WorkflowRun | undefined;
 }
@@ -485,14 +495,24 @@ export async function admitRunExecution(
   assertWorkflowNotWorktreePinnedForFolder(options.folder === true, pinnedEnabled, workflow.name);
 
   // Signature gate (#2470, #2554): resolve this invocation's declared inputs from the
-  // `--input name=value` flags against the workflow's `inputs:` block, here — before the
-  // --detach fork and any worktree/clone/AI cost — so a bad name, a missing required
-  // input, or a malformed assignment costs nothing.
+  // `--input` and `--input-file` flags against the workflow's `inputs:` block, here —
+  // before the --detach fork and any worktree/clone/AI cost — so a bad name, a missing
+  // required input, a malformed assignment, or an unreadable file costs nothing.
+  //
+  // A detached child gates on the inputs its launcher recorded on the row, not on argv:
+  // the launcher read any input file, and the child never gets the flags (#5678).
   //
   // Skipped on a resume: the resumed run is not bound until the launch, and its inputs
   // were validated when its row was created. Re-gating with nothing supplied would make
   // every resume of a required-input run impossible.
-  const resolvedInputs = options.resume ? undefined : resolveDeclaredInputs(workflow, options);
+  const suppliedInputs = options.resume
+    ? undefined
+    : selection.preCreatedRun
+      ? recordedLaunchInputs(selection.preCreatedRun)
+      : await readSuppliedInputs(options);
+  const resolvedInputs = options.resume
+    ? undefined
+    : resolveTopLevelInputs(workflow, suppliedInputs);
 
   // Capability gate: hard-fail before the --detach fork and any worktree/clone/
   // AI cost if the workflow declares `requires: [github]` and the acting CLI
@@ -508,19 +528,59 @@ export async function admitRunExecution(
     flagBase,
     pinnedEnabled,
     wantsIsolation,
+    suppliedInputs,
     resolvedInputs,
     aiConfigurationRun: undefined,
   };
 }
 
-function resolveDeclaredInputs(
-  workflow: ResolvedWorkflow,
-  options: WorkflowRunOptions
-): Record<string, string> | undefined {
-  return resolveTopLevelInputs(
-    workflow,
-    options.inputs ? parseInputAssignments(options.inputs) : undefined
-  );
+/**
+ * The inputs an invocation supplies: `--input name=value` as typed, and `--input-file
+ * name=path` as the file's exact contents (no trimming, unlike `$(cat file)`). Only the
+ * explicit flag reads a file; a `--input` value that looks like a path stays a string.
+ * The CLI route has already resolved each path from `--cwd`.
+ *
+ * @throws WorkflowInputContractError on a grammar error, a name given by both flags, or a
+ *   file that cannot be read. Messages name the input and path, never the contents.
+ */
+export async function readSuppliedInputs(
+  options: Pick<WorkflowRunOptions, 'inputs' | 'inputFiles'>
+): Promise<Record<string, string> | undefined> {
+  const supplied = options.inputs ? parseInputAssignments(options.inputs) : {};
+  for (const [name, path] of Object.entries(options.inputFiles ?? {})) {
+    if (Object.hasOwn(supplied, name)) {
+      throw new WorkflowInputContractError(
+        `Input '${name}' is given by both --input and --input-file: supply it once.`
+      );
+    }
+    try {
+      supplied[name] = await readFile(path, 'utf8');
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      throw new WorkflowInputContractError(
+        `Cannot read --input-file for input '${name}' at '${path}': ${err.code ?? err.message}`
+      );
+    }
+  }
+  return Object.keys(supplied).length > 0 ? supplied : undefined;
+}
+
+/**
+ * The inputs a detached launcher recorded on the row it handed its child. The launcher
+ * writes the supplied map as text (`workflow-detach.ts`), so a non-string value means the
+ * row was not written by a CLI launch.
+ */
+function recordedLaunchInputs(row: WorkflowRun): Record<string, string> | undefined {
+  const recorded = readSubrunMetadata(row.metadata).inputs;
+  if (recorded === undefined) return undefined;
+  const inputs: Record<string, string> = {};
+  for (const [name, value] of Object.entries(recorded)) {
+    if (typeof value !== 'string') {
+      throw new Error(`Cannot execute run '${row.id}': its recorded input '${name}' is not text.`);
+    }
+    inputs[name] = value;
+  }
+  return inputs;
 }
 
 /**
@@ -560,7 +620,9 @@ export async function recaptureForLane(
   // The gates above ran against the parent checkout's YAML; this lane executes the
   // branch's graph, so judge the same signature gates against the branch vintage
   // (mirrors the orchestrator's deferred runSignatureGates).
-  if (!options.resume) admission.resolvedInputs = resolveDeclaredInputs(workflow, options);
+  if (!options.resume) {
+    admission.resolvedInputs = resolveTopLevelInputs(workflow, admission.suppliedInputs);
+  }
   await assertCliWorkflowRequirementsMet(host, workflow);
 }
 

@@ -68,6 +68,11 @@ export const orderedFlags: FlagHelp[] = [
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
+    spec: '--input-file <name>=<path>',
+    description: "Supply a declared workflow input from a file's contents; repeat per input",
+    owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
     spec: '--model <name>=<spec>',
     description: 'Rebind small/medium/large or @alias for one run; repeat per binding',
     owners: [{ command: 'workflow', subcommand: 'run' }],
@@ -155,7 +160,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--json',
     description:
-      'Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume, project list/config)',
+      'Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/pause/abandon/resume, project list/config)',
     owners: [],
   },
   {
@@ -181,7 +186,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--as <name>',
     description:
-      "For 'workflow approve/reject/respond/answer/rule/link': the name the answerer declares for itself,\nrecorded with an attention wait's answer, a ruling or a link as a claim (never checked; refused at a gate)",
+      "For 'workflow approve/reject/respond/answer/rule/link/pause': the name the answerer declares for itself,\nrecorded with an attention wait's answer, a ruling, a link or a pause as a claim (never checked; refused at a gate)",
     owners: [
       { command: 'workflow', subcommand: 'approve' },
       { command: 'workflow', subcommand: 'reject' },
@@ -189,6 +194,7 @@ export const orderedFlags: FlagHelp[] = [
       { command: 'workflow', subcommand: 'answer' },
       { command: 'workflow', subcommand: 'rule' },
       { command: 'workflow', subcommand: 'link' },
+      { command: 'workflow', subcommand: 'pause' },
     ],
   },
   {

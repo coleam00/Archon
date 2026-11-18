@@ -52,7 +52,7 @@ import { installPipeSafeConsole } from './utils/safe-console';
 import { withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
 import { escapeRunJobIfRequested } from './utils/run-job-escape';
-import { rejectConfigOutsideRun } from './dispatch-guards';
+import { rejectRunFlagsOutsideRun } from './dispatch-guards';
 import { resolveCliExitCode } from './utils/workflow-exit-code';
 import { trackerExit } from './utils/tracker-exit';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
@@ -354,13 +354,8 @@ async function decodeDetachedRunConfig({
 /** Routes the commands that run before the project gate, then gates and routes the rest. */
 async function dispatchCommand(base: CliRouteContext): Promise<number> {
   const { command, subcommand, values } = base;
-  const configOutsideRun = rejectConfigOutsideRun(
-    command,
-    subcommand,
-    values.config,
-    values['config-from-run']
-  );
-  if (configOutsideRun) return await fail(base.json, configOutsideRun);
+  const flagOutsideRun = rejectRunFlagsOutsideRun(command, subcommand, values);
+  if (flagOutsideRun) return await fail(base.json, flagOutsideRun);
   await assertFileStoreIfNeeded(base);
   const ctx = { ...base, detachedRunConfig: await decodeDetachedRunConfig(base) };
 
@@ -524,6 +519,8 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
           return await workflowRoutes.runWorkflowRuns(route);
         case 'resume':
           return await workflowRoutes.runWorkflowResume(route);
+        case 'pause':
+          return await workflowRoutes.runWorkflowPause(route);
         case 'abandon':
           return await workflowRoutes.runWorkflowAbandon(route);
         case 'end-turn':

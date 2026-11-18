@@ -14,6 +14,7 @@ import {
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import { attentionLabelKeySchema, attentionLabelsSchema } from '@archon/workflows/schemas/dag-node';
+import { describeOperatorPause, operatorPause } from '@archon/workflows/schemas/operator-pause';
 import { z } from 'zod';
 import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import type { RunAttention, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -377,36 +378,28 @@ function formatRunAttention(run: WorkflowRun): string[] {
 }
 
 function formatRunGate(run: WorkflowRun): string[] {
-  const parts: string[] = [];
-  const rawApproval = run.metadata.approval;
-  if (
-    run.status === 'paused' &&
-    isApprovalContext(rawApproval) &&
-    rawApproval.type === 'interactive_loop'
-  ) {
-    parts.push(
-      `gate: awaiting approval (node ${rawApproval.nodeId}, iteration ${String(rawApproval.iteration ?? '?')})`
-    );
-    parts.push(`completionSignaled: ${rawApproval.completionSignaled === true ? 'true' : 'false'}`);
-    if (rawApproval.completionSignaled === true) {
-      parts.push(
-        '-> approve with NO message (or accept:true) to FINALIZE without re-running; approve with a message to run another iteration.'
-      );
-    }
-    const excerpt = (rawApproval.signaledOutput ?? '').trim().slice(0, 300);
-    if (excerpt) parts.push(`output: ${excerpt}`);
+  // Any gate beside an operator pause is history.
+  const pause = operatorPause(run);
+  if (pause !== null) return [describeOperatorPause(pause)];
+  const gate = run.metadata.approval;
+  if (run.status !== 'paused' || !isApprovalContext(gate)) return [];
+  if (gate.type === 'interactive_loop') {
+    const excerpt = (gate.signaledOutput ?? '').trim().slice(0, 300);
+    return [
+      `gate: awaiting approval (node ${gate.nodeId}, iteration ${String(gate.iteration ?? '?')})`,
+      `completionSignaled: ${gate.completionSignaled === true ? 'true' : 'false'}`,
+      ...(gate.completionSignaled === true
+        ? [
+            '-> approve with NO message (or accept:true) to FINALIZE without re-running; approve with a message to run another iteration.',
+          ]
+        : []),
+      ...(excerpt ? [`output: ${excerpt}`] : []),
+    ];
   }
-  if (
-    run.status === 'paused' &&
-    isApprovalContext(rawApproval) &&
-    (rawApproval.type === 'approval' || rawApproval.type === undefined) &&
-    rawApproval.decisionsAuthored === true &&
-    rawApproval.decisions !== undefined
-  ) {
-    const ids = rawApproval.decisions.map(d => d.id).join(', ');
-    parts.push(`gate: decisions: ${ids} (use action=respond with one of these)`);
-  }
-  return parts;
+  const authored = gate.type === 'approval' || gate.type === undefined;
+  if (!authored || gate.decisionsAuthored !== true || gate.decisions === undefined) return [];
+  const ids = gate.decisions.map(d => d.id).join(', ');
+  return [`gate: decisions: ${ids} (use action=respond with one of these)`];
 }
 
 // ─── Write handlers ─────────────────────────────────────────────────────────

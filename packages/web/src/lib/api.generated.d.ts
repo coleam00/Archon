@@ -3744,8 +3744,10 @@ export interface paths {
           codebaseId?: string;
           /** @description An ISO date or time. Each group also reports records whose producing runs started before it against those started at or after it. */
           compare?: string;
-          /** @description A node id. Each group also reports its records split by the model label that ran this node in their producing runs and the runs below them. Not combined with `compare`; a node no producing run ran is a 400 listing the AI nodes they ran. */
+          /** @description A node id. Each group also reports its records split by the model label that ran this node in their producing runs and the runs below them. Not combined with `compare` or `byDimension`; a node no producing run ran is a 400 listing the AI nodes they ran. */
           byModel?: string;
+          /** @description A dimension key. Each group also reports its records split by the value they carry for this key in their `metric_dimensions` entry, each value's group with its own `compare` when `compare` is given. Not combined with `byModel`; a key no record in the window carries is a 400 listing the keys they carry. */
+          byDimension?: string;
         };
         header?: never;
         path?: never;
@@ -3762,7 +3764,7 @@ export interface paths {
             'application/json': components['schemas']['MetricsReport'];
           };
         };
-        /** @description Malformed window or compare cut, compare with byModel, or a byModel node no producing run ran */
+        /** @description Malformed window, compare cut or byDimension key, byModel with compare or byDimension, a byModel node no producing run ran, or a byDimension key no record carries */
         400: {
           headers: {
             [name: string]: unknown;
@@ -6552,6 +6554,30 @@ export interface components {
       agents_failed: number | null;
       agents_total: number | null;
       attention: components['schemas']['RunAttention'] | (never | null);
+      /** @description An operator's pause (`archon workflow pause`): `requested` while the run still runs the nodes it had started and pauses once they finish, `paused` once it stopped at that boundary, with who asked, through which surface and when. Null when the run is in neither. Derived from the run row; a resume ends it. */
+      operator_pause: {
+        /** @enum {string} */
+        state: 'requested' | 'paused';
+        requested: {
+          /** Format: date-time */
+          at: string;
+          via: string;
+          by:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              }
+            | unknown;
+          fromRun: {
+            runId: string;
+            nodePath: string;
+          } | null;
+        };
+        /** Format: date-time */
+        pausedAt: string | null;
+      } | null;
       /**
        * @description What this server observes about the run's execution owner while its state needs one (running, or paused on a sub-run that runs in its process), by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run needs no owner now (an ordinary pause, a pending or ended run). Observed per request; never stored.
        * @enum {string|null}
@@ -7961,6 +7987,29 @@ export interface components {
           /** @enum {string|null} */
           owner: 'reachable' | 'unreachable' | 'unknown' | null;
         } | null;
+        operatorPause: {
+          /** @enum {string} */
+          state: 'requested' | 'paused';
+          requested: {
+            /** Format: date-time */
+            at: string;
+            via: string;
+            by:
+              | {
+                  declared: string;
+                }
+              | {
+                  userId: string;
+                }
+              | unknown;
+            fromRun: {
+              runId: string;
+              nodePath: string;
+            } | null;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+        } | null;
         hasResult: boolean;
         resultCommit: string | null;
       }[];
@@ -8530,6 +8579,29 @@ export interface components {
             status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
             /** @enum {string|null} */
             owner: 'reachable' | 'unreachable' | 'unknown' | null;
+          } | null;
+          operatorPause: {
+            /** @enum {string} */
+            state: 'requested' | 'paused';
+            requested: {
+              /** Format: date-time */
+              at: string;
+              via: string;
+              by:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
+              fromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
           } | null;
           hasResult: boolean;
           resultCommit: string | null;
@@ -9721,6 +9793,30 @@ export interface components {
         | unknown;
       item_id: string | null;
       attention: components['schemas']['RunAttention'] | (never | null);
+      /** @description An operator's pause (`archon workflow pause`): `requested` while the run still runs the nodes it had started and pauses once they finish, `paused` once it stopped at that boundary, with who asked, through which surface and when. Null when the run is in neither. Derived from the run row; a resume ends it. */
+      operator_pause: {
+        /** @enum {string} */
+        state: 'requested' | 'paused';
+        requested: {
+          /** Format: date-time */
+          at: string;
+          via: string;
+          by:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              }
+            | unknown;
+          fromRun: {
+            runId: string;
+            nodePath: string;
+          } | null;
+        };
+        /** Format: date-time */
+        pausedAt: string | null;
+      } | null;
     };
     /** @enum {string|null} */
     WorkflowRunOutcome: 'succeeded' | 'failed' | null;
@@ -10445,14 +10541,14 @@ export interface components {
                     runs_partial_cost: number;
                     runs_missing: number;
                   };
-                  requested_models: string[];
-                  resolved_models: string[];
                   delta_vs_rest: number | null;
                   delta_interval_vs_rest: {
                     low: number;
                     high: number;
                   } | null;
                   separated: boolean;
+                  requested_models: string[];
+                  resolved_models: string[];
                 }
               | {
                   /** @enum {string} */
@@ -10473,14 +10569,14 @@ export interface components {
                     runs_partial_cost: number;
                     runs_missing: number;
                   };
-                  requested_models: string[];
-                  resolved_models: string[];
                   delta_vs_rest: number | null;
                   delta_interval_vs_rest: {
                     low: number;
                     high: number;
                   } | null;
                   separated: boolean;
+                  requested_models: string[];
+                  resolved_models: string[];
                 }
               | {
                   /** @enum {string} */
@@ -10501,17 +10597,129 @@ export interface components {
                     runs_partial_cost: number;
                     runs_missing: number;
                   };
-                  requested_models: string[];
-                  resolved_models: string[];
                   delta_vs_rest: number | null;
                   delta_interval_vs_rest: {
                     low: number;
                     high: number;
                   } | null;
                   separated: boolean;
+                  requested_models: string[];
+                  resolved_models: string[];
                 }
             )[];
             unattributed: number;
+          };
+          by_dimension?: {
+            key: string;
+            groups: (
+              | {
+                  /** @enum {string} */
+                  split: 'value';
+                  label: string;
+                  value: number;
+                  n: number;
+                  interval: {
+                    low: number;
+                    high: number;
+                  } | null;
+                  cost: {
+                    usd: number | null;
+                    input_tokens: number | null;
+                    output_tokens: number | null;
+                    runs: number;
+                    runs_without_cost: number;
+                    runs_without_tokens: number;
+                    runs_partial_cost: number;
+                    runs_missing: number;
+                  };
+                  delta_vs_rest: number | null;
+                  delta_interval_vs_rest: {
+                    low: number;
+                    high: number;
+                  } | null;
+                  separated: boolean;
+                  compare?: {
+                    at: string;
+                    before: {
+                      value: number | null;
+                      n: number;
+                      interval: {
+                        low: number;
+                        high: number;
+                      } | null;
+                    };
+                    after: {
+                      value: number | null;
+                      n: number;
+                      interval: {
+                        low: number;
+                        high: number;
+                      } | null;
+                    };
+                    delta: number | null;
+                    delta_interval: {
+                      low: number;
+                      high: number;
+                    } | null;
+                    separated: boolean;
+                    straddling: number;
+                    unattributed: number;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  split: 'none';
+                  value: number;
+                  n: number;
+                  interval: {
+                    low: number;
+                    high: number;
+                  } | null;
+                  cost: {
+                    usd: number | null;
+                    input_tokens: number | null;
+                    output_tokens: number | null;
+                    runs: number;
+                    runs_without_cost: number;
+                    runs_without_tokens: number;
+                    runs_partial_cost: number;
+                    runs_missing: number;
+                  };
+                  delta_vs_rest: number | null;
+                  delta_interval_vs_rest: {
+                    low: number;
+                    high: number;
+                  } | null;
+                  separated: boolean;
+                  compare?: {
+                    at: string;
+                    before: {
+                      value: number | null;
+                      n: number;
+                      interval: {
+                        low: number;
+                        high: number;
+                      } | null;
+                    };
+                    after: {
+                      value: number | null;
+                      n: number;
+                      interval: {
+                        low: number;
+                        high: number;
+                      } | null;
+                    };
+                    delta: number | null;
+                    delta_interval: {
+                      low: number;
+                      high: number;
+                    } | null;
+                    separated: boolean;
+                    straddling: number;
+                    unattributed: number;
+                  };
+                }
+            )[];
           };
           latest: {
             value: number;

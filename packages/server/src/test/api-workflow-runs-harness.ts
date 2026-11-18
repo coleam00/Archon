@@ -405,6 +405,8 @@ export const mockLabelAttentionWait = mock<
 >(async () => ({ labeled: false }));
 
 mock.module('@archon/core/db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   listWorkflowRuns: mockListWorkflowRuns,
@@ -430,12 +432,31 @@ export const mockListEventsForRuns = mock(
   async (runIds: readonly string[], _types: readonly string[]) =>
     new Map<string, MockWorkflowEvent[]>(runIds.map(id => [id, []]))
 );
+const unexpected = (name: string) => async (): Promise<never> => {
+  throw new Error(`Unexpected ${name}`);
+};
+/**
+ * A real module's exports, each function a mock that throws `Unexpected <name>`. A module
+ * this harness replaces must still provide every export the code under test imports, so
+ * a new export needs no edit here unless a test calls it.
+ */
+function unusedExports<Module extends object>(real: Module): Module {
+  // Typed as the module so the mock-module check sees every export covered.
+  return Object.fromEntries(
+    Object.entries(real).map(([name, value]) => [
+      name,
+      typeof value === 'function' ? mock(unexpected(name)) : value,
+    ])
+  ) as Module;
+}
+const unusedItems = unusedExports(await import('@archon/core/db/items'));
+const unusedItemRulings = unusedExports(await import('@archon/core/db/item-rulings'));
+const unusedItemMerges = unusedExports(await import('@archon/core/db/item-merges'));
+const unusedItemLinks = unusedExports(await import('@archon/core/db/item-links'));
+const unusedItemAsks = unusedExports(await import('@archon/core/db/item-asks'));
 export const mockGetItemRuns = mock<typeof import('@archon/core/db/items')['getItemRuns']>(
   async () => null
 );
-const unusedItemWrite = mock(async () => {
-  throw new Error('Item writes are not used by the route tests');
-});
 export const mockGetItem = mock<typeof import('@archon/core/db/items')['getItem']>(
   async () => null
 );
@@ -443,12 +464,10 @@ export const mockListItemsInWindow = mock<
   typeof import('@archon/core/db/items')['listItemsInWindow']
 >(async () => []);
 mock.module('@archon/core/db/items', () => ({
+  ...unusedItems,
   getItemRuns: mockGetItemRuns,
   listItemsInWindow: mockListItemsInWindow,
   getItem: mockGetItem,
-  ensureItem: unusedItemWrite,
-  ensureItemInProject: unusedItemWrite,
-  continuedItem: unusedItemWrite,
 }));
 // The item read lists the item's queued and skipped starts; without these it queries a
 // real database.
@@ -472,47 +491,39 @@ mock.module('@archon/core/db/install-hold', () => ({
 }));
 type ItemRulingsDb = typeof import('@archon/core/db/item-rulings');
 export const mockListItemRulings = mock<ItemRulingsDb['listItemRulings']>(async () => []);
-export const mockRecordItemRuling = mock<ItemRulingsDb['recordItemRuling']>(async () => {
-  throw new Error('Unexpected recordItemRuling');
-});
-export const mockWithdrawItemRuling = mock<ItemRulingsDb['withdrawItemRuling']>(async () => {
-  throw new Error('Unexpected withdrawItemRuling');
-});
+export const mockRecordItemRuling = mock<ItemRulingsDb['recordItemRuling']>(
+  unexpected('recordItemRuling')
+);
+export const mockWithdrawItemRuling = mock<ItemRulingsDb['withdrawItemRuling']>(
+  unexpected('withdrawItemRuling')
+);
 mock.module('@archon/core/db/item-rulings', () => ({
+  ...unusedItemRulings,
   listItemRulings: mockListItemRulings,
   recordItemRuling: mockRecordItemRuling,
   withdrawItemRuling: mockWithdrawItemRuling,
 }));
 mock.module('@archon/core/db/item-merges', () => ({
+  ...unusedItemMerges,
   getItemMerge: mock(async () => null),
-  recordItemMerge: unusedItemWrite,
 }));
 
 type ItemLinksDb = typeof import('@archon/core/db/item-links');
 mock.module('@archon/core/db/item-links', () => ({
+  ...unusedItemLinks,
   listItemLinks: mock<ItemLinksDb['listItemLinks']>(async () => []),
-  recordItemLink: mock<ItemLinksDb['recordItemLink']>(async () => {
-    throw new Error('Unexpected recordItemLink');
-  }),
-  endItemLink: mock<ItemLinksDb['endItemLink']>(async () => {
-    throw new Error('Unexpected endItemLink');
-  }),
 }));
 
 type ItemAsksDb = typeof import('@archon/core/db/item-asks');
 export const mockListOpenItemAsks = mock<ItemAsksDb['listOpenItemAsks']>(async () => []);
 export const mockListItemAsks = mock<ItemAsksDb['listItemAsks']>(async () => []);
 export const mockGetItemAsk = mock<ItemAsksDb['getItemAsk']>(async () => null);
-export const mockAnswerItemAsk = mock<ItemAsksDb['answerItemAsk']>(async () => {
-  throw new Error('Unexpected answerItemAsk');
-});
-export const mockWithdrawItemAsk = mock<ItemAsksDb['withdrawItemAsk']>(async () => {
-  throw new Error('Unexpected withdrawItemAsk');
-});
+export const mockAnswerItemAsk = mock<ItemAsksDb['answerItemAsk']>(unexpected('answerItemAsk'));
+export const mockWithdrawItemAsk = mock<ItemAsksDb['withdrawItemAsk']>(
+  unexpected('withdrawItemAsk')
+);
 mock.module('@archon/core/db/item-asks', () => ({
-  openItemAsksForCompletedRun: mock(async () => {
-    throw new Error('Unexpected openItemAsksForCompletedRun');
-  }),
+  ...unusedItemAsks,
   listOpenItemAsks: mockListOpenItemAsks,
   listItemAsks: mockListItemAsks,
   getItemAsk: mockGetItemAsk,

@@ -166,6 +166,8 @@ Commands:
                              (defaults to the current project)
   workflow attention label <run-id> --occurrence <id>
                              Set or remove labels on the attention wait a run is paused at
+  workflow pause <run-id>    Request a pause before a running run's next node; a run with no node left completes
+                             Once paused it keeps its slot and item; resume it with 'workflow resume'
   workflow resume <run-id>   Resume a failed, paused or killed run from completed nodes
   workflow wake [--watch] [--json] Wake due continuations across this install
   workflow signal <full-run-id> Signal and wake an event wait; use --occurrence for an exact match
@@ -266,6 +268,7 @@ Options:
   --folder                   Register the current directory (with or without git) as a folder project and run in place
   --container                Run a folder project in container isolation
   --input <name>=<value>     Supply a declared workflow input; repeat per input
+  --input-file <name>=<path> Supply a declared workflow input from a file's contents; repeat per input
   --model <name>=<spec>      Rebind small/medium/large or @alias for one run; repeat per binding
   --config <path>            Load a sparse YAML config layer for one fresh workflow run
   --config-from-run <run-id> Start a fresh run with the run config another run was started with
@@ -285,13 +288,13 @@ Options:
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Log warnings and errors only (the default except for serve)
   --verbose, -v              Show debug-level logs (on stderr; on stdout for serve)
-  --json                     Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume, project list/config)
+  --json                     Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/pause/abandon/resume, project list/config)
   --events                   For verbose JSON status/get: output raw event rows instead of node summaries
   --occurrence <id>          For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still
                              paused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer
                              and attention label)
-  --as <name>                For 'workflow approve/reject/respond/answer/rule/link': the name the answerer declares for itself,
-                             recorded with an attention wait's answer, a ruling or a link as a claim (never checked; refused at a gate)
+  --as <name>                For 'workflow approve/reject/respond/answer/rule/link/pause': the name the answerer declares for itself,
+                             recorded with an attention wait's answer, a ruling, a link or a pause as a claim (never checked; refused at a gate)
   --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)
   --no-wait                  For 'workflow run': refuse instead of waiting, naming the resource when the workflow's
                              resource is full, or the holding run when another run of the workflow on the same --item
@@ -331,6 +334,7 @@ Examples:
   archon workflow logs <run-id> --follow
   archon workflow logs <run-id> --follow --format text
   archon workflow wait <run-id> --json
+  archon workflow pause <run-id>
   archon workflow resume <run-id>
   archon workflow cancel <run-id>
   archon workflow cancel --item issue-42

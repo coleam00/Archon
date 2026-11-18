@@ -311,6 +311,18 @@ export async function runWorkflowResume(route: WorkflowRoute): Promise<number> {
   );
 }
 
+export async function runWorkflowPause(route: WorkflowRoute): Promise<number> {
+  const pauseRunId = route.positionals[2];
+  if (!pauseRunId) {
+    return await fail(route.json, 'Usage: archon workflow pause <run-id> [--as <name>]');
+  }
+  return await route.commands.workflowPauseCommand(route.host, pauseRunId, {
+    json: route.json,
+    cwd: route.effectiveCwd,
+    as: route.values.as as string | undefined,
+  });
+}
+
 export async function runWorkflowAbandon(route: WorkflowRoute): Promise<number> {
   const target = runOrItemTarget(route, 'abandon');
   if ('usage' in target) return await fail(route.json, target.usage);
@@ -739,6 +751,6 @@ export async function runUnknownWorkflowSubcommand({
       : `Unknown workflow subcommand: ${subcommand}`;
   return await fail(
     json,
-    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, link, items, merged, cleanup, reset-sessions, event, notice, wake, signal`
+    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, pause, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, link, items, merged, cleanup, reset-sessions, event, notice, wake, signal`
   );
 }

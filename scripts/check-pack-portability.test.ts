@@ -19,12 +19,6 @@ describe('pack portability check', () => {
     ]);
   });
 
-  test("allows only the forge plugin's install id, in its own file", () => {
-    const line = "const GITHUB_FORGE_PLUGIN = 'coleam00/Archon/plugins/forge-github';";
-    expect(findLeaks('.archon/workflows/sdlc/.shared/forge-check.ts', line)).toEqual([]);
-    expect(findLeaks('.archon/workflows/sdlc/.shared/other.ts', line)).toHaveLength(1);
-  });
-
   test("allows the forge plugin's install command in the setup guide, and nothing else on that line", () => {
     const readme = `${PACK_ROOT}/README.md`;
     const command = 'archon plugin add coleam00/Archon/plugins/forge-github';

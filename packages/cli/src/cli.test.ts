@@ -33,6 +33,7 @@ import { sealWorkflowRunConfig } from '@archon/core/config';
 import {
   isContinueSubcommand,
   rejectConfigOutsideRun,
+  rejectInputFileOutsideRun,
   rejectRunFlagsOnContinue,
 } from './dispatch-guards';
 import { loadCliEnv } from './load-cli-env';
@@ -538,6 +539,7 @@ describe('workflow model arguments', () => {
       for (const [values, flag, kept] of [
         [{ model: 'large=opus' }, '--model', 'the model bindings'],
         [{ input: ['ticket=1'] }, '--input', 'the inputs'],
+        [{ 'input-file': ['ticket=ticket.md'] }, '--input-file', 'the inputs'],
         [{ base: 'main' }, '--base', 'the base branch'],
       ] as const) {
         const message = rejectRunFlagsOnContinue(args[1], values);
@@ -769,6 +771,17 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
       );
     }
   }
+
+  it('refuses --input-file outside workflow run, leaving continuations their own message', () => {
+    const files = ['diff=changes.diff'];
+    expect(rejectInputFileOutsideRun('trigger', 'fire', files)).toBe(
+      'Error: --input-file can only be used with workflow run.'
+    );
+    expect(rejectInputFileOutsideRun('workflow', 'list', files)).toBeDefined();
+    expect(rejectInputFileOutsideRun('workflow', 'run', files)).toBeUndefined();
+    expect(rejectInputFileOutsideRun('workflow', 'resume', files)).toBeUndefined();
+    expect(rejectInputFileOutsideRun('trigger', 'fire', undefined)).toBeUndefined();
+  });
 
   it('accepts config flags on their owning commands', () => {
     expect(rejectConfigOutsideRun('workflow', 'run', 'config.yaml')).toBeUndefined();
@@ -2058,8 +2071,9 @@ describe('log output channel (#3444)', () => {
       join(workflows, 'listed.yaml'),
       'name: listed\ndescription: The listed workflow.\nnodes:\n  - id: a\n    bash: echo a\n'
     );
-    // Another workflow with an authoring problem: discovery parses it on every
-    // listing, but only `validate` should report it.
+    // Another workflow with an authoring problem: discovery parses it on every listing,
+    // which must not log it at the default level. `validate` rendering such a parse
+    // warning is proved in commands/validate.test.ts.
     writeFileSync(
       join(workflows, 'typo.yaml'),
       'name: typo\ndescription: Has a typo.\nnodes:\n  - id: b\n    bash: echo b\n    contxt: fresh\n'
@@ -2105,9 +2119,6 @@ describe('log output channel (#3444)', () => {
       expect(logRecords(verbose.stderr)).toContainEqual(
         expect.objectContaining({ level: 20, msg: 'node_unknown_key_ignored' })
       );
-
-      const validated = run(['validate', 'workflows', 'typo']);
-      expect(validated.stdout).toContain("unknown key 'contxt' will be ignored");
     } finally {
       await removeTempTree(root);
     }

@@ -447,6 +447,8 @@ export type WorkflowExecutionResult =
       paused: true;
       workflowRunId: string;
       waitCursor?: ReturnType<typeof deadlineWaitCursor>;
+      /** An operator paused the run (`archon workflow pause`); only an explicit resume continues it. */
+      byOperator?: true;
     }
   | {
       success: true;

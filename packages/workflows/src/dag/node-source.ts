@@ -92,6 +92,27 @@ export async function loadNodeCommandPrompt(
   }
 }
 
+/**
+ * Await thunks one at a time, collecting outcomes in `Promise.allSettled` shape so the
+ * caller's result handling is identical for the sequential and concurrent paths.
+ * `stopBefore` ends the walk before the next thunk, leaving it unstarted.
+ */
+export async function settleSequentially<T>(
+  thunks: readonly (() => Promise<T>)[],
+  stopBefore?: () => Promise<boolean>
+): Promise<PromiseSettledResult<T>[]> {
+  const settled: PromiseSettledResult<T>[] = [];
+  for (const thunk of thunks) {
+    if (settled.length > 0 && (await stopBefore?.())) break;
+    try {
+      settled.push({ status: 'fulfilled', value: await thunk() });
+    } catch (reason) {
+      settled.push({ status: 'rejected', reason });
+    }
+  }
+  return settled;
+}
+
 /** Preserve the rejection that determines run recovery after all claimed work settles. */
 export function settledValuesOrThrow<T>(
   results: readonly PromiseSettledResult<T>[],

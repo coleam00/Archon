@@ -74,6 +74,10 @@ describe('Windows path spelling of a registered checkout', () => {
       expect((await resolveCodebaseForPath(checkout, store)).codebase?.id).toBe(
         registered.codebaseId
       );
+      expect((await store.findCodebaseByPathPrefix(join(checkout, 'src', 'deep')))?.id).toBe(
+        registered.codebaseId
+      );
+      expect(await store.findCodebaseByPathPrefix(`${checkout}-staging`)).toBeNull();
       expect(await store.listCodebases()).toMatchObject([{ default_cwd: stored }]);
       expect(await store.listCodebases()).toHaveLength(1);
     }
