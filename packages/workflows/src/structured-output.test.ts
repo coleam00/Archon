@@ -84,7 +84,6 @@ describe('validateStructuredOutput: reserved metrics key', () => {
           runs: ['0123456789abcdef0123456789abcdef', '01234567-89ab-cdef-0123-456789abcdef'],
           instrument: 'judge@sha256:abc',
           instrument_node: 'judge',
-          dimensions: { route: 'plan', size: 'm' },
         },
       ])
     ).toEqual([]);
@@ -98,29 +97,6 @@ describe('validateStructuredOutput: reserved metrics key', () => {
     ['a time without an offset', { ...count, at: '2026-10-24T10:00:00' }, '/metrics/1/at'],
     ['a malformed run id', { ...count, runs: ['not-a-run'] }, '/metrics/1/runs/0'],
     [
-      'a dimension key outside [a-z0-9_]',
-      { ...count, dimensions: { Route: 'plan' } },
-      '/metrics/1/dimensions/Route',
-    ],
-    [
-      'a dimension value over 64 characters',
-      { ...count, dimensions: { route: 'x'.repeat(65) } },
-      '/metrics/1/dimensions/route',
-    ],
-    [
-      'a dimension value with free text',
-      { ...count, dimensions: { route: 'the plan' } },
-      '/metrics/1/dimensions/route',
-    ],
-    [
-      'more than 8 dimensions',
-      {
-        ...count,
-        dimensions: Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`k${String(i)}`, 'v'])),
-      },
-      '/metrics/1/dimensions',
-    ],
-    [
       'a repeated run id',
       { ...count, runs: ['0123456789abcdef0123456789abcdef', '0123456789abcdef0123456789abcdef'] },
       '/metrics/1/runs',
@@ -129,6 +105,46 @@ describe('validateStructuredOutput: reserved metrics key', () => {
     const errors = errorsFor([count, record]);
     expect(errors.length).toBeGreaterThan(0);
     expect(errors.every(e => e.startsWith(path))).toBe(true);
+  });
+
+  test('records may carry dimensions beside them, one entry per record', () => {
+    const r = validateStructuredOutput(
+      { metrics: [count, count], metric_dimensions: [{}, { route: 'plan', constructor: 'm' }] },
+      schema
+    );
+    expect(r).toEqual({ valid: true });
+  });
+
+  test.each([
+    ['a key that does not start with a letter', { _route: 'plan' }, '/metric_dimensions/1/_route'],
+    ['a key outside [a-z0-9_]', { Route: 'plan' }, '/metric_dimensions/1/Route'],
+    // A parsed `__proto__` would be dropped silently, so it is refused.
+    ['the key __proto__', JSON.parse('{"__proto__":"plan"}'), '/metric_dimensions/1/__proto__'],
+    ['a value over 64 characters', { route: 'x'.repeat(65) }, '/metric_dimensions/1/route'],
+    ['a value with free text', { route: 'the plan' }, '/metric_dimensions/1/route'],
+    [
+      'more than 8 dimensions',
+      Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`k${String(i)}`, 'v'])),
+      '/metric_dimensions/1',
+    ],
+  ])('a dimension with %s fails with its path', (_label, dimensions, path) => {
+    const r = validateStructuredOutput(
+      { metrics: [count, count], metric_dimensions: [{}, dimensions] },
+      schema
+    );
+    const errors = r.valid ? [] : r.errors;
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.every(e => e.startsWith(path))).toBe(true);
+  });
+
+  test('dimensions that do not match the records one for one fail', () => {
+    const r = validateStructuredOutput(
+      { metrics: [count, count], metric_dimensions: [{}] },
+      schema
+    );
+    expect(r.valid ? [] : r.errors).toEqual([
+      '/metric_dimensions: must hold one entry per record in metrics',
+    ]);
   });
 
   test('a score may name the metric it calibrates', () => {

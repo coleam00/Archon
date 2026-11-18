@@ -2717,7 +2717,7 @@ and splits each instrument's records by when their producing runs started: befor
 or at or after it. `--by-model <node>` splits them instead by the model label that ran
 `<node>` in their producing runs and the runs below them, and cannot be combined with
 `--compare`. `--by-dimension <key>` splits them by the value each record carries for `<key>`
-in its `dimensions`; with `--compare`, each value is compared on its own. `--by-model` and
+in its output's `metric_dimensions`; with `--compare`, each value is compared on its own. `--by-model` and
 `--by-dimension` cannot be combined.
 
 Text output prints one line per metric for its newest instrument: name, kind and unit,

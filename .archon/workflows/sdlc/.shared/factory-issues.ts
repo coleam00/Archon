@@ -4,8 +4,9 @@
  * The pull-request metrics say what happened to each pull request. These say what
  * happened to each issue, which is what the factory is for, and carry the issue's route
  * as the `route` dimension, so `archon metrics --by-dimension route` judges a route by
- * what it costs and what it closes. Every figure is read from the work item; nothing is
- * read from the forge.
+ * what it costs and what it closes. A record keeps its dimensions here; `metricOutput`
+ * moves them beside the records, where the engine reads them. Every figure is read from
+ * the work item; nothing is read from the forge.
  *
  * Each record names its issue as the subject and the build-queue runs that worked it as
  * `runs`, so the engine places it, and its cost, in the cohort of those runs. The engine
@@ -81,6 +82,19 @@ export interface Window {
 export function inWindow(time: string, window: Window): boolean {
   const at = Date.parse(time);
   return at >= window.from && at < window.until;
+}
+
+/**
+ * The output a metrics node emits: its records, and each record's dimensions at the same
+ * position under `metric_dimensions`, `{}` for a record without any.
+ */
+export function metricOutput<T extends object>(
+  records: readonly (T & { readonly dimensions?: Readonly<Record<string, string>> })[],
+): { metrics: Omit<T, 'dimensions'>[]; metric_dimensions: Readonly<Record<string, string>>[] } {
+  return {
+    metrics: records.map(({ dimensions: _, ...record }) => record),
+    metric_dimensions: records.map(record => record.dimensions ?? {}),
+  };
 }
 
 /**

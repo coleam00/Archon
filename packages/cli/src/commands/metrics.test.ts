@@ -26,7 +26,8 @@ async function fixture(overrides: Record<string, unknown>[]) {
   const records = createInMemoryWorkflowHostStore();
   const store = createInMemoryWorkflowStore(records);
   const runIds: string[] = [];
-  for (const override of overrides) {
+  // A `dimensions` override is the record's entry in its output's `metric_dimensions`.
+  for (const { dimensions, ...override } of overrides) {
     const run = await store.createWorkflowRun({ workflow_name: 'count-prs', user_message: '' });
     runIds.push(run.id);
     await store.persistWorkflowEvent({
@@ -46,6 +47,7 @@ async function fixture(overrides: Record<string, unknown>[]) {
               ...override,
             },
           ],
+          ...(dimensions === undefined ? {} : { metric_dimensions: [dimensions] }),
         },
       },
     });

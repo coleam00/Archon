@@ -16,7 +16,7 @@
  */
 
 import { dirname, join } from 'node:path';
-import { inWindow, issueMetricRecords } from '../../.shared/factory-issues.ts';
+import { inWindow, issueMetricRecords, metricOutput } from '../../.shared/factory-issues.ts';
 import { factoryPrRuns, factoryPrs, prMetricRecords, readPrFacts, sinceTime } from '../../.shared/factory-prs.ts';
 import { artifactsDir, emit, input, refuse, state } from 'archon:script';
 import { lineRecords, readPrFiles } from '../../.shared/pr-lines.ts';
@@ -48,7 +48,7 @@ try {
   const merged = prs.factory.filter(pr => pr.state === 'MERGED' && Date.parse(pr.mergedAt ?? '') >= linesFrom);
   const lines = lineRecords(merged, runsByUrl, readPrFiles);
   emit({
-    metrics: [...prMetricRecords(factory, runsByUrl), ...reviews.metrics, ...issueMetricRecords(items, window), ...lines.metrics],
+    ...metricOutput([...prMetricRecords(factory, runsByUrl), ...reviews.metrics, ...issueMetricRecords(items, window), ...lines.metrics]),
     skipped: prs.skipped,
     review_rounds_skipped: reviews.skipped,
     review_rounds_distribution: reviews.distribution,

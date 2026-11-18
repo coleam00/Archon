@@ -27,7 +27,8 @@ import {
   SEEN_LIMIT,
 } from './metrics-query';
 import {
-  storedMetricRecordSchema,
+  storedMetricOutputSchema,
+  type MetricDimensions,
   type MetricByDimension,
   type MetricByModel,
   type MetricCohort,
@@ -66,6 +67,8 @@ export type MetricsStore = Pick<
 /** One parsed record that counts. */
 interface CountedRecord {
   record: MetricRecord;
+  /** The record's entry in its output's `metric_dimensions`; `{}` without one. */
+  dimensions: MetricDimensions;
   /** `at`, else the completion time, in ms. */
   time: number;
   /** The run that returned the record. */
@@ -353,6 +356,10 @@ function byModelReport(
   };
 }
 
+/** An own-property read, so a key such as `constructor` never reads the prototype's. */
+const dimensionOf = (entry: CountedRecord, key: string): string | null =>
+  Object.hasOwn(entry.dimensions, key) ? (entry.dimensions[key] ?? null) : null;
+
 /**
  * Split records by the value they carry for `key`; each value group compares with the other
  * values, and carries its own cohorts when the query names a cut.
@@ -366,7 +373,7 @@ function byDimensionReport(
 ): MetricByDimension {
   const buckets = new Map<string | null, CountedRecord[]>();
   for (const entry of records) {
-    const label = entry.record.dimensions?.[key] ?? null;
+    const label = dimensionOf(entry, key);
     buckets.set(label, [...(buckets.get(label) ?? []), entry]);
   }
   const rate = isRate(records.map(({ record }) => record.value));
@@ -581,9 +588,9 @@ async function reportContext(
 function assertKeyCarried(records: readonly CountedRecord[], key: string): void {
   if (records.length === 0) return;
   const seen = new Set<string>();
-  for (const { record } of records) {
-    if (record.dimensions?.[key] !== undefined) return;
-    for (const carried of Object.keys(record.dimensions ?? {})) seen.add(carried);
+  for (const entry of records) {
+    if (dimensionOf(entry, key) !== null) return;
+    for (const carried of Object.keys(entry.dimensions)) seen.add(carried);
   }
   throw new MetricsDimensionKeyError(key, [...seen].sort().slice(0, SEEN_LIMIT));
 }
@@ -621,9 +628,7 @@ function invalidRefusal(row: MetricRecordRow, error: z.ZodError): Refused {
     refusal: {
       reason: 'invalid',
       ...source(row),
-      errors: error.issues.map(
-        issue => `/metrics/${issue.path.map(String).join('/')}: ${issue.message}`
-      ),
+      errors: error.issues.map(issue => `/${issue.path.map(String).join('/')}: ${issue.message}`),
     },
   };
 }
@@ -669,15 +674,19 @@ function admitRow(
   definitions: Map<string, MetricDefinition>,
   row: MetricRecordRow
 ): { admitted: AdmittedRecord[]; refused: Refused[] } {
-  const parsed = z.array(storedMetricRecordSchema).safeParse(row.metrics);
+  const parsed = storedMetricOutputSchema.safeParse({
+    metrics: row.metrics,
+    metric_dimensions: row.metricDimensions,
+  });
   if (!parsed.success) return { admitted: [], refused: [invalidRefusal(row, parsed.error)] };
   const admitted: AdmittedRecord[] = [];
   const refused: Refused[] = [];
-  for (const record of parsed.data) {
+  for (const [index, record] of parsed.data.metrics.entries()) {
     const time = Date.parse(record.at ?? row.completedAt);
     const conflict = admitDefinition(definitions, record);
     if (conflict === null) {
-      admitted.push({ record, time, runId: row.runId });
+      const dimensions = parsed.data.metric_dimensions?.[index] ?? {};
+      admitted.push({ record, dimensions, time, runId: row.runId });
     } else {
       refused.push({
         time,

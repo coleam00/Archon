@@ -135,18 +135,6 @@ affected; to use the key for something else, rename it.
                 "minLength": 1,
                 "maxLength": 255
               },
-              "dimensions": {
-                "type": "object",
-                "propertyNames": {
-                  "type": "string",
-                  "pattern": "^[a-z0-9_]{1,32}$"
-                },
-                "additionalProperties": {
-                  "type": "string",
-                  "pattern": "^[A-Za-z0-9_.:@/-]{1,64}$"
-                },
-                "maxProperties": 8
-              },
               "kind": {
                 "type": "string",
                 "const": "count"
@@ -210,18 +198,6 @@ affected; to use the key for something else, rename it.
                 "minLength": 1,
                 "maxLength": 255
               },
-              "dimensions": {
-                "type": "object",
-                "propertyNames": {
-                  "type": "string",
-                  "pattern": "^[a-z0-9_]{1,32}$"
-                },
-                "additionalProperties": {
-                  "type": "string",
-                  "pattern": "^[A-Za-z0-9_.:@/-]{1,64}$"
-                },
-                "maxProperties": 8
-              },
               "kind": {
                 "type": "string",
                 "const": "score"
@@ -245,6 +221,21 @@ affected; to use the key for something else, rename it.
             "additionalProperties": false
           }
         ]
+      }
+    },
+    "metric_dimensions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "propertyNames": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,31}$"
+        },
+        "additionalProperties": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.:@/-]{1,64}$"
+        },
+        "maxProperties": 8
       }
     }
   },
@@ -270,20 +261,24 @@ affected; to use the key for something else, rename it.
 - `instrument_node`: the node that did the measuring, such as a judge's prompt node. The
   engine reads which models ran it, in the run that returned the record and in that run's
   child runs, and keeps the result as the record's `measured_by`. You never declare a model.
-- `dimensions`: up to 8 named values a query can split the metric by, such as
-  `{ "route": "plan" }`. A key is 1 to 32 characters of `[a-z0-9_]`; a value is 1 to 64
-  characters of `[A-Za-z0-9_.:@/-]`. Dimensions are not part of the name's definition or of
-  the record's identity: a re-measured subject whose dimension changed replaces its old
-  record. See [Splitting by a dimension](#splitting-by-a-dimension).
 
 Records hold only these fields. A record with any other key is refused, so a record
-cannot carry credentials, prompt contents or messages beyond its bounded `subject`,
-`instrument` and `dimensions`.
+cannot carry credentials, prompt contents or messages beyond its bounded `subject` and
+`instrument`.
 
-A binary reading stored records ignores a key it does not know, so a record written by a
-newer binary with a field this one lacks still counts. Archon v0.14.0 and older refuse
-such a record instead: they report the node output that carries `dimensions` as invalid
-and leave its records out.
+A node may also return `metric_dimensions` beside `metrics`: one entry per record, at the
+same position, naming values a query can split the metric by, such as
+`[{ "route": "plan" }, {}]`. `{}` is a record without dimensions. An entry holds up to 8
+values; a key is a letter followed by up to 31 characters of `[a-z0-9_]`, and a value is 1
+to 64 characters of `[A-Za-z0-9_.:@/-]`. An output whose `metric_dimensions` does not hold
+one entry per record fails like a malformed record. Dimensions are not part of the name's
+definition or of the record's identity: a re-measured subject whose dimension changed
+replaces its old record. See [Splitting by a dimension](#splitting-by-a-dimension).
+
+Dimensions sit beside the records rather than inside them so that a binary that predates
+them still reads every record and counts it, without its dimensions. A binary reading
+stored records also ignores a record key it does not know, so a record a newer binary
+extends still counts.
 
 ## How records are counted
 
@@ -408,7 +403,7 @@ Showing a model effect needs work assigned to each model independently of its si
 ## Splitting by a dimension
 
 `archon metrics <name> --by-dimension <key>` (or `byDimension=` on the API) splits each
-entry's records by the value they carry for `<key>` in their `dimensions`. A pack that
+entry's records by the value their `metric_dimensions` entry holds for `<key>`. A pack that
 needs a metric per route, size or issue type writes each record once with that value,
 rather than once per name.
 

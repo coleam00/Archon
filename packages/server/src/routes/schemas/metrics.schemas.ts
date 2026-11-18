@@ -31,6 +31,6 @@ export const metricsQuerySchema = z.object({
   }),
   byDimension: z.string().optional().openapi({
     description:
-      "A dimension key. Each group also reports its records split by the value they carry for this key in their `dimensions`, each value's group with its own `compare` when `compare` is given. Not combined with `byModel`; a key no record in the window carries is a 400 listing the keys they carry.",
+      "A dimension key. Each group also reports its records split by the value they carry for this key in their `metric_dimensions` entry, each value's group with its own `compare` when `compare` is given. Not combined with `byModel`; a key no record in the window carries is a 400 listing the keys they carry.",
   }),
 });

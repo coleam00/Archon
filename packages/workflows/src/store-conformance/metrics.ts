@@ -34,12 +34,24 @@ export function describeMetricRecordsConformance(getHarness: () => WorkflowStore
       });
       await complete(first.id, { structured_output: { metrics, other: 'kept out' } });
       await Bun.sleep(2);
-      await complete(second.id, { structured_output: { metrics: [] }, node_output: 'secret' });
+      const dimensions = [{ route: 'plan' }];
+      await complete(second.id, {
+        structured_output: { metrics, metric_dimensions: dimensions },
+        node_output: 'secret',
+      });
 
       const rows = await store.listMetricRecords();
-      expect(rows.map(row => [row.runId, row.workflowName, row.nodeId, row.metrics])).toEqual([
-        [first.id, 'count-prs', 'count', metrics],
-        [second.id, 'count-prs-again', 'count', []],
+      expect(
+        rows.map(row => [
+          row.runId,
+          row.workflowName,
+          row.nodeId,
+          row.metrics,
+          row.metricDimensions,
+        ])
+      ).toEqual([
+        [first.id, 'count-prs', 'count', metrics, undefined],
+        [second.id, 'count-prs-again', 'count', metrics, dimensions],
       ]);
       const [row] = rows;
       expect(Number.isNaN(Date.parse(row?.completedAt ?? ''))).toBe(false);

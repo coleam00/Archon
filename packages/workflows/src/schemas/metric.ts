@@ -2,8 +2,10 @@
  * Metric records: the shape a node returns under its reserved top-level `metrics`
  * output key, and the report `queryMetrics` aggregates them into.
  *
- * Records are strict so they cannot carry free text beyond a bounded subject, instrument
- * and dimensions: no credentials, prompt contents or user messages.
+ * Records are strict so they cannot carry free text beyond a bounded subject and
+ * instrument: no credentials, prompt contents or user messages. A record's dimensions sit
+ * beside the records, under `metric_dimensions`, so a binary that reads records strictly
+ * still reads every record a newer one writes.
  */
 import { z } from 'zod';
 
@@ -22,7 +24,7 @@ const runIdSchema = z
 
 export const metricDimensionKeySchema = z
   .string()
-  .regex(/^[a-z0-9_]{1,32}$/, 'must be 1-32 characters of [a-z0-9_]');
+  .regex(/^[a-z][a-z0-9_]{0,31}$/, 'must be a letter, then up to 31 characters of [a-z0-9_]');
 
 const metricDimensionValueSchema = z
   .string()
@@ -61,18 +63,6 @@ const recordFields = {
     .optional(),
   /** The node that did the measuring; the models that ran it are part of the instrument. */
   instrument_node: z.string().min(1).max(255).optional(),
-  /**
-   * Named values a query can split the name by, such as `{ route: 'plan' }`. Not part of
-   * the name's definition or of a record's identity.
-   */
-  dimensions: z
-    .record(metricDimensionKeySchema, metricDimensionValueSchema)
-    .refine(
-      dimensions => Object.keys(dimensions).length <= MAX_DIMENSIONS,
-      `must hold at most ${String(MAX_DIMENSIONS)} dimensions`
-    )
-    .meta({ maxProperties: MAX_DIMENSIONS })
-    .optional(),
 };
 
 const countFields = { ...recordFields, kind: z.literal('count'), value: z.number().nonnegative() };
@@ -102,8 +92,57 @@ export const storedMetricRecordSchema = z.discriminatedUnion('kind', [
 ]);
 export type MetricKind = MetricRecord['kind'];
 
-/** The output shape a metric node returns. Other top-level keys are the author's. */
-export const metricOutputSchema = z.object({ metrics: z.array(metricRecordSchema) });
+/**
+ * Named values a query can split a record's name by, such as `{ route: 'plan' }`. Not part
+ * of the name's definition or of a record's identity.
+ */
+const metricDimensionsSchema = z.preprocess(
+  (input, context) => {
+    // zod drops a `__proto__` key without a word, so it never reaches the key pattern.
+    if (typeof input === 'object' && input !== null && Object.hasOwn(input, '__proto__')) {
+      context.issues.push({
+        code: 'custom',
+        input,
+        path: ['__proto__'],
+        message: 'must be a letter, then up to 31 characters of [a-z0-9_]',
+      });
+    }
+    return input;
+  },
+  z
+    .record(metricDimensionKeySchema, metricDimensionValueSchema)
+    .refine(
+      dimensions => Object.keys(dimensions).length <= MAX_DIMENSIONS,
+      `must hold at most ${String(MAX_DIMENSIONS)} dimensions`
+    )
+    .meta({ maxProperties: MAX_DIMENSIONS })
+);
+export type MetricDimensions = z.infer<typeof metricDimensionsSchema>;
+
+/** `metric_dimensions`, when present, holds one entry per record, `{}` for none. */
+const metricDimensionsListSchema = z.array(metricDimensionsSchema).optional();
+
+const sameLength = (output: { metrics: unknown[]; metric_dimensions?: unknown[] }): boolean =>
+  output.metric_dimensions === undefined ||
+  output.metric_dimensions.length === output.metrics.length;
+
+const DIMENSIONS_LENGTH = 'must hold one entry per record in metrics';
+
+/**
+ * The output shape a metric node returns: its records, and their dimensions by position.
+ * Other top-level keys are the author's.
+ */
+export const metricOutputSchema = z
+  .object({ metrics: z.array(metricRecordSchema), metric_dimensions: metricDimensionsListSchema })
+  .refine(sameLength, { path: ['metric_dimensions'], message: DIMENSIONS_LENGTH });
+
+/** How a stored output is read: the same rule over the stored records. */
+export const storedMetricOutputSchema = z
+  .object({
+    metrics: z.array(storedMetricRecordSchema),
+    metric_dimensions: metricDimensionsListSchema,
+  })
+  .refine(sameLength, { path: ['metric_dimensions'], message: DIMENSIONS_LENGTH });
 
 const metricDefinitionSchema = z.object({
   kind: z.enum(['count', 'score']),
