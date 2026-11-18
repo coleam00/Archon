@@ -52,9 +52,11 @@ let database = '';
 
 let seeded = '';
 
-// Seeding runs four workflows, which costs seconds on Windows, so it happens once. Each
-// test then starts from a copy of the seeded state at the same path, because the database
-// and the workspace link record absolute paths.
+// One real `workflow run --item` registers the project as the CLI does and puts a run on
+// item-1; the other runs are store rows, because what the store records for an item is
+// proved by its conformance tests and a full workflow costs seconds on a slow runner. It
+// happens once. Each test then starts from a copy of the seeded state at the same path,
+// because the database and the workspace link record absolute paths.
 beforeAll(async () => {
   Object.assign(process.env, callerEnv);
   root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-item-commands-')));
@@ -71,9 +73,7 @@ beforeAll(async () => {
   expect(init.exitCode).toBe(0);
   // Every test reads these: two runs on item-1, one on item-2 and one with no item.
   await run({ item: 'item-1' });
-  await run({ item: 'item-1' });
-  await run({ item: 'item-2' });
-  await run();
+  await seedRuns(['item-1', 'item-2', undefined]);
   cpSync(root, seeded, { recursive: true, verbatimSymlinks: true });
 });
 
@@ -148,6 +148,26 @@ async function run(options: { item?: string; supersedesRunId?: string } = {}): P
     workflowRunCommand(host, projectRoot, 'item-proof', 'go', { noWorktree: true, ...options })
   );
   expect(result.exitCode, result.stderr).toBe(0);
+}
+
+/** Completed runs of `item-proof` in the registered project, written straight to the store. */
+async function seedRuns(itemKeys: readonly (string | undefined)[]): Promise<void> {
+  const result = await captureWorkflowCommand(archonHome, async host => {
+    const codebase = await host.records.codebases.findCodebaseByDefaultCwd(projectRoot);
+    if (!codebase) throw new Error('The seed run did not register the project');
+    for (const item_key of itemKeys) {
+      const seeded = await host.deps.store.createWorkflowRun({
+        workflow_name: 'item-proof',
+        user_message: 'go',
+        codebase_id: codebase.id,
+        working_path: projectRoot,
+        item_key,
+      });
+      await host.deps.store.claimPendingWorkflowRun(seeded.id, projectRoot);
+      await host.deps.store.completeWorkflowRun(seeded.id, { duration_ms: 1 });
+    }
+  });
+  expect(result.status, result.stderr).toBe(0);
 }
 
 const readItemJson = async (key: string) =>
@@ -231,27 +251,18 @@ test.serial(
       answers: [],
     });
 
-    // A continuation stays on the item of the run it continues; `--item` still wins, and
-    // continuing a run with no item gives none. `--adopt` writes the same
-    // `adopted_from_run_id` and needs a worktree run, so the store's conformance test covers it.
-    const [onItem] = all;
+    // `--supersedes` and `--item` both reach the run the command creates. Which item a
+    // continuation lands on (inherited, named, or none) is the store's rule, proved in its
+    // conformance tests; `--adopt` writes the same `adopted_from_run_id` and needs a worktree.
     const bare = all.find(row => row.item_key === null);
-    if (!onItem || !bare) throw new Error('Expected a run on item-1 and a run with no item');
-    await run({ supersedesRunId: onItem.id });
-    await run({ supersedesRunId: onItem.id, item: 'item-2' });
-    await run({ supersedesRunId: bare.id });
+    if (!bare) throw new Error('Expected a run with no item');
+    await run({ supersedesRunId: bare.id, item: 'item-2' });
     expect(
       runsWithItems()
         .filter(row => row.continues !== null)
         .map(({ continues, item_key }) => ({ continues, item_key }))
-        .sort((a, b) => String(a.item_key).localeCompare(String(b.item_key)))
-    ).toEqual([
-      { continues: onItem.id, item_key: 'item-1' },
-      { continues: onItem.id, item_key: 'item-2' },
-      { continues: bare.id, item_key: null },
-    ]);
-  },
-  30_000
+    ).toEqual([{ continues: bare.id, item_key: 'item-2' }]);
+  }
 );
 
 test.serial(
