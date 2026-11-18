@@ -70,13 +70,12 @@ import {
 } from '@archon/workflows/utils/workflow-requirements';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { WorkflowInputContractError } from '@archon/workflows/workflow-inputs';
-import { isAttentionDegraded } from '@archon/workflows/schemas/attention-degraded';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import {
+  itemRunConfig,
   loadWorkflowRunConfigFile,
   unsealWorkflowRunConfig,
-  workflowRunConfigFromRun,
 } from '../config/run-config';
 import type { Codebase } from '../schemas/codebase';
 import type { WorkflowHost } from './host-store';
@@ -339,15 +338,12 @@ async function prepareBinding(
 }
 
 /**
- * The run config the item of a binding start last ran on: the one its most recent run
- * sealed, labelled `run <id> (<label>)`. A later round thus keeps the config the item was
- * started with, and its record names the run it came from. Undefined for a start on no
- * item, an item not written yet, or one whose latest run sealed none. The item is the one
- * admission's `namedItem` writes the run onto: the binding's key, else the receipt's, in
- * the project of the launch cwd. An unreadable latest run fails the start; reading an
- * older run instead would carry a config the item may have left.
+ * The run config of the item a binding start is on (see `itemRunConfig`). The item is the
+ * one admission's `namedItem` writes the run onto: the binding's key, else the receipt's,
+ * in the project of the launch cwd. Undefined for a start on no item or an item not
+ * written yet.
  */
-async function itemRunConfig(
+async function bindingItemRunConfig(
   host: WorkflowHost,
   intent: ResourceStartBindingIntent,
   receiptId: string
@@ -361,14 +357,7 @@ async function itemRunConfig(
     projectKeyForCodebase(codebase, codebase.default_cwd),
     itemKey
   );
-  const latest = found?.runs.at(-1);
-  if (!latest) return undefined;
-  if (isAttentionDegraded(latest)) {
-    throw new Error(
-      `Run ${latest.runId}, the most recent on item '${itemKey}', cannot be read, so the run config it ran on cannot be carried to this start.`
-    );
-  }
-  return workflowRunConfigFromRun(latest);
+  return found ? itemRunConfig(itemKey, found.runs) : undefined;
 }
 
 async function prepareClaimedBinding(
@@ -386,7 +375,7 @@ async function prepareClaimedBinding(
     // once for the install (`pack bindings --config`), a default for an item's first run,
     // not a change to this item's config.
     const runConfig =
-      (await itemRunConfig(host, intent, identity.receiptId)) ??
+      (await bindingItemRunConfig(host, intent, identity.receiptId)) ??
       (intent.launch.configSource
         ? await loadWorkflowRunConfigFile(intent.launch.configSource)
         : undefined);
