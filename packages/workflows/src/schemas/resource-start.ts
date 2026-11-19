@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { forgeSubjectRefSchema } from '@archon/forge';
 import { isJsonPointer } from '../json-pointer';
 import { jsonValueSchema } from '../output-ref';
 import { itemLinkKindSchema } from './item-link';
+import { trustedTextBindingSchema } from './trusted-text';
 import { attentionOptionSchema } from './wait-node';
 import { ITEM_KEY_MAX_LENGTH, itemKeySchema, workflowRunOriginSchema } from './workflow-run';
 import {
@@ -315,17 +315,6 @@ export const itemMappingSchema = z
   .strict();
 export type ItemMapping = z.infer<typeof itemMappingSchema>;
 
-export const trustedTextBindingSchema = z
-  .object({
-    subject: forgeSubjectRefSchema,
-    maintainersPath: z.string().min(1),
-    /** The declared workflow input that receives the frozen title/body snapshot. */
-    input: z.string().min(1),
-  })
-  .strict();
-export type TrustedTextBinding = z.infer<typeof trustedTextBindingSchema>;
-export const trustedTextDeclarationSchema = trustedTextBindingSchema.omit({ subject: true });
-
 /**
  * The item key `mapping` makes of the field's value: text as it is, a finite number in
  * decimal. Anything else, a missing or empty value included, is refused with a reason
@@ -492,7 +481,7 @@ export const resourceStartBindingIntentSchema = z
      * `intent` column.
      */
     itemKey: itemKeySchema.optional(),
-    /** Unlike eventInputs, SQL stores this beside the legacy strict intent document. */
+    /** Kept in the strict intent so older binaries cannot silently drop the trust gate. */
     trustedText: trustedTextBindingSchema.optional(),
     /**
      * The checkout a run-ended binding with `checkout: "ended-run"` or an asks-settled

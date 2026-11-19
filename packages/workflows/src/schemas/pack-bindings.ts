@@ -18,8 +18,8 @@ import {
   resourceStartBindingIntentSchema,
   resourceStartOverlapSchema,
   runEndedTriggerSchema,
-  trustedTextDeclarationSchema,
 } from './resource-start';
+import { trustedTextDeclarationSchema } from './trusted-text';
 
 /** A binding id and a resource name both end up in a file name and a resource key. */
 const BINDING_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;

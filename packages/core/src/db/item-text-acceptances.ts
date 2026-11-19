@@ -3,7 +3,7 @@ import {
   trustedTextRunMetadataSchema,
   type TrustedTextRunMetadata,
 } from '@archon/workflows/trusted-text';
-import { trustedTextBindingSchema } from '@archon/workflows/schemas/resource-start';
+import { trustedTextBindingSchema } from '@archon/workflows/schemas/trusted-text';
 import { ensureItem } from './items';
 
 export async function declareItemTextRequirement(

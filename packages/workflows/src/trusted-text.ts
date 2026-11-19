@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { trustedTextBindingSchema } from './schemas/resource-start';
+import { trustedTextBindingSchema } from './schemas/trusted-text';
 import type { ResolvedWorkflow } from './schemas';
 import type { WorkflowDeps } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';

@@ -16,8 +16,8 @@ import { jsonValueSchema } from '@archon/workflows/output-ref';
 import {
   itemMappingSchema,
   resourceStartBindingIntentSchema,
-  trustedTextDeclarationSchema,
 } from '@archon/workflows/schemas/resource-start';
+import { trustedTextDeclarationSchema } from '@archon/workflows/schemas/trusted-text';
 
 export const githubSourceBindingSchema = resourceStartBindingIntentSchema
   .omit({
