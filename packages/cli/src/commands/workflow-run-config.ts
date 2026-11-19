@@ -6,8 +6,9 @@ import {
   workflowRunConfigFromRun,
 } from '@archon/core/config';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
+import { projectKeyForCodebase } from '@archon/paths';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
+import { findLaunchCodebase } from './workflow-isolation';
 import { resolveRunIdArg, type WorkflowRunOptions } from './workflow-shared';
 
 /**
@@ -53,25 +54,29 @@ export async function resolveLaunchRunConfig(
 /**
  * The config of the item a fresh start is on, so a start that names no config keeps the
  * one the item runs on instead of silently dropping it. The item is the one `--item` names
- * in the project of `cwd`, else that of the run `--supersedes` names, which the start
- * inherits. An adoption inherits the adopted run's AI configuration instead.
+ * in the start's project, else that of the run `--supersedes` names, which the start
+ * inherits. The start's project comes from `findLaunchCodebase`, the lookup the run row
+ * (and so the item it is written onto) takes its project from, so `--project` selects the
+ * item here too. An adoption inherits the adopted run's AI configuration instead.
  */
 async function itemLaunchRunConfig(
   host: WorkflowHost,
   options: WorkflowRunOptions,
   cwd: string
 ): Promise<WorkflowRunConfigInput | undefined> {
-  if (options.adoptRunId) return undefined;
+  if (options.adoptRunId || !(options.item || options.supersedesRunId)) return undefined;
+  const { codebase } = await findLaunchCodebase(host, cwd, options);
+  // No registered project means no item yet: the run registers it and writes the item.
+  // (A supersession outside a registered project is refused by the run itself.)
+  if (!codebase) return undefined;
   let item: { projectKey: string; key: string } | null = null;
   if (options.item) {
-    const projectKey = await registeredProjectKeyForPath(cwd, host.records.codebases);
-    // No registered project means no item yet: the run registers it and writes the item.
-    item = projectKey ? { projectKey, key: options.item } : null;
+    item = { projectKey: projectKeyForCodebase(codebase, codebase.default_cwd), key: options.item };
   } else if (options.supersedesRunId) {
     // Resolved within the launch project, as the supersession itself resolves it: a short
     // prefix passed through unresolved would find no run and silently drop the config.
     const superseded = await host.deps.store.getWorkflowRun(
-      await resolveRunIdArg(host, options.supersedesRunId, cwd)
+      await resolveRunIdArg(host, options.supersedesRunId, undefined, false, codebase.id)
     );
     item = superseded?.item_id ? await host.deps.store.getItem(superseded.item_id) : null;
   }
