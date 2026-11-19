@@ -212,7 +212,6 @@ nodes:
       pull_request: "$checkout.output.pull_request"
       prior_report: "$checkout.output.prior_report"
       branch: "$facts.output.branch"
-      ci: "$INPUTS.ci"
 
   - id: answer
     command: answer

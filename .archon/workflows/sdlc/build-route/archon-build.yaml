@@ -50,9 +50,6 @@ inputs:
   branch:
     default: ""
     description: The branch a new pull request opens from, forwarded unchanged to delivery.
-  ci:
-    default: "forge"
-    description: The pack's `ci` setting, forwarded to delivery.
   errors:
     default: "auto"
     description: Silent-failure lens — auto, true, or false.
@@ -108,7 +105,6 @@ nodes:
   - id: deliver
     include: archon-deliver
     with:
-      ci: "$INPUTS.ci"
       errors: "$INPUTS.errors"
       part: "$INPUTS.part"
       work: >-
