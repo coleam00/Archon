@@ -513,6 +513,19 @@ test.serial(
     expect(flagged.exitCode, flagged.stderr).toBe(0);
     expect(readFileSync(out, 'utf8').trim()).toBe('main from-base');
 
+    // A start that supersedes a run on the item names no item and still takes its branch.
+    const [memberRun] = rows<{ id: string }>(
+      `SELECT r.id FROM remote_agent_workflow_runs r JOIN remote_agent_items i
+         ON i.id = r.item_id WHERE i.key = 'member' ORDER BY r.rowid DESC LIMIT 1`
+    );
+    const superseding = await invoke(host =>
+      workflowRunCommand(host, projectRoot, 'base-proof', 'go', {
+        supersedesRunId: memberRun?.id,
+      })
+    );
+    expect(superseding.exitCode, superseding.stderr).toBe(0);
+    expect(readFileSync(out, 'utf8').trim()).toBe('feat/order from-feat');
+
     // `--project` selects the project apart from the directory: its item's branch applies.
     const elsewhere = join(root, 'elsewhere');
     mkdirSync(elsewhere);
