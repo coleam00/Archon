@@ -17,7 +17,7 @@ Rules:
 - Never run it on the user's real data or a live database. `ui-check.md` (`.archon/sdlc/policy/`, over the default in `$PACK_DIR/.shared/policy/`) says how this project starts safely.
 - Never modify this checkout or post anywhere: sibling reviewers read it at the same time, and the engine fails a reviewer that leaves it changed. Scratch files go under `$ARTIFACTS_DIR`.
 - Stop exactly what you started.
-- If you could not run it, say so; do not judge the UX from the code alone. When no browser tool is found, start nothing: write `ux.md` saying the app was not exercised because no browser tool is on this host, with no findings, and reply.
+- If you could not run it, say so; do not judge the UX from the code alone. When no browser tool is found, start nothing: write `ux.md` opening with the statement that the app was not exercised because no browser tool is on this host, with no findings, and reply. Synthesis reads that report as a coverage gap, never as a clean UX pass.
 
 ## Output
 
