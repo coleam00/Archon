@@ -7,7 +7,9 @@ import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import { asksCheckoutMetadata } from '@archon/workflows/schemas/resource-start';
 import { asksResultMetadata } from '@archon/workflows/schemas/run-metadata';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { createAsksCheckout, createAsksSettledStarts } from './asks-settled';
+import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
+import { createAsksCheckout, createAsksSettledStarts, optionOverlaps } from './asks-settled';
+import { readAsksSettledBindings } from './run-ended';
 
 const track = trackTempRoots();
 
@@ -46,19 +48,20 @@ const SETTLED = [
 function trigger(
   inputs: Record<string, unknown>,
   cwd = PROJECT_CWD,
-  extra: { checkout?: 'asking-run' } = {}
+  extra: { checkout?: 'asking-run'; option?: string; settled?: string } = {},
+  stage = 'build'
 ) {
   return {
     version: 1,
-    sourceInstanceId: 'build-after-answers',
+    sourceInstanceId: `${stage}-after-answers`,
     binding: {
-      bindingId: 'build',
+      bindingId: stage,
       bindingRevision: null,
       hostId: 'factory-host',
       runAsUserId: 'operator',
-      resource: 'build',
+      resource: stage,
       overlap: 'queue',
-      launch: { cwd, workflowName: 'build', inputs: {}, isolation: { kind: 'default' } },
+      launch: { cwd, workflowName: stage, inputs: {}, isolation: { kind: 'default' } },
     },
     on: { asksSettled: { workflowName: 'plan', settled: 'answered', inputs, ...extra } },
   };
@@ -130,6 +133,93 @@ describe('asks-settled starts', () => {
       'build.json': trigger({ decisions: { answers: true } }, '/srv/other'),
     });
     expect(elsewhere.build).toBeUndefined();
+  });
+
+  describe('with option', () => {
+    const answered = (
+      position: number,
+      answer: { decision: string; text: string } | { text: string }
+    ) => storedAsk(position, { as: 'answered', answer, act });
+    const started = (
+      receipts:
+        | readonly { bindings?: readonly { launch: { workflowName: string } }[] }[]
+        | undefined
+    ) =>
+      (receipts ?? []).flatMap(receipt => receipt.bindings ?? []).map(b => b.launch.workflowName);
+    const routes = {
+      'keep.json': trigger({}, PROJECT_CWD, { option: 'keep' }, 'build'),
+      'drop.json': trigger({}, PROJECT_CWD, { option: 'drop' }, 'replan'),
+    };
+
+    test('each option starts its own binding, once', async () => {
+      const { build } = await prepareWith(routes);
+      expect(started(build?.([answered(0, { decision: 'keep', text: '' })], null))).toEqual([
+        'build',
+      ]);
+      expect(started(build?.([answered(0, { decision: 'drop', text: '' })], null))).toEqual([
+        'replan',
+      ]);
+    });
+
+    test.each([
+      ['an option no binding names', [answered(0, { decision: 'other', text: 'hold it' })]],
+      ['a text-only answer', [answered(0, { text: 'keep it' })]],
+      [
+        'a mixed set',
+        [answered(0, { decision: 'keep', text: '' }), answered(1, { decision: 'drop', text: '' })],
+      ],
+    ] as const)('%s starts no option binding', async (_, rows) => {
+      const { build } = await prepareWith(routes);
+      expect(build?.(rows, null)).toEqual([]);
+    });
+
+    test('withdrawn asks are not counted, and a binding without option still starts on a mixed set', async () => {
+      const { build } = await prepareWith({
+        ...routes,
+        'review.json': trigger({}, PROJECT_CWD, {}, 'review'),
+      });
+      expect(
+        started(build?.([answered(0, { decision: 'keep', text: '' }), SETTLED[1]], null))
+      ).toEqual(['build', 'review']);
+      expect(
+        started(
+          build?.(
+            [
+              answered(0, { decision: 'keep', text: '' }),
+              answered(1, { decision: 'drop', text: '' }),
+            ],
+            null
+          )
+        )
+      ).toEqual(['review']);
+    });
+
+    test('takes settled: answered', () => {
+      const parsed = triggerConfigSchema.safeParse(
+        trigger({}, PROJECT_CWD, { option: 'keep', settled: 'withdrawn' })
+      );
+      expect(parsed.error?.issues.map(issue => issue.path.at(-1))).toEqual(['option']);
+    });
+
+    test('trigger check reports two files that both start when one option is chosen', async () => {
+      const bindings = await readAsksSettledBindings(
+        await triggersWith({
+          'a-keep.json': trigger({}, PROJECT_CWD, { option: 'keep' }, 'build'),
+          'b-keep.json': trigger({}, PROJECT_CWD, { option: 'keep' }, 'review'),
+          'c-drop.json': trigger({}, PROJECT_CWD, { option: 'drop' }, 'replan'),
+          'd-answered.json': trigger({}, PROJECT_CWD, {}, 'deliver'),
+          'e-withdrawn.json': trigger({}, PROJECT_CWD, { settled: 'withdrawn' }, 'close'),
+          'f-elsewhere.json': trigger({}, PROJECT_CWD, { option: 'drop' }, 'replan-elsewhere'),
+        })
+      );
+      const projects = bindings.map(b =>
+        b.file.endsWith('f-elsewhere.json') ? 'other' : 'widgets'
+      );
+      const reported = optionOverlaps(bindings, projects).map(problems =>
+        problems.map(problem => /(\w)-\w+\.json/.exec(problem)?.[1])
+      );
+      expect(reported).toEqual([['b', 'd'], ['a', 'd'], ['d'], ['a', 'b', 'c'], [], []]);
+    });
   });
 
   describe('with checkout: asking-run', () => {

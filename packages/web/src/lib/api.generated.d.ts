@@ -10854,6 +10854,7 @@ export interface components {
                   stage: string;
                   /** @enum {string} */
                   settled: 'answered' | 'withdrawn' | 'any';
+                  option?: string;
                 };
             to: string;
             /** @enum {boolean} */
@@ -10878,6 +10879,7 @@ export interface components {
                   stage: string;
                   /** @enum {string} */
                   settled: 'answered' | 'withdrawn' | 'any';
+                  option?: string;
                 };
             to: string;
             /** @enum {boolean} */

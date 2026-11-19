@@ -35,7 +35,11 @@ type GraphDeps = Pick<WorkflowDeps, 'loadConfig' | 'providers'> &
 function installedFrom(file: OnBinding): InstalledArrow['from'] {
   return 'runEnded' in file
     ? { stage: file.runEnded.workflowName, outcome: file.runEnded.outcome }
-    : { stage: file.asksSettled.workflowName, settled: file.asksSettled.settled };
+    : {
+        stage: file.asksSettled.workflowName,
+        settled: file.asksSettled.settled,
+        ...(file.asksSettled.option === undefined ? {} : { option: file.asksSettled.option }),
+      };
 }
 
 /**

@@ -461,7 +461,7 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
 - `nodes` are the stage's nodes after includes are expanded, under the ids its runs record (`<include>__<id>`); `blocks` names the include each came from, outermost first. A `loop_group` is a node, and its body follows it: each body node has `loopGroup` set to the group's id, and its `id` and `dependsOn` are the step names its runs are recorded under (`<group>.<id>`, composing across nested groups, as in `rounds.review__check`). A body's included blocks are named the same way (`rounds.review`). An `include:` with `fan_out:` is one `compose_fan_out` node, because its width is known only at run time; its `fanOut.workflow` names its body in `fanOutBlocks`, which lists each such body's nodes once, including bodies a body fans out to.
 - An arrow is `active` when a trigger file launches it in this project. A declared arrow with no file is reported with `active: false`, not left out. `to` may be a workflow outside the pack. An active arrow's `installed.problems` is what `archon trigger check` reports as the check a run gets before it starts: when it is not empty, every run of `from.stage` on an item is refused before it starts, so the arrow starts nothing until the file is fixed. A file whose `launch.cwd` no longer exists is in no project, so the end of a run never starts it; it is shown with that problem because which project it was meant for cannot be known.
 - A declared binding that names a workflow which is not a stage as the pack loaded keeps the name as written, and its `declared.problems` says so. When that stage failed to load, its load error is in `discoveryErrors`; the rest of the graph is still read.
-- An arrow from an [asks-settled binding](#start-a-stage-again-when-its-asks-are-answered) has `from: { "stage", "settled" }` in place of `outcome`, where `settled` is the binding's `answered`, `withdrawn` or `any`. It starts nothing for an outcome, so it does not change `startsNothing`.
+- An arrow from an [asks-settled binding](#start-a-stage-again-when-its-asks-are-answered) has `from: { "stage", "settled" }` in place of `outcome`, where `settled` is the binding's `answered`, `withdrawn` or `any`, and `option` when the binding names one ([options](#start-a-different-stage-for-each-option)); a pack binding that lists several options is one arrow per option. It starts nothing for an outcome, so it does not change `startsNothing`.
 - `startsNothing` marks an outcome no active arrow without problems leaves. With `asks: false` such an outcome ends in silence; whether that is right is the pack's call.
 - `discoveryErrors` lists every workflow that failed to load from the source the pack was read from. A stage that failed is missing from `stages`, so a non-empty list means the graph may be incomplete.
 - When the pack's workflows are not in the checkout, pass `--workflow-source <dir>` (`workflowSource=` on the API), the directory a binding's `launch.discoveryCwd` names. The arrows are still those of the checkout's project.
@@ -598,6 +598,7 @@ A binding starts once for a set of asks that meets all of these:
 - The run that left the asks is a run of `workflowName`.
 - `settled` matches how the set settled: `answered` when at least one ask was answered, so a set with some asks withdrawn counts as answered; `withdrawn` when every ask was withdrawn; `any` for either.
 - The binding's `launch.cwd` is in the item's project, as for a run-ended binding.
+- With `option`, every answered ask of the set chose that option ([below](#start-a-different-stage-for-each-option)).
 
 `inputs` maps each input of the started workflow to data from the set and the run that left it, and nothing else:
 
@@ -622,6 +623,29 @@ Answering is not starting. Who may answer or withdraw an ask is unchanged: the r
 Asks-settled bindings need the database store, as asks do. A [`wait: attention`](/reference/workflow-language/) node is unchanged: it pauses its own run and resumes it with the answer, and starts nothing.
 
 A workflow pack can declare this binding as an [`asks_settled:` binding](/reference/workflow-language/#pack-bindings); [`archon pack bindings`](/reference/cli/#pack-bindings) writes it, checked, and `archon trigger add` registers it.
+
+### Start a different stage for each option
+
+An ask's options can lead to different stages. `"option": "<id>"` in `on.asksSettled` narrows a binding to answers that chose that option, so one ask offering `send-back`, `replan` and `hold` can start `deliver` again on `send-back`, start `plan` on `replan`, and start nothing on `hold`. Two files on the same asking workflow do it:
+
+```json
+"on": { "asksSettled": { "workflowName": "deliver", "settled": "answered", "option": "send-back", "checkout": "asking-run" } }
+```
+
+```json
+"on": { "asksSettled": { "workflowName": "deliver", "settled": "answered", "option": "replan" } }
+```
+
+The rules:
+
+- `option` is one option `id`, as the ask declared it, and takes `"settled": "answered"`: a withdrawn ask chose nothing.
+- The binding starts when the set has at least one answered ask and every answered ask chose that option. Withdrawn asks are not counted. The engine compares the chosen option's `id` and never reads answer text.
+- A set whose answered asks chose different options matches no binding with `option`. Neither does an answer that chose no option the ask offers, such as a text-only answer. The reserved `other` is an option, so a binding may name it.
+- A binding without `option` starts as before, whatever was chosen.
+
+`archon trigger check` reports two files in one project, on the same asking workflow, that would both start when one option is chosen: two files naming the same option, or one naming an option beside one that names none and takes answers. Two files that name no option and start different stages are not reported; several stages may start on one settlement on purpose.
+
+When a settled set starts nothing, because no binding names the option chosen or no binding matches at all, `archon workflow answer` says so: the text ends with "No trigger binding starts on this settlement, so nothing was started." and the JSON has `"nothingStarted": true`. A choice like `hold` reads as a stop, not as a lost start.
 
 ### Work in the checkout the asking run left
 
