@@ -47,8 +47,11 @@ Each item names the run, its workflow, its project, how long it has waited, the 
 | `usage_limit` | A node hit a provider usage limit, or a rate limit that outlasted its retries | Nothing. It retries at `resetAt`. `resume` tries sooner |
 | `unreadable` | A paused run Archon cannot describe | Inspect it, then resume or abandon it |
 | `owner_lost` | A run whose owner process on this host is gone while it holds its [item](/reference/cli/#items), with a later start of its workflow on that item waiting behind it | `archon workflow resume <run-id>` or `archon workflow abandon <run-id>`. Archon never ends it by itself |
+| `overdue_wait` | An item still [waiting for something outside Archon](/reference/workflow-language/#waits-what-an-item-waits-for-outside-archon) past its deadline; no run holds it | Look at why the event has not come. It still wakes the item when it does. `archon workflow answer --withdraw <ref>` withdraws the waits |
 
 A `usage_limit` wait retries from the node that hit the limit, at the provider's reset time or a 5 to 15 minute backoff, and pauses again if the limit is still there. With `workflows.autoResumeOnQuotaReset: false`, or for a container run, the run fails instead of waiting.
+
+An `overdue_wait` item carries `waitingIn` (the completed run that left the waits and its workflow), `waits` (each wait's `event` and `about`), `deadline` and, as `pausedAt`, when the waits opened. Its ref is `wait:<run-id>`.
 
 An `owner_lost` item carries `item` and `observedStatus`, the run's stored status (`running`, or `paused` for a parent whose sub-run lost its owner), which is unchanged. The list observes owners on this host only, so a holder owned on another host is not listed; `archon workflow runs --item <key>` shows its owner as `unknown`.
 

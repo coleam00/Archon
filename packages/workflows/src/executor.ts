@@ -125,9 +125,9 @@ export type ExecuteWorkflowOptions = ResumePayload & {
   /** Already resolved checkout base, including unresolved empty; recorded resumes take priority. */
   resolvedBaseBranch?: string;
   /**
-   * Per-dispatch base-branch override (CLI `--base <branch>`), the top
-   * precedence level for `$BASE_BRANCH` — above repo config and the codebase
-   * default. Mirrors `IsolationRequest.baseOverride`, which does the same for
+   * Per-dispatch base-branch override (CLI `--base <branch>`, else the landing branch of
+   * the item the fresh run is on), the top precedence level for `$BASE_BRANCH` — above
+   * repo config and the codebase default. Mirrors `IsolationRequest.baseOverride`, which does the same for
    * the worktree cut-from, so one flag drives both halves of "base". Passing
    * the override through `baseBranch` instead would rank it BELOW
    * `worktree.baseBranch`, so a repo with that config set would cut its

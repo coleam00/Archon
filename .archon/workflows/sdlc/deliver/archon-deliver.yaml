@@ -55,12 +55,6 @@ inputs:
       The part of an approved multi-part plan this delivery is, forwarded
       unchanged to every review in the rounds. archon-review's `part` input
       owns its shape. Empty delivers the whole contract.
-  ci:
-    default: "forge"
-    description: >-
-      The pack's `ci` setting; an includer passes its own. `none` has the CI agent run the
-      project's full validation itself and record it for the merge gate; `forge` leaves
-      validation to the forge's checks.
   # Error review can be forced on or off; `auto` leaves it to review's route agent.
   errors:
     default: "auto"

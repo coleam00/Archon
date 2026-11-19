@@ -290,6 +290,45 @@ describe('archon pack bindings', () => {
     expect(config.bindings[0]?.item).toEqual({ field: 'subject.number', prefix: 'issue-' });
   });
 
+  it('writes an event binding that wakes a wait, with the met wait as an input', async () => {
+    const WAKE = `bindings:
+  checks-done:
+    workflow: fixture-build
+    resource: build
+    overlap: queue
+    event:
+      kind: check.changed
+      actions: [changed]
+    wake: { workflow: fixture-plan, wait: checks, about: check.revision }
+    inputs:
+      plan: { wait: true }
+      issue: { event: check.revision }
+`;
+    await writePack(WAKE);
+    await packCommand('bindings', ['fixture'], options({ repo: 'github.com/acme/widgets' }));
+    const [binding] = githubWebhookSourceConfigSchema.parse({
+      version: 1,
+      webhookSecretEnv: 'WEBHOOK_SECRET',
+      host: 'github.com',
+      bindings: [await readJson(await fileFor('checks-done'))],
+    }).bindings;
+    expect(binding?.wake).toEqual({
+      workflow: 'fixture-plan',
+      wait: 'checks',
+      about: { field: 'check.revision' },
+      input: 'plan',
+    });
+    expect(binding?.inputMapping).toEqual({
+      issue: { source: 'field', field: 'check.revision' },
+    });
+
+    // The met wait exists only for a binding that wakes one.
+    await writePack(WAKE.replace(/    wake: .*\n/, ''));
+    await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(
+      "input 'plan' reads the met wait, but only an event binding with wake has one"
+    );
+  });
+
   it('refuses an event binding for a host the source plugin does not read, writing nothing', async () => {
     await writePack(DECLARATION);
     await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(
@@ -477,7 +516,26 @@ describe('archon pack bindings: asks-settled', () => {
     expect(logSpy.mock.calls.flat().join('\n')).toContain(`archon trigger add '${binding?.file}'`);
   });
 
+  it('writes one trigger file per option a binding lists', async () => {
+    await writePack(
+      ASKS_SETTLED_DECLARATION.replace(
+        'settled: answered,',
+        'settled: answered, option: [keep, drop],'
+      )
+    );
+    await packCommand('bindings', ['fixture'], options());
+
+    const bindings = await readAsksSettledBindings(out);
+    expect(bindings.map(entry => entry.asksSettled.option).sort()).toEqual(['drop', 'keep']);
+    expect(logSpy.mock.calls.flat().join('\n')).toContain("# option 'keep'");
+  });
+
   it.each([
+    [
+      'two bindings that both start when one option is chosen',
+      `${ASKS_SETTLED_DECLARATION.replace('settled: answered,', 'settled: answered, option: keep,')}  build-on-answers:\n    workflow: fixture-build\n    resource: build\n    overlap: queue\n    asks_settled: { workflow: fixture-ask, settled: answered }\n    inputs:\n      plan: { answers: true }\n      issue: { input: issue }\n`,
+      "starts when option 'keep' is chosen",
+    ],
     [
       'an asking workflow that declares no returns.asks',
       ASKS_SETTLED_DECLARATION.replace('workflow: fixture-ask', 'workflow: fixture-plan'),

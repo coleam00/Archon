@@ -617,6 +617,12 @@ export interface IResourceStartStore {
    * belong to a first acceptance; `acceptStartReceipt` still decides replay versus conflict.
    */
   hasStartReceiptForDelivery(sourceInstanceId: string, deliveryId: string): Promise<boolean>;
+  /**
+   * Record a receipt and the starts its bindings make. A binding with `wake` is resolved
+   * here, in the same transaction, against the open waits (see `wake` on the binding
+   * intent): it starts on the wait's item or is recorded as not started, so an event that
+   * arrives twice wakes a set once. A replayed delivery resolves nothing.
+   */
   acceptStartReceipt(
     input: SourceReceiptAcceptance
   ): Promise<{ receiptId: string; replay: boolean }>;

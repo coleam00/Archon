@@ -532,7 +532,8 @@ export const withdrawAttentionItemBodySchema = z
 
 /**
  * POST /api/attention/answer and /api/attention/withdraw response. `settled` is set when
- * the write closed the last open ask of its set; `unchanged` when the item already had
+ * the write closed the last open ask of its set, and `nothingStarted` when that settlement
+ * started no trigger binding; `unchanged` when the item already had
  * this answer or was already withdrawn; `runId` names the paused run an answer went to.
  */
 export const attentionItemActionResponseSchema = z
@@ -541,6 +542,7 @@ export const attentionItemActionResponseSchema = z
     action: z.enum(['answer', 'withdraw']),
     unchanged: z.boolean(),
     settled: z.boolean().optional(),
+    nothingStarted: z.literal(true).optional(),
     runId: z.string().optional(),
     continues: z.boolean().optional(),
     cancelled: z.boolean().optional(),

@@ -32,7 +32,6 @@ import type {
   ResourceStartBindingIntent,
   ResourceStartDisposition,
   ResourceStartIntent,
-  SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import {
   sourceReceiptInputSchema,
@@ -63,7 +62,6 @@ import { holdsItem, itemHolder, itemHolders } from '@archon/workflows/item-hold'
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { ensureItem } from './items';
 import { WorkflowStatusReadError } from './workflow-run-reads';
-import { insertStartReceipt } from './start-receipt-writes';
 import { toHydratedTimestamp } from './timestamps';
 import { InstallHeldError } from '@archon/workflows/store';
 
@@ -293,12 +291,6 @@ export async function hasStartReceiptForDelivery(
     [sourceInstanceId, deliveryId]
   );
   return found.rows.length > 0;
-}
-
-export async function acceptStartReceipt(
-  input: SourceReceiptAcceptance
-): Promise<{ receiptId: string; replay: boolean }> {
-  return getDatabase().withTransaction(query => insertStartReceipt(query, input));
 }
 
 export function parseStoredJson(value: unknown): unknown {

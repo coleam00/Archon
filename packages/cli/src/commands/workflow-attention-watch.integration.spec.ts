@@ -7,7 +7,11 @@
  * is shared between the watcher and the run.
  */
 import { multiAttentionWorkflows } from '../test-support/multi-attention-fixture';
-import { attentionQueueItemSchema, isHeldByRun } from '@archon/workflows/attention-queue';
+import {
+  attentionQueueItemSchema,
+  isHeldByRun,
+  heldRunOf,
+} from '@archon/workflows/attention-queue';
 import { afterEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -469,7 +473,8 @@ test('fan-out questions have independent stream identities and resolve second fi
     const line = await watch.next(`question ${index}`, line => {
       if (line.type !== 'attention') return false;
       const item = attentionQueueItemSchema.parse(line.item);
-      return item.run?.fanOut?.parentRunId === parentId && item.run.fanOut.index === index;
+      const fanOut = heldRunOf(item)?.fanOut;
+      return fanOut?.parentRunId === parentId && fanOut.index === index;
     });
     expect(line).toMatchObject({ workflow: 'question', parentRunId: parentId });
     const item = attentionQueueItemSchema.parse(line.item);

@@ -240,14 +240,19 @@ export async function updateWorkflowActivity(id: string): Promise<void> {
  */
 /**
  * A run that left asks still open on its item is kept: its events hold the record of the
- * set (who answered, the settle), and its starter decides who may answer them. Cleanup
- * deletes it once the set is closed. `id` is cast because `run_id` is TEXT and a run id
+ * set (who answered, the settle), and its starter decides who may answer them. So is one
+ * that left waits still open: its starter decides who may withdraw them, and the stage they
+ * wake reads its result. Cleanup deletes it once the sets are closed. `id` is cast because `run_id` is TEXT and a run id
  * is a UUID on PostgreSQL.
  */
 const NO_OPEN_ASKS = `NOT EXISTS (
   SELECT 1 FROM remote_agent_item_asks
   WHERE remote_agent_item_asks.run_id = CAST(remote_agent_workflow_runs.id AS TEXT)
-    AND remote_agent_item_asks.closed_as IS NULL)`;
+    AND remote_agent_item_asks.closed_as IS NULL)
+  AND NOT EXISTS (
+  SELECT 1 FROM remote_agent_item_waits
+  WHERE remote_agent_item_waits.run_id = CAST(remote_agent_workflow_runs.id AS TEXT)
+    AND remote_agent_item_waits.closed_as IS NULL)`;
 
 export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }> {
   if (!Number.isInteger(olderThanDays) || olderThanDays < 0) {
@@ -289,8 +294,8 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
 /**
  * Delete a workflow run and its associated events.
  * Only terminal runs (completed, failed, cancelled) can be deleted, and not one that left
- * asks still open: those asks would have no rule for who may answer them and no run to
- * record the answer on.
+ * asks or waits still open: those asks would have no rule for who may answer them and no
+ * run to record the answer on, and those waits none for who may withdraw them.
  */
 export async function deleteWorkflowRun(id: string): Promise<void> {
   try {
@@ -316,6 +321,15 @@ export async function deleteWorkflowRun(id: string): Promise<void> {
       if (open > 0) {
         throw new WorkflowRunGuardError(
           `Cannot delete workflow run ${id}: it left ${String(open)} open ask(s) on its item. Answer or withdraw them first (archon workflow answer --withdraw <ref>); archon workflow attention lists their refs.`
+        );
+      }
+      const waits = await query<{ open: number | string }>(
+        'SELECT COUNT(*) AS open FROM remote_agent_item_waits WHERE run_id = $1 AND closed_as IS NULL',
+        [id]
+      );
+      if (Number(waits.rows[0]?.open ?? 0) > 0) {
+        throw new WorkflowRunGuardError(
+          `Cannot delete workflow run ${id}: its item still waits for what it named (returns.waits). Withdraw the waits first (archon workflow answer --withdraw wait:${id}).`
         );
       }
       await query('DELETE FROM remote_agent_workflow_events WHERE workflow_run_id = $1', [id]);

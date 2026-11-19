@@ -337,6 +337,14 @@ export const workflowHelp: HelpGroup = {
     },
     {
       command: 'workflow',
+      subcommand: 'landing',
+      spec: 'workflow landing --item <key> --branch <name>',
+      description:
+        "Record the branch an item's change lands on. Every fresh run on the item, and on\nan item part_of it that records none, is cut from it and proposes against it.\nRecording again replaces it",
+      scopedFlags: [{ spec: '--branch <name>', description: 'The branch the item lands on' }],
+    },
+    {
+      command: 'workflow',
       subcommand: 'notice',
       spec: 'workflow notice <text>',
       description:

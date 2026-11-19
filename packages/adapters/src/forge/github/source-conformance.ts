@@ -115,6 +115,29 @@ export const githubConformanceFixtures = [
     },
     capability: { kind: 'comment.changed' as const, action: 'created' as const },
   })),
+  ...(
+    [
+      ['submitted', 'approved'],
+      ['dismissed', 'dismissed'],
+    ] as const
+  ).map(([action, state]) => ({
+    name: `pull_request_review.${action}`,
+    eventName: 'pull_request_review',
+    payload: {
+      action,
+      repository,
+      sender,
+      pull_request: pullRequest,
+      review: {
+        id: 300,
+        user: sender,
+        state,
+        commit_id: 'sha256:opaque-review',
+        submitted_at: '2026-09-22T10:00:00Z',
+      },
+    },
+    capability: { kind: 'review.changed' as const, action },
+  })),
   {
     name: 'check_run.completed',
     eventName: 'check_run',

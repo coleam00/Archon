@@ -1,7 +1,8 @@
+// @archon-test-windows
 import { describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { providerRegistry } from '@archon/providers';
 import type { WorkflowWithSource } from '@archon/workflows/schemas/workflow';
@@ -54,7 +55,8 @@ describe('selectStartedWorkflow', () => {
       found(entry('build', 'bundled'))
     );
     if (!('refused' in started)) throw new Error('expected a refusal');
-    expect(started.refused).toContain(`did you mean ${SOURCE}?`);
+    // The refusal names the resolved root, which carries a drive letter on Windows.
+    expect(started.refused).toContain(`did you mean ${resolve(SOURCE)}?`);
   });
 
   test('with a workflow source, a load error from another scope still names where it looked', () => {

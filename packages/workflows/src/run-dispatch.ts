@@ -422,7 +422,8 @@ async function resolveBaseBranch(
   config: WorkflowConfig,
   recordedDispatch: RunDispatchMetadata | undefined
 ): Promise<string> {
-  // The per-dispatch override takes priority, then what this run
+  // The per-dispatch override (`--base`, else the item's landing branch, which callers
+  // resolve before they call) takes priority, then what this run
   // recorded at its start, then an already resolved checkout base, repo config, the codebase default,
   // then git auto-detection.
   // The override must outrank config so `--base` reports the same branch the

@@ -1,5 +1,6 @@
 // @archon-test-isolated
 import { getLog } from './workflow-shared';
+import { heldRunOf } from '@archon/workflows/attention-queue';
 import * as chatScope from '../workflow-scope';
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
@@ -173,23 +174,23 @@ test('the queue scopes by project the way archon state names it, across a rename
   };
 
   const registered = await list(registeredDir);
-  expect(registered.map(item => item.run?.id).sort()).toEqual([current, renamed].sort());
-  expect(registered.find(item => item.run?.id === current)?.project).toEqual({
+  expect(registered.map(item => heldRunOf(item)?.id).sort()).toEqual([current, renamed].sort());
+  expect(registered.find(item => heldRunOf(item)?.id === current)?.project).toEqual({
     key: await stateKey(registeredDir),
     codebaseId: codebase.id,
     name: 'beta',
   });
-  expect(registered.find(item => item.run?.id === renamed)?.project).toEqual({
+  expect(registered.find(item => heldRunOf(item)?.id === renamed)?.project).toEqual({
     key: '_folder/alpha',
     codebaseId: codebase.id,
     name: 'beta',
   });
-  expect((await list(scratchDir, { project: 'beta' })).map(item => item.run?.id).sort()).toEqual(
-    [current, renamed].sort()
-  );
+  expect(
+    (await list(scratchDir, { project: 'beta' })).map(item => heldRunOf(item)?.id).sort()
+  ).toEqual([current, renamed].sort());
 
   const scratch = await list(scratchDir);
-  expect(scratch.map(item => item.run?.id)).toEqual([unregistered]);
+  expect(scratch.map(item => heldRunOf(item)?.id)).toEqual([unregistered]);
   const scratchKey = await stateKey(scratchDir);
   expect(scratch[0]?.project).toEqual({
     key: scratchKey,
@@ -197,15 +198,17 @@ test('the queue scopes by project the way archon state names it, across a rename
     name: scratchKey.slice(scratchKey.lastIndexOf('/') + 1),
   });
   expect(
-    (await list(registeredDir, { project: await stateKey(scratchDir) })).map(item => item.run?.id)
+    (await list(registeredDir, { project: await stateKey(scratchDir) })).map(
+      item => heldRunOf(item)?.id
+    )
   ).toEqual([unregistered]);
 
-  expect((await list(registeredDir, { all: true })).map(item => item.run?.id).sort()).toEqual(
-    [current, renamed, unregistered].sort()
-  );
+  expect(
+    (await list(registeredDir, { all: true })).map(item => heldRunOf(item)?.id).sort()
+  ).toEqual([current, renamed, unregistered].sort());
   expect(
     (await list(registeredDir, { all: true, labels: ['ci=other'] }))
-      .map(item => item.run?.id)
+      .map(item => heldRunOf(item)?.id)
       .sort()
   ).toEqual([current, unregistered].sort());
 
@@ -647,7 +650,9 @@ test('watch streams the queue by project, refuses list-only flags, and exits 4 o
     );
   const runsOf = (lines: Record<string, unknown>[]): unknown[] =>
     lines.flatMap(line =>
-      line.type === 'attention' ? [[(line.item as AttentionQueueItem).run?.id, line.project]] : []
+      line.type === 'attention'
+        ? [[heldRunOf(line.item as AttentionQueueItem)?.id, line.project]]
+        : []
     );
   const alphaKey = projectKeyForCodebase(null, alphaDir);
   const alphaProject = {

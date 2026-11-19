@@ -5,7 +5,8 @@
  * (`run_ended:`), an asks-settled binding (`asks_settled:`) or, with none of them, a
  * fire-only binding. The checks that span bindings run here, where all are visible: a
  * sibling reference names a declared binding that is written as a file `trigger fire`
- * reads (a timer or fire-only binding), an event field is read only by an event binding, a
+ * reads (a timer or fire-only binding), an event field is read only by an event binding, the
+ * met wait only by an event binding with `wake`, a
  * part of the run only by a run-ended or asks-settled binding, and the settled answers
  * only by an asks-settled binding.
  */
@@ -78,6 +79,13 @@ function checkInputs(
     const problem = inputProblem(binding, input, bindings);
     if (problem !== undefined) fail(`binding '${id}' input '${name}' ${problem}`);
   }
+  const waitInputs = Object.entries(binding.inputs).filter(
+    ([, input]) => typeof input === 'object' && 'wait' in input
+  );
+  if (waitInputs.length > 1)
+    fail(
+      `binding '${id}' inputs ${waitInputs.map(([name]) => `'${name}'`).join(' and ')} both read the met wait; read it once`
+    );
 }
 
 function inputProblem(
@@ -92,6 +100,10 @@ function inputProblem(
     return kind === 'event'
       ? undefined
       : 'reads an event field, but only an event binding has an event';
+  if ('wait' in input)
+    return kind === 'event' && 'wake' in binding && binding.wake !== undefined
+      ? undefined
+      : 'reads the met wait, but only an event binding with wake has one';
   if ('answers' in input)
     return kind === 'asks_settled'
       ? undefined
