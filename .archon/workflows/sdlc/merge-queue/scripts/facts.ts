@@ -52,33 +52,23 @@ import { readWorkItem, type WorkItem } from '../../.shared/workitem.ts';
 interface SettledAsk {
   readonly closedAs: 'answered' | 'withdrawn';
   readonly answer: { readonly text: string } | null;
-  /** The option chosen; null for an answer that chose none the ask offers. */
-  readonly option: { readonly id: string; readonly does: string } | null;
+  readonly option: { readonly id: string } | null;
   readonly at: string;
 }
 
 /**
- * A maintainer's answer to the stage's ask. `merge` approves the pull request at the
- * head that was asked about. `return` sends it back to the build queue. `park` stops
- * work on it. An answer that chose none of the three (the ask's reserved `other`, or
- * text alone) returns it when the asking run wrote a brief, and parks it otherwise.
+ * A maintainer's answer to the stage's ask: the option chosen, by its id. The pack binds
+ * only the three options, so a start with any other answer is refused, never guessed
+ * from the answer's words.
  */
 function answer(): MergeAnswer | null {
   const settled = (nullableJson(input('decisions')) ?? []) as SettledAsk[];
   const asked = nullableJson(input('asked')) as { readonly head?: string; readonly brief?: string } | null;
   const answered = settled.find(entry => entry.closedAs === 'answered');
   if (answered === undefined || asked === null) return null;
-  const brief = asked.brief ?? '';
-  const chosen = ASK_OPTIONS.find(id => id === answered.option?.id);
-  return {
-    effect: chosen ?? (brief.trim() === '' ? 'park' : 'return'),
-    choice: answered.option?.id ?? 'other',
-    does: answered.option?.does ?? '',
-    text: answered.answer?.text.trim() ?? '',
-    at: answered.at,
-    head: asked.head ?? '',
-    brief,
-  };
+  const chosen = ASK_OPTIONS.find(option => option.id === answered.option?.id);
+  if (chosen === undefined) throw new Error(`the answer chose "${answered.option?.id ?? 'no option'}", which is none of ${ASK_OPTIONS.map(option => option.id).join(', ')}`);
+  return { effect: chosen.id, text: answered.answer?.text.trim() ?? '', at: answered.at, head: asked.head ?? '', brief: asked.brief ?? '' };
 }
 
 /** Whether what the met wait was about still reads as it did when the item began to wait. */
@@ -116,7 +106,7 @@ function main(): void {
   const settle = { path: 'settle', item: doc.subject, pr, url: '', facts: null, base: null, record: doc.facts.merge ?? null, validation: null, protected: [], lane, ci, answer: answered } as const;
   const out = (start: MergeStart): void => emit(start);
   if (answered !== null && answered.effect !== 'merge') {
-    out({ ...settle, settled: { status: answered.effect === 'return' ? 'returned' : 'parked', reason: `a maintainer answered ${answered.choice}` } });
+    out({ ...settle, settled: { status: answered.effect === 'return' ? 'returned' : 'parked', reason: `a maintainer answered ${answered.effect}` } });
     return;
   }
   if (pr === null) {

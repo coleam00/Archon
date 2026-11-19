@@ -13,7 +13,6 @@
 import { buildWaits, itemPullRequest, type Validation } from './build.ts';
 import { type QualifiedPr } from './identity.ts';
 import { record } from './inputs.ts';
-import { OUTPUT_ENUMS } from './outputs.generated.ts';
 import { forge } from 'archon:script';
 import { viewPr } from './pr.ts';
 import { type DecisionEntry, withDecision } from './queue.ts';
@@ -126,20 +125,37 @@ export function withMerge(doc: WorkItem, change: MergeChange): WorkItem {
   };
 }
 
-/** The ids an ask's options take, as the judge's `output_format` declares them. */
-export const ASK_OPTIONS = OUTPUT_ENUMS['archon-merge-queue'].judge['decision.anyOf[2].ask.options[].id'];
+/**
+ * The options every ask of the merge stage offers, and what each starts. They are fixed
+ * here, not written by the judge: `.pack/pack.yaml` binds an answer by these ids, and an
+ * option the judge left out could not be chosen.
+ */
+export const ASK_OPTIONS = [
+  {
+    id: 'merge',
+    does: 'Approves the pull request at the head that was asked about. The merge stage runs again and merges it if the gate still holds there.',
+    cost: 'The change lands on the default branch as it is.',
+  },
+  {
+    id: 'return',
+    does: "Sends the pull request back. The build queue's next round starts on the item, with your answer's words as what to change.",
+    cost: 'One more build round and review before it can merge.',
+  },
+  {
+    id: 'park',
+    does: 'Stops work on the item. Nothing starts, and the pull request stays open.',
+    cost: 'The change does not land until the build queue readies the item again.',
+  },
+] as const;
+export type AskOption = (typeof ASK_OPTIONS)[number]['id'];
 
 /**
  * A maintainer's answer to the stage's ask, as the run it started reads it. `merge`
  * approves the pull request at `head`, the head that was asked about. `return` sends it
- * back to the build queue from `brief`. `park` stops work on it.
+ * back to the build queue from `brief` and the answer's `text`. `park` stops work on it.
  */
 export interface MergeAnswer {
-  readonly effect: (typeof ASK_OPTIONS)[number];
-  /** The id of the option chosen; `other` for an answer that chose none of the three. */
-  readonly choice: string;
-  /** What the ask said the chosen option does; empty for `other`. */
-  readonly does: string;
+  readonly effect: AskOption;
   readonly text: string;
   readonly at: string;
   readonly head: string;

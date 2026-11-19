@@ -230,8 +230,8 @@ A run ends with one outcome, which `archon workflow runs --item issue-<issue>` s
 
 A run merges a clear pull request on its own, unless the project's `merge_lane` setting is `manual` or the pull request changes a path its `protected_paths` setting matches: then it is asked about and merges only once approved at its head. An unclear one, such as a very large
 change, is asked about too. The ask is on the item, with no paused run behind it: answer it with
-`archon workflow answer --ref ask:<id> --choose <option>`, where the option is `merge`,
-`return`, `park` or `other` with `--text`. A red default branch asks nobody: nothing merges, and the run's summary names the failing checks, the
+`archon workflow answer --ref ask:<id> --choose <option> --text "<why>"`, where the option is `merge`,
+`return` or `park`. A merge ask has exactly those three; an answer with text and no option starts nothing. A red default branch asks nobody: nothing merges, and the run's summary names the failing checks, the
 pull requests merged since green and the suspect.
 
 A `merge` answer approves the pull request at the head it asked about, and the run the
@@ -271,8 +271,9 @@ next run yourself.
 - When the recommendation fits the user's standing direction, answer it yourself.
 - When it is unclear, risky or not decided by anything the user has said, bring it to
   the user with the item's own summary.
-- `other` exists on every pull-request and build item. Use it when no declared choice
-  fits, and say exactly what to do instead.
+- `other` exists on every build item. Use it when no declared choice fits, and say
+  exactly what to do instead. A merge ask has no `other`: choose the nearest of its
+  three options and say what you want in the text.
 
 ## Merging by hand
 

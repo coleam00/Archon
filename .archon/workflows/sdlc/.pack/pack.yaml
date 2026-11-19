@@ -232,9 +232,10 @@ bindings:
     wake: { workflow: archon-merge-queue, wait: base-checks, about: check.revision }
     inputs: *woken
   # An answer to the stage's ask starts it again with the answer and what was asked. The
-  # options are the stage's fixed ids and the ask's own `other`. Each starts the stage,
-  # which approves, returns or parks by the id chosen; a return then starts the build
-  # round below, through the stage's `returned` outcome.
+  # options are the stage's three fixed ids. Each starts the stage, which approves,
+  # returns or parks by the id chosen; a return then starts the build round below,
+  # through the stage's `returned` outcome. An answer that chooses none of them, such as
+  # text alone, starts nothing, and the engine tells the answerer so.
   merge-after-answer:
     workflow: archon-merge-queue
     resource: merge
@@ -242,7 +243,7 @@ bindings:
     asks_settled:
       workflow: archon-merge-queue
       settled: answered
-      option: [merge, return, park, other]
+      option: [merge, return, park]
     inputs:
       repo_host: { input: repo_host }
       repo_path: { input: repo_path }

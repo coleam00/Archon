@@ -40,14 +40,12 @@ Work through the steps in order; the first that decides it is the decision.
 
 **An approval holds** when the policy's rule for a pull request a maintainer approved says it does. Judge what changed since the approved head from `git diff <approved>..<head>` against what the default branch brought in. An approval that does not hold is asked again.
 
-A `return` always carries a `brief`, and an `ask` always carries its question in `ask` and, when it offers `return`, the `brief` that answer starts from. Every other decision has a null `ask`. `head` is always the full head revision your decision is about. `reason` is one line a maintainer can check.
+A `return` always carries a `brief`, and so does an `ask`: the brief the build round starts from if the answer is `return`, written like any other. An `ask` carries its question in `ask`; every other decision has a null `ask`. `head` is always the full head revision your decision is about. `reason` is one line a maintainer can check.
 
 ## The question
 
-Write the `ask` as `attention.md` says: `question` is one sentence that names the pull request and the decision, and `context` is what is at stake. It is left on the issue's item and this run ends; the answer starts the stage again. The option ids are fixed, and an ask offers at least two of them:
+Write the `ask` as `attention.md` says: `question` is one sentence that names the pull request and the decision, and `context` is what is at stake, including what you would send back and why when that is what you recommend. It is left on the issue's item and this run ends; the answer starts the stage again. You do not write the options. Every ask offers the same three, and `recommendation.option` names one of them:
 
 - `merge` approves the pull request at the head you name. The stage then merges it once the gate passes there.
-- `return` sends it back to the build queue with the `brief`. Offer it only with a `brief`. Its `does` says what the build round then does, and is written into the issue body as the ruling when it is chosen.
+- `return` sends it back to the build queue with your `brief` and the person's words as what to change.
 - `park` stops work on the item until the build queue readies it again.
-
-Each option's `does` and `cost` say what choosing it means for this pull request. Every ask also takes a free-text answer: it returns the pull request with the person's text as the ruling when the ask has a `brief`, and without one it records the text and parks. Say which in the `context`.

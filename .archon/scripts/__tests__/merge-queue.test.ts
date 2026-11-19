@@ -352,21 +352,17 @@ function gate(at: Install, options: RunOptions = {}, start: Partial<MergeStart> 
   return { result, outcome, reason: stored(at).value?.facts.merge?.decisions.at(-1)?.reason ?? '' };
 }
 
+/** The judge's question: it writes no options. */
 const ASK = {
   question: 'PR 42 changes the SDLC pack; merge it?',
   context: `Merging changes every pack run; holding it leaves the fix out. ${PR_URL}`,
-  options: [
-    { id: 'merge', does: 'merges it once the gate passes at this head', cost: 'every pack run changes' },
-    { id: 'return', does: 'Keep the old prompt wording.', cost: 'another build round' },
-  ],
   recommendation: { option: 'merge', why: 'reviewed Ready' },
 };
 
 /** A maintainer's answer, as the asks-settled binding passes it with the asking run's result. */
 function answered(id: string, text = '', asked: { head: string; brief: string } = { head: HEAD, brief: 'rework PR 42' }): Record<string, string> {
-  const option = id === 'other' ? { id, does: 'Do what the answer text says.' } : ASK.options.find(candidate => candidate.id === id) ?? { id, does: 'stops work on it' };
   return {
-    INPUTS_DECISIONS: JSON.stringify([{ question: ASK.question, closedAs: 'answered', answer: { decision: id, text }, option, at: LATER }]),
+    INPUTS_DECISIONS: JSON.stringify([{ question: ASK.question, closedAs: 'answered', answer: { decision: id, text }, option: { id, does: 'as the ask said' }, at: LATER }]),
     INPUTS_ASKED: JSON.stringify({ ...asked, number: 7 }),
   };
 }
@@ -555,6 +551,13 @@ describe('the merge stage settles its item', () => {
     const asked = ok(settle(at, decision({ action: 'ask', class: 'unclear', ask: ASK, brief: 'rework PR 42' }), { pr: { checks: 'pending' } }));
     expect(asked).toMatchObject({ outcome: 'asked', number: 7, head: HEAD, brief: 'rework PR 42', asks: [{ ...ASK, artifacts: [] }], waits: [] });
     expect(stored(at).value).toMatchObject({ facts: { merge: { status: 'asking' } } });
+    // Every ask offers the same three options, whatever the judge wrote; a recommendation for anything else is park.
+    const options = (ask: Record<string, unknown>) => (ask.options as { id: string }[]).map(option => option.id);
+    expect(options((asked.asks as Record<string, unknown>[])[0] ?? {})).toEqual(['merge', 'return', 'park']);
+    const strayed = { ...ASK, recommendation: { option: 'rework', why: 'it needs a split' } };
+    const [fallback] = ok(settle(at, decision({ action: 'ask', class: 'unclear', ask: strayed, brief: 'rework PR 42' }))).asks as { recommendation: { option: string; why: string } }[];
+    expect(fallback?.recommendation.option).toBe('park');
+    expect(fallback?.recommendation.why).toContain('"rework", which is not an option');
   }, 60_000);
 
   test('settle says what merged, on which lane, and what went back to the build queue', () => {
@@ -605,32 +608,33 @@ describe("a maintainer's answer", () => {
     expect(stored(at).value).toMatchObject({ facts: { merge: { status: 'waiting', approval: { head: OLD } } } });
   }, 60_000);
 
-  test('a return writes its ruling into the issue body, and the build round starts from it', () => {
+  test("a return ends returned, and the maintainer's words reach the build round as the ruling in the issue body", () => {
     const at = install();
     seed(at, item(BUILT, merge('asking')));
-    const { start, settled } = answer(at, answered('return'));
+    const { start, settled } = answer(at, answered('return', 'Split the migration out.'));
     expect(start).toMatchObject({ path: 'settle', settled: { status: 'returned' } });
     expect(ok(settled)).toMatchObject({ outcome: 'returned', number: 7 });
     const body = settled.bodies[0] ?? '';
     const heading = /## (Current scope \(maintainer ruling on the merge stage's question on PR 42, \d{4}-\d{2}-\d{2}\))/.exec(body)?.[1] ?? '';
-    expect(body).toBe(`The contract.\n\n\n## ${heading}\n\nKeep the old prompt wording.\n`);
+    expect(body).toBe(`The contract.\n\n\n## ${heading}\n\nThe maintainer's words: Split the migration out.\n`);
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ facts: { merge: { status: 'returned' }, build: { status: 'next' } } });
     expect(doc.facts.build?.brief).toContain('rework PR 42');
     expect(doc.facts.build?.brief).toContain(heading);
   }, 60_000);
 
-  test('a free-text answer returns a pull request the judge wrote a brief for, and parks one it wrote none for', () => {
+  test('a park stops work and starts nothing, and an answer that chose none of the three options is refused, not guessed from its words', () => {
     const at = install();
     seed(at, item(BUILT, merge('asking')));
-    const returned = answer(at, answered('other', 'Split the migration out.'));
-    expect(ok(returned.settled).outcome).toBe('returned');
-    expect(returned.settled.bodies[0]).toContain("The maintainer's words: Split the migration out.");
+    expect(ok(answer(at, answered('park')).settled).outcome).toBe('parked');
+    expect(stored(at).value).toMatchObject({ facts: { merge: { status: 'parked' } } });
 
     seed(at, item(BUILT, merge('asking')));
-    const parked = answer(at, answered('other', 'Wait for the release.', { head: HEAD, brief: '' }));
-    expect(ok(parked.settled).outcome).toBe('parked');
-    expect(stored(at).value).toMatchObject({ facts: { merge: { status: 'parked' } } });
+    const before = stored(at);
+    const other = run(at, 'facts', answered('other', 'Send it back to the build queue.'));
+    expect(other.code).toBe(1);
+    expect(other.stderr).toContain('the answer chose "other", which is none of merge, return, park');
+    expect(stored(at)).toEqual(before);
   }, 60_000);
 });
 

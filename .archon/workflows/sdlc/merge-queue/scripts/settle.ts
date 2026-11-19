@@ -21,8 +21,9 @@
  *   `head` and `brief` from this node's result.
  *
  * A return hands the item to the build queue with its brief. One a maintainer's answer
- * chose first writes what the option does and the maintainer's words into the issue body
- * as a dated "Current scope" section, so the round reads them as the contract.
+ * chose first writes the maintainer's words into the issue body as a dated "Current
+ * scope" section, so the round reads them as the contract. An ask's options are fixed
+ * (`ASK_OPTIONS`); the judge writes only the question and its recommendation.
  *
  * Bound inputs: INPUTS_START, the facts node's output; INPUTS_JUDGED, the judge's, "null"
  * when it was skipped; the workflow's INPUTS_MERGE_METHOD and INPUTS_RETRIAGE_MERGED and
@@ -37,6 +38,7 @@ import { nullableJson } from '../../.shared/inputs.ts';
 import { appendSection, viewIssue } from '../../.shared/issue.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import {
+  ASK_OPTIONS,
   type BaseFacts,
   type EventWait,
   eventWaits,
@@ -152,17 +154,26 @@ function settledWithout(start: MergeStart): Settled {
 }
 
 /**
- * Write a maintainer's ruling into the issue body, and return the brief a returned round
- * starts from. A ruling is what the chosen option does, when it returns the pull request,
- * and the maintainer's own words.
+ * Write a maintainer's words into the issue body as the ruling, and return the brief a
+ * returned round starts from: the brief the asking run wrote, and where the ruling is.
  */
 function ruled(item: QualifiedPr, pr: QualifiedPr | null, answer: MergeAnswer, at: string): string {
-  const words = answer.text === '' ? '' : `The maintainer's words: ${answer.text}`;
-  const ruling = [answer.effect === 'return' ? answer.does : '', words].filter(part => part !== '').join('\n\n');
-  if (ruling === '') return answer.brief;
+  const chose = `The maintainer chose "${answer.effect}"`;
+  if (answer.text === '') return `${answer.brief}\n\n${chose} and wrote nothing more.`;
   const heading = rulingHeading(at, `the merge stage's question on PR ${String(pr?.number ?? '')}`);
-  appendSection(item, heading, ruling);
-  return `${answer.brief}\n\nThe maintainer chose "${answer.choice}". The ruling is the issue body's "${heading}" section, which is part of the contract.`;
+  appendSection(item, heading, `The maintainer's words: ${answer.text}`);
+  return `${answer.brief}\n\n${chose}. What to change is the issue body's "${heading}" section, which is part of the contract.`;
+}
+
+/**
+ * The judge's question as the engine opens it, with the stage's fixed options. A
+ * recommendation that names none of them falls back to `park`, and says so.
+ */
+function ask(asked: NonNullable<Judged['ask']>): Record<string, unknown> {
+  const { option, why } = asked.recommendation;
+  const known = ASK_OPTIONS.some(candidate => candidate.id === option);
+  const recommendation = known ? asked.recommendation : { option: 'park', why: `The judge recommended "${option}", which is not an option, so this falls back to park. ${why}` };
+  return { question: asked.question, context: asked.context, options: ASK_OPTIONS, recommendation, artifacts: [] };
 }
 
 /** Say what the stage did with the pull request, once its work item holds it. */
@@ -206,7 +217,7 @@ function record(start: MergeStart, settled: Settled, brief: string, runId: strin
     links: start.url === '' ? [] : [start.url],
     head: settled.head,
     reran: settled.reran,
-    ...(answer === null ? {} : { answer: { choice: answer.choice, text: answer.text, at: answer.at } }),
+    ...(answer === null ? {} : { answer: { choice: answer.effect, text: answer.text, at: answer.at } }),
   };
   const approval = answer?.effect === 'merge' ? { approval: { head: answer.head, at: answer.at } } : {};
   updateWorkItem(start.item, doc => {
@@ -272,7 +283,7 @@ function main(): void {
     number: item.number,
     head: settled.head ?? '',
     brief: asking ? (judged?.brief ?? '') : brief,
-    asks: asking && judged?.ask != null ? [{ ...judged.ask, artifacts: [] }] : [],
+    asks: asking && judged?.ask != null ? [ask(judged.ask)] : [],
     waits,
   });
 }

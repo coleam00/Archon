@@ -324,9 +324,10 @@ archon workflow answer --ref ask:<id> --choose <option> --text "why"   # an ask 
 
 The build queue pauses its run on a question. The merge stage ends its run and leaves
 the question on the issue's item, and the answer starts the stage again through the
-`merge-after-answer` binding (step 10): `merge` approves the pull request at the head
-that was asked about, `return` sends it back to the build queue, and `park` stops work
-on it.
+`merge-after-answer` binding (step 10). Its ask always has three options: `merge`
+approves the pull request at the head that was asked about, `return` sends it back to
+the build queue with the answer's text as what to change, and `park` stops work on it.
+An answer with text and no option starts nothing.
 
 Each item says what is being decided, the agent's recommendation and its evidence, the
 choices and what each does. The reason matters: a build or merge answer is written into

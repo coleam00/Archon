@@ -409,13 +409,8 @@ export interface WorkflowOutputs {
         readonly ask: {
           readonly question: string;
           readonly context: string;
-          readonly options: ReadonlyArray<{
-            readonly id: 'merge' | 'return' | 'park';
-            readonly does: string;
-            readonly cost: string;
-          }>;
           readonly recommendation: {
-            readonly option: 'merge' | 'return' | 'park';
+            readonly option: string;
             readonly why: string;
           };
         };
@@ -877,8 +872,6 @@ export const OUTPUT_ENUMS = {
       'decision.anyOf[1].class': ['clear', 'unclear'],
       'decision.anyOf[2].action': ['ask'],
       'decision.anyOf[2].class': ['clear', 'unclear'],
-      'decision.anyOf[2].ask.options[].id': ['merge', 'return', 'park'],
-      'decision.anyOf[2].ask.recommendation.option': ['merge', 'return', 'park'],
     },
     settle: {
       outcome: ['merged', 'merged_retriage', 'returned', 'parked', 'waiting', 'asked'],

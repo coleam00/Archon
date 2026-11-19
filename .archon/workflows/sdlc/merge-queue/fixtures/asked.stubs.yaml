@@ -1,5 +1,6 @@
 # Dry-run fixture, an unclear pull request: the run ends `asked` with the judge's question
-# left on the item, and no wait. The answer starts the stage again.
+# and the stage's three fixed options left on the item, and no wait. The answer starts the
+# stage again.
 facts:
   path: judge
   item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
@@ -22,13 +23,10 @@ judge:
     reran: false
     reason: "stub: it changes a stored format"
     brief: "stub-brief: split the migration out of pull request 1"
-    ask: &ask
-      question: "Pull request 1 changes the stored run format: merge it as it is?"
-      context: "stub: Older binaries read the same rows. A free-text answer returns it with that text as the ruling. https://github.com/example/repo/pull/1"
-      options:
-        - { id: merge, does: "Approves it at this head; it merges once the gate passes there.", cost: "Older binaries stop reading new rows." }
-        - { id: return, does: "Sends it back to split the migration into its own pull request.", cost: "One more build round." }
-      recommendation: { option: return, why: "The format change has no ruling." }
+    ask:
+      question: &question "Pull request 1 changes the stored run format: merge it as it is?"
+      context: &context "stub: Older binaries read the same rows. I would send it back to split the migration out. https://github.com/example/repo/pull/1"
+      recommendation: &recommendation { option: return, why: "The format change has no ruling." }
   base: "stub: dev is green"
 settle:
   outcome: asked
@@ -37,7 +35,14 @@ settle:
   head: "1111111111111111111111111111111111111111"
   brief: "stub-brief: split the migration out of pull request 1"
   asks:
-    - { <<: *ask, artifacts: [] }
+    - question: *question
+      context: *context
+      options:
+        - { id: merge, does: "stub: approves it at this head; the stage runs again and merges it.", cost: "stub: it lands as it is." }
+        - { id: return, does: "stub: the build queue's next round starts with the answer's words.", cost: "stub: one more round." }
+        - { id: park, does: "stub: nothing starts.", cost: "stub: it does not land." }
+      recommendation: *recommendation
+      artifacts: []
   waits: []
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }

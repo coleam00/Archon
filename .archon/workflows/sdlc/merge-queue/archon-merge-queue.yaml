@@ -10,8 +10,8 @@ description: |
   pinned to that head. The stage never pushes and never holds a run open: a conflict, a
   stale verdict or red the change caused goes back to the build queue; a pull request
   whose checks still run, or that a red default branch holds back, ends waiting for a
-  check at that commit; and anything unclear ends as one ask on the item, whose answer
-  starts the stage again.
+  check at that commit; and anything unclear ends as one ask on the item with three
+  fixed options (merge, return, park), whose answer starts the stage again.
 
   Use when: a trigger binding the operator installed starts it (see
   https://archon.diy/guides/sdlc-operations/#merge-queue), or a person starts one issue:
@@ -147,35 +147,25 @@ nodes:
                 head: *head
                 reran: *reran
                 reason: *reason
-                # The brief a return answer starts from; empty when the ask offers no return.
-                brief: { type: string }
-                # The ask as the person reads it. The option ids are fixed: the answer
-                # is acted on by the id chosen, never by its text.
+                # The brief the build round starts from when the answer is `return`.
+                brief: { type: string, pattern: '\S' }
+                # The question as the person reads it. The options are the stage's own
+                # three (merge, return, park), which the settle node adds.
                 ask:
                   type: object
                   additionalProperties: false
                   properties:
                     question: { type: string, pattern: '\S' }
                     context: { type: string, pattern: '\S' }
-                    options:
-                      type: array
-                      minItems: 2
-                      items:
-                        type: object
-                        additionalProperties: false
-                        properties:
-                          id: { type: string, enum: [merge, return, park] }
-                          does: { type: string, pattern: '\S' }
-                          cost: { type: string, pattern: '\S' }
-                        required: [id, does, cost]
                     recommendation:
                       type: object
                       additionalProperties: false
                       properties:
-                        option: { type: string, enum: [merge, return, park] }
+                        # merge, return or park; anything else is recorded as park.
+                        option: { type: string, pattern: '\S' }
                         why: { type: string, pattern: '\S' }
                       required: [option, why]
-                  required: [question, context, options, recommendation]
+                  required: [question, context, recommendation]
               required: *decision
         # The default branch as the judge found it; when red, the diagnosis.
         base: { type: string }

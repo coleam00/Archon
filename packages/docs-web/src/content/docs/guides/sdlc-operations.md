@@ -308,14 +308,13 @@ What follows a merge run is a binding on its outcome, not a step of the run:
 
 ### What it asks
 
-An unclear pull request ends its run with outcome `asked` and one [ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) on the issue's item. `archon workflow attention` lists it with no run behind it; answer it with `archon workflow answer --ref ask:<id> --choose <option>`. The agent writes the question, what each option does and costs, and its recommendation, and they reach you as written. The option ids are fixed, and the answer starts the stage again through `merge-after-answer`:
+An unclear pull request ends its run with outcome `asked` and one [ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) on the issue's item. `archon workflow attention` lists it with no run behind it; answer it with `archon workflow answer --ref ask:<id> --choose <option> --text "<why>"`. The agent writes the question, what is at stake and its recommendation. The ask always has exactly three options, the same on every ask, and the answer starts the stage again through `merge-after-answer`:
 
-- **`merge`** approves the pull request at the head that was asked about. The started run merges it once the gate passes there, or ends waiting for its checks.
-- **`return`** hands the item back to the build queue, and the run ends `returned`, which starts the next round.
-- **`park`** stops work on the item until the build queue readies it again.
-- **`other`** takes your text. When the agent wrote a brief for the build queue, it returns the pull request with your text as the ruling. Without a brief, it records the text and parks.
+- **`merge`** approves the pull request at the head that was asked about. The stage runs again and merges it if the gate still holds there, or ends waiting for its checks.
+- **`return`** sends the pull request back. The run ends `returned`, which starts the issue's next build round, with your answer's words as what to change: they are written into the issue body as a dated "Current scope" section, and the round reads them as the contract.
+- **`park`** stops work on the item until the build queue readies it again. Nothing starts, and the pull request stays open.
 
-What a `return` option does and your words are written into the issue body as a dated "Current scope" section, so the returned round reads them as the contract. An answer with text alone, naming no option, starts nothing, and the command says so. A withdrawn ask starts nothing either: the item stays as asked until the build queue readies it again.
+To ask for something else, choose the nearest option and say it in the text. Text alone, naming no option, starts nothing: the stage never reads an answer's words to guess what was meant, and the command says that nothing was started. A withdrawn ask starts nothing either. In both cases the item stays as asked until the build queue readies it again.
 
 ### The stage's bindings
 
@@ -326,7 +325,7 @@ Every start of the merge stage shares the resource `merge` with a capacity of 1 
 | `merge-after-build` | a build round ends `ready` |
 | `merge-after-checks` | a check completes at the head a `checks` wait names |
 | `merge-after-base-checks` | a check completes at the default-branch commit a `base-checks` wait names |
-| `merge-after-answer` | the stage's ask is answered with `merge`, `return`, `park` or `other` |
+| `merge-after-answer` | the stage's ask is answered with `merge`, `return` or `park` |
 | `merge-queue` | fired for one item: by the backstop, or by hand with `archon trigger fire --config <file> --item issue-<number>` |
 
 `merge-pick` schedules the backstop every 30 minutes, with `overlap: skip`. `build-after-merge-return`, `discoveries-after-merge` and `intake-after-merge` are the bindings on the stage's outcome described above.
