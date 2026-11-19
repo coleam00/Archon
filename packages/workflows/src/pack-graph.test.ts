@@ -165,6 +165,33 @@ describe('a pack graph', () => {
     expect(graph.stages[0]?.outcome?.values).toEqual([{ value: 'ready', startsNothing: true }]);
   });
 
+  test('an asks binding that lists options is one arrow per option, each matched by its own file', () => {
+    const graph = graphOf(stages(stage('a', ['ready'], true), stage('b', ['done'])), {
+      declared: {
+        'b-after-a': packAsksSettledBindingSchema.parse({
+          workflow: 'b',
+          resource: 'b',
+          overlap: 'queue',
+          asks_settled: { workflow: 'a', settled: 'answered', option: ['replan', 'send-back'] },
+        }),
+      },
+      installed: [
+        {
+          file: '/home/triggers/replan.json',
+          sourceInstanceId: 'replan',
+          from: { stage: 'a', settled: 'answered', option: 'replan' },
+          launchWorkflow: 'b',
+          linked: false,
+          problems: [],
+        },
+      ],
+    });
+    expect(graph.arrows.map(a => [a.from, a.active])).toEqual([
+      [{ stage: 'a', settled: 'answered', option: 'replan' }, true],
+      [{ stage: 'a', settled: 'answered', option: 'send-back' }, false],
+    ]);
+  });
+
   test('an outcome spelled like a settlement is never matched by an asks arrow', () => {
     const graph = graphOf(stages(stage('a', ['asks:answered'], true), stage('b', ['done'])), {
       declared: { 'b-after-a': runEnded('b', 'a', 'asks:answered') },

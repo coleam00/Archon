@@ -6,6 +6,8 @@
  */
 import {
   answerAttentionItem,
+  NOTHING_STARTED,
+  settledWithNothingStarted,
   withdrawAttentionItem,
   type AttentionItemAnswerResult,
   type AttentionItemWithdrawResult,
@@ -149,13 +151,27 @@ async function startStates(
   });
 }
 
+/** What a close says about its set: settled or not, and whether it started nothing. */
+export function settlement(
+  result: { settled: boolean; startReceipts: readonly SourceReceiptAcceptance[] },
+  starts: SettledStarts
+): SettledStarts {
+  if (!result.settled) return { text: starts.text, json: { settled: false, ...starts.json } };
+  const nothingStarted = settledWithNothingStarted(result);
+  return {
+    text: ` That was the last open ask of its set; the set is settled.${nothingStarted ? ` ${NOTHING_STARTED}` : ''}${starts.text}`,
+    json: { settled: true, ...(nothingStarted ? { nothingStarted: true } : {}), ...starts.json },
+  };
+}
+
 function answered(ref: string, result: AttentionItemAnswerResult, starts: SettledStarts): Outcome {
   switch (result.kind) {
     case 'ask_answered': {
+      const settled = settlement(result, starts);
       return {
         ok: true,
-        text: `Answered ${ref}.${result.settled ? ' That was the last open ask of its set; the set is settled.' : ''}${starts.text}`,
-        json: { ok: true, ref, action: 'answer', settled: result.settled, ...starts.json },
+        text: `Answered ${ref}.${settled.text}`,
+        json: { ok: true, ref, action: 'answer', ...settled.json },
       };
     }
     case 'answered':
@@ -210,10 +226,11 @@ function withdrawn(
 ): Outcome {
   switch (result.kind) {
     case 'withdrawn': {
+      const settled = settlement(result, starts);
       return {
         ok: true,
-        text: `Withdrew ${ref}.${result.settled ? ' That was the last open ask of its set; the set is settled.' : ''}${starts.text}`,
-        json: { ok: true, ref, action: 'withdraw', settled: result.settled, ...starts.json },
+        text: `Withdrew ${ref}.${settled.text}`,
+        json: { ok: true, ref, action: 'withdraw', ...settled.json },
       };
     }
     case 'unchanged':

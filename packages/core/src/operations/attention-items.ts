@@ -98,6 +98,22 @@ export type AttentionItemAnswerResult =
     };
 
 /**
+ * A close that settled its set and wrote no start receipt: no asks-settled binding matched,
+ * for example an option no binding names, so nothing was started. Every answer surface
+ * reports it with `NOTHING_STARTED`, so a stop such as "hold" reads as one and not as a
+ * lost start.
+ */
+export function settledWithNothingStarted(result: {
+  settled: boolean;
+  startReceipts: readonly SourceReceiptAcceptance[];
+}): boolean {
+  return result.settled && result.startReceipts.length === 0;
+}
+
+export const NOTHING_STARTED =
+  'No trigger binding starts on this settlement, so nothing was started.';
+
+/**
  * The run whose permission decides who may answer `item`, when `actor` has it. An item's
  * permission is its run's: whoever started the run, or an admin. For an ask that is the
  * run that left it; once that run is deleted, nobody may answer the ask by this rule.

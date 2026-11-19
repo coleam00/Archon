@@ -516,7 +516,26 @@ describe('archon pack bindings: asks-settled', () => {
     expect(logSpy.mock.calls.flat().join('\n')).toContain(`archon trigger add '${binding?.file}'`);
   });
 
+  it('writes one trigger file per option a binding lists', async () => {
+    await writePack(
+      ASKS_SETTLED_DECLARATION.replace(
+        'settled: answered,',
+        'settled: answered, option: [keep, drop],'
+      )
+    );
+    await packCommand('bindings', ['fixture'], options());
+
+    const bindings = await readAsksSettledBindings(out);
+    expect(bindings.map(entry => entry.asksSettled.option).sort()).toEqual(['drop', 'keep']);
+    expect(logSpy.mock.calls.flat().join('\n')).toContain("# option 'keep'");
+  });
+
   it.each([
+    [
+      'two bindings that both start when one option is chosen',
+      `${ASKS_SETTLED_DECLARATION.replace('settled: answered,', 'settled: answered, option: keep,')}  build-on-answers:\n    workflow: fixture-build\n    resource: build\n    overlap: queue\n    asks_settled: { workflow: fixture-ask, settled: answered }\n    inputs:\n      plan: { answers: true }\n      issue: { input: issue }\n`,
+      "starts when option 'keep' is chosen",
+    ],
     [
       'an asking workflow that declares no returns.asks',
       ASKS_SETTLED_DECLARATION.replace('workflow: fixture-ask', 'workflow: fixture-plan'),

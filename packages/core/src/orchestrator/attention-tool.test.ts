@@ -365,7 +365,9 @@ describe('attention tool', () => {
     expect(listed(await mine.tool.handler({ action: 'list' })).map(i => i.ref)).toEqual(['ask:a1']);
     expect(
       await mine.tool.handler({ action: 'answer', item: 'ask:a1', recommended: true })
-    ).toContain('the set is settled');
+    ).toContain(
+      'the set is settled. No trigger binding starts on this settlement, so nothing was started.'
+    );
     expect(mine.answerItemAsk.mock.calls[0]?.[0]).toMatchObject({
       askId: 'a1',
       answer: { decision: 'keep', text: '' },

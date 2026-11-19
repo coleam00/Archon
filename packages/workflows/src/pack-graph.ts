@@ -73,11 +73,15 @@ const packGraphStageSchema = z.object({
 
 /**
  * What starts an arrow: a run of `stage` completing with `outcome`, or the asks a run of
- * `stage` left being `settled` that way.
+ * `stage` left being `settled` that way, and with `option`, answered choosing that option.
  */
 const arrowFromSchema = z.union([
   z.object({ stage: z.string(), outcome: z.string() }),
-  z.object({ stage: z.string(), settled: asksSettledTriggerSchema.shape.settled }),
+  z.object({
+    stage: z.string(),
+    settled: asksSettledTriggerSchema.shape.settled,
+    option: asksSettledTriggerSchema.shape.option,
+  }),
 ]);
 export type PackGraphArrowFrom = z.infer<typeof arrowFromSchema>;
 
@@ -322,7 +326,7 @@ const arrowKey = (from: PackGraphArrowFrom, to: string): string =>
   JSON.stringify(
     'outcome' in from
       ? [from.stage, 'outcome', from.outcome, to]
-      : [from.stage, 'settled', from.settled, to]
+      : [from.stage, 'settled', from.settled, from.option ?? null, to]
   );
 
 const installedSource = (
@@ -335,9 +339,10 @@ const installedSource = (
 
 /**
  * Each declared run-ended binding as one arrow per outcome it lists, and each declared
- * asks-settled binding as one arrow, from stage to stage. A workflow name that is not a
- * stage is kept as declared, with a problem, so a stage that failed to load leaves its
- * arrows and the load error in the graph instead of failing it.
+ * asks-settled binding as one arrow per option it lists (one when it lists none), from
+ * stage to stage. A workflow name that is not a stage is kept as declared, with a problem,
+ * so a stage that failed to load leaves its arrows and the load error in the graph instead
+ * of failing it.
  */
 interface DeclaredArrow {
   binding: { binding: string; problems: string[] };
@@ -363,13 +368,14 @@ function declaredArrows(input: GraphInput): DeclaredArrow[] {
     if (kinded.kind === 'asks_settled') {
       const stage = stageName(kinded.binding.asks_settled.workflow);
       const to = stageName(kinded.binding.workflow);
-      return [
-        {
-          binding: { binding: id, problems },
-          from: { stage, settled: kinded.binding.asks_settled.settled },
-          to,
-        },
-      ];
+      const { settled, option } = kinded.binding.asks_settled;
+      const options =
+        option === undefined ? [undefined] : typeof option === 'string' ? [option] : option;
+      return options.map(value => ({
+        binding: { binding: id, problems: [...problems] },
+        from: { stage, settled, ...(value === undefined ? {} : { option: value }) },
+        to,
+      }));
     }
     const stage = stageName(kinded.binding.run_ended.workflow);
     const to = stageName(kinded.binding.workflow);

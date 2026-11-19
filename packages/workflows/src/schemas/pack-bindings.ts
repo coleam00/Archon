@@ -93,6 +93,20 @@ export const packEventBindingSchema = z
   .strict();
 
 const runEndedOutcomeSchema = runEndedTriggerSchema.shape.outcome;
+const asksSettledOptionSchema = asksSettledTriggerSchema.shape.option.unwrap();
+
+/** One value, or a list of distinct ones; a trigger file holds one, so each is its own file. */
+function oneOrDistinct<T extends z.ZodString>(value: T, plural: string) {
+  return z.union([
+    value,
+    z
+      .array(value)
+      .min(1)
+      .refine(values => new Set(values).size === values.length, {
+        message: `${plural} must be distinct`,
+      }),
+  ]);
+}
 
 /** The engine picks the lane of a start on another run's checkout, so none is fixed here. */
 const checkoutTakesDefaultIsolation = {
@@ -121,15 +135,7 @@ export const packRunEndedBindingSchema = z
     run_ended: z
       .object({
         workflow: z.string().min(1),
-        outcome: z.union([
-          runEndedOutcomeSchema,
-          z
-            .array(runEndedOutcomeSchema)
-            .min(1)
-            .refine(outcomes => new Set(outcomes).size === outcomes.length, {
-              message: 'outcomes must be distinct',
-            }),
-        ]),
+        outcome: oneOrDistinct(runEndedOutcomeSchema, 'outcomes'),
         checkout: runEndedTriggerSchema.shape.checkout,
       })
       .strict(),
@@ -139,7 +145,8 @@ export const packRunEndedBindingSchema = z
 
 /**
  * Starts when the asks a run of `asks_settled.workflow`, a workflow of this pack, left on
- * an item are settled, as `on.asksSettled` does: `settled` and `checkout` read as there.
+ * an item are settled, as `on.asksSettled` does: `settled`, `option` and `checkout` read as
+ * there. A trigger file holds one option, so each listed option is written as its own file.
  */
 export const packAsksSettledBindingSchema = z
   .object({
@@ -148,9 +155,14 @@ export const packAsksSettledBindingSchema = z
       .object({
         workflow: z.string().min(1),
         settled: asksSettledTriggerSchema.shape.settled,
+        option: oneOrDistinct(asksSettledOptionSchema, 'options').optional(),
         checkout: asksSettledTriggerSchema.shape.checkout,
       })
-      .strict(),
+      .strict()
+      .refine(trigger => trigger.option === undefined || trigger.settled === 'answered', {
+        message: 'option selects on an answer, so it takes settled: answered',
+        path: ['option'],
+      }),
   })
   .strict()
   .refine(checkoutTakesDefaultIsolation.check, checkoutTakesDefaultIsolation.message);

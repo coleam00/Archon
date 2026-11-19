@@ -13,6 +13,7 @@ import {
 import { RunActionForbiddenError } from '@archon/core/operations/run-authorization';
 import {
   answerAttentionItem,
+  settledWithNothingStarted,
   withdrawAttentionItem,
   type AttentionItemAnswerResult,
 } from '@archon/core/operations/attention-items';
@@ -308,12 +309,22 @@ type AttentionItemReply =
   | { body: z.infer<typeof attentionItemActionResponseSchema> }
   | { status: 400 | 404 | 409; error: string };
 
+/** `settled`, and `nothingStarted` when the settlement started no binding. */
+function settlement(result: Parameters<typeof settledWithNothingStarted>[0]): {
+  settled: boolean;
+  nothingStarted?: true;
+} {
+  return settledWithNothingStarted(result)
+    ? { settled: true, nothingStarted: true }
+    : { settled: result.settled };
+}
+
 /** The HTTP reply to an answer by ref. */
 function answerReply(ref: string, result: AttentionItemAnswerResult): AttentionItemReply {
   const base = { ref, action: 'answer' as const };
   switch (result.kind) {
     case 'ask_answered':
-      return { body: { ...base, unchanged: false, settled: result.settled } };
+      return { body: { ...base, unchanged: false, ...settlement(result) } };
     case 'unchanged':
       return { body: { ...base, unchanged: true } };
     case 'answered':
@@ -440,7 +451,7 @@ export function registerRunAttentionRoutes(
       const base = { ref: body.ref, action: 'withdraw' as const };
       switch (result.kind) {
         case 'withdrawn':
-          return c.json({ ...base, unchanged: false, settled: result.settled }, 200);
+          return c.json({ ...base, unchanged: false, ...settlement(result) }, 200);
         case 'unchanged':
           return c.json({ ...base, unchanged: true }, 200);
         case 'unknown':

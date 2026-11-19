@@ -2167,7 +2167,10 @@ input referenced by the block is a load error. Whether **extra** caller keys are
 depends on whether the block declares `inputs:` (see
 [Workflow Signature](#workflow-signature-inputs-returns-and-inputs)): a block with no
 `inputs:` ignores unrecognized keys; a block that declares `inputs:` rejects an undeclared
-key at load.
+key at load. The exception is a block included from its includer's own pack: it reads that
+pack's settings without declaring them, so a setting it reads need not be passed, and a
+setting passed through `with:` is not refused. Any other undeclared key is still refused (see
+[Pack settings](#pack-settings)).
 
 An object value is a literal, with two exceptions. An object with exactly the shape
 `{ from, if_skipped }` (`if_skipped` optional) is the binding directive, with the same
@@ -2748,13 +2751,21 @@ result on its row; a resumed run keeps those values even if the project file cha
   pack's default, never the project file.
   Two different names that fold to the same `INPUTS_*` key across a workflow's inputs and its
   pack's settings are a load error.
-- **An `include:`d block takes nothing from its pack.** Its `$INPUTS.<name>` references read
-  what its includer passes through `with:`, and a reference nothing supplies fails the load. A
-  block that wants a setting gets it from its includer:
+- **An `include:`d block from its includer's own pack reads the run's settings**, as it does
+  when run directly: it needs no `inputs:` entry for a setting and the includer no `with:` line.
+  An optional setting the run has no value for stays unset in the block, as it does run directly.
+  The includer may still pass a setting through `with:`, which overrides the run's value for
+  that block, and a default the block declares under `inputs:` for a setting's name wins over
+  the run's value when included. Through a chain of includes the setting travels the same way
+  as far as the pack stays the same; where the chain enters another pack, that includer passes
+  it as below.
+- **An `include:`d block from another pack takes nothing from its pack.** Its
+  `$INPUTS.<name>` references read what its includer passes through `with:`, and a reference
+  nothing supplies fails the load. A block that wants a setting gets it from its includer:
 
   ```yaml
   - id: review
-    include: review-block
+    include: review-block   # a block of another pack
     with:
       forge: $INPUTS.forge   # the including run's setting, passed in
   ```
@@ -2846,6 +2857,7 @@ bindings:
     asks_settled:                     # starts when the asks a run of this pack's workflow left settle
       workflow: review-fix
       settled: answered               # answered | withdrawn | any
+      option: send-back               # optional: only when the answers chose this option; or a list
       checkout: asking-run            # optional: continue on the asking run's branch
     inputs:
       decisions: { answers: true }    # the settled answers; asks-settled bindings only
@@ -2881,9 +2893,13 @@ passes the settled answers, and `{ input: <name> }` and `{ result: <JSON Pointer
 asking run's inputs and result, as `on.asksSettled.inputs` does. `asks_settled.checkout:
 asking-run` starts it in the checkout the asking run left, as
 [`on.asksSettled.checkout`](/guides/workflow-triggers/#work-in-the-checkout-the-asking-run-left)
-does. `archon pack bindings` writes one file, and refuses the whole set, writing nothing, when the
-asking workflow does not declare `returns.asks` or an input read from it, or the started
-workflow does not declare an input mapped to it. With `checkout` on either form, `isolation`
+does. `asks_settled.option`, an option id or a list of distinct ones, takes `settled: answered`
+and narrows the binding to answers that chose that option, as
+[`on.asksSettled.option`](/guides/workflow-triggers/#start-a-different-stage-for-each-option)
+does. `archon pack bindings` writes one file per option, or one when the binding names none, and
+refuses the whole set, writing nothing, when the asking workflow does not declare `returns.asks`
+or an input read from it, the started workflow does not declare an input mapped to it, or two
+files would both start when one option is chosen. With `checkout` on either form, `isolation`
 must be left out: the engine picks the start's checkout.
 
 An event binding with `wake:` starts its workflow on the item of an open
@@ -2940,7 +2956,7 @@ or a finer token such as `resolve:subject`. The list must not be empty; any othe
 Every fresh run of a workflow of the pack is checked when it starts, before a worktree, a
 queue slot or any node: started by hand, from chat or the Web UI, by a trigger binding (before
 admission, so a refused binding takes no slot), or as a `workflow:` sub-run, which is checked
-against its own pack. An `include:`d block takes nothing from its pack. A resumed or approved
+against its own pack. An `include:`d block's own pack is not checked. A resumed or approved
 run is not checked again. The engine asks
 [`archon forge check`](/reference/forge/#check-forge-access-before-a-run-spends) for each
 remote of the project's checkout, with the run's GitHub credential; the run starts when one

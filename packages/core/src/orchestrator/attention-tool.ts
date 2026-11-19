@@ -11,6 +11,8 @@ import { z } from 'zod';
 import {
   answerAttentionItem,
   mayAnswerAttentionItem,
+  NOTHING_STARTED,
+  settledWithNothingStarted,
   type AttentionItemAnswerResult,
   type AttentionItemDeps,
 } from '../operations/attention-items';
@@ -268,7 +270,7 @@ async function answerItem(
     const { item } = result;
     log.info({ ref, settled: result.settled }, 'attention_tool.ask_answered');
     // Nothing continues from an ask: its run completed. Settling the set is recorded.
-    return `Answered ${ref}${item.askedIn === undefined ? '' : `, which run ${item.askedIn.runId} (${item.askedIn.workflow}) left,`} with ${describe(answer)}. It asked:\n> ${item.message.replace(/\n/g, '\n> ')}\n${result.settled ? 'That was the last open ask of its set; the set is settled.' : 'Other asks of its set are still open.'}`;
+    return `Answered ${ref}${item.askedIn === undefined ? '' : `, which run ${item.askedIn.runId} (${item.askedIn.workflow}) left,`} with ${describe(answer)}. It asked:\n> ${item.message.replace(/\n/g, '\n> ')}\n${result.settled ? `That was the last open ask of its set; the set is settled.${settledWithNothingStarted(result) ? ` ${NOTHING_STARTED}` : ''}` : 'Other asks of its set are still open.'}`;
   }
   if (result.kind !== 'answered') return notAnswered(ref, result);
   const { item } = result;

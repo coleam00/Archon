@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { isJsonPointer } from '../json-pointer';
 import { jsonValueSchema } from '../output-ref';
 import { itemLinkKindSchema } from './item-link';
+import { attentionOptionSchema } from './wait-node';
 import { ITEM_KEY_MAX_LENGTH, itemKeySchema, workflowRunOriginSchema } from './workflow-run';
 import {
   DEFAULT_RESOURCE_CAPACITY,
@@ -693,11 +694,17 @@ export type AsksSettledInputSource = z.infer<typeof asksSettledInputSourceSchema
  * `workflowName` left on an item are settled, in the project the binding launches in.
  * `answered` matches a set with at least one answer, `withdrawn` one whose every ask was
  * withdrawn, `any` either.
+ *
+ * `option` narrows `answered` to a set whose every answered ask chose that option id, as
+ * `chosenAskOption` reads it; withdrawn asks are not counted. A mixed set, or an answer
+ * that chose no offered option, matches no binding with `option`. Only the id is compared,
+ * never answer text, as `runEnded.outcome` compares the ended run's outcome.
  */
 export const asksSettledTriggerSchema = z
   .object({
     workflowName: z.string().min(1),
     settled: z.enum(['answered', 'withdrawn', 'any']),
+    option: attentionOptionSchema.shape.id.optional(),
     inputs: z.record(z.string().min(1), asksSettledInputSourceSchema).optional(),
     /**
      * `asking-run`: the started run works in the checkout the asking run left, on its
@@ -706,7 +713,12 @@ export const asksSettledTriggerSchema = z
      */
     checkout: z.literal('asking-run').optional(),
   })
-  .strict();
+  .strict()
+  // A withdrawn ask chose nothing, so an option can only select among answers.
+  .refine(trigger => trigger.option === undefined || trigger.settled === 'answered', {
+    message: 'option selects on an answer, so it takes settled: answered',
+    path: ['option'],
+  });
 export type AsksSettledTrigger = z.infer<typeof asksSettledTriggerSchema>;
 
 /**
