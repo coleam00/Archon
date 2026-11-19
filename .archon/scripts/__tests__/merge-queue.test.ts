@@ -383,6 +383,9 @@ describe('the merge stage reads its item', () => {
     expect(run(at, 'facts', {}).stderr).toContain("issue 7 is not the merge stage's");
     seed(at, item(BUILT, merge('merged')));
     expect(run(at, 'facts', {}).stderr).toContain('merge status merged');
+    // A parked item is judged again when someone starts the stage on it: nothing else starts it.
+    seed(at, item(BUILT, merge('parked')));
+    expect(ok(run(at, 'facts', {})).path).toBe('judge');
     expect(run(at, 'facts', { RUN_ITEM_KEY: '' }).stderr).toContain('the run is on no item');
     expect(run(at, 'facts', { RUN_ITEM_KEY: 'pr-7' }).stderr).toContain('the run is on item pr-7');
   }, 60_000);

@@ -79,6 +79,17 @@ export function mergeWaits(doc: WorkItem): boolean {
 }
 
 /**
+ * Whether a merge run started on the item may decide it: an item that waits, and a
+ * parked one. Nothing starts a parked item by itself (`mergeWaits`), so a run on one is
+ * an operator's own start, and it is judged like any other. An item the build queue
+ * would accept for another round is still refused.
+ */
+export function mergeAccepts(doc: WorkItem): boolean {
+  if (mergeWaits(doc)) return true;
+  return doc.facts.build?.status === 'ready' && !buildWaits(doc) && doc.facts.merge?.status === 'parked';
+}
+
+/**
  * The issue whose item a merge run is on. `itemKey` owns the key's form: a key it does
  * not produce for the number read from it is not an issue's item, and is refused.
  */
@@ -144,7 +155,7 @@ export const ASK_OPTIONS = [
   {
     id: 'park',
     does: 'Stops work on the item. Nothing starts, and the pull request stays open.',
-    cost: 'The change does not land until the build queue readies the item again.',
+    cost: 'The change does not land until the build queue readies the item again, or someone starts the merge stage on it by hand.',
   },
 ] as const;
 export type AskOption = (typeof ASK_OPTIONS)[number]['id'];

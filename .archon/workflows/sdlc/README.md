@@ -327,7 +327,9 @@ the question on the issue's item, and the answer starts the stage again through 
 `merge-after-answer` binding (step 10). Its ask always has three options: `merge`
 approves the pull request at the head that was asked about, `return` sends it back to
 the build queue with the answer's text as what to change, and `park` stops work on it.
-An answer with text and no option starts nothing.
+An answer with text and no option starts nothing. A parked pull request comes back when
+you start the merge stage on its item by hand: `archon trigger fire --config <the
+merge-queue binding file> --item issue-42`.
 
 Each item says what is being decided, the agent's recommendation and its evidence, the
 choices and what each does. The reason matters: a build or merge answer is written into

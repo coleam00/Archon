@@ -228,7 +228,7 @@ A merge run is on the issue's item, `issue-<number>`, like a build run, and the 
 
 ### What a run takes
 
-An item is the merge stage's when its build record is ready, no re-triage came after that build round began, and the stage has not settled it: it never decided it, or left it waiting or asking. When the build queue readies an item again after the stage returned or parked it, it is the stage's again. A run on any other item refuses before it reads the forge, which is what keeps a merge run off an item the build queue would accept for another round. The pull request is the latest one a build round recorded, or, when no round recorded one, the one triage routed the item to continue. One already merged or closed is recorded without the agent.
+An item is the merge stage's when its build record is ready, no re-triage came after that build round began, and the stage has not settled it: it never decided it, or left it waiting or asking. When the build queue readies an item again after the stage returned or parked it, it is the stage's again. A run started by hand on a parked item is accepted too. A run on any other item refuses before it reads the forge, which is what keeps a merge run off an item the build queue would accept for another round. The pull request is the latest one a build round recorded, or, when no round recorded one, the one triage routed the item to continue. One already merged or closed is recorded without the agent.
 
 The run refuses before it starts when the forge plugin lacks an operation the stage needs.
 
@@ -312,7 +312,7 @@ An unclear pull request ends its run with outcome `asked` and one [ask](/referen
 
 - **`merge`** approves the pull request at the head that was asked about. The stage runs again and merges it if the gate still holds there, or ends waiting for its checks.
 - **`return`** sends the pull request back. The run ends `returned`, which starts the issue's next build round, with your answer's words as what to change: they are written into the issue body as a dated "Current scope" section, and the round reads them as the contract.
-- **`park`** stops work on the item until the build queue readies it again. Nothing starts, and the pull request stays open.
+- **`park`** stops work on the item. Nothing starts by itself, and the pull request stays open, until the build queue readies the item again or you start the merge stage on it by hand: `archon trigger fire --config <merge-queue file> --item issue-<number>`. That run judges the pull request like any other.
 
 To ask for something else, choose the nearest option and say it in the text. Text alone, naming no option, starts nothing: the stage never reads an answer's words to guess what was meant, and the command says that nothing was started. A withdrawn ask starts nothing either. In both cases the item stays as asked until the build queue readies it again.
 

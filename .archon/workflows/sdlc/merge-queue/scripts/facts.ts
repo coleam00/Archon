@@ -3,8 +3,9 @@
  * default branch.
  *
  * The run is on the issue's item, where the engine admits one merge run at a time, so it
- * takes no claim. It refuses an item that is not the merge stage's (`mergeWaits`), which
- * includes one the build queue would accept for another round.
+ * takes no claim. It refuses an item that is not the merge stage's (`mergeAccepts`), which
+ * includes one the build queue would accept for another round. A parked item is accepted:
+ * only an operator's own start reaches it.
  *
  * `path` says what follows. `settle`: there is nothing to judge, because the pull
  * request is already merged or closed, the item names none, or a maintainer answered the
@@ -37,7 +38,7 @@ import {
   listSetting,
   type MergeAnswer,
   type MergeStart,
-  mergeWaits,
+  mergeAccepts,
   parseCiMode,
   parseLane,
   type PrFacts,
@@ -88,7 +89,7 @@ function ownItem(repo: ReturnType<typeof workflowRepo>): WorkItem {
   if (!sameRepo(doc.subject.repo, repo)) {
     throw new Error(`${issue}'s work item is ${doc.subject.repo.host}/${doc.subject.repo.path}'s, not ${repo.host}/${repo.path}'s`);
   }
-  if (!mergeWaits(doc)) {
+  if (!mergeAccepts(doc)) {
     const build = doc.facts.build?.status ?? 'none';
     throw new Error(`${issue} is not the merge stage's: build status ${build}, merge status ${doc.facts.merge?.status ?? 'none'}`);
   }
