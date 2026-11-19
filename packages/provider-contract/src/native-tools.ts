@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import Ajv from 'ajv';
-import { rawJsonObjectSchema } from './json-values';
+import { rawJsonObjectValidator } from './json-values';
 import {
   nativeToolInputSchema,
   type NativeToolInputSchema,
@@ -30,7 +30,7 @@ export function nativeToolInputParser(
     const validate = new Ajv({ allErrors: true, strict: false }).compile(input.jsonSchema);
     if ('$async' in validate && validate.$async)
       throw new Error('Native tools require a synchronous JSON Schema');
-    return rawJsonObjectSchema
+    return rawJsonObjectValidator
       .superRefine((value, context) => {
         if (validate(value)) return;
         for (const issue of validate.errors ?? []) {

@@ -225,7 +225,8 @@ function redactJson(value: JsonValue, credentials: readonly string[]): JsonValue
     const redacted = value.map(item => redactJson(item, credentials));
     return redacted.every(item => item !== undefined) ? redacted : undefined;
   }
-  return typeof value === 'object' && value !== null ? redactObject(value, credentials) : value;
+  if (typeof value === 'object' && value !== null) return redactObject(value, credentials);
+  return containsCredentialValue(canonicalValueText(value), credentials) ? undefined : value;
 }
 
 function redactObject(

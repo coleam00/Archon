@@ -439,6 +439,39 @@ test('omits only an unsafe audit field when a credential matches the marker', as
   expect(event).not.toHaveProperty('input');
 });
 
+test.each([
+  { field: 'input', inputCount: 424242, outputCount: 7 },
+  { field: 'output', inputCount: 7, outputCount: 424242 },
+] as const)('omits the audit $field on a numeric credential match', async row => {
+  const node = agent();
+  if (!node.tools) throw new Error('Missing tool declaration');
+  node.tools.lookup.output_schema = {
+    type: 'object',
+    properties: { counts: { type: 'array', items: { type: 'integer' } } },
+    required: ['counts'],
+  };
+  await writeFile(
+    join(root, '.archon', 'scripts', 'lookup.ts'),
+    'const input = JSON.parse(await Bun.stdin.text()); console.log(JSON.stringify({counts:[424249 - input.count]}));'
+  );
+  const input = { ...args, count: row.inputCount };
+  const output = { counts: [row.outputCount] };
+  mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
+    expect(await options?.nativeTools?.[0].handler(input)).toBe(JSON.stringify(output));
+    yield reply();
+  });
+  await run([node], 'claude', ['424242']);
+  expect(events('node_completed')).toHaveLength(1);
+  const calls = events('script_tool_call');
+  expect(calls).toHaveLength(1);
+  expect(calls[0].data).toMatchObject({
+    status: 'completed',
+    [`${row.field}_redaction_failed`]: true,
+    ...(row.field === 'input' ? { output } : { input }),
+  });
+  expect(calls[0].data).not.toHaveProperty(row.field);
+});
+
 test('redacts a recorded tool error without replacing the audit status', async () => {
   await writeFile(
     join(root, '.archon', 'scripts', 'lookup.ts'),

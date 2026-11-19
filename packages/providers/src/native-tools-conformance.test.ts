@@ -216,6 +216,18 @@ describe('native tool input schema conformance', () => {
       }
     }
   );
+  test('standalone tool schemas preserve omitted additionalProperties', () => {
+    const jsonSchema = { type: 'object', properties: { count: { type: 'number' } } };
+    const parser = nativeToolInputParser({ jsonSchema });
+    const exported = z.toJSONSchema(parser);
+    expect(exported).toMatchObject(jsonSchema);
+    expect(exported).not.toHaveProperty('additionalProperties');
+    const validate = new Ajv2020({ strict: false }).compile(exported);
+    const args = { count: 7, extra: { values: [null, true] } };
+    expect(validate(args)).toBe(true);
+    expect(validate({ count: 'wrong' })).toBe(false);
+    expect(parser.parse(args)).toBe(args);
+  });
   test('JSON Schema not keywords work without changing input', () => {
     const schema = { type: 'object', not: { required: ['blocked'] } };
     const parser = nativeToolInputParser({ jsonSchema: schema });

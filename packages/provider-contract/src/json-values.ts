@@ -21,7 +21,10 @@ export const rawJsonValueSchema = z
   .unknown()
   .refine(isJsonValue, { message: 'Expected a JSON value', abort: true })
   .meta({ $ref: '#/$defs/JsonValue' });
-export const rawJsonObjectSchema = z
+export const rawJsonObjectValidator = z
   .unknown()
-  .refine(isJsonObject, { message: 'Expected a JSON object', abort: true })
-  .meta({ type: 'object', additionalProperties: { $ref: '#/$defs/JsonValue' } });
+  .refine(isJsonObject, { message: 'Expected a JSON object', abort: true });
+export const rawJsonObjectSchema = rawJsonObjectValidator.meta({
+  type: 'object',
+  additionalProperties: { $ref: '#/$defs/JsonValue' },
+});
