@@ -1,0 +1,46 @@
+# Dry-run fixture, an unclear pull request: the run ends `asked` with the judge's question
+# left on the item, and no wait. The answer starts the stage again.
+facts:
+  path: judge
+  item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+  url: "https://github.com/example/repo/pull/1"
+  facts: null
+  base: null
+  record: null
+  validation: null
+  protected: []
+  lane: auto
+  ci: forge
+  answer: null
+  settled: null
+judge:
+  decision:
+    action: ask
+    class: unclear
+    head: "1111111111111111111111111111111111111111"
+    reran: false
+    reason: "stub: it changes a stored format"
+    brief: "stub-brief: split the migration out of pull request 1"
+    ask: &ask
+      question: "Pull request 1 changes the stored run format: merge it as it is?"
+      context: "stub: Older binaries read the same rows. A free-text answer returns it with that text as the ruling. https://github.com/example/repo/pull/1"
+      options:
+        - { id: merge, does: "Approves it at this head; it merges once the gate passes there.", cost: "Older binaries stop reading new rows." }
+        - { id: return, does: "Sends it back to split the migration into its own pull request.", cost: "One more build round." }
+      recommendation: { option: return, why: "The format change has no ruling." }
+  base: "stub: dev is green"
+settle:
+  outcome: asked
+  summary: "stub: PR 1: ask (unclear); it changes a stored format"
+  number: 7
+  head: "1111111111111111111111111111111111111111"
+  brief: "stub-brief: split the migration out of pull request 1"
+  asks:
+    - { <<: *ask, artifacts: [] }
+  waits: []
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo }
+  expect: completed
+  authored: asked
+  reached: [facts, judge, settle]

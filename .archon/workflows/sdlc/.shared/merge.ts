@@ -1,11 +1,11 @@
 /**
- * The merge queue's record on an item's work item, `facts.merge`, and the pull-request
+ * The merge stage's record on an item's work item, `facts.merge`, and the pull-request
  * facts its gate reads before every merge.
  *
- * The merge queue takes the items the build queue finished: a work item whose
+ * The merge stage takes the items the build queue finished: a work item whose
  * `facts.build` is `ready`. Its pull request is the latest one a build round recorded,
- * or, when none did, the one triage routed the item to continue. The queue claims them
- * with intake's claim, so an item has one owner at a time across the three queues.
+ * or, when none did, the one triage routed the item to continue. A merge run is on the
+ * issue's item, where the engine admits one at a time, so it takes no claim.
  *
  * Every read and the merge go through the forge contract (`forge` of `archon:script`).
  */
@@ -13,35 +13,13 @@
 import { buildWaits, itemPullRequest, type Validation } from './build.ts';
 import { type QualifiedPr } from './identity.ts';
 import { record } from './inputs.ts';
+import { OUTPUT_ENUMS } from './outputs.generated.ts';
 import { forge } from 'archon:script';
 import { viewPr } from './pr.ts';
-import { type Ask, type DecisionEntry, withDecision } from './queue.ts';
+import { type DecisionEntry, withDecision } from './queue.ts';
 import { type ContractCoverage, type ReviewStamp, readReviewStamp } from './review-comment.ts';
-import type { Pickup, WorkItem } from './workitem.ts';
+import { itemKey, type WorkItem } from './workitem.ts';
 
-/** What a merge option does when a person picks it; archon-merge-queue.yaml declares the same enum. */
-export const MERGE_EFFECTS = ['merge', 'return', 'park'] as const;
-export type MergeEffect = (typeof MERGE_EFFECTS)[number];
-export type MergeAsk = Ask<MergeEffect>;
-
-/** What an `other` answer does with an asked pull request: a return when the sweep wrote a brief, a park otherwise. */
-export function otherEffect(brief: string): MergeEffect {
-  return brief.trim() === '' ? 'park' : 'return';
-}
-
-/** The sweep's decision on one pull request; archon-merge-queue.yaml declares the same enums. */
-export const POLICY_CLASSES = ['clear', 'unclear'] as const;
-export type PolicyClass = (typeof POLICY_CLASSES)[number];
-export const MERGE_PATHS = ['idle', 'record', 'sweep'] as const;
-export type MergePath = (typeof MERGE_PATHS)[number];
-/** What the record node asked, which the ruling node needs to act on the answer. */
-export interface MergeAsked {
-  readonly item: QualifiedPr;
-  readonly pr: QualifiedPr;
-  readonly head: string;
-  readonly brief: string;
-  readonly ask: MergeAsk;
-}
 export const MERGE_METHODS = ['squash', 'merge'] as const;
 /** The pack's `ci` setting; `.pack/pack.yaml` declares the same values. */
 export const CI_MODES = ['forge', 'none'] as const;
@@ -61,23 +39,21 @@ export function parseCiMode(value: string): CiMode {
 export type MergeMethod = (typeof MERGE_METHODS)[number];
 
 /**
- * `waiting`: the next sweep decides it. `asking`: a run is paused on its attention item.
+ * `waiting`: the next merge run decides it. `asking`: its ask is open on the item.
  * `merged`: this PR merged; a later build may ready another. `returned`: handed back
- * to the build queue, which owns it until it is ready again. `parked`: the queue
+ * to the build queue, which owns it until it is ready again. `parked`: the stage
  * stopped working it until renewed build readiness.
  */
 export type MergeStatus = 'waiting' | 'asking' | 'merged' | 'returned' | 'parked';
 
 /**
- * One merge decision. `head` is the commit it was about, null when the queue settled
- * the item without reading one; `reran` says the queue re-ran its failed checks at that
+ * One merge decision. `head` is the commit it was about, null when the stage settled
+ * the item without reading one; `reran` says the stage re-ran its failed checks at that
  * head, which it does at most once per head.
  */
 export interface MergeDecisionEntry extends DecisionEntry {
   readonly head: string | null;
   readonly reran: boolean;
-  /** On a `wait` the sweep declared: the facts it waited on (`waitedOn`). */
-  readonly waited_on?: string;
 }
 
 export interface MergeRecord {
@@ -86,21 +62,17 @@ export interface MergeRecord {
   /** A maintainer's approval to merge, pinned to the head they approved. */
   readonly approval: { readonly head: string; readonly at: string } | null;
   readonly decisions: readonly MergeDecisionEntry[];
-  /** When the queue last decided the item. */
+  /** When the stage last decided the item. */
   readonly at: string;
 }
 
-export function answeredMergeDecision(effect: MergeEffect): `answered: ${MergeEffect}` {
-  return `answered: ${effect}`;
-}
-
 /**
- * Renewed build readiness waits again after settlement; an abandoned ask waits once
- * its claim is released.
+ * Whether the item is the merge stage's to decide. Renewed build readiness waits again
+ * after settlement. An item the build queue would accept for another round is refused
+ * here: nothing else keeps a merge run off an item a re-triage handed back to the build.
  */
 export function mergeWaits(doc: WorkItem): boolean {
   const build = doc.facts.build;
-  // A re-triaged item is the build queue's until its round ends: no claim says so.
   if (build?.status !== 'ready' || buildWaits(doc)) return false;
   const merge = doc.facts.merge;
   if (merge === undefined || merge.status === 'waiting' || merge.status === 'asking') return true;
@@ -108,23 +80,16 @@ export function mergeWaits(doc: WorkItem): boolean {
 }
 
 /**
- * The decision label of an item settled `waiting` because its pull request could not be
- * read. A second one in a row parks the item instead, so a pull request that can never
- * be read is reported rather than claimed by every sweep.
+ * The issue whose item a merge run is on. `itemKey` owns the key's form: a key it does
+ * not produce for the number read from it is not an issue's item, and is refused.
  */
-export const UNREADABLE = 'waiting (unreadable)';
-
-/** A claimed item the facts node settled without the sweep, which the record node writes. */
-export interface MergeSettled {
-  readonly item: QualifiedPr;
-  readonly pr: QualifiedPr | null;
-  readonly status: Extract<MergeStatus, 'merged' | 'parked' | 'waiting'>;
-  /** The decision label recorded. */
-  readonly decision: string;
-  readonly reason: string;
+export function issueOfItem(key: string | undefined): number {
+  const number = Number(key?.split('-').at(-1));
+  if (key === undefined || !Number.isInteger(number) || itemKey(number) !== key) {
+    throw new Error(`the run is on ${key === undefined ? 'no item' : `item ${key}`}; a merge run is on the item of its issue`);
+  }
+  return number;
 }
-
-export const MERGE_PICKUP: Pickup = { stage: 'merge', waits: mergeWaits, takesRequests: false };
 
 /**
  * The item's pull request as the build queue resolves it (its latest round's, else the
@@ -142,8 +107,6 @@ export interface MergeChange {
   readonly pr: QualifiedPr | null;
   /** Undefined keeps the approval already recorded. */
   readonly approval?: MergeRecord['approval'];
-  /** Clear the claim in the same write: nothing is left for this run to do. */
-  readonly release: boolean;
 }
 
 /** The work item with one merge decision recorded on it. */
@@ -158,10 +121,54 @@ export function withMerge(doc: WorkItem, change: MergeChange): WorkItem {
   };
   return {
     ...doc,
-    claim: change.release ? null : doc.claim,
     facts: { ...doc.facts, merge },
     links: { runs: [...doc.links.runs.filter(id => id !== change.run_id), change.run_id].slice(-50) },
   };
+}
+
+/** The ids an ask's options take, as the judge's `output_format` declares them. */
+export const ASK_OPTIONS = OUTPUT_ENUMS['archon-merge-queue'].judge['decision.anyOf[2].ask.options[].id'];
+
+/**
+ * A maintainer's answer to the stage's ask, as the run it started reads it. `merge`
+ * approves the pull request at `head`, the head that was asked about. `return` sends it
+ * back to the build queue from `brief`. `park` stops work on it.
+ */
+export interface MergeAnswer {
+  readonly effect: (typeof ASK_OPTIONS)[number];
+  /** The id of the option chosen; `other` for an answer that chose none of the three. */
+  readonly choice: string;
+  /** What the ask said the chosen option does; empty for `other`. */
+  readonly does: string;
+  readonly text: string;
+  readonly at: string;
+  readonly head: string;
+  readonly brief: string;
+}
+
+/**
+ * What the facts node hands the judge and the settle node. `settle`: nothing to judge,
+ * and `settled` says how the item ends. `wait`: a check woke the run and what it waited
+ * for is still not there. `judge`: the agent decides from the snapshot.
+ */
+export interface MergeStart {
+  readonly path: 'settle' | 'wait' | 'judge';
+  /** The issue whose item the run is on. */
+  readonly item: QualifiedPr;
+  readonly pr: QualifiedPr | null;
+  readonly url: string;
+  readonly facts: PrFacts | null;
+  readonly base: BaseFacts | null;
+  /** The stage's record, holding an approval the answer just gave. */
+  readonly record: Partial<MergeRecord> | null;
+  /** The latest validation the item's build rounds recorded, which the gate trusts under `ci: none`. */
+  readonly validation: Validation | null;
+  /** The changed paths the `protected_paths` setting matches; with any, the gate needs an approval at the head. */
+  readonly protected: readonly string[];
+  readonly lane: (typeof LANES)[number];
+  readonly ci: CiMode;
+  readonly answer: MergeAnswer | null;
+  readonly settled: { readonly status: Extract<MergeStatus, 'merged' | 'returned' | 'parked'>; readonly reason: string } | null;
 }
 
 // --- the facts the gate reads -----------------------------------------------------
@@ -211,33 +218,37 @@ export interface PrFacts {
   readonly verdict: Verdict;
 }
 
-/**
- * The facts a `wait` can end on: the head, whether it is a draft, whether it merges,
- * the state of its checks, its open threads, its verdict with its contract coverage, the
- * default branch's head and check state, and the project's CI setting. While they read
- * the same as when the sweep declared the wait, the agent would decide the same, so the
- * item is not handed to it again.
- */
-export function waitedOn(facts: PrFacts, base: BaseFacts | null, ci: CiMode): string {
-  return JSON.stringify([
-    ci,
-    facts.head_revision,
-    facts.is_draft,
-    facts.mergeable,
-    facts.checks.state,
-    [...facts.threads.urls].sort(),
-    facts.verdict.state,
-    facts.verdict.reviewed,
-    facts.verdict.contract,
-    facts.default_head,
-    base?.checks.state ?? null,
-  ]);
-}
-
 export interface BaseFacts {
   readonly branch: string;
   readonly head: string;
   readonly checks: Checks;
+}
+
+/** A wait as the engine opens it on the item (`returns.waits`). */
+export interface EventWait {
+  readonly event: 'checks' | 'base-checks';
+  readonly about: string;
+  readonly within_minutes: number;
+}
+
+// Past this the engine lists the item as overdue and the backstop reads it again.
+const WAIT_MINUTES = 60;
+
+/**
+ * The forge events a pull request that did not merge waits for; `.pack/pack.yaml` binds
+ * each name to a completed check. `checks`: a check completing at exactly the pull
+ * request's head, while its checks are pending there or the stage just re-ran them.
+ * `base-checks`: a check completing at exactly the default branch's head, while that
+ * branch is red. A check at any other commit meets neither. Anything else a pull request
+ * waits for has no event, and the backstop reads it.
+ */
+export function eventWaits(facts: PrFacts, base: BaseFacts, ci: CiMode, reran: boolean): EventWait[] {
+  const waits: EventWait[] = [];
+  if (ci === 'forge' && (facts.checks.state === 'pending' || reran)) {
+    waits.push({ event: 'checks', about: facts.head_revision, within_minutes: WAIT_MINUTES });
+  }
+  if (base.checks.state === 'red') waits.push({ event: 'base-checks', about: base.head, within_minutes: WAIT_MINUTES });
+  return waits;
 }
 
 /** The default branch, its head commit and the checks on it. */
@@ -357,7 +368,7 @@ function readComments(ref: QualifiedPr): Comment[] {
 }
 
 /**
- * One snapshot of everything the gate and the sweep read about a pull request. Each
+ * One snapshot of everything the gate and the judge read about a pull request. Each
  * read that names a commit must name the head.
  */
 export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrFacts {
@@ -398,19 +409,17 @@ function ciRefusal(checks: Checks, head: string, ci: CiTrust): string | null {
 }
 
 /**
- * Why the pull request may not merge at `head`; empty when it may. The facts the
- * queue's contract names are a Ready verdict given at the head and what the project's
- * `ci` setting trusts there, on a default branch whose CI is not red: green forge checks
- * under `forge`, a passing validation delivery recorded at that same head under `none`.
- * The queue never pushes, so a verdict for another commit
- * means someone else pushed after the review. Pending CI on the default branch
- * does not hold a merge: the next sweep reads its result. Whether an open review thread
- * holds the merge is the sweep's judgment, from the thread facts it reads. Under the
- * manual lane, or with a protected path changed, a maintainer's approval at `head` is
- * required. The rest keep
- * the merge on an open, non-draft pull request into the default branch at exactly the
- * commit that was judged, and that commit either containing the default branch's head
- * or merging into it with no conflict.
+ * Why the pull request may not merge at `head`; empty when it may. It needs a Ready
+ * verdict given at the head and what the project's `ci` setting trusts there, on a
+ * default branch whose CI is not red: green forge checks under `forge`, a passing
+ * validation delivery recorded at that same head under `none`. The stage never pushes,
+ * so a verdict for another commit means someone else pushed after the review. Pending CI
+ * on the default branch does not hold a merge. Whether an open review thread holds the
+ * merge is the judge's call, from the thread facts it reads. Under the manual lane, or
+ * with a protected path changed, a maintainer's approval at `head` is required. The rest
+ * keep the merge on an open, non-draft pull request into the default branch at exactly
+ * the commit that was judged, and that commit either containing the default branch's
+ * head or merging into it with no conflict.
  */
 export function gateRefusals(
   facts: PrFacts,

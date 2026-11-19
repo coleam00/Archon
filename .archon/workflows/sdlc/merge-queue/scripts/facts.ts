@@ -1,204 +1,146 @@
 /**
- * Claim the merge queue's items and read the facts the sweep decides from.
+ * Read what one merge run decides from: the issue's work item, its pull request and the
+ * default branch.
  *
- * Live claims, in intake's order, every item the build queue finished, up to `limit`,
- * and reads each pull request in one snapshot: its head, the trusted review
- * verdict, CI and review threads at that head, and whether it merges cleanly, beside
- * the latest validation the item's build rounds recorded. An item
- * whose pull request is already merged or closed, or that names none, is settled without
- * the sweep. An unreadable pull request waits once, then parks on a consecutive failed
- * read with the reason, without stopping the rest of the batch. Successful reads reset
- * that sequence durably before the sweep, keeping the claim until record settles it.
- * A red default branch reaches the sweep only with a pull request it holds back: with
- * nothing to decide there is nothing for it to block. An unreadable
- * base reaches record for independent bookkeeping before the run reports the failure.
+ * The run is on the issue's item, where the engine admits one merge run at a time, so it
+ * takes no claim. It refuses an item that is not the merge stage's (`mergeWaits`), which
+ * includes one the build queue would accept for another round.
  *
- * A pull request whose last decision stored the facts its wait can end on (`waitedOn`),
- * and whose facts read the same now, is released without the sweep: the agent would
- * decide the same. When that leaves nothing to decide, the run ends after its script nodes.
+ * `path` says what follows. `settle`: there is nothing to judge, because the pull
+ * request is already merged or closed, the item names none, or a maintainer answered the
+ * stage's ask with a return or a park. `wait`: a check woke the run and what it waited
+ * for is still not there (the head's checks still pending, or the default branch still
+ * red, at the commit the wait named), so the item waits again without the agent. `judge`:
+ * the agent decides, on a snapshot of the pull request's gate facts.
+ *
+ * A read that fails refuses the run; the backstop starts the item again.
+ *
+ * Bound inputs: INPUTS_WAITED, the wait a check met (a wake binding's `{ wait: true }`);
+ * INPUTS_DECISIONS, the settled answers to the stage's ask, and INPUTS_ASKED, the result
+ * of the run that asked (an asks-settled binding's `{ answers: true }` and
+ * `{ result: "" }`); the pack settings INPUTS_CI, INPUTS_MERGE_LANE and
+ * INPUTS_PROTECTED_PATHS. Each binding input is empty when another start made the run.
  */
 
-import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
-import { type QualifiedPr } from '../../.shared/identity.ts';
-import { latestValidation, type Validation } from '../../.shared/build.ts';
+import { emit, input, item as runItem, refuse } from 'archon:script';
+import { latestValidation } from '../../.shared/build.ts';
+import { sameRepo } from '../../.shared/identity.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
+import { readMaintainers } from '../../.shared/maintainers.ts';
 import {
-  itemPr,
+  ASK_OPTIONS,
+  type BaseFacts,
   type CiMode,
-  MERGE_PICKUP,
+  issueOfItem,
+  itemPr,
   listSetting,
+  type MergeAnswer,
+  type MergeStart,
+  mergeWaits,
   parseCiMode,
   parseLane,
-  protectedChanges,
-  type MergeRecord,
-  type MergeSettled,
   type PrFacts,
+  protectedChanges,
   readBase,
   readPr,
-  UNREADABLE,
-  waitedOn,
-  withMerge,
 } from '../../.shared/merge.ts';
-import { readMaintainers } from '../../.shared/maintainers.ts';
 import { workflowRepo } from '../../.shared/remote.ts';
-import { claimNext, updateClaimed, type Pickup, type WorkItem } from '../../.shared/workitem.ts';
+import { readWorkItem, type WorkItem } from '../../.shared/workitem.ts';
 
-interface Item {
-  /** The issue whose work item the queue claimed. */
-  readonly item: QualifiedPr;
-  readonly pr: QualifiedPr;
-  readonly url: string;
-  readonly facts: PrFacts;
-  readonly record: MergeRecord | null;
-  /** The latest validation its build rounds recorded, which the gate trusts under `ci: none`. */
-  readonly validation: Validation | null;
-  /** The changed paths the `protected_paths` setting matches; with any, the gate needs an approval at the head. */
-  readonly protected: readonly string[];
+/** One settled ask, as an asks-settled binding's `{ answers: true }` passes it. */
+interface SettledAsk {
+  readonly closedAs: 'answered' | 'withdrawn';
+  readonly answer: { readonly text: string } | null;
+  /** The option chosen; null for an answer that chose none the ask offers. */
+  readonly option: { readonly id: string; readonly does: string } | null;
+  readonly at: string;
 }
 
-function positive(name: string, value: string): number {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`);
-  return parsed;
-}
-
-function claimAll(limit: number, runId: string, pickup: Pickup): WorkItem[] {
-  const claimed: WorkItem[] = [];
-  const at = new Date().toISOString();
-  while (claimed.length < limit) {
-    const doc = claimNext(at, runId, pickup);
-    if (doc === null) break;
-    claimed.push(doc);
-  }
-  return claimed;
-}
-
-type Snapshot = { readonly ok: true; readonly facts: PrFacts } | { readonly ok: false; readonly error: unknown };
-
-function snapshotReader(maintainers: ReadonlySet<string>): (pr: QualifiedPr) => PrFacts {
-  const snapshots = new Map<string, Snapshot>();
-  return pr => {
-    const key = JSON.stringify([pr.repo.host, pr.repo.path, pr.number]);
-    let result = snapshots.get(key);
-    if (result === undefined) {
-      try {
-        result = { ok: true, facts: readPr(pr, maintainers) };
-      } catch (error) {
-        result = { ok: false, error };
-      }
-      snapshots.set(key, result);
-    }
-    if (!result.ok) throw result.error;
-    return result.facts;
+/**
+ * A maintainer's answer to the stage's ask. `merge` approves the pull request at the
+ * head that was asked about. `return` sends it back to the build queue. `park` stops
+ * work on it. An answer that chose none of the three (the ask's reserved `other`, or
+ * text alone) returns it when the asking run wrote a brief, and parks it otherwise.
+ */
+function answer(): MergeAnswer | null {
+  const settled = (nullableJson(input('decisions')) ?? []) as SettledAsk[];
+  const asked = nullableJson(input('asked')) as { readonly head?: string; readonly brief?: string } | null;
+  const answered = settled.find(entry => entry.closedAs === 'answered');
+  if (answered === undefined || asked === null) return null;
+  const brief = asked.brief ?? '';
+  const chosen = ASK_OPTIONS.find(id => id === answered.option?.id);
+  return {
+    effect: chosen ?? (brief.trim() === '' ? 'park' : 'return'),
+    choice: answered.option?.id ?? 'other',
+    does: answered.option?.does ?? '',
+    text: answered.answer?.text.trim() ?? '',
+    at: answered.at,
+    head: asked.head ?? '',
+    brief,
   };
 }
 
-function unreadableItem(doc: WorkItem, pr: QualifiedPr | null, error: unknown): MergeSettled {
-  const reason = `its pull request could not be read: ${error instanceof Error ? error.message : String(error)}`;
-  const prior = doc.facts.merge;
-  const consecutive = prior?.status === 'waiting' && prior.decisions.at(-1)?.decision === UNREADABLE;
-  const status = consecutive ? 'parked' : 'waiting';
-  return { item: doc.subject, pr, status, decision: UNREADABLE, reason };
+/** Whether what the met wait was about still reads as it did when the item began to wait. */
+function stillWaits(facts: PrFacts, base: BaseFacts, ci: CiMode): boolean {
+  const waited = nullableJson(input('waited')) as { readonly event?: string; readonly about?: string } | null;
+  if (waited?.event === 'checks') return ci === 'forge' && waited.about === facts.head_revision && facts.checks.state === 'pending';
+  if (waited?.event === 'base-checks') return waited.about === base.head && base.checks.state === 'red';
+  return false;
 }
 
-function recordReadable(doc: WorkItem, facts: PrFacts, runId: string): WorkItem {
-  if (doc.facts.merge?.decisions.at(-1)?.decision !== UNREADABLE) return doc;
-  const at = new Date().toISOString();
-  return updateClaimed(doc.subject, runId, current => withMerge(current, {
-    at,
-    run_id: runId,
-    entry: { at, run_id: runId, decision: 'readable', reason: 'its pull request was read successfully', links: [], head: facts.head_revision, reran: false },
-    status: 'waiting',
-    pr: facts.pr,
-    release: false,
-  }));
-}
-
-type Inspection = { base: ReturnType<typeof readBase>; error: '' } | { base: null; error: string };
-
-// The default branch is one of the facts a pull request is decided and waits on.
-function inspectBase(repo: QualifiedPr['repo']): Inspection {
-  try {
-    return { base: readBase(repo), error: '' };
-  } catch (error) {
-    return { base: null, error: `merge-queue facts: ${error instanceof Error ? error.message : String(error)}` };
+/** The work item of the issue whose item the run is on, when it is the merge stage's; a refusal otherwise. */
+function ownItem(repo: ReturnType<typeof workflowRepo>): WorkItem {
+  const number = issueOfItem(runItem()?.item.key);
+  const issue = `issue ${String(number)}`;
+  const doc = readWorkItem(number);
+  if (doc === null) throw new Error(`${issue} has no work item: intake has not recorded it`);
+  if (!sameRepo(doc.subject.repo, repo)) {
+    throw new Error(`${issue}'s work item is ${doc.subject.repo.host}/${doc.subject.repo.path}'s, not ${repo.host}/${repo.path}'s`);
   }
-}
-
-function emitFacts(
-  inspection: Inspection,
-  items: readonly Item[],
-  settled: readonly MergeSettled[],
-  unchanged: number,
-  lane: string,
-  ci: CiMode
-): void {
-  const { base } = inspection;
-  if (unchanged > 0) console.error(`${String(unchanged)} pull request(s) read the same as at their last wait; not swept`);
-  const path = base === null
-    ? 'record'
-    : items.length > 0
-      ? 'sweep'
-      : settled.length > 0 ? 'record' : 'idle';
-  emit({
-    path,
-    base,
-    base_error: inspection.error,
-    items,
-    settled,
-    lane,
-    ci,
-  });
+  if (!mergeWaits(doc)) {
+    const build = doc.facts.build?.status ?? 'none';
+    throw new Error(`${issue} is not the merge stage's: build status ${build}, merge status ${doc.facts.merge?.status ?? 'none'}`);
+  }
+  return doc;
 }
 
 function main(): void {
-  const limit = positive('limit', input('limit').trim());
   const ci = parseCiMode(input('ci').trim());
   const lane = parseLane('merge_lane', input('merge_lane').trim());
-  const protectedPaths = listSetting(input('protected_paths'));
   const repo = workflowRepo();
-  const runId = workflowRunId();
+  const doc = ownItem(repo);
 
-  const snapshot = snapshotReader(readMaintainers(repo));
-  const inspection = inspectBase(repo);
-  const items: Item[] = [];
-  const settled: MergeSettled[] = [];
-  let unchanged = 0;
-  for (const doc of claimAll(limit, runId, MERGE_PICKUP)) {
-    let pr: QualifiedPr | null = null;
-    let facts: PrFacts;
-    try {
-      pr = itemPr(doc);
-      if (pr === null) {
-        settled.push({ item: doc.subject, pr: null, status: 'parked', decision: 'parked', reason: 'the build record names no pull request' });
-        continue;
-      }
-      facts = snapshot(pr);
-    } catch (error) {
-      settled.push(unreadableItem(doc, pr, error));
-      continue;
-    }
-    const current = recordReadable(doc, facts, runId);
-    if (facts.state !== 'open') {
-      const status = facts.state === 'merged' ? 'merged' : 'parked';
-      settled.push({ item: doc.subject, pr, status, decision: status, reason: `${facts.url} was ${facts.state} before this sweep` });
-      continue;
-    }
-    if (current.facts.merge?.decisions.at(-1)?.waited_on === waitedOn(facts, inspection.base, ci)) {
-      updateClaimed(doc.subject, runId, held => ({ ...held, claim: null }));
-      unchanged += 1;
-      continue;
-    }
-    items.push({
-      item: doc.subject,
-      pr,
-      url: facts.url,
-      facts,
-      record: current.facts.merge ?? null,
-      validation: latestValidation(current),
-      protected: protectedChanges(pr, protectedPaths),
-    });
+  const answered = answer();
+  const pr = itemPr(doc);
+  const settle = { path: 'settle', item: doc.subject, pr, url: '', facts: null, base: null, record: doc.facts.merge ?? null, validation: null, protected: [], lane, ci, answer: answered } as const;
+  const out = (start: MergeStart): void => emit(start);
+  if (answered !== null && answered.effect !== 'merge') {
+    out({ ...settle, settled: { status: answered.effect === 'return' ? 'returned' : 'parked', reason: `a maintainer answered ${answered.choice}` } });
+    return;
   }
-  emitFacts(inspection, items, settled, unchanged, lane, ci);
+  if (pr === null) {
+    out({ ...settle, settled: { status: 'parked', reason: 'the build record names no pull request' } });
+    return;
+  }
+  const facts = readPr(pr, readMaintainers(repo));
+  if (facts.state !== 'open') {
+    const status = facts.state === 'merged' ? 'merged' : 'parked';
+    out({ ...settle, url: facts.url, facts, settled: { status, reason: `${facts.url} was ${facts.state} before this run` } });
+    return;
+  }
+  const base = readBase(repo);
+  out({
+    ...settle,
+    path: stillWaits(facts, base, ci) ? 'wait' : 'judge',
+    url: facts.url,
+    facts,
+    base,
+    // The judge and the gate read an approval just given as the record will hold it.
+    record: answered === null ? settle.record : { ...settle.record, approval: { head: answered.head, at: answered.at } },
+    validation: latestValidation(doc),
+    protected: protectedChanges(pr, listSetting(input('protected_paths'))),
+    settled: null,
+  });
 }
 
 try {
