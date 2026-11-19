@@ -7662,6 +7662,8 @@ export interface components {
       action: 'answer' | 'withdraw';
       unchanged: boolean;
       settled?: boolean;
+      /** @enum {boolean} */
+      nothingStarted?: true;
       runId?: string;
       continues?: boolean;
       cancelled?: boolean;
@@ -10854,6 +10856,7 @@ export interface components {
                   stage: string;
                   /** @enum {string} */
                   settled: 'answered' | 'withdrawn' | 'any';
+                  option?: string;
                 };
             to: string;
             /** @enum {boolean} */
@@ -10878,6 +10881,7 @@ export interface components {
                   stage: string;
                   /** @enum {string} */
                   settled: 'answered' | 'withdrawn' | 'any';
+                  option?: string;
                 };
             to: string;
             /** @enum {boolean} */

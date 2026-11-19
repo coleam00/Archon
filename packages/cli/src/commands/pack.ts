@@ -99,6 +99,8 @@ interface Generated {
   document: unknown;
   /** The outcome a run-ended file starts on; one file per outcome. */
   outcome?: string;
+  /** The option an asks-settled file starts on; one file per option, when it names any. */
+  option?: string;
 }
 
 function parseRepo(repo: string): Target['repo'] {
@@ -111,13 +113,14 @@ function parseRepo(repo: string): Target['repo'] {
 /**
  * One name for a binding's file, its binding id and its source instance. The readable
  * part flattens the repository path, so `a-b/c` and `a/b-c` read alike; the digest of the
- * whole identity keeps distinct packs, hosts, repositories and outcomes apart.
+ * whole identity keeps distinct packs, hosts, repositories and values apart. `value` is
+ * the outcome or option a file starts on, for a binding written as one file per value.
  */
-function bindingName(target: Target, id: string, outcome?: string): string {
+function bindingName(target: Target, id: string, value?: string): string {
   const { packKey, repo } = target;
-  const identity = [packKey, repo.host, repo.path, id, ...(outcome === undefined ? [] : [outcome])];
+  const identity = [packKey, repo.host, repo.path, id, ...(value === undefined ? [] : [value])];
   const digest = createHash('sha256').update(JSON.stringify(identity)).digest('hex').slice(0, 12);
-  const slug = outcome
+  const slug = value
     ?.toLowerCase()
     .replaceAll(/[^a-z0-9]+/g, '-')
     .replaceAll(/^-|-$/g, '');
@@ -125,13 +128,14 @@ function bindingName(target: Target, id: string, outcome?: string): string {
   return `${readable.join('-')}-${digest}`;
 }
 
-function bindingPath(target: Target, id: string, outcome?: string): string {
-  return join(target.outDir, `${bindingName(target, id, outcome)}.json`);
+function bindingPath(target: Target, id: string, value?: string): string {
+  return join(target.outDir, `${bindingName(target, id, value)}.json`);
 }
 
 /**
  * The trigger files a run-ended or asks-settled binding is written as: one per outcome for
- * a run-ended binding, one for an asks-settled binding.
+ * a run-ended binding, and for an asks-settled binding one per option, or one when it names
+ * no option, under the name it had before options existed.
  */
 function onFiles(
   id: string,
@@ -149,15 +153,26 @@ function onFiles(
     on,
   });
   if (kinded.kind === 'asks_settled') {
-    const { workflow, settled, checkout } = kinded.binding.asks_settled;
-    const asksSettled = {
-      workflowName: workflowNameFor(pack, id, workflow),
-      settled,
-      ...(checkout === undefined ? {} : { checkout }),
-      ...mapped,
-    };
-    const document = file(bindingName(target, id), { asksSettled });
-    return [{ id, kind: kinded.kind, path: bindingPath(target, id), document }];
+    const { workflow, settled, option, checkout } = kinded.binding.asks_settled;
+    const workflowName = workflowNameFor(pack, id, workflow);
+    const options =
+      option === undefined ? [undefined] : typeof option === 'string' ? [option] : option;
+    return options.map(value => {
+      const asksSettled = {
+        workflowName,
+        settled,
+        ...(value === undefined ? {} : { option: value }),
+        ...(checkout === undefined ? {} : { checkout }),
+        ...mapped,
+      };
+      return {
+        id,
+        kind: kinded.kind,
+        path: bindingPath(target, id, value),
+        ...(value === undefined ? {} : { option: value }),
+        document: file(bindingName(target, id, value), { asksSettled }),
+      };
+    });
   }
   const { workflow, outcome, checkout } = kinded.binding.run_ended;
   const workflowName = workflowNameFor(pack, id, workflow);
@@ -369,7 +384,7 @@ function triggerAddSteps(files: readonly Generated[], heading: string, starts: s
     `${heading}. Add each to the triggers directory, where it is active at once: it starts its workflow ${starts}. Then list and check them with \`archon trigger check\`; deleting one from the triggers directory turns it off:`,
     ...files.map(
       item =>
-        `  archon trigger add ${shellQuote(item.path)}${item.outcome === undefined ? '' : `  # outcome '${item.outcome}'`}`
+        `  archon trigger add ${shellQuote(item.path)}${item.outcome !== undefined ? `  # outcome '${item.outcome}'` : item.option !== undefined ? `  # option '${item.option}'` : ''}`
     ),
   ];
 }
@@ -483,8 +498,11 @@ async function assertAsksSettledChecks(
     // As for run-ended bindings, a duplicate among installed files is left to `trigger check`.
     { loadConfig, providers: providerRegistry, projectKeyOf: async () => null }
   );
-  const problems = asks.flatMap(({ id }, index) =>
-    found[index].map(problem => `  Binding '${id}': ${problem}`)
+  const problems = asks.flatMap(({ id, check }, index) =>
+    found[index].map(
+      problem =>
+        `  Binding '${id}'${check.asksSettled.option === undefined ? '' : ` (option '${check.asksSettled.option}')`}: ${problem}`
+    )
   );
   if (problems.length > 0)
     throw new Error(
@@ -566,11 +584,12 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
   if (options.json) {
     await writeJsonLine({
       pack: packKey,
-      written: generated.map(({ id, kind, path, outcome }) => ({
+      written: generated.map(({ id, kind, path, outcome, option }) => ({
         id,
         kind,
         path,
         ...(outcome === undefined ? {} : { outcome }),
+        ...(option === undefined ? {} : { option }),
       })),
     });
     return;
@@ -598,7 +617,7 @@ function arrowText(arrow: PackGraph['arrows'][number]): string {
   const from =
     'outcome' in arrow.from
       ? `${arrow.from.stage}:${arrow.from.outcome}`
-      : `${arrow.from.stage}:asks(${arrow.from.settled})`;
+      : `${arrow.from.stage}:asks(${arrow.from.settled}${arrow.from.option === undefined ? '' : `: ${arrow.from.option}`})`;
   return `  ${from} -> ${arrow.to} [${state}]${note}`;
 }
 

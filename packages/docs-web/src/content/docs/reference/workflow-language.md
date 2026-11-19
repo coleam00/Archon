@@ -2788,6 +2788,7 @@ bindings:
     asks_settled:                     # starts when the asks a run of this pack's workflow left settle
       workflow: review-fix
       settled: answered               # answered | withdrawn | any
+      option: send-back               # optional: only when the answers chose this option; or a list
       checkout: asking-run            # optional: continue on the asking run's branch
     inputs:
       decisions: { answers: true }    # the settled answers; asks-settled bindings only
@@ -2823,9 +2824,13 @@ passes the settled answers, and `{ input: <name> }` and `{ result: <JSON Pointer
 asking run's inputs and result, as `on.asksSettled.inputs` does. `asks_settled.checkout:
 asking-run` starts it in the checkout the asking run left, as
 [`on.asksSettled.checkout`](/guides/workflow-triggers/#work-in-the-checkout-the-asking-run-left)
-does. `archon pack bindings` writes one file, and refuses the whole set, writing nothing, when the
-asking workflow does not declare `returns.asks` or an input read from it, or the started
-workflow does not declare an input mapped to it. With `checkout` on either form, `isolation`
+does. `asks_settled.option`, an option id or a list of distinct ones, takes `settled: answered`
+and narrows the binding to answers that chose that option, as
+[`on.asksSettled.option`](/guides/workflow-triggers/#start-a-different-stage-for-each-option)
+does. `archon pack bindings` writes one file per option, or one when the binding names none, and
+refuses the whole set, writing nothing, when the asking workflow does not declare `returns.asks`
+or an input read from it, the started workflow does not declare an input mapped to it, or two
+files would both start when one option is chosen. With `checkout` on either form, `isolation`
 must be left out: the engine picks the start's checkout.
 
 A stage that needs both a clock and a hand-off declares two bindings with the
