@@ -33,6 +33,7 @@ function read(key: string, runs: ItemRun[], mergedAt: string | null): ItemRead {
     questions: [],
     answers: [],
     links: [],
+    landing: null,
     merged:
       mergedAt === null
         ? null

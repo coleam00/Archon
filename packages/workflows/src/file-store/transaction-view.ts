@@ -89,6 +89,8 @@ export type TransactionView = Omit<
   | 'listItemsInWindow'
   | 'getItemMerge'
   | 'recordItemMerge'
+  | 'getItemLanding'
+  | 'recordItemLanding'
   | 'listItemLinks'
   | 'recordItemLink'
   | 'endItemLink'

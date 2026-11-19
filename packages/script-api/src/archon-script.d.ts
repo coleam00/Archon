@@ -2538,6 +2538,19 @@ declare module 'archon:script' {
         readonly nodePath: string;
       } | null;
     } | null;
+    readonly landing: {
+      readonly branch: string;
+      readonly from: {
+        readonly kind: 'own';
+      } | {
+        readonly kind: 'part_of';
+        readonly item: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        };
+      };
+    } | null;
     readonly degraded: ReadonlyArray<{
       readonly type: 'degraded';
       readonly reason: 'run_unreadable';
@@ -2554,6 +2567,10 @@ declare module 'archon:script' {
       readonly type: 'degraded';
       readonly reason: 'link_unreadable';
       readonly linkId: string;
+    } | {
+      readonly type: 'degraded';
+      readonly reason: 'landing_unresolved';
+      readonly message: string;
     }>;
   };
 
@@ -3041,6 +3058,19 @@ declare module 'archon:script' {
           readonly nodePath: string;
         } | null;
       } | null;
+      readonly landing: {
+        readonly branch: string;
+        readonly from: {
+          readonly kind: 'own';
+        } | {
+          readonly kind: 'part_of';
+          readonly item: {
+            readonly id: string;
+            readonly projectKey: string;
+            readonly key: string;
+          };
+        };
+      } | null;
       readonly degraded: ReadonlyArray<{
         readonly type: 'degraded';
         readonly reason: 'run_unreadable';
@@ -3057,6 +3087,10 @@ declare module 'archon:script' {
         readonly type: 'degraded';
         readonly reason: 'link_unreadable';
         readonly linkId: string;
+      } | {
+        readonly type: 'degraded';
+        readonly reason: 'landing_unresolved';
+        readonly message: string;
       }>;
     }>;
     readonly next: string | null;

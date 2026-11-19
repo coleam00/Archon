@@ -115,13 +115,13 @@ export interface RunSelection extends RunSourceSlot {
 export interface OwnedRunAdmission extends RunSelection {
   readonly cliUserId: string | undefined;
   /**
-   * Per-dispatch --base override, normalized once. Wins over repo config + the
-   * codebase default for both the worktree cut-from (the provider request's
-   * `baseOverride`) and the PR target / $BASE_BRANCH (executeWorkflow's
-   * `baseOverride` opt). Both halves need their own channel: the `baseBranch`
-   * field on either side is the codebase-default FALLBACK and ranks below repo
-   * config, so routing the flag through it would silently lose to a repo that
-   * sets `worktree.baseBranch`.
+   * Per-dispatch --base override, normalized once. `resolveLaunchBase` ranks it above the
+   * item's landing branch; the result wins over repo config + the codebase default for
+   * both the worktree cut-from (the provider request's `baseOverride`) and the PR target /
+   * $BASE_BRANCH (executeWorkflow's `baseOverride` opt). Both halves need their own
+   * channel: the `baseBranch` field on either side is the codebase-default FALLBACK and
+   * ranks below repo config, so routing the override through it would silently lose to a
+   * repo that sets `worktree.baseBranch`.
    */
   readonly flagBase: string | undefined;
   readonly pinnedEnabled: boolean | undefined;

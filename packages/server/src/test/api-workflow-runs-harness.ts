@@ -453,6 +453,7 @@ const unusedItems = unusedExports(await import('@archon/core/db/items'));
 const unusedItemRulings = unusedExports(await import('@archon/core/db/item-rulings'));
 const unusedItemMerges = unusedExports(await import('@archon/core/db/item-merges'));
 const unusedItemLinks = unusedExports(await import('@archon/core/db/item-links'));
+const unusedItemLandings = unusedExports(await import('@archon/core/db/item-landings'));
 const unusedItemAsks = unusedExports(await import('@archon/core/db/item-asks'));
 export const mockGetItemRuns = mock<typeof import('@archon/core/db/items')['getItemRuns']>(
   async () => null
@@ -506,6 +507,10 @@ mock.module('@archon/core/db/item-rulings', () => ({
 mock.module('@archon/core/db/item-merges', () => ({
   ...unusedItemMerges,
   getItemMerge: mock(async () => null),
+}));
+mock.module('@archon/core/db/item-landings', () => ({
+  ...unusedItemLandings,
+  getItemLanding: mock(async () => null),
 }));
 
 type ItemLinksDb = typeof import('@archon/core/db/item-links');

@@ -43,6 +43,8 @@ import {
   itemMergeSchema,
   type ItemMergeDegraded,
 } from './schemas/item-merge';
+import { itemLandingUnresolvedSchema, resolvedItemLandingSchema } from './schemas/item-landing';
+import { ItemLandingUnresolvedError, resolveItemLanding } from './item-landing';
 import { recordSurfaceSchema } from './schemas/record-surface';
 import { parseRunUsage } from './schemas/run-usage';
 import { chosenAskOption, type StoredItemAsk } from './schemas/item-ask';
@@ -303,11 +305,16 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * `degraded` names each part that could not be read: one of the item's own runs, a paused
  * run the queue could not read (`run_unreadable`, by `runId`), a ruling
  * (`ruling_unreadable`, by `rulingId`), a link (`link_unreadable`, by `linkId`), or the
- * merge (`merge_unreadable`). The rest still reads. `merged` is the merge the forge
- * reported for the item's change, recorded once; null while none is recorded or when its
- * row could not be read. `waits` are what the item waits for outside Archon: the open waits
- * completed runs left on it (`returns.waits`), each with when it opened and fell due, and
- * `overdue` once that time has passed. An overdue set is also among `questions`.
+ * merge (`merge_unreadable`), or where the item lands (`landing_unresolved`). The rest
+ * still reads. `merged` is the merge the forge reported for the item's change, recorded
+ * once; null while none is recorded or when its row could not be read. `landing` is the
+ * branch a fresh run on the item is cut from and proposes against, and where it came from:
+ * the item's own record, or the nearest item it is `part_of`. Null when neither records
+ * one, or when it cannot be resolved. The read does not check that the branch is on the
+ * remote; a run does when it starts. `waits` are what the item waits for outside Archon:
+ * the open waits completed runs left on it (`returns.waits`), each with when it opened and
+ * fell due, and `overdue` once that time has passed. An overdue set is also among
+ * `questions`.
  */
 export const itemReadSchema = z.object({
   item: workflowItemSchema,
@@ -321,12 +328,14 @@ export const itemReadSchema = z.object({
   answers: z.array(itemAnswerSchema),
   links: z.array(itemReadLinkSchema),
   merged: itemMergeSchema.nullable(),
+  landing: resolvedItemLandingSchema.nullable(),
   degraded: z.array(
     z.discriminatedUnion('reason', [
       attentionDegradedSchema,
       itemRulingDegradedSchema,
       itemMergeDegradedSchema,
       itemLinkDegradedSchema,
+      itemLandingUnresolvedSchema,
     ])
   ),
 });
@@ -340,6 +349,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'listEventsForRuns'
       | 'listItemRulings'
       | 'getItemMerge'
+      | 'getItemLanding'
       | 'listItemLinks'
       | 'listItemAsks'
       | 'listOpenItemWaits'
@@ -625,8 +635,28 @@ export async function readItemQueue(source: ItemReadSource): Promise<ItemQueueRe
   return splitAttentionRead(await listAttentionQueue({ ...source, ownerLost: undefined }));
 }
 
-/** The facts recorded on the item itself: its rulings, its links and its merge. */
-async function readItemFacts(source: ItemReadSource, itemId: string) {
+/** Where the item lands, through the resolver a run uses; a resolution error is reported, not thrown. */
+async function readLanding(source: ItemReadSource, item: WorkflowItem) {
+  try {
+    return { landing: await resolveItemLanding(source.store, item), degraded: [] };
+  } catch (error) {
+    if (!(error instanceof ItemLandingUnresolvedError)) throw error;
+    return {
+      landing: null,
+      degraded: [
+        {
+          type: 'degraded' as const,
+          reason: 'landing_unresolved' as const,
+          message: error.message,
+        },
+      ],
+    };
+  }
+}
+
+/** The facts recorded on the item itself: its rulings, its links, its merge and its landing. */
+async function readItemFacts(source: ItemReadSource, item: WorkflowItem) {
+  const itemId = item.id;
   const rulings: ItemRuling[] = [];
   const unreadableRulings: ItemRulingDegraded[] = [];
   for (const read of await source.store.listItemRulings(itemId))
@@ -639,11 +669,13 @@ async function readItemFacts(source: ItemReadSource, itemId: string) {
     else links.push(readLink(itemId, read));
   const merge = await source.store.getItemMerge(itemId);
   const unreadableMerge: ItemMergeDegraded[] = merge !== null && 'type' in merge ? [merge] : [];
+  const landing = await readLanding(source, item);
   return {
     rulings,
     links,
     merged: merge !== null && !('type' in merge) ? merge : null,
-    degraded: [...unreadableRulings, ...unreadableMerge, ...unreadableLinks],
+    landing: landing.landing,
+    degraded: [...unreadableRulings, ...unreadableMerge, ...unreadableLinks, ...landing.degraded],
   };
 }
 
@@ -681,7 +713,7 @@ export async function assembleItemRead(
     tree.size === 0
       ? new Map<string, WorkflowEventRow[]>()
       : await source.store.listEventsForRuns([...tree], ['wait_answered', 'approval_received']);
-  const facts = await readItemFacts(source, found.item.id);
+  const facts = await readItemFacts(source, found.item);
   const terminalEvents = await completionEvents(source, own.values);
   const asks = splitAttentionRead(await source.store.listItemAsks(found.item.id));
   const answers = [
@@ -734,6 +766,7 @@ export async function assembleItemRead(
     answers,
     links: facts.links,
     merged: facts.merged,
+    landing: facts.landing,
     // A paused item run the store could not read is in both reports, and an unreadable
     // open ask in the queue's and the item's; list each run once.
     degraded: [

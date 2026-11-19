@@ -355,7 +355,7 @@ A real run prints a JSON payload only with `--detach`. Without it, `--json` supp
 | `--branch`, `-b <name>` | Branch name for the worktree; reuses a healthy active task worktree registered in Archon for the project and branch, or a usable checkout at the configured target path. If another path holds the branch and was not reused, check for a live Archon run before freeing it and retrying. A worktree created for a named branch is never removed when the run ends; `isolation cleanup --merged` removes it |
 | `--from <branch>`, `--from-branch <branch>` | Start point for the new worktree only. An existing worktree whose history lacks it is refused, not reused; see [Where the run executes](#where-the-run-executes). Unlike `--base`, it does not change the PR target. |
 | `--base-branch <name>` | Choose the project base branch on first registration only. Omit to follow the remote default at use time; no prompt. Rejected for folder projects, existing projects, adoption/supersedes, dry runs, and every subcommand other than `workflow run`. A reachable remote must advertise the branch. With `--base`, this flag stores the project choice while `--base` overrides only this dispatch. |
-| `--base <branch>` | Per-dispatch base override, inherited by fresh shared-checkout children. Sets **both** the worktree cut-from **and** the PR target (`$BASE_BRANCH`), and outranks `worktree.baseBranch` in config plus the codebase default; see [Base branch precedence](#base-branch-precedence) below. The branch **must already exist on the remote**; a missing one is a hard error, not a fallback. Combine with `--from` to drive the two separately. Rejected with `--no-worktree`, `--folder`, and workflows pinning `worktree.enabled: false`. |
+| `--base <branch>` | Per-dispatch base override, inherited by fresh shared-checkout children. Sets **both** the worktree cut-from **and** the PR target (`$BASE_BRANCH`), and outranks the item's [landing branch](#workflow-landing), `worktree.baseBranch` in config and the codebase default; see [Base branch precedence](#base-branch-precedence) below. The branch **must already exist on the remote**; a missing one is a hard error, not a fallback. Combine with `--from` to drive the two separately. Rejected with `--no-worktree`, `--folder`, and workflows pinning `worktree.enabled: false`. |
 | `--project <id\|name>` | Bind a fresh run to an existing registered repository by ID or exact name (for example `owner/repo`); see `archon project list`. Folder projects are unsupported. See `archon workflow run --help` for incompatible flags. |
 | `--no-worktree` | Run directly in the live checkout, without isolation |
 | `--folder` | Register the current directory, git or not, as a folder project on first use and run in place, without a worktree. Rejects `--branch`, `--from` and `--base`. |
@@ -516,16 +516,20 @@ This validates deterministic engine wiring; it does not validate model reasoning
 
 "Base branch" means two things, and by default one flag sets both: the **cut-from**
 (what `git worktree add` branches off) and the **PR target** (`$BASE_BRANCH`, which
-bash nodes pass to `gh pr create --base`). Four sources can supply it, highest first:
+bash nodes pass to `gh pr create --base`). Five sources can supply it, highest first:
 
 | Precedence | Source | Scope |
 |------------|--------|-------|
 | 1 | `--base <branch>` | one dispatch |
-| 2 | `worktree.baseBranch` in `.archon/config.yaml` | the repo |
-| 3 | The registered codebase's stored default branch | the repo |
-| 4 | Live symbolic HEAD advertised by the selected remote | the repo |
+| 2 | The item's [landing branch](#workflow-landing): its own, else that of the nearest item it is `part_of` | every fresh run on the item |
+| 3 | `worktree.baseBranch` in `.archon/config.yaml` | the repo |
+| 4 | The registered codebase's stored default branch | the repo |
+| 5 | Live symbolic HEAD advertised by the selected remote | the repo |
 
-Levels 2 and 3 are project choices; level 4 is resolved live using `worktree.remote`
+Level 2 applies to a fresh run on an item: `--item <key>`, or the item of the run that
+`--supersedes` or `--adopt` names, and every [trigger start](/guides/workflow-triggers/#land-an-items-runs-on-its-own-branch)
+on an item. A run on no item, or on an item where neither it nor anything it is part of
+records a branch, skips it. Levels 3 and 4 are project choices; level 5 is resolved live using `worktree.remote`
 or the automatically selected remote. Use `--base` for a different base on one dispatch. New registrations store a branch only when explicitly chosen with `--base-branch`.
 An unset project branch follows the remote's live HEAD advertisement, including renames;
 resolution requires a reachable remote with a known symbolic HEAD and never guesses `main`.
@@ -536,7 +540,7 @@ local checkout. See [Troubleshooting](/reference/troubleshooting/) to clear a st
 dispatch (epic slices, A/B variants) config-free.
 
 **Scope: isolated children resolve independently.** A `workflow:` node with `isolation: worktree`
-creates a worktree for its child run, and that worktree is cut using levels 2--4
+creates a worktree for its child run, and that worktree is cut using levels 3--5
 only. Parent `--base` and `--from` do **not** change an isolated child's cut-from. A parent
 dispatched with `--base release/2.0` still branches its isolated children off the
 repo's configured base, and the child's `$BASE_BRANCH` reports that provisioning base.
@@ -564,18 +568,23 @@ copy of the start point may be stale.
 against a [folder project](/guides/multi-repo-projects/),
 and against a workflow pinning `worktree.enabled: false`. None of these create a
 worktree, so the flag could only move the PR target, which would report a base
-no worktree was ever cut from.
+no worktree was ever cut from. For the same reason a run on an item with a landing branch
+is refused in these cases (and when it runs in a folder project) before it starts, naming
+the branch. `--adopt` on such an item continues the adopted run's checkout and proposes
+against the landing branch.
 
 **When an existing worktree is adopted** by `--branch` reusing a healthy Archon
 registration or a usable checkout at the configured target path, the cut-from is already
-fixed, so `--base` changes only the PR target. Archon warns.
+fixed, so `--base` or the item's landing branch changes only the PR target. Archon warns,
+naming which of the two it was.
 
 **A continuation keeps the base it started with.** A run records its resolved
 `$BASE_BRANCH` when it starts, and every continuation of it (`workflow resume`, an approved
 gate, or the automatic resume of a parent whose sub-run gate was approved) reports that
-value rather than re-running levels 2--4 against whatever config and git say later.
-Continuations refuse `--base`. A run started before Archon
-recorded this re-resolves through levels 2--4 and logs
+value rather than re-running levels 2--5 against whatever config, items and git say later.
+Continuations refuse `--base`, and recording a new landing branch on the item does not move
+a run already started. A run started before Archon
+recorded this re-resolves through levels 3--5 and logs
 `workflow.dispatch_not_recorded_resolving_live` when it does.
 
 #### Continuing an existing estate
@@ -659,11 +668,11 @@ reads events in batches of up to 20 runs; without the flag, listing costs are un
 Unreadable history or invalid typed execution metadata fails the opted-in request rather
 than returning a partial report.
 
-`--item <key>` reads one [item](#items) in the current project and ignores the other filters. It prints these sections: the item's runs (id, workflow, status, authored outcome, start and end, and for a start waiting behind another run of its workflow on the item, that run), oldest first; its starts still waiting to start, in queue order, each with its full request id (what `trigger inspect` and `trigger withdraw` take), workflow, resource, and what it waits behind: how many queued starts of that resource and host are ahead of it, or, with none ahead, a free slot on the resource; the host that drains it; when it queued; and the run of its workflow on the item it waits behind, when one holds it; its refused starts when there are any (starts its binding's `overlap: skip` refused, with the run each was refused for); its [links](#workflow-link), active ones first, each with its id, its kind and an arrow for its direction (`this item depends_on → issue-3` for a link from this item, `← issue-9 duplicate_of this item` for a link to it), and ended ones after them, marked with who ended them and when; then, oldest first, the questions open in those runs or their sub-runs and the asks open on the item, and the answers recorded in them (attention answers and gate decisions, with the run, node, time and surface) together with the item's [rulings](#workflow-rule) (text, time, surface, who when they said, and when it was withdrawn). A sub-run is not listed as a run; its question or answer names its own run id, and `workflow get` on the parent shows it. The read reports recorded facts only; it computes no stage for the item. A start's count ahead is queue order, not a promise: a start whose checkout or item is held is passed over. It needs a registered project.
+`--item <key>` reads one [item](#items) in the current project and ignores the other filters. Under its name it prints the merge recorded on it, if any, and the branch it lands on with where that came from (`Lands on: feat/order (own)`, or `(part_of WO-12)` when it is the branch of an item it is part of). Then it prints these sections: the item's runs (id, workflow, status, authored outcome, start and end, and for a start waiting behind another run of its workflow on the item, that run), oldest first; its starts still waiting to start, in queue order, each with its full request id (what `trigger inspect` and `trigger withdraw` take), workflow, resource, and what it waits behind: how many queued starts of that resource and host are ahead of it, or, with none ahead, a free slot on the resource; the host that drains it; when it queued; and the run of its workflow on the item it waits behind, when one holds it; its refused starts when there are any (starts its binding's `overlap: skip` refused, with the run each was refused for); its [links](#workflow-link), active ones first, each with its id, its kind and an arrow for its direction (`this item depends_on → issue-3` for a link from this item, `← issue-9 duplicate_of this item` for a link to it), and ended ones after them, marked with who ended them and when; then, oldest first, the questions open in those runs or their sub-runs and the asks open on the item, and the answers recorded in them (attention answers and gate decisions, with the run, node, time and surface) together with the item's [rulings](#workflow-rule) (text, time, surface, who when they said, and when it was withdrawn). A sub-run is not listed as a run; its question or answer names its own run id, and `workflow get` on the parent shows it. The read reports recorded facts only; it computes no stage for the item. A start's count ahead is queue order, not a promise: a start whose checkout or item is held is passed over. It needs a registered project.
 
 While the [install hold](#hold) is set, the waiting section says so and lists first the item's trigger starts that the hold keeps before they are prepared, each with its receipt, binding, workflow and when it was received.
 
-`--json` prints `{ item, runs, queued, skipped, hold, held, questions, answers, links, merged, degraded }`: `hold` is the install hold (`{ setBy, setAt }`) or null, and `held` lists the item's held trigger starts as `{ receiptId, bindingId, workflow, receivedAt }`, empty while no hold is set; `item` is `{ id, projectKey, key }`; each run is `{ id, workflow, status, outcome, startedAt, completedAt, cause, awaitingExecution, heldBehind, operatorPause, spend }`, where `spend` is `{ usd, inputTokens, outputTokens }` as recorded on the run, each null when the run recorded none, and `operatorPause` is null, or `{ state, requested, pausedAt }` for a [pause](#workflow-pause): `state` is `requested` while the run finishes its running nodes and `paused` once it stopped, `requested` is `{ at, via, by, fromRun }`; each queued start is `{ requestId, workflow, resource, hostId, queuedAt, ahead, heldBehind }`, where `ahead` is read when the item is read and `workflow` is null when the stored launch does not read; each skipped start is `{ requestId, workflow, resource, heldBehind }`. `heldBehind` is null, or the run of the same workflow on the item that the start waits behind, was skipped for, or was refused for (a cancelled `--no-wait` start keeps it after that run ends): `{ runId, workflow, status, owner }`, where `owner` is what this process observes about that run's execution owner while it is running (`reachable`, `unreachable` when it is gone and only `workflow resume` or `workflow abandon` moves it, or `unknown`), and null otherwise. A queued start with a null `heldBehind` waits for capacity or its checkout; each question is the attention queue item `workflow attention --json` lists; each answer has `kind` `attention` (with `answer`, `by`, `fromRun`) or `gate` (with `decision`, and `text` for its comment or rejection reason), and `runId`, `node`, `occurrence`, `at`, `via`, null where the row does not record them; or `kind` `ruling`, with `id`, `text`, `at`, `via`, `by`, `fromRun` and `withdrawn` (null, or `{ at, via, by, fromRun }`), and no run. Each link is `{ id, kind, direction, other, at, via, by, fromRun, ended }` in recording order: `direction` is `outgoing` when this item is the one that depends on, is part of, or is a duplicate of `other`, and `incoming` when `other` points at this item; `other` is `{ id, projectKey, key }`; `ended` is null while the link is active, or `{ at, via, by, fromRun }`. An [ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) a completed run left reads as `kind` `ask`, with its `ref`, the `question` it asked, `answer` (null for a withdrawal), `chosen` (the chosen option's `id` and what it `does`, or null), `withdrawn`, `by` and `fromRun`, and `runId` naming the run that left it; `kind` `asks_settled` records that the last open ask of that run's set closed, with `answered` and `withdrawn` counts, at the time of that close; a set with an ask row that could not be read does not settle, and `degraded` names its run. Both are read from the item's asks, so they stay after the run that left them is deleted. Open asks on the item are among its questions. `merged` is the merge [recorded on the item](#workflow-merged), `{ change, commit, at, recordedAt, via, fromRun }`, or null. `degraded` names each part that could not be read: a run in the item's tree, one of its own runs or a paused child (`reason: "run_unreadable"`, `runId`), a ruling (`reason: "ruling_unreadable"`, `rulingId`), a link (`reason: "link_unreadable"`, `linkId`), or the merge (`reason: "merge_unreadable"`, `itemId`); the rest of the item still reads. An item named with no run yet reads with empty sections but for its queued and skipped starts, rulings and links; a key nothing has named exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "item": "<key>" }`.
+`--json` prints `{ item, runs, queued, skipped, hold, held, questions, answers, links, merged, landing, degraded }`: `hold` is the install hold (`{ setBy, setAt }`) or null, and `held` lists the item's held trigger starts as `{ receiptId, bindingId, workflow, receivedAt }`, empty while no hold is set; `item` is `{ id, projectKey, key }`; each run is `{ id, workflow, status, outcome, startedAt, completedAt, cause, awaitingExecution, heldBehind, operatorPause, spend }`, where `spend` is `{ usd, inputTokens, outputTokens }` as recorded on the run, each null when the run recorded none, and `operatorPause` is null, or `{ state, requested, pausedAt }` for a [pause](#workflow-pause): `state` is `requested` while the run finishes its running nodes and `paused` once it stopped, `requested` is `{ at, via, by, fromRun }`; each queued start is `{ requestId, workflow, resource, hostId, queuedAt, ahead, heldBehind }`, where `ahead` is read when the item is read and `workflow` is null when the stored launch does not read; each skipped start is `{ requestId, workflow, resource, heldBehind }`. `heldBehind` is null, or the run of the same workflow on the item that the start waits behind, was skipped for, or was refused for (a cancelled `--no-wait` start keeps it after that run ends): `{ runId, workflow, status, owner }`, where `owner` is what this process observes about that run's execution owner while it is running (`reachable`, `unreachable` when it is gone and only `workflow resume` or `workflow abandon` moves it, or `unknown`), and null otherwise. A queued start with a null `heldBehind` waits for capacity or its checkout; each question is the attention queue item `workflow attention --json` lists; each answer has `kind` `attention` (with `answer`, `by`, `fromRun`) or `gate` (with `decision`, and `text` for its comment or rejection reason), and `runId`, `node`, `occurrence`, `at`, `via`, null where the row does not record them; or `kind` `ruling`, with `id`, `text`, `at`, `via`, `by`, `fromRun` and `withdrawn` (null, or `{ at, via, by, fromRun }`), and no run. Each link is `{ id, kind, direction, other, at, via, by, fromRun, ended }` in recording order: `direction` is `outgoing` when this item is the one that depends on, is part of, or is a duplicate of `other`, and `incoming` when `other` points at this item; `other` is `{ id, projectKey, key }`; `ended` is null while the link is active, or `{ at, via, by, fromRun }`. An [ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) a completed run left reads as `kind` `ask`, with its `ref`, the `question` it asked, `answer` (null for a withdrawal), `chosen` (the chosen option's `id` and what it `does`, or null), `withdrawn`, `by` and `fromRun`, and `runId` naming the run that left it; `kind` `asks_settled` records that the last open ask of that run's set closed, with `answered` and `withdrawn` counts, at the time of that close; a set with an ask row that could not be read does not settle, and `degraded` names its run. Both are read from the item's asks, so they stay after the run that left them is deleted. Open asks on the item are among its questions. `merged` is the merge [recorded on the item](#workflow-merged), `{ change, commit, at, recordedAt, via, fromRun }`, or null. `landing` is the branch a fresh run on the item is cut from and proposes against, `{ branch, from }`, where `from` is `{ kind: "own" }` for the item's own [landing branch](#workflow-landing) or `{ kind: "part_of", item }` for that of the nearest item it is part of; null when neither records one. The read does not check that the branch is on the remote; a run does when it starts. `degraded` names each part that could not be read: a run in the item's tree, one of its own runs or a paused child (`reason: "run_unreadable"`, `runId`), a ruling (`reason: "ruling_unreadable"`, `rulingId`), a link (`reason: "link_unreadable"`, `linkId`), the merge (`reason: "merge_unreadable"`, `itemId`), or where the item lands (`reason: "landing_unresolved"`, `message`: a landing or link row on the way could not be read, or two items it is part of at the same distance land on different branches; a run on the item is refused for the same reason); the rest of the item still reads. An item named with no run yet reads with empty sections but for its queued and skipped starts, rulings and links; a key nothing has named exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "item": "<key>" }`.
 
 `--item-of <run-id>` reads the item a run belongs to, the item of its top-level run when it is a `workflow:` sub-run, in whichever project the run is. It prints the same read as `--item`. A run on no item, or one the store does not know, exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "run": "<run-id>" }`. It is the host command behind the `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to) export.
 
@@ -1374,11 +1383,12 @@ HTTP; see the [API reference](/reference/api/).
 ### `workflow link`
 
 Record a link from one item of the current project to another, or end one. A link is a
-directed relation the engine stores and reports; it gives the kinds no meaning, and ranks,
-holds or starts nothing because of a link by itself. A trigger file can start a stage on an
-item when the items linked to it end a workflow; see [start a stage on an item when the items
+directed relation the engine stores and reports; it ranks, holds or starts nothing because
+of a link by itself. A trigger file can start a stage on an item when the items linked to it
+end a workflow; see [start a stage on an item when the items
 it links to end](/guides/workflow-triggers/#start-a-stage-on-an-item-when-the-items-it-links-to-end).
-Both items' reads show it
+An active `part_of` gives an item that records no [landing branch](#workflow-landing) the
+branch of the item it is part of. Both items' reads show it
 ([`runs --item`](#workflow-runs)), and a run on either item can read it through
 [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to).
 
@@ -1473,6 +1483,41 @@ node, it records the node's run and node as `fromRun`. It exits 1 for a key no r
 has named in the project (`error: "not_found"`: a merge never creates an item), a malformed
 flag, or a directory with no registered project. Every later item read carries the fact as
 `merged`. It needs the database store.
+
+### `workflow landing`
+
+Record the branch an item's change lands on. Every fresh run on the item is then cut from
+that branch and proposes against it (`$BASE_BRANCH`), as [`--base`](#base-branch-precedence)
+makes one run do, and so is every fresh run on an item that is [`part_of`](#workflow-link)
+it and records no branch of its own. A work order made of several items records its branch
+once, links its members to it, and their changes land together on that branch.
+
+```bash
+archon workflow landing --item WO-12 --branch feat/checkout-redesign
+archon workflow link --item issue-42 --kind part_of --to WO-12
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--item <key>` | The item, in the project the working directory belongs to. A key nothing has named yet writes the item |
+| `--branch <name>` | The branch it lands on; must be a valid branch name |
+| `--json` | Print `{ branch, recordedAt, fromRun }`, or `{ ok: false, error }` |
+
+Recording again replaces the branch. A run already started keeps the base it recorded.
+Recording does not check the remote, so a branch may be recorded before it is pushed. A run
+checks it when it starts: a branch the project's remote (`worktree.remote`, else the
+automatically selected one) does not have refuses the run before its first node, naming the
+branch, the remote and where the branch came from. It never falls back to the base branch.
+
+The branch a run takes is found in this order: `--base` on the dispatch; the item's own
+branch; the branch of the item it is `part_of` through an active link, nearest first (a
+member of a member of `WO-12` lands on `WO-12`'s branch when the member between records none).
+Two items at the same distance with different branches refuse the run, naming both; record
+the branch on the item itself to settle it. Then come the existing sources: a trigger
+binding's `launch.isolation.baseOverride`, `worktree.baseBranch`, the codebase default and
+the remote's HEAD. Called from inside a workflow node, it records the node's run and node as
+`fromRun`. It exits 1 for an invalid branch name or a directory with no registered project.
+`workflow runs --item <key>` shows the branch and where it came from. It needs the database store.
 
 ### `workflow attention label`
 
@@ -2847,7 +2892,9 @@ The merge of an item's change is the one fact about it that comes from outside t
 
 A ruling is a decision recorded on the item without a question having been asked ([`workflow rule`](#workflow-rule)). It is a fact about the item, like an answer, and needs no run: recording one on a key nothing has named writes the item. Withdrawing a ruling keeps the record and marks it withdrawn. A workflow reads its item's answers and rulings through `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to); the engine passes them to no node on its own.
 
-A link is a directed relation from one item to another: `depends_on`, `part_of` or `duplicate_of` ([`workflow link`](#workflow-link)). Only accepted links are recorded. Both items' reads show it, with its direction. Ending a link keeps the record with who ended it and when. The engine stores and reports links and acts on none of them; what a link means for an item is for a reading node to judge.
+The branch an item's change lands on is a fact of the item too, recorded with [`workflow landing`](#workflow-landing). Every fresh run on the item, and on an item `part_of` it that records none, is cut from that branch and proposes against it.
+
+A link is a directed relation from one item to another: `depends_on`, `part_of` or `duplicate_of` ([`workflow link`](#workflow-link)). Only accepted links are recorded. Both items' reads show it, with its direction. Ending a link keeps the record with who ended it and when. The engine acts on one kind only: an active `part_of` carries the [landing branch](#workflow-landing) of the item it points at to an item that records none. Otherwise what a link means for an item is for a reading node to judge.
 
 Items need the database store and a registered project. With `store: files`, or in a directory with no project, naming, reading or listing an item fails; it is never read as empty.
 

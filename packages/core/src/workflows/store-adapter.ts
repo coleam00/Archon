@@ -22,6 +22,7 @@ import * as itemsDb from '../db/items';
 import * as itemLinksDb from '../db/item-links';
 import * as itemRulingsDb from '../db/item-rulings';
 import * as itemMergesDb from '../db/item-merges';
+import * as itemLandingsDb from '../db/item-landings';
 import * as itemAsksDb from '../db/item-asks';
 import * as itemWaitsDb from '../db/item-waits';
 import * as workflowDb from '../db/workflows';
@@ -212,6 +213,8 @@ export function createWorkflowStore(): IWorkflowStore {
     listItemsInWindow: itemsDb.listItemsInWindow,
     getItemMerge: itemMergesDb.getItemMerge,
     recordItemMerge: itemMergesDb.recordItemMerge,
+    getItemLanding: itemLandingsDb.getItemLanding,
+    recordItemLanding: itemLandingsDb.recordItemLanding,
     listItemLinks: itemLinksDb.listItemLinks,
     recordItemLink: itemLinksDb.recordItemLink,
     endItemLink: itemLinksDb.endItemLink,
