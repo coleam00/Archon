@@ -2159,6 +2159,15 @@ declare module 'archon:script' {
       readonly workflow: string | null;
       readonly receivedAt: string;
     }>;
+    readonly waits: ReadonlyArray<{
+      readonly event: string;
+      readonly about: string;
+      readonly workflow: string;
+      readonly runId: string;
+      readonly waitingSince: string;
+      readonly deadline: string;
+      readonly overdue: boolean;
+    }>;
     readonly questions: ReadonlyArray<{
       readonly kind: 'attention';
       readonly ref: string;
@@ -2354,6 +2363,31 @@ declare module 'archon:script' {
         };
       };
       readonly observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+    } | {
+      readonly kind: 'overdue_wait';
+      readonly ref: string;
+      readonly project: {
+        readonly key: string;
+        readonly codebaseId: string | null;
+        readonly name: string;
+      } | null;
+      readonly item?: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      };
+      readonly revision: number;
+      readonly labels: Readonly<Record<string, string>>;
+      readonly pausedAt: string | null;
+      readonly waitingIn: {
+        readonly runId: string;
+        readonly workflow: string;
+      };
+      readonly waits: ReadonlyArray<{
+        readonly event: string;
+        readonly about: string;
+      }>;
+      readonly deadline: string;
     }>;
     readonly answers: ReadonlyArray<{
       readonly kind: 'attention';
@@ -2645,6 +2679,15 @@ declare module 'archon:script' {
         readonly workflow: string | null;
         readonly receivedAt: string;
       }>;
+      readonly waits: ReadonlyArray<{
+        readonly event: string;
+        readonly about: string;
+        readonly workflow: string;
+        readonly runId: string;
+        readonly waitingSince: string;
+        readonly deadline: string;
+        readonly overdue: boolean;
+      }>;
       readonly questions: ReadonlyArray<{
         readonly kind: 'attention';
         readonly ref: string;
@@ -2840,6 +2883,31 @@ declare module 'archon:script' {
           };
         };
         readonly observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+      } | {
+        readonly kind: 'overdue_wait';
+        readonly ref: string;
+        readonly project: {
+          readonly key: string;
+          readonly codebaseId: string | null;
+          readonly name: string;
+        } | null;
+        readonly item?: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        };
+        readonly revision: number;
+        readonly labels: Readonly<Record<string, string>>;
+        readonly pausedAt: string | null;
+        readonly waitingIn: {
+          readonly runId: string;
+          readonly workflow: string;
+        };
+        readonly waits: ReadonlyArray<{
+          readonly event: string;
+          readonly about: string;
+        }>;
+        readonly deadline: string;
       }>;
       readonly answers: ReadonlyArray<{
         readonly kind: 'attention';

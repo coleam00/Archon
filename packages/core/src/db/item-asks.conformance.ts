@@ -7,7 +7,7 @@
 import { expect, test } from 'bun:test';
 import type { ItemAsk } from '@archon/workflows/schemas/item-ask';
 import type { IWorkflowStore } from '@archon/workflows/store';
-import { openAskItems } from '@archon/workflows/attention-queue';
+import { openAskItems } from '@archon/workflows/queue-items-without-run';
 import { readItemOfRun } from '@archon/workflows/item-read';
 import { watchAttentionQueue, type AttentionStreamLine } from '@archon/workflows/attention-watch';
 import type { WorkflowStoreHarness } from '@archon/workflows/store-conformance';

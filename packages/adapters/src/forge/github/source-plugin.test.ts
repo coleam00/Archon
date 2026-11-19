@@ -371,4 +371,108 @@ describe('GitHub source plugin', () => {
       bindings: [{ bindingId: 'wake', eventInputs: { number: 8, author: 'reporter' } }],
     });
   });
+
+  test('a binding with wake hands the engine the value its wait is matched on', async () => {
+    const recorded = recorder();
+    const github = await adapter(
+      config([
+        binding({
+          bindingId: 'reviewed',
+          selector: {
+            kind: 'review.changed',
+            actions: ['submitted', 'dismissed'],
+            repository: { host: 'github.com', path: 'owner/repo' },
+          },
+          inputMapping: { state: { source: 'field', field: 'review.state' } },
+          item: { field: 'subject.number', prefix: 'pr-' },
+          wake: {
+            workflow: 'host',
+            wait: 'review',
+            about: { field: 'review.commit' },
+            input: 'waited',
+          },
+        }),
+      ]),
+      recorded.intake
+    );
+    const review = (commit: string | null) =>
+      JSON.stringify({
+        action: 'submitted',
+        repository: { full_name: 'owner/repo' },
+        sender: { id: 5, login: 'reviewer' },
+        pull_request: { number: 7, head: { sha: commit } },
+        review: {
+          id: 300,
+          user: { id: 5, login: 'reviewer' },
+          state: 'approved',
+          commit_id: commit,
+          body: 'looks good',
+          submitted_at: '2026-09-22T10:00:00Z',
+        },
+      });
+    const reviewed = review('c0ffee');
+    await github.receiveWebhook(reviewed, sign(reviewed), 'delivery-review', 'pull_request_review');
+    expect(recorded.calls[0]).toMatchObject({
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: 'reviewed',
+          eventInputs: { state: 'approved' },
+          itemKey: 'pr-7',
+          wake: { workflowName: 'host', wait: 'review', about: 'c0ffee', input: 'waited' },
+        },
+      ],
+    });
+    // The review text is not part of anything the plugin hands on.
+    expect(JSON.stringify(recorded.calls[0])).not.toContain('looks good');
+
+    const unplaced = review(null);
+    await github.receiveWebhook(unplaced, sign(unplaced), 'delivery-none', 'pull_request_review');
+    expect(recorded.calls[1]).toMatchObject({
+      outcome: 'unmatched',
+      evaluatedBindings: [
+        {
+          bindingId: 'reviewed',
+          status: 'rejected',
+          reason: "Wake: field 'review.commit' is missing",
+        },
+      ],
+    });
+  });
+
+  test('a binding with wake maps the item its event names and reads a field its event has', () => {
+    const wake = { workflow: 'host', wait: 'checks', about: { field: 'check.revision' as const } };
+    // A review names its pull request: without the item, a review of another pull request at
+    // the same commit could wake this one.
+    const review = {
+      selector: {
+        kind: 'review.changed',
+        actions: ['submitted'],
+        repository: { host: 'github.com', path: 'owner/repo' },
+      },
+      inputMapping: {},
+      wake: { workflow: 'host', wait: 'review', about: { field: 'review.commit' } },
+    };
+    expect(
+      githubWebhookSourceConfigSchema.safeParse({
+        version: 1,
+        webhookSecretEnv: 'ARCHON_SOURCE_PLUGIN_TEST_SECRET',
+        host: 'github.com',
+        bindings: [binding(review)],
+      }).success
+    ).toBe(false);
+    expect(
+      config([binding({ ...review, item: { field: 'subject.number', prefix: 'pr-' } })]).bindings[0]
+        ?.item
+    ).toEqual({ field: 'subject.number', prefix: 'pr-' });
+    expect(
+      githubWebhookSourceConfigSchema.safeParse({
+        version: 1,
+        webhookSecretEnv: 'ARCHON_SOURCE_PLUGIN_TEST_SECRET',
+        host: 'github.com',
+        bindings: [binding({ wake: { ...wake, about: { field: 'review.commit' } } })],
+      }).success
+    ).toBe(false);
+    expect(config([binding({ wake })]).bindings[0]?.wake).toEqual(wake);
+  });
 });

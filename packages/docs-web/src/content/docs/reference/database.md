@@ -348,6 +348,10 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Opened in the write that completes the run; `run_id` is the run that left the ask and names its set, `workflow_name` the run's workflow, `position` its place in the set and `ask` the JSON the run left
   - Closes once: `closed_as` is `answered`, `withdrawn` or `replaced`, NULL while open. An answer or withdrawal sets `answer` (answers only), `closed_at`, `closed_via`, `closed_by_declared` or `closed_by_user_id`, and `closed_from_run_id` and `closed_from_node_path` (unverified); a replacement sets `closed_at` and `replaced_by_run_id`
   - `run_id` has no foreign key, so run cleanup keeps the record: the item read takes its asks, their answers and its settled sets from these rows. `ask` and `answer` are read tolerantly, since more than one binary reads them. The `ask_answered`, `ask_withdrawn` and `asks_settled` events on the run that left the set notify readers of the run's event tail, and go with that run
+- **`remote_agent_item_waits`** - What a completed run said its item waits for outside Archon ([`returns.waits`](/reference/workflow-language/#waits-what-an-item-waits-for-outside-archon))
+  - Opened in the write that completes the run; `run_id` is the run that left the wait and names its set, `workflow_name` the run's workflow, `position` its place in the set, `event` and `about` what it waits for, and `deadline_at` when it falls due (`created_at` plus its `within_minutes`)
+  - A set closes once, all its rows together: `closed_as` is `met`, `replaced` or `withdrawn`, NULL while open, with `closed_at`. A met set records the receipt and binding the event started in `met_by_receipt_id` and `met_by_binding_id`, written in the transaction that records the event; a replaced one `replaced_by_run_id`
+  - Nothing reads `deadline_at` but the attention queue, which lists an open set past it as overdue. `run_id` has no foreign key, as for asks
 
 - **`remote_agent_start_receipt_bindings`** - Per-binding preparation state for a source receipt
   - Keyed by `(receipt_id, binding_id)`; deleted with the owning receipt

@@ -900,6 +900,30 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_asks (
   replaced_by_run_id TEXT
 );
 
+-- Waits: what a completed run said its item now waits for outside Archon (returns.waits).
+-- A row opens in the write that completes the run and closes once: met by an accepted
+-- event (met_by_* name the receipt binding it started, written in the same transaction),
+-- replaced by a later completed run of the same workflow on the same item, or withdrawn.
+-- The waits one run left are a set and close together. Nothing fires at deadline_at: an
+-- open wait past it is listed as overdue. run_id has no foreign key, like an ask's.
+-- closed_as is checked in code, not by a constraint, as on an ask.
+CREATE TABLE IF NOT EXISTS remote_agent_item_waits (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  item_id UUID NOT NULL REFERENCES remote_agent_items(id),
+  run_id TEXT NOT NULL,
+  workflow_name TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  event TEXT NOT NULL,
+  about TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  deadline_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  closed_as TEXT,
+  closed_at TIMESTAMP WITH TIME ZONE,
+  met_by_receipt_id TEXT,
+  met_by_binding_id TEXT,
+  replaced_by_run_id TEXT
+);
+
 -- The surface a state write outside a run came through (cli, api, ...). Nullable:
 -- rows written before it existed came through the CLI.
 ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS writer_via TEXT;
@@ -955,6 +979,11 @@ CREATE INDEX IF NOT EXISTS idx_item_asks_open
   ON remote_agent_item_asks(item_id, workflow_name) WHERE closed_as IS NULL;
 CREATE INDEX IF NOT EXISTS idx_item_asks_run_id
   ON remote_agent_item_asks(run_id);
+-- Item waits
+CREATE INDEX IF NOT EXISTS idx_item_waits_open
+  ON remote_agent_item_waits(workflow_name, event, about) WHERE closed_as IS NULL;
+CREATE INDEX IF NOT EXISTS idx_item_waits_run_id
+  ON remote_agent_item_waits(run_id);
 
 -- Codebase env vars
 CREATE INDEX IF NOT EXISTS idx_codebase_env_vars_codebase_id

@@ -11,7 +11,7 @@ import { executeWorkflow } from './executor';
 import { hydrateResumableRun } from './run-resume';
 import { discoverWorkflows } from './workflow-discovery';
 import { createFileWorkflowStore } from './file-store';
-import { isHeldByRun, listAttentionQueue } from './attention-queue';
+import { heldRunOf, isHeldByRun, listAttentionQueue } from './attention-queue';
 import { runAttention } from './schemas/workflow-run';
 
 const roots = trackTempRoots();
@@ -220,5 +220,5 @@ test('all opens every question even when the list exceeds the default window', a
   );
   expect(degraded).toEqual([]);
   expect(items).toHaveLength(questions.length);
-  expect(items.map(item => item.run?.fanOut?.index).sort()).toEqual([0, 1, 2, 3, 4, 5]);
+  expect(items.map(item => heldRunOf(item)?.fanOut?.index).sort()).toEqual([0, 1, 2, 3, 4, 5]);
 });

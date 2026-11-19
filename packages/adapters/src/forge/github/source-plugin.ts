@@ -12,6 +12,7 @@ import type { JsonValue } from '@archon/workflows/output-ref';
 import {
   mappedItemKey,
   resourceStartBindingIntentSchema,
+  type BindingWake,
   type ResourceStartBindingIntent,
   type SourceReceiptInput,
 } from '@archon/workflows/schemas/resource-start';
@@ -26,6 +27,28 @@ type EvaluatedBinding = NonNullable<
   Extract<WebhookSourceResult, { status: 'received' }>['acceptance']['evaluatedBindings']
 >[number];
 
+/**
+ * The wake a binding hands the engine: the value of its `about` field, which the engine
+ * matches against the open waits. The plugin reads the value and compares nothing.
+ */
+function wakeOf(
+  wake: NonNullable<z.infer<typeof githubSourceBindingSchema>['wake']>,
+  event: ForgeEvent
+): { wake: BindingWake } | { reason: string } {
+  const about = readForgeEventField(event, wake.about.field);
+  if (typeof about === 'string' && about !== '')
+    return {
+      wake: {
+        workflowName: wake.workflow,
+        wait: wake.wait,
+        about,
+        ...(wake.input === undefined ? {} : { input: wake.input }),
+      },
+    };
+  const state = about === undefined || about === null || about === '' ? 'missing' : 'not text';
+  return { reason: `Wake: field '${wake.about.field}' is ${state}` };
+}
+
 /** The start one configured binding makes of `event`, or why it makes none. */
 function evaluateBinding(
   binding: z.infer<typeof githubSourceBindingSchema>,
@@ -35,12 +58,14 @@ function evaluateBinding(
   const skipped = (status: EvaluatedBinding['status'], reason: string) => ({
     skipped: { bindingId: binding.bindingId, bindingRevision, status, reason },
   });
-  const { selector, inputMapping, item, ...intent } = binding;
+  const { selector, inputMapping, item, wake, ...intent } = binding;
   if (!matchForgeEvent(selector, event)) return skipped('unmatched', 'selector_did_not_match');
   const mapped = mapForgeInputs(inputMapping, event);
   if (!mapped.ok) return skipped('rejected', `Input '${mapped.input}': ${mapped.reason}`);
   const itemKey = item ? mappedItemKey(item, readForgeEventField(event, item.field)) : undefined;
   if (itemKey && !itemKey.ok) return skipped('rejected', `Item: ${itemKey.reason}`);
+  const woken = wake ? wakeOf(wake, event) : undefined;
+  if (woken && 'reason' in woken) return skipped('rejected', woken.reason);
   // Field mappings carry event content; literal mappings are the operator's own values.
   const literalInputs: Record<string, JsonValue> = {};
   const eventInputs: Record<string, JsonValue> = {};
@@ -53,6 +78,7 @@ function evaluateBinding(
       launch: { ...binding.launch, inputs: { ...binding.launch.inputs, ...literalInputs } },
       eventInputs,
       ...(itemKey ? { itemKey: itemKey.key } : {}),
+      ...(woken ? { wake: woken.wake } : {}),
     }),
   };
 }

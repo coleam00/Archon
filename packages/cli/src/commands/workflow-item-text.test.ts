@@ -35,6 +35,7 @@ const read: ItemRead = {
   skipped: [],
   hold: null,
   held: [],
+  waits: [],
   questions: [
     {
       kind: 'awaiting_response',

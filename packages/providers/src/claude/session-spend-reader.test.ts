@@ -15,10 +15,10 @@ import {
 } from './session-spend-reader';
 
 const track = trackTempRoots();
-const sessionId = '55a9a375-ec0a-40b3-a92d-177efa7a763b';
-// Captured from a real SDK error_max_turns turn; error and graceful abort durability
-// were checked on this version. An upgrade must recapture this private SDK format.
-const capturedSdkVersion = '0.3.302';
+const sessionId = 'a50a2225-43f2-4295-914f-a6f3c1c9d2e9';
+// Captured from a real SDK error_max_turns turn on this version, which writes the record
+// on an error result. An upgrade must recapture this private SDK format.
+const capturedSdkVersion = '0.3.327';
 const fixture = readFileSync(
   join(import.meta.dir, `fixtures/cost-state.sdk-${capturedSdkVersion}.jsonl`),
   'utf8'
@@ -27,19 +27,13 @@ const record = JSON.parse(fixture) as Record<string, unknown>;
 const known = {
   kind: 'known' as const,
   spend: {
-    costUsd: 0.0024422000000000003,
+    costUsd: 0.0033717,
     modelUsage: {
       'claude-haiku-5-5': {
-        inputTokens: 1193,
-        outputTokens: 17,
+        inputTokens: 1180,
+        outputTokens: 111,
         cacheReadInputTokens: 0,
-        cacheCreationInputTokens: 0,
-      },
-      'claude-haiku-4-5': {
-        inputTokens: 10,
-        outputTokens: 142,
-        cacheReadInputTokens: 15944,
-        cacheCreationInputTokens: 0,
+        cacheCreationInputTokens: 15991,
       },
     },
   },
@@ -72,7 +66,7 @@ test('old output-only records remain usable for cost and model selection', () =>
     )
   ).toEqual({
     kind: 'known',
-    spend: { costUsd: 0.0024422000000000003, modelUsage: { main: { outputTokens: 280 } } },
+    spend: { costUsd: known.spend.costUsd, modelUsage: { main: { outputTokens: 280 } } },
   });
 });
 
@@ -112,7 +106,7 @@ test.each([
 test('an empty model record is valid, while a missing cost record is unknown', () => {
   expect(parseSessionSpend(JSON.stringify({ ...record, modelUsage: {} }), sessionId)).toEqual({
     kind: 'known',
-    spend: { costUsd: 0.0024422000000000003, modelUsage: {} },
+    spend: { costUsd: known.spend.costUsd, modelUsage: {} },
   });
   expect(parseSessionSpend('{"type":"user"}\n', sessionId)).toEqual({ kind: 'unknown' });
 });

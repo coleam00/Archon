@@ -147,8 +147,8 @@ export function validateExecInputTargets(
   const errors: string[] = [];
   const warnings: string[] = [];
   // A pack setting reaches every node of the pack's workflows as an input when the
-  // workflow runs directly. Included, the block reads only what its includer passes:
-  // `findUnpassedPackSettingReads` checks that at include expansion.
+  // workflow runs directly. Included from another pack, the block reads only what its
+  // includer passes: `findUnpassedPackSettingReads` checks that at include expansion.
   const declaredInputs = [
     ...new Set([
       ...Object.keys(workflow.inputs ?? {}),
@@ -198,9 +198,11 @@ export interface UnpassedPackSettingRead {
 /**
  * Raw `INPUTS_<NAME>` reads, in an included block's own nodes, of the block's pack
  * settings that neither the includer (`passed`) nor the node's own `with:` supplies.
- * At run time such a read gets the INCLUDING run's value, so it is refused at load like
- * the `$INPUTS.<name>` form. Nodes that arrived through a deeper include carry composed
- * metadata and were checked against their own file when that include was expanded.
+ * At run time such a read gets the INCLUDING run's value. Across packs that is the wrong
+ * pack's value, so it is refused at load like the `$INPUTS.<name>` form; from the same
+ * pack the read is forwarded instead (`include/inline.ts`). Nodes that arrived through a
+ * deeper include carry composed metadata and were checked against their own file when
+ * that include was expanded.
  * A named script with no source in `namedScripts` (a flat name discovery did not
  * resolve) cannot be read here and is not checked.
  */

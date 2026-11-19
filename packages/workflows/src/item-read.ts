@@ -272,6 +272,18 @@ export const itemAnswerKindSchema = z.enum({
  * depends on, is part of, or is a duplicate of `other`), `incoming` when `other` points at
  * this item. An ended link stays, with `ended` set; a link is active while `ended` is null.
  */
+/** An open wait on the item, as the item read lists it. */
+export const itemOpenWaitSchema = z.object({
+  event: z.string(),
+  about: z.string(),
+  workflow: z.string(),
+  runId: z.string(),
+  waitingSince: z.string().datetime(),
+  deadline: z.string().datetime(),
+  overdue: z.boolean(),
+});
+export type ItemOpenWait = z.infer<typeof itemOpenWaitSchema>;
+
 export const itemReadLinkSchema = z.object({
   id: z.string(),
   kind: itemLinkKindSchema,
@@ -299,7 +311,10 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * branch a fresh run on the item is cut from and proposes against, and where it came from:
  * the item's own record, or the nearest item it is `part_of`. Null when neither records
  * one, or when it cannot be resolved. The read does not check that the branch is on the
- * remote; a run does when it starts.
+ * remote; a run does when it starts. `waits` are what the item waits for outside Archon:
+ * the open waits completed runs left on it (`returns.waits`), each with when it opened and
+ * fell due, and `overdue` once that time has passed. An overdue set is also among
+ * `questions`.
  */
 export const itemReadSchema = z.object({
   item: workflowItemSchema,
@@ -308,6 +323,7 @@ export const itemReadSchema = z.object({
   skipped: z.array(itemSkippedStartSchema),
   hold: installHoldSchema.nullable(),
   held: z.array(itemHeldStartSchema),
+  waits: z.array(itemOpenWaitSchema),
   questions: z.array(attentionQueueItemSchema),
   answers: z.array(itemAnswerSchema),
   links: z.array(itemReadLinkSchema),
@@ -336,6 +352,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'getItemLanding'
       | 'listItemLinks'
       | 'listItemAsks'
+      | 'listOpenItemWaits'
       | 'getStartReceipt'
       | 'getResourceStartRequest'
       | 'listQueuedItemStarts'
@@ -736,6 +753,15 @@ export async function assembleItemRead(
     skipped,
     hold,
     held,
+    waits: (await source.store.listOpenItemWaits(found.item.id)).map(wait => ({
+      event: wait.event,
+      about: wait.about,
+      workflow: wait.workflowName,
+      runId: wait.runId,
+      waitingSince: wait.openedAt,
+      deadline: wait.deadlineAt,
+      overdue: Date.parse(wait.deadlineAt) <= Date.now(),
+    })),
     questions,
     answers,
     links: facts.links,

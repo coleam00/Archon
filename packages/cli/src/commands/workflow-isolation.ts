@@ -255,8 +255,7 @@ export async function resolveRunCodebase(
   /** Set only when THIS call registered a new folder project. */
   registeredFolder?: RegisteredFolder;
 }> {
-  cwd = await canonicalizeProjectPath(cwd);
-  const { codebase, repoRoot } = await findRunCodebase(host, cwd, options);
+  const { codebase, repoRoot, cwd: projectCwd } = await findLaunchCodebase(host, cwd, options);
   if (options.codebaseId && !codebase)
     throw new Error(`Project "${options.codebaseId}" no longer exists.`);
 
@@ -264,7 +263,23 @@ export async function resolveRunCodebase(
   assertRegistrationOptions(options, codebase, repoRoot);
 
   if (codebase || !(options.folder || repoRoot)) return { codebase };
-  return registerRunCodebase(host, cwd, options, repoRoot);
+  return registerRunCodebase(host, projectCwd, options, repoRoot);
+}
+
+/**
+ * The one answer to "which project is this start on": the project `--project` names,
+ * else the folder or repository of `cwd`. Read-only, so a lookup that must agree with
+ * the run's own project (the item a fresh start takes its config from) asks it here
+ * instead of resolving `cwd` a second way. `codebase` is null when nothing is registered
+ * yet; `repoRoot` and the canonical `cwd` are what registration needs after that.
+ */
+export async function findLaunchCodebase(
+  host: WorkflowHost,
+  cwd: string,
+  options: RunCodebaseOptions
+): Promise<{ codebase: Codebase | null; repoRoot: string | null; cwd: string }> {
+  const canonicalCwd = await canonicalizeProjectPath(cwd);
+  return { ...(await findRunCodebase(host, canonicalCwd, options)), cwd: canonicalCwd };
 }
 
 type RunCodebaseOptions = Pick<

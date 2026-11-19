@@ -199,6 +199,15 @@ function answerLine(answer: ItemAnswer): string {
   return `  ${minute(answer.at)}  ${answer.runId.slice(0, 8)}  ${answer.node ?? '(node not recorded)'}  ${answerText(answer)}${via}`;
 }
 
+/** What the item waits for outside Archon, each open wait with when it falls due. */
+function waitLines(read: ItemRead): string[] {
+  if (read.waits.length === 0) return ['  none'];
+  return read.waits.map(
+    wait =>
+      `  '${wait.event}' about ${wait.about}, since ${minute(wait.waitingSince)}, ${wait.overdue ? 'overdue since' : 'due'} ${minute(wait.deadline)} (left by ${wait.workflow} run ${wait.runId.slice(0, 8)})`
+  );
+}
+
 /** The facts under the item's name: its merge and the branch it lands on. */
 function itemFactLines(read: ItemRead): string[] {
   const lines: string[] = [];
@@ -230,6 +239,7 @@ export function itemReadLines(read: ItemRead): string[] {
     lines.push(
       `  ${String(links.length)} link(s) of this item could not be read: ${links.join(', ')}`
     );
+  lines.push('', 'Waiting for:', ...waitLines(read));
   lines.push('', 'Open questions:');
   if (read.questions.length === 0) lines.push('  none');
   for (const question of read.questions) lines.push(...attentionItemLines(question, 'brief'));

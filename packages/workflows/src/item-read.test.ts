@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
+import { heldRunOf } from './attention-queue';
 import type { ItemMerge } from './schemas/item-merge';
 import type { ItemLanding } from './schemas/item-landing';
 import type { StoredItemAsk } from './schemas/item-ask';
@@ -193,6 +194,7 @@ const source: ItemReadSource = {
     getCodebase: async () => null,
     getItem: async id => (id === item.id ? item : null),
     listItemAsks: async () => [],
+    listOpenItemWaits: async () => [],
     listItemRulings: async id => (id === item.id ? rulings : []),
     getItemMerge: async id => (id === item.id ? merge : null),
     getItemLanding: async id => (id === item.id ? landing : null),
@@ -320,7 +322,7 @@ describe('reading an item', () => {
     ]);
     // The children's questions are the item's, under their own run ids, oldest first; the
     // unrelated one is not.
-    expect(read?.questions.map(question => [question.kind, question.run?.id])).toEqual([
+    expect(read?.questions.map(question => [question.kind, heldRunOf(question)?.id])).toEqual([
       ['attention', 'sibling'],
       ['attention', 'child'],
     ]);
@@ -411,6 +413,7 @@ describe('reading an item', () => {
       skipped: [],
       hold: null,
       held: [],
+      waits: [],
       questions: [],
       answers: rulings,
       merged: merge,
@@ -530,7 +533,7 @@ describe('reading an item', () => {
     };
     const read = await readItem(broken, item.projectKey, item.key);
     expect(read?.runs.map(row => row.id)).toEqual(['first', 'second']);
-    expect(read?.questions.map(question => question.run?.id)).toEqual(['child']);
+    expect(read?.questions.map(question => heldRunOf(question)?.id)).toEqual(['child']);
     expect(read?.answers.map(answer => answer.kind !== 'ruling' && answer.runId)).toEqual([
       'first',
       'first',

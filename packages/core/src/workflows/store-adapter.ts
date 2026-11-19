@@ -24,8 +24,10 @@ import * as itemRulingsDb from '../db/item-rulings';
 import * as itemMergesDb from '../db/item-merges';
 import * as itemLandingsDb from '../db/item-landings';
 import * as itemAsksDb from '../db/item-asks';
+import * as itemWaitsDb from '../db/item-waits';
 import * as workflowDb from '../db/workflows';
 import * as resourceStarts from '../db/resource-starts';
+import { acceptStartReceipt } from '../db/start-receipt-writes';
 import * as installHold from '../db/install-hold';
 import { toHydratedTimestamp } from '../db/timestamps';
 import * as workflowEventDb from '../db/workflow-events';
@@ -183,7 +185,7 @@ export function createWorkflowStore(): IWorkflowStore {
     admitPendingRun: resourceStarts.admitPendingRun,
     drainResourceStarts: resourceStarts.drainResourceStarts,
     hasStartReceiptForDelivery: resourceStarts.hasStartReceiptForDelivery,
-    acceptStartReceipt: resourceStarts.acceptStartReceipt,
+    acceptStartReceipt: input => acceptStartReceipt(input, launchProjectKeyOf),
     getStartReceipt: resourceStarts.getStartReceipt,
     listStartReceipts: resourceStarts.listStartReceipts,
     listPendingStartBindings: resourceStarts.listPendingStartBindings,
@@ -223,6 +225,8 @@ export function createWorkflowStore(): IWorkflowStore {
       itemAsksDb.answerItemAsk(input, await asksSettledStarts(input.askId)),
     withdrawItemAsk: async input =>
       itemAsksDb.withdrawItemAsk(input, await asksSettledStarts(input.askId)),
+    listOpenItemWaits: itemWaitsDb.listOpenItemWaits,
+    withdrawItemWaits: itemWaitsDb.withdrawItemWaits,
     findAdoptingRuns: workflowDb.findAdoptingRuns,
     deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,
     getWorkflowEventHead: async () => sqlCursor(await workflowEventDb.getWorkflowEventHead()),
