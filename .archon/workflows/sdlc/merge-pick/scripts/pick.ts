@@ -11,7 +11,8 @@
  *
  * It starts every item the merge stage has (`mergeWaits`) except one whose ask is open,
  * which an answer starts, one the engine shows waiting for a check that is not overdue,
- * which the check starts, and one with a merge run already queued or running. Each start is a fire of the operator's merge-queue
+ * which the check starts, one with a merge run already queued or running, and one whose
+ * newest merge run failed, which the operator resumes or abandons. Each start is a fire of the operator's merge-queue
  * binding on the issue's item, so it runs under that binding's resource, one merge run
  * at a time. The delivery id names this run, so a retried node fires no start twice.
  *
@@ -27,9 +28,18 @@ import { itemKey, PICKUP_ORDER, read, sortCandidates } from '../../.shared/worki
 const STAGE = 'archon-merge-queue';
 
 /**
- * The items something already starts a merge run on: an open wait of the stage before its
- * deadline, which a check meets, a start of the stage still queued, or a run of it not yet
- * ended.
+ * The items this pass must not start: one something already starts a merge run on (an
+ * open wait of the stage before its deadline, which a check meets, a start of the stage
+ * still queued, or a run of it not yet ended), and one whose newest merge run failed.
+ *
+ * It pages every item with a run in the window on every pass, on purpose. The stage's
+ * binding is `overlap: queue`, so nothing refuses a second start of an item, and a
+ * `skip` binding could not stand in: admission sees neither an open wait nor a start
+ * queued behind another item. Without this check each pass would start duplicates.
+ *
+ * A failed run is not started again, such as one whose pull request cannot be read. It
+ * stays in `archon workflow runs --open`, and resuming or abandoning it is the
+ * operator's action; a run that then completes or is cancelled frees the item.
  */
 function alreadyHeld(): Set<string> {
   const keys = new Set<string>();
@@ -38,8 +48,9 @@ function alreadyHeld(): Set<string> {
     for (const entry of page.items) {
       const waits = entry.waits.some(wait => wait.workflow === STAGE && !wait.overdue);
       const queued = entry.queued.some(start => start.workflow === STAGE);
-      const live = entry.runs.some(run => run.workflow === STAGE && (run.status === 'pending' || run.status === 'running'));
-      if (waits || queued || live) keys.add(entry.item.key);
+      // Runs are listed in the order they started.
+      const newest = entry.runs.filter(run => run.workflow === STAGE).at(-1)?.status;
+      if (waits || queued || newest === 'pending' || newest === 'running' || newest === 'failed') keys.add(entry.item.key);
     }
     if (page.next === null) return keys;
     page = items({ after: page.next, limit: 100 });

@@ -13,7 +13,8 @@
  * red, at the commit the wait named), so the item waits again without the agent. `judge`:
  * the agent decides, on a snapshot of the pull request's gate facts.
  *
- * A read that fails refuses the run; the backstop starts the item again.
+ * A read that fails refuses the run. The backstop leaves an item whose newest run failed
+ * to the operator, who resumes or abandons that run.
  *
  * Bound inputs: INPUTS_WAITED, the wait a check met (a wake binding's `{ wait: true }`);
  * INPUTS_DECISIONS, the settled answers to the stage's ask, and INPUTS_ASKED, the result

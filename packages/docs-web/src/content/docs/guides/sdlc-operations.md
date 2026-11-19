@@ -238,7 +238,7 @@ The run reads the pull request's head, how many commits of the default branch it
 
 Only a review comment a listed maintainer wrote counts (`.archon/sdlc/policy/maintainers.json` on the default branch); verdicts from other authors are ignored. So the login that authors the pack's published reviews must be on the list, and anyone on it can publish a verdict that passes the gate. A pull request with two trusted review comments has no verdict.
 
-A failed read fails the run, and the item stays as it was. The [backstop](#the-stages-bindings) starts it again.
+A failed read fails the run, and the item stays as it was. The [backstop](#the-stages-bindings) does not start an item whose newest merge run failed: the run stays in `archon workflow runs --open`, and you resume it with `archon workflow resume <run-id>` or end it with `archon workflow abandon <run-id>`, after which the backstop starts the item again.
 
 ### How a run decides
 
@@ -282,7 +282,7 @@ A check at any other commit, such as an older head, meets neither and starts not
 
 A red default branch asks nobody. Nothing merges, the run's summary and a notice labelled `kind=base-red` carry the agent's diagnosis: the failing checks and what each points at, the pull requests merged since the branch was green, the one it suspects, and whether to rerun, revert or fix forward. It recommends a rerun by hand when no recent merge touched the red code: the forge's rerun acts only on a pull request, so the pack never reruns the default branch. A rerun of those jobs completes checks at the commit the items wait on, and wakes them. A fix that lands as a new commit names another commit, so the items wait for the backstop.
 
-Everything else a pull request can wait for has no forge event the pack binds. The backstop covers it: every 30 minutes `archon-merge-pick` starts a merge run on each item the stage has, except one whose ask is open, one waiting on a check that is not yet overdue, and one with a merge run already queued or running. That is how these get read:
+Everything else a pull request can wait for has no forge event the pack binds. The backstop covers it: every 30 minutes `archon-merge-pick` starts a merge run on each item the stage has, except one whose ask is open, one waiting on a check that is not yet overdue, one with a merge run already queued or running, and one whose newest merge run failed. That is how these get read:
 
 - a review thread resolved;
 - a draft marked ready;
@@ -290,7 +290,7 @@ Everything else a pull request can wait for has no forge event the pack binds. T
 - a new review verdict, which is a comment and not a forge review;
 - a validation recorded under `ci: none`;
 - a default branch fixed by a new commit;
-- a hand-off or a check event that was lost, and a failed run.
+- a hand-off or a check event that was lost.
 
 The backstop reads no pull request and runs no agent. Each run it starts does.
 

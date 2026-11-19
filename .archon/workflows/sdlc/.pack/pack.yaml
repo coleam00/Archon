@@ -294,7 +294,8 @@ bindings:
   # marked ready, the forge computing whether a pull request merges, a new review
   # verdict, a validation recorded under `ci: none`, a default branch fixed by a new
   # commit, and a start or a check event that was lost. Every 30 minutes it fires
-  # `merge-queue` for each waiting item that no open ask, wait or merge run holds.
+  # `merge-queue` for each waiting item that no open ask, wait or merge run holds, and whose
+  # newest merge run did not fail.
   merge-pick:
     workflow: archon-merge-pick
     resource: merge-pick

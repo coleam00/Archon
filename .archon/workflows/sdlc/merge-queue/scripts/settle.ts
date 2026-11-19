@@ -84,7 +84,12 @@ function message(error: unknown): string {
 const UNKNOWN_READS = 4;
 const UNKNOWN_PAUSE_MS = 5000;
 
-/** The pull request's facts, read again while the forge has not computed whether it merges. */
+/**
+ * The pull request's facts, read again while the forge has not computed whether it merges.
+ * The sleep is on purpose: the forge sends no event for "mergeability computed", and
+ * GitHub computes it lazily right after a push to either branch. Without this short
+ * re-read the item would wait for the 30 minute backstop.
+ */
 function readComputed(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrFacts {
   let facts = readPr(pr, maintainers);
   for (let reads = 1; reads < UNKNOWN_READS && facts.behind > 0 && facts.mergeable === 'unknown'; reads++) {
