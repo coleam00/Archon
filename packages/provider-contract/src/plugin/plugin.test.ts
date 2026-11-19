@@ -638,7 +638,16 @@ test('concurrent native tools remain scoped to their owning session', async () =
 });
 
 test('JSON Schema input and provider call identity cross the plugin wire unchanged', async () => {
-  const input = { count: 2.5, items: [{ id: 7 }] };
+  const reserved = Object.fromEntries([['__proto__', 7]]);
+  const input = { count: 2.5, items: [reserved] };
+  const schema = {
+    type: 'object',
+    properties: {
+      count: { type: 'number' },
+      items: { type: 'array', items: { type: 'object' }, default: [reserved] },
+    },
+    required: ['count', 'items'],
+  };
   const context = { providerCallId: 'call-7', providerCallScope: 'mcp-1' };
   let handled = 0;
   await withProvider(
@@ -646,9 +655,14 @@ test('JSON Schema input and provider call identity cross the plugin wire unchang
       async *sendQuery(prompt, _c, _r, options) {
         const tool = options?.nativeTools?.[0];
         if (!tool) throw new Error('Missing tool');
+        if (prompt !== 'invalid')
+          expect(JSON.stringify(tool.inputSchema)).toBe(JSON.stringify({ jsonSchema: schema }));
         yield {
           type: 'result',
-          text: await tool.handler(prompt === 'invalid' ? { count: 'wrong' } : input, context),
+          text: await tool.handler(
+            prompt === 'invalid' ? { count: 2.5, ...reserved } : input,
+            context
+          ),
         };
         yield { type: 'settled' };
       },
@@ -660,19 +674,10 @@ test('JSON Schema input and provider call identity cross the plugin wire unchang
             {
               name: 'lookup',
               description: 'lookup',
-              inputSchema: {
-                jsonSchema: {
-                  type: 'object',
-                  properties: {
-                    count: { type: 'number' },
-                    items: { type: 'array', items: { type: 'object' } },
-                  },
-                  required: ['count', 'items'],
-                },
-              },
+              inputSchema: { jsonSchema: schema },
               handler: async (actual, identity) => {
                 handled++;
-                expect(actual).toEqual(input);
+                expect(JSON.stringify(actual)).toBe(JSON.stringify(input));
                 expect(identity).toEqual(context);
                 return 'ok';
               },
@@ -692,6 +697,7 @@ test('JSON Schema input and provider call identity cross the plugin wire unchang
                     type: 'object',
                     properties: { count: { type: 'number' } },
                     required: ['count'],
+                    additionalProperties: false,
                   },
                 },
                 handler: async () => {

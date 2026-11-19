@@ -220,6 +220,14 @@ test('invalid tool schemas fail load and pack qualification leaves output types 
     },
   };
   expect(validateNodeOutputFormats([broken])).toContain('cannot be compiled');
+  expect(
+    validateNodeOutputFormats([
+      {
+        ...node,
+        tools: { lookup: { ...tool, output_schema: { ...tool.output_schema, $async: true } } },
+      },
+    ])
+  ).toContain('output_schema must be synchronous');
   const workflow = { name: 'tools', description: 'tools', nodes: [node] };
   qualifyWorkflowResources(workflow, { source: 'project', pack: 'checks', workflow: 'inspect' });
   expect(node.tools?.lookup.script).toContain('checks:inspect::lookup');
@@ -274,18 +282,18 @@ test('an unsettled provider with a pending write is cancelled and cannot complet
 });
 
 test('stop bounds a hung write, records unknown once, and fails instead of completing', async () => {
-  let rejectScript: ((error: Error) => void) | undefined;
-  const exec = spyOn(runControl, 'runSubprocessUntilRunStops').mockImplementation(
-    async () =>
-      new Promise<never>((_resolve, reject) => {
-        rejectScript = reject;
-      })
-  );
+  const started = Promise.withResolvers<void>();
+  const script = Promise.withResolvers<never>();
+  const exec = spyOn(runControl, 'runSubprocessUntilRunStops').mockImplementation(async () => {
+    started.resolve();
+    return script.promise;
+  });
   try {
     let work: Promise<string> | undefined;
     mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
       work = options?.nativeTools?.[0].handler(args);
       void work?.catch(() => undefined);
+      await started.promise;
       yield reply();
     });
     await run([agent(true)]);
@@ -296,7 +304,7 @@ test('stop bounds a hung write, records unknown once, and fails instead of compl
     });
     expect(events('script_tool_call')).toHaveLength(1);
     expect(events('script_tool_call')[0]?.data?.status).toBe('unknown');
-    rejectScript?.(Object.assign(new Error('late cancellation'), { cancelled: true }));
+    script.reject(Object.assign(new Error('late cancellation'), { cancelled: true }));
     await expect(work).rejects.toThrow('late cancellation');
     await Promise.resolve();
     expect(events('script_tool_call')).toHaveLength(1);
@@ -331,47 +339,128 @@ test('a certified null result stays null in the call event', async () => {
   if (!node.tools) throw new Error('Missing tool declaration');
   node.tools.lookup.output_schema = { type: 'null' };
   await writeFile(join(root, '.archon', 'scripts', 'lookup.ts'), 'console.log("null");');
+  let result: string | undefined;
   mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
-    expect(await options?.nativeTools?.[0].handler(args)).toBe('null');
+    result = await options?.nativeTools?.[0].handler(args);
     yield reply();
   });
   await run([node]);
+  expect(events('node_completed')).toHaveLength(1);
+  expect(result).toBe('null');
   expect(events('script_tool_call')[0]?.data?.output).toBeNull();
 });
 
-test('call events recursively redact protected values without changing the tool result', async () => {
-  const node = agent();
-  if (!node.tools) throw new Error('Missing tool declaration');
-  node.tools.lookup.output_schema = {
-    type: 'object',
-    properties: {
-      nested: {
-        type: 'object',
-        properties: {
-          secret: { type: 'string' },
-          count: { type: 'number' },
-          values: { type: 'array', items: { type: 'string' } },
+test.each([false, true])(
+  'redacts audit keys and values without changing stdin or the result (reverse: %s)',
+  async reverse => {
+    const node = agent();
+    if (!node.tools) throw new Error('Missing tool declaration');
+    node.tools.lookup.output_schema = {
+      type: 'object',
+      properties: {
+        nested: {
+          type: 'object',
+          properties: {
+            secret: { type: 'string' },
+            count: { type: 'number' },
+            values: { type: 'array', items: { type: 'string' } },
+            names: { type: 'object' },
+          },
         },
       },
-    },
-  };
-  await writeFile(
-    join(root, '.archon', 'scripts', 'lookup.ts'),
-    'const input=JSON.parse(await Bun.stdin.text()); console.log(JSON.stringify({nested:{secret:`prefix ${input.payload}`,count:7,values:[input.payload]}}));'
-  );
-  mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
-    const result = await options?.nativeTools?.[0].handler({
-      ...args,
-      payload: 'secret-value',
+    };
+    await writeFile(
+      join(root, '.archon', 'scripts', 'lookup.ts'),
+      'const input=JSON.parse(await Bun.stdin.text()); console.log(JSON.stringify({nested:{secret:`prefix ${input.payload}`,count:7,values:[input.payload],names:input.items[0].names}}));'
+    );
+    const names = reverse
+      ? {
+          '[REDACTED]#1': 4,
+          '[REDACTED]': 3,
+          'second-secret': 2,
+          'secret-value': 1,
+          ordinary: null,
+        }
+      : {
+          'secret-value': 1,
+          'second-secret': 2,
+          '[REDACTED]': 3,
+          '[REDACTED]#1': 4,
+          ordinary: null,
+        };
+    let result: string | undefined;
+    mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
+      result = await options?.nativeTools?.[0].handler({
+        ...args,
+        payload: 'secret-value',
+        items: [{ id: 7, names }],
+      });
+      yield reply();
     });
-    expect(result).toContain('secret-value');
+    await run([node], 'claude', ['secret-value', 'second-secret']);
+    expect(events('node_completed')).toHaveLength(1);
+    expect(result && JSON.parse(result)).toEqual({
+      nested: { secret: 'prefix secret-value', count: 7, values: ['secret-value'], names },
+    });
+    const redacted = {
+      '[REDACTED]': 3,
+      '[REDACTED]#1': 4,
+      '[REDACTED]#2': reverse ? 2 : 1,
+      '[REDACTED]#3': reverse ? 1 : 2,
+      ordinary: null,
+    };
+    const event = events('script_tool_call')[0]?.data;
+    expect(event?.input).toEqual({
+      ...args,
+      payload: '[REDACTED]',
+      items: [{ id: 7, names: redacted }],
+    });
+    expect(event?.output).toEqual({
+      nested: { secret: 'prefix [REDACTED]', count: 7, values: ['[REDACTED]'], names: redacted },
+    });
+  }
+);
+
+test('omits only an unsafe audit field when a credential matches the marker', async () => {
+  let result: string | undefined;
+  mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
+    result = await options?.nativeTools?.[0].handler({ ...args, payload: '[REDACTED]' });
     yield reply();
   });
-  await run([node], 'claude', ['secret-value']);
-  expect(events('script_tool_call')[0]?.data).toMatchObject({
-    input: { payload: '[REDACTED]' },
-    output: { nested: { secret: 'prefix [REDACTED]', count: 7, values: ['[REDACTED]'] } },
+  await run([agent()], 'claude', ['[REDACTED]']);
+  expect(events('node_completed')).toHaveLength(1);
+  expect(result).toBe('{"green":false}');
+  const event = events('script_tool_call')[0]?.data;
+  expect(event).toMatchObject({
+    status: 'completed',
+    input_redaction_failed: true,
+    output: { green: false },
   });
+  expect(event).not.toHaveProperty('input');
+});
+
+test('redacts a recorded tool error without replacing the audit status', async () => {
+  await writeFile(
+    join(root, '.archon', 'scripts', 'lookup.ts'),
+    'console.error("fixture-credential"); process.exit(1);'
+  );
+  let rejected = false;
+  mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
+    try {
+      await options?.nativeTools?.[0].handler(args);
+    } catch {
+      rejected = true;
+    }
+    yield reply();
+  });
+  await run([agent()], 'claude', ['fixture-credential']);
+  expect(rejected).toBe(true);
+  expect(events('node_completed')).toHaveLength(1);
+  expect(events('script_tool_call')[0]?.data).toMatchObject({
+    status: 'failed',
+    error: expect.stringContaining('[REDACTED]'),
+  });
+  expect(String(events('script_tool_call')[0]?.data?.error)).not.toContain('fixture-credential');
 });
 
 test('a stalled unknown-event write cannot block shutdown past the second grace', async () => {

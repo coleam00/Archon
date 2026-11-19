@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import type { NativeTool } from '../types';
-import { nativeToolInputParser, nativeToolJsonSchema } from '@archon/provider-contract';
+import {
+  nativeToolInputParser,
+  nativeToolJsonSchema,
+  rawJsonObjectSchema,
+  rawJsonValueSchema,
+} from '@archon/provider-contract';
 import type { DynamicToolSpec } from './protocol/v2/DynamicToolSpec';
 import type { DynamicToolCallParams } from './protocol/v2/DynamicToolCallParams';
 import type { DynamicToolCallResponse } from './protocol/v2/DynamicToolCallResponse';
@@ -11,7 +16,7 @@ const callSchema = z.object({
   callId: z.string(),
   namespace: z.string().nullable(),
   tool: z.string(),
-  arguments: z.json(),
+  arguments: rawJsonValueSchema,
 }) satisfies z.ZodType<DynamicToolCallParams>;
 
 export function toolResponse(text: string, success: boolean): DynamicToolCallResponse {
@@ -35,7 +40,7 @@ export function buildCodexNativeTools(tools: readonly NativeTool[]): {
       type: 'function',
       name: tool.name,
       description: tool.description,
-      inputSchema: z.json().parse(nativeToolJsonSchema(tool.inputSchema)),
+      inputSchema: rawJsonObjectSchema.parse(nativeToolJsonSchema(tool.inputSchema)),
     })),
     call: async (params, threadId, turnId) => {
       const parsed = callSchema.safeParse(params);
@@ -51,12 +56,7 @@ export function buildCodexNativeTools(tools: readonly NativeTool[]): {
         return toolResponse(`Invalid arguments for ${call.tool}: ${input.error.message}`, false);
       try {
         return toolResponse(
-          await entry.tool.handler(
-            'jsonSchema' in entry.tool.inputSchema
-              ? (call.arguments as Record<string, unknown>)
-              : input.data,
-            { providerCallId: call.callId }
-          ),
+          await entry.tool.handler(input.data, { providerCallId: call.callId }),
           true
         );
       } catch (error) {

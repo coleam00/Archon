@@ -105,6 +105,11 @@ describe('native tool input schema conformance', () => {
     };
     try {
       await server.instance.connect(transport);
+      transport.onmessage?.({ jsonrpc: '2.0', id: 6, method: 'tools/list' });
+      expect(await response.promise).toMatchObject({
+        result: { tools: [{ name: 'lookup', inputSchema: jsonSchema }] },
+      });
+      response = Promise.withResolvers<unknown>();
       transport.onmessage?.({
         jsonrpc: '2.0',
         id: 7,
@@ -151,11 +156,76 @@ describe('native tool input schema conformance', () => {
       await server.instance.close();
     }
   });
+  test.each([false, true])(
+    'validates reserved JSON keys without filtering them first (open: %s)',
+    async open => {
+      const data = Object.fromEntries([['__proto__', 7]]);
+      const schema = { type: 'object', additionalProperties: open };
+      const seen: unknown[] = [];
+      const tool: NativeTool = {
+        name: 'lookup',
+        description: 'lookup',
+        inputSchema: { jsonSchema: schema },
+        handler: async args => {
+          seen.push(args);
+          return 'ok';
+        },
+      };
+      const parser = nativeToolInputParser(tool.inputSchema);
+      expect(parser.parse({})).toEqual({});
+      expect(parser.safeParse(data).success).toBe(open);
+      const codex = buildCodexNativeTools([tool]);
+      const result = await codex.call(
+        {
+          threadId: 'thread',
+          turnId: 'turn',
+          callId: 'call',
+          namespace: null,
+          tool: 'lookup',
+          arguments: data,
+        },
+        'thread',
+        'turn'
+      );
+      expect(result.success).toBe(open);
+      const server = buildArchonMcpServer([tool]);
+      const response = Promise.withResolvers<unknown>();
+      const transport: Parameters<typeof server.instance.connect>[0] = {
+        start: async () => {},
+        close: async () => {},
+        send: async message => {
+          if ('id' in message) response.resolve(message);
+        },
+      };
+      try {
+        await server.instance.connect(transport);
+        transport.onmessage?.({
+          jsonrpc: '2.0',
+          id: 7,
+          method: 'tools/call',
+          params: { name: 'lookup', arguments: data },
+        });
+        expect(await response.promise).toMatchObject({
+          result: open ? { content: [{ type: 'text', text: 'ok' }] } : { isError: true },
+        });
+        expect(seen.map(value => JSON.stringify(value))).toEqual(
+          open ? [JSON.stringify(data), JSON.stringify(data)] : []
+        );
+      } finally {
+        await server.instance.close();
+      }
+    }
+  );
   test('JSON Schema not keywords work without changing input', () => {
     const schema = { type: 'object', not: { required: ['blocked'] } };
     const parser = nativeToolInputParser({ jsonSchema: schema });
     expect(parser.safeParse({}).success).toBe(true);
     expect(parser.safeParse({ blocked: true }).success).toBe(false);
+  });
+  test('rejects asynchronous schemas before preparing a native tool', () => {
+    expect(() => nativeToolInputParser({ jsonSchema: { type: 'object', $async: true } })).toThrow(
+      'require a synchronous JSON Schema'
+    );
   });
   test('Claude, Pi and Codex accept and reject the same inputs', async () => {
     const zodObject = nativeToolInputParser(SCHEMA);

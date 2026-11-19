@@ -158,6 +158,7 @@ export {
 
 export { nativeToolInputParser, nativeToolJsonSchema } from './native-tools';
 export { nativeToolInputSchema } from './agent-provider';
+export { rawJsonObjectSchema, rawJsonValueSchema } from './json-values';
 
 export {
   normalizeJsonSchemaForOpenAiStrict,

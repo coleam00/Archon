@@ -1,6 +1,7 @@
 import type { checkCredentialRequestSchema } from './plugin/wire';
 import type { ProviderDiagnostics, ProviderModelList } from './information';
 import { z } from 'zod';
+import { rawJsonObjectSchema } from './json-values';
 import type { CredentialStatus } from './credential-status';
 import type { ProviderCapabilities } from './capabilities';
 import type { ProviderChunk } from './events';
@@ -173,7 +174,7 @@ const legacyNativeToolInputSchema = z
 export const nativeToolInputSchema = z.union([
   legacyNativeToolInputSchema,
   z.object({
-    jsonSchema: z.record(z.string(), z.json()).refine(schema => schema.type === 'object', {
+    jsonSchema: rawJsonObjectSchema.refine(schema => schema?.type === 'object', {
       message: 'Native tool parameters must declare type: object',
     }),
   }),

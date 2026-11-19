@@ -301,6 +301,8 @@ export function scriptToolsCompileError(node: DagNode): string | null {
       input_schema: tool.input_schema,
       output_schema: tool.output_schema,
     })) {
+      if (schema.$async === true)
+        return `Node '${node.id}', tool '${name}': ${field} must be synchronous`;
       const error = compileOutputSchema(schema);
       if (error) return `Node '${node.id}', tool '${name}': ${field} cannot be compiled: ${error}`;
     }

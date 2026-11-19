@@ -13,6 +13,7 @@ import { prepareToolScript, runScript } from '../exec/script';
 import { ExecOutputContractError } from '../exec/exec-output';
 import {
   collectCredentialValues,
+  containsCredentialValue,
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
 
@@ -82,11 +83,9 @@ export async function createScriptTools(
                   ? { provider_call_scope: context.providerCallScope }
                   : {}),
                 status: outcome.status,
-                input: redactJson(jsonInput, credentialValues),
-                output: redactJson(outcome.output, credentialValues),
-                ...(outcome.error
-                  ? { error: redactCredentialValues(outcome.error, credentialValues) }
-                  : {}),
+                ...auditField('input', jsonInput, credentialValues),
+                ...auditField('output', outcome.output, credentialValues),
+                ...(outcome.error ? auditField('error', outcome.error, credentialValues) : {}),
               },
             });
           } catch (cause) {
@@ -208,15 +207,64 @@ async function exceedsGrace(promise: Promise<unknown>): Promise<boolean> {
   return timedOut;
 }
 
-function redactJson(value: JsonValue, credentialValues: readonly string[]): JsonValue {
-  if (typeof value === 'string') return redactCredentialValues(value, credentialValues);
-  if (Array.isArray(value)) return value.map(item => redactJson(item, credentialValues));
-  if (typeof value === 'object' && value !== null) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, redactJson(item, credentialValues)])
-    );
+function auditField(
+  field: 'input' | 'output' | 'error',
+  value: JsonValue,
+  credentials: readonly string[]
+): Record<string, JsonValue> {
+  const redacted = redactJson(value, credentials);
+  return redacted === undefined ? { [`${field}_redaction_failed`]: true } : { [field]: redacted };
+}
+
+function redactJson(value: JsonValue, credentials: readonly string[]): JsonValue | undefined {
+  if (typeof value === 'string') {
+    const redacted = redactCredentialValues(value, credentials);
+    return containsCredentialValue(redacted, credentials) ? undefined : redacted;
   }
-  return value;
+  if (Array.isArray(value)) {
+    const redacted = value.map(item => redactJson(item, credentials));
+    return redacted.every(item => item !== undefined) ? redacted : undefined;
+  }
+  return typeof value === 'object' && value !== null ? redactObject(value, credentials) : value;
+}
+
+function redactObject(
+  value: Record<string, JsonValue>,
+  credentials: readonly string[]
+): JsonValue | undefined {
+  const entries = Object.entries(value);
+  const reserved = new Set(
+    Object.keys(value).filter(key => !containsCredentialValue(key, credentials))
+  );
+  const output: [string, JsonValue][] = [];
+  for (const [key, item] of entries) {
+    const result = redactJson(item, credentials);
+    if (result === undefined) return undefined;
+    const name = containsCredentialValue(key, credentials)
+      ? allocateRedactedKey(key, reserved, credentials, entries.length + 1)
+      : key;
+    if (name === undefined) return undefined;
+    reserved.add(name);
+    output.push([name, result]);
+  }
+  return Object.fromEntries(output);
+}
+
+function allocateRedactedKey(
+  key: string,
+  reserved: Set<string>,
+  credentials: readonly string[],
+  maxSuffix: number
+): string | undefined {
+  const base = redactCredentialValues(key, credentials);
+  if (containsCredentialValue(base, credentials)) return undefined;
+  if (!reserved.has(base)) return base;
+  for (let suffix = 1; suffix <= maxSuffix; suffix++) {
+    const candidate = `${base}#${suffix}`;
+    if (!reserved.has(candidate) && !containsCredentialValue(candidate, credentials))
+      return candidate;
+  }
+  return undefined;
 }
 
 function knownScriptFailure(ctx: RunLayersContext, cause: unknown): boolean {

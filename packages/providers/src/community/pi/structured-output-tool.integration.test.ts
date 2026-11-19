@@ -27,11 +27,13 @@ import {
   SessionManager,
   SettingsManager,
   type ResourceLoader,
+  type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 
 import type { MessageChunk } from '../../types';
 import { bridgeSession } from './event-bridge';
 import { createStructuredOutputTool } from './structured-output-tool';
+import { buildPiNativeToolDefinitions } from './native-tools';
 
 const scratch = mkdtempSync(join(tmpdir(), 'archon-pi-structured-output-'));
 afterAll(async () => {
@@ -73,7 +75,10 @@ const schema = {
 const answer = { decision: 'done', count: 2 };
 
 /** Run one prompt through the tool and the bridge; report the result and model calls. */
-async function runTurn(steps: FauxResponseStep[]): Promise<{
+async function runTurn(
+  steps: FauxResponseStep[],
+  extraTools: ToolDefinition[] = []
+): Promise<{
   result: Extract<MessageChunk, { type: 'result' }> | undefined;
   modelCalls: number;
 }> {
@@ -92,7 +97,7 @@ async function runTurn(steps: FauxResponseStep[]): Promise<{
       compaction: { enabled: false },
       retry: { enabled: false },
     }),
-    customTools: [tool.definition],
+    customTools: [tool.definition, ...extraTools],
     noTools: 'builtin',
   });
   tool.capFailedCalls(session);
@@ -102,6 +107,41 @@ async function runTurn(steps: FauxResponseStep[]): Promise<{
   }
   return { result, modelCalls: faux.state.callCount - callsBefore };
 }
+
+test('native tools reject invalid raw parameters before Pi normalizes them', async () => {
+  const seen: unknown[] = [];
+  const tools = buildPiNativeToolDefinitions([
+    {
+      name: 'lookup',
+      description: 'Look up an item',
+      inputSchema: {
+        jsonSchema: {
+          type: 'object',
+          properties: { count: { type: 'number' }, label: { type: 'string' } },
+          required: ['count'],
+          additionalProperties: false,
+        },
+      },
+      handler: async input => {
+        seen.push(input);
+        return 'ok';
+      },
+    },
+  ]);
+  const { result } = await runTurn(
+    [
+      fauxAssistantMessage([fauxToolCall('lookup', { count: '7' })], { stopReason: 'toolUse' }),
+      fauxAssistantMessage([fauxToolCall('lookup', { count: 7, label: null })], {
+        stopReason: 'toolUse',
+      }),
+      fauxAssistantMessage([fauxToolCall('lookup', { count: 8 })], { stopReason: 'toolUse' }),
+      fauxAssistantMessage([fauxToolCall('structured_output', answer)], { stopReason: 'toolUse' }),
+    ],
+    tools
+  );
+  expect(result?.structuredOutput).toEqual(answer);
+  expect(seen).toEqual([{ count: 8 }]);
+});
 
 describe('Pi structured_output tool on a real agent loop', () => {
   test('a valid tool call is the output and ends the turn without another model call', async () => {

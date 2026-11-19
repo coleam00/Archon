@@ -2,6 +2,37 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$comment": "AUTO-GENERATED from packages/provider-contract/src by packages/provider-contract/src/scripts/generate-schema.ts. Do not edit.",
   "$defs": {
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        }
+      ]
+    },
     "ProviderFailure": {
       "type": "object",
       "properties": {
@@ -922,7 +953,7 @@
               "minLength": 1
             },
             "params": {
-              "$ref": "#/$defs/schema1"
+              "$ref": "#/$defs/JsonValue"
             }
           },
           "required": [
@@ -944,7 +975,7 @@
               "minLength": 1
             },
             "params": {
-              "$ref": "#/$defs/schema2"
+              "$ref": "#/$defs/JsonValue"
             }
           },
           "required": [
@@ -973,7 +1004,7 @@
               ]
             },
             "result": {
-              "$ref": "#/$defs/schema3"
+              "$ref": "#/$defs/schema1"
             }
           },
           "required": [
@@ -1021,7 +1052,7 @@
                   "type": "string"
                 },
                 "data": {
-                  "$ref": "#/$defs/schema4"
+                  "$ref": "#/$defs/schema2"
                 }
               },
               "required": [
@@ -1086,7 +1117,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema5"
+            "$ref": "#/$defs/schema3"
           }
         },
         "config": {
@@ -1098,7 +1129,7 @@
                 "type": "string"
               },
               "additionalProperties": {
-                "$ref": "#/$defs/schema6"
+                "$ref": "#/$defs/schema4"
               }
             },
             "run": {
@@ -1107,7 +1138,7 @@
                 "type": "string"
               },
               "additionalProperties": {
-                "$ref": "#/$defs/schema7"
+                "$ref": "#/$defs/schema5"
               }
             },
             "snapshot": {
@@ -1116,7 +1147,7 @@
                 "type": "string"
               },
               "additionalProperties": {
-                "$ref": "#/$defs/schema8"
+                "$ref": "#/$defs/schema6"
               }
             },
             "stripUnknownKeys": {
@@ -1229,7 +1260,7 @@
                 "type": "string"
               },
               "additionalProperties": {
-                "$ref": "#/$defs/schema9"
+                "$ref": "#/$defs/schema7"
               }
             }
           },
@@ -1271,7 +1302,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema9"
+            "$ref": "#/$defs/schema7"
           }
         },
         "assistantConfig": {
@@ -1280,7 +1311,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema9"
+            "$ref": "#/$defs/schema7"
           }
         },
         "execContext": {
@@ -1422,11 +1453,8 @@
                     "properties": {
                       "jsonSchema": {
                         "type": "object",
-                        "propertyNames": {
-                          "type": "string"
-                        },
                         "additionalProperties": {
-                          "$ref": "#/$defs/schema10"
+                          "$ref": "#/$defs/JsonValue"
                         }
                       }
                     },
@@ -1702,11 +1730,8 @@
         },
         "input": {
           "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
           "additionalProperties": {
-            "$ref": "#/$defs/schema11"
+            "$ref": "#/$defs/JsonValue"
           }
         },
         "providerCallId": {
@@ -1758,7 +1783,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema12"
+            "$ref": "#/$defs/schema8"
           }
         }
       },
@@ -1829,7 +1854,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema9"
+            "$ref": "#/$defs/schema7"
           }
         },
         "env": {
@@ -1969,7 +1994,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema9"
+            "$ref": "#/$defs/schema7"
           }
         },
         "cwd": {
@@ -1998,7 +2023,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema9"
+            "$ref": "#/$defs/schema7"
           }
         }
       }
@@ -2389,130 +2414,6 @@
           },
           "additionalProperties": {
             "$ref": "#/$defs/schema8"
-          }
-        }
-      ]
-    },
-    "schema9": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "number"
-        },
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "null"
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/schema9"
-          }
-        },
-        {
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/schema9"
-          }
-        }
-      ]
-    },
-    "schema10": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "number"
-        },
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "null"
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/schema10"
-          }
-        },
-        {
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/schema10"
-          }
-        }
-      ]
-    },
-    "schema11": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "number"
-        },
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "null"
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/schema11"
-          }
-        },
-        {
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/schema11"
-          }
-        }
-      ]
-    },
-    "schema12": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "number"
-        },
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "null"
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/schema12"
-          }
-        },
-        {
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/schema12"
           }
         }
       ]
