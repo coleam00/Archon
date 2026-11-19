@@ -645,7 +645,7 @@ The rules:
 
 `archon trigger check` reports two files in one project, on the same asking workflow, that would both start when one option is chosen: two files naming the same option, or one naming an option beside one that names none and takes answers. Two files that name no option and start different stages are not reported; several stages may start on one settlement on purpose.
 
-When a settled set starts nothing, because no binding names the option chosen or no binding matches at all, `archon workflow answer` says so: the text ends with "No trigger binding starts on this settlement, so nothing was started." and the JSON has `"nothingStarted": true`. A choice like `hold` reads as a stop, not as a lost start.
+When a settled set starts nothing, because no binding names the option chosen or no binding matches at all, the answer says so on every surface: `archon workflow answer` and the chat attention tool end their reply with "No trigger binding starts on this settlement, so nothing was started.", and the `--json` output and `POST /api/attention/answer` or `/withdraw` reply have `"nothingStarted": true`. A choice like `hold` reads as a stop, not as a lost start.
 
 ### Work in the checkout the asking run left
 

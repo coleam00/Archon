@@ -7662,6 +7662,8 @@ export interface components {
       action: 'answer' | 'withdraw';
       unchanged: boolean;
       settled?: boolean;
+      /** @enum {boolean} */
+      nothingStarted?: true;
       runId?: string;
       continues?: boolean;
       cancelled?: boolean;

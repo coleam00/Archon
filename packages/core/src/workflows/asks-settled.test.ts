@@ -48,7 +48,7 @@ const SETTLED = [
 function trigger(
   inputs: Record<string, unknown>,
   cwd = PROJECT_CWD,
-  extra: { checkout?: 'asking-run'; option?: string; settled?: string } = {},
+  extra: { checkout?: 'asking-run'; option?: string; settled?: string; workflowName?: string } = {},
   stage = 'build'
 ) {
   return {
@@ -164,6 +164,7 @@ describe('asks-settled starts', () => {
     test.each([
       ['an option no binding names', [answered(0, { decision: 'other', text: 'hold it' })]],
       ['a text-only answer', [answered(0, { text: 'keep it' })]],
+      ['a set whose every ask was withdrawn', [SETTLED[1]]],
       [
         'a mixed set',
         [answered(0, { decision: 'keep', text: '' }), answered(1, { decision: 'drop', text: '' })],
@@ -194,7 +195,7 @@ describe('asks-settled starts', () => {
       ).toEqual(['review']);
     });
 
-    test('takes settled: answered', () => {
+    test('is refused beside settled: withdrawn', () => {
       const parsed = triggerConfigSchema.safeParse(
         trigger({}, PROJECT_CWD, { option: 'keep', settled: 'withdrawn' })
       );
@@ -210,6 +211,12 @@ describe('asks-settled starts', () => {
           'd-answered.json': trigger({}, PROJECT_CWD, {}, 'deliver'),
           'e-withdrawn.json': trigger({}, PROJECT_CWD, { settled: 'withdrawn' }, 'close'),
           'f-elsewhere.json': trigger({}, PROJECT_CWD, { option: 'drop' }, 'replan-elsewhere'),
+          'g-other-asker.json': trigger(
+            {},
+            PROJECT_CWD,
+            { option: 'keep', workflowName: 'review' },
+            'build-after-review'
+          ),
         })
       );
       const projects = bindings.map(b =>
@@ -218,7 +225,7 @@ describe('asks-settled starts', () => {
       const reported = optionOverlaps(bindings, projects).map(problems =>
         problems.map(problem => /(\w)-\w+\.json/.exec(problem)?.[1])
       );
-      expect(reported).toEqual([['b', 'd'], ['a', 'd'], ['d'], ['a', 'b', 'c'], [], []]);
+      expect(reported).toEqual([['b', 'd'], ['a', 'd'], ['d'], ['a', 'b', 'c'], [], [], []]);
     });
   });
 

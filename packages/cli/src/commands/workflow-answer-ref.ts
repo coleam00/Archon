@@ -6,6 +6,8 @@
  */
 import {
   answerAttentionItem,
+  NOTHING_STARTED,
+  settledWithNothingStarted,
   withdrawAttentionItem,
   type AttentionItemAnswerResult,
   type AttentionItemWithdrawResult,
@@ -149,19 +151,15 @@ async function startStates(
   });
 }
 
-/**
- * What a close says about its set: settled or not, and when settled with no receipt, that
- * no binding started anything (a choice like "hold" that no binding names, or no binding at
- * all), so a stop reads as one and not as a lost start.
- */
+/** What a close says about its set: settled or not, and whether it started nothing. */
 export function settlement(
   result: { settled: boolean; startReceipts: readonly SourceReceiptAcceptance[] },
   starts: SettledStarts
 ): SettledStarts {
   if (!result.settled) return { text: starts.text, json: { settled: false, ...starts.json } };
-  const nothingStarted = result.startReceipts.length === 0;
+  const nothingStarted = settledWithNothingStarted(result);
   return {
-    text: ` That was the last open ask of its set; the set is settled.${nothingStarted ? ' No trigger binding starts on this settlement, so nothing was started.' : ''}${starts.text}`,
+    text: ` That was the last open ask of its set; the set is settled.${nothingStarted ? ` ${NOTHING_STARTED}` : ''}${starts.text}`,
     json: { settled: true, ...(nothingStarted ? { nothingStarted: true } : {}), ...starts.json },
   };
 }

@@ -586,7 +586,7 @@ describe('asks answered and withdrawn by ref over HTTP', () => {
     }
   });
 
-  test('an answer is recorded through the API surface and says when it settled the set', async () => {
+  test('an answer that settles the set says so, and that nothing was started when no binding matched', async () => {
     withAsk(open);
     mockAnswerItemAsk.mockImplementationOnce(async () => ({
       kind: 'closed',
@@ -601,6 +601,7 @@ describe('asks answered and withdrawn by ref over HTTP', () => {
       action: 'answer',
       unchanged: false,
       settled: true,
+      nothingStarted: true,
     });
     expect(mockAnswerItemAsk.mock.calls.at(-1)?.[0]).toMatchObject({
       askId: 'a1',
