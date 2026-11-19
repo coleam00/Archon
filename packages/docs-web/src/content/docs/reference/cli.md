@@ -568,10 +568,10 @@ copy of the start point may be stale.
 against a [folder project](/guides/multi-repo-projects/),
 and against a workflow pinning `worktree.enabled: false`. None of these create a
 worktree, so the flag could only move the PR target, which would report a base
-no worktree was ever cut from. An item's landing branch is not refused there: it is a
-fact of the item rather than a choice for one dispatch, so an in-place run on the item
-still reports it as `$BASE_BRANCH`. A run on an item with a landing branch in a folder
-project is refused, since a folder has no branches.
+no worktree was ever cut from. For the same reason a run on an item with a landing branch
+is refused in these cases (and when it runs in a folder project) before it starts, naming
+the branch. `--adopt` on such an item continues the adopted run's checkout and proposes
+against the landing branch.
 
 **When an existing worktree is adopted** by `--branch` reusing a healthy Archon
 registration or a usable checkout at the configured target path, the cut-from is already

@@ -6,11 +6,14 @@ import {
   workflowRunConfigFromRun,
 } from '@archon/core/config';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import { resolveRunLanding } from '@archon/core/workflows/item-landing';
+import { refuseInPlaceLanding, resolveRunLanding } from '@archon/core/workflows/item-landing';
+import { projectRefForCodebase } from '@archon/core/operations/attention-queue';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { landingSourceText } from '@archon/workflows/item-landing';
 import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
+import type { WorkflowItem } from '@archon/workflows/schemas/workflow-run';
+import type { ContinuationDeclaration } from './workflow-run-preflight';
 import { resolveRunIdArg, type WorkflowRunOptions } from './workflow-shared';
 
 /**
@@ -71,8 +74,8 @@ async function itemLaunchRunConfig(
 
 /**
  * The item a fresh start is on and its runs: the one `--item` names in the project of
- * `cwd`, else that of the run it continues (`--supersedes` or `--adopt`), which the start
- * inherits. Null when there is no such item yet.
+ * `cwd`, else that of the run `--supersedes` names, which the start inherits. Null when
+ * there is no such item yet.
  */
 async function launchItemRuns(
   host: WorkflowHost,
@@ -108,27 +111,47 @@ export interface LaunchBase {
   source: string;
 }
 
-/** Throws when the item's landing branch is missing on the remote or cannot be resolved. */
+/**
+ * Throws when the item's landing branch is missing on the remote or cannot be resolved, or
+ * when the run would work in place, where it cannot be cut from the branch. An adoption
+ * continues the adopted run's checkout, which keeps its own cut-from, as a hand-off does.
+ */
 export async function resolveLaunchBase(
   host: WorkflowHost,
-  options: WorkflowRunOptions,
-  cwd: string,
-  admission: { isContinuation: boolean; flagBase: string | undefined },
-  codebase: Codebase | null
+  item: string | undefined,
+  admission: { isContinuation: boolean; flagBase: string | undefined; wantsIsolation: boolean },
+  codebase: Codebase | null,
+  declaration: ContinuationDeclaration | undefined
 ): Promise<LaunchBase | undefined> {
   if (admission.flagBase) return { branch: admission.flagBase, source: '--base' };
   if (admission.isContinuation || codebase === null) return undefined;
-  const found = await launchItemRuns(
-    host,
-    options.item,
-    options.supersedesRunId ?? options.adoptRunId,
-    cwd
-  );
+  const found = await launchItem(host, item, codebase, declaration);
   if (!found) return undefined;
-  const landing = await resolveRunLanding(host.deps.store, codebase, found.item);
+  const landing = await resolveRunLanding(host.deps.store, codebase, found);
   if (!landing) return undefined;
+  if (!admission.wantsIsolation && !(declaration && 'lane' in declaration))
+    refuseInPlaceLanding(found, landing);
   return {
     branch: landing.branch,
-    source: `landing branch of item ${found.item.key}, ${landingSourceText(landing)}`,
+    source: `landing branch of item ${found.key}, ${landingSourceText(landing)}`,
   };
+}
+
+/**
+ * The item a fresh launch is recorded on: `--item` in the selected project (which
+ * `--project` may choose apart from the directory the command runs in), else the item of
+ * the run the declared `--supersedes` or `--adopt` continues. Null when there is none yet.
+ */
+async function launchItem(
+  host: WorkflowHost,
+  item: string | undefined,
+  codebase: Codebase,
+  declaration: ContinuationDeclaration | undefined
+): Promise<WorkflowItem | null> {
+  const { store } = host.deps;
+  if (item)
+    return (await store.getItemRuns(projectRefForCodebase(codebase).key, item))?.item ?? null;
+  if (!declaration) return null;
+  const continued = await store.getWorkflowRun(declaration.runId);
+  return continued?.item_id ? store.getItem(continued.item_id) : null;
 }

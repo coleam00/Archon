@@ -99,9 +99,6 @@ export async function launchDetachedOwnedRun(
   if (!options.noWorktree && admission.wantsIsolation) {
     assertCodebaseResolvedForIsolation(detachResolved);
   }
-  // The item's landing branch is checked here so a missing one refuses before `Started`;
-  // the child resolves it again when it cuts the worktree.
-  await resolveLaunchBase(host, options, cwd, admission, detachCodebase);
   // Never pin a worktree branch on the child for a folder project. The --folder flag
   // declares it; an already-registered folder project is read off the resolution.
   const detachIsFolder = options.folder === true || detachCodebase?.kind === 'folder';
@@ -112,6 +109,9 @@ export async function launchDetachedOwnedRun(
   // Adoption resolution is read-only; the child re-resolves against the live checkout.
   const declaration = await resolveContinuationDeclaration(host, options, detachCodebase);
   if (declaration && 'lane' in declaration) admission.aiConfigurationRun = declaration.adoptedRun;
+  // The item's landing branch is checked here so a missing one refuses before `Started`;
+  // the child resolves it again when it cuts the worktree.
+  await resolveLaunchBase(host, options.item, admission, detachCodebase, declaration);
   const adoptionLane = declaration && 'lane' in declaration ? declaration.lane : undefined;
   await refuseDetachedWorkspace(request, admission, adoptionLane, detachCodebase, detachIsFolder);
   const prepared = await prepareLaneAiConfiguration(
@@ -254,11 +254,7 @@ export interface ForegroundLaunch {
    * $BASE_BRANCH resolution all derive from this one value).
    */
   readonly codebaseDefaultBranch: string | undefined;
-  /**
-   * The per-dispatch base override, `--base` or the item's landing branch. It wins over
-   * repo config and the codebase default for both the worktree cut-from (the provider
-   * request's `baseOverride`) and `$BASE_BRANCH` (executeWorkflow's `baseOverride`).
-   */
+  /** `--base` or the item's landing branch: the cut-from and `$BASE_BRANCH` override. */
   readonly base: LaunchBase | undefined;
   readonly continuation: LaunchContinuation;
   /** The prior run a resume continues; the executor performs no implicit resume detection. */
@@ -294,8 +290,6 @@ export async function prepareForegroundLaunch(
     );
   }
 
-  // Before any worktree, so a landing branch missing on the remote refuses the run.
-  const base = await resolveLaunchBase(host, options, cwd, admission, codebase);
   const workspace: RunWorkspace = {
     workingCwd: cwd,
     isolationEnvId: undefined,
@@ -305,6 +299,14 @@ export async function prepareForegroundLaunch(
     container: undefined,
   };
   const continuation = await bindContinuationLane(request, admission, codebase, workspace);
+  // Before any worktree is cut, so a landing branch missing on the remote refuses the run.
+  const base = await resolveLaunchBase(
+    host,
+    options.item,
+    admission,
+    codebase,
+    continuation.declaration
+  );
   const { resumable, resumeBranch } = await bindResumableRun(
     request,
     admission,

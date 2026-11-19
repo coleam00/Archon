@@ -150,7 +150,7 @@ export function warnBaseOverrideOnReuse(workingPath: string, base: LaunchBase): 
   );
   console.warn(
     `Warning: Reusing existing worktree at ${workingPath}. ` +
-      `The base ${base.branch} (${base.source}) did not change the cut-from (worktree already exists); ` +
+      `${base.source === '--base' ? `--base ${base.branch}` : `The ${base.source} (${base.branch})`} did not change the cut-from (worktree already exists); ` +
       'it still applies to the PR target.'
   );
 }

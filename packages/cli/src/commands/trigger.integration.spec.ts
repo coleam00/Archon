@@ -460,6 +460,9 @@ describe('trigger CLI durable execution', () => {
 
     await invoke(['workflow', 'landing', '--item', 'WO-1', '--branch', 'feat/order']);
     await invoke(['workflow', 'link', '--item', 'member', '--kind', 'part_of', '--to', 'WO-1']);
+    // The file's static base is the same for every item it starts; the item's branch wins.
+    config.binding.launch.isolation = { kind: 'worktree', baseOverride: 'main' };
+    writeFileSync(configPath, JSON.stringify(config));
     await invoke(['trigger', 'fire', '--config', configPath, '--item', 'member']);
     await completed(2, 'the member run to complete');
     expect(readFileSync(out, 'utf8').trim()).toBe('feat/order from-feat');
@@ -483,6 +486,17 @@ describe('trigger CLI durable execution', () => {
       'the lonely run to be refused'
     );
     expect(JSON.parse(failed.metadata).error).toContain("'feat/missing' is not on remote 'origin'");
+    expect(readFileSync(out, 'utf8')).toBe('untouched');
+
+    // An in-place stage cannot be cut from the landing branch, so it is refused too.
+    config.binding.launch.isolation = { kind: 'in-place' };
+    writeFileSync(configPath, JSON.stringify(config));
+    await invoke(['trigger', 'fire', '--config', configPath, '--item', 'member']);
+    const inPlace = await waitFor(() => {
+      const refused = fixture.runs().filter(run => run.status === 'failed');
+      return refused.length === 2 ? refused.find(run => run.id !== failed.id) : undefined;
+    }, 'the in-place member run to be refused');
+    expect(JSON.parse(inPlace.metadata).error).toContain('would work in place');
     expect(readFileSync(out, 'utf8')).toBe('untouched');
   }, 60_000);
 

@@ -502,14 +502,35 @@ test.serial(
         )
       )
     );
-    const start = (options: { item: string; baseBranch?: string }) =>
-      invoke(host => workflowRunCommand(host, projectRoot, 'base-proof', 'go', options));
+    const start = (
+      options: Parameters<typeof workflowRunCommand>[4] & { item: string },
+      cwd = projectRoot
+    ) => invoke(host => workflowRunCommand(host, cwd, 'base-proof', 'go', options));
     const started = await start({ item: 'member' });
     expect(started.exitCode, started.stderr).toBe(0);
     expect(readFileSync(out, 'utf8').trim()).toBe('feat/order from-feat');
     const flagged = await start({ item: 'member', baseBranch: 'main' });
     expect(flagged.exitCode, flagged.stderr).toBe(0);
     expect(readFileSync(out, 'utf8').trim()).toBe('main from-base');
+
+    // `--project` selects the project apart from the directory: its item's branch applies.
+    const elsewhere = join(root, 'elsewhere');
+    mkdirSync(elsewhere);
+    expect(Bun.spawnSync(['git', 'init', '-q'], { cwd: elsewhere }).exitCode).toBe(0);
+    const [selected] = rows<{ id: string }>('SELECT id FROM remote_agent_codebases');
+    const projected = await start(
+      { item: 'member', codebaseId: selected?.id, discoveryCwd: projectRoot },
+      elsewhere
+    );
+    expect(projected.exitCode, projected.stderr).toBe(0);
+    expect(readFileSync(out, 'utf8').trim()).toBe('feat/order from-feat');
+
+    // An in-place run cannot be cut from the landing branch, so it is refused before it runs.
+    writeFileSync(out, 'untouched');
+    const inPlace = await start({ item: 'member', noWorktree: true });
+    expect(inPlace.exitCode).not.toBe(0);
+    expect(inPlace.stderr).toContain('would work in place');
+    expect(readFileSync(out, 'utf8')).toBe('untouched');
 
     // A branch the remote does not have refuses the start before a worktree is cut.
     writeFileSync(out, 'untouched');
@@ -522,7 +543,9 @@ test.serial(
     expect(refused.stderr).toContain("'feat/missing' is not on remote 'origin'");
     expect(worktrees()).toBe(before);
     expect(readFileSync(out, 'utf8')).toBe('untouched');
-  }
+  },
+  // Five real runs, each cutting a worktree.
+  60_000
 );
 
 test.serial(

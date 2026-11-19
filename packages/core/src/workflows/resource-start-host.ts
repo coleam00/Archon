@@ -80,7 +80,7 @@ import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { executionLane, handoffIsolation } from './resource-start-lanes';
 import { selectStartedWorkflow } from './binding-workflow';
-import { resolveRunLanding } from './item-landing';
+import { refuseInPlaceLanding, resolveRunLanding } from './item-landing';
 
 const log = createLogger('resource-start-host');
 
@@ -739,7 +739,7 @@ async function prepareAdmittedResourceSubmission(
       baseBranch,
       ownedWorktree: execution.ownedWorktree,
       ...(execution.cutFromCommit !== undefined ? { cutFromCommit: execution.cutFromCommit } : {}),
-      // Every lane, so an in-place or hand-off stage also gets the item's `$BASE_BRANCH`.
+      // A hand-off lane too: it keeps the handed-on checkout and proposes against the base.
       ...(baseOverride ? { baseOverride } : {}),
       resolveChildIsolation: createCodebaseChildResolver(
         host.records.isolation,
@@ -761,7 +761,8 @@ async function prepareAdmittedResourceSubmission(
  * The prepared lane with the base the run takes. The item's landing branch outranks the
  * trigger file's static `baseOverride`, which is the same for every item the file starts.
  * Read now, not at preparation, so a queued start takes the branch the item records when
- * it runs, and the persisted launch keeps its shape; a missing branch refuses it here.
+ * it runs, and the persisted launch keeps its shape. A missing branch, or an in-place start
+ * on an item that has one, refuses it here.
  */
 async function landingLane(
   host: WorkflowHost,
@@ -773,10 +774,12 @@ async function landingLane(
   if (run.item_id) {
     const item = await host.deps.store.getItem(run.item_id);
     if (!item) throw new Error(`The run's item '${run.item_id}' is missing from the store.`);
-    landing = (await resolveRunLanding(host.deps.store, codebase, item))?.branch;
+    const resolved = await resolveRunLanding(host.deps.store, codebase, item);
+    // A hand-off lane is a worktree lane, so only a true in-place start reaches this.
+    if (resolved && prepared.kind === 'in-place') refuseInPlaceLanding(item, resolved);
+    landing = resolved?.branch;
   }
-  if (prepared.kind !== 'worktree')
-    return landing ? { lane: prepared, baseOverride: landing } : { lane: prepared };
+  if (prepared.kind !== 'worktree') return { lane: prepared };
   const baseOverride = landing ?? prepared.baseOverride;
   return baseOverride ? { lane: { ...prepared, baseOverride }, baseOverride } : { lane: prepared };
 }
