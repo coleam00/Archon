@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { trustedTextDigest, type ForgeError, type TrustedText } from '@archon/forge';
 import { z } from 'zod';
 import { closeDatabase, getDatabase, resetDatabase } from './connection';
 import { createWorkflowStore } from '../workflows/store-adapter';
@@ -48,7 +49,7 @@ import {
   ResourceStartDrainError,
   type ResourceStartHost,
 } from '../workflows/resource-start-host';
-import { TrustedTextRefusedError } from '../workflows/trusted-text';
+import { CoreTrustedTextHost, TrustedTextRefusedError } from '../workflows/trusted-text';
 import type { TrustedTextRunMetadata } from '@archon/workflows/trusted-text';
 import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
@@ -517,6 +518,131 @@ nodes:
       acceptedBy: { host: 'github.com', id: '1', login: 'alice' },
     });
     await drainResourceStartHost(host);
+    expect(started).toHaveLength(1);
+  });
+
+  test('retries the same protected binding after temporary Forge failures without bypassing acceptance', async () => {
+    const project = await realpath(root);
+    const workflows = join(project, '.archon', 'workflows');
+    await mkdir(workflows, { recursive: true });
+    await writeFile(
+      join(workflows, 'protected.yaml'),
+      `name: protected
+description: protected input
+webSearchMode: disabled
+inputs:
+  trusted_item:
+    required: true
+nodes:
+  - id: read
+    prompt: Read the accepted item
+    allowed_tools: [Read]
+`
+    );
+    await getDatabase().query('UPDATE remote_agent_codebases SET default_cwd = $1 WHERE id = $2', [
+      project,
+      CODEBASE_ID,
+    ]);
+    const requirement: TrustedTextRunMetadata['requirement'] = {
+      subject: {
+        kind: 'issue',
+        ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+      },
+      maintainersPath: '.archon/maintainers.json',
+      input: 'trusted_item',
+    };
+    const evidence: TrustedText = {
+      subject: requirement.subject,
+      title: 'Title',
+      body: 'Body',
+      contentDigest: trustedTextDigest('Title', 'Body'),
+      author: { host: 'github.com', id: '2', login: 'outsider' },
+      policy: {
+        maintainersPath: requirement.maintainersPath,
+        head: 'b'.repeat(40),
+        digest: 'c'.repeat(64),
+        maintainers: ['alice'],
+      },
+    };
+    const intent = { cwd: project, workflowName: 'protected', trustedText: requirement };
+    const receiptId = await acceptTestBinding(intent);
+    const started: string[] = [];
+    const host = testResourceHost(started);
+    let failureKind: ForgeError['kind'] | undefined;
+    const trustedText = new CoreTrustedTextHost(host.records, async request => {
+      const { operationId } = request;
+      if (request.op === 'workitem.trust') {
+        return {
+          response: failureKind
+            ? { operationId, ok: false, error: { kind: failureKind, message: 'Forge error' } }
+            : { operationId, ok: true, result: { op: request.op, value: evidence } },
+        };
+      }
+      if (request.op !== 'workitem.accept') throw new Error('Unexpected operation');
+      return {
+        response: {
+          operationId,
+          ok: true,
+          result: {
+            op: request.op,
+            value: {
+              ...evidence,
+              acceptedBy: { host: 'github.com', id: '1', login: 'alice' },
+              scope: request.scope,
+            },
+          },
+        },
+      };
+    });
+    host.deps.trustedText = trustedText;
+
+    for (const [kind, reason] of [
+      [undefined, 'waiting_acceptance'],
+      ['unavailable', 'policy_unreadable'],
+      ['rate_limited', 'policy_unreadable'],
+      [undefined, 'waiting_acceptance'],
+    ] as const) {
+      failureKind = kind;
+      await expect(drainResourceStartHost(host)).rejects.toMatchObject({
+        failures: [{ receiptId, error: { reason, forgeKind: kind } }],
+      });
+      expect((await getStartReceipt(receiptId))?.bindings[0]).toMatchObject({
+        status: 'failed',
+        error: reason,
+        requestStatus: null,
+      });
+      expect(started).toEqual([]);
+    }
+    await trustedText.accept({
+      operationId: 'accept',
+      op: 'workitem.accept',
+      subject: requirement.subject,
+      maintainersPath: requirement.maintainersPath,
+      expectedContentDigest: evidence.contentDigest,
+      scope: { codebaseId: CODEBASE_ID, itemKey: 'issue-7', input: requirement.input },
+    });
+
+    await drainResourceStartHost(host);
+    await drainResourceStartHost(host);
+    expect(started).toHaveLength(1);
+    expect((await getStartReceipt(receiptId))?.bindings[0]).toMatchObject({
+      status: 'complete',
+      disposition: { status: 'admitted', requestId: started[0] },
+    });
+    expect((await getWorkflowRun(started[0]!))?.metadata.inputs_values).toMatchObject({
+      trusted_item: { title: 'Title', body: 'Body' },
+    });
+
+    const rejectedReceipt = await acceptTestBinding(intent);
+    failureKind = 'authorization';
+    await expect(drainResourceStartHost(host)).rejects.toBeInstanceOf(ResourceStartDrainError);
+    failureKind = undefined;
+    await drainResourceStartHost(host);
+    expect((await getStartReceipt(rejectedReceipt))?.bindings[0]).toMatchObject({
+      status: 'rejected',
+      error: 'policy_unreadable',
+      requestStatus: null,
+    });
     expect(started).toHaveLength(1);
   });
 

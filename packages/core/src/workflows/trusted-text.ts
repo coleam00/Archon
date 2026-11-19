@@ -1,5 +1,11 @@
 import { dispatchForge, type ForgeDispatchResult } from '@archon/forge/dispatch';
-import { trustedActor, trustedTextDigest, type ForgeRequest } from '@archon/forge';
+import {
+  temporaryErrorKinds,
+  trustedActor,
+  trustedTextDigest,
+  type ForgeError,
+  type ForgeRequest,
+} from '@archon/forge';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import type { Codebase } from '../schemas/codebase';
 import type { IWorkflowHostStore } from './host-store';
@@ -54,8 +60,19 @@ function sameText(left: TrustedTextRunMetadata, right: TrustedTextEvidence): boo
 }
 
 export class TrustedTextRefusedError extends Error {
-  constructor(readonly reason: string) {
+  constructor(
+    readonly reason: string,
+    readonly forgeKind?: ForgeError['kind']
+  ) {
     super(reason);
+  }
+
+  get retryable(): boolean {
+    return (
+      this.reason === 'waiting_acceptance' ||
+      this.reason === 'acceptance_requirement_changed' ||
+      temporaryErrorKinds.some(kind => kind === this.forgeKind)
+    );
   }
 }
 
@@ -74,7 +91,8 @@ export class CoreTrustedTextHost implements WorkflowTrustedTextHost {
       subject: requirement.subject,
       maintainersPath: requirement.maintainersPath,
     });
-    if (!response.ok || response.result.op !== 'workitem.trust')
+    if (!response.ok) throw new TrustedTextRefusedError('policy_unreadable', response.error.kind);
+    if (response.result.op !== 'workitem.trust')
       throw new TrustedTextRefusedError('policy_unreadable');
     return response.result.value;
   }

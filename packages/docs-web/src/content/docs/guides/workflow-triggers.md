@@ -312,6 +312,8 @@ archon forge workitem.accept --data-file ./accept-item.json
 
 `trusted-item.json` contains `subject` and `maintainersPath`. `accept-item.json` adds the returned `contentDigest` as `expectedContentDigest`, plus `scope: {codebaseId, itemKey, input}` matching the binding. The accept command verifies the authenticated `/user` identity against the current default-branch policy and stores the accepted snapshot in Core. An installation token that cannot prove a human identity is refused. Acceptance can be reused by later runs until title or body changes. Every admission rechecks current text and policy; a drift returns the item to `waiting_acceptance` without exposing the new text to the run. Unaccepted text is not copied into binding inputs, receipts, events or refusal messages.
 
+A temporary Forge outage or rate limit during preparation starts no run and leaves the same binding eligible for the next drain. When Forge recovers, the binding still requires current trust evidence and, if the text is untrusted, exact acceptance. An invalid or missing maintainer policy is rejected rather than retried.
+
 ## Start a stage when a run on an item ends
 
 A trigger file with `on.runEnded` starts its binding when a run of a named workflow completes with a named outcome on an [item](/reference/cli/#items). It is how one stage hands an item to the next with no node that fires anything: the hand-off is a file the deployment owns, the engine reads it at the moment a run completes, and the start goes through the same receipt, preparation, admission, capacity, overlap and queue order as any binding start.

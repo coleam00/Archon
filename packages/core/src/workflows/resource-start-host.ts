@@ -425,10 +425,7 @@ async function prepareClaimedBinding(
     try {
       await host.deps.store.failStartBindingPreparation({
         ...identity,
-        retryable:
-          error instanceof TrustedTextRefusedError &&
-          (error.reason === 'waiting_acceptance' ||
-            error.reason === 'acceptance_requirement_changed'),
+        retryable: error instanceof TrustedTextRefusedError && error.retryable,
         error: error instanceof TrustedTextRefusedError ? error.reason : `${stage}_failed`,
         ...(error instanceof ForgeRequirementError
           ? { forgeRefusal: { pack: error.packKey, failures: error.failures } }
