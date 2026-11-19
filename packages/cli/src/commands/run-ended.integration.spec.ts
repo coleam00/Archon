@@ -1133,6 +1133,77 @@ describe("an item's later starts", () => {
     expect(fixture.rows(RUNS_SQL)).toHaveLength(1);
   }, 90_000);
 
+  test('a start naming another project with --project takes the config of the item in that project', async () => {
+    const fixture = await makeFixture('item-other-project');
+    // A second repository, registered by a start from inside it, with its own item-1.
+    const other = join(fixture.root, 'other');
+    mkdirSync(join(other, '.archon', 'workflows'), { recursive: true });
+    writeFileSync(join(other, '.archon', 'workflows', 'stage-b.yaml'), STAGE_B);
+    expect(await Bun.spawn(['git', 'init', '-q'], { cwd: other }).exited).toBe(0);
+    const start = async (config: string, cwd: string[], item: string) => {
+      writeFileSync(config, 'env:\n  CONFIG_PROOF: x\n');
+      await fixture.cli([
+        'workflow',
+        'run',
+        'stage-b',
+        '--no-worktree',
+        ...cwd,
+        '--config',
+        config,
+        '--item',
+        item,
+        '--input',
+        'plan=p',
+        '--input',
+        'issue=i',
+      ]);
+    };
+    await start(join(fixture.root, 'other.yaml'), ['--cwd', other], 'issue-1');
+    // The invocation's own project holds the same key, and a key the other project lacks.
+    await start(join(fixture.root, 'own.yaml'), [], 'issue-1');
+    await start(join(fixture.root, 'own.yaml'), [], 'issue-2');
+    const [otherRun] = await waitFor(() => completedRuns(fixture, 3), 'the three configured runs');
+    const [{ id: otherProject }] = fixture.rows<{ id: string }>(
+      `SELECT codebase_id AS id FROM remote_agent_workflow_runs WHERE id = '${otherRun?.id}'`
+    );
+
+    const startInOther = (args: string[]) =>
+      fixture.cli([
+        'workflow',
+        'run',
+        'stage-b',
+        '--no-worktree',
+        '--project',
+        otherProject,
+        ...args,
+        '--input',
+        'plan=p',
+        '--input',
+        'issue=i',
+      ]);
+    await startInOther(['--item', 'issue-1']);
+    await startInOther(['--item', 'issue-2']);
+    await startInOther(['--supersedes', String(otherRun?.id).slice(0, 8)]);
+    const runs = await waitFor(() => completedRuns(fixture, 6), 'the starts in the other project');
+
+    const otherKey = `SELECT project_key FROM remote_agent_items i JOIN remote_agent_workflow_runs r ON r.item_id = i.id WHERE r.id = '${otherRun?.id}'`;
+    const written = fixture.rows<{ key: string; inOther: number }>(
+      `SELECT i.key, i.project_key = (${otherKey}) AS inOther FROM remote_agent_workflow_runs r JOIN remote_agent_items i ON r.item_id = i.id ORDER BY r.started_at, r.rowid`
+    );
+    expect(written.slice(3)).toEqual([
+      { key: 'issue-1', inOther: 1 },
+      { key: 'issue-2', inOther: 1 },
+      { key: 'issue-1', inOther: 1 },
+    ]);
+    expect(runConfig(runs[3]).source?.label).toBe(`run ${otherRun?.id} (other.yaml)`);
+    expect(runConfig(runs[4])).toEqual({});
+    // The supersession resolves its short prefix in the other project too, and takes the
+    // config of that item's latest run.
+    expect(runConfig(runs[5]).source?.label).toBe(
+      `run ${runs[3]?.id} (${runConfig(runs[3]).source?.label})`
+    );
+  }, 90_000);
+
   test("an item started on no config keeps none, and a binding's config applies while it has none", async () => {
     const fixture = await makeFixture('item-no-config');
     fixture.bind('build-after-plan', RUN_ENDED);
