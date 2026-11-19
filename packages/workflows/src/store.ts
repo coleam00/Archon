@@ -10,7 +10,7 @@
  */
 import type { AttentionRead } from './schemas/attention-degraded';
 import type { IResourceStartStore } from './resource-start-store';
-import type { SourceReceiptAcceptance } from './schemas/resource-start';
+import type { LinkedRunEndedStart, SourceReceiptAcceptance } from './schemas/resource-start';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { ProviderEventQuery, ProviderEventRecord } from './schemas/provider-event';
 import type { WorkflowEventRow } from './schemas/workflow-event';
@@ -136,6 +136,8 @@ export interface MetricRecordRow {
   completedAt: string;
   /** The raw `structured_output.metrics` value; the engine parses it. */
   metrics: unknown;
+  /** The raw `structured_output.metric_dimensions` value, when the output has one. */
+  metricDimensions?: unknown;
 }
 
 /**
@@ -548,6 +550,15 @@ export interface IWorkflowStore
    * completion is refused before it can write them again. A store without items refuses
    * a non-empty list.
    *
+   * `result.linkedStarts` are run-ended bindings whose stage starts on the items linked to
+   * the ended run's item. The store resolves them in the same transaction, after the
+   * completing write: one receipt on each item holding an active link of the named kind
+   * at the named end, so a link ended before the run completed causes nothing. A store
+   * without items refuses a non-empty list.
+   *
+   * It returns every receipt this call wrote, from both lists, and not those that replayed;
+   * the caller starts those.
+   *
    * `result.asks` is present when the run's workflow declares `returns.asks` and the run is
    * top-level. In the same transaction, and only when this call wins, the asks still open
    * from that workflow on the run's item close as `replaced`, and these open in their
@@ -561,9 +572,10 @@ export interface IWorkflowStore
     result?: {
       outcome?: RunCompletedOutcome;
       startReceipts?: readonly SourceReceiptAcceptance[];
+      linkedStarts?: readonly LinkedRunEndedStart[];
       asks?: readonly ItemAsk[];
     }
-  ): Promise<void>;
+  ): Promise<{ startReceipts: SourceReceiptAcceptance[] }>;
   /**
    * Atomically fail a pending or running run and persist its matching lifecycle event.
    * `failed` is false when the run was already terminal: a no-op that leaves the winning

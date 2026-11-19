@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots, testTimeout } from '@archon/paths/test-utils';
-import { TEST_ISOLATION_DIRECTIVE } from './package-test-groups';
+import { TEST_ISOLATION_DIRECTIVE, WINDOWS_TEST_DIRECTIVE } from './package-test-groups';
 import {
   junitDestination,
   parseTestArguments,
@@ -770,6 +770,32 @@ test('a test that testGroups does not name still runs, whole or requested', asyn
   expect(await run(root, ['unlisted.test'])).toBe(0);
   expect(readFileSync(join(root, 'ran'), 'utf8')).toBe('unlisted;');
 });
+
+test(
+  '--windows runs exactly the marked files, not unmarked files whose path ends the same way',
+  async () => {
+    const root = fixture();
+    const probe = `import { test } from 'bun:test';\nimport { appendFileSync } from 'node:fs';\ntest('ran', () => appendFileSync('ran', import.meta.path + '\\n'));\n`;
+    mkdirSync(join(root, 'src/db'), { recursive: true });
+    mkdirSync(join(root, 'src/fixtures/src/db'), { recursive: true });
+    writeFileSync(join(root, 'src/db/probe.test.ts'), `${WINDOWS_TEST_DIRECTIVE}\n${probe}`);
+    writeFileSync(join(root, 'src/fixtures/src/db/probe.test.ts'), probe);
+
+    expect(await run(root, ['--windows'])).toBe(0);
+    expect(
+      readFileSync(join(root, 'ran'), 'utf8')
+        .trim()
+        .split('\n')
+        .map(path => path.replaceAll('\\', '/'))
+    ).toEqual([realpathSync(join(root, 'src/db/probe.test.ts')).replaceAll('\\', '/')]);
+
+    unlinkSync(join(root, 'src/db/probe.test.ts'));
+    unlinkSync(join(root, 'ran'));
+    expect(await run(root, ['--windows'])).toBe(0);
+    expect(existsSync(join(root, 'ran'))).toBe(false);
+  },
+  testTimeout(20_000)
+);
 
 test('JUnit destination follows the final reporter and outfile options', () => {
   for (const [args, expected] of [

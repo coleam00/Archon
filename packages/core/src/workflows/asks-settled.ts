@@ -30,7 +30,6 @@ import {
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { readAsksResult, readSubrunMetadata } from '@archon/workflows/schemas/run-metadata';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { resolveWorkflowName } from '@archon/workflows/router';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import {
   bindingProjectKey,
@@ -42,6 +41,7 @@ import {
   type AsksSettledBinding,
   type RunEndedStartsDependencies,
 } from './run-ended';
+import { selectStartedWorkflow, type StartedWorkflow } from './binding-workflow';
 
 export interface AsksSettledStartsDependencies
   extends Omit<RunEndedStartsDependencies, 'endedCheckout'> {
@@ -255,17 +255,18 @@ export async function asksSettledBindingCheck(
     deps.providers
   );
   const workflows = discovered.workflows.map(found => found.workflow);
+  const started = selectStartedWorkflow(binding.launch, discovered);
   return [
     ...askingWorkflowProblems(asksSettled, workflows),
-    ...checkoutProblems(asksSettled, binding.launch.workflowName, workflows),
-    ...startedWorkflowProblems(binding.launch.workflowName, asksSettled.inputs, workflows),
+    ...checkoutProblems(asksSettled, started, workflows),
+    ...startedWorkflowProblems(started, asksSettled.inputs),
   ];
 }
 
 /** With `checkout`, both runs need a worktree: one to leave it, one to take it. */
 function checkoutProblems(
   asksSettled: AsksSettledTrigger,
-  started: string,
+  started: StartedWorkflow,
   workflows: readonly ResolvedWorkflow[]
 ): string[] {
   if (asksSettled.checkout === undefined) return [];
@@ -277,7 +278,7 @@ function checkoutProblems(
     problems.push(
       `workflow '${asking.name}' runs in place (worktree.enabled: false), so it leaves no checkout for checkout: asking-run`
     );
-  const target = resolveWorkflowName(started, workflows);
+  const target = 'workflow' in started ? started.workflow : undefined;
   if (target?.worktree?.enabled === false)
     problems.push(
       `workflow '${target.name}' runs in place (worktree.enabled: false), so it cannot take the asking run's checkout`

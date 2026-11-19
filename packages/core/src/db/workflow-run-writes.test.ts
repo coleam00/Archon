@@ -60,7 +60,7 @@ describe('workflow run writes', () => {
 
       await updateWorkflowRun('workflow-run-123', { metadata: { lastStep: 'plan' } });
 
-      expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('metadata = metadata ||'), [
+      expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('metadata = (metadata ||'), [
         JSON.stringify({ lastStep: 'plan' }),
         'workflow-run-123',
       ]);

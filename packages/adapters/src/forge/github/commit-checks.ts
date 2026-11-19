@@ -21,11 +21,11 @@ import {
   location,
   type Fetch,
 } from './api';
-import { readWorkflowRuns } from './workflow-runs';
+import { type ListedWorkflowRun, readWorkflowRuns } from './workflow-runs';
 
 const pullRequestSchema = z.object({ head: z.object({ sha: z.string().min(1) }) });
 const checkRunSchema = z.object({
-  id: z.union([z.string().min(1), z.number().int()]),
+  id: z.number().int(),
   name: z.string().min(1),
   status: z.string().min(1),
   conclusion: z.string().nullable().optional(),
@@ -103,7 +103,38 @@ function statusObservation(status: z.infer<typeof statusSchema>): CheckObservati
   };
 }
 
-/** Every check run and the latest status per context on `revision`, with each run's rerun group. */
+type CheckRun = z.infer<typeof checkRunSchema>;
+
+/**
+ * GitHub's `filter=latest` is per check suite, so a commit with two suites of one
+ * workflow (a cancelled run and its replacement) lists every job twice. A check is a
+ * name within one Actions workflow, or within one other app; only the suite holding
+ * its newest run counts. Check-run IDs grow with creation, so a rerun of an older
+ * suite becomes the newest again. Runs whose workflow cannot be identified stay
+ * scoped to their own suite, so they are never hidden by another suite's result.
+ */
+function latestCheckRuns(
+  runs: CheckRun[],
+  workflowOf: (run: CheckRun) => ListedWorkflowRun | undefined
+): CheckRun[] {
+  const checkKey = (run: CheckRun): string => {
+    const workflow = workflowOf(run);
+    if (workflow) return `workflow:${String(workflow.workflow_id)}:${run.name}`;
+    const app = run.app?.slug;
+    if (app && app !== 'github-actions') return `app:${app}:${run.name}`;
+    return `suite:${String(run.check_suite?.id ?? null)}:${run.name}`;
+  };
+  const newest = new Map<string, CheckRun>();
+  for (const run of runs) {
+    const key = checkKey(run);
+    const current = newest.get(key);
+    if (!current || run.id > current.id) newest.set(key, run);
+  }
+  // Same-name runs inside the newest suite are distinct units and all survive.
+  return runs.filter(run => newest.get(checkKey(run))?.check_suite?.id === run.check_suite?.id);
+}
+
+/** The newest run of every check and the latest status per context on `revision`, with each run's rerun group. */
 async function readCommitChecks(
   fetchImpl: Fetch,
   token: string,
@@ -137,13 +168,15 @@ async function readCommitChecks(
     contexts.add(context);
     return true;
   });
+  const workflowOf = (run: CheckRun): ListedWorkflowRun | undefined => {
+    const associated = workflows.filter(
+      workflow => workflow.head_sha === revision && workflow.check_suite_id === run.check_suite?.id
+    );
+    return associated.length === 1 ? associated[0] : undefined;
+  };
   const units = [
-    ...runs.map(run => {
-      const associated = workflows.filter(
-        workflow =>
-          workflow.head_sha === revision && workflow.check_suite_id === run.check_suite?.id
-      );
-      const workflow = associated.length === 1 ? associated[0] : undefined;
+    ...latestCheckRuns(runs, workflowOf).map(run => {
+      const workflow = workflowOf(run);
       return {
         ...checkRunObservation(run),
         rerun:

@@ -31,6 +31,7 @@ import {
 import type { IWorkflowHostStore } from '@archon/core/workflows/host-store';
 import type { User } from '@archon/core/schemas/user';
 import type { Codebase } from '@archon/core/schemas/codebase';
+import { defaultCwdKey, isSameDefaultCwd } from '@archon/core/utils/codebase-path';
 
 const unsupported = async (): Promise<never> => {
   throw new Error('Unsupported test-store operation');
@@ -46,10 +47,15 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
       listCodebases: async () => [...codebases.values()],
       listCodebaseClaims: async () => [...codebases.values()],
       findCodebaseByDefaultCwd: async cwd =>
-        [...codebases.values()].find(row => row.default_cwd === cwd) ?? null,
+        [...codebases.values()].find(row => isSameDefaultCwd(row.default_cwd, cwd)) ?? null,
       findCodebaseByPathPrefix: async cwd =>
         [...codebases.values()]
-          .filter(row => isPathInside(row.default_cwd, cwd, { includeRoot: true, lexical: true }))
+          .filter(row =>
+            isPathInside(defaultCwdKey(row.default_cwd), defaultCwdKey(cwd), {
+              includeRoot: true,
+              lexical: true,
+            })
+          )
           .sort((a, b) => resolve(b.default_cwd).length - resolve(a.default_cwd).length)[0] ?? null,
       findCodebaseByName: async name =>
         [...codebases.values()].find(row => row.name === name) ?? null,

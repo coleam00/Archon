@@ -1,13 +1,11 @@
 # Dry-run fixture, an ask: route cannot launch the item and asks. The run pauses on
 # the question, options and recommendation route wrote, which apply hands on unchanged.
-start:
-  repo: { host: github.com, path: example/repo }
-  message: false
 facts:
   path: route
   item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
   url: "https://github.com/example/repo/issues/7"
-  record: null
+  read_at: "2026-11-18T00:00:00.000Z"
+  record: {}
   brief: ""
   rounds: []
   at_cap: false
@@ -15,9 +13,6 @@ facts:
   continues: null
   branch: "build/7-stub-fixture"
   related: []
-blocked:
-  blocked: []
-  blocked_count: 0
 route:
   decision: ask
   route: plan
@@ -45,8 +40,7 @@ apply:
   item: "7"
   pr: ""
   asked: { ask: *ask, brief: "stub-brief: build issue 7 under the ruling", by: route }
-  healthy: true
 fixture:
-  inputs: { repo_host: github.com, repo_path: example/repo }
+  inputs: { repo_host: github.com, repo_path: example/repo, number: "7" }
   expect: paused
   reached: [facts, route, apply]

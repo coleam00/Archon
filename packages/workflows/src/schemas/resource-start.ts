@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { forgeSubjectRefSchema } from '@archon/forge';
 import { isJsonPointer } from '../json-pointer';
 import { jsonValueSchema } from '../output-ref';
+import { itemLinkKindSchema } from './item-link';
 import { ITEM_KEY_MAX_LENGTH, itemKeySchema, workflowRunOriginSchema } from './workflow-run';
 import {
   DEFAULT_RESOURCE_CAPACITY,
@@ -594,18 +595,38 @@ export type SourceReceiptAcceptance = z.infer<typeof sourceReceiptAcceptanceSche
 
 /**
  * Where a run-ended binding reads one input of the stage it starts: a JSON Pointer into
- * the ended run's result (its `returns:` node output), or one of the ended run's own
- * inputs by name. Data only: no expression, and nothing here names a workflow.
+ * the ended run's result (its `returns:` node output), one of the ended run's own inputs
+ * by name, or the key of the ended run's item (which item ended, for a linked start).
+ * Data only: no expression, and nothing here names a workflow.
  */
-export const runEndedInputSourceSchema = z.union([
+const runInputSources = [
   z.object({ result: z.string().refine(isJsonPointer, 'Invalid JSON Pointer') }).strict(),
   z.object({ input: z.string().min(1) }).strict(),
+] as const;
+export const runEndedInputSourceSchema = z.union([
+  ...runInputSources,
+  z.object({ item: z.literal('key') }).strict(),
 ]);
 export type RunEndedInputSource = z.infer<typeof runEndedInputSourceSchema>;
 
 /**
+ * `on.runEnded.linked`: the stage starts on the items the ended run's item is linked to
+ * (the holders), not on that item, once for every holder each time the run ends with the
+ * outcome; the stage judges whether its item is ready. `kind` names the link and `holder`
+ * the end of it the started item is on; the ended run's item is on the other end. An
+ * order whose members are `part_of` it uses `holder: 'to'`; an item that `depends_on`
+ * another uses `holder: 'from'`. The engine gives the kind no meaning: the file names
+ * both the kind and the end. Only links active when the run completes count.
+ */
+export const runEndedLinkedSchema = z
+  .object({ kind: itemLinkKindSchema, holder: z.enum(['from', 'to']) })
+  .strict();
+export type RunEndedLinked = z.infer<typeof runEndedLinkedSchema>;
+
+/**
  * `on.runEnded` of a trigger file: the binding starts when a run of `workflowName`
- * completes with `outcome` on an item, in the project the binding launches in.
+ * completes with `outcome` on an item, in the project the binding launches in. Without
+ * `linked`, the stage starts on the same item.
  */
 export const runEndedTriggerSchema = z
   .object({
@@ -617,9 +638,28 @@ export const runEndedTriggerSchema = z
      * at the commit it ended on, or is refused naming why.
      */
     checkout: z.literal('ended-run').optional(),
+    linked: runEndedLinkedSchema.optional(),
   })
-  .strict();
+  .strict()
+  // The ended run's checkout is its own item's work, not the holder's.
+  .refine(trigger => trigger.linked === undefined || trigger.checkout === undefined, {
+    message: 'A linked start takes no checkout: the ended run left it for its own item',
+    path: ['checkout'],
+  });
 export type RunEndedTrigger = z.infer<typeof runEndedTriggerSchema>;
+
+/**
+ * A linked run-ended start, as the completing write resolves it. Which items hold an
+ * active link to the ended run's item can only be read exactly inside the transaction
+ * that completes the run. `acceptance` is the receipt for the ended run; the store sets
+ * its `id`, `itemKey` and `deliveryId` per holder.
+ */
+export interface LinkedRunEndedStart {
+  link: RunEndedLinked;
+  endedRunId: string;
+  endedItemId: string;
+  acceptance: SourceReceiptAcceptance;
+}
 
 /**
  * Where an asks-settled binding reads one input of the stage it starts: what a run-ended
@@ -627,7 +667,7 @@ export type RunEndedTrigger = z.infer<typeof runEndedTriggerSchema>;
  * itself, each ask with its question, how it closed and who closed it.
  */
 export const asksSettledInputSourceSchema = z.union([
-  ...runEndedInputSourceSchema.options,
+  ...runInputSources,
   z.object({ answers: z.literal(true) }).strict(),
 ]);
 export type AsksSettledInputSource = z.infer<typeof asksSettledInputSourceSchema>;

@@ -35,7 +35,7 @@ const getMetricsRoute = createRoute({
       description: 'OK',
     },
     400: jsonError(
-      'Malformed window or compare cut, compare with byModel, or a byModel node no producing run ran'
+      'Malformed window, compare cut or byDimension key, byModel with compare or byDimension, a byModel node no producing run ran, or a byDimension key no record carries'
     ),
     500: jsonError('Server error'),
   },
@@ -43,15 +43,13 @@ const getMetricsRoute = createRoute({
 
 export function registerMetricsRoute(app: OpenAPIHono, store: MetricsStore): void {
   openApiRouteRegistrar(app)(getMetricsRoute, async c => {
-    const { since, until, name, subject, codebaseId, compare, byModel } = getValidatedQuery(
-      c,
-      metricsQuerySchema
-    );
+    const { since, until, name, subject, codebaseId, compare, byModel, byDimension } =
+      getValidatedQuery(c, metricsQuerySchema);
     let window: { since: Date; until: Date };
     let split: MetricsSplit;
     try {
       window = resolveMetricsWindow({ since, until });
-      split = resolveMetricsSplit({ compare, byModel });
+      split = resolveMetricsSplit({ compare, byModel, byDimension });
     } catch (error) {
       if (!(error instanceof MetricsQueryError)) throw error;
       return apiError(c, 400, error.message);
@@ -67,7 +65,8 @@ export function registerMetricsRoute(app: OpenAPIHono, store: MetricsStore): voi
         })
       );
     } catch (error) {
-      // A byModel node no producing run ran, listing the AI nodes they did run.
+      // A byModel node no producing run ran, or a byDimension key no record carries,
+      // listing what they did run or carry.
       if (error instanceof MetricsQueryError) return apiError(c, 400, error.message);
       getLog().error({ err: error }, 'query_metrics_failed');
       return apiError(c, 500, 'Failed to query metrics');

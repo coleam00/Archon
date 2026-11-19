@@ -219,7 +219,7 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
     const recorded = withMerge(doc, { at, run_id: runId, entry, status: raised ? 'asking' : status, pr: item.pr, release: !raised });
     if (status !== 'returned') return recorded;
     const returned = { ...entry, decision: 'returned by the merge queue' };
-    return withBuild(recorded, { at, run_id: runId, round: null, entry: returned, status: 'next', brief: decision.brief, release: true });
+    return withBuild(recorded, { at, run_id: runId, round: null, entry: returned, status: 'next', brief: decision.brief });
   });
   if (!written) return false;
   if (status === 'merged') {

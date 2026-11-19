@@ -71,11 +71,19 @@ The standing front of the pack, started by trigger bindings on issue and label e
 
 #### `archon-build-queue`
 
-The stage after intake. Intake starts it for an item it routed, through the build-queue binding, and the binding's schedule picks up the rest. Each run claims the triaged item that sorts first, the issue `--input number=<n>` names, or the issue its message describes, runs one round on it from a brief, and reads how the round ended. A round is `archon-ship` without its triage, since intake already triaged the item. A clear case acts on its own: the item is done when its pull request is reviewed Ready at its head, and a correctable finding or a stop the issue already answers starts the item's next round at once through the build-queue binding. An unclear one pauses as one attention item with the agent's recommendation and declared choices; the answer is written into the issue body as a dated "Current scope" section. [Build queue](/guides/sdlc-operations/#build-queue) covers pickup, rounds, the questions it asks and [work orders](/guides/sdlc-operations/#work-orders), which limit a scheduled queue to the items you approved.
+The stage after intake. Each run builds one issue, the one `--input number=<n>` names, on that issue's item (`--item issue-<n>`), where the engine admits one build run at a time. The engine starts it when the issue's intake run ends with a build route, and `archon-build-pick` starts it for every other issue that waits. The run takes one round on the issue from a brief, and reads how the round ended. A round is `archon-ship` without its triage, since intake already triaged the item. A clear case acts on its own: the item is done when its pull request is reviewed Ready at its head, and a correctable finding or a stop the issue already answers leaves the item waiting for its next round, which the pick the engine starts when the run ends starts. An unclear one pauses as one attention item with the agent's recommendation and declared choices; the answer is written into the issue body as a dated "Current scope" section. [Build queue](/guides/sdlc-operations/#build-queue) covers rounds, the questions it asks and [work orders](/guides/sdlc-operations/#work-orders), which limit the pick to the items you approved.
 
 **When to use it**: You want triaged issues worked to reviewed pull requests without answering every routine stop yourself. The pack's [setup guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-up-the-pack) runs it by hand and binds it.
 
 **What it produces**: Reviewed pull requests, the queue's record on each work item (`facts.build`: status, rounds and decisions), and attention items for the decisions that need a person.
+
+#### `archon-build-pick`
+
+Chooses what the build queue builds next. It lists the issues that wait for a build round, in pickup order, and fires the `build-queue` binding once for each, on that issue's item. The binding's capacity admits as many as it has slots and skips the rest, and the engine skips an issue a build run already holds, so the pick holds no build slot and keeps no count. It runs on a schedule and when a build run ends. With a message it resolves what you said to an issue to start, a choice between issues, a work order, or new work it files for intake: `archon workflow run archon-build-pick "build the retry fix"`.
+
+**When to use it**: Bind it beside `archon-build-queue`, or say in words what to build.
+
+**What it produces**: Starts of `archon-build-queue`, a work order, or a filed issue. It builds nothing itself.
 
 #### `archon-merge-queue`
 
@@ -252,7 +260,8 @@ archon workflow run archon-deliver --adopt <run-id> "#142: the flaky test is out
 | `archon-ship` | Issue or request to reviewed PR | Yes | Yes |
 | `archon-triage` | Decide what an item needs next | No | No |
 | `archon-intake` | Triage new issues as they arrive (trigger-started) | No | No |
-| `archon-build-queue` | Work triaged issues to reviewed PRs (trigger-started) | Yes | Yes |
+| `archon-build-queue` | Work one triaged issue to a reviewed PR (trigger-started) | Yes | Yes |
+| `archon-build-pick` | Start a build for each waiting issue, or for work named in words (trigger-started) | No | No |
 | `archon-merge-queue` | Merge reviewed, green PRs the build queue finished (trigger-started) | No | No |
 | `archon-discoveries` | File, track or drop what finished runs discovered | No | No |
 | `archon-split` | File the issues a large item splits into when it can't be built whole (trigger-started) | No | No |

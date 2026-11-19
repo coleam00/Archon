@@ -1657,6 +1657,32 @@ declare module 'archon:script' {
         readonly bodyDigest: string;
       };
     };
+    'attachment.put': {
+      readonly request: {
+        readonly repo: {
+          readonly host: string;
+          readonly path: string;
+          readonly hostClaim?: true;
+        };
+        readonly contentType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+        readonly content: string;
+      };
+      readonly result: {
+        readonly target: {
+          readonly host: string;
+          readonly path: string;
+          readonly hostClaim?: true;
+        };
+        readonly outcome: 'applied';
+        readonly changed: boolean;
+        readonly attachment: {
+          readonly url: string;
+          readonly digest: string;
+          readonly bytes: number;
+          readonly contentType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+        };
+      };
+    };
     'metadata': {
       readonly request: {
         readonly host: string;
@@ -1711,7 +1737,7 @@ declare module 'archon:script' {
       readonly exitCode?: number | null;
     };
     readonly mutation?: {
-      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body';
+      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body' | 'attachment.put';
       readonly target: {
         readonly repo: {
           readonly host: string;
@@ -1804,7 +1830,7 @@ declare module 'archon:script' {
         readonly descriptionDigest: string;
       };
     } | {
-      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body';
+      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body' | 'attachment.put';
       readonly target: {
         readonly repo: {
           readonly host: string;
@@ -1911,7 +1937,7 @@ declare module 'archon:script' {
       };
       readonly leaveBehind: string;
     } | {
-      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body';
+      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body' | 'attachment.put';
       readonly target: {
         readonly repo: {
           readonly host: string;

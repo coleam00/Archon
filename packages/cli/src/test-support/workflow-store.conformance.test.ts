@@ -1,3 +1,5 @@
+import { expect, test } from 'bun:test';
+import { join, resolve } from 'node:path';
 import {
   describeWorkflowStoreConformance,
   CONFORMANCE_CODEBASE_ID,
@@ -26,3 +28,21 @@ describeWorkflowStoreConformance('in-memory CLI test store', async () => {
     close: async () => {},
   };
 });
+
+test.skipIf(process.platform !== 'win32')(
+  'the test host matches a forward-slash, lowercase-drive registration as the real stores do',
+  async () => {
+    const records = createInMemoryWorkflowHostStore();
+    const checkout = resolve('archon-host-lookup');
+    const created = await records.codebases.createCodebase({
+      name: 'host-lookup',
+      default_cwd: checkout.charAt(0).toLowerCase() + checkout.slice(1).replaceAll('\\', '/'),
+    });
+
+    expect((await records.codebases.findCodebaseByDefaultCwd(checkout))?.id).toBe(created.id);
+    expect((await records.codebases.findCodebaseByPathPrefix(join(checkout, 'src')))?.id).toBe(
+      created.id
+    );
+    expect(await records.codebases.findCodebaseByPathPrefix(`${checkout}-staging`)).toBeNull();
+  }
+);

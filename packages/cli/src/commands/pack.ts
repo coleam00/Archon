@@ -6,7 +6,7 @@
  *
  * The pack declares each binding once (`bindings:` in its `.pack/pack.yaml`); the operator
  * supplies the repository, the host, the run-as user and the checkout, and optionally the
- * run config every start launches with and where the pack's workflows are discovered.
+ * default run config of their starts (an item in flight keeps its own) and where the pack's workflows are discovered.
  *
  * Every file goes to `--out` and nothing registers it: the operator still runs
  * `archon trigger fire` and `archon trigger schedule install` for a timer binding, adds an
@@ -66,7 +66,10 @@ export interface PackBindingsOptions {
   host?: string;
   runAs?: string;
   out?: string;
-  /** A run config file every written binding launches with (`launch.configSource`). */
+  /**
+   * The default run config of the written bindings' starts (`launch.configSource`). A start
+   * on an item whose latest run recorded a config carries that one instead.
+   */
   config?: string;
   /** Where the pack's workflows are discovered when it does not live in the checkout. */
   workflowSource?: string;

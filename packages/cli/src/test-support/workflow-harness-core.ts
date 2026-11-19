@@ -9,7 +9,9 @@ mock.module('@archon/core/services/provider-admission', () => ({
 
 const realRunConfig = await import('@archon/core/config/run-config');
 const realSealRunConfig = realRunConfig.sealWorkflowRunConfig;
+// Only sealing changes: it needs an encryption key the harness does not set.
 mock.module('@archon/core/config/run-config', () => ({
+  ...realRunConfig,
   sealWorkflowRunConfig: (...args: Parameters<typeof realSealRunConfig>) => {
     const previous = process.env.TOKEN_ENCRYPTION_KEY;
     try {

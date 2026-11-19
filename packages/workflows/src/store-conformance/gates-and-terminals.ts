@@ -127,8 +127,9 @@ export function describeGatesAndTerminalsConformance(getHarness: () => WorkflowS
           const won = results.filter(
             result =>
               result.status === 'fulfilled' &&
-              result.value !== undefined &&
-              ('failed' in result.value ? result.value.failed : result.value.cancelled)
+              ('failed' in result.value
+                ? result.value.failed
+                : 'cancelled' in result.value && result.value.cancelled)
           );
           expect(won).toHaveLength(1);
         }

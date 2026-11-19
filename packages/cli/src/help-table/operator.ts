@@ -64,7 +64,8 @@ export const operatorHelp: HelpGroup = {
         },
         {
           spec: '--config <file>',
-          description: 'A run config every written binding launches with (model aliases)',
+          description:
+            "Default run config for the bindings' starts (model aliases); an item keeps its own",
         },
         {
           spec: '--workflow-source <dir>',

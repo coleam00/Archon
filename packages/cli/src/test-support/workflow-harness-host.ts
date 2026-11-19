@@ -103,6 +103,7 @@ const { createSqlWorkflowOperations } = await import('@archon/core/workflows/sql
 export function createTestWorkflowHost(): import('@archon/core/workflows/host-store').WorkflowHost {
   const host = createSqlWorkflowHost();
   host.deps.store.pruneStateRevisions = mock(async () => ({ count: 0 }));
+  host.deps.store.getInstallHold = async () => null;
   host.deps.store.createWorkflowEvent = mockCreateWorkflowEvent;
   host.deps.store.persistWorkflowEvent = mockPersistWorkflowEvent;
   host.deps.store.getWorkflowEventHead = async () => testFeedCursor(committedTestEvents.length);

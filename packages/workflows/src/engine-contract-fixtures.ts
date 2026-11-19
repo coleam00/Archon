@@ -114,7 +114,7 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     getCodebase: async () => null,
     getCodebaseEnvVars: async () => ({}),
     updateWorkflowActivity: noop,
-    completeWorkflowRun: noop,
+    completeWorkflowRun: async () => ({ startReceipts: [] }),
     pauseWorkflowRun: noop,
     pauseWorkflowRunForWait: noop,
     clearWorkflowWaitContext: async (id, _wait, completion) => ({

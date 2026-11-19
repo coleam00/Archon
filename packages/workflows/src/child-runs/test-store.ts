@@ -213,7 +213,7 @@ export class InMemoryStore {
       r.outcome = outcome?.kind === 'boolean' ? outcome.value : null;
       r.completed_outcome = outcome?.value ?? null;
     }
-    return Promise.resolve();
+    return Promise.resolve({ startReceipts: [] });
   };
 
   failWorkflowRun = (id: string, error: string): Promise<{ failed: boolean }> => {

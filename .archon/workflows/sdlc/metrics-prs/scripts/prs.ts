@@ -2,8 +2,8 @@
  * Metric records for the pull requests the build queue opened: opened, merged,
  * abandoned and the merge rate, and for each merged one the review rounds it took to
  * reach Ready, each attributed to the build-queue runs that built it; and for each issue
- * the queue worked, whether it was built and merged, its lead time, rounds and asks, in
- * total and per route. Pull requests a
+ * the queue worked, whether it was built and merged, its lead time, rounds and asks, with
+ * its route. Pull requests a
  * round only continued, and merged ones whose rounds cannot be counted, are reported in
  * `skipped`.
  * Merged pull requests merged at or after `lines_since` also record the test and
@@ -16,7 +16,7 @@
  */
 
 import { dirname, join } from 'node:path';
-import { inWindow, issueMetricRecords } from '../../.shared/factory-issues.ts';
+import { inWindow, issueMetricRecords, metricOutput } from '../../.shared/factory-issues.ts';
 import { factoryPrRuns, factoryPrs, prMetricRecords, readPrFacts, sinceTime } from '../../.shared/factory-prs.ts';
 import { artifactsDir, emit, input, refuse, state } from 'archon:script';
 import { lineRecords, readPrFiles } from '../../.shared/pr-lines.ts';
@@ -48,7 +48,7 @@ try {
   const merged = prs.factory.filter(pr => pr.state === 'MERGED' && Date.parse(pr.mergedAt ?? '') >= linesFrom);
   const lines = lineRecords(merged, runsByUrl, readPrFiles);
   emit({
-    metrics: [...prMetricRecords(factory, runsByUrl), ...reviews.metrics, ...issueMetricRecords(items, window), ...lines.metrics],
+    ...metricOutput([...prMetricRecords(factory, runsByUrl), ...reviews.metrics, ...issueMetricRecords(items, window), ...lines.metrics]),
     skipped: prs.skipped,
     review_rounds_skipped: reviews.skipped,
     review_rounds_distribution: reviews.distribution,

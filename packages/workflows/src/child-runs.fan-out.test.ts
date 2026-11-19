@@ -1091,7 +1091,17 @@ nodes:
       );
       const store = new InMemoryStore();
       const platform = makePlatform();
-      platform.sendMessage = mock(() => Promise.reject(new Error('platform down')));
+      // Only the fan-out notice fails. Failing every send would also put the run's
+      // critical messages through their real 1 s retry backoff, seconds of wall clock
+      // that prove nothing about the notifier.
+      let noticeFailures = 0;
+      platform.sendMessage = mock((_conversationId: string, message: string) => {
+        if (!message.includes('Fan-out completed with unfinished children')) {
+          return Promise.resolve();
+        }
+        noticeFailures++;
+        return Promise.reject(new Error('platform down'));
+      });
       const result = await executeWorkflow(
         makeDeps(store),
         platform,
@@ -1102,7 +1112,7 @@ nodes:
         { conversationId: 'conv-db' }
       );
       expect(result.success).toBe(true);
-      expect(platform.sendMessage).toHaveBeenCalled();
+      expect(noticeFailures).toBe(1);
       const outcome = workFanOutOutcome(store.events, 'node_completed') as {
         slots: { child_run_id?: string }[];
       };

@@ -480,6 +480,76 @@ describe('a run-ended binding', () => {
     });
   }, 90_000);
 
+  test('a linked binding starts the stage on the order each time a member ends, naming the member', async () => {
+    const fixture = await makeFixture('order');
+    fixture.bind('build-order', {
+      runEnded: {
+        workflowName: 'stage-a',
+        outcome: 'planned',
+        linked: { kind: 'part_of', holder: 'to' },
+        inputs: { plan: { result: '/plan' }, issue: { item: 'key' } },
+      },
+    });
+    // A link names items of a registered project, and the first run registers it.
+    await fixture.cli([
+      'workflow',
+      'run',
+      'stage-b',
+      '--no-worktree',
+      '--input',
+      'plan=p',
+      '--input',
+      'issue=i',
+    ]);
+    for (const member of ['m1', 'm2'])
+      await fixture.cli([
+        'workflow',
+        'link',
+        '--item',
+        member,
+        '--kind',
+        'part_of',
+        '--to',
+        'order-1',
+      ]);
+    const plan = async (member: string, count: number): Promise<RunRow[]> => {
+      await fixture.cli([
+        'workflow',
+        'run',
+        'stage-a',
+        '--no-worktree',
+        '--item',
+        member,
+        '--input',
+        `plan=${member}`,
+        '--input',
+        'issue=i1',
+      ]);
+      return waitFor(() => completedRuns(fixture, count), `${member} and the start its end caused`);
+    };
+    await plan('m1', 3);
+    const runs = await plan('m2', 5);
+    expect(runs.map(run => run.workflow_name)).toEqual([
+      'stage-b',
+      'stage-a',
+      'stage-b',
+      'stage-a',
+      'stage-b',
+    ]);
+
+    const order = itemReadSchema.parse(
+      JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'order-1', '--json']))
+    );
+    expect(order.runs.map(run => [run.id, run.cause])).toEqual([
+      [runs[2]?.id, { kind: 'run_ended', runId: runs[1]?.id, sourceInstanceId: 'build-order' }],
+      [runs[4]?.id, { kind: 'run_ended', runId: runs[3]?.id, sourceInstanceId: 'build-order' }],
+    ]);
+    const inputsOf = (run: RunRow | undefined) =>
+      (JSON.parse(run?.metadata ?? '{}') as { inputs?: Record<string, string> }).inputs;
+    expect(inputsOf(runs[2])).toEqual({ plan: 'planned: m1', issue: 'm1' });
+    expect(inputsOf(runs[4])).toEqual({ plan: 'planned: m2', issue: 'm2' });
+  }, 90_000);
+
   test('a hand run with no trigger host starts the stage its end caused, with no other command', async () => {
     const fixture = await makeFixture('hand');
     fixture.bind('build-after-plan', RUN_ENDED);
@@ -870,6 +940,13 @@ describe('trigger check', () => {
     fixture.bind('plan-again', RUN_ENDED, { workflowName: 'stage-a' });
     const gone = join(fixture.root, 'deleted-checkout');
     fixture.bind('stale', RUN_ENDED, { cwd: gone });
+    const linked = { kind: 'part_of', holder: 'to' };
+    // A linked binding starts the stage on other items: no duplicate of a same-item one.
+    fixture.bind('order-after-plan', { runEnded: { ...RUN_ENDED.runEnded, linked } });
+    fixture.bind('order-typo', {
+      runEnded: { workflowName: 'stage-a', outcome: 'plannned', linked },
+    });
+    fixture.bind('order-missing', { runEnded: { workflowName: 'stage-z', outcome: 'x', linked } });
 
     const checked = await fixture.attempt(['trigger', 'check']);
     expect(checked.exitCode).not.toBe(0);
@@ -885,9 +962,209 @@ describe('trigger check', () => {
     expect(problems.get('plan-again')).toEqual([
       "binding starts 'stage-a', the workflow whose end fires it: each run that completes with 'planned' starts another on the same item",
     ]);
+    expect(problems.get('order-after-plan')).toEqual([]);
+    expect(problems.get('order-typo')).toEqual([
+      "outcome 'plannned' is not one 'stage-a' completes with ('planned', 'blocked')",
+    ]);
+    expect(problems.get('order-missing')).toEqual(["workflow 'stage-z' is not in this project"]);
     expect(problems.get('stale')).toEqual([
       `binding.launch.cwd '${gone}' does not exist, so this binding never starts; fix the path or remove the file`,
     ]);
+  }, 90_000);
+});
+
+describe("an item's later starts", () => {
+  const runConfig = (run: RunRow | undefined): { source?: { label: string }; keys?: string[] } =>
+    (JSON.parse(run?.metadata ?? '{}') as { run_config?: object }).run_config ?? {};
+  const inputsFile = (fixture: Fixture): string => {
+    const path = join(fixture.root, 'inputs.json');
+    writeFileSync(path, JSON.stringify({ plan: 'p', issue: 'i' }));
+    return path;
+  };
+
+  /** A fire-only binding file for `stage-b` that launches with its own `configSource`. */
+  const configuredBinding = (fixture: Fixture, name: string, config: string): string => {
+    const path = fixture.fireConfig(name, 'stage-b', 'stage-b');
+    const file = JSON.parse(readFileSync(path, 'utf8'));
+    file.binding.launch.configSource = config;
+    writeFileSync(path, JSON.stringify(file));
+    return path;
+  };
+
+  test('run on the config the item was started with, through a run end, a hand start, a fire and a rerun', async () => {
+    const fixture = await makeFixture('item-config');
+    fixture.bind('build-after-plan', RUN_ENDED);
+    const config = join(fixture.root, 'a.yaml');
+    writeFileSync(config, 'env:\n  CONFIG_PROOF: a\n');
+    await fixture.cli([
+      'workflow',
+      'run',
+      'stage-a',
+      '--no-worktree',
+      '--config',
+      config,
+      '--item',
+      'issue-1',
+      '--input',
+      'plan=p1',
+      '--input',
+      'issue=i1',
+    ]);
+    const [a, b] = await waitFor(() => completedRuns(fixture, 2), 'A and the B its end started');
+    // A detached hand start on the item naming no config, as the SDLC pack's re-triage
+    // launches intake.
+    await fixture.cli([
+      'workflow',
+      'run',
+      'stage-b',
+      '--no-worktree',
+      '--item',
+      'issue-1',
+      '--input',
+      'plan=p2',
+      '--input',
+      'issue=i1',
+      '--detach',
+      '--json',
+    ]);
+    const [, , c] = await waitFor(() => completedRuns(fixture, 3), 'the hand start');
+    // A binding file whose own config is the install's: the item's config wins over it.
+    const other = join(fixture.root, 'b.yaml');
+    writeFileSync(other, 'env:\n  OTHER_PROOF: b\n');
+    await fixture.cli([
+      'trigger',
+      'fire',
+      '--config',
+      configuredBinding(fixture, 'again', other),
+      '--item',
+      'issue-1',
+      '--inputs',
+      inputsFile(fixture),
+    ]);
+    const [, , , d] = await waitFor(() => completedRuns(fixture, 4), 'the fired round');
+    // A rerun that names no item inherits the one of the run it supersedes, and its config,
+    // also when it names that run by a short prefix.
+    await fixture.cli([
+      'workflow',
+      'run',
+      'stage-b',
+      '--no-worktree',
+      '--supersedes',
+      String(d?.id).slice(0, 8),
+      '--input',
+      'plan=p3',
+      '--input',
+      'issue=i1',
+    ]);
+    const runs = await waitFor(() => completedRuns(fixture, 5), 'the rerun');
+
+    const carried = (label: string) => ({ source: { label }, keys: ['env.CONFIG_PROOF'] });
+    expect(runConfig(a)).toMatchObject(carried('a.yaml'));
+    expect(runConfig(b)).toMatchObject(carried(`run ${a?.id} (a.yaml)`));
+    expect(runConfig(c)).toMatchObject(carried(`run ${b?.id} (run ${a?.id} (a.yaml))`));
+    expect(runConfig(d)).toMatchObject(
+      carried(`run ${c?.id} (run ${b?.id} (run ${a?.id} (a.yaml)))`)
+    );
+    expect(runConfig(runs[4]).source?.label).toBe(`run ${d?.id} (${runConfig(d).source?.label})`);
+    expect(runConfig(runs[4]).keys).toEqual(['env.CONFIG_PROOF']);
+  }, 90_000);
+
+  test('a start on an item whose latest run cannot be read is rejected, not run on defaults', async () => {
+    const fixture = await makeFixture('item-unreadable');
+    const config = join(fixture.root, 'a.yaml');
+    writeFileSync(config, 'env:\n  CONFIG_PROOF: a\n');
+    await fixture.cli([
+      'workflow',
+      'run',
+      'stage-b',
+      '--no-worktree',
+      '--config',
+      config,
+      '--item',
+      'issue-1',
+      '--input',
+      'plan=p1',
+      '--input',
+      'issue=i1',
+    ]);
+    const [first] = await waitFor(() => completedRuns(fixture, 1), 'the first run');
+    const database = new Database(join(fixture.archonHome, 'archon.db'));
+    try {
+      database
+        .query('UPDATE remote_agent_workflow_runs SET metadata = ? WHERE id = ?')
+        .run('{', String(first?.id));
+    } finally {
+      database.close();
+    }
+
+    const fired = await fixture.attempt([
+      'trigger',
+      'fire',
+      '--config',
+      fixture.fireConfig('again', 'stage-b', 'stage-b'),
+      '--item',
+      'issue-1',
+      '--inputs',
+      inputsFile(fixture),
+    ]);
+    expect(fired.exitCode).not.toBe(0);
+    expect(
+      fixture.rows<{ preparation_status: string; preparation_error: string }>(
+        'SELECT preparation_status, preparation_error FROM remote_agent_start_receipt_bindings'
+      )
+    ).toEqual([{ preparation_status: 'rejected', preparation_error: 'run_configuration_failed' }]);
+    // A hand start is refused the same way.
+    const hand = await fixture.attempt([
+      'workflow',
+      'run',
+      'stage-b',
+      '--no-worktree',
+      '--item',
+      'issue-1',
+      '--input',
+      'plan=p2',
+      '--input',
+      'issue=i1',
+    ]);
+    expect(hand.exitCode).not.toBe(0);
+    expect(hand.stderr + hand.stdout).toContain(
+      `Run ${first?.id}, the most recent on item 'issue-1'`
+    );
+    expect(fixture.rows(RUNS_SQL)).toHaveLength(1);
+  }, 90_000);
+
+  test("an item started on no config keeps none, and a binding's config applies while it has none", async () => {
+    const fixture = await makeFixture('item-no-config');
+    fixture.bind('build-after-plan', RUN_ENDED);
+    await fixture.cli([
+      'workflow',
+      'run',
+      'stage-a',
+      '--no-worktree',
+      '--item',
+      'issue-1',
+      '--input',
+      'plan=p1',
+      '--input',
+      'issue=i1',
+    ]);
+    const ran = await waitFor(() => completedRuns(fixture, 2), 'A and the B its end started');
+    expect(ran.map(runConfig)).toEqual([{}, {}]);
+
+    const config = join(fixture.root, 'b.yaml');
+    writeFileSync(config, 'env:\n  CONFIG_PROOF: b\n');
+    await fixture.cli([
+      'trigger',
+      'fire',
+      '--config',
+      configuredBinding(fixture, 'configured', config),
+      '--item',
+      'issue-1',
+      '--inputs',
+      inputsFile(fixture),
+    ]);
+    const runs = await waitFor(() => completedRuns(fixture, 3), 'the fired round');
+    expect(runConfig(runs[2]).source?.label).toBe('b.yaml');
   }, 90_000);
 });
 

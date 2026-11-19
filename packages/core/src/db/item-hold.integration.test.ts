@@ -150,7 +150,9 @@ async function bindingStart(input: {
   return { runId, disposition };
 }
 
-const end = (id: string): Promise<void> => completeWorkflowRun(id, { duration_ms: 1 });
+const end = async (id: string): Promise<void> => {
+  await completeWorkflowRun(id, { duration_ms: 1 });
+};
 
 const source = () =>
   attentionQueueSource(store, { findLatestByCodebaseAndWorkingPath: async () => null });

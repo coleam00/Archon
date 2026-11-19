@@ -10,6 +10,7 @@ import {
   describeSqlStatusReadConformance,
 } from './workflow-store.conformance-harness';
 import { describeItemLinkConformance } from './item-links.conformance-harness';
+import { describeLinkedStartConformance } from './linked-starts.conformance-harness';
 import { describeSqlItemAskStartConformance } from './item-ask-starts.conformance';
 import { describeSqlItemAskConformance } from './item-asks.conformance';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
@@ -35,6 +36,7 @@ describeWorkflowStoreConformance('SQLite', makeHarness);
 
 describeSqlStatusReadConformance(makeHarness);
 describeItemLinkConformance(makeHarness);
+describeLinkedStartConformance(makeHarness);
 describeSqlItemAskConformance(makeHarness);
 describeSqlItemAskStartConformance(makeHarness);
 

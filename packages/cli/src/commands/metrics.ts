@@ -10,17 +10,20 @@ import { liveSourceRoots, workflowSourceConfigFrom } from '@archon/workflows/wor
 import type { LiveWorkflowSourceRoots } from '@archon/workflows/workflow-source/roots';
 import {
   MetricsByModelNodeError,
+  MetricsDimensionKeyError,
   MetricsQueryError,
   queryMetrics,
   resolveMetricsSplit,
   resolveMetricsWindow,
 } from '@archon/workflows/metrics';
 import type {
+  MetricByDimension,
   MetricByModel,
   MetricCohort,
   MetricCompare,
   MetricCost,
   MetricDefinition,
+  MetricDimensionGroup,
   MetricInstrumentReport,
   MetricModelGroup,
   MetricRefusal,
@@ -37,13 +40,15 @@ export interface MetricsCommandOptions {
   compare?: string;
   /** Split each metric by the model label that ran this node; exclusive with `compare`. */
   byModel?: string;
+  /** Split each metric by the value its records carry for this dimension key. */
+  byDimension?: string;
   /** A codebase id, name or project key, resolved as `workflow attention --project` does. */
   project?: string;
   json?: boolean;
 }
 
 // Scripts branch on these, never on message text.
-const EXIT = { ok: 0, usage: 1, unknownNode: 2, refused: 4 } as const;
+const EXIT = { ok: 0, usage: 1, unknownSplit: 2, refused: 4 } as const;
 
 type MetricsHost = Pick<WorkflowHost, 'deps' | 'records'>;
 
@@ -113,15 +118,17 @@ function compareLines(compare: MetricCompare): string[] {
   ];
 }
 
+function vsRestText(group: MetricModelGroup | MetricDimensionGroup): string {
+  return group.delta_vs_rest === null
+    ? ''
+    : `  vs rest ${figure(group.delta_vs_rest)}${intervalText(group.delta_interval_vs_rest)}  separated: ${group.separated ? 'yes' : 'no'}`;
+}
+
 function modelGroupLine(group: MetricModelGroup): string {
   const name = group.split === 'model' ? group.label : `(${group.split})`;
   const models =
     group.requested_models.length === 0 ? '' : `  requested ${group.requested_models.join(', ')}`;
-  const delta =
-    group.delta_vs_rest === null
-      ? ''
-      : `  vs rest ${figure(group.delta_vs_rest)}${intervalText(group.delta_interval_vs_rest)}  separated: ${group.separated ? 'yes' : 'no'}`;
-  return `  ${name}: ${cohortText('value', group)}${delta}${models}; ${costText(group.cost)}`;
+  return `  ${name}: ${cohortText('value', group)}${vsRestText(group)}${models}; ${costText(group.cost)}`;
 }
 
 function byModelLines(byModel: MetricByModel): string[] {
@@ -131,11 +138,24 @@ function byModelLines(byModel: MetricByModel): string[] {
   ];
 }
 
+function dimensionGroupLines(group: MetricDimensionGroup): string[] {
+  const name = group.split === 'value' ? group.label : '(none)';
+  return [
+    `  ${name}: ${cohortText('value', group)}${vsRestText(group)}; ${costText(group.cost)}`,
+    ...(group.compare ? compareLines(group.compare).map(line => `    ${line}`) : []),
+  ];
+}
+
+function byDimensionLines(byDimension: MetricByDimension): string[] {
+  return [`by ${byDimension.key}:`, ...byDimension.groups.flatMap(dimensionGroupLines)];
+}
+
 function detailLines(entry: MetricInstrumentReport, indent: string): string[] {
   return [
     costText(entry.cost),
     ...(entry.compare ? compareLines(entry.compare) : []),
     ...(entry.by_model ? byModelLines(entry.by_model) : []),
+    ...(entry.by_dimension ? byDimensionLines(entry.by_dimension) : []),
   ].map(line => `${indent}${line}`);
 }
 
@@ -174,6 +194,8 @@ const OBSERVATIONAL = {
     'The comparison is observational: the cohorts also differ in the work they ran and in anything else that changed around the cut.',
   byModel:
     'The split is observational: each model ran the work it was routed, so a difference mixes the model with the work.',
+  byDimension:
+    'The split is observational: each value covers different work, so a difference mixes the dimension with the work.',
 } as const;
 
 function definitionText(definition: MetricDefinition): string {
@@ -190,11 +212,18 @@ function refusalLine(refusal: MetricRefusal): string {
   return `error: metric ${refusal.name} is ${definitionText(definition)}; ${where} offered ${definitionText(offered)}`;
 }
 
-/** The note a split report ends with; a report carries at most one kind of split. */
+/** The notes a split report ends with: one per kind of split it carries. */
 function observationalNote(report: MetricsReport): string[] {
   const entries = report.metrics.flatMap(metric => metric.instruments);
-  if (entries.some(entry => entry.compare !== undefined)) return [OBSERVATIONAL.compare];
-  return entries.some(entry => entry.by_model !== undefined) ? [OBSERVATIONAL.byModel] : [];
+  const groups = entries.flatMap(entry => entry.by_dimension?.groups ?? []);
+  const compared =
+    entries.some(entry => entry.compare !== undefined) ||
+    groups.some(group => group.compare !== undefined);
+  return [
+    ...(entries.some(entry => entry.by_dimension !== undefined) ? [OBSERVATIONAL.byDimension] : []),
+    ...(entries.some(entry => entry.by_model !== undefined) ? [OBSERVATIONAL.byModel] : []),
+    ...(compared ? [OBSERVATIONAL.compare] : []),
+  ];
 }
 
 function itemFiguresText(figures: ItemMetricFigures): string {
@@ -237,7 +266,8 @@ function reportText(report: MetricsReport): string {
 /**
  * `archon metrics [name]`: aggregate stored metric records over a window. Exits 4 when
  * any record was refused, so a script can tell a clean report from one with conflicts,
- * and 2 when no producing run ran the `--by-model` node.
+ * and 2 when no producing run ran the `--by-model` node or no record carries the
+ * `--by-dimension` key.
  */
 export async function metricsCommand(
   host: MetricsHost,
@@ -259,12 +289,17 @@ export async function metricsCommand(
   } catch (error) {
     if (!(error instanceof MetricsQueryError || error instanceof MetricsUsageError)) throw error;
     await stderr(`Error: ${error.message}\n`);
-    return error instanceof MetricsByModelNodeError ? EXIT.unknownNode : EXIT.usage;
+    return error instanceof MetricsByModelNodeError || error instanceof MetricsDimensionKeyError
+      ? EXIT.unknownSplit
+      : EXIT.usage;
   }
   const { report, project } = queried;
   // Item metrics are per project and have no subject or split, so those filters leave them out.
   const split =
-    options.subject !== undefined || options.compare !== undefined || options.byModel !== undefined;
+    options.subject !== undefined ||
+    options.compare !== undefined ||
+    options.byModel !== undefined ||
+    options.byDimension !== undefined;
   const itemMetrics =
     project === null || split
       ? null

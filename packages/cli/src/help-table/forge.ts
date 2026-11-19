@@ -38,6 +38,7 @@ const forgeOperationDescriptions = {
   'pr.thread.resolve': 'Resolve one review thread and verify the result',
   'pr.review.submit':
     'Submit a comment review with inline findings at one commit (presentation, not a gate)',
+  'attachment.put': 'Store an image in the repository and return a link a comment can embed',
   'comment.upsert': 'Write the one marked comment on a pull request',
 } satisfies Record<ForgeRequest['op'], string>;
 

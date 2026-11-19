@@ -23,7 +23,11 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import type { WorktreeDisposition } from './schemas/terminal-record';
-import type { AsksCheckout, SourceReceiptAcceptance } from './schemas/resource-start';
+import type {
+  AsksCheckout,
+  LinkedRunEndedStart,
+  SourceReceiptAcceptance,
+} from './schemas/resource-start';
 import type { RunCompletedOutcome } from './schemas';
 import type { JsonValue } from './output-ref';
 import type { OutcomeForm } from './completed-outcome';
@@ -281,10 +285,22 @@ export interface RunEndedFacts {
   /** The form of the declared outcome, so a binding can be checked against it. */
   outcomeForm: OutcomeForm;
   outcome: RunCompletedOutcome;
-  /** The run's result: its `returns:` node output, parsed. */
+  /**
+   * The run's result: the value its terminal record holds as `returns` (see
+   * `recordedReturn`), undefined when the record has none.
+   */
   result: JsonValue | undefined;
   /** The run's own inputs, as `$INPUTS` saw them. */
   inputs: Readonly<Record<string, JsonValue>>;
+}
+
+/**
+ * The starts a completion causes: receipts for the ended run's own item, and linked
+ * starts the completing write resolves against the items linked to it.
+ */
+export interface RunEndedStarts {
+  receipts: readonly SourceReceiptAcceptance[];
+  linked: readonly LinkedRunEndedStart[];
 }
 
 export interface WorkflowDeps {
@@ -301,12 +317,13 @@ export interface WorkflowDeps {
   providers: ProviderRegistry;
   store: IWorkflowStore;
   /**
-   * Optional: the starts a run's completion causes (run-ended bindings), as receipts the
-   * completing write accepts in its own transaction. Absent, a completion causes none.
+   * Optional: the starts a run's completion causes (run-ended bindings), as receipts and
+   * linked starts the completing write accepts in its own transaction. Absent, a
+   * completion causes none.
    * It throws when a binding it must read is unreadable or invalid, and the run then
    * fails naming the reason, so a completion never silently drops its hand-off.
    */
-  runEndedStarts?: (ended: RunEndedFacts) => Promise<readonly SourceReceiptAcceptance[]>;
+  runEndedStarts?: (ended: RunEndedFacts) => Promise<RunEndedStarts>;
   /**
    * Optional: the checkout a run that completes leaving asks hands an asks-settled binding
    * with `checkout: "asking-run"`, read before the completing write, which records it on
