@@ -8,6 +8,7 @@ import {
   composedInputs,
   inlinePrompt,
 } from './include-expander.fixtures';
+import { readComposedMeta, readForwardedFanOutWith } from './compiled-command';
 
 describe('expandWorkflowIncludes — with input mapping', () => {
   test('inlines literals, preserves caller refs, and still namespaces internal refs', () => {
@@ -710,6 +711,143 @@ describe("expandWorkflowIncludes — an included block's raw reads of its pack s
   test('a raw read of a name that is not a pack setting is not this check', () => {
     const { errors } = expand([{ id: 'shell', bash: 'echo "$INPUTS_MOOD"' }]);
     expect(errors).toHaveLength(0);
+  });
+});
+
+// From its own pack, a block reads the run's settings as it does run directly: each read
+// setting its includer does not pass is forwarded as the includer's own `$INPUTS.<name>`.
+describe('expandWorkflowIncludes — a block included from its own pack reads its settings', () => {
+  const packOf = (key: string): NonNullable<Parameters<typeof wf>[2]>['pack'] => ({
+    key,
+    source: 'project',
+    settings: { tone: { type: 'string' }, mood: { type: 'string' } },
+  });
+  const reader = (name: string, key: string, extra: object = {}): ReturnType<typeof wf> =>
+    wf(
+      name,
+      [
+        { id: 'speak', prompt: 'tone is $INPUTS.tone' },
+        { id: 'shell', bash: 'echo $INPUTS.tone "$INPUTS_TONE"', depends_on: ['speak'] },
+      ],
+      { pack: packOf(key), ...extra }
+    );
+  const errorOf = (
+    result: ReturnType<typeof expandWorkflowIncludes>,
+    name: string
+  ): string | undefined => result.errors.find(e => e.filename === name)?.error;
+
+  test('loads with no with:, keeps the reference for the run, and forwards only read settings', () => {
+    const result = expandWorkflowIncludes(
+      mapOf(
+        reader('block', 'p'),
+        wf('host', [{ id: 'blk', include: 'block' }], { pack: packOf('p') })
+      )
+    );
+    expect(result.errors).toHaveLength(0);
+    const host = result.workflows.get('host')!;
+    expect(inlinePrompt(nodeById(host, 'blk__speak'))).toBe('tone is $INPUTS.tone');
+    const shell = nodeById(host, 'blk__shell');
+    expect(shell).toMatchObject({ script: 'echo "${INPUTS_TONE}" "$INPUTS_TONE"' });
+    expect(composedInputs(shell)).toEqual({ tone: '$INPUTS.tone' });
+  });
+
+  test("the block's own inputs: neither refuses nor needs the setting", () => {
+    const block = reader('block', 'p', { inputs: { topic: { default: 'x' } } });
+    const result = expandWorkflowIncludes(
+      mapOf(
+        block,
+        wf(
+          'host',
+          [
+            { id: 'silent', include: 'block' },
+            { id: 'passing', include: 'block', with: { tone: 'loud' } },
+          ],
+          { pack: packOf('p') }
+        )
+      )
+    );
+    expect(result.errors).toHaveLength(0);
+    const host = result.workflows.get('host')!;
+    expect(inlinePrompt(nodeById(host, 'silent__speak'))).toBe('tone is $INPUTS.tone');
+    expect(inlinePrompt(nodeById(host, 'passing__speak'))).toBe('tone is loud');
+  });
+
+  test('a host in another pack still has to pass the setting', () => {
+    const result = expandWorkflowIncludes(
+      mapOf(
+        reader('block', 'p'),
+        wf('host', [{ id: 'blk', include: 'block' }], { pack: packOf('q') })
+      )
+    );
+    expect(result.workflows.has('host')).toBe(false);
+    expect(errorOf(result, 'host')).toContain('references missing input $INPUTS.tone');
+  });
+
+  test('a forwarded setting must be passed where the chain changes pack', () => {
+    const middle = wf('middle', [{ id: 'inner', include: 'block' }], { pack: packOf('p') });
+    const result = expandWorkflowIncludes(
+      mapOf(
+        reader('block', 'p'),
+        middle,
+        wf('silent', [{ id: 'mid', include: 'middle' }], { pack: packOf('q') }),
+        wf('passing', [{ id: 'mid', include: 'middle', with: { tone: 'loud' } }], {
+          pack: packOf('q'),
+        })
+      )
+    );
+    expect(result.workflows.has('middle')).toBe(true);
+    expect(result.workflows.has('silent')).toBe(false);
+    expect(errorOf(result, 'silent')).toContain('references missing input $INPUTS.tone');
+    const passing = result.workflows.get('passing')!;
+    expect(inlinePrompt(nodeById(passing, 'mid__inner__speak'))).toBe('tone is loud');
+    expect(composedInputs(nodeById(passing, 'mid__inner__shell'))).toEqual({ tone: 'loud' });
+  });
+
+  test('a setting stays marked forwarded only while every level out forwards it', () => {
+    const middle = wf('middle', [{ id: 'inner', include: 'block' }], { pack: packOf('p') });
+    const result = expandWorkflowIncludes(
+      mapOf(
+        reader('block', 'p'),
+        middle,
+        wf('same', [{ id: 'mid', include: 'middle' }], { pack: packOf('p') }),
+        wf('explicit', [{ id: 'mid', include: 'middle', with: { tone: '$INPUTS.tone' } }], {
+          pack: packOf('q'),
+        })
+      )
+    );
+    expect(result.errors).toHaveLength(0);
+    const shellOf = (name: string) =>
+      readComposedMeta(nodeById(result.workflows.get(name)!, 'mid__inner__shell')!);
+    expect(shellOf('same')?.forwarded).toEqual(['tone']);
+    // The same `$INPUTS.tone` value, now an explicit binding: an absent run value fails.
+    expect(shellOf('explicit')?.inputs).toEqual({ tone: '$INPUTS.tone' });
+    expect(shellOf('explicit')?.forwarded).toBeUndefined();
+  });
+
+  test("a composed fan-out carries the forwarded setting in its node's with:", () => {
+    const fanOut = {
+      id: 'fan',
+      include: 'block',
+      fan_out: { items: '[1,2]', as: 'item', max_parallel: 2, join: 'all_success' },
+    };
+    const result = expandWorkflowIncludes(
+      mapOf(
+        reader('block', 'p'),
+        wf('middle', [fanOut], { pack: packOf('p') }),
+        wf('silent', [{ id: 'mid', include: 'middle' }], { pack: packOf('q') }),
+        wf('explicit', [{ id: 'mid', include: 'middle', with: { tone: '$INPUTS.tone' } }], {
+          pack: packOf('q'),
+        })
+      )
+    );
+    expect(
+      readForwardedFanOutWith(nodeById(result.workflows.get('explicit')!, 'mid__fan')!)
+    ).toEqual([]);
+    const fan = nodeById(result.workflows.get('middle')!, 'fan') as { with?: unknown };
+    expect(fan.with).toEqual({ tone: '$INPUTS.tone' });
+    expect(readForwardedFanOutWith(fan)).toEqual(['tone']);
+    expect(result.workflows.has('silent')).toBe(false);
+    expect(errorOf(result, 'silent')).toContain('references missing input $INPUTS.tone');
   });
 });
 

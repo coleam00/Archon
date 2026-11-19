@@ -204,6 +204,26 @@ export function parseWholeInputsRef(text: string): string | undefined {
 }
 
 /**
+ * Whether one implicitly forwarded pack setting (see ComposedNodeMeta.forwarded) is
+ * absent from the run, so its receiver leaves it unset instead of failing as an unknown
+ * input. `forwarded` lists only those implicit forwards: an explicit binding of an
+ * absent input is not one of them and still fails.
+ */
+export function isAbsentInputForward(
+  name: string,
+  value: JsonValue,
+  runInputs: Record<string, JsonValue> | undefined,
+  forwarded: readonly string[]
+): boolean {
+  return (
+    forwarded.includes(name) &&
+    typeof value === 'string' &&
+    parseWholeInputsRef(value) === name &&
+    !Object.hasOwn(runInputs ?? {}, name)
+  );
+}
+
+/**
  * One reference grammar a template can contain, and how to resolve it (#4046). `pattern`
  * is sticky and starts with `\$`. `resolve` returns the replacement text, or undefined to
  * leave the match to a later token at the same `$`.
