@@ -432,6 +432,10 @@ describe('trigger CLI durable execution', () => {
     await git(['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'feat']);
     await git(['push', '-q', 'origin', 'feat/order']);
     await git(['checkout', '-q', 'main']);
+    // A single-branch clone: the fetch refspec names only `main`, and no remote-tracking ref
+    // for the landing branch exists until a run fetches it.
+    await git(['config', 'remote.origin.fetch', '+refs/heads/main:refs/remotes/origin/main']);
+    await git(['update-ref', '-d', 'refs/remotes/origin/feat/order']);
     fixture.writeWorkflow(
       `echo "$BASE_BRANCH $([ -f on-feat ] && echo from-feat || echo from-base)" > '${out}'`
     );
