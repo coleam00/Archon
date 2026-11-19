@@ -453,6 +453,24 @@ describe('archon pack bindings: run-ended', () => {
     }
   });
 
+  it('writes a linked binding into on.runEnded.linked, passing the ended item key', async () => {
+    const declaration = RUN_ENDED_DECLARATION.replace(
+      '[planned, blocked] }',
+      'planned, linked: { kind: part_of, holder: to } }'
+    ).replace('{ input: issue }', '{ item: key }');
+    await writePack(declaration);
+    await packCommand('bindings', ['fixture'], options());
+
+    const [entry, ...rest] = await readRunEndedBindings(out);
+    expect(rest).toEqual([]);
+    expect(entry?.runEnded).toEqual({
+      workflowName: 'fixture-plan',
+      outcome: 'planned',
+      linked: { kind: 'part_of', holder: 'to' },
+      inputs: { plan: { result: '/plan' }, issue: { item: 'key' } },
+    });
+  });
+
   it.each([
     [
       'an ended workflow the pack lacks',

@@ -2885,7 +2885,11 @@ completes on that item with `run_ended.outcome`. `{ input: <name> }` and
 declare the outcome or an input read from it, or the started workflow does not declare an input
 mapped to it. `run_ended.checkout: ended-run` starts the workflow in the checkout the ended run
 left, as [`on.runEnded.checkout`](/guides/workflow-triggers/#work-in-the-checkout-the-ended-run-left)
-does.
+does. `run_ended.linked: { kind: <link kind>, holder: from | to }` starts the workflow on every
+item holding an active link of that kind to the ended run's item instead of on that item, as
+[`on.runEnded.linked`](/guides/workflow-triggers/#start-a-stage-on-an-item-when-the-items-it-links-to-end)
+does, and takes no `checkout`. A `{ item: key }` input, run-ended bindings only, passes the key
+of the item whose run ended.
 
 An `asks_settled:` binding is an
 [asks-settled trigger file](/guides/workflow-triggers/#start-a-stage-again-when-its-asks-are-answered):

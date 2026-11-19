@@ -18,7 +18,7 @@ import type { PackBinding } from './schemas/pack-bindings';
 import { kindedPackBinding } from './schemas/pack-bindings';
 import { loopBodyStepNamePrefix, resolvedBodyNodes } from './graph-plan';
 import { isComposeFanOutNode, isLoopGroupNode } from './schemas/node-guards';
-import { asksSettledTriggerSchema } from './schemas/resource-start';
+import { asksSettledTriggerSchema, type RunEndedLinked } from './schemas/resource-start';
 import type {
   ResolvedWorkflow,
   WorkflowLoadResult,
@@ -247,10 +247,10 @@ export interface InstalledArrow {
   from: PackGraphArrowFrom;
   launchWorkflow: string;
   /**
-   * The file starts its stage on the items linked to the ended run's item
-   * (`on.runEnded.linked`). A pack declares only same-item arrows, so it matches none.
+   * The link the file starts its stage over (`on.runEnded.linked`), or null when it starts
+   * on the ended run's own item. It matches only a declared arrow with the same link.
    */
-  linked: boolean;
+  linked: RunEndedLinked | null;
   problems: readonly string[];
 }
 
@@ -348,7 +348,11 @@ interface DeclaredArrow {
   binding: { binding: string; problems: string[] };
   from: PackGraphArrowFrom;
   to: string;
+  linked: RunEndedLinked | null;
 }
+
+const sameLink = (a: RunEndedLinked | null, b: RunEndedLinked | null): boolean =>
+  a === null || b === null ? a === b : a.kind === b.kind && a.holder === b.holder;
 
 function declaredArrows(input: GraphInput): DeclaredArrow[] {
   const names = input.stages.map(stage => stage.name);
@@ -375,15 +379,17 @@ function declaredArrows(input: GraphInput): DeclaredArrow[] {
         binding: { binding: id, problems: [...problems] },
         from: { stage, settled, ...(value === undefined ? {} : { option: value }) },
         to,
+        linked: null,
       }));
     }
     const stage = stageName(kinded.binding.run_ended.workflow);
     const to = stageName(kinded.binding.workflow);
-    const { outcome } = kinded.binding.run_ended;
+    const { outcome, linked } = kinded.binding.run_ended;
     return (typeof outcome === 'string' ? [outcome] : outcome).map(value => ({
       binding: { binding: id, problems: [...problems] },
       from: { stage, outcome: value },
       to,
+      linked: linked ?? null,
     }));
   });
 }
@@ -395,10 +401,12 @@ function declaredArrows(input: GraphInput): DeclaredArrow[] {
 function graphArrows(input: GraphInput): PackGraphArrow[] {
   const arrows: PackGraphArrow[] = [];
   const matched = new Set<InstalledArrow>();
-  for (const { binding, from, to } of declaredArrows(input)) {
+  for (const { binding, from, to, linked } of declaredArrows(input)) {
     const ends = { from, to };
     const files = input.installed.filter(
-      entry => !entry.linked && arrowKey(entry.from, entry.launchWorkflow) === arrowKey(from, to)
+      entry =>
+        sameLink(entry.linked, linked) &&
+        arrowKey(entry.from, entry.launchWorkflow) === arrowKey(from, to)
     );
     if (files.length === 0)
       arrows.push({ ...ends, active: false, declared: binding, installed: null });
