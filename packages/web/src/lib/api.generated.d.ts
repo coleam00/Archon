@@ -2005,7 +2005,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Withdraw an ask a completed run left, by its ref */
+    /** Withdraw an ask, or the open waits, a completed run left, by its ref */
     post: {
       parameters: {
         query?: never;
@@ -2046,7 +2046,7 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
-        /** @description The ask was already answered or replaced */
+        /** @description The ask was already answered or replaced, or the waits met or replaced */
         409: {
           headers: {
             [name: string]: unknown;
@@ -5985,6 +5985,7 @@ export interface components {
       result?: {
         outcome?: string;
         asks?: string;
+        waits?: string;
       };
     };
     DagNode: {
@@ -7613,6 +7614,37 @@ export interface components {
           };
           /** @enum {string} */
           observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        }
+      | {
+          /** @enum {string} */
+          kind: 'overdue_wait';
+          ref: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          waitingIn: {
+            runId: string;
+            workflow: string;
+          };
+          waits: {
+            event: string;
+            about: string;
+          }[];
+          /** Format: date-time */
+          deadline: string;
         };
     AttentionQueueCountsResponse: {
       counts: components['schemas']['AttentionQueueCounts'];
@@ -7914,6 +7946,37 @@ export interface components {
             /** @enum {string} */
             observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
           }
+        | {
+            /** @enum {string} */
+            kind: 'overdue_wait';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            waitingIn: {
+              runId: string;
+              workflow: string;
+            };
+            waits: {
+              event: string;
+              about: string;
+            }[];
+            /** Format: date-time */
+            deadline: string;
+          }
         | unknown;
     };
     LabelAttentionResponse: {
@@ -8055,6 +8118,17 @@ export interface components {
         bindingId: string;
         workflow: string | null;
         receivedAt: string;
+      }[];
+      waits: {
+        event: string;
+        about: string;
+        workflow: string;
+        runId: string;
+        /** Format: date-time */
+        waitingSince: string;
+        /** Format: date-time */
+        deadline: string;
+        overdue: boolean;
       }[];
       questions: (
         | {
@@ -8290,6 +8364,37 @@ export interface components {
             };
             /** @enum {string} */
             observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          }
+        | {
+            /** @enum {string} */
+            kind: 'overdue_wait';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            waitingIn: {
+              runId: string;
+              workflow: string;
+            };
+            waits: {
+              event: string;
+              about: string;
+            }[];
+            /** Format: date-time */
+            deadline: string;
           }
       )[];
       answers: (
@@ -8649,6 +8754,17 @@ export interface components {
           workflow: string | null;
           receivedAt: string;
         }[];
+        waits: {
+          event: string;
+          about: string;
+          workflow: string;
+          runId: string;
+          /** Format: date-time */
+          waitingSince: string;
+          /** Format: date-time */
+          deadline: string;
+          overdue: boolean;
+        }[];
         questions: (
           | {
               /** @enum {string} */
@@ -8889,6 +9005,37 @@ export interface components {
                 | 'failed'
                 | 'cancelled'
                 | 'paused';
+            }
+          | {
+              /** @enum {string} */
+              kind: 'overdue_wait';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              waitingIn: {
+                runId: string;
+                workflow: string;
+              };
+              waits: {
+                event: string;
+                about: string;
+              }[];
+              /** Format: date-time */
+              deadline: string;
             }
         )[];
         answers: (
@@ -9419,6 +9566,37 @@ export interface components {
                   | 'failed'
                   | 'cancelled'
                   | 'paused';
+              }
+            | {
+                /** @enum {string} */
+                kind: 'overdue_wait';
+                ref: string;
+                project: {
+                  key: string;
+                  codebaseId: string | null;
+                  name: string;
+                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
+                revision: number;
+                labels: {
+                  [key: string]: string;
+                };
+                /** Format: date-time */
+                pausedAt: string | null;
+                waitingIn: {
+                  runId: string;
+                  workflow: string;
+                };
+                waits: {
+                  event: string;
+                  about: string;
+                }[];
+                /** Format: date-time */
+                deadline: string;
               };
         }
       | (

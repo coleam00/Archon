@@ -6,6 +6,7 @@ import { isAgentNode, isExecNode, workflowDefinitionSchema, type DagNode } from 
 import { parseWorkflow as parseWorkflowWithProviders, type ParseResult } from '../loader';
 import { resolveWorkflow } from '../graph-plan';
 import { itemAsksJsonSchema } from '../schemas/item-ask';
+import { itemWaitsJsonSchema } from '../schemas/item-wait';
 import { validateWorkflowResultContract } from './contracts';
 
 // Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
@@ -547,6 +548,50 @@ nodes:${node}
 // ---------------------------------------------------------------------------
 // Declared contract schemas compile at load time (#2453)
 // ---------------------------------------------------------------------------
+
+describe('workflow result contract: returns.waits', () => {
+  const parse = (declaration: string, properties = 'summary: { type: string }'): ParseResult =>
+    parseWorkflow(
+      `
+name: waits-outside
+description: waits for checks on its change
+${declaration}
+nodes:
+  - id: host
+    prompt: read the change
+    output_format:
+      type: object
+      properties:
+        ${properties}
+`,
+      'waits-outside.yaml'
+    );
+
+  it('loads a declared waits property, which the engine adds beside the asks property', () => {
+    const { workflow, error } = parse('returns: { node: host, asks: asks, waits: waits }');
+    expect(error).toBeNull();
+    expect(workflow?.result).toEqual({ asks: 'asks', waits: 'waits' });
+    if (workflow === null) throw new Error('Expected the workflow to load');
+    const resolved = resolveWorkflow(workflow);
+    const node = resolved.nodes.find(candidate => candidate.id === 'host');
+    expect(node?.output_format?.properties).toEqual({
+      summary: { type: 'string' },
+      asks: itemAsksJsonSchema(),
+      waits: itemWaitsJsonSchema(),
+    });
+    expect(node?.output_format?.required).toEqual(['asks', 'waits']);
+    expect(validateWorkflowResultContract(resolved)).toBeNull();
+  });
+
+  it('refuses an authored waits property and waits naming the asks property', () => {
+    expect(
+      parse('returns: { node: host, waits: waits }', 'waits: { type: array }').error?.error
+    ).toContain("returns.waits: 'waits' on node 'host': the engine defines this property");
+    expect(parse('returns: { node: host, asks: next, waits: next }').error?.error).toContain(
+      "returns.waits: 'next' names the same property as returns.asks"
+    );
+  });
+});
 
 describe('output_format compiles at load time (#2453)', () => {
   it('rejects output_format on a workflow: node, naming the child returns: node as the owner', () => {

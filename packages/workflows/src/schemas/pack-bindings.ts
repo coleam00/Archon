@@ -28,15 +28,17 @@ export const packBindingNameSchema = z
 
 /**
  * One launch input: literal text, a part of the operator's repository, the file written
- * for a sibling binding, (event bindings only) a field of the event, (run-ended and
- * asks-settled bindings only) a part of the run that ended or left the asks, as
- * `on.runEnded.inputs` reads it, or (asks-settled bindings only) the settled answers.
+ * for a sibling binding, (event bindings only) a field of the event, (event bindings with
+ * `wake` only) the wait the event met, (run-ended and asks-settled bindings only) a part of
+ * the run that ended or left the asks, as `on.runEnded.inputs` reads it, or (asks-settled
+ * bindings only) the settled answers.
  */
 const packBindingInputSchema = z.union([
   z.string(),
   z.object({ repo: z.enum(['host', 'path']) }).strict(),
   z.object({ binding: packBindingNameSchema }).strict(),
   z.object({ event: z.string().min(1) }).strict(),
+  z.object({ wait: z.literal(true) }).strict(),
   ...asksSettledInputSourceSchema.options,
 ]);
 export type PackBindingInput = z.infer<typeof packBindingInputSchema>;
@@ -77,6 +79,16 @@ export const packEventBindingSchema = z
       }),
     /** `field` is one of the source plugin's event fields, checked there like `event`. */
     item: itemMappingSchema.optional(),
+    /**
+     * Wake the open wait `wait` that a run of `workflow`, a workflow of this pack, left on an
+     * item, when the event's field `about` holds exactly the value the wait names. When the
+     * event names its subject, `item` is required with it (checked by the source plugin when
+     * the binding is generated), and only a wait on that item matches.
+     */
+    wake: z
+      .object({ workflow: z.string().min(1), wait: z.string().min(1), about: z.string().min(1) })
+      .strict()
+      .optional(),
   })
   .strict();
 

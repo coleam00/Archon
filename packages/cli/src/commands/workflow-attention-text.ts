@@ -132,6 +132,15 @@ function refItemLines(item: Ask): string[] {
   return lines;
 }
 
+/** What an overdue wait says: what the item waits for, since when, and how it closes. */
+function overdueWaitLines(item: Extract<AttentionQueueItem, { kind: 'overdue_wait' }>): string[] {
+  return [
+    `waits for ${item.waits.map(wait => `'${wait.event}' about ${wait.about}`).join(' or ')}, due ${item.deadline}`,
+    `left by run ${item.waitingIn.runId} (${item.waitingIn.workflow}), which completed; nothing is held while it waits`,
+    `the event still meets it when it arrives; run ${item.waitingIn.workflow} on the item again to replace it, or withdraw it: ${command(`answer --withdraw ${item.ref}`)}`,
+  ];
+}
+
 /** What an item a paused run holds says under its heading line. */
 function itemBody(item: RunAttentionQueueItem, detail: AttentionItemDetail): string[] {
   const { run } = item;
@@ -180,7 +189,8 @@ function headingLine(item: AttentionQueueItem): string {
   const opened =
     item.pausedAt === null ? 'open time not recorded' : `opened ${formatAge(item.pausedAt)} ago`;
   const key = item.item === undefined ? '' : `  item ${item.item.key}`;
-  return `  ${item.ref}  open ask  ${project}${key}  ${opened}`;
+  const what = item.kind === 'overdue_wait' ? 'overdue wait' : 'open ask';
+  return `  ${item.ref}  ${what}  ${project}${key}  ${opened}`;
 }
 
 /** One queue item as a block of text lines. */
@@ -198,7 +208,11 @@ export function attentionItemLines(
   if (labels.length > 0)
     lines.push(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
   // No run holds it, so no run command answers it: it is answered by its ref.
-  const body = isHeldByRun(item) ? itemBody(item, detail) : refItemLines(item);
+  const body = isHeldByRun(item)
+    ? itemBody(item, detail)
+    : item.kind === 'overdue_wait'
+      ? overdueWaitLines(item)
+      : refItemLines(item);
   for (const line of body) lines.push(`    ${line}`);
   return lines;
 }

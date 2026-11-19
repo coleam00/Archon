@@ -270,6 +270,18 @@ export const itemAnswerKindSchema = z.enum({
  * depends on, is part of, or is a duplicate of `other`), `incoming` when `other` points at
  * this item. An ended link stays, with `ended` set; a link is active while `ended` is null.
  */
+/** An open wait on the item, as the item read lists it. */
+export const itemOpenWaitSchema = z.object({
+  event: z.string(),
+  about: z.string(),
+  workflow: z.string(),
+  runId: z.string(),
+  waitingSince: z.string().datetime(),
+  deadline: z.string().datetime(),
+  overdue: z.boolean(),
+});
+export type ItemOpenWait = z.infer<typeof itemOpenWaitSchema>;
+
 export const itemReadLinkSchema = z.object({
   id: z.string(),
   kind: itemLinkKindSchema,
@@ -293,7 +305,9 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * (`ruling_unreadable`, by `rulingId`), a link (`link_unreadable`, by `linkId`), or the
  * merge (`merge_unreadable`). The rest still reads. `merged` is the merge the forge
  * reported for the item's change, recorded once; null while none is recorded or when its
- * row could not be read.
+ * row could not be read. `waits` are what the item waits for outside Archon: the open waits
+ * completed runs left on it (`returns.waits`), each with when it opened and fell due, and
+ * `overdue` once that time has passed. An overdue set is also among `questions`.
  */
 export const itemReadSchema = z.object({
   item: workflowItemSchema,
@@ -302,6 +316,7 @@ export const itemReadSchema = z.object({
   skipped: z.array(itemSkippedStartSchema),
   hold: installHoldSchema.nullable(),
   held: z.array(itemHeldStartSchema),
+  waits: z.array(itemOpenWaitSchema),
   questions: z.array(attentionQueueItemSchema),
   answers: z.array(itemAnswerSchema),
   links: z.array(itemReadLinkSchema),
@@ -327,6 +342,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'getItemMerge'
       | 'listItemLinks'
       | 'listItemAsks'
+      | 'listOpenItemWaits'
       | 'getStartReceipt'
       | 'getResourceStartRequest'
       | 'listQueuedItemStarts'
@@ -705,6 +721,15 @@ export async function assembleItemRead(
     skipped,
     hold,
     held,
+    waits: (await source.store.listOpenItemWaits(found.item.id)).map(wait => ({
+      event: wait.event,
+      about: wait.about,
+      workflow: wait.workflowName,
+      runId: wait.runId,
+      waitingSince: wait.openedAt,
+      deadline: wait.deadlineAt,
+      overdue: Date.parse(wait.deadlineAt) <= Date.now(),
+    })),
     questions,
     answers,
     links: facts.links,

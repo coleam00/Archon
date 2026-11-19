@@ -7,14 +7,17 @@
  */
 import {
   askIdOfRef,
-  askQueueItem,
   isHeldByRun,
+  leftByRun,
   readAttentionQueueItemByRef,
+  waitRunIdOfRef,
+  type AskQueueItem,
   type AttentionQueueItem,
   type AttentionQueueItemWithoutRun,
   type AttentionQueueSource,
   type RunAttentionQueueItem,
 } from '@archon/workflows/attention-queue';
+import { waitQueueItem, askQueueItem } from '@archon/workflows/queue-items-without-run';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import type { RecordSurface } from '@archon/workflows/schemas/record-surface';
@@ -37,7 +40,10 @@ export interface AttentionItemDeps {
   /** The queue every surface lists through, and the store an ask is answered in. */
   queue: AttentionQueueSource & {
     store: AttentionQueueSource['store'] &
-      Pick<IWorkflowStore, 'getItemAsk' | 'answerItemAsk' | 'withdrawItemAsk'>;
+      Pick<
+        IWorkflowStore,
+        'getItemAsk' | 'answerItemAsk' | 'withdrawItemAsk' | 'withdrawItemWaits'
+      >;
   };
   operations: Pick<
     WorkflowOperations,
@@ -57,7 +63,10 @@ export type AttentionItemAnswerResult =
   | { kind: 'moved'; item: AttentionQueueItem }
   | {
       kind: 'takes_no_answer';
-      item: Extract<AttentionQueueItem, { kind: 'usage_limit' | 'unreadable' | 'owner_lost' }>;
+      item: Extract<
+        AttentionQueueItem,
+        { kind: 'usage_limit' | 'unreadable' | 'owner_lost' | 'overdue_wait' }
+      >;
     }
   /**
    * A gate takes one of its decisions and has no recommendation to accept; an answered ask
@@ -68,14 +77,14 @@ export type AttentionItemAnswerResult =
       reason: 'gate_has_no_recommendation' | 'gate_takes_one_decision' | 'already_answered';
     }
   /** The ask already has this answer: nothing changed. */
-  | { kind: 'unchanged'; item: AttentionQueueItemWithoutRun }
+  | { kind: 'unchanged'; item: AskQueueItem }
   /**
    * An ask was answered; `settled` when it was the last open ask of its run's set, and
    * `startReceipts` the starts that settlement caused.
    */
   | {
       kind: 'ask_answered';
-      item: AttentionQueueItemWithoutRun;
+      item: AskQueueItem;
       settled: boolean;
       startReceipts: readonly SourceReceiptAcceptance[];
     }
@@ -114,11 +123,7 @@ async function answerableRun(
   item: AttentionQueueItem,
   actor: RunActor
 ): Promise<WorkflowRun | null> {
-  const runId = isHeldByRun(item)
-    ? item.run.id
-    : item.kind === 'attention'
-      ? item.askedIn?.runId
-      : undefined;
+  const runId = isHeldByRun(item) ? item.run.id : leftByRun(item)?.runId;
   if (runId === undefined) return null;
   const run = await deps.queue.store.getWorkflowRun(runId);
   if (run === null) return null;
@@ -158,7 +163,10 @@ export async function answerAttentionItem(
   if (read.kind === 'unknown' || read.kind === 'none') return read;
   const { item } = read;
   const holder = await answerableRun(deps, item, actor);
-  if (holder === null || !isHeldByRun(item)) return { kind: 'unknown' };
+  if (holder === null) return { kind: 'unknown' };
+  // An overdue wait is closed by its event, a new run of its workflow, or a withdrawal.
+  if (item.kind === 'overdue_wait') return { kind: 'takes_no_answer', item };
+  if (!isHeldByRun(item)) return { kind: 'unknown' };
   if (read.kind === 'moved') return read;
   if (item.kind === 'usage_limit' || item.kind === 'unreadable' || item.kind === 'owner_lost')
     return { kind: 'takes_no_answer', item };
@@ -188,7 +196,7 @@ async function answerableAsk(
   deps: AttentionItemDeps,
   askId: string,
   actor: RunActor
-): Promise<{ ask: StoredItemAsk; item: AttentionQueueItemWithoutRun } | undefined> {
+): Promise<{ ask: StoredItemAsk; item: AskQueueItem } | undefined> {
   // Read by id, not from the open list, so a repeated answer finds the answered ask.
   const ask = await deps.queue.store.getItemAsk(askId);
   if (ask === null) return undefined;
@@ -239,13 +247,19 @@ async function answerAsk(
 export type AttentionItemWithdrawResult =
   /** Nothing the actor may withdraw has this ref. */
   | { kind: 'unknown' }
-  /** Only an ask a completed run left can be withdrawn; a paused run's item is answered. */
+  /**
+   * Only an ask or the waits a completed run left can be withdrawn; a paused run's item is
+   * answered.
+   */
   | { kind: 'not_an_ask' }
-  /** The ask was answered or replaced; that close stands. */
-  | { kind: 'refused'; closedAs: 'answered' | 'replaced' }
-  /** The ask was already withdrawn: nothing changed. */
+  /** The ask was answered or replaced, or the waits met or replaced; that close stands. */
+  | { kind: 'refused'; closedAs: 'answered' | 'replaced' | 'met' }
+  /** The ask or the waits were already withdrawn: nothing changed. */
   | { kind: 'unchanged'; item: AttentionQueueItemWithoutRun }
-  /** `settled` when it was the last open ask of its run's set; see `ask_answered`. */
+  /**
+   * `settled` when it was the last open ask of its run's set; see `ask_answered`. Waits
+   * settle nothing and start nothing when withdrawn.
+   */
   | {
       kind: 'withdrawn';
       item: AttentionQueueItemWithoutRun;
@@ -255,7 +269,8 @@ export type AttentionItemWithdrawResult =
 
 /**
  * Withdraw the ask `ref` names: it closes unanswered. Held to the rule an answer is, and
- * settles its set as an answer does.
+ * settles its set as an answer does. A wait ref withdraws the open waits its run left, held
+ * to the same rule: they close unmet and nothing starts.
  */
 export async function withdrawAttentionItem(
   deps: AttentionItemDeps,
@@ -263,6 +278,8 @@ export async function withdrawAttentionItem(
   actor: RunActor,
   via: RecordSurface
 ): Promise<AttentionItemWithdrawResult> {
+  const waitingRunId = waitRunIdOfRef(ref);
+  if (waitingRunId !== undefined) return withdrawWaits(deps, waitingRunId, actor);
   const askId = askIdOfRef(ref);
   if (askId === undefined) return { kind: 'not_an_ask' };
   const found = await answerableAsk(deps, askId, actor);
@@ -289,4 +306,27 @@ export async function withdrawAttentionItem(
         closedAs: result.ask.closed?.as === 'answered' ? 'answered' : 'replaced',
       };
   }
+}
+
+async function withdrawWaits(
+  deps: AttentionItemDeps,
+  runId: string,
+  actor: RunActor
+): Promise<AttentionItemWithdrawResult> {
+  const run = await deps.queue.store.getWorkflowRun(runId);
+  if (run === null) return { kind: 'unknown' };
+  try {
+    await deps.operations.assertRunActionAllowed(run, actor, 'respond');
+  } catch (error) {
+    if (error instanceof RunActionForbiddenError) return { kind: 'unknown' };
+    throw error;
+  }
+  const result = await deps.queue.store.withdrawItemWaits(runId);
+  if (result.kind === 'not_found') return { kind: 'unknown' };
+  if (result.kind === 'refused' && result.closedAs !== 'withdrawn')
+    return { kind: 'refused', closedAs: result.closedAs };
+  const item = await waitQueueItem(deps.queue.store, result.waits);
+  return result.kind === 'refused'
+    ? { kind: 'unchanged', item }
+    : { kind: 'withdrawn', item, settled: false, startReceipts: [] };
 }

@@ -58,6 +58,7 @@ import { reportRunTerminal } from './workflow-terminal-telemetry';
 import { insertStartReceipt } from './start-receipt-writes';
 import { insertLinkedStarts } from './linked-starts';
 import { openItemAsksForCompletedRun } from './item-asks';
+import { openItemWaitsForCompletedRun } from './item-waits';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
 
@@ -400,6 +401,9 @@ export async function completeWorkflowRun(
         started.push(...(await insertLinkedStarts(query, result?.linkedStarts ?? [])));
         // The asks it leaves open with it too, replacing its workflow's open set on the item.
         if (result?.asks !== undefined) await openItemAsksForCompletedRun(query, id, result.asks);
+        // And the waits, replacing its workflow's open set of waits on the item.
+        if (result?.waits !== undefined)
+          await openItemWaitsForCompletedRun(query, id, result.waits);
       }
       return { update, started };
     });

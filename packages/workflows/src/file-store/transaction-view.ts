@@ -97,6 +97,8 @@ export type TransactionView = Omit<
   | 'getItemAsk'
   | 'answerItemAsk'
   | 'withdrawItemAsk'
+  | 'listOpenItemWaits'
+  | 'withdrawItemWaits'
 > & {
   /**
    * The run `resumeWorkflowRun(id, cursor)` would continue; throws what it would throw
@@ -346,12 +348,13 @@ export function createTransactionView(
       result
     ): ReturnType<IWorkflowStore['completeWorkflowRun']> => {
       validateWorkflowWaitMetadata(metadata);
-      // A start receipt, a linked start and an ask name an item, and items are refused here
-      // before a run starts, so none can reach this write.
+      // A start receipt, a linked start, an ask and a wait name an item, and items are refused
+      // here before a run starts, so none can reach this write.
       if (
         (result?.startReceipts?.length ?? 0) > 0 ||
         (result?.linkedStarts?.length ?? 0) > 0 ||
-        (result?.asks?.length ?? 0) > 0
+        (result?.asks?.length ?? 0) > 0 ||
+        (result?.waits?.length ?? 0) > 0
       )
         throw new FileStoreUnsupportedError('items');
       const run = structuredClone(row(id));

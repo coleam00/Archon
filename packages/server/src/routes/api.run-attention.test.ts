@@ -26,6 +26,7 @@ import {
   makeApp,
 } from '../test/api-workflow-runs-harness';
 import { describe, test, expect } from 'bun:test';
+import { heldRunOf } from '@archon/workflows/attention-queue';
 import { itemReadSchema } from '@archon/workflows/item-read';
 import { itemWindowSchema } from '@archon/workflows/item-window';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
@@ -113,7 +114,7 @@ describe('the attention queue over HTTP', () => {
       const list = await app.request('/api/runs/attention?label=ci%3Dother');
       expect(list.status).toBe(200);
       const body = runsNeedingAttentionResponseSchema.parse(await list.json());
-      expect(body.items.map(item => item.run?.id)).toEqual(['run-other']);
+      expect(body.items.map(item => heldRunOf(item)?.id)).toEqual(['run-other']);
       expect(body.runs.map(run => run.id)).toEqual(['run-other']);
       expect(body.items[0]).toMatchObject({
         kind: 'attention',
@@ -177,7 +178,9 @@ describe('the attention queue over HTTP', () => {
       const list = await app.request('/api/runs/attention');
       expect(list.status).toBe(200);
       const { items } = runsNeedingAttentionResponseSchema.parse(await list.json());
-      expect(items.map(item => ({ runId: item.run?.id, fanOut: item.run?.fanOut }))).toEqual(
+      expect(
+        items.map(item => ({ runId: heldRunOf(item)?.id, fanOut: heldRunOf(item)?.fanOut }))
+      ).toEqual(
         children.map((run, index) => ({
           runId: run.id,
           fanOut: { parentRunId: 'questions-parent', nodeId: 'answers', index },
@@ -185,7 +188,7 @@ describe('the attention queue over HTTP', () => {
       );
       for (const item of items) {
         expect(item.kind).toBe('attention');
-        const read = await app.request(`/api/runs/${item.run?.id}/attention`);
+        const read = await app.request(`/api/runs/${heldRunOf(item)?.id}/attention`);
         expect(read.status).toBe(200);
         expect(await read.json()).toEqual({ item });
       }
@@ -265,7 +268,7 @@ test('batch list and counts preserve degraded reports even when scope or labels 
       const body = runsNeedingAttentionResponseSchema.parse(await list.json());
       expect(body.degraded).toEqual(warnings);
       expect(body.runs.map(run => run.id)).toEqual(project ? [] : [run.id]);
-      expect(body.items.map(item => item.run?.id)).toEqual(project ? [] : [run.id]);
+      expect(body.items.map(item => heldRunOf(item)?.id)).toEqual(project ? [] : [run.id]);
       for (const countBy of ['', '&countBy=project']) {
         const response = await app.request(
           `/api/runs/attention?label=missing%3Dyes${project}${countBy}`
@@ -340,7 +343,7 @@ describe('reading an item over HTTP', () => {
       const read = itemReadSchema.parse(await response.json());
       expect(read.item).toEqual(item);
       expect(read.runs.map(run => [run.id, run.status])).toEqual([['run-item', 'paused']]);
-      expect(read.questions.map(question => question.run?.id)).toEqual(['run-item']);
+      expect(read.questions.map(question => heldRunOf(question)?.id)).toEqual(['run-item']);
       expect(read.answers).toMatchObject([
         { kind: 'gate', runId: 'run-item', decision: 'approved' },
       ]);

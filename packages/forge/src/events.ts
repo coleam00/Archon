@@ -56,6 +56,32 @@ export const commentChangedEventSchema = z.object({
   comment: z.object({ id: z.string().min(1), author: sourceActorSchema.nullable() }),
 });
 
+export const reviewStateSchema = z.enum([
+  'approved',
+  'changes_requested',
+  'commented',
+  'dismissed',
+  'unknown',
+]);
+export type ReviewState = z.infer<typeof reviewStateSchema>;
+
+/**
+ * A review submitted on a pull request, or dismissed. `commit` is the commit the review
+ * was made on, null when the forge does not say. Its body stays on the forge.
+ */
+export const reviewChangedEventSchema = z.object({
+  kind: z.literal('review.changed'),
+  action: z.enum(['submitted', 'dismissed']),
+  pr: prRefSchema,
+  review: z.object({
+    id: z.string().min(1),
+    state: reviewStateSchema,
+    nativeState: z.string().min(1),
+    commit: gitObjectIdSchema.nullable(),
+    author: sourceActorSchema.nullable(),
+  }),
+});
+
 export const checkResultSchema = z.enum([
   'success',
   'failure',
@@ -92,6 +118,7 @@ export const forgeEventSchema = z.discriminatedUnion('kind', [
   prLifecycleEventSchema,
   labelChangedEventSchema,
   commentChangedEventSchema,
+  reviewChangedEventSchema,
   checkChangedEventSchema,
 ]);
 export type ForgeEvent = z.infer<typeof forgeEventSchema>;
