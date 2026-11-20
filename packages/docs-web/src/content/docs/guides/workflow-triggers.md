@@ -128,7 +128,7 @@ It prints `runAsUserId`, the ID to put in the binding, and `cliIdentity`, the na
 
 A workflow pack can declare the bindings it recommends. [`archon pack bindings`](/reference/cli/#pack-bindings) writes them as the files described below for one repository, and you register each as this page describes.
 
-## Configure a native macOS schedule
+## Configure a native schedule
 
 Create `/Users/alice/.archon/triggers/repository-refresh.json`:
 
@@ -171,7 +171,7 @@ nodes:
   # ...
 ```
 
-`intervalSeconds` is required and has no default. `runAtLoad` is also required. Set it to `true` to request one start when launchd loads the job, or `false` to wait for the first interval.
+`intervalSeconds` is required and has no default. `runAtLoad` is also required. Set it to `true` to request one start when the scheduler loads the job, at install and at each login, or `false` to wait for the first interval.
 
 `schedule` itself is optional. A configuration without it is a [fire-only binding](#start-a-binding-only-with-trigger-fire).
 
@@ -181,13 +181,13 @@ Test the binding once before installing it:
 archon trigger fire --config /Users/alice/.archon/triggers/repository-refresh.json
 ```
 
-The command returns a durable receipt and disposition, then runs accepted work in the background. Install the per-user LaunchAgent after the one-shot request succeeds:
+The command returns a durable receipt and disposition, then runs accepted work in the background. Install the timer after the one-shot request succeeds:
 
 ```bash
 archon trigger schedule install --config /Users/alice/.archon/triggers/repository-refresh.json
 ```
 
-Archon installs only jobs in the `com.archon.trigger.*` namespace. The plist contains the absolute executable and arguments, working directory, `ARCHON_HOME`, and the `PATH` of the shell that ran `install`, so scheduled runs find `bun`, `uv`, `gh`, git credential helpers, and provider CLIs where your terminal finds them. launchd's default `PATH` is only `/usr/bin:/bin:/usr/sbin:/sbin`. The plist does not copy provider credentials or other environment variables. Scheduled runs use the same native provider configuration and credentials available to the configured user, so a credential that exists only as a variable in your shell is not there: keep it where the provider stores its login, or in Archon's config.
+The timer belongs to the operating system's own scheduler: a LaunchAgent on macOS, a systemd user timer on Linux, and a Task Scheduler task on Windows. Archon installs only jobs named `com.archon.trigger.*` (on Windows, under the `\Archon\` task folder). Each job runs the same `trigger fire --config <file>` command as the installing user, with the absolute executable and arguments, the working directory, `ARCHON_HOME`, and the `PATH` of the shell that ran `install`, so scheduled runs find `bun`, `uv`, `gh`, git credential helpers, and provider CLIs where your terminal finds them. A scheduler's default `PATH` lacks them; launchd's is only `/usr/bin:/bin:/usr/sbin:/sbin`. The job gets no provider credentials or other environment variables. Its output is appended to `ARCHON_HOME/schedules/com.archon.trigger.<id>.log`, and `archon trigger schedule status --config <file>` reports whether the timer is installed and when it last ran. See [trigger schedules](/reference/cli/#trigger-schedules) for what each platform writes. Scheduled runs use the same native provider configuration and credentials available to the configured user, so a credential that exists only as a variable in your shell is not there: keep it where the provider stores its login, or in Archon's config.
 
 Use `archon trigger list` to find recent native or webhook receipts, then inspect a receipt or resource-start request by its UUID:
 
@@ -201,19 +201,23 @@ Remove future firings with the same configuration file:
 archon trigger schedule remove --config /Users/alice/.archon/triggers/repository-refresh.json
 ```
 
-Removing a schedule does not cancel work that Archon already accepted. To change its interval or startup behavior, or to record a changed `PATH`, remove the existing job before installing again. A schedule installed before Archon recorded `PATH` needs the same remove and install once; until then its runs cannot find tools outside launchd's default `PATH`.
+Removing a schedule does not cancel work that Archon already accepted. To change its interval or startup behavior, or to record a changed `PATH`, remove the existing job before installing again. A schedule installed before Archon recorded `PATH` needs the same remove and install once; until then its runs cannot find tools outside launchd's default `PATH`. A macOS schedule installed before Archon wrote its output to a log needs it once too, and until then `status` cannot say when it last ran.
 
-### macOS scheduling limits
+### Scheduling limits
 
-The installed LaunchAgent runs in the current user's GUI login domain. The user must be logged in, and logout ends that launchd session. No scheduler runs while the computer is powered off.
+No scheduler runs while the computer is powered off, and Archon does not promise replay of missed intervals. `runAtLoad` requests one invocation when the job loads; it is not a missed-run queue. No platform starts a run while the previous one is still running.
 
-`StartInterval` behavior during sleep or while the prior command is still running is native launchd behavior and differs across macOS releases. Archon does not promise replay of missed intervals. `runAtLoad` requests one invocation when the job loads; it is not a missed-run queue.
+On macOS, the LaunchAgent runs in the current user's GUI login domain. The user must be logged in, and logout ends that launchd session. `StartInterval` behavior during sleep is native launchd behavior and differs across macOS releases.
+
+On Linux, the timer runs in the user's systemd manager, which runs while the user has a session. To keep it running without one, enable lingering with `loginctl enable-linger`. A host without a reachable user manager, such as a container or WSL without systemd, has no timer to install.
+
+On Windows, the task runs as the logged-on user, so it runs only while that user is logged on, and keeps access to the Credential Manager that `gh` and Git Credential Manager use. Each run opens a console window. Task Scheduler repeats a task every whole number of minutes from 1 minute to 31 days, so `intervalSeconds` must be a multiple of 60 in that range.
 
 For plain schedules, use the trigger workflow to read the current source state when it runs. To report identified items from an external system, use the [polling recipe](#poll-a-system-that-cannot-send-webhooks). Do not depend on one invocation for every wall-clock interval.
 
-## Drive the same commands from Linux or Windows
+## Drive the same commands from another scheduler
 
-Archon does not install or manage Linux or Windows scheduler definitions. Configure the host scheduler to run the same one-shot command with an absolute executable path, an absolute config path, the configured working directory, `ARCHON_HOME`, and a `PATH` that contains the tools your workflows run, such as `bun`, `uv`, `gh`, and provider CLIs:
+Use this on a host with no scheduler `schedule install` supports, or when you prefer your own. `schedule install` on such a host prints the exact command to schedule by hand. Configure the scheduler to run the same one-shot command with an absolute executable path, an absolute config path, the configured working directory, `ARCHON_HOME`, and a `PATH` that contains the tools your workflows run, such as `bun`, `uv`, `gh`, and provider CLIs:
 
 ```text
 /opt/archon/bin/archon trigger fire --config /home/alice/.archon/triggers/repository-refresh.json
@@ -225,9 +229,7 @@ A server with `ARCHON_TRIGGER_HOST` set already drains its host. Without a runni
 /opt/archon/bin/archon trigger drain --host build-host-1
 ```
 
-Use the first command as a systemd `ExecStart` or cron command on Linux. On Windows Task Scheduler, set the absolute Archon executable as the program and pass `trigger fire --config C:\Users\Alice\.archon\triggers\repository-refresh.json` as its arguments. Configure the working directory and `ARCHON_HOME` separately in the scheduler.
-
-These recipes share Archon's trigger boundary, but the host scheduler owns login, sleep, wake, missed-time, and credential-loading behavior. Test the real scheduled task under its configured user before relying on unattended execution.
+The host scheduler owns login, sleep, wake, missed-time, and credential-loading behavior. Test the real scheduled task under its configured user before relying on unattended execution.
 
 ## Start a binding only with `trigger fire`
 

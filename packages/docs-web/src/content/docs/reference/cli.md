@@ -2062,7 +2062,7 @@ archon workflow wake schedule install --interval 5 --json
 archon workflow wake schedule remove --json
 ```
 
-The launch interval is a positive integer in seconds, defaulting to 5. It starts the job again if it has exited; the watch process polls every five seconds. The job invokes `workflow wake --watch --json` as one long-lived process, runs at load, and records an absolute executable, working directory, `ARCHON_HOME`, and the installing shell's `PATH`. Reinstalling identical configuration verifies that its launchd job is registered and fails if registration cannot be verified. Remove then install to change its interval, executable, or `PATH`, to add `PATH` to a schedule installed before it was recorded, or to upgrade an existing one-shot wake schedule to watch mode. Native installation is macOS-only; see [workflow trigger scheduling](/guides/workflow-triggers/#macos-scheduling-limits) for login, sleep, environment, and scheduler caveats.
+The launch interval is a positive integer in seconds, defaulting to 5. It starts the job again if it has exited; the watch process polls every five seconds. The job invokes `workflow wake --watch --json` as one long-lived process, runs at load, and records an absolute executable, working directory, `ARCHON_HOME`, and the installing shell's `PATH`. Reinstalling identical configuration loads the job when launchd has not. Remove then install to change its interval, executable, or `PATH`, to add `PATH` to a schedule installed before it was recorded, or to upgrade an existing one-shot wake schedule to watch mode. Native wake installation is macOS-only, and its output is discarded; see [workflow trigger scheduling](/guides/workflow-triggers/#scheduling-limits) for login, sleep, environment, and scheduler caveats.
 
 On Linux, use a long-lived systemd user service with `ExecStart=/absolute/path/to/archon workflow wake --watch --json`, `Environment=ARCHON_HOME=/absolute/path/to/.archon`, an `Environment=PATH=...` that contains the tools your workflows run (systemd's default `PATH` usually lacks `~/.bun/bin`), and `Restart=on-failure`. Enable it with `systemctl --user enable --now <name>.service`.
 
@@ -2483,35 +2483,24 @@ The interval is a positive integer in seconds, defaulting to 21600 (6 hours, the
 default). The job runs at load and then every interval, from the Archon home, and records
 an absolute executable, `ARCHON_HOME`, and the installing shell's `PATH`, which must
 contain `git` and `gh`. There is one job per install: one pass covers every project
-registered there, and launchd never starts a pass while the previous one runs.
-Reinstalling identical configuration verifies that its launchd job is registered; to
+registered there, and the scheduler never starts a pass while the previous one runs.
+Reinstalling identical configuration loads the job when the scheduler has not; to
 change the interval, executable or `PATH`, remove it and install again. `install`
-refuses a file-store install, because merged cleanup needs the database. `status`
-reports whether the job is installed and whether launchd has it loaded.
+refuses a file-store install, because merged cleanup needs the database.
+
+The timer is the one [`trigger schedule`](#trigger-schedules) installs, on the same
+platforms and with the same files: a LaunchAgent on macOS, a systemd user timer on Linux,
+and a Task Scheduler task on Windows, where the interval must be a whole number of
+minutes. Its output is appended to `ARCHON_HOME/schedules/<label>.log`. `install --json`
+prints `path` (the job's definition file) and `log`; `status --json` prints `installed`
+and, for an installed job, `path`, `registered` (the scheduler has it loaded), `log` and
+`lastRunAt`. On a host with no supported scheduler, `install` prints the command to
+schedule by hand.
 
 `isolation` commands act on every registered project, so they run from any directory,
-including one that is not a git repository. launchd discards the job's output; read its
-last exit status with `launchctl print gui/$(id -u)/<label>`, where `<label>` is the
-plist file name `status` reports, without `.plist`. Native installation is macOS-only;
-see [workflow trigger scheduling](/guides/workflow-triggers/#macos-scheduling-limits)
-for login, sleep, and environment caveats.
-
-On Linux, use a systemd user service with `Type=oneshot`,
-`ExecStart=/absolute/path/to/archon isolation cleanup --merged`,
-`WorkingDirectory=` and `Environment=ARCHON_HOME=` set to the Archon home, and an
-`Environment=PATH=...` that contains `git` and `gh`. Pair it with a timer that sets
-`OnBootSec=5min` and `OnUnitActiveSec=6h`, and enable it with
-`systemctl --user enable --now <name>.timer`. With cron instead:
-
-```cron
-0 */6 * * * cd /absolute/path/to/.archon && ARCHON_HOME=/absolute/path/to/.archon PATH=/usr/local/bin:/usr/bin:/bin /absolute/path/to/archon isolation cleanup --merged
-```
-
-On Windows Task Scheduler, select the absolute Archon executable, set arguments to
-`isolation cleanup --merged`, repeat the task every 6 hours, and select "Do not start a
-new instance" if it is already running. Use the Archon home as the working directory,
-and set `ARCHON_HOME` and a `PATH` that contains `git` and `gh` in the task's environment
-or in a wrapper that sets them.
+including one that is not a git repository. See
+[workflow trigger scheduling](/guides/workflow-triggers/#scheduling-limits) for login,
+sleep, and environment caveats.
 
 ### `complete <branch> [branch2 ...]`
 
@@ -2871,6 +2860,42 @@ A CLI process that ends a run starts the starts its own completion wrote, each o
 `trigger list` prints each receipt with `itemKey`, the item the start named or null, and `awaitingExecution`: its starts that are admitted but whose run no executor has claimed, as `{requestId, hostId}`. One that stays there was admitted by a process that died before spawning its executor; run it once with `trigger execute <requestId> --host <hostId>`. Each receipt also carries `hold`: the [install hold](#hold) (`{ setBy, setAt }`) while it is set and the receipt has a start it keeps (a binding not yet prepared, or a queued request), else null. `trigger fire` adds the same `hold` to the receipt it prints, and says on stderr that the start waits until the hold is lifted. `refusedBindings` lists each binding whose preparation was refused or failed, as `{bindingId, status, error, forgeRefusal}`.
 
 Run from inside a workflow node, `trigger fire` records the calling run and node as the receipt's `sourceActor` (`{source: "archon-run", id: <run id>, display: <node path>}`); outside a run it records none. A set `WORKFLOW_ID` makes `fire` act as a call from that node: it then requires a matching `ARCHON_NODE_EXECUTION`, and refuses a run the opened store does not know before a receipt is written, so a shell left with a stale `WORKFLOW_ID` fails instead of firing. `trigger inspect <request-id>` and `workflow get <run-id> --json` always carry the requesting run, as `requestedBy` and `requested_by` (`{runId, nodePath}`, or `null` when no run asked for the start), and the plain `workflow get` view prints a `Requested by` line when there is one. The started run still acts as its binding's `runAsUserId`; the requesting run is provenance only.
+
+#### Trigger schedules
+
+`trigger schedule` registers a timer binding with the operating system's own scheduler, so the binding fires with no Archon process running:
+
+```bash
+archon trigger schedule install --config <timer-binding.json>
+archon trigger schedule status --config <timer-binding.json>
+archon trigger schedule remove --config <timer-binding.json>
+```
+
+The job runs `archon trigger fire --config <absolute file>` every `schedule.intervalSeconds`, and once when the scheduler loads it if `schedule.runAtLoad` is true: at install and at each login. It runs as the installing user, from the binding's `launch.cwd`, with exactly two variables set: `ARCHON_HOME`, and the `PATH` of the shell that ran `install`. No other variables and no credentials are copied. The job's name is `com.archon.trigger.<id>`, where the id is derived from the Archon home, the source instance and the binding.
+
+| Platform | Scheduler | Files `install` writes |
+| --- | --- | --- |
+| macOS | launchd, in the user's GUI domain | `~/Library/LaunchAgents/<label>.plist` |
+| Linux | a systemd user timer | `<label>.timer` and `<label>.service` in `$XDG_CONFIG_HOME/systemd/user` (default `~/.config/systemd/user`) |
+| Windows | Task Scheduler, task `\Archon\<label>` | `<label>.xml` (the task definition) and `<label>.cmd` (the wrapper that sets `ARCHON_HOME` and `PATH`) in `ARCHON_HOME\schedules` |
+
+On every platform the job's standard output and error are appended to `ARCHON_HOME/schedules/<label>.log`. The log is never rotated, and `remove` keeps it.
+
+- `install` is idempotent. An identical job that is loaded is left alone, and one the scheduler has not loaded is loaded. A different job under the same name, for example after `PATH` changed or an upgrade changed the rendered job, is refused with the `remove` command to run first. A macOS timer installed before the log existed is refused this way once.
+- `remove` unloads the job and deletes only the files `install` wrote. It succeeds for a job the scheduler has not loaded, and prints `{"bindingId", "schedule": "remove"}` whether or not a job was installed.
+- `status` prints `{"bindingId", "schedule": "status", "installed": false}`, or for an installed job `"installed": true` with `path` (the plist, the `.timer` unit or the task XML), `registered` (the scheduler has the job loaded), `log`, and `lastRunAt`: the log's last write time, or null before the job has written to it. A run the scheduler cannot start at all, such as one whose executable is gone, writes nothing to the log, so `lastRunAt` does not move. Read that failure from the scheduler's own record: `launchctl print gui/$(id -u)/<label>` on macOS, `systemctl --user status <label>.service` on Linux, and the task's history in Task Scheduler on Windows.
+
+`remove` and `status` need no `schedule` in the file, so a timer installed before the file lost it can still be managed.
+
+Platform rules:
+
+- **macOS**: the user must be logged in to a GUI session.
+- **Linux**: the timer needs a reachable systemd user manager. It runs while the user has a session; `loginctl enable-linger` keeps it running without one. The service is a `Type=oneshot` unit with `KillMode=process`, so the run `trigger fire` hands to a background process survives `fire`'s exit.
+- **Windows**: the task runs as the logged-on user and only while that user is logged on, so it keeps access to the Credential Manager; each run opens a console window. The interval must be a whole number of minutes from 1 minute to 31 days, a path or `PATH` entry must not contain a double quote, and `ARCHON_HOME` must not contain `%`. A run that is still going when the next is due is skipped.
+
+On any other host, or on Linux without a reachable `systemctl --user`, `install` refuses and prints the command to schedule by hand, with its interval; see [drive the same commands from another scheduler](/guides/workflow-triggers/#drive-the-same-commands-from-another-scheduler).
+
+To undo an install by hand: `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`; `systemctl --user disable --now <label>.timer`, then delete the two unit files; or `schtasks /Delete /TN \Archon\<label> /F`, then delete the two files.
 
 #### Items
 

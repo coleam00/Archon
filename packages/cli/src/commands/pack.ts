@@ -438,7 +438,7 @@ function nextSteps(generated: readonly Generated[], target: Target): string[] {
   if (timers.length > 0) {
     lines.push(
       '',
-      'Timer bindings. Fire each once to check it, then schedule it. `schedule install` is macOS launchd; elsewhere run the same `trigger fire` command from cron, systemd or Task Scheduler:'
+      'Timer bindings. Fire each once to check it, then schedule it. `schedule install` uses launchd on macOS, a systemd user timer on Linux and Task Scheduler on Windows; on another host it prints the command to schedule by hand:'
     );
     for (const timer of timers) {
       lines.push(
