@@ -91,6 +91,7 @@ export type { IsolationResolverDeps } from './resolver';
 export { WorktreeProvider, resolveRepoLocalOverride } from './providers/worktree';
 export { generatedTaskBranch, isGeneratedTaskBranch } from './providers/worktree/branches';
 export { refuseUnappliedStartPoint } from './providers/worktree/adopt';
+export { resolveWorktreeBase } from './providers/worktree/create';
 
 // --- PR state lookup ---
 export { getPrState, getPrsForCommit } from './pr-state';

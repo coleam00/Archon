@@ -41,10 +41,13 @@ import {
   isSourceReadFailure,
   isSystemError,
   recordSelectedWorkflow,
+  resolveChildBaseDefinitions,
   resolveChildDiscoveryRoot,
   resolveChildInstalledPacks,
+  runProjectConfigRoot,
   type InstalledPacksRoot,
 } from './workflow-source';
+import type { BaseRunDefinitions } from './schemas/run-metadata';
 
 /** Depth cap on the `workflow:` sub-run tree (D9). A node nested deeper fails fast. */
 const CHILD_WORKFLOW_DEPTH_CAP = 5;
@@ -213,6 +216,8 @@ export async function runChildWorkflow(
 interface ParentSource {
   readonly root: string | undefined;
   readonly installedFrom: InstalledPacksRoot | undefined;
+  /** Set when the parent's definitions came from the base branch: `root` is its capture. */
+  readonly base: { origin: string; definitions: BaseRunDefinitions } | undefined;
 }
 
 // A `workflow:` child freezes its own source AT ITS OWN START, from the parent's
@@ -222,11 +227,23 @@ interface ParentSource {
 // discovering from the capture rather than from the live directory is what stops the
 // child executing one moment's YAML against another moment's scripts.
 // Installed packs are the exception: the child takes them from the parent's capture.
+// So is a parent whose definitions came from the base branch: its authoring directory is
+// a composition that no longer exists, so the child takes the parent's captured project
+// scope, config included, and parent and child run one set of definitions.
 async function readParentSource({ args }: ChildLaunch): Promise<ParentSource> {
   try {
+    const installedFrom = await resolveChildInstalledPacks(args.parentRun.metadata);
+    const base = await resolveChildBaseDefinitions(args.parentRun.metadata);
+    if (base)
+      return {
+        root: base.projectRoot,
+        installedFrom,
+        base: { origin: base.origin, definitions: base.definitions },
+      };
     return {
       root: await resolveChildDiscoveryRoot(args.parentRun.metadata),
-      installedFrom: await resolveChildInstalledPacks(args.parentRun.metadata),
+      installedFrom,
+      base: undefined,
     };
   } catch (err) {
     throw parentSourceUnreadable(args.cwd, err);
@@ -244,6 +261,13 @@ async function captureChildSource(
       sourceRoot,
       ...(parentSource.installedFrom !== undefined
         ? { installedFrom: parentSource.installedFrom }
+        : {}),
+      ...(parentSource.base !== undefined
+        ? {
+            origin: parentSource.base.origin,
+            includeProjectConfig: true,
+            definitions: parentSource.base.definitions,
+          }
         : {}),
     });
     owner.hold(childSource);
@@ -274,8 +298,10 @@ async function resolveChildWorkflow(
     // check for `workflow:` targets. Discovery runs HERE, when the node executes,
     // so a run can author a workflow mid-flight and then execute it as a governed
     // child run; a load-time check would compile, pass every existing test, and
-    // silently delete that capability. Recorded in the constitution's case-law
-    // table (.archon/workflow-language-constitution.md) and locked by
+    // silently delete that capability. A parent whose definitions came from the base
+    // branch is the one exception: its children read the parent's capture, so they see
+    // what the parent captured, not what it wrote since. Recorded in the constitution's
+    // case-law table (.archon/workflow-language-constitution.md) and locked by
     // `describe('workflow: late resolution is a deliberate affordance')` in
     // child-runs.late-resolution.test.ts.
     const { workflows, errors } = await discoverWorkflowsWithConfig(
@@ -366,6 +392,7 @@ async function prepareChildAiConfiguration(
   const configCwd = resumeChild?.run.working_path ?? args.cwd;
   try {
     const childPrepared = await prepareRunAiConfiguration(deps, childWorkflow, configCwd, {
+      configRoot: runProjectConfigRoot((resumeChild?.run ?? args.parentRun).metadata, configCwd),
       codebaseId: args.codebaseId,
       userId: args.userId,
       ...(resumeChild

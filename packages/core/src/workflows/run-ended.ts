@@ -37,7 +37,7 @@ import type { WorkflowItem, WorkflowRun } from '@archon/workflows/schemas/workfl
 import type { WorkflowDeps } from '@archon/workflows/deps';
 import { declaredOutcome, outcomeValues } from '@archon/workflows/completed-outcome';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { discoverBindingWorkflows } from './definition-source';
 import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
 import { getArchonHome } from '@archon/paths';
 import { selectStartedWorkflow, type StartedWorkflow } from './binding-workflow';
@@ -440,11 +440,9 @@ export async function runEndedBindingCheck(
   { binding, runEnded }: RunEndedBinding,
   deps: Pick<WorkflowDeps, 'loadConfig' | 'providers'>
 ): Promise<string[]> {
-  const discovered = await discoverWorkflowsWithConfig(
-    binding.launch.discoveryCwd ?? binding.launch.cwd,
-    deps.loadConfig,
-    deps.providers
-  );
+  const read = await discoverBindingWorkflows(binding.launch, deps);
+  if ('refused' in read) return [read.refused];
+  const { discovered } = read;
   const workflows = discovered.workflows.map(found => found.workflow);
   const problems: string[] = [];
   // A completion matches the ended run's own name exactly, so this does too.
