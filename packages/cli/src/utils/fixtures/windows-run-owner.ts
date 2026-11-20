@@ -11,8 +11,8 @@ import { claimDetachedRunProcessOwner } from '../detached-run-control';
  *
  * - `orphan`: start an intermediate that starts a detached grandchild and exits, so the
  *   grandchild's parent is gone before any stop begins.
- * - `orphan-complete`, `orphan-fail`: start the same orphan, then, once `<dir>/exit` exists,
- *   exit by itself with 0 or 1, as an owner does when its run ends, with no stop.
+ * - `orphan-exit`: start the same orphan, then, once `<dir>/exit` exists, exit by itself, as
+ *   an owner does when its run ends, with no stop.
  * - `spawner`: start a detached child every few milliseconds, so a stop races a spawn.
  * - `nested`: start a process, as a node would, that launches a real CLI workflow with
  *   `--detach` through the job broker. Its run id is saved in `<dir>/child-run-id`.
@@ -22,8 +22,7 @@ import { claimDetachedRunProcessOwner } from '../detached-run-control';
 const [runId, dir, mode] = process.argv.slice(2);
 const modes = [
   'orphan',
-  'orphan-complete',
-  'orphan-fail',
+  'orphan-exit',
   'spawner',
   'nested',
   'nested-approve',
@@ -101,7 +100,7 @@ if (mode === 'relay' || mode === 'relay-approve') {
   await claimDetachedRunProcessOwner();
   await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
 
-  if (mode === 'orphan' || mode === 'orphan-complete' || mode === 'orphan-fail') {
+  if (mode === 'orphan' || mode === 'orphan-exit') {
     const intermediate = spawn(
       process.execPath,
       [
@@ -125,9 +124,8 @@ if (mode === 'relay' || mode === 'relay-approve') {
     intermediate.once('exit', () => {
       writeReady();
       if (mode === 'orphan') return;
-      const exitCode = mode === 'orphan-complete' ? 0 : 1;
       setInterval(() => {
-        if (existsSync(join(dir, 'exit'))) process.exit(exitCode);
+        if (existsSync(join(dir, 'exit'))) process.exit(0);
       }, 25);
     });
   } else if (mode === 'spawner') {

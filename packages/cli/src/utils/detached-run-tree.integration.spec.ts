@@ -179,7 +179,7 @@ function stubOwner(pid: number, windowsJob?: string): Server {
  * ready. Its fixture directory's name is on the command line of every process in its tree.
  */
 async function startWindowsRunOwner(
-  mode: 'orphan' | 'orphan-complete' | 'orphan-fail' | 'spawner' | 'nested' | 'nested-approve'
+  mode: 'orphan' | 'orphan-exit' | 'spawner' | 'nested' | 'nested-approve'
 ): Promise<{
   runId: string;
   dir: string;
@@ -437,41 +437,38 @@ describe('detached run tree stop', () => {
     RACING_STOP_TEST_TIMEOUT_MS
   );
 
-  for (const [mode, exitCode] of [
-    ['orphan-complete', 0],
-    ['orphan-fail', 1],
-  ] as const) {
-    windowsOnly(
-      `ends a Windows orphan grandchild when its owner exits with ${String(exitCode)}, with no stop`,
-      async () => {
-        // #5988: a run that ends by itself gets no stop. The owner holds the only handle to
-        // its kill-on-close job, so its exit is what ends a process a node left running.
+  windowsOnly(
+    'ends a Windows orphan grandchild when its owner exits by itself, with no stop',
+    async () => {
+      // #5988: a run that ends by itself gets no stop. The owner holds the only handle to its
+      // kill-on-close job, so its exit is what ends a process a node left running. How the
+      // owner exits does not matter to the job, so one exit stands for finishing, failing
+      // and pausing.
 
-        const { dir, marker, exited } = await startWindowsRunOwner(mode);
-        await withFixtureCleanup(
-          async () => {
-            const grandchild = Number(readFileSync(join(dir, 'grandchild'), 'utf8'));
-            // The premise, asserted rather than assumed: the orphan is alive before the exit.
-            expect(await windowsProcessesNaming(marker)).toContain(grandchild);
+      const { dir, marker, exited } = await startWindowsRunOwner('orphan-exit');
+      await withFixtureCleanup(
+        async () => {
+          const grandchild = Number(readFileSync(join(dir, 'grandchild'), 'utf8'));
+          // The premise, asserted rather than assumed: the orphan is alive before the exit.
+          expect(await windowsProcessesNaming(marker)).toContain(grandchild);
 
-            writeFileSync(join(dir, 'exit'), '');
-            expect(await exited).toBe(exitCode);
-            // Windows ends the job's members as the owner's handle closes; give the
-            // terminations a few listings to land rather than assume they are synchronous.
-            let survivors = await windowsProcessesNaming(marker);
-            const deadline = Date.now() + FIXTURE_STATE_DEADLINE_MS;
-            while (survivors.length > 0 && Date.now() < deadline) {
-              await new Promise<void>(resolve => setTimeout(resolve, 250));
-              survivors = await windowsProcessesNaming(marker);
-            }
-            expect(survivors).toEqual([]);
-          },
-          () => killWindowsProcessesNaming(marker)
-        );
-      },
-      RACING_STOP_TEST_TIMEOUT_MS
-    );
-  }
+          writeFileSync(join(dir, 'exit'), '');
+          expect(await exited).toBe(0);
+          // Windows ends the job's members as the owner's handle closes; give the
+          // terminations a few listings to land rather than assume they are synchronous.
+          let survivors = await windowsProcessesNaming(marker);
+          const deadline = Date.now() + FIXTURE_STATE_DEADLINE_MS;
+          while (survivors.length > 0 && Date.now() < deadline) {
+            await new Promise<void>(resolve => setTimeout(resolve, 250));
+            survivors = await windowsProcessesNaming(marker);
+          }
+          expect(survivors).toEqual([]);
+        },
+        () => killWindowsProcessesNaming(marker)
+      );
+    },
+    RACING_STOP_TEST_TIMEOUT_MS
+  );
 
   windowsOnly(
     'does not report a Windows tree stopped while a descendant the first kill missed is alive',

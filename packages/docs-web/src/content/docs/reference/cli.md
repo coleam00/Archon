@@ -1885,16 +1885,16 @@ tree cannot be confirmed, so cancel and abandon refuse it while it runs: stop th
 process and its descendants yourself, then use `workflow abandon`.
 
 A detached run that a node launches with `workflow run`, `resume`, `approve`, `reject`,
-or `respond` and `--detach` starts outside the launching run's job and owns its own.
-Cancelling the launching run leaves it running; stop it with its own `cancel`.
+or `respond` and `--detach` starts outside the launching run's job and owns its own. So
+does a run started through a trigger, whether a node fires it or the launching run's end
+starts it as a follow-up. Cancelling or ending the launching run leaves it running; stop
+it with its own `cancel`.
 The broker and relayed CLI ignore
 `BUN_OPTIONS` and `bunfig.toml` startup hooks, which would execute outside the owner's job.
 On POSIX a detached run starts its own process group, so the same holds.
 
 The job grants no other way out: a tool in the run that asks Windows to start a process
-outside its job fails to start it. A run that a node starts through `archon trigger` stays
-in the launching run's job. Cancelling the launching run kills that run's processes, and
-its row stays `running` with no owner until you `workflow abandon` it.
+outside its job fails to start it.
 
 For a detached container run, cancel must also confirm container teardown after stopping
 the owner and before recording cancellation. If that teardown fails, cancel fails and
