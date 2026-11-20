@@ -6,7 +6,11 @@ import type {
   ResolvedWorkflow,
 } from '../../../schemas';
 import { parseWholeInputsRef, type JsonValue } from '../../../output-ref';
-import { readForwardedFanOutWith, type IncludeCommandContent } from '../../../compiled-command';
+import {
+  readComposedMeta,
+  readForwardedFanOutWith,
+  type IncludeCommandContent,
+} from '../../../compiled-command';
 import {
   boundaryIdComponent,
   instantiateResolvedInclude,
@@ -143,9 +147,13 @@ export function expandComposeInstance(
     include: node.include,
     ...(Object.keys(inputs).length > 0 ? { with: inputs } : {}),
   };
+  // The directive id is generated per item; the inner nodes name the fan-out node's
+  // authored include path instead, which an enclosing include already recorded on it.
+  const origin = readComposedMeta(node);
   const expanded = instantiateResolvedInclude(directive, definition, {
     commandContents,
     includeId,
+    includes: origin !== undefined ? [...origin.includes, origin.nodeId] : [node.id],
     includerPack,
   });
   const primarySink = expanded.primarySink;

@@ -11,7 +11,7 @@ Archon captures a node's execution facts in `nodeExecutionRecordSchema`. The sha
 
 ## Identity and execution context
 
-The node descriptor identifies the authored node and its kind; `path` identifies its location in the run, including composed structure. An invocation identifies the logical execution, while an attempt identifies one execution attempt within it. Retrying can create another attempt without creating another invocation. `invocation.loopPath` identifies enclosing loop groups and iterations.
+The node descriptor identifies the authored node and its kind. A node that came in through an include also carries `composed`: its id as written, the workflow that declared it, and the include ids that brought it in, outermost first. Node emitter events carry the same `composed` next to `nodeName`. `path` identifies the node's location in the run, including composed structure. An invocation identifies the logical execution, while an attempt identifies one execution attempt within it. Retrying can create another attempt without creating another invocation. `invocation.loopPath` identifies enclosing loop groups and iterations.
 
 The invocation's checkout observation captures the checkout at its first attempt. Later attempts and resumed continuations retain it; each attempt can also have its own checkout observation. An observation describes Git content, a positively established non-Git directory, or an unavailable observation. It is evidence, not a policy against dirty starts.
 
@@ -109,46 +109,91 @@ Presence is relative to the containing object: a required child of an optional p
 
 #### node
 
-| Field path         | Type / values                | Presence | Alternative                                         |
-| ------------------ | ---------------------------- | -------- | --------------------------------------------------- |
-| `node`             | `object`                     | required | `node.kind = "agent"`                               |
-| `node.id`          | `string`                     | required | `node.kind = "agent"`                               |
-| `node.kind`        | `"agent"`                    | required | `node.kind = "agent"`                               |
-| `node.source`      | `object`                     | required | `node.kind = "agent"; node.source.kind = "inline"`  |
-| `node.source.kind` | `"inline"`                   | required | `node.kind = "agent"; node.source.kind = "inline"`  |
-| `node.source`      | `object`                     | required | `node.kind = "agent"; node.source.kind = "command"` |
-| `node.source.kind` | `"command"`                  | required | `node.kind = "agent"; node.source.kind = "command"` |
-| `node.source.name` | `string`                     | required | `node.kind = "agent"; node.source.kind = "command"` |
-| `node`             | `object`                     | required | `node.kind = "exec"`                                |
-| `node.id`          | `string`                     | required | `node.kind = "exec"`                                |
-| `node.kind`        | `"exec"`                     | required | `node.kind = "exec"`                                |
-| `node.runtime`     | `"sh" \| "bun" \| "uv"`      | required | `node.kind = "exec"`                                |
-| `node`             | `object`                     | required | `node.kind = "loop"`                                |
-| `node.id`          | `string`                     | required | `node.kind = "loop"`                                |
-| `node.kind`        | `"loop"`                     | required | `node.kind = "loop"`                                |
-| `node.command`     | `string`                     | optional | `node.kind = "loop"`                                |
-| `node`             | `object`                     | required | `node.kind = "loop_group"`                          |
-| `node.id`          | `string`                     | required | `node.kind = "loop_group"`                          |
-| `node.kind`        | `"loop_group"`               | required | `node.kind = "loop_group"`                          |
-| `node`             | `object`                     | required | `node.kind = "gate"`                                |
-| `node.id`          | `string`                     | required | `node.kind = "gate"`                                |
-| `node.kind`        | `"gate"`                     | required | `node.kind = "gate"`                                |
-| `node`             | `object`                     | required | `node.kind = "halt"`                                |
-| `node.id`          | `string`                     | required | `node.kind = "halt"`                                |
-| `node.kind`        | `"halt"`                     | required | `node.kind = "halt"`                                |
-| `node`             | `object`                     | required | `node.kind = "wait"`                                |
-| `node.id`          | `string`                     | required | `node.kind = "wait"`                                |
-| `node.kind`        | `"wait"`                     | required | `node.kind = "wait"`                                |
-| `node`             | `object`                     | required | `node.kind = "workflow"`                            |
-| `node.id`          | `string`                     | required | `node.kind = "workflow"`                            |
-| `node.kind`        | `"workflow"`                 | required | `node.kind = "workflow"`                            |
-| `node.fanOut`      | `true`                       | optional | `node.kind = "workflow"`                            |
-| `node`             | `object`                     | required | `node.kind = "compose_fan_out"`                     |
-| `node.id`          | `string`                     | required | `node.kind = "compose_fan_out"`                     |
-| `node.kind`        | `"compose_fan_out"`          | required | `node.kind = "compose_fan_out"`                     |
-| `node`             | `object`                     | required | `node.kind = "compose_fan_out_instance"`            |
-| `node.kind`        | `"compose_fan_out_instance"` | required | `node.kind = "compose_fan_out_instance"`            |
-| `node.id`          | `string`                     | required | `node.kind = "compose_fan_out_instance"`            |
+| Field path                 | Type / values                | Presence | Alternative                                         |
+| -------------------------- | ---------------------------- | -------- | --------------------------------------------------- |
+| `node`                     | `object`                     | required | `node.kind = "agent"`                               |
+| `node.id`                  | `string`                     | required | `node.kind = "agent"`                               |
+| `node.kind`                | `"agent"`                    | required | `node.kind = "agent"`                               |
+| `node.composed`            | `object`                     | optional | `node.kind = "agent"`                               |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "agent"`                               |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "agent"`                               |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "agent"`                               |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "agent"`                               |
+| `node.source`              | `object`                     | required | `node.kind = "agent"; node.source.kind = "inline"`  |
+| `node.source.kind`         | `"inline"`                   | required | `node.kind = "agent"; node.source.kind = "inline"`  |
+| `node.source`              | `object`                     | required | `node.kind = "agent"; node.source.kind = "command"` |
+| `node.source.kind`         | `"command"`                  | required | `node.kind = "agent"; node.source.kind = "command"` |
+| `node.source.name`         | `string`                     | required | `node.kind = "agent"; node.source.kind = "command"` |
+| `node`                     | `object`                     | required | `node.kind = "exec"`                                |
+| `node.id`                  | `string`                     | required | `node.kind = "exec"`                                |
+| `node.kind`                | `"exec"`                     | required | `node.kind = "exec"`                                |
+| `node.runtime`             | `"sh" \| "bun" \| "uv"`      | required | `node.kind = "exec"`                                |
+| `node.composed`            | `object`                     | optional | `node.kind = "exec"`                                |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "exec"`                                |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "exec"`                                |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "exec"`                                |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "exec"`                                |
+| `node`                     | `object`                     | required | `node.kind = "loop"`                                |
+| `node.id`                  | `string`                     | required | `node.kind = "loop"`                                |
+| `node.kind`                | `"loop"`                     | required | `node.kind = "loop"`                                |
+| `node.composed`            | `object`                     | optional | `node.kind = "loop"`                                |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "loop"`                                |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "loop"`                                |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "loop"`                                |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "loop"`                                |
+| `node.command`             | `string`                     | optional | `node.kind = "loop"`                                |
+| `node`                     | `object`                     | required | `node.kind = "loop_group"`                          |
+| `node.id`                  | `string`                     | required | `node.kind = "loop_group"`                          |
+| `node.kind`                | `"loop_group"`               | required | `node.kind = "loop_group"`                          |
+| `node.composed`            | `object`                     | optional | `node.kind = "loop_group"`                          |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "loop_group"`                          |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "loop_group"`                          |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "loop_group"`                          |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "loop_group"`                          |
+| `node`                     | `object`                     | required | `node.kind = "gate"`                                |
+| `node.id`                  | `string`                     | required | `node.kind = "gate"`                                |
+| `node.kind`                | `"gate"`                     | required | `node.kind = "gate"`                                |
+| `node.composed`            | `object`                     | optional | `node.kind = "gate"`                                |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "gate"`                                |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "gate"`                                |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "gate"`                                |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "gate"`                                |
+| `node`                     | `object`                     | required | `node.kind = "halt"`                                |
+| `node.id`                  | `string`                     | required | `node.kind = "halt"`                                |
+| `node.kind`                | `"halt"`                     | required | `node.kind = "halt"`                                |
+| `node.composed`            | `object`                     | optional | `node.kind = "halt"`                                |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "halt"`                                |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "halt"`                                |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "halt"`                                |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "halt"`                                |
+| `node`                     | `object`                     | required | `node.kind = "wait"`                                |
+| `node.id`                  | `string`                     | required | `node.kind = "wait"`                                |
+| `node.kind`                | `"wait"`                     | required | `node.kind = "wait"`                                |
+| `node.composed`            | `object`                     | optional | `node.kind = "wait"`                                |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "wait"`                                |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "wait"`                                |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "wait"`                                |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "wait"`                                |
+| `node`                     | `object`                     | required | `node.kind = "workflow"`                            |
+| `node.id`                  | `string`                     | required | `node.kind = "workflow"`                            |
+| `node.kind`                | `"workflow"`                 | required | `node.kind = "workflow"`                            |
+| `node.composed`            | `object`                     | optional | `node.kind = "workflow"`                            |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "workflow"`                            |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "workflow"`                            |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "workflow"`                            |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "workflow"`                            |
+| `node.fanOut`              | `true`                       | optional | `node.kind = "workflow"`                            |
+| `node`                     | `object`                     | required | `node.kind = "compose_fan_out"`                     |
+| `node.id`                  | `string`                     | required | `node.kind = "compose_fan_out"`                     |
+| `node.kind`                | `"compose_fan_out"`          | required | `node.kind = "compose_fan_out"`                     |
+| `node.composed`            | `object`                     | optional | `node.kind = "compose_fan_out"`                     |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "compose_fan_out"`                     |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "compose_fan_out"`                     |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "compose_fan_out"`                     |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "compose_fan_out"`                     |
+| `node`                     | `object`                     | required | `node.kind = "compose_fan_out_instance"`            |
+| `node.kind`                | `"compose_fan_out_instance"` | required | `node.kind = "compose_fan_out_instance"`            |
+| `node.id`                  | `string`                     | required | `node.kind = "compose_fan_out_instance"`            |
 
 #### invocation
 
@@ -476,46 +521,91 @@ Presence is relative to the containing object: a required child of an optional p
 
 #### node
 
-| Field path         | Type / values                | Presence | Alternative                                         |
-| ------------------ | ---------------------------- | -------- | --------------------------------------------------- |
-| `node`             | `object`                     | required | `node.kind = "agent"`                               |
-| `node.id`          | `string`                     | required | `node.kind = "agent"`                               |
-| `node.kind`        | `"agent"`                    | required | `node.kind = "agent"`                               |
-| `node.source`      | `object`                     | required | `node.kind = "agent"; node.source.kind = "inline"`  |
-| `node.source.kind` | `"inline"`                   | required | `node.kind = "agent"; node.source.kind = "inline"`  |
-| `node.source`      | `object`                     | required | `node.kind = "agent"; node.source.kind = "command"` |
-| `node.source.kind` | `"command"`                  | required | `node.kind = "agent"; node.source.kind = "command"` |
-| `node.source.name` | `string`                     | required | `node.kind = "agent"; node.source.kind = "command"` |
-| `node`             | `object`                     | required | `node.kind = "exec"`                                |
-| `node.id`          | `string`                     | required | `node.kind = "exec"`                                |
-| `node.kind`        | `"exec"`                     | required | `node.kind = "exec"`                                |
-| `node.runtime`     | `"sh" \| "bun" \| "uv"`      | required | `node.kind = "exec"`                                |
-| `node`             | `object`                     | required | `node.kind = "loop"`                                |
-| `node.id`          | `string`                     | required | `node.kind = "loop"`                                |
-| `node.kind`        | `"loop"`                     | required | `node.kind = "loop"`                                |
-| `node.command`     | `string`                     | optional | `node.kind = "loop"`                                |
-| `node`             | `object`                     | required | `node.kind = "loop_group"`                          |
-| `node.id`          | `string`                     | required | `node.kind = "loop_group"`                          |
-| `node.kind`        | `"loop_group"`               | required | `node.kind = "loop_group"`                          |
-| `node`             | `object`                     | required | `node.kind = "gate"`                                |
-| `node.id`          | `string`                     | required | `node.kind = "gate"`                                |
-| `node.kind`        | `"gate"`                     | required | `node.kind = "gate"`                                |
-| `node`             | `object`                     | required | `node.kind = "halt"`                                |
-| `node.id`          | `string`                     | required | `node.kind = "halt"`                                |
-| `node.kind`        | `"halt"`                     | required | `node.kind = "halt"`                                |
-| `node`             | `object`                     | required | `node.kind = "wait"`                                |
-| `node.id`          | `string`                     | required | `node.kind = "wait"`                                |
-| `node.kind`        | `"wait"`                     | required | `node.kind = "wait"`                                |
-| `node`             | `object`                     | required | `node.kind = "workflow"`                            |
-| `node.id`          | `string`                     | required | `node.kind = "workflow"`                            |
-| `node.kind`        | `"workflow"`                 | required | `node.kind = "workflow"`                            |
-| `node.fanOut`      | `true`                       | optional | `node.kind = "workflow"`                            |
-| `node`             | `object`                     | required | `node.kind = "compose_fan_out"`                     |
-| `node.id`          | `string`                     | required | `node.kind = "compose_fan_out"`                     |
-| `node.kind`        | `"compose_fan_out"`          | required | `node.kind = "compose_fan_out"`                     |
-| `node`             | `object`                     | required | `node.kind = "compose_fan_out_instance"`            |
-| `node.kind`        | `"compose_fan_out_instance"` | required | `node.kind = "compose_fan_out_instance"`            |
-| `node.id`          | `string`                     | required | `node.kind = "compose_fan_out_instance"`            |
+| Field path                 | Type / values                | Presence | Alternative                                         |
+| -------------------------- | ---------------------------- | -------- | --------------------------------------------------- |
+| `node`                     | `object`                     | required | `node.kind = "agent"`                               |
+| `node.id`                  | `string`                     | required | `node.kind = "agent"`                               |
+| `node.kind`                | `"agent"`                    | required | `node.kind = "agent"`                               |
+| `node.composed`            | `object`                     | optional | `node.kind = "agent"`                               |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "agent"`                               |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "agent"`                               |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "agent"`                               |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "agent"`                               |
+| `node.source`              | `object`                     | required | `node.kind = "agent"; node.source.kind = "inline"`  |
+| `node.source.kind`         | `"inline"`                   | required | `node.kind = "agent"; node.source.kind = "inline"`  |
+| `node.source`              | `object`                     | required | `node.kind = "agent"; node.source.kind = "command"` |
+| `node.source.kind`         | `"command"`                  | required | `node.kind = "agent"; node.source.kind = "command"` |
+| `node.source.name`         | `string`                     | required | `node.kind = "agent"; node.source.kind = "command"` |
+| `node`                     | `object`                     | required | `node.kind = "exec"`                                |
+| `node.id`                  | `string`                     | required | `node.kind = "exec"`                                |
+| `node.kind`                | `"exec"`                     | required | `node.kind = "exec"`                                |
+| `node.runtime`             | `"sh" \| "bun" \| "uv"`      | required | `node.kind = "exec"`                                |
+| `node.composed`            | `object`                     | optional | `node.kind = "exec"`                                |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "exec"`                                |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "exec"`                                |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "exec"`                                |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "exec"`                                |
+| `node`                     | `object`                     | required | `node.kind = "loop"`                                |
+| `node.id`                  | `string`                     | required | `node.kind = "loop"`                                |
+| `node.kind`                | `"loop"`                     | required | `node.kind = "loop"`                                |
+| `node.composed`            | `object`                     | optional | `node.kind = "loop"`                                |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "loop"`                                |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "loop"`                                |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "loop"`                                |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "loop"`                                |
+| `node.command`             | `string`                     | optional | `node.kind = "loop"`                                |
+| `node`                     | `object`                     | required | `node.kind = "loop_group"`                          |
+| `node.id`                  | `string`                     | required | `node.kind = "loop_group"`                          |
+| `node.kind`                | `"loop_group"`               | required | `node.kind = "loop_group"`                          |
+| `node.composed`            | `object`                     | optional | `node.kind = "loop_group"`                          |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "loop_group"`                          |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "loop_group"`                          |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "loop_group"`                          |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "loop_group"`                          |
+| `node`                     | `object`                     | required | `node.kind = "gate"`                                |
+| `node.id`                  | `string`                     | required | `node.kind = "gate"`                                |
+| `node.kind`                | `"gate"`                     | required | `node.kind = "gate"`                                |
+| `node.composed`            | `object`                     | optional | `node.kind = "gate"`                                |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "gate"`                                |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "gate"`                                |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "gate"`                                |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "gate"`                                |
+| `node`                     | `object`                     | required | `node.kind = "halt"`                                |
+| `node.id`                  | `string`                     | required | `node.kind = "halt"`                                |
+| `node.kind`                | `"halt"`                     | required | `node.kind = "halt"`                                |
+| `node.composed`            | `object`                     | optional | `node.kind = "halt"`                                |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "halt"`                                |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "halt"`                                |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "halt"`                                |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "halt"`                                |
+| `node`                     | `object`                     | required | `node.kind = "wait"`                                |
+| `node.id`                  | `string`                     | required | `node.kind = "wait"`                                |
+| `node.kind`                | `"wait"`                     | required | `node.kind = "wait"`                                |
+| `node.composed`            | `object`                     | optional | `node.kind = "wait"`                                |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "wait"`                                |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "wait"`                                |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "wait"`                                |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "wait"`                                |
+| `node`                     | `object`                     | required | `node.kind = "workflow"`                            |
+| `node.id`                  | `string`                     | required | `node.kind = "workflow"`                            |
+| `node.kind`                | `"workflow"`                 | required | `node.kind = "workflow"`                            |
+| `node.composed`            | `object`                     | optional | `node.kind = "workflow"`                            |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "workflow"`                            |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "workflow"`                            |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "workflow"`                            |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "workflow"`                            |
+| `node.fanOut`              | `true`                       | optional | `node.kind = "workflow"`                            |
+| `node`                     | `object`                     | required | `node.kind = "compose_fan_out"`                     |
+| `node.id`                  | `string`                     | required | `node.kind = "compose_fan_out"`                     |
+| `node.kind`                | `"compose_fan_out"`          | required | `node.kind = "compose_fan_out"`                     |
+| `node.composed`            | `object`                     | optional | `node.kind = "compose_fan_out"`                     |
+| `node.composed.nodeId`     | `string`                     | required | `node.kind = "compose_fan_out"`                     |
+| `node.composed.workflow`   | `string`                     | required | `node.kind = "compose_fan_out"`                     |
+| `node.composed.includes`   | `array<string>`              | required | `node.kind = "compose_fan_out"`                     |
+| `node.composed.includes[]` | `string`                     | item     | `node.kind = "compose_fan_out"`                     |
+| `node`                     | `object`                     | required | `node.kind = "compose_fan_out_instance"`            |
+| `node.kind`                | `"compose_fan_out_instance"` | required | `node.kind = "compose_fan_out_instance"`            |
+| `node.id`                  | `string`                     | required | `node.kind = "compose_fan_out_instance"`            |
 
 #### invocation
 
@@ -743,6 +833,11 @@ Presence is relative to the containing object: a required child of an optional p
 | `node`                                 | `object`                     | required | `node.kind = "agent"`                               |
 | `node.id`                              | `string`                     | required | `node.kind = "agent"`                               |
 | `node.kind`                            | `"agent"`                    | required | `node.kind = "agent"`                               |
+| `node.composed`                        | `object`                     | optional | `node.kind = "agent"`                               |
+| `node.composed.nodeId`                 | `string`                     | required | `node.kind = "agent"`                               |
+| `node.composed.workflow`               | `string`                     | required | `node.kind = "agent"`                               |
+| `node.composed.includes`               | `array<string>`              | required | `node.kind = "agent"`                               |
+| `node.composed.includes[]`             | `string`                     | item     | `node.kind = "agent"`                               |
 | `node.source`                          | `object`                     | required | `node.kind = "agent"; node.source.kind = "inline"`  |
 | `node.source.kind`                     | `"inline"`                   | required | `node.kind = "agent"; node.source.kind = "inline"`  |
 | `node.source`                          | `object`                     | required | `node.kind = "agent"; node.source.kind = "command"` |
@@ -752,29 +847,69 @@ Presence is relative to the containing object: a required child of an optional p
 | `node.id`                              | `string`                     | required | `node.kind = "exec"`                                |
 | `node.kind`                            | `"exec"`                     | required | `node.kind = "exec"`                                |
 | `node.runtime`                         | `"sh" \| "bun" \| "uv"`      | required | `node.kind = "exec"`                                |
+| `node.composed`                        | `object`                     | optional | `node.kind = "exec"`                                |
+| `node.composed.nodeId`                 | `string`                     | required | `node.kind = "exec"`                                |
+| `node.composed.workflow`               | `string`                     | required | `node.kind = "exec"`                                |
+| `node.composed.includes`               | `array<string>`              | required | `node.kind = "exec"`                                |
+| `node.composed.includes[]`             | `string`                     | item     | `node.kind = "exec"`                                |
 | `node`                                 | `object`                     | required | `node.kind = "loop"`                                |
 | `node.id`                              | `string`                     | required | `node.kind = "loop"`                                |
 | `node.kind`                            | `"loop"`                     | required | `node.kind = "loop"`                                |
+| `node.composed`                        | `object`                     | optional | `node.kind = "loop"`                                |
+| `node.composed.nodeId`                 | `string`                     | required | `node.kind = "loop"`                                |
+| `node.composed.workflow`               | `string`                     | required | `node.kind = "loop"`                                |
+| `node.composed.includes`               | `array<string>`              | required | `node.kind = "loop"`                                |
+| `node.composed.includes[]`             | `string`                     | item     | `node.kind = "loop"`                                |
 | `node.command`                         | `string`                     | optional | `node.kind = "loop"`                                |
 | `node`                                 | `object`                     | required | `node.kind = "loop_group"`                          |
 | `node.id`                              | `string`                     | required | `node.kind = "loop_group"`                          |
 | `node.kind`                            | `"loop_group"`               | required | `node.kind = "loop_group"`                          |
+| `node.composed`                        | `object`                     | optional | `node.kind = "loop_group"`                          |
+| `node.composed.nodeId`                 | `string`                     | required | `node.kind = "loop_group"`                          |
+| `node.composed.workflow`               | `string`                     | required | `node.kind = "loop_group"`                          |
+| `node.composed.includes`               | `array<string>`              | required | `node.kind = "loop_group"`                          |
+| `node.composed.includes[]`             | `string`                     | item     | `node.kind = "loop_group"`                          |
 | `node`                                 | `object`                     | required | `node.kind = "gate"`                                |
 | `node.id`                              | `string`                     | required | `node.kind = "gate"`                                |
 | `node.kind`                            | `"gate"`                     | required | `node.kind = "gate"`                                |
+| `node.composed`                        | `object`                     | optional | `node.kind = "gate"`                                |
+| `node.composed.nodeId`                 | `string`                     | required | `node.kind = "gate"`                                |
+| `node.composed.workflow`               | `string`                     | required | `node.kind = "gate"`                                |
+| `node.composed.includes`               | `array<string>`              | required | `node.kind = "gate"`                                |
+| `node.composed.includes[]`             | `string`                     | item     | `node.kind = "gate"`                                |
 | `node`                                 | `object`                     | required | `node.kind = "halt"`                                |
 | `node.id`                              | `string`                     | required | `node.kind = "halt"`                                |
 | `node.kind`                            | `"halt"`                     | required | `node.kind = "halt"`                                |
+| `node.composed`                        | `object`                     | optional | `node.kind = "halt"`                                |
+| `node.composed.nodeId`                 | `string`                     | required | `node.kind = "halt"`                                |
+| `node.composed.workflow`               | `string`                     | required | `node.kind = "halt"`                                |
+| `node.composed.includes`               | `array<string>`              | required | `node.kind = "halt"`                                |
+| `node.composed.includes[]`             | `string`                     | item     | `node.kind = "halt"`                                |
 | `node`                                 | `object`                     | required | `node.kind = "wait"`                                |
 | `node.id`                              | `string`                     | required | `node.kind = "wait"`                                |
 | `node.kind`                            | `"wait"`                     | required | `node.kind = "wait"`                                |
+| `node.composed`                        | `object`                     | optional | `node.kind = "wait"`                                |
+| `node.composed.nodeId`                 | `string`                     | required | `node.kind = "wait"`                                |
+| `node.composed.workflow`               | `string`                     | required | `node.kind = "wait"`                                |
+| `node.composed.includes`               | `array<string>`              | required | `node.kind = "wait"`                                |
+| `node.composed.includes[]`             | `string`                     | item     | `node.kind = "wait"`                                |
 | `node`                                 | `object`                     | required | `node.kind = "workflow"`                            |
 | `node.id`                              | `string`                     | required | `node.kind = "workflow"`                            |
 | `node.kind`                            | `"workflow"`                 | required | `node.kind = "workflow"`                            |
+| `node.composed`                        | `object`                     | optional | `node.kind = "workflow"`                            |
+| `node.composed.nodeId`                 | `string`                     | required | `node.kind = "workflow"`                            |
+| `node.composed.workflow`               | `string`                     | required | `node.kind = "workflow"`                            |
+| `node.composed.includes`               | `array<string>`              | required | `node.kind = "workflow"`                            |
+| `node.composed.includes[]`             | `string`                     | item     | `node.kind = "workflow"`                            |
 | `node.fanOut`                          | `true`                       | optional | `node.kind = "workflow"`                            |
 | `node`                                 | `object`                     | required | `node.kind = "compose_fan_out"`                     |
 | `node.id`                              | `string`                     | required | `node.kind = "compose_fan_out"`                     |
 | `node.kind`                            | `"compose_fan_out"`          | required | `node.kind = "compose_fan_out"`                     |
+| `node.composed`                        | `object`                     | optional | `node.kind = "compose_fan_out"`                     |
+| `node.composed.nodeId`                 | `string`                     | required | `node.kind = "compose_fan_out"`                     |
+| `node.composed.workflow`               | `string`                     | required | `node.kind = "compose_fan_out"`                     |
+| `node.composed.includes`               | `array<string>`              | required | `node.kind = "compose_fan_out"`                     |
+| `node.composed.includes[]`             | `string`                     | item     | `node.kind = "compose_fan_out"`                     |
 | `node`                                 | `object`                     | required | `node.kind = "compose_fan_out_instance"`            |
 | `node.kind`                            | `"compose_fan_out_instance"` | required | `node.kind = "compose_fan_out_instance"`            |
 | `node.id`                              | `string`                     | required | `node.kind = "compose_fan_out_instance"`            |
@@ -827,6 +962,11 @@ Presence is relative to the containing object: a required child of an optional p
 | `node`                                                      | `object`                                                                                                                                                                                                      | optional | `node.kind = "agent"`                                                                       |
 | `node.id`                                                   | `string`                                                                                                                                                                                                      | required | `node.kind = "agent"`                                                                       |
 | `node.kind`                                                 | `"agent"`                                                                                                                                                                                                     | required | `node.kind = "agent"`                                                                       |
+| `node.composed`                                             | `object`                                                                                                                                                                                                      | optional | `node.kind = "agent"`                                                                       |
+| `node.composed.nodeId`                                      | `string`                                                                                                                                                                                                      | required | `node.kind = "agent"`                                                                       |
+| `node.composed.workflow`                                    | `string`                                                                                                                                                                                                      | required | `node.kind = "agent"`                                                                       |
+| `node.composed.includes`                                    | `array<string>`                                                                                                                                                                                               | required | `node.kind = "agent"`                                                                       |
+| `node.composed.includes[]`                                  | `string`                                                                                                                                                                                                      | item     | `node.kind = "agent"`                                                                       |
 | `node.source`                                               | `object`                                                                                                                                                                                                      | required | `node.kind = "agent"; node.source.kind = "inline"`                                          |
 | `node.source.kind`                                          | `"inline"`                                                                                                                                                                                                    | required | `node.kind = "agent"; node.source.kind = "inline"`                                          |
 | `node.source`                                               | `object`                                                                                                                                                                                                      | required | `node.kind = "agent"; node.source.kind = "command"`                                         |
@@ -836,29 +976,69 @@ Presence is relative to the containing object: a required child of an optional p
 | `node.id`                                                   | `string`                                                                                                                                                                                                      | required | `node.kind = "exec"`                                                                        |
 | `node.kind`                                                 | `"exec"`                                                                                                                                                                                                      | required | `node.kind = "exec"`                                                                        |
 | `node.runtime`                                              | `"sh" \| "bun" \| "uv"`                                                                                                                                                                                       | required | `node.kind = "exec"`                                                                        |
+| `node.composed`                                             | `object`                                                                                                                                                                                                      | optional | `node.kind = "exec"`                                                                        |
+| `node.composed.nodeId`                                      | `string`                                                                                                                                                                                                      | required | `node.kind = "exec"`                                                                        |
+| `node.composed.workflow`                                    | `string`                                                                                                                                                                                                      | required | `node.kind = "exec"`                                                                        |
+| `node.composed.includes`                                    | `array<string>`                                                                                                                                                                                               | required | `node.kind = "exec"`                                                                        |
+| `node.composed.includes[]`                                  | `string`                                                                                                                                                                                                      | item     | `node.kind = "exec"`                                                                        |
 | `node`                                                      | `object`                                                                                                                                                                                                      | optional | `node.kind = "loop"`                                                                        |
 | `node.id`                                                   | `string`                                                                                                                                                                                                      | required | `node.kind = "loop"`                                                                        |
 | `node.kind`                                                 | `"loop"`                                                                                                                                                                                                      | required | `node.kind = "loop"`                                                                        |
+| `node.composed`                                             | `object`                                                                                                                                                                                                      | optional | `node.kind = "loop"`                                                                        |
+| `node.composed.nodeId`                                      | `string`                                                                                                                                                                                                      | required | `node.kind = "loop"`                                                                        |
+| `node.composed.workflow`                                    | `string`                                                                                                                                                                                                      | required | `node.kind = "loop"`                                                                        |
+| `node.composed.includes`                                    | `array<string>`                                                                                                                                                                                               | required | `node.kind = "loop"`                                                                        |
+| `node.composed.includes[]`                                  | `string`                                                                                                                                                                                                      | item     | `node.kind = "loop"`                                                                        |
 | `node.command`                                              | `string`                                                                                                                                                                                                      | optional | `node.kind = "loop"`                                                                        |
 | `node`                                                      | `object`                                                                                                                                                                                                      | optional | `node.kind = "loop_group"`                                                                  |
 | `node.id`                                                   | `string`                                                                                                                                                                                                      | required | `node.kind = "loop_group"`                                                                  |
 | `node.kind`                                                 | `"loop_group"`                                                                                                                                                                                                | required | `node.kind = "loop_group"`                                                                  |
+| `node.composed`                                             | `object`                                                                                                                                                                                                      | optional | `node.kind = "loop_group"`                                                                  |
+| `node.composed.nodeId`                                      | `string`                                                                                                                                                                                                      | required | `node.kind = "loop_group"`                                                                  |
+| `node.composed.workflow`                                    | `string`                                                                                                                                                                                                      | required | `node.kind = "loop_group"`                                                                  |
+| `node.composed.includes`                                    | `array<string>`                                                                                                                                                                                               | required | `node.kind = "loop_group"`                                                                  |
+| `node.composed.includes[]`                                  | `string`                                                                                                                                                                                                      | item     | `node.kind = "loop_group"`                                                                  |
 | `node`                                                      | `object`                                                                                                                                                                                                      | optional | `node.kind = "gate"`                                                                        |
 | `node.id`                                                   | `string`                                                                                                                                                                                                      | required | `node.kind = "gate"`                                                                        |
 | `node.kind`                                                 | `"gate"`                                                                                                                                                                                                      | required | `node.kind = "gate"`                                                                        |
+| `node.composed`                                             | `object`                                                                                                                                                                                                      | optional | `node.kind = "gate"`                                                                        |
+| `node.composed.nodeId`                                      | `string`                                                                                                                                                                                                      | required | `node.kind = "gate"`                                                                        |
+| `node.composed.workflow`                                    | `string`                                                                                                                                                                                                      | required | `node.kind = "gate"`                                                                        |
+| `node.composed.includes`                                    | `array<string>`                                                                                                                                                                                               | required | `node.kind = "gate"`                                                                        |
+| `node.composed.includes[]`                                  | `string`                                                                                                                                                                                                      | item     | `node.kind = "gate"`                                                                        |
 | `node`                                                      | `object`                                                                                                                                                                                                      | optional | `node.kind = "halt"`                                                                        |
 | `node.id`                                                   | `string`                                                                                                                                                                                                      | required | `node.kind = "halt"`                                                                        |
 | `node.kind`                                                 | `"halt"`                                                                                                                                                                                                      | required | `node.kind = "halt"`                                                                        |
+| `node.composed`                                             | `object`                                                                                                                                                                                                      | optional | `node.kind = "halt"`                                                                        |
+| `node.composed.nodeId`                                      | `string`                                                                                                                                                                                                      | required | `node.kind = "halt"`                                                                        |
+| `node.composed.workflow`                                    | `string`                                                                                                                                                                                                      | required | `node.kind = "halt"`                                                                        |
+| `node.composed.includes`                                    | `array<string>`                                                                                                                                                                                               | required | `node.kind = "halt"`                                                                        |
+| `node.composed.includes[]`                                  | `string`                                                                                                                                                                                                      | item     | `node.kind = "halt"`                                                                        |
 | `node`                                                      | `object`                                                                                                                                                                                                      | optional | `node.kind = "wait"`                                                                        |
 | `node.id`                                                   | `string`                                                                                                                                                                                                      | required | `node.kind = "wait"`                                                                        |
 | `node.kind`                                                 | `"wait"`                                                                                                                                                                                                      | required | `node.kind = "wait"`                                                                        |
+| `node.composed`                                             | `object`                                                                                                                                                                                                      | optional | `node.kind = "wait"`                                                                        |
+| `node.composed.nodeId`                                      | `string`                                                                                                                                                                                                      | required | `node.kind = "wait"`                                                                        |
+| `node.composed.workflow`                                    | `string`                                                                                                                                                                                                      | required | `node.kind = "wait"`                                                                        |
+| `node.composed.includes`                                    | `array<string>`                                                                                                                                                                                               | required | `node.kind = "wait"`                                                                        |
+| `node.composed.includes[]`                                  | `string`                                                                                                                                                                                                      | item     | `node.kind = "wait"`                                                                        |
 | `node`                                                      | `object`                                                                                                                                                                                                      | optional | `node.kind = "workflow"`                                                                    |
 | `node.id`                                                   | `string`                                                                                                                                                                                                      | required | `node.kind = "workflow"`                                                                    |
 | `node.kind`                                                 | `"workflow"`                                                                                                                                                                                                  | required | `node.kind = "workflow"`                                                                    |
+| `node.composed`                                             | `object`                                                                                                                                                                                                      | optional | `node.kind = "workflow"`                                                                    |
+| `node.composed.nodeId`                                      | `string`                                                                                                                                                                                                      | required | `node.kind = "workflow"`                                                                    |
+| `node.composed.workflow`                                    | `string`                                                                                                                                                                                                      | required | `node.kind = "workflow"`                                                                    |
+| `node.composed.includes`                                    | `array<string>`                                                                                                                                                                                               | required | `node.kind = "workflow"`                                                                    |
+| `node.composed.includes[]`                                  | `string`                                                                                                                                                                                                      | item     | `node.kind = "workflow"`                                                                    |
 | `node.fanOut`                                               | `true`                                                                                                                                                                                                        | optional | `node.kind = "workflow"`                                                                    |
 | `node`                                                      | `object`                                                                                                                                                                                                      | optional | `node.kind = "compose_fan_out"`                                                             |
 | `node.id`                                                   | `string`                                                                                                                                                                                                      | required | `node.kind = "compose_fan_out"`                                                             |
 | `node.kind`                                                 | `"compose_fan_out"`                                                                                                                                                                                           | required | `node.kind = "compose_fan_out"`                                                             |
+| `node.composed`                                             | `object`                                                                                                                                                                                                      | optional | `node.kind = "compose_fan_out"`                                                             |
+| `node.composed.nodeId`                                      | `string`                                                                                                                                                                                                      | required | `node.kind = "compose_fan_out"`                                                             |
+| `node.composed.workflow`                                    | `string`                                                                                                                                                                                                      | required | `node.kind = "compose_fan_out"`                                                             |
+| `node.composed.includes`                                    | `array<string>`                                                                                                                                                                                               | required | `node.kind = "compose_fan_out"`                                                             |
+| `node.composed.includes[]`                                  | `string`                                                                                                                                                                                                      | item     | `node.kind = "compose_fan_out"`                                                             |
 | `node`                                                      | `object`                                                                                                                                                                                                      | optional | `node.kind = "compose_fan_out_instance"`                                                    |
 | `node.kind`                                                 | `"compose_fan_out_instance"`                                                                                                                                                                                  | required | `node.kind = "compose_fan_out_instance"`                                                    |
 | `node.id`                                                   | `string`                                                                                                                                                                                                      | required | `node.kind = "compose_fan_out_instance"`                                                    |
