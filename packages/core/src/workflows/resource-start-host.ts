@@ -204,9 +204,8 @@ function resolveBindingIsolation(
     : { kind: 'in-place' };
 }
 
-// The row is created with only the authored inputs and those naming the repository the
-// forge check judged. The run fixes its pack settings and declared defaults on the row
-// when it starts (resolveRunDispatch), and a resume reads that.
+// The row holds the authored inputs and those naming the judged repository. The run fixes
+// its settings and defaults on the row at start (resolveRunDispatch); a resume reads that.
 function authoredInputsMetadata(inputs: Record<string, JsonValue>): Record<string, JsonValue> {
   if (Object.keys(inputs).length === 0) return {};
   return {
@@ -288,12 +287,8 @@ async function prepareBinding(
       runConfig,
     });
     // Before admission, so a binding its forge cannot serve never takes a slot.
-    const inputs = await assertRunForgeAccess(host.deps, workflow, preparedAi, {
-      cwd,
-      settingsCwd: cwd,
-      codebaseId: codebase.id,
-      supplied: bindingInputs,
-    });
+    const site = { cwd, settingsCwd: cwd, codebaseId: codebase.id, supplied: bindingInputs };
+    const inputs = await assertRunForgeAccess(host.deps, workflow, preparedAi, site);
     const launch: PreparedWorkflowLaunch = {
       version: 2,
       run: {
