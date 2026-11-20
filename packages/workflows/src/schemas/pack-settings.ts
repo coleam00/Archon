@@ -76,9 +76,17 @@ export interface WorkflowPack {
 
 /**
  * The authored `forge:` block: the capability tokens the pack calls, each an operation
- * name or a finer token a plugin advertises, such as `resolve:subject`.
+ * name or a finer token a plugin advertises, such as `resolve:subject`. `repository`
+ * names the two workflow inputs that carry the repository a run acts on; a run that sets
+ * both is checked against that repository instead of its checkout's remotes.
  */
 export const packForgeNeedsSchema = z
-  .object({ operations: z.array(z.string().min(1)).min(1) })
+  .object({
+    operations: z.array(z.string().min(1)).min(1),
+    repository: z
+      .object({ host: z.string().min(1), path: z.string().min(1) })
+      .strict()
+      .optional(),
+  })
   .strict();
 export type PackForgeNeeds = z.infer<typeof packForgeNeedsSchema>;

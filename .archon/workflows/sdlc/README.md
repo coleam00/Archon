@@ -80,8 +80,10 @@ the other cases.
 
 The pack lists the forge operations it calls in `.pack/pack.yaml`, under `forge:`. Archon
 checks them each time a run of a pack workflow starts, before a worktree or any agent: the
-plugin must advertise every one and have a credential. A refusal says what to fix: a
-missing plugin, an operation the plugin lacks, or no credential.
+plugin must advertise every one and have a credential the forge accepts in one read of the
+repository. That is the repository a run names in `repo_host` and `repo_path`, and
+otherwise one of the checkout's remotes. A refusal says what to fix: a missing plugin, an
+operation the plugin lacks, no credential, or one the forge rejects.
 
 To check without starting a run, name the operations to check. This example names three;
 pass the whole list from `.pack/pack.yaml` to check what a pack run checks:
@@ -90,8 +92,10 @@ pass the whole list from `.pack/pack.yaml` to check what a pack run checks:
 archon forge check --json --data '{"host":"github.com","operations":["pr.view","pr.create","pr.merge"]}'
 ```
 
-It contacts no forge. A pass names the credential source it used. Neither check proves
-what the token may read or write: each forge call of a run proves only the access it uses. A run in a container
+A `host` check contacts no forge; add `"repo":{"host":"github.com","path":"owner/repository"}`
+in place of `host` to also make the read a run's check makes. A pass names the credential
+source it used. Neither check proves what the token may write: each forge call of a run
+proves only the access it uses. A run in a container
 has no path to the forge and refuses when it starts.
 
 ### 4. Name the maintainers

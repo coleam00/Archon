@@ -3,6 +3,8 @@ import { describe, test, expect } from 'bun:test';
 import { expandWorkflowIncludes } from './include-expander';
 import type { WorkflowDefinition } from './schemas';
 import { evaluateCondition } from './condition-evaluator';
+import { describeExecutionNode } from './node-execution';
+import { composedOrigin as descriptorOrigin } from './schemas/node-execution';
 import {
   wf,
   mapOf,
@@ -438,5 +440,80 @@ describe('expandWorkflowIncludes — composed approval gates carry their origin 
     expect(errors).toHaveLength(0);
     const group = nodeById(workflows.get('parent')!, 'inc__group');
     expect(composedOrigin(loopGroupNodes(group)?.[0])).toBe('lg-gate-blk');
+  });
+});
+
+describe('describeExecutionNode — an included node names where it was written', () => {
+  test('nested includes and a loop body read their own id, workflow and include path', () => {
+    const grandchild = wf('grandchild', [
+      { id: 'x', bash: 'echo x' },
+      {
+        id: 'lg',
+        depends_on: ['x'],
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 2,
+          nodes: [{ id: 'body', prompt: 'go', depends_on: [] }],
+        },
+      },
+    ]);
+    const child = wf('child', [{ id: 'inner', include: 'grandchild' }]);
+    const parent = wf('parent', [
+      { id: 'plain', bash: 'echo plain' },
+      { id: 'outer', include: 'child', depends_on: ['plain'] },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(grandchild, child, parent));
+    expect(errors).toHaveLength(0);
+    const expanded = workflows.get('parent')!;
+
+    expect(descriptorOrigin(describeExecutionNode(nodeById(expanded, 'outer__inner__x')!))).toEqual(
+      {
+        nodeId: 'x',
+        workflow: 'grandchild',
+        includes: ['outer', 'inner'],
+      }
+    );
+    const lg = nodeById(expanded, 'outer__inner__lg')!;
+    expect(descriptorOrigin(describeExecutionNode(lg))?.nodeId).toBe('lg');
+    expect(descriptorOrigin(describeExecutionNode(loopGroupNodes(lg)![0]!))).toEqual({
+      nodeId: 'body',
+      workflow: 'grandchild',
+      includes: ['outer', 'inner'],
+    });
+    expect('composed' in describeExecutionNode(nodeById(expanded, 'plain')!)).toBe(false);
+  });
+
+  test('a composed fan-out item names the authored include path, not its generated id', () => {
+    const leaf = wf('leaf', [{ id: 'work', bash: 'echo work' }]);
+    const middle = wf('middle', [
+      { id: 'list', bash: 'echo []' },
+      {
+        id: 'batch',
+        include: 'leaf',
+        depends_on: ['list'],
+        fan_out: { items: '$list.output', as: 'item' },
+      },
+    ]);
+    const top = wf('top', [{ id: 'outer', include: 'middle' }]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(leaf, middle, top));
+    expect(errors).toHaveLength(0);
+    const fanOut = nodeById(workflows.get('top')!, 'outer__batch');
+    if (fanOut?.kind !== 'compose_fan_out') throw new Error('expected the composed fan-out');
+
+    const instance = expandComposeInstance(
+      fanOut,
+      'item-a',
+      {},
+      workflows.get('leaf')!,
+      new Map(),
+      undefined
+    );
+    if ('error' in instance) throw new Error(instance.error);
+    const work = instance.nodes.find(node => node.id === 'outer__batch__item-a__work')!;
+    expect(descriptorOrigin(describeExecutionNode(work))).toEqual({
+      nodeId: 'work',
+      workflow: 'leaf',
+      includes: ['outer', 'batch'],
+    });
   });
 });

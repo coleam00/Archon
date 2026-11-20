@@ -169,7 +169,9 @@ export const workflowHelp: HelpGroup = {
       scopedFlags: [
         {
           spec: '--watch',
-          description: 'Repeat serial passes every 5 seconds; drain execution on shutdown',
+          description:
+            'Repeat serial passes every 5 seconds; drain execution on shutdown;\n' +
+            'exit 75 when Archon is updated, for the supervisor to restart',
         },
         { spec: '--json', description: 'One JSON document per pass' },
         { spec: 'schedule install|remove', description: 'Manage a macOS wake timer' },

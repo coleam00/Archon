@@ -11,6 +11,9 @@
  * re-triage. The build-pick the engine starts when this run ends starts a `continue`'s
  * next round.
  *
+ * The node is the run's `returns` node, so it also runs when nothing was asked, and then
+ * hands on apply's decision (INPUTS_APPLIED) unchanged.
+ *
  * Bound inputs: INPUTS_ITEM and INPUTS_READ_AT from facts; INPUTS_ASKED, what apply
  * asked; INPUTS_DECISION, the id of the chosen option (`other` for the wait's own), and
  * INPUTS_TEXT, the answer's text.
@@ -35,6 +38,9 @@ const STATUS = { continue: 'next', ready: 'ready', park: 'parked' } as const sat
   BuildStatus
 >;
 
+/** The run's outcome for each effect, as the `build-pick-after-build` binding reads it. */
+const OUTCOME = { continue: 'continue', ready: 'ready', park: 'parked' } as const satisfies Record<BuildEffect, string>;
+
 /** Refuse a ready answer before any write when the item has no pull request to hand on. */
 function requireReadyPr(item: QualifiedPr, id: string): void {
   const doc = readWorkItem(item.number);
@@ -53,7 +59,11 @@ function main(): void {
   const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
   const asked = nullableJson(input('asked')) as Asked | null;
-  if (asked === null) throw new Error('the answer arrived with nothing asked');
+  // Nothing was asked: apply's decision is how the run left the item.
+  if (asked === null) {
+    emit({ decision: input('applied'), section: '', summary: '' });
+    return;
+  }
   const choice = answeredChoice(asked.ask, input('decision').trim(), 'continue');
   const { effect } = choice.value;
   const words = input('text').trim();
@@ -92,7 +102,7 @@ function main(): void {
     ready: () => 'its pull request waits for the merge queue',
     park: () => 'the queue stops working it until a re-triage',
   }[effect]();
-  emit({ decision: effect, section: heading, summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${next}.` });
+  emit({ decision: OUTCOME[effect], section: heading, summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${next}.` });
 }
 
 try {

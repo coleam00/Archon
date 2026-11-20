@@ -106,12 +106,24 @@ describe('parsePackDeclaration forge', () => {
         'p/.pack/pack.yaml'
       )
     ).toEqual({ forge: { operations: ['pr.view', 'resolve:subject'] } });
+    expect(
+      parsePackDeclaration(
+        'forge:\n  operations: [pr.view]\n  repository: { host: repo_host, path: repo_path }\n',
+        'p/.pack/pack.yaml'
+      )
+    ).toEqual({
+      forge: { operations: ['pr.view'], repository: { host: 'repo_host', path: 'repo_path' } },
+    });
   });
 
   it.each([
     ['forge:\n  operations: []\n', "'forge' is invalid at 'operations'"],
     ['forge:\n  operations: [pr.view, 3]\n', "'forge' is invalid at 'operations.1'"],
     ['forge:\n  operations: [pr.view]\n  host: github.com\n', "'forge' is invalid"],
+    [
+      'forge:\n  operations: [pr.view]\n  repository: { host: h, path: p, ref: r }\n',
+      "'forge' is invalid",
+    ],
     ['forge: [pr.view]\n', "'forge' must be a mapping"],
   ])('refuses %p, naming the file', (yaml, reason) => {
     expect(() => parsePackDeclaration(yaml, 'p/.pack/pack.yaml')).toThrow(reason);
