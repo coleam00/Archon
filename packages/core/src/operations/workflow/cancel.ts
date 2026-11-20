@@ -171,6 +171,10 @@ export async function cancelWorkflow(
  * lock around its pending-only write, so either a starter holds it and cancel refuses,
  * or cancel wins and every later starter sees the run cancelled.
  *
+ * The lock and endpoint are host-local. A starter on another machine sharing the store
+ * holds its own lock there, which this cannot see; that limit is documented, and closing
+ * it needs preparation recorded in the shared store (issue 5884).
+ *
  * A sub-run takes no lock of its own: the process of the ancestor that executes it
  * claims it. So an owner answering for any ancestor (the root, or an intermediate run
  * resumed on its own) is a live process that may start it, and cancel refuses.

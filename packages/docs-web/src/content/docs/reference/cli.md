@@ -1814,6 +1814,13 @@ surface (this command, `/workflow cancel` in chat, the Web UI's Cancel action,
   while cancel records it, is refused and left unchanged; cancel it again once it is
   running. A start still `queued` for its resource has no run yet;
   withdraw it with `archon trigger withdraw <request-id>`.
+
+  The owner lock and endpoint cancel checks live on this machine. A starter on another
+  machine that shares the same database holds its own lock there, and cancel cannot see
+  it. Cancel then records the run `cancelled` and frees its slot while that machine keeps
+  preparing the checkout and running setup. Until Archon records preparation in the
+  shared store, cancel a pending run only when no other machine starts runs from the same
+  database.
 - **The process handling the cancel executes the run** (a run the server started, cancelled
   from that server): the run is marked `cancelled` and its executor stops at its next
   status check. On macOS and Linux, cooperative cancellation reports possible
