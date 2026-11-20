@@ -297,6 +297,11 @@ test('watch exits 75 before its next pass when the installed engine changed', as
     fingerprint = 'b';
     return [];
   });
+  // Ends the loop if the check misses the change, so the failure is an assertion, not a hang.
+  scan.mockImplementationOnce(async () => {
+    process.emit('SIGTERM');
+    return [];
+  });
   try {
     expect(await workflowContinuationCommand(host, 'wake', [], { json: true, watch: true })).toBe(
       75
