@@ -273,14 +273,27 @@ export async function resolveRunCodebase(
  * instead of resolving `cwd` a second way. `codebase` is null when nothing is registered
  * yet; `repoRoot` and the canonical `cwd` are what registration needs after that.
  */
-export async function findLaunchCodebase(
+export function findLaunchCodebase(
   host: WorkflowHost,
   cwd: string,
   options: RunCodebaseOptions
-): Promise<{ codebase: Codebase | null; repoRoot: string | null; cwd: string }> {
-  const canonicalCwd = await canonicalizeProjectPath(cwd);
-  return { ...(await findRunCodebase(host, canonicalCwd, options)), cwd: canonicalCwd };
+): Promise<LaunchCodebase> {
+  // One answer per invocation: selection reads it to plan the run's definitions, and the
+  // launch reads it again to register and isolate, before anything registers the project.
+  const cached = launchLookups.get(options);
+  if (cached?.cwd === cwd) return cached.found;
+  const found = (async () => {
+    const canonicalCwd = await canonicalizeProjectPath(cwd);
+    return { ...(await findRunCodebase(host, canonicalCwd, options)), cwd: canonicalCwd };
+  })();
+  launchLookups.set(options, { cwd, found });
+  // A failed lookup is not remembered, so a retry asks again.
+  found.catch(() => launchLookups.delete(options));
+  return found;
 }
+
+type LaunchCodebase = { codebase: Codebase | null; repoRoot: string | null; cwd: string };
+const launchLookups = new WeakMap<object, { cwd: string; found: Promise<LaunchCodebase> }>();
 
 type RunCodebaseOptions = Pick<
   WorkflowRunOptions,

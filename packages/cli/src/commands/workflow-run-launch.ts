@@ -67,6 +67,7 @@ import {
   type OwnedRunRequest,
 } from './workflow-run-admission';
 import { resolveLaunchBase, type LaunchBase } from './workflow-run-config';
+import { definitionsStartCommit } from './workflow-run-definitions';
 
 /**
  * Preflight before handing execution to a detached child. Refusals must reach the
@@ -111,7 +112,7 @@ export async function launchDetachedOwnedRun(
   if (declaration && 'lane' in declaration) admission.aiConfigurationRun = declaration.adoptedRun;
   // The item's landing branch is checked here so a missing one refuses before `Started`;
   // the child resolves it again when it cuts the worktree.
-  await resolveLaunchBase(host, options.item, admission, detachCodebase, declaration);
+  const base = await resolveLaunchBase(host, options.item, admission, detachCodebase, declaration);
   const adoptionLane = declaration && 'lane' in declaration ? declaration.lane : undefined;
   await refuseDetachedWorkspace(request, admission, adoptionLane, detachCodebase, detachIsFolder);
   const prepared = await prepareLaneAiConfiguration(
@@ -124,7 +125,8 @@ export async function launchDetachedOwnedRun(
       admission.workflow,
       detachCodebase,
       admission.continuationRun
-    )
+    ),
+    base
   );
 
   await launchDetachedRun({
@@ -324,7 +326,8 @@ export async function prepareForegroundLaunch(
     request,
     admission,
     foregroundLaneConfig(continuation, codebase, workspace),
-    await runExecutesInContainer(host, options, admission.workflow, codebase, resumable)
+    await runExecutesInContainer(host, options, admission.workflow, codebase, resumable),
+    base
   );
 
   const isFolderCodebase = codebase?.kind === 'folder';
@@ -702,6 +705,7 @@ async function createRunWorktree(
       taskBranch: worktreeTaskBranch(options, launch.continuation.adoptedTaskBranch),
       baseBranch: codebaseDefaultBranch ? git.toBranchName(codebaseDefaultBranch) : undefined,
       baseOverride: launch.base ? git.toBranchName(launch.base.branch) : undefined,
+      ...definitionsStartCommit(admission.preparedSource),
       codebaseId: codebase.id,
       // owner/repo name lets resolveOwnerRepo use the registered identity
       // instead of the _local/<basename> path fallback (#2022, #2227)

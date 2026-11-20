@@ -35,6 +35,26 @@ mock.module('@archon/core/workflows/branch-launch-source', () => ({
   ) => prepare('/adopted/snapshot'),
 }));
 
+/**
+ * The base-branch composition, faked: the checkout is passed through as the composed root.
+ * Unset definitions keep a harness run on the checkout; a test that sets them gets a run
+ * whose definitions came from the base branch.
+ */
+export const mockLayeredDefinitions: { definitions: unknown } = { definitions: undefined };
+mock.module('@archon/core/workflows/definition-source', () => ({
+  DefinitionSourceError: class DefinitionSourceError extends Error {},
+  withLayeredDefinitions: async (
+    input: { checkout: string },
+    use: (composed: { root: string; definitions: unknown }) => Promise<unknown>
+  ) => use({ root: input.checkout, definitions: mockLayeredDefinitions.definitions }),
+  discoverBindingWorkflows: async () => {
+    throw new Error('discoverBindingWorkflows is not mocked here');
+  },
+  extractCommitTree: async () => {
+    throw new Error('extractCommitTree is not mocked here');
+  },
+}));
+
 export const mockCreateWorkflowEvent = mock(() => Promise.resolve());
 export const mockPersistWorkflowEvent = mock(() => Promise.resolve());
 

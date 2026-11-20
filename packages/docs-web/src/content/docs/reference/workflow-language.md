@@ -2999,7 +2999,7 @@ Both run another workflow as authored. They differ in how many governance object
 |---|---|---|
 | **Run record** | One. The block's nodes flatten into this run at load time. | Two. The child gets its own run record, artifacts, cost line and audit trail. |
 | **Pauses** | Answered on the run that composed the block. | Answered on the child by its own run id. The parent stays paused and resumes by itself when the child finishes. |
-| **Command bodies** | Snapshotted at discovery, so a resumed run survives the file being edited or deleted. | Re-read when the child starts. |
+| **Command bodies** | Snapshotted at discovery, so a resumed run survives the file being edited or deleted. | Re-read when the child starts, from the parent's capture when the parent's definitions came from the base branch. |
 | **Output** | `$includeId.output` (the block's `returns:` node, or its primary sink). | `$nodeId.output` (the child's result). |
 
 Reach for `include:` when you want one run made of reusable parts, which is the common case. Reach for `workflow:` when one delegated unit must be answered, inspected or abandoned independently of its siblings and its caller, or when you want N runtime copies of one workflow (`fan_out:`).
@@ -3339,7 +3339,8 @@ Resume skips a completed fan-out and reports how many children were previously r
 It does not repeat children that ran, including failed children in an `all_done` batch.
 Resume uses the captured parent source, so correcting a binding in that source requires
 a fresh launch. Project child workflows still resolve from the live authoring directory
-when spawned; installed packs remain captured. A transient refusal may also clear before
+when spawned, unless the parent's definitions came from the base branch, where children take
+the parent's capture; installed packs remain captured. A transient refusal may also clear before
 resume.
 
 ##### A completed fan-out node is not completed child work

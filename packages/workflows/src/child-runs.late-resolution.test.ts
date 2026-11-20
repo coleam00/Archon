@@ -8,7 +8,8 @@ import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { executeWorkflow } from './executor';
-import { discoverWorkflows } from './workflow-discovery';
+import { discoverWorkflows, discoverWorkflowsWithConfig } from './workflow-discovery';
+import { prepareWorkflowSource } from './run-source';
 import { validateWorkflowResources } from './validator';
 import type { IWorkflowStore } from './store';
 import type { ResolvedWorkflow } from './schemas/workflow';
@@ -564,5 +565,60 @@ nodes:
     expect(approval).toBeDefined();
     const paused = children.find(c => c.status === 'paused');
     expect(String(approval?.childRunId ?? '')).toBe(paused?.id ?? '');
+  });
+
+  it("a parent whose definitions came from the base branch gives its child the parent's capture", async () => {
+    // The composed base-plus-local definitions the parent captured, and the operator's
+    // checkout it records as its origin, which holds another version of the child.
+    const composed = join(cwd, 'composed');
+    await mkdir(join(composed, '.archon', 'workflows'), { recursive: true });
+    await writeFile(
+      join(composed, '.archon', 'workflows', 'parent.yaml'),
+      'name: parent\ndescription: runs a child\nnodes:\n  - id: sub\n    workflow: slot\n'
+    );
+    await writeFile(join(composed, '.archon', 'workflows', 'slot.yaml'), slotYaml('slot', 'BASE'));
+    await writeWorkflow('slot', slotYaml('slot', 'CHECKOUT'));
+    const definitions = {
+      from: 'base' as const,
+      remote: 'origin',
+      branch: 'dev',
+      commit: 'a'.repeat(40),
+      merge_base: 'a'.repeat(40),
+      checkout: cwd,
+      local_files: [],
+    };
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const preparedSource = await prepareWorkflowSource(deps, {
+      sourceRoot: composed,
+      origin: cwd,
+      includeProjectConfig: true,
+      definitions,
+    });
+    const { workflows } = await discoverWorkflowsWithConfig(
+      cwd,
+      deps.loadConfig,
+      providerRegistry,
+      preparedSource.roots
+    );
+    const parent = workflows.find(w => w.workflow.name === 'parent')?.workflow;
+    if (!parent) throw new Error('parent not discovered from the capture');
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      { conversationId: 'conv-db' },
+      { preparedSource }
+    );
+
+    expect(result.success).toBe(true);
+    const done = store.events.find(e => e.event_type === 'node_completed' && e.step_name === 'sub');
+    expect(String(done?.data?.node_output)).toContain('BASE');
+    const child = [...store.runs.values()].find(r => r.workflow_name === 'slot');
+    expect(child?.metadata.workflow_source).toMatchObject({ origin: cwd, definitions });
   });
 });

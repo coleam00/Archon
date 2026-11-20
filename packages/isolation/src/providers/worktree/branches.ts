@@ -390,7 +390,8 @@ async function checkOutNewBranch(
     request.workflowType === 'task' && request.taskBranch?.kind === 'new'
       ? request.taskBranch.fromBranch
       : undefined;
-  const startPoint = fromBranch ?? `${remote}/${baseBranch}`;
+  const startCommit = request.workflowType === 'task' ? request.startCommit : undefined;
+  const startPoint = fromBranch ?? startCommit?.commit ?? `${remote}/${baseBranch}`;
 
   const localExists = await localBranchExists(repoPath, branchName);
   const remoteExists = await remoteBranchExists(repoPath, remote, branchName);

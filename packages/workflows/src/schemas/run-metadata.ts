@@ -424,6 +424,42 @@ export const workflowSourceConfigSchema = z.object({
 
 export type WorkflowSourceConfig = Readonly<z.infer<typeof workflowSourceConfigSchema>>;
 
+const absolutePathSchema = z
+  .string()
+  .refine(p => isAbsolute(p), { message: 'must be an absolute path' });
+
+/**
+ * Where a run's project definitions (workflows, commands, scripts, an in-repository pack,
+ * `.archon/config.yaml`) came from.
+ *
+ * - `base`: the base branch commit fetched at the start, with the files uncommitted in the
+ *   operator's checkout laid on top. `local_files` names every file taken from the
+ *   checkout. The capture holds the project config, under `project/.archon/config.yaml`.
+ * - `checkout`: an in-place run reads its checkout as it is; the checkout is its one commit.
+ * - `source`: an explicit source (`--workflow-source`, `launch.discoveryCwd`), read as it is.
+ */
+export const runDefinitionsSchema = z.discriminatedUnion('from', [
+  z.object({
+    from: z.literal('base'),
+    remote: z.string().min(1),
+    branch: z.string().min(1),
+    commit: z.string().min(1),
+    merge_base: z.string().min(1),
+    checkout: absolutePathSchema,
+    local_files: z.array(
+      z.object({
+        path: z.string().min(1),
+        change: z.enum(['modified', 'added', 'deleted', 'ignored']),
+      })
+    ),
+  }),
+  z.object({ from: z.literal('checkout'), checkout: absolutePathSchema }),
+  z.object({ from: z.literal('source'), root: absolutePathSchema }),
+]);
+
+export type RunDefinitions = z.infer<typeof runDefinitionsSchema>;
+export type BaseRunDefinitions = Extract<RunDefinitions, { from: 'base' }>;
+
 /**
  * A run's recorded executable source.
  *
@@ -460,6 +496,8 @@ export const workflowSourceMetadataSchema = z.object({
   source_config: workflowSourceConfigSchema.optional(),
   file_count: z.number(),
   byte_count: z.number(),
+  /** Absent on runs created before definitions were recorded, and on chat and web runs. */
+  definitions: runDefinitionsSchema.optional(),
 });
 
 export type WorkflowSourceMetadata = z.infer<typeof workflowSourceMetadataSchema>;

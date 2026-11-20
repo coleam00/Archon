@@ -33,7 +33,7 @@ import {
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { readAsksResult, readSubrunMetadata } from '@archon/workflows/schemas/run-metadata';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { discoverBindingWorkflows } from './definition-source';
 import {
   bindingProjectKey,
   bindingReceipt,
@@ -265,11 +265,9 @@ export async function asksSettledBindingCheck(
   { binding, asksSettled }: AsksSettledBinding,
   deps: Pick<WorkflowDeps, 'loadConfig' | 'providers'>
 ): Promise<string[]> {
-  const discovered = await discoverWorkflowsWithConfig(
-    binding.launch.discoveryCwd ?? binding.launch.cwd,
-    deps.loadConfig,
-    deps.providers
-  );
+  const read = await discoverBindingWorkflows(binding.launch, deps);
+  if ('refused' in read) return [read.refused];
+  const { discovered } = read;
   const workflows = discovered.workflows.map(found => found.workflow);
   const started = selectStartedWorkflow(binding.launch, discovered);
   return [
