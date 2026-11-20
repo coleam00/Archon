@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import { isRunOwnerAnswering, startRunLiveOwner } from '@archon/core/services/run-live-owner';
@@ -11,6 +11,8 @@ import { claimDetachedRunProcessOwner } from '../detached-run-control';
  *
  * - `orphan`: start an intermediate that starts a detached grandchild and exits, so the
  *   grandchild's parent is gone before any stop begins.
+ * - `orphan-complete`, `orphan-fail`: start the same orphan, then, once `<dir>/exit` exists,
+ *   exit by itself with 0 or 1, as an owner does when its run ends, with no stop.
  * - `spawner`: start a detached child every few milliseconds, so a stop races a spawn.
  * - `nested`: start a process, as a node would, that launches a real CLI workflow with
  *   `--detach` through the job broker. Its run id is saved in `<dir>/child-run-id`.
@@ -18,7 +20,16 @@ import { claimDetachedRunProcessOwner } from '../detached-run-control';
  */
 
 const [runId, dir, mode] = process.argv.slice(2);
-const modes = ['orphan', 'spawner', 'nested', 'nested-approve', 'relay', 'relay-approve'];
+const modes = [
+  'orphan',
+  'orphan-complete',
+  'orphan-fail',
+  'spawner',
+  'nested',
+  'nested-approve',
+  'relay',
+  'relay-approve',
+];
 if (!runId || !dir || !mode || !modes.includes(mode)) {
   throw new Error(`Usage: windows-run-owner.ts <run-id> <dir> <${modes.join('|')}>`);
 }
@@ -90,7 +101,7 @@ if (mode === 'relay' || mode === 'relay-approve') {
   await claimDetachedRunProcessOwner();
   await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
 
-  if (mode === 'orphan') {
+  if (mode === 'orphan' || mode === 'orphan-complete' || mode === 'orphan-fail') {
     const intermediate = spawn(
       process.execPath,
       [
@@ -111,7 +122,14 @@ if (mode === 'relay' || mode === 'relay-approve') {
     intermediate.on('error', error => {
       throw error;
     });
-    intermediate.once('exit', writeReady);
+    intermediate.once('exit', () => {
+      writeReady();
+      if (mode === 'orphan') return;
+      const exitCode = mode === 'orphan-complete' ? 0 : 1;
+      setInterval(() => {
+        if (existsSync(join(dir, 'exit'))) process.exit(exitCode);
+      }, 25);
+    });
   } else if (mode === 'spawner') {
     const kidsDir = join(dir, 'kids');
     const loop = (): void => {
