@@ -8,7 +8,11 @@ import { startTriggerExecutor } from './run-job-escape';
 
 /** Hand one admitted request to a detached `trigger execute` process with its own log. */
 export async function spawnAdmitted(
-  host: WorkflowHost,
+  host: {
+    readonly deps: {
+      readonly store: Pick<WorkflowHost['deps']['store'], 'getResourceStartRequest'>;
+    };
+  },
   requestId: string,
   hostId: string
 ): Promise<void> {

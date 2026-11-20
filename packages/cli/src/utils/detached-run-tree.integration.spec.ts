@@ -179,7 +179,7 @@ function stubOwner(pid: number, windowsJob?: string): Server {
  * ready. Its fixture directory's name is on the command line of every process in its tree.
  */
 async function startWindowsRunOwner(
-  mode: 'orphan' | 'orphan-exit' | 'spawner' | 'nested' | 'nested-approve'
+  mode: 'orphan' | 'orphan-exit' | 'trigger-exit' | 'spawner' | 'nested' | 'nested-approve'
 ): Promise<{
   runId: string;
   dir: string;
@@ -463,6 +463,39 @@ describe('detached run tree stop', () => {
             survivors = await windowsProcessesNaming(marker);
           }
           expect(survivors).toEqual([]);
+        },
+        () => killWindowsProcessesNaming(marker)
+      );
+    },
+    RACING_STOP_TEST_TIMEOUT_MS
+  );
+
+  windowsOnly(
+    'keeps a trigger executor its Windows owner started alive after that owner exits',
+    async () => {
+      // A run's end starts its follow-ups as trigger executors, which are other runs' owners.
+      // The job is kill-on-close, so one started inside it would die with the owner that
+      // started it; it must start outside the job and finish its own work. The fixture's
+      // executor names no admitted request, so its work is to log that and exit, about a
+      // CLI start-up after the owner is gone; a killed executor logs nothing.
+
+      const { dir, marker, exited } = await startWindowsRunOwner('trigger-exit');
+      const log = join(dir, 'home', 'logs', `trigger-run-${marker}.log`);
+      await withFixtureCleanup(
+        async () => {
+          const grandchild = Number(readFileSync(join(dir, 'grandchild'), 'utf8'));
+          expect(await windowsProcessesNaming(marker)).toContain(grandchild);
+
+          writeFileSync(join(dir, 'exit'), '');
+          expect(await exited).toBe(0);
+          await waitFor(
+            () =>
+              existsSync(log) &&
+              readFileSync(log, 'utf8').includes('Execution requires an admitted request'),
+            NESTED_LAUNCH_DEADLINE_MS
+          );
+          // The owner's own leftovers still ended with it.
+          expect(await windowsProcessesNaming(marker)).not.toContain(grandchild);
         },
         () => killWindowsProcessesNaming(marker)
       );
