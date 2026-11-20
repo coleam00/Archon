@@ -2862,9 +2862,9 @@ its path. Any other key under `forge:` is refused, and an invalid block fails ev
 of the pack, naming the file.
 
 Every fresh run of a workflow of the pack is checked when it starts, before a worktree, a
-queue slot or any node: started by hand, from chat or the Web UI, by a trigger binding (before
-admission, so a refused binding takes no slot), or as a `workflow:` sub-run, which is checked
-against its own pack. An `include:`d block takes nothing from its pack. A resumed or approved
+queue slot or any node: started by hand, from chat or the Web UI (a fresh run the resume menu
+offers included), by a trigger binding (before admission, so a refused binding takes no slot),
+or as a `workflow:` sub-run, which is checked against its own pack. An `include:`d block takes nothing from its pack. A resumed or approved
 run is not checked again. The engine asks
 [`archon forge check`](/reference/forge/#check-forge-access-before-a-run-spends), with the
 run's GitHub credential, about the repository the run acts on:
@@ -2873,12 +2873,16 @@ run's GitHub credential, about the repository the run acts on:
   starts with them, set both inputs `repository` names, the check judges that repository
   alone. The settings are read where the run reads its other configuration at start: an
   adopted run's worktree or branch, a sub-run's parent checkout, or else the project's
-  checkout. The run then starts with both inputs set to the values judged, so the settings of
-  a worktree created after the check cannot move it to another repository. The checkout's
-  remotes are not read, so a capable mirror cannot start a run whose repository fails.
+  checkout. The run then starts with both inputs set to the values judged, so a worktree
+  created after the check whose settings name another repository does not move the run. The
+  checkout's remotes are not read, so a capable mirror cannot start a run whose repository
+  fails.
 - When they set neither, or the pack declares no `repository`, the check asks for each remote
   of the project's checkout, and the run starts when one remote passes. A mirror no plugin
   claims, or one the credential cannot read, does not refuse a run its canonical remote serves.
+  The check does not prove the run acts on a checked remote: when a worktree created after the
+  check names a repository in its own pack settings, the run reads that repository there,
+  unchecked.
 - When they set only one, the run is refused with `no_forge_repository`.
 
 A repository passes when its plugin advertises every listed capability, its credential
