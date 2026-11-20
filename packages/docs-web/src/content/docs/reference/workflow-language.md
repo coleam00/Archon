@@ -2097,7 +2097,12 @@ nodes; an include in a `loop_group` body produces body-local nodes. There is no 
   underscore) within that scope. Including `archon-review` under `id: review` yields
   `review__scope`, `review__code`, `review__synthesize`, and so on. These
   namespaced ids are what appear in the event stream and in `archon workflow get <id>`;
-  body-local events additionally carry their enclosing group prefix.
+  body-local events additionally carry their enclosing group prefix. To show such a node
+  by a readable name, read its `composed` origin instead of splitting the id: a node
+  event, its stored `data.node` and a Web `dag_node` frame carry `composed: { nodeId,
+  workflow, includes }`, the id as written, the workflow that declared it, and the
+  include ids that brought it in, outermost first. A node the run's own workflow
+  declares has no `composed`.
 - **Edges and command bodies.** Internal `depends_on` edges and `$id.output` references are
   rewired to the namespaced ids automatically. This includes named `command:` and
   `loop.command` files: discovery resolves their bodies and compiles them into the flat DAG

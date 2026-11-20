@@ -55,8 +55,8 @@ function isSamePack(left: PackIdentity, right: PackIdentity): boolean {
  * field: the innermost workflow that inlined this node already said the true thing,
  * and an outer level re-stating it would replace one file's answer with another's.
  * `blockSessionStart` is the exception — it is idempotently true, and a node can
- * legitimately start the thread of two nested blocks at once. `boundaries` is cumulative: each outer
- * include prepends its own activation predicate without replacing the inner ones.
+ * legitimately start the thread of two nested blocks at once. `boundaries` and `includes` are
+ * cumulative: each outer include prepends its own entry without replacing the inner ones.
  */
 function markComposedNode(node: DagNode, patch: ComposedNodeMeta): void {
   const target = node as DagNode & NodeWithComposedMeta;
@@ -64,10 +64,12 @@ function markComposedNode(node: DagNode, patch: ComposedNodeMeta): void {
   if (existing === undefined) {
     target[COMPOSED_NODE] = {
       ...patch,
+      includes: [...patch.includes],
       ...(patch.boundaries !== undefined ? { boundaries: cloneBoundaries(patch.boundaries) } : {}),
     };
   } else {
     if (patch.blockSessionStart === true) existing.blockSessionStart = true;
+    existing.includes = [...patch.includes, ...existing.includes];
     if (patch.boundaries !== undefined) {
       existing.boundaries = [...cloneBoundaries(patch.boundaries), ...(existing.boundaries ?? [])];
     }
@@ -78,9 +80,8 @@ function markComposedNode(node: DagNode, patch: ComposedNodeMeta): void {
   // OUTER graph and means nothing inside a body (a body's first iteration starts fresh). A body node is likewise never the entry of an
   // enclosing outer-graph include, though it still inherits that boundary.
   if (isLoopGroupNode(node)) {
-    const inherited = bodyComposedMeta(patch);
     for (const body of node.loop_group.nodes) {
-      if (!isIncludeDirective(body)) markComposedNode(body, inherited);
+      if (!isIncludeDirective(body)) markComposedNode(body, bodyComposedMeta(patch, body));
     }
   }
 }
@@ -113,10 +114,13 @@ function cloneBoundaries(boundaries: ComposedBlockBoundary[]): ComposedBlockBoun
   return boundaries.map(boundary => structuredClone(boundary));
 }
 
-/** The record a loop_group body node inherits from its group's. */
-function bodyComposedMeta(patch: ComposedNodeMeta): ComposedNodeMeta {
+/** The record a loop_group body node inherits from its group's. A body id is never
+ * prefixed, so the body names itself. */
+function bodyComposedMeta(patch: ComposedNodeMeta, body: DagNode): ComposedNodeMeta {
   return {
     origin: patch.origin,
+    nodeId: body.id,
+    includes: patch.includes,
     ...(patch.pack !== undefined ? { pack: patch.pack } : {}),
     ...(patch.inputs !== undefined ? { inputs: patch.inputs } : {}),
     ...(patch.forwarded !== undefined ? { forwarded: patch.forwarded } : {}),
@@ -411,6 +415,8 @@ function composedMeta(scope: InlineScope, cn: DagNode, wasEntry: boolean): Compo
   const pack = scope.child.pack;
   return {
     origin: scope.child.name,
+    nodeId: cn.id,
+    includes: [scope.includeNode.id],
     ...(pack !== undefined ? { pack: { source: pack.source, key: pack.key } } : {}),
     ...(Object.keys(resolvedInputs).length > 0 ? { inputs: { ...resolvedInputs } } : {}),
     ...(scope.forwarded.length > 0 ? { forwarded: [...scope.forwarded] } : {}),

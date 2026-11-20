@@ -63,7 +63,12 @@ describe('output reference errors name the reference as written', () => {
         runtime: 'bun',
         with: { x: 'local' },
       }) as DagNode & NodeWithComposedMeta;
-      node[COMPOSED_NODE] = { origin: 'blk', inputs: { x: { from: '$a.output' } } };
+      node[COMPOSED_NODE] = {
+        origin: 'blk',
+        nodeId: 'run',
+        includes: ['use'],
+        inputs: { x: { from: '$a.output' } },
+      };
       const outputs = new Map([['a', makeOutput(state)]]);
       expect(inputEnvVars(node, ctx(outputs), undefined).INPUTS_X).toBe('local');
     }
