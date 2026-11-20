@@ -32,6 +32,12 @@ const snapshot: TrustedTextRunMetadata = {
   title: 'Title',
   body: 'Body',
   contentDigest: 'a'.repeat(64),
+  editProvenance: {
+    editor: { host: 'github.com', id: 'outside', login: 'outside' },
+    lastEditedAt: '2026-11-19T00:00:00Z',
+    titleEditor: null,
+    titleEditedAt: null,
+  },
   policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
   acceptedBy: { host: 'github.com', id: '1', login: 'alice' },
 };

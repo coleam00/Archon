@@ -343,6 +343,8 @@ async function claimPendingRun(
     workflowRun,
     noWait: noWait === true,
     attempt: async () => {
+      // A hold may outlive the first evidence read; refusal is not a failed claim.
+      await recheckTrustedTextAdmission(deps, workflow, workflowRun);
       try {
         claim.run = await deps.store.claimPendingWorkflowRun(workflowRun.id, cwd);
       } catch (error) {

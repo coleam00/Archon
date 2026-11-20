@@ -88,7 +88,7 @@ export async function resolveRunDispatch(
     preCreatedRun !== undefined &&
     (opts.priorCompletedNodes !== undefined || preCreatedRun.status !== 'pending');
   refuseInvalidDispatch(workflow, opts, isContinuation);
-  await authorizePreCreatedTrustedText(deps, preCreatedRun);
+  await authorizePreCreatedTrustedText(deps, preCreatedRun, isContinuation);
   const containerRefusal = await refuseContainerResumeWithoutBackend(
     deps,
     platform,
@@ -185,12 +185,16 @@ async function authorizeDeclaredItem(
 
 async function authorizePreCreatedTrustedText(
   deps: WorkflowDeps,
-  run: ExecuteWorkflowOptions['preCreatedRun']
+  run: ExecuteWorkflowOptions['preCreatedRun'],
+  isContinuation: boolean
 ): Promise<void> {
   if (!run || readTrustedTextMetadata(run)) return;
   try {
     const trustedText = await authorizeDeclaredItem(deps, run);
-    if (trustedText) stampTrustedText(run, trustedText);
+    if (trustedText) {
+      if (isContinuation) throw new Error('trusted_text_unprotected_continuation');
+      stampTrustedText(run, trustedText);
+    }
   } catch (error) {
     throw new TrustedTextAdmissionError(error instanceof Error ? error.message : String(error));
   }

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { trustedTextSchema } from '@archon/forge';
 import { trustedTextBindingSchema } from './schemas/trusted-text';
 import type { ResolvedWorkflow } from './schemas';
 import type { WorkflowDeps } from './deps';
@@ -13,12 +14,23 @@ const actorSchema = z.object({
   login: z.string().min(1).nullable().optional(),
 });
 
+export const trustedTextEditProvenanceSchema = trustedTextSchema
+  .pick({
+    editor: true,
+    lastEditedAt: true,
+    titleEditor: true,
+    titleEditedAt: true,
+  })
+  .required();
+
 export const trustedTextRunMetadataSchema = z.object({
   schemaVersion: z.literal(1),
   requirement: trustedTextBindingSchema,
   title: z.string(),
   body: z.string(),
   contentDigest: z.string().regex(/^[0-9a-f]{64}$/),
+  // Old records remain readable, but cannot authorize text without edit evidence.
+  editProvenance: trustedTextEditProvenanceSchema.optional(),
   policy: z.object({
     head: z.string().min(1),
     digest: z.string().regex(/^[0-9a-f]{64}$/),

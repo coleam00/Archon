@@ -191,9 +191,9 @@ describe('CoreTrustedTextHost', () => {
       { ...evidence(), author: maintainer, editor: undefined, lastEditedAt: undefined },
     ]) {
       h.set(current);
-      await expect(
-        h.host.authorize(requirement, { codebase, itemKey: 'issue-7' })
-      ).resolves.toMatchObject({ acceptedBy: maintainer });
+      await expect(h.host.authorize(requirement, { codebase, itemKey: 'issue-7' })).rejects.toThrow(
+        'waiting_acceptance'
+      );
     }
   });
 
@@ -282,6 +282,63 @@ describe('CoreTrustedTextHost', () => {
       h.set(changed);
       await expect(h.host.recheck(snapshot)).rejects.toBeInstanceOf(TrustedTextRefusedError);
     }
+  });
+
+  test.each(['body', 'title'])(
+    'an edited and restored %s requires a new acceptance',
+    async field => {
+      const h = harness();
+      const original = await h.host.accept(acceptance());
+      const changed =
+        field === 'body'
+          ? {
+              ...evidence('Title', 'Changed'),
+              editor: outsider,
+              lastEditedAt: '2026-11-19T00:00:00Z',
+            }
+          : {
+              ...evidence('Changed', 'Body'),
+              titleEditor: outsider,
+              titleEditedAt: '2026-11-19T00:00:00Z',
+            };
+      h.set(changed);
+      await expect(h.host.recheck(original)).rejects.toThrow('waiting_acceptance');
+      const restored =
+        field === 'body'
+          ? { ...evidence(), editor: outsider, lastEditedAt: '2026-11-19T00:01:00Z' }
+          : { ...evidence(), titleEditor: outsider, titleEditedAt: '2026-11-19T00:01:00Z' };
+      h.set(restored);
+      await expect(h.host.recheck(original)).rejects.toThrow('waiting_acceptance');
+      await expect(h.host.authorize(requirement, { codebase, itemKey: 'issue-7' })).rejects.toThrow(
+        'waiting_acceptance'
+      );
+      await expect(h.host.authorizeItem(requirement, 'item-7')).rejects.toThrow(
+        'waiting_acceptance'
+      );
+      const renewed = await h.host.accept(acceptance());
+      await h.host.recheck(renewed);
+      await expect(h.host.authorizeItem(requirement, 'item-7')).resolves.toEqual(renewed);
+      expect(trustedTextRunMetadataSchema.parse(renewed)).toEqual(renewed);
+    }
+  );
+
+  test('legacy acceptances without edit provenance fail closed until accepted again', async () => {
+    const h = harness();
+    const original = await h.host.accept(acceptance());
+    const legacy = { ...original };
+    delete (legacy as Record<string, unknown>).editProvenance;
+    h.accepted.set(h.accepted.keys().next().value!, legacy);
+    await expect(h.host.recheck(legacy)).rejects.toThrow('waiting_acceptance');
+    await expect(h.host.authorizeItem(requirement, 'item-7')).rejects.toThrow('waiting_acceptance');
+    const renewed = await h.host.accept(acceptance());
+    await h.host.recheck(renewed);
+  });
+
+  test('acceptance refuses incomplete edit evidence', async () => {
+    const h = harness();
+    h.set({ ...evidence(), titleEditor: undefined, titleEditedAt: undefined });
+    await expect(h.host.accept(acceptance())).rejects.toThrow('edit_provenance_unavailable');
+    expect(h.accepted.size).toBe(0);
   });
 
   test('acceptance rejects forged actors and concurrent stale evidence cannot authorize new text', async () => {

@@ -28,13 +28,13 @@ import type { ExecuteWorkflowOptions } from './executor';
 import type { WorkflowRun } from './schemas';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { IWorkflowStore } from './store';
-import { InstallHeldError } from './store/errors';
+import { InstallHeldError, WorkflowItemHeldError } from './store/errors';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { WorkflowStatusReadError } from './workflow-status-read';
 import { keepAwake } from './utils/keep-awake';
 import { createFileWorkflowStore, commit } from './file-store';
 import type { TrustedTextRunMetadata } from './trusted-text';
-import { SUBRUN_METADATA_KEYS } from './schemas';
+import { SUBRUN_METADATA_KEYS, runInputsMetadata } from './schemas';
 
 /** How a run claims its row and its checkout: the path lock, row stamps and the checkout baseline. */
 
@@ -311,7 +311,7 @@ describe('concurrent-run guard', () => {
     expect(release).toHaveBeenCalledWith(run.id);
   });
 
-  it('persists a newly authorized running continuation before any agent executes', async () => {
+  it('refuses unprotected continuation history but persists an already protected continuation before DAG entry', async () => {
     const trustedText: TrustedTextRunMetadata = {
       schemaVersion: 1,
       requirement: {
@@ -340,6 +340,14 @@ describe('concurrent-run guard', () => {
         throw new Error('unexpected authorization');
       },
       recheck: async () => undefined,
+    };
+    await expect(startWorkflow({ deps, options: resumeOf(run) })).rejects.toThrow(
+      'trusted_text_unprotected_continuation'
+    );
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    run.metadata = {
+      trusted_text: trustedText,
+      ...runInputsMetadata({ trusted_item: { title: 'Accepted', body: 'Snapshot' } }, true),
     };
     let persistedBeforeDag = false;
     mockExecuteDagWorkflow.mockImplementationOnce(async () => {
@@ -450,6 +458,89 @@ describe('concurrent-run guard', () => {
     expect(transitions[0]).toBe('metadata');
     expect(transitions).toContain('claim');
   });
+
+  it.each(['resource', 'item'])(
+    'refuses edited text after a %s wait without reporting an ambiguous claim',
+    async heldAt => {
+      const trustedText: TrustedTextRunMetadata = {
+        schemaVersion: 1,
+        requirement: {
+          subject: {
+            kind: 'issue',
+            ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+          },
+          maintainersPath: '.archon/maintainers.json',
+          input: 'trusted_item',
+        },
+        title: 'Accepted',
+        body: 'Snapshot',
+        contentDigest: 'a'.repeat(64),
+        policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+      };
+      const run = makeRun({
+        status: 'pending',
+        item_id: 'item-7',
+        codebase_id: 'codebase',
+        metadata: { trusted_text: trustedText },
+      });
+      const store = makeStore();
+      const deps = makeDeps(store);
+      let edited = false;
+      if (heldAt === 'resource') {
+        store.admitPendingRun = mock(async () => {
+          if (!edited) {
+            edited = true;
+            throw new InstallHeldError({
+              setAt: '2026-11-19T00:00:00Z',
+              setBy: 'maintainer',
+            });
+          }
+          return null;
+        });
+      } else {
+        store.claimPendingWorkflowRun = mock(async () => {
+          if (edited) return { ...run, status: 'running' as const };
+          edited = true;
+          throw new WorkflowItemHeldError(run.id, 'holder', 'protected', 'issue-7');
+        });
+      }
+      deps.trustedText = {
+        readEvidence: async () => {
+          throw new Error('unexpected evidence read');
+        },
+        authorize: async () => {
+          throw new Error('unexpected authorization');
+        },
+        recheck: async () => {
+          if (edited) throw new Error('waiting_acceptance');
+        },
+      };
+      await expect(
+        startWorkflow({
+          deps,
+          workflow: makeWorkflow({
+            webSearchMode: 'disabled',
+            ...(heldAt === 'resource' ? { resource: { name: 'pool' } } : {}),
+            nodes: [
+              {
+                id: 'reader',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'Read' },
+                allowed_tools: ['Read'],
+              },
+            ],
+          }),
+          options: { preCreatedRun: run },
+        })
+      ).rejects.toThrow('waiting_acceptance');
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      expect(store.claimPendingWorkflowRun).toHaveBeenCalledTimes(heldAt === 'resource' ? 0 : 1);
+      expect(store.failWorkflowRun).toHaveBeenCalledWith(run.id, 'waiting_acceptance', {
+        exitReason: 'launch_failed',
+        pendingOnly: true,
+      });
+    }
+  );
   it('blocks and cancels its own row when the active-workflow check fails', async () => {
     const cancelSpy = mock(async () => ({ cancelled: true }));
     const store = makeStore({

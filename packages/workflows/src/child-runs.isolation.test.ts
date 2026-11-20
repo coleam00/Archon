@@ -8,12 +8,14 @@ import {
 } from './child-runs/test-utils';
 import { InMemoryStore } from './child-runs/test-store';
 import { providerRegistry } from '@archon/providers';
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
 import { mkdir, writeFile, rm, cp } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { executeWorkflow } from './executor';
+import { runChildWorkflow } from './child-runs';
+import type { TrustedTextRunMetadata } from './trusted-text';
 import { hydrateResumableRun } from './run-resume';
 import { discoverWorkflows } from './workflow-discovery';
 import type { WorkflowDeps } from './deps';
@@ -57,6 +59,85 @@ describe('workflow: sub-run isolation (#2121 slice 2)', () => {
   });
 
   // --- slice 2, PR-A: per-child worktree isolation ------------------------------
+
+  it('a child inherits its protected snapshot and refuses before an agent if it drifts', async () => {
+    await writeWorkflow(
+      'trusted-child',
+      `name: trusted-child
+description: protected child
+webSearchMode: disabled
+nodes:
+  - id: read
+    prompt: Read
+    allowed_tools: [Read]
+`
+    );
+    const trustedText: TrustedTextRunMetadata = {
+      schemaVersion: 1,
+      requirement: {
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        maintainersPath: '.archon/maintainers.json',
+        input: 'trusted_item',
+      },
+      title: 'Accepted',
+      body: 'Snapshot',
+      contentDigest: 'a'.repeat(64),
+      editProvenance: { editor: null, lastEditedAt: null, titleEditor: null, titleEditedAt: null },
+      policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+    };
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const sendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
+      async function* () {
+        throw new Error('Unaccepted text must not reach an agent');
+      }
+    );
+    const createProvider = deps.getAgentProvider;
+    deps.getAgentProvider = name => ({ ...createProvider(name), sendQuery });
+    let observed: TrustedTextRunMetadata | undefined;
+    deps.trustedText = {
+      readEvidence: async () => {
+        throw new Error('unexpected evidence read');
+      },
+      authorize: async () => {
+        throw new Error('unexpected authorization');
+      },
+      recheck: async snapshot => {
+        observed = snapshot;
+        throw new Error('waiting_acceptance');
+      },
+    };
+    const parent = await store.createWorkflowRun({
+      workflow_name: 'parent',
+      user_message: 'accepted',
+      working_path: cwd,
+      metadata: { trusted_text: trustedText },
+    });
+    const result = await runChildWorkflow(
+      deps,
+      makePlatform(),
+      {
+        parentRun: parent,
+        nodeId: 'child',
+        childWorkflowName: 'trusted-child',
+        input: 'accepted',
+        cwd,
+        conversationId: 'conversation',
+      },
+      {},
+      undefined,
+      'main'
+    );
+    const child = [...store.runs.values()].find(run => run.parent_run_id === parent.id);
+    expect(child?.metadata.trusted_text).toEqual(trustedText);
+    expect(observed).toEqual(trustedText);
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('waiting_acceptance');
+    expect(sendQuery).not.toHaveBeenCalled();
+  });
 
   it("isolation: 'worktree' runs the child in the resolver's cwd (distinct from the parent)", async () => {
     await writeWorkflow(

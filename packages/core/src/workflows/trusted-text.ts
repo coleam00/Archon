@@ -9,7 +9,7 @@ import {
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import type { Codebase } from '../schemas/codebase';
 import type { IWorkflowHostStore } from './host-store';
-import { trustedTextActor } from '@archon/workflows/trusted-text';
+import { trustedTextActor, trustedTextEditProvenanceSchema } from '@archon/workflows/trusted-text';
 import type {
   TrustedTextEvidence,
   TrustedTextRunMetadata,
@@ -37,12 +37,15 @@ export function createTrustedTextRecords(): NonNullable<IWorkflowHostStore['trus
 type Dispatch = (request: ForgeRequest) => Promise<Pick<ForgeDispatchResult, 'response'>>;
 type Requirement = TrustedTextRunMetadata['requirement'];
 function metadata(evidence: TrustedTextEvidence, requirement: Requirement): TrustedTextRunMetadata {
+  const editProvenance = trustedTextEditProvenanceSchema.safeParse(evidence);
+  if (!editProvenance.success) throw new TrustedTextRefusedError('edit_provenance_unavailable');
   return {
     schemaVersion: 1,
     requirement,
     title: evidence.title,
     body: evidence.body,
     contentDigest: trustedTextDigest(evidence.title, evidence.body),
+    editProvenance: editProvenance.data,
     policy: {
       head: evidence.policy.head,
       digest: evidence.policy.digest,
@@ -52,10 +55,14 @@ function metadata(evidence: TrustedTextEvidence, requirement: Requirement): Trus
 }
 
 function sameText(left: TrustedTextRunMetadata, right: TrustedTextEvidence): boolean {
+  const editProvenance = trustedTextEditProvenanceSchema.safeParse(right);
   return (
     left.contentDigest === trustedTextDigest(right.title, right.body) &&
     left.title === right.title &&
-    left.body === right.body
+    left.body === right.body &&
+    left.editProvenance !== undefined &&
+    editProvenance.success &&
+    isDeepStrictEqual(left.editProvenance, editProvenance.data)
   );
 }
 

@@ -491,6 +491,38 @@ nodes:
     expect(declarations).toBe(0);
     expect(await listPendingStartBindings({ hostId: 'host' })).toHaveLength(0);
 
+    await acceptTestBinding({
+      cwd: project,
+      workflowName: 'protected',
+      trustedText: { ...requirement, input: 'trusted_item' },
+      inputs: { trusted_item: { title: 'Caller', body: 'Unaccepted' } },
+    });
+    await expect(drainResourceStartHost(host)).rejects.toMatchObject({
+      failures: [{ error: { message: 'trusted_text_input_already_supplied' } }],
+    });
+    await writeFile(
+      join(project, '.archon', 'workflows', 'unsupported.yaml'),
+      `name: unsupported
+description: unsupported protected node
+webSearchMode: disabled
+inputs:
+  trusted_item: {}
+nodes:
+  - id: shell
+    bash: echo unaccepted
+`
+    );
+    await acceptTestBinding({
+      cwd: project,
+      workflowName: 'unsupported',
+      trustedText: { ...requirement, input: 'trusted_item' },
+    });
+    await expect(drainResourceStartHost(host)).rejects.toMatchObject({
+      failures: [{ error: { message: 'trusted_text_unsupported_node' } }],
+    });
+    expect(declarations).toBe(0);
+    expect(started).toEqual([]);
+
     const retryReceipt = await acceptTestBinding({
       cwd: project,
       workflowName: 'protected',
@@ -557,6 +589,10 @@ nodes:
       body: 'Body',
       contentDigest: trustedTextDigest('Title', 'Body'),
       author: { host: 'github.com', id: '2', login: 'outsider' },
+      editor: null,
+      lastEditedAt: null,
+      titleEditor: null,
+      titleEditedAt: null,
       policy: {
         maintainersPath: requirement.maintainersPath,
         head: 'b'.repeat(40),
