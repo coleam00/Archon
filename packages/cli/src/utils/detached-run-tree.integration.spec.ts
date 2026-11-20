@@ -20,7 +20,7 @@ import {
   isRunOwnerAnswering,
 } from '@archon/core/services/run-live-owner';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
-import { createFileWorkflowStore } from '@archon/workflows/file-store';
+import { commit, createFileWorkflowStore } from '@archon/workflows/file-store';
 import { createInMemoryWorkflowHostStore } from '../test-support/workflow-store';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
 
@@ -476,24 +476,42 @@ describe('detached run tree stop', () => {
       // A run's end starts its follow-ups as trigger executors, which are other runs' owners.
       // The job is kill-on-close, so one started inside it would die with the owner that
       // started it; it must start outside the job and finish its own work. The fixture's
-      // executor names no admitted request, so its work is to log that and exit, about a
-      // CLI start-up after the owner is gone; a killed executor logs nothing.
+      // executor names no admitted request, so its work is to read the store and log that.
+      // The test holds the store's lock until the owner has exited, so the executor cannot
+      // log anything before then: a logged result shows it was alive after the owner died.
 
       const { dir, marker, exited } = await startWindowsRunOwner('trigger-exit');
       const log = join(dir, 'home', 'logs', `trigger-run-${marker}.log`);
+      const executorDone = (): boolean =>
+        existsSync(log) &&
+        readFileSync(log, 'utf8').includes('Execution requires an admitted request');
+      const storeRoot = join(dir, 'home', 'store');
+      await createFileWorkflowStore({ root: storeRoot });
       await withFixtureCleanup(
         async () => {
           const grandchild = Number(readFileSync(join(dir, 'grandchild'), 'utf8'));
           expect(await windowsProcessesNaming(marker)).toContain(grandchild);
 
-          writeFileSync(join(dir, 'exit'), '');
-          expect(await exited).toBe(0);
-          await waitFor(
-            () =>
-              existsSync(log) &&
-              readFileSync(log, 'utf8').includes('Execution requires an admitted request'),
-            NESTED_LAUNCH_DEADLINE_MS
-          );
+          let release!: () => void;
+          const released = new Promise<void>(resolve => (release = resolve));
+          let held!: () => void;
+          const holding = new Promise<void>(resolve => (held = resolve));
+          const lock = commit(storeRoot, [], async () => {
+            held();
+            await released;
+            return { result: undefined, changes: {} };
+          });
+          try {
+            await holding;
+            writeFileSync(join(dir, 'exit'), '');
+            expect(await exited).toBe(0);
+            // Kept short: the executor gives up waiting for the lock after 10 seconds.
+            expect(executorDone()).toBe(false);
+          } finally {
+            release();
+            await lock;
+          }
+          await waitFor(executorDone, NESTED_LAUNCH_DEADLINE_MS);
           // The owner's own leftovers still ended with it.
           expect(await windowsProcessesNaming(marker)).not.toContain(grandchild);
         },

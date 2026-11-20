@@ -17,8 +17,8 @@ import { spawnAdmitted } from '../spawn-admitted';
  *   an owner does when its run ends, with no stop.
  * - `trigger-exit`: as `orphan-exit`, but on `<dir>/exit` first start a trigger executor
  *   through `spawnAdmitted`, as a run's end does for a follow-up, and exit the moment it has
- *   started. The executor finds no admitted request and logs that, which it can only do if
- *   it outlived the owner's job.
+ *   started. The executor reads the file store under `<dir>/home`, finds no admitted
+ *   request and logs that.
  * - `spawner`: start a detached child every few milliseconds, so a stop races a spawn.
  * - `nested`: start a process, as a node would, that launches a real CLI workflow with
  *   `--detach` through the job broker. Its run id is saved in `<dir>/child-run-id`.
