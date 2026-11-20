@@ -29,6 +29,7 @@ import { getItem, getItemRuns } from '@archon/core/db/items';
 import { claimPendingWorkflowRun } from '@archon/core/db/workflows';
 import {
   drainResourceStartHost,
+  ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
 import { captureLogLines, removeTempTree } from '@archon/paths/test-utils';
@@ -736,6 +737,45 @@ describe('server resource-start host', () => {
     });
     await host.requestDrain();
     expect(engine.submitted).toHaveLength(1);
+  });
+
+  test('a binding whose workflow source lacks the workflow starts nothing, though a global one has the name', async () => {
+    const { deliver, engine } = await fixture(false);
+    const project = join(root, 'project');
+    const source = join(root, 'source');
+    await mkdir(join(source, '.archon', 'workflows'), { recursive: true });
+    await mkdir(join(root, 'home', 'workflows'));
+    await writeFile(
+      join(root, 'home', 'workflows', 'hosted.yaml'),
+      'name: hosted\ndescription: Global copy.\nnodes:\n  - id: one\n    bash: echo global\n'
+    );
+    const launch = {
+      cwd: project,
+      discoveryCwd: source,
+      workflowName: 'hosted',
+      inputs: {},
+      isolation: { kind: 'in-place' },
+    };
+    expect((await deliver('sourced', 'queue', { launch })).status).toBe(200);
+
+    const drained = drainResourceStartHost({
+      ...createSqlWorkflowHost(),
+      hostId: HOST_ID,
+      startAdmitted: async () => {
+        throw new Error('a refused binding is never admitted');
+      },
+    });
+    await expect(drained).rejects.toThrow(ResourceStartDrainError);
+    const failure = await drained.catch((error: ResourceStartDrainError) => error.failures[0]);
+    expect(String(failure?.error)).toContain(join(source, '.archon', 'workflows'));
+    expect((await bindingOf('sourced')).status).toBe('rejected');
+    const counts = await getDatabase().query<{ runs: number; requests: number; holders: number }>(
+      `SELECT (SELECT COUNT(*) FROM remote_agent_workflow_runs) AS runs,
+              (SELECT COUNT(*) FROM remote_agent_resource_start_requests) AS requests,
+              (SELECT COUNT(*) FROM remote_agent_resource_slot_holders) AS holders`
+    );
+    expect(counts.rows[0]).toEqual({ runs: 0, requests: 0, holders: 0 });
+    expect(engine.submitted).toHaveLength(0);
   });
 
   test('a dead connected credential fails before worktree creation and releases the resource slot on the next drain', async () => {

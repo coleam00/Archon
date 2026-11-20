@@ -32,6 +32,10 @@ const sdkToolHandlers = new Map<
   string,
   (args: Record<string, unknown>) => Promise<{ content: { type: 'text'; text: string }[] }>
 >();
+// Exports these tests never reach fail when called instead of running the real SDK.
+const unmocked = (name: string) => () => {
+  throw new Error(`${name} is not mocked`);
+};
 mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   createSdkMcpServer: ({ name }: { name: string }) => ({
     type: 'sdk',
@@ -49,6 +53,9 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
     },
   }),
   query: mockQuery,
+  archiveSession: unmocked('archiveSession'),
+  unarchiveSession: unmocked('unarchiveSession'),
+  matchDeniedModels: unmocked('matchDeniedModels'),
 }));
 
 import { TOOL_OUTPUT_MAX_CHARS, type ProviderStopReason } from '@archon/provider-contract';
@@ -929,6 +936,62 @@ describe('subtasks and settling', () => {
     expect(inputClosed).toBe(true);
     expect(stream.chunks.some(chunk => chunk.type === 'settled')).toBe(false);
     expect(stream.chunks.filter(chunk => chunk.type === 'subtask')).toHaveLength(1);
+  });
+
+  test('holds the main agent turn end until its subtasks close, and never refuses its structured result (#5923)', async () => {
+    const decisions: unknown[] = [];
+    let structuredOutputHooks: unknown[] = [];
+    mockQuery.mockImplementation(async function* ({ options }) {
+      structuredOutputHooks = (options?.hooks?.PreToolUse ?? []).filter(
+        m => m.matcher === 'StructuredOutput'
+      );
+      const hold = options?.hooks?.Stop?.[0]?.hooks[0];
+      if (!hold) throw new Error('no Stop hook');
+      const stop = (input: Record<string, unknown> = {}, signal = new AbortController().signal) =>
+        hold({ hook_event_name: 'Stop', ...input } as never, undefined, { signal }).then(d => {
+          decisions.push(d);
+        });
+      yield { type: 'system', subtype: 'task_started', task_id: 'helper' };
+      await stop({ agent_id: 'helper' });
+      const held = stop();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(decisions).toHaveLength(1);
+      yield { type: 'system', subtype: 'task_notification', task_id: 'helper', status: 'failed' };
+      await held;
+      await stop();
+    });
+
+    await chunksOf('test', '/workspace', undefined, {
+      outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+    });
+
+    expect(structuredOutputHooks).toEqual([]);
+    expect(decisions).toEqual([
+      { continue: true },
+      { decision: 'block', reason: expect.any(String) },
+      { continue: true },
+    ]);
+  });
+
+  test('an aborted hold releases the turn end without sending the agent back', async () => {
+    let decision: unknown;
+    mockQuery.mockImplementation(async function* ({ options }) {
+      const hold = options?.hooks?.Stop?.[0]?.hooks[0];
+      if (!hold) throw new Error('no Stop hook');
+      yield { type: 'system', subtype: 'task_started', task_id: 'helper' };
+      const aborted = new AbortController();
+      const held = hold({ hook_event_name: 'Stop' } as never, undefined, {
+        signal: aborted.signal,
+      });
+      aborted.abort();
+      decision = await held;
+    });
+
+    await chunksOf('test', '/workspace', undefined, {
+      outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+    });
+
+    expect(decision).toEqual({ continue: true });
   });
 });
 
@@ -2474,6 +2537,15 @@ describe('workflow node capabilities', () => {
     expect(options.allowedTools).toContain('mcp__declared__*');
   });
 
+  test('a workflow node never gets ScheduleWakeup, and keeps its own denied tools', async () => {
+    const node = await workflowOptions({ nodeConfig: { nodeId: 'n', denied_tools: ['WebFetch'] } });
+    expect(node.disallowedTools).toEqual(['ScheduleWakeup', 'WebFetch']);
+
+    mockQuery.mockClear();
+    const chat = await workflowOptions({ nodeConfig: { denied_tools: ['WebFetch'] } });
+    expect(chat.disallowedTools).toEqual(['WebFetch']);
+  });
+
   test('keeps partial non-workflow nodeConfig on ambient defaults', async () => {
     const options = await workflowOptions({ nodeConfig: { allowed_tools: [] } });
 
@@ -2810,6 +2882,11 @@ describe('typed failures (#1797, #3524)', () => {
     ['temp_dir_unusable', 'misconfigured'],
     ['cwd_unavailable', 'misconfigured'],
     ['shell_tool_missing', 'misconfigured'],
+    ['sandbox_required_unavailable', 'misconfigured'],
+    ['config_file_invalid', 'misconfigured'],
+    ['initialize_not_first', 'misconfigured'],
+    ['managed_settings_not_delivered', 'misconfigured'],
+    ['initialize_fields_not_delivered', 'misconfigured'],
     ['remote_settings_required_unavailable', 'unknown'],
     ['org_verify_failed', 'unknown'],
   ])('a startup failure for %s reports %s, classified by its reason', async (reason, expected) => {

@@ -222,7 +222,7 @@ export function createMockStore(): MockWorkflowStore {
       ),
       getWorkflowRunStatus,
       completeWorkflowRun: mock<IWorkflowStore['completeWorkflowRun']>(
-        async (_id, _completion, _metadata) => undefined
+        async (_id, _completion, _metadata) => ({ startReceipts: [] })
       ),
       failWorkflowRun: mock<IWorkflowStore['failWorkflowRun']>(async () => ({ failed: true })),
       pauseWorkflowRun: mock<IWorkflowStore['pauseWorkflowRun']>(

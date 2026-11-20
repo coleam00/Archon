@@ -9,7 +9,11 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { getDatabaseType, pool } from './connection';
 import type { TransactionQuery } from './resource-slots';
-import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
+import {
+  normalizeWorkflowRun,
+  parseJsonObject,
+  type WorkflowRunRow,
+} from './workflow-run-normalization';
 import { getLog } from './workflow-run-shared';
 
 /**
@@ -112,6 +116,11 @@ export async function getItemRuns(
   );
   const runs = result.rows.map((run): AttentionRead<WorkflowRun> => {
     try {
+      // Elsewhere metadata that does not read is taken as empty; on an item that would read
+      // as a run that recorded nothing, such as no run config, so a later start would
+      // silently run without the item's config.
+      if (run.metadata !== null && parseJsonObject(run.metadata) === null)
+        throw new Error('unreadable metadata');
       return normalizeWorkflowRun(run);
     } catch {
       // Parser errors can quote stored data, including message text.

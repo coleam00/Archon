@@ -257,7 +257,8 @@ export function shouldRunPackTests(
 
 /**
  * A pull request runs the Linux jobs its change can affect. The other platforms and the builds
- * (`PUSH_ONLY_MODES`) wait for the push to `dev` or `main`, which runs every job. These paths are
+ * (`PUSH_ONLY_MODES`) wait for the push to `dev` or `main`, which runs every job (the whole
+ * Windows suite only on `main`; `WINDOWS_FULL_SUITE_REF`). These paths are
  * the exception: a pull request that changes one runs every job, as a push does, because the
  * change can break any job on any platform and nothing narrower is safe to assume.
  *   - `.github/workflows/`: changing the gate must run the gate.
@@ -295,8 +296,9 @@ export function shouldRunEveryJob(
 /**
  * The jobs a pull request leaves to the push, each with the paths that bring it back onto the
  * pull request because the job exists to check them. Only paths a short list can name are here.
- *   - `full-matrix`: the Windows legs and the macOS job. Platform-dependent code is spread across
- *     the packages, so no list names it and only `shouldRunEveryJob` selects these.
+ *   - `full-matrix`: the Windows set (`windows-tests`) and the macOS job. Platform-dependent code
+ *     is spread across the packages, so no list names it and only `shouldRunEveryJob` selects
+ *     these.
  *   - `docker-build`: the image recipe, its entrypoint, and the scripts the build and its
  *     upgrade test run. The image also copies every package, which is why the push builds it.
  *   - `serve-binary`: the script that compiles the release binaries and the smoke tests the job
@@ -384,6 +386,7 @@ function decideFromDiff(
 
 /** The parts of a GitHub event payload this reads. Every leaf is checked before use. */
 export interface EventPayload {
+  ref?: unknown;
   before?: unknown;
   after?: unknown;
   pull_request?: { base?: { sha?: unknown }; head?: { sha?: unknown } } | null;
@@ -612,16 +615,31 @@ const MODES = {
   '--full-matrix': 'full-matrix',
   '--docker-build': 'docker-build',
   '--serve-binary': 'serve-binary',
+  '--windows-full-suite': 'windows-full-suite',
 } as const;
 export type Mode = 'suite' | (typeof MODES)[keyof typeof MODES];
 
-/** The pack modes, each named after the `test.yml` dispatch input that opts into it. */
-const OPT_IN_MODES: ReadonlySet<Mode> = new Set(['pack-tests', 'pack-fixtures']);
+/** The modes a dispatch runs only on request, each named after the `test.yml` input that asks. */
+const OPT_IN_MODES: ReadonlySet<Mode> = new Set([
+  'pack-tests',
+  'pack-fixtures',
+  'windows-full-suite',
+]);
 
 /**
- * A manual dispatch runs every job on every platform, and the pack checks only when its input asks. The event file
- * carries a boolean input as `true` or the string `"true"`; any other value but `false`, `"false"`
- * or an absent input is a wiring bug, so it throws rather than publish a guess.
+ * The whole suite on Windows runs for a push to `main` only. A push to `dev` runs the Windows
+ * set (`full-matrix`) instead: on a slow runner the whole suite failed mostly on timing, not on
+ * Windows behaviour (#5926). `main` keeps it because a release has no Windows test run of its
+ * own. A pull request runs it when its change runs every job, so its run can still prove the
+ * push; a dispatch runs it when its `windows-full-suite` input asks.
+ */
+const WINDOWS_FULL_SUITE_REF = 'refs/heads/main';
+
+/**
+ * A manual dispatch runs every job on every platform, and the opt-in checks only when their
+ * input asks. The event file carries a boolean input as `true` or the string `"true"`; any
+ * other value but `false`, `"false"` or an absent input is a wiring bug, so it throws rather
+ * than publish a guess.
  */
 export function dispatchDecision(mode: Mode, event: EventPayload): boolean {
   if (!OPT_IN_MODES.has(mode)) return true;
@@ -654,6 +672,7 @@ const PREDICATES: Record<Mode, (files: Iterable<string>) => boolean> = {
   'full-matrix': files => shouldRunPushOnlyJob('full-matrix', files),
   'docker-build': files => shouldRunPushOnlyJob('docker-build', files),
   'serve-binary': files => shouldRunPushOnlyJob('serve-binary', files),
+  'windows-full-suite': () => false,
 };
 
 function packPredicate(files: Iterable<string>): boolean {
@@ -683,6 +702,14 @@ async function main(): Promise<void> {
   const event: EventPayload = JSON.parse(readFileSync(eventPath, 'utf8'));
   if (eventName === 'workflow_dispatch') {
     console.log(dispatchDecision(mode, event));
+    return;
+  }
+  if (
+    eventName === 'push' &&
+    mode === 'windows-full-suite' &&
+    event.ref !== WINDOWS_FULL_SUITE_REF
+  ) {
+    console.log(false);
     return;
   }
   const range = diffRange(eventName, event);

@@ -18,8 +18,10 @@
  *    the project's choice and beats them. A resume reads the row, never the files.
  *
  * Settings belong to a run, not to a node: a run reads its root workflow's pack, and a
- * `workflow:` child, being a run of its own, reads its own. An `include:`d block takes
- * nothing from its pack; its includer passes what it needs through `with:`.
+ * `workflow:` child, being a run of its own, reads its own. An `include:`d block from the
+ * includer's own pack reads the settings the run resolved, as it does run directly; one
+ * from another pack takes nothing from its pack, and its includer passes what it needs
+ * through `with:` (`include/inline.ts`).
  */
 import { readFile } from 'fs/promises';
 import { join } from 'path';

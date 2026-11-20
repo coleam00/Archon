@@ -6,7 +6,7 @@
  *
  * The pack declares each binding once (`bindings:` in its `.pack/pack.yaml`); the operator
  * supplies the repository, the host, the run-as user and the checkout, and optionally the
- * run config every start launches with and where the pack's workflows are discovered.
+ * default run config of their starts (an item in flight keeps its own) and where the pack's workflows are discovered.
  *
  * Every file goes to `--out` and nothing registers it: the operator still runs
  * `archon trigger fire` and `archon trigger schedule install` for a timer binding, adds an
@@ -44,6 +44,7 @@ import {
   kindedPackBinding,
   type PackBinding,
   type PackBindingInput,
+  type PackEventBinding,
   type PackBindingKind,
 } from '@archon/workflows/schemas/pack-bindings';
 import {
@@ -56,6 +57,7 @@ import { writeJsonLine } from '../utils/stdout';
 import {
   triggerConfigSchema,
   type AsksSettledInputSource,
+  type RunEndedInputSource,
 } from '@archon/workflows/schemas/resource-start';
 import { loadWorkflows } from './workflow-list';
 
@@ -66,7 +68,10 @@ export interface PackBindingsOptions {
   host?: string;
   runAs?: string;
   out?: string;
-  /** A run config file every written binding launches with (`launch.configSource`). */
+  /**
+   * The default run config of the written bindings' starts (`launch.configSource`). A start
+   * on an item whose latest run recorded a config carries that one instead.
+   */
   config?: string;
   /** Where the pack's workflows are discovered when it does not live in the checkout. */
   workflowSource?: string;
@@ -96,6 +101,8 @@ interface Generated {
   document: unknown;
   /** The outcome a run-ended file starts on; one file per outcome. */
   outcome?: string;
+  /** The option an asks-settled file starts on; one file per option, when it names any. */
+  option?: string;
 }
 
 function parseRepo(repo: string): Target['repo'] {
@@ -108,13 +115,14 @@ function parseRepo(repo: string): Target['repo'] {
 /**
  * One name for a binding's file, its binding id and its source instance. The readable
  * part flattens the repository path, so `a-b/c` and `a/b-c` read alike; the digest of the
- * whole identity keeps distinct packs, hosts, repositories and outcomes apart.
+ * whole identity keeps distinct packs, hosts, repositories and values apart. `value` is
+ * the outcome or option a file starts on, for a binding written as one file per value.
  */
-function bindingName(target: Target, id: string, outcome?: string): string {
+function bindingName(target: Target, id: string, value?: string): string {
   const { packKey, repo } = target;
-  const identity = [packKey, repo.host, repo.path, id, ...(outcome === undefined ? [] : [outcome])];
+  const identity = [packKey, repo.host, repo.path, id, ...(value === undefined ? [] : [value])];
   const digest = createHash('sha256').update(JSON.stringify(identity)).digest('hex').slice(0, 12);
-  const slug = outcome
+  const slug = value
     ?.toLowerCase()
     .replaceAll(/[^a-z0-9]+/g, '-')
     .replaceAll(/^-|-$/g, '');
@@ -122,13 +130,21 @@ function bindingName(target: Target, id: string, outcome?: string): string {
   return `${readable.join('-')}-${digest}`;
 }
 
-function bindingPath(target: Target, id: string, outcome?: string): string {
-  return join(target.outDir, `${bindingName(target, id, outcome)}.json`);
+function bindingPath(target: Target, id: string, value?: string): string {
+  return join(target.outDir, `${bindingName(target, id, value)}.json`);
 }
 
 /**
+ * An input read from the run that ended or left the asks. Pack load lets the ended item's
+ * key reach only a run-ended binding, and every written file is checked by the trigger
+ * loader's schema before it is written.
+ */
+type RunInputSource = RunEndedInputSource | AsksSettledInputSource;
+
+/**
  * The trigger files a run-ended or asks-settled binding is written as: one per outcome for
- * a run-ended binding, one for an asks-settled binding.
+ * a run-ended binding, and for an asks-settled binding one per option, or one when it names
+ * no option, under the name it had before options existed.
  */
 function onFiles(
   id: string,
@@ -136,7 +152,7 @@ function onFiles(
   pack: DeclaredPack,
   target: Target,
   intent: Record<string, unknown>,
-  fromRun: Record<string, AsksSettledInputSource>
+  fromRun: Record<string, RunInputSource>
 ): Generated[] {
   const mapped = Object.keys(fromRun).length > 0 ? { inputs: fromRun } : {};
   const file = (name: string, on: Record<string, unknown>) => ({
@@ -146,23 +162,35 @@ function onFiles(
     on,
   });
   if (kinded.kind === 'asks_settled') {
-    const { workflow, settled, checkout } = kinded.binding.asks_settled;
-    const asksSettled = {
-      workflowName: workflowNameFor(pack, id, workflow),
-      settled,
-      ...(checkout === undefined ? {} : { checkout }),
-      ...mapped,
-    };
-    const document = file(bindingName(target, id), { asksSettled });
-    return [{ id, kind: kinded.kind, path: bindingPath(target, id), document }];
+    const { workflow, settled, option, checkout } = kinded.binding.asks_settled;
+    const workflowName = workflowNameFor(pack, id, workflow);
+    const options =
+      option === undefined ? [undefined] : typeof option === 'string' ? [option] : option;
+    return options.map(value => {
+      const asksSettled = {
+        workflowName,
+        settled,
+        ...(value === undefined ? {} : { option: value }),
+        ...(checkout === undefined ? {} : { checkout }),
+        ...mapped,
+      };
+      return {
+        id,
+        kind: kinded.kind,
+        path: bindingPath(target, id, value),
+        ...(value === undefined ? {} : { option: value }),
+        document: file(bindingName(target, id, value), { asksSettled }),
+      };
+    });
   }
-  const { workflow, outcome, checkout } = kinded.binding.run_ended;
+  const { workflow, outcome, checkout, linked } = kinded.binding.run_ended;
   const workflowName = workflowNameFor(pack, id, workflow);
   return (typeof outcome === 'string' ? [outcome] : outcome).map(value => {
     const runEnded = {
       workflowName,
       outcome: value,
       ...(checkout === undefined ? {} : { checkout }),
+      ...(linked === undefined ? {} : { linked }),
       ...mapped,
     };
     return {
@@ -183,12 +211,14 @@ function generate(
 ): Generated[] {
   const literals: Record<string, string> = {};
   const fields: Record<string, { source: 'field'; field: string }> = {};
-  const fromRun: Record<string, AsksSettledInputSource> = {};
+  const fromRun: Record<string, RunInputSource> = {};
+  let waitInput: string | undefined;
   const resolveInput = (name: string, input: PackBindingInput): void => {
     if (typeof input === 'string') literals[name] = input;
     else if ('repo' in input) literals[name] = target.repo[input.repo];
     else if ('binding' in input) literals[name] = bindingPath(target, input.binding);
     else if ('event' in input) fields[name] = { source: 'field', field: input.event };
+    else if ('wait' in input) waitInput = name;
     else fromRun[name] = input;
   };
   for (const [name, input] of Object.entries(binding.inputs)) resolveInput(name, input);
@@ -261,10 +291,29 @@ function generate(
             selector: { ...kinded.binding.event, repository: target.repo },
             inputMapping: fields,
             ...(kinded.binding.item ? { item: kinded.binding.item } : {}),
+            ...wakeDocument(kinded.binding.wake, pack, id, waitInput),
           },
         },
       ];
   }
+}
+
+/** The plugin's `wake` for a binding that declares one, with its workflow's installed name. */
+function wakeDocument(
+  wake: PackEventBinding['wake'],
+  pack: DeclaredPack,
+  id: string,
+  input: string | undefined
+): Record<string, unknown> {
+  if (wake === undefined) return {};
+  return {
+    wake: {
+      workflow: workflowNameFor(pack, id, wake.workflow),
+      wait: wake.wait,
+      about: { field: wake.about },
+      ...(input === undefined ? {} : { input }),
+    },
+  };
 }
 
 /**
@@ -366,7 +415,7 @@ function triggerAddSteps(files: readonly Generated[], heading: string, starts: s
     `${heading}. Add each to the triggers directory, where it is active at once: it starts its workflow ${starts}. Then list and check them with \`archon trigger check\`; deleting one from the triggers directory turns it off:`,
     ...files.map(
       item =>
-        `  archon trigger add ${shellQuote(item.path)}${item.outcome === undefined ? '' : `  # outcome '${item.outcome}'`}`
+        `  archon trigger add ${shellQuote(item.path)}${item.outcome !== undefined ? `  # outcome '${item.outcome}'` : item.option !== undefined ? `  # option '${item.option}'` : ''}`
     ),
   ];
 }
@@ -480,8 +529,11 @@ async function assertAsksSettledChecks(
     // As for run-ended bindings, a duplicate among installed files is left to `trigger check`.
     { loadConfig, providers: providerRegistry, projectKeyOf: async () => null }
   );
-  const problems = asks.flatMap(({ id }, index) =>
-    found[index].map(problem => `  Binding '${id}': ${problem}`)
+  const problems = asks.flatMap(({ id, check }, index) =>
+    found[index].map(
+      problem =>
+        `  Binding '${id}'${check.asksSettled.option === undefined ? '' : ` (option '${check.asksSettled.option}')`}: ${problem}`
+    )
   );
   if (problems.length > 0)
     throw new Error(
@@ -563,11 +615,12 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
   if (options.json) {
     await writeJsonLine({
       pack: packKey,
-      written: generated.map(({ id, kind, path, outcome }) => ({
+      written: generated.map(({ id, kind, path, outcome, option }) => ({
         id,
         kind,
         path,
         ...(outcome === undefined ? {} : { outcome }),
+        ...(option === undefined ? {} : { option }),
       })),
     });
     return;
@@ -595,7 +648,7 @@ function arrowText(arrow: PackGraph['arrows'][number]): string {
   const from =
     'outcome' in arrow.from
       ? `${arrow.from.stage}:${arrow.from.outcome}`
-      : `${arrow.from.stage}:asks(${arrow.from.settled})`;
+      : `${arrow.from.stage}:asks(${arrow.from.settled}${arrow.from.option === undefined ? '' : `: ${arrow.from.option}`})`;
   return `  ${from} -> ${arrow.to} [${state}]${note}`;
 }
 

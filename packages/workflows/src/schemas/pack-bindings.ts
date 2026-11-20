@@ -14,7 +14,9 @@ import { jsonValueSchema } from '../output-ref';
 import {
   asksSettledInputSourceSchema,
   asksSettledTriggerSchema,
+  endedItemKeySourceSchema,
   itemMappingSchema,
+  linkedTakesNoCheckout,
   resourceStartBindingIntentSchema,
   resourceStartOverlapSchema,
   runEndedTriggerSchema,
@@ -28,16 +30,20 @@ export const packBindingNameSchema = z
 
 /**
  * One launch input: literal text, a part of the operator's repository, the file written
- * for a sibling binding, (event bindings only) a field of the event, (run-ended and
- * asks-settled bindings only) a part of the run that ended or left the asks, as
- * `on.runEnded.inputs` reads it, or (asks-settled bindings only) the settled answers.
+ * for a sibling binding, (event bindings only) a field of the event, (event bindings with
+ * `wake` only) the wait the event met, (run-ended and asks-settled bindings only) a part of
+ * the run that ended or left the asks, as `on.runEnded.inputs` reads it, (run-ended
+ * bindings only) the key of the ended run's item, or (asks-settled bindings only) the
+ * settled answers.
  */
 const packBindingInputSchema = z.union([
   z.string(),
   z.object({ repo: z.enum(['host', 'path']) }).strict(),
   z.object({ binding: packBindingNameSchema }).strict(),
   z.object({ event: z.string().min(1) }).strict(),
+  z.object({ wait: z.literal(true) }).strict(),
   ...asksSettledInputSourceSchema.options,
+  endedItemKeySourceSchema,
 ]);
 export type PackBindingInput = z.infer<typeof packBindingInputSchema>;
 
@@ -77,10 +83,34 @@ export const packEventBindingSchema = z
       }),
     /** `field` is one of the source plugin's event fields, checked there like `event`. */
     item: itemMappingSchema.optional(),
+    /**
+     * Wake the open wait `wait` that a run of `workflow`, a workflow of this pack, left on an
+     * item, when the event's field `about` holds exactly the value the wait names. When the
+     * event names its subject, `item` is required with it (checked by the source plugin when
+     * the binding is generated), and only a wait on that item matches.
+     */
+    wake: z
+      .object({ workflow: z.string().min(1), wait: z.string().min(1), about: z.string().min(1) })
+      .strict()
+      .optional(),
   })
   .strict();
 
 const runEndedOutcomeSchema = runEndedTriggerSchema.shape.outcome;
+const asksSettledOptionSchema = asksSettledTriggerSchema.shape.option.unwrap();
+
+/** One value, or a list of distinct ones; a trigger file holds one, so each is its own file. */
+function oneOrDistinct<T extends z.ZodString>(value: T, plural: string) {
+  return z.union([
+    value,
+    z
+      .array(value)
+      .min(1)
+      .refine(values => new Set(values).size === values.length, {
+        message: `${plural} must be distinct`,
+      }),
+  ]);
+}
 
 /** The engine picks the lane of a start on another run's checkout, so none is fixed here. */
 const checkoutTakesDefaultIsolation = {
@@ -101,7 +131,9 @@ const checkoutTakesDefaultIsolation = {
  * Starts when a run of `run_ended.workflow`, a workflow of this pack, completes with one
  * of the outcomes on an item. A trigger file holds one outcome, so each listed outcome
  * is written as its own file. `checkout: ended-run` starts it in the checkout the run
- * left, as `on.runEnded.checkout` does.
+ * left, as `on.runEnded.checkout` does. `linked` starts it on the items holding a link of
+ * that kind to the ended run's item instead of on that item, as `on.runEnded.linked` does,
+ * and takes no `checkout`.
  */
 export const packRunEndedBindingSchema = z
   .object({
@@ -109,25 +141,20 @@ export const packRunEndedBindingSchema = z
     run_ended: z
       .object({
         workflow: z.string().min(1),
-        outcome: z.union([
-          runEndedOutcomeSchema,
-          z
-            .array(runEndedOutcomeSchema)
-            .min(1)
-            .refine(outcomes => new Set(outcomes).size === outcomes.length, {
-              message: 'outcomes must be distinct',
-            }),
-        ]),
+        outcome: oneOrDistinct(runEndedOutcomeSchema, 'outcomes'),
         checkout: runEndedTriggerSchema.shape.checkout,
+        linked: runEndedTriggerSchema.shape.linked,
       })
-      .strict(),
+      .strict()
+      .refine(linkedTakesNoCheckout.check, linkedTakesNoCheckout.message),
   })
   .strict()
   .refine(checkoutTakesDefaultIsolation.check, checkoutTakesDefaultIsolation.message);
 
 /**
  * Starts when the asks a run of `asks_settled.workflow`, a workflow of this pack, left on
- * an item are settled, as `on.asksSettled` does: `settled` and `checkout` read as there.
+ * an item are settled, as `on.asksSettled` does: `settled`, `option` and `checkout` read as
+ * there. A trigger file holds one option, so each listed option is written as its own file.
  */
 export const packAsksSettledBindingSchema = z
   .object({
@@ -136,9 +163,14 @@ export const packAsksSettledBindingSchema = z
       .object({
         workflow: z.string().min(1),
         settled: asksSettledTriggerSchema.shape.settled,
+        option: oneOrDistinct(asksSettledOptionSchema, 'options').optional(),
         checkout: asksSettledTriggerSchema.shape.checkout,
       })
-      .strict(),
+      .strict()
+      .refine(trigger => trigger.option === undefined || trigger.settled === 'answered', {
+        message: 'option selects on an answer, so it takes settled: answered',
+        path: ['option'],
+      }),
   })
   .strict()
   .refine(checkoutTakesDefaultIsolation.check, checkoutTakesDefaultIsolation.message);

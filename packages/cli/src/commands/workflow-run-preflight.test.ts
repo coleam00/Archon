@@ -452,7 +452,9 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
       errors: [],
     });
     const codebaseDb = require('@archon/core/db/codebases');
-    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+    // Not once: the launch resolves the prefix for the item's run config, then again for
+    // the supersession itself.
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue({
       id: 'cb-sup',
       name: 'test-repo',
       default_cwd: '/test/path',
@@ -464,7 +466,7 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
     const supersededRunId = '0b1ee8da-1111-2222-3333-444455556666';
     const workflowDb = await import('@archon/core/db/workflows');
     setupSupersedesMocks();
-    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValue([
       makeContinuationRun({ id: supersededRunId }),
     ]);
 
@@ -494,7 +496,7 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
     const supersededRunId = '0b1ee8da-1111-2222-3333-444455556666';
     const workflowDb = await import('@archon/core/db/workflows');
     setupSupersedesMocks();
-    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValue([
       makeContinuationRun({ id: supersededRunId, status: 'running' }),
     ]);
 
@@ -517,15 +519,16 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
     });
     // The detach pre-flight resolves the project the same way the adopt pre-flight
     // does: a subdir cwd misses the exact default-cwd lookup, then the path-prefix
-    // lookup resolves the covering folder project.
-    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockResolvedValueOnce({
+    // lookup resolves the covering folder project. Not once: the item's run config
+    // resolves the project and the prefix too, before the supersession does.
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(null);
+    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockResolvedValue({
       id: 'cb-1',
       name: 'test/folder',
       default_cwd: '/test/path',
       kind: 'folder',
     });
-    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValue([
       makeContinuationRun({ id: supersededRunId }),
     ]);
 
@@ -577,14 +580,14 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
     });
-    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockResolvedValueOnce({
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(null);
+    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockResolvedValue({
       id: 'cb-1',
       name: 'test/folder',
       default_cwd: '/test/path',
       kind: 'folder',
     });
-    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValue([
       makeContinuationRun({ id: supersededRunId, status: 'running' }),
     ]);
 

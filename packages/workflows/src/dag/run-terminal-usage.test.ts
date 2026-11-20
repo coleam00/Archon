@@ -44,7 +44,7 @@ import { executeDagWorkflow } from '../dag-executor';
 import type { DagNode, AgentNode, NodeOutput, WorkflowRun } from '../schemas';
 import type { IWorkflowStore, PersistedNodeOutput } from '../store';
 import type { RunEndedFacts, WorkflowDeps } from '../deps';
-import type { SourceReceiptAcceptance } from '../schemas/resource-start';
+import type { LinkedRunEndedStart, SourceReceiptAcceptance } from '../schemas/resource-start';
 
 /**
  * #2469 — a run's spend has to survive its outcome. Usage used to be written only in
@@ -1061,13 +1061,14 @@ describe('executeDagWorkflow -- the outcome is written when the run completes (#
     mockStructuredResult({ green: true, plan: 'ship it' });
     const store = createMockStore();
     const receipt = { receipt: { id: 'r' } } as unknown as SourceReceiptAcceptance;
+    const linked = { endedRunId: 'ended-run' } as unknown as LinkedRunEndedStart;
     const seen: RunEndedFacts[] = [];
 
     await run(store, [resultNode()], {
       workflowRun: makeWorkflowRun('ended-run', { metadata: { inputs: { issue: 'i-1' } } }),
       runEndedStarts: async ended => {
         seen.push(ended);
-        return [receipt];
+        return { receipts: [receipt], linked: [linked] };
       },
     });
 
@@ -1083,7 +1084,33 @@ describe('executeDagWorkflow -- the outcome is written when the run completes (#
     expect(completedWith(store)).toEqual({
       outcome: { kind: 'boolean', value: 'succeeded' },
       startReceipts: [receipt],
+      linkedStarts: [linked],
     });
+  });
+
+  // A replayed completion that kept only text: the binding reads what the terminal record
+  // holds, the text as a string, and nothing once the text passed the persisted cap.
+  it.each([
+    ['text within the cap', JSON.stringify({ green: true, plan: 'x' }), false],
+    ['text past the cap', JSON.stringify({ green: true, pad: 'x'.repeat(40_000) }), true],
+  ])('hands a binding the result its terminal record holds for %s', async (_, output, cut) => {
+    const store = createMockStore();
+    const seen: RunEndedFacts[] = [];
+
+    await run(store, [resultNode()], {
+      priorCompletedNodes: new Map([['result', { output }]]),
+      runEndedStarts: async ended => {
+        seen.push(ended);
+        return { receipts: [], linked: [] };
+      },
+    });
+
+    const replayed = persistedEvents(store).find(
+      e => e.event_type === 'node_skipped_prior_success'
+    );
+    expect(replayed?.data?.node_output_truncated === true).toBe(cut);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.result).toEqual(cut ? undefined : output);
   });
 
   it('fails the run naming the reason when its run-ended triggers cannot be read', async () => {
@@ -1937,6 +1964,49 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
     const empty = createMockStore();
     await run(empty);
     expect(empty.completeWorkflowRun.mock.calls[0]?.[3]).toEqual({ asks: [] });
+  });
+
+  it('completes with the waits the run leaves, and fails naming the field when two name one event', async () => {
+    const waits = [{ event: 'checks', about: 'a'.repeat(40), within_minutes: 30 }];
+    mockStructuredResult({ summary: 'done', waits });
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-waits',
+        cwd: testDir,
+        workflow: {
+          name: 'waits',
+          nodes: [resultNode],
+          returns: 'decide',
+          result: { waits: 'waits' },
+        },
+        workflowRun: makeWorkflowRun('waits-run'),
+      })
+    );
+    expect(store.completeWorkflowRun.mock.calls[0]?.[3]).toEqual({ waits });
+
+    // The schema cannot hold "each event once"; the engine's check does.
+    mockStructuredResult({ summary: 'done', waits: [...waits, ...waits] });
+    const twice = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(twice),
+        conversationId: 'conv-waits',
+        cwd: testDir,
+        workflow: {
+          name: 'waits',
+          nodes: [resultNode],
+          returns: 'decide',
+          result: { waits: 'waits' },
+        },
+        workflowRun: makeWorkflowRun('waits-run'),
+      })
+    );
+    expect(twice.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(twice.failWorkflowRun.mock.calls[0]?.[1]).toContain(
+      "returns.waits 'waits' on node 'decide': [1].event 'checks' is named more than once"
+    );
   });
 
   it('fails the run naming the field when an ask does not hold together, and opens none', async () => {

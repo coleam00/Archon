@@ -814,6 +814,18 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_merges (
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
+-- The branch an item's change lands on (`archon workflow landing`): a fresh run on the item,
+-- or on an item `part_of` it, is cut from it and proposes against it. One row per item;
+-- recording again replaces the row, and a run already started keeps the base it recorded.
+-- from_run_id has no foreign key, so run cleanup keeps the fact.
+CREATE TABLE IF NOT EXISTS remote_agent_item_landings (
+  item_id UUID PRIMARY KEY REFERENCES remote_agent_items(id),
+  branch TEXT NOT NULL,
+  from_run_id TEXT,
+  from_node_path TEXT,
+  recorded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
 -- One row per item tracker destination ('tracker:<project>'). The row exists once the
 -- destination's activation baseline is committed, so a later activation does not baseline
 -- again. The pass_owner_* columns name the process running the destination's pass, NULL
@@ -835,7 +847,8 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_tracker_destinations (
 -- ending a link writes the ended_* columns once, so the original fact and who ended it and
 -- when stay readable. Rows are never deleted. While active, the same (from, to, kind) is
 -- stored once (idx_item_links_active). The schema lets a link join items of two projects.
--- The engine stores and reports links and gives the kinds no meaning. id is TEXT, as for
+-- The engine stores and reports links; only an active part_of carries meaning, the landing
+-- branch of the item it points at (remote_agent_item_landings). id is TEXT, as for
 -- rulings; from_run_id and ended_from_run_id have no foreign key.
 CREATE TABLE IF NOT EXISTS remote_agent_item_links (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -884,6 +897,30 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_asks (
   closed_by_user_id TEXT,
   closed_from_run_id TEXT,
   closed_from_node_path TEXT,
+  replaced_by_run_id TEXT
+);
+
+-- Waits: what a completed run said its item now waits for outside Archon (returns.waits).
+-- A row opens in the write that completes the run and closes once: met by an accepted
+-- event (met_by_* name the receipt binding it started, written in the same transaction),
+-- replaced by a later completed run of the same workflow on the same item, or withdrawn.
+-- The waits one run left are a set and close together. Nothing fires at deadline_at: an
+-- open wait past it is listed as overdue. run_id has no foreign key, like an ask's.
+-- closed_as is checked in code, not by a constraint, as on an ask.
+CREATE TABLE IF NOT EXISTS remote_agent_item_waits (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  item_id UUID NOT NULL REFERENCES remote_agent_items(id),
+  run_id TEXT NOT NULL,
+  workflow_name TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  event TEXT NOT NULL,
+  about TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  deadline_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  closed_as TEXT,
+  closed_at TIMESTAMP WITH TIME ZONE,
+  met_by_receipt_id TEXT,
+  met_by_binding_id TEXT,
   replaced_by_run_id TEXT
 );
 
@@ -942,6 +979,11 @@ CREATE INDEX IF NOT EXISTS idx_item_asks_open
   ON remote_agent_item_asks(item_id, workflow_name) WHERE closed_as IS NULL;
 CREATE INDEX IF NOT EXISTS idx_item_asks_run_id
   ON remote_agent_item_asks(run_id);
+-- Item waits
+CREATE INDEX IF NOT EXISTS idx_item_waits_open
+  ON remote_agent_item_waits(workflow_name, event, about) WHERE closed_as IS NULL;
+CREATE INDEX IF NOT EXISTS idx_item_waits_run_id
+  ON remote_agent_item_waits(run_id);
 
 -- Codebase env vars
 CREATE INDEX IF NOT EXISTS idx_codebase_env_vars_codebase_id

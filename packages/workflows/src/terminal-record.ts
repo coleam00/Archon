@@ -352,15 +352,43 @@ function readResultCommit(run: Pick<WorkflowRun, 'status' | 'metadata'>): Result
   return value === undefined ? undefined : resultCommitSchema.parse(value);
 }
 
-function selectRecordedReturn({ graph, nodes, outputs }: NodeEventFold): TerminalRecord['returns'] {
-  const selected = graph?.returns;
+function selectRecordedReturn(folded: NodeEventFold): TerminalRecord['returns'] {
+  const selected = folded.graph?.returns;
   if (selected === undefined) {
     return {
       availability: 'unavailable',
       node_id: null,
-      reason: graph ? 'not_declared' : 'graph_unavailable',
+      reason: folded.graph ? 'not_declared' : 'graph_unavailable',
     };
   }
+  return returnOfNode(selected, folded);
+}
+
+/**
+ * The run's returned value, as its terminal record and a run-ended or asks-settled binding
+ * read it. `returnsNode` is the workflow's `returns:` node. Its node events decide it:
+ *
+ * - it did not complete: no value (`node_not_completed`);
+ * - it carries structured output (`output_format`): that value, whatever its size, since
+ *   structured output is persisted whole;
+ * - its text fits the persisted output cap: the text, as a string, whether or not it is
+ *   JSON. Typed data travels through `output_format`, never by sniffing text;
+ * - its text passed the cap: no value, reported `truncated` with the spill path and the
+ *   original size. The spill file is never read: it exists only on the host that ran
+ *   the node, and the value must read the same everywhere.
+ */
+export function recordedReturn(
+  run: Pick<WorkflowRun, 'id' | 'metadata'>,
+  events: readonly TerminalRecordEvent[],
+  returnsNode: string
+): TerminalRecord['returns'] {
+  return returnOfNode(returnsNode, foldNodeEvents(run, events));
+}
+
+function returnOfNode(
+  selected: string,
+  { nodes, outputs }: NodeEventFold
+): TerminalRecord['returns'] {
   const data = outputs.get(selected);
   if (nodes.get(selected)?.state !== 'completed') {
     return { availability: 'unavailable', node_id: selected, reason: 'node_not_completed' };

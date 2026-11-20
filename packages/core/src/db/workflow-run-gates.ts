@@ -55,30 +55,17 @@ function expectedGateParams(expected: ExpectedApprovalGate | undefined): (string
 
 /**
  * SQL expression writing a fresh approval gate: merge the caller's run-level
- * metadata into the column at the TOP level, then set `metadata.approval` to the
- * bound value WHOLESALE. Dialect-aware and kept in ONE place beside
- * unresolvedGateClause so the two forms cannot drift.
- *
- * Deliberately NOT dialect.jsonMerge, because the two merge operators disagree
- * one level down: Postgres `||` is shallow, so `approval` is replaced; SQLite's
- * json_patch is RFC 7396 and RECURSES, so a nested object like
- * `approval.signaledTokens` was merged key by key and interior keys the new gate
- * omitted survived from the previous gate — fabricating cache-token counts no
- * provider reported (#2673). Replacing the whole object makes "this gate's
- * context, and only this gate's" structural on both dialects instead of a list
- * of resets that every new nested field re-arms.
+ * metadata into the column at the top level, then set `metadata.approval` to the
+ * bound value whole, so the row holds this gate's context and only this gate's
+ * (#2673). Kept in one place beside unresolvedGateClause so the two cannot drift.
  *
  * @param mergeParamIndex - param holding top-level run metadata (may be `{}`)
  * @param approvalParamIndex - param holding the complete ApprovalContext
  */
 function writeApprovalMetadata(mergeParamIndex: number, approvalParamIndex: number): string {
-  const merge = `$${String(mergeParamIndex)}`;
   const approval = `$${String(approvalParamIndex)}`;
-  const merged =
-    getDatabaseType() === 'postgresql'
-      ? `(metadata || ${merge}::jsonb)`
-      : `json_patch(metadata, ${merge})`;
-  const withoutWait = getDialect().jsonRemove(merged, 'wait');
+  const dialect = getDialect();
+  const withoutWait = dialect.jsonRemove(dialect.jsonMerge('metadata', mergeParamIndex), 'wait');
   return getDatabaseType() === 'postgresql'
     ? `jsonb_set(${withoutWait}, '{approval}', ${approval}::jsonb, true)`
     : `json_set(${withoutWait}, '$.approval', json(${approval}))`;
@@ -105,12 +92,8 @@ function writeApprovalMetadata(mergeParamIndex: number, approvalParamIndex: numb
  * separate gap where a post-commit event-write failure stranded a resolved gate
  * with no audit event and no way to retry (#2146).
  *
- * This one merges (unlike the wholesale pause write — writeApprovalMetadata) and
- * is safe to, because it stamps the SAME gate rather than opening a new one:
- * every caller passes `{ ...approval, resolved }`, the stored context plus fields,
- * so SQLite's deep-merge and a replace produce identical rows. A caller that ever
- * passed a PARTIAL approval would silently keep the stored values on SQLite and
- * drop them on Postgres — pass the whole context, or use the pause write's form.
+ * The merge is top-level, so `metadata.approval` replaces the stored context:
+ * every caller passes `{ ...approval, resolved }`, the stored context plus fields.
  */
 export async function resolveApprovalGate(
   id: string,

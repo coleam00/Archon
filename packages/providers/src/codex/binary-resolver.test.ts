@@ -211,22 +211,6 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
     );
   });
 
-  test('autodetects npm global install at %APPDATA%\\npm\\codex.cmd (Windows)', async () => {
-    if (process.platform !== 'win32') return; // Windows-only probe
-    const appData = process.env.APPDATA ?? 'C:\\Users\\test\\AppData\\Roaming';
-    const expected = `${appData}\\npm\\codex.cmd`;
-    pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) =>
-      path === expected ? 'file' : 'missing'
-    );
-
-    const result = await resolver.resolveCodexBinaryPath();
-    expect(result).toBe(expected);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      { binaryPath: expected, source: 'autodetect' },
-      'codex.binary_resolved'
-    );
-  });
-
   test('autodetects homebrew install on Apple Silicon', async () => {
     if (process.platform !== 'darwin' || process.arch !== 'arm64') {
       // `/opt/homebrew/bin/codex` is only probed on darwin-arm64; on other

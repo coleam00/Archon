@@ -313,7 +313,7 @@ function commonRunOptions(
     source: admission.workflowEntry?.source,
     parseWarnings: admission.workflowEntry?.parseWarnings,
     baseBranch: codebaseDefaultBranch,
-    baseOverride: admission.flagBase,
+    baseOverride: launch.base?.branch,
     execContext: workspace.execContext,
     container: containerRunCtx,
     resolveChildIsolation,

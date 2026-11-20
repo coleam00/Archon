@@ -3,6 +3,57 @@ import { join } from 'node:path';
 
 export const TEST_ISOLATION_DIRECTIVE = '// @archon-test-isolated';
 
+/**
+ * Marks a test file as part of the Windows set: the files CI runs on Windows for a push to
+ * `dev` (`bun run test --windows`). It may sit on any line of the file's leading `//` comment
+ * lines, so it can follow `TEST_ISOLATION_DIRECTIVE`, which must be line 1.
+ */
+export const WINDOWS_TEST_DIRECTIVE = '// @archon-test-windows';
+
+/** The consecutive `//` lines a test file's source starts with. */
+function leadingCommentLines(source: string): string[] {
+  const lines = source.replace(/^\uFEFF/, '').split(/\r?\n/);
+  const end = lines.findIndex(line => !line.startsWith('//'));
+  return end === -1 ? lines : lines.slice(0, end);
+}
+
+/** Whether a test file's source carries `WINDOWS_TEST_DIRECTIVE` in its leading comment lines. */
+export function hasWindowsTestDirective(source: string): boolean {
+  return leadingCommentLines(source).includes(WINDOWS_TEST_DIRECTIVE);
+}
+
+/** The files among `files` (relative to `directory`) that carry `WINDOWS_TEST_DIRECTIVE`. */
+export function selectWindowsTestFiles(directory: string, files: readonly string[]): string[] {
+  return files.filter(file => hasWindowsTestDirective(readFileSync(join(directory, file), 'utf8')));
+}
+
+function readTestSource(packageDirectory: string, file: string): string {
+  try {
+    return readFileSync(join(packageDirectory, file), 'utf8').replace(/^\uFEFF/, '');
+  } catch (cause) {
+    throw new Error(`Cannot read test file ${file}: ${String(cause)}`, { cause });
+  }
+}
+
+/**
+ * The Windows marker shares the leading comment lines with the isolation directive, which only
+ * counts on line 1. A file with the marker above the directive would silently lose its own
+ * process, so the directive anywhere else in those lines is refused. Checked for every file
+ * before grouping, so a file a manifest group names is held to it too.
+ */
+function assertIsolationDirectivesPlaced(packageDirectory: string, files: readonly string[]): void {
+  const misplaced = files.filter(file =>
+    leadingCommentLines(readTestSource(packageDirectory, file))
+      .slice(1)
+      .includes(TEST_ISOLATION_DIRECTIVE)
+  );
+  if (misplaced.length > 0) {
+    throw new Error(
+      `These tests carry "${TEST_ISOLATION_DIRECTIVE}" below line 1, where it has no effect; move it to line 1: ${misplaced.join(', ')}`
+    );
+  }
+}
+
 export function resolvePackageTestGroups(
   packageDirectory: string,
   declaration: unknown,
@@ -11,6 +62,8 @@ export function resolvePackageTestGroups(
   if (typeof declaration !== 'object' || declaration === null || Array.isArray(declaration)) {
     throw new Error('Package test declaration must be an object');
   }
+  const candidates = selectedFiles ?? discoverPackageTestFiles(packageDirectory);
+  assertIsolationDirectivesPlaced(packageDirectory, candidates);
   const groups = 'testGroups' in declaration ? declaration.testGroups : undefined;
   if (groups !== undefined) {
     if (
@@ -26,7 +79,7 @@ export function resolvePackageTestGroups(
       )
     )
       throw new Error('testGroups must contain nonempty arrays of string selectors');
-    const files = selectedFiles ?? discoverPackageTestFiles(packageDirectory);
+    const files = candidates;
     const selects = (group: string[], file: string) =>
       group.some(selector => file.includes(selector));
     const declared =
@@ -41,10 +94,7 @@ export function resolvePackageTestGroups(
       : [...declared, ...groupDiscoveredTestFiles(packageDirectory, undeclared)];
   }
 
-  return groupDiscoveredTestFiles(
-    packageDirectory,
-    selectedFiles ?? discoverPackageTestFiles(packageDirectory)
-  );
+  return groupDiscoveredTestFiles(packageDirectory, candidates);
 }
 
 function groupDiscoveredTestFiles(packageDirectory: string, files: readonly string[]): string[][] {
@@ -53,12 +103,7 @@ function groupDiscoveredTestFiles(packageDirectory: string, files: readonly stri
   const shared: string[] = [];
   const unmarkedMocks: string[] = [];
   for (const file of files) {
-    let source: string;
-    try {
-      source = readFileSync(join(packageDirectory, file), 'utf8').replace(/^\uFEFF/, '');
-    } catch (cause) {
-      throw new Error(`Cannot read test file ${file}: ${String(cause)}`, { cause });
-    }
+    const source = readTestSource(packageDirectory, file);
     if (source.split(/\r?\n/, 1)[0] === TEST_ISOLATION_DIRECTIVE) isolated.push([file]);
     else if (source.includes('mock.module(')) unmarkedMocks.push(file);
     else shared.push(file);
