@@ -2,8 +2,8 @@
  * The start-time refusal for a run whose pack declares `forge:` in its `.pack/pack.yaml`.
  *
  * Every fresh start path calls {@link assertRunForgeAccess} beside its credential
- * preflight, before a worktree, a slot or a node: the CLI, chat and Web dispatch, a
- * trigger binding before admission, and a `workflow:` sub-run. Continuations are not
+ * preflight, before a worktree, a slot or a node: the CLI, chat and Web dispatch, the
+ * resume menu's fresh run, a trigger binding before admission, and a `workflow:` sub-run. Continuations are not
  * checked; a paused run's forge calls still refuse on their own.
  *
  * The check asks `archon forge check` through `ARCHON_CLI_COMMAND`, the same executable,
