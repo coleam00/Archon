@@ -182,7 +182,7 @@ export interface WorkflowOutputs {
       readonly asked: Readonly<Record<string, unknown>> | null;
     };
     ruling: {
-      readonly decision: 'continue' | 'ready' | 'park';
+      readonly decision: 'continue' | 'ready' | 'parked';
       readonly section: string;
       readonly summary: string;
     };
@@ -873,7 +873,7 @@ export const OUTPUT_ENUMS = {
       class: ['', 'route', 'stop', 'scope'],
     },
     ruling: {
-      decision: ['continue', 'ready', 'park'],
+      decision: ['continue', 'ready', 'parked'],
     },
   },
   'archon-deliver': {
