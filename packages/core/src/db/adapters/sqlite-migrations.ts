@@ -495,6 +495,13 @@ function addItemColumns(db: Database): void {
   db.run(
     'CREATE INDEX IF NOT EXISTS idx_workflow_runs_item ON remote_agent_workflow_runs(item_id) WHERE item_id IS NOT NULL'
   );
+  // The item read finds an item's starts by status and a receipt binding's start.
+  db.run(
+    'CREATE INDEX IF NOT EXISTS idx_resource_start_item ON remote_agent_resource_start_requests(item_id, status)'
+  );
+  db.run(
+    'CREATE INDEX IF NOT EXISTS idx_resource_start_receipt ON remote_agent_resource_start_requests(receipt_id, binding_id)'
+  );
 }
 
 // The outcome a run completed with (#5660); see migrations/000_combined.sql.

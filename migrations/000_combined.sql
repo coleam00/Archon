@@ -1079,6 +1079,11 @@ CREATE INDEX IF NOT EXISTS idx_resource_start_queue
   ON remote_agent_resource_start_requests(resource_key, status, queue_position);
 CREATE INDEX IF NOT EXISTS idx_resource_start_host_queue
   ON remote_agent_resource_start_requests(host_id, status, resource_key, queue_position);
+-- An item's queued and skipped starts, and a receipt binding's start (the item read).
+CREATE INDEX IF NOT EXISTS idx_resource_start_item
+  ON remote_agent_resource_start_requests(item_id, status);
+CREATE INDEX IF NOT EXISTS idx_resource_start_receipt
+  ON remote_agent_resource_start_requests(receipt_id, binding_id);
 CREATE INDEX IF NOT EXISTS idx_start_binding_preparation
   ON remote_agent_start_receipt_bindings(host_id, preparation_status, created_at);
 
