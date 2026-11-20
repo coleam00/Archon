@@ -106,15 +106,22 @@ export async function cancelWorkflowRun(input: WorkflowCommand): Promise<Command
       return { success: true, message: 'No active workflow to cancel.' };
     }
     const result = await operations.cancelWorkflow(runId, actor);
-    if (result.kind === 'cooperative') {
-      return {
-        success: true,
-        message: result.cancelled
-          ? `Cancelled workflow: \`${result.run.workflow_name}\`${cancelCleanupWarnings(result.cleanupWarnings)}`
-          : `Workflow \`${result.run.workflow_name}\` already finished; nothing to cancel.`,
-      };
+    switch (result.kind) {
+      case 'pending':
+        return {
+          success: true,
+          message: `Cancelled workflow \`${result.run.workflow_name}\` before it started; nothing ran.${cancelCleanupWarnings(result.cleanupWarnings)}`,
+        };
+      case 'cooperative':
+        return {
+          success: true,
+          message: result.cancelled
+            ? `Cancelled workflow: \`${result.run.workflow_name}\`${cancelCleanupWarnings(result.cleanupWarnings)}`
+            : `Workflow \`${result.run.workflow_name}\` already finished; nothing to cancel.`,
+        };
+      case 'stopped':
+        return { success: true, message: stoppedRunMessage(input, result) };
     }
-    return { success: true, message: stoppedRunMessage(input, result) };
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, conversationId: conversation.id, runId }, 'cmd.workflow_cancel_failed');

@@ -18,14 +18,16 @@ import {
 /**
  * Why cancel left a run unchanged.
  *
- * `not_running`: only a running run has live work to stop.
+ * `not_running`: the run is neither pending nor running.
+ * `starting`: the run has not started, but a live process is starting it, or it started
+ *   while cancel was recording. Cancel does not guess which process owns it.
  * `no_owner_answered`: nothing answered at the run's live-owner endpoint on this host.
  *   Cancel never records `cancelled` for a run it cannot prove stopped; abandon is the
  *   operator's explicit call that the run is dead, so surfaces point there.
  * `not_stopped`: an owner answered but could not be stopped, or its container could not
  *   be confirmed.
  */
-export type CancelRefusal = 'not_running' | 'no_owner_answered' | 'not_stopped';
+export type CancelRefusal = 'not_running' | 'starting' | 'no_owner_answered' | 'not_stopped';
 
 /** Cancel refused; the run is unchanged. The message states why. */
 export class CancelRefusedError extends Error {
@@ -45,9 +47,13 @@ export class CancelRefusedError extends Error {
  * root's row keeps the worktree lock and resource slot. `cancelled` is false when the run finished first.
  * `stopped`: another live process owned the run; its process was stopped, with any output-holder warnings reported
  * before the run was recorded `cancelled`.
+ * `pending`: the run had not started and no process was starting it; this call recorded
+ * it `cancelled`, so its start never runs. Nothing ran, so no checkout or host command is
+ * reported.
  */
 export type CancelWorkflowResult =
   | { kind: 'cooperative'; run: WorkflowRun; cancelled: boolean; cleanupWarnings?: string[] }
+  | { kind: 'pending'; run: WorkflowRun; cleanupWarnings?: string[] }
   | ({ kind: 'stopped'; pid: number } & Omit<AbandonWorkflowResult, 'cancelled'>);
 
 /**
@@ -78,14 +84,16 @@ async function confirmedRunContainer(
   return envId;
 }
 
-/** Only a running run has live work for cancel to stop. */
+/** A pending run is withdrawn before it starts; a running run has live work to stop. */
 export function isCancellableRun(run: Pick<WorkflowRun, 'status'>): boolean {
-  return run.status === 'running';
+  return run.status === 'pending' || run.status === 'running';
 }
 
 /**
- * Cancel a running run, the same way on every surface.
+ * Cancel a pending or running run, the same way on every surface.
  *
+ * - Pending, and no owner answers for it (or, for a sub-run, for its root): record
+ *   `cancelled` while it is still pending (see {@link cancelPendingRun}).
  * - This process executes it, or it is a sub-run with no live owner of its own whose
  *   root's owner answers: cooperative cancel (see {@link CancelWorkflowResult}).
  * - Another live process owns it, sub-run or not: stop that owner through the shared stop path
@@ -104,10 +112,11 @@ export async function cancelWorkflow(
   if (!isCancellableRun(run)) {
     throw new CancelRefusedError(
       'not_running',
-      `Cannot cancel run with status '${run.status}'. Only a running run has live work to stop; ` +
+      `Cannot cancel run with status '${run.status}'. Only a pending or running run can be cancelled; ` +
         'abandon a paused or failed run instead.'
     );
   }
+  if (run.status === 'pending') return cancelPendingRun(ctx, run);
 
   if (ctx.isRunOwnedByThisProcess(run.id)) return cooperativeCancel(ctx, run);
 
@@ -148,6 +157,50 @@ export async function cancelWorkflow(
     ...recorded,
     ...(cleanupWarnings.length ? { cleanupWarnings } : {}),
   };
+}
+
+/**
+ * A pending run has not started. Every process that prepares one publishes a live-owner
+ * endpoint first; a sub-run publishes none and is claimed by its root's process. So when
+ * nothing answers for the run or its root, no process is starting it, and the pending-only
+ * write is safe: a start claims only a pending run, so a won write means it never runs.
+ * Nothing executed, so there is no owner to stop, checkout to reclaim or child to cascade.
+ */
+async function cancelPendingRun(
+  ctx: OperationContext,
+  run: WorkflowRun
+): Promise<CancelWorkflowResult> {
+  const startingMessage = (ownerRunId: string): string =>
+    `Run ${run.id} has not started, but a live process is starting ` +
+    `${ownerRunId === run.id ? 'it' : `it under root run ${ownerRunId}`}. The run was not changed. ` +
+    'Cancel it again once it is running, or stop that process.';
+  if (ctx.isRunOwnedByThisProcess(run.id) || (await ctx.isRunOwnerAnswering(run.id)))
+    throw new CancelRefusedError('starting', startingMessage(run.id));
+  const rootRunId = run.parent_run_id ? await rootRunIdOf(ctx, run.id) : undefined;
+  if (rootRunId && (await ctx.isRunOwnerAnswering(rootRunId)))
+    throw new CancelRefusedError('starting', startingMessage(rootRunId));
+
+  const { cancelled } = await ctx.store.cancelWorkflowRun(
+    run.id,
+    { cancel_reason: 'operator' },
+    { pendingOnly: true }
+  );
+  if (!cancelled) {
+    const latest = await ctx.store.getWorkflowRun(run.id);
+    if (latest?.status === 'running') {
+      throw new CancelRefusedError(
+        'starting',
+        `Run ${run.id} started while cancel was recording; it was not cancelled. Run cancel again to stop it.`
+      );
+    }
+    throw new CancelRefusedError(
+      'not_running',
+      `Run ${run.id} is now ${latest?.status ?? 'gone'}; nothing to cancel.`
+    );
+  }
+  await releaseRunScratch(run);
+  const cleanupWarnings = await releaseRunResources(ctx, run.id);
+  return { kind: 'pending', run, ...(cleanupWarnings.length ? { cleanupWarnings } : {}) };
 }
 
 /**

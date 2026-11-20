@@ -374,6 +374,73 @@ describe('cancelWorkflow', () => {
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
+  // A queued run that no process is starting has nothing to stop: it is recorded
+  // cancelled while still pending, so its start never claims it.
+  test('cancels a pending run that no owner answers for, stopping nothing and warning of nothing', async () => {
+    const root = trackTempRoot(join(getArchonWorkspacesPath(), '_cwd', `cancel-${randomUUID()}`));
+    const { run, checkout: scratch } = makeRunWithScratch(root, {
+      status: 'pending',
+      working_path: '/repo/worktrees/pending',
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+    mockReleaseRunResources.mockClear();
+
+    const result = await cancelWorkflow(run.id, operator);
+
+    expect(result).toEqual({ kind: 'pending', run });
+    expect(mockCancelWorkflowRun.mock.calls).toEqual([
+      [run.id, { cancel_reason: 'operator' }, { pendingOnly: true }],
+    ]);
+    expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
+    expect(mockFindChildRuns).not.toHaveBeenCalled();
+    expect(mockReleaseRunResources.mock.calls).toEqual([[run.id]]);
+    expect(existsSync(scratch)).toBe(false);
+  });
+
+  test('refuses a pending run a live process is starting, leaving it unchanged', async () => {
+    const runId = `cancel-starting-${crypto.randomUUID()}`;
+    const owner = await startRunLiveOwner(runId);
+    try {
+      mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ id: runId, status: 'pending' }));
+
+      const error = await refusal(runId);
+
+      expect(error.reason).toBe('starting');
+      expect(error.message).toContain('The run was not changed.');
+      expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+    } finally {
+      await owner.close();
+    }
+  });
+
+  test("refuses a pending sub-run whose root's owner answers", async () => {
+    const rootRunId = `cancel-root-${crypto.randomUUID()}`;
+    const rootOwner = await startRunLiveOwner(rootRunId);
+    try {
+      mockGetWorkflowRun.mockResolvedValueOnce({ ...nestedSubRun(rootRunId), status: 'pending' });
+
+      const error = await refusal();
+
+      expect(error.reason).toBe('starting');
+      expect(error.message).toContain(rootRunId);
+      expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+    } finally {
+      await rootOwner.close();
+    }
+  });
+
+  test('refuses a pending run that started before the cancel was recorded', async () => {
+    mockGetWorkflowRun
+      .mockResolvedValueOnce(makePausedRun({ status: 'pending' }))
+      .mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    mockCancelWorkflowRun.mockResolvedValueOnce({ cancelled: false });
+
+    const error = await refusal();
+
+    expect(error.reason).toBe('starting');
+    expect(error.message).toContain('it was not cancelled');
+  });
+
   test('refuses a run that is not running without asking for an owner', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'paused' }));
 

@@ -1798,11 +1798,19 @@ Two resumes of the same run cannot both start it. The first one admitted changes
 
 ### `workflow cancel`
 
-Stop a running workflow. Every cancel surface (this command, `/workflow cancel` in
-chat, the Web UI's Cancel action, `POST /api/workflows/runs/{runId}/cancel`, the Slack
-Cancel button, and the chat agent's `manage_run` tool) does the same thing, decided by
-who owns the run:
+Stop a running workflow, or withdraw a `pending` one before it starts. Every cancel
+surface (this command, `/workflow cancel` in chat, the Web UI's Cancel action,
+`POST /api/workflows/runs/{runId}/cancel`, the Slack Cancel button, and the chat agent's
+`manage_run` tool) does the same thing, decided by the run's status and who owns it:
 
+- **The run is `pending` and no owner answers for it** (an admitted start, or a hand start,
+  that no process has picked up; for a `workflow:` sub-run, none answers for its root
+  either): the run is recorded `cancelled` while it is still pending, so its start never
+  runs and its resource slot frees. Nothing ran, so no owner is stopped and no
+  host-command or checkout warning is printed. A pending run that a live process is
+  starting, or one that starts while cancel records it, is refused and left unchanged; cancel
+  it again once it is running. A start still `queued` for its resource has no run yet;
+  withdraw it with `archon trigger withdraw <request-id>`.
 - **The process handling the cancel executes the run** (a run the server started, cancelled
   from that server): the run is marked `cancelled` and its executor stops at its next
   status check. On macOS and Linux, cooperative cancellation reports possible
@@ -1839,19 +1847,26 @@ archon workflow cancel <run-id> --json
 archon workflow cancel --item <key> [--all-runs]
 ```
 
-With `--item <key>`, cancel acts on the [item's](#items) run that is `running`, through
-the same path as `workflow cancel <run-id>`, so a live owner is handled the same way.
-Archon never chooses between runs: when several runs on the item are running, cancel
+With `--item <key>`, cancel acts on the [item's](#items) run that is `pending` or
+`running`, through the same path as `workflow cancel <run-id>`, so a live owner is handled
+the same way. Archon never chooses between runs: when several runs on the item are pending
+or running, cancel
 refuses and lists them; name one by id, or pass `--all-runs` to cancel each in start
 order. With `--all-runs`, one run's failure does not stop the rest, every run is
 reported, and the command exits `1` if any failed. Cancel also refuses an item with no
-running run, and an item one of whose runs cannot be read, since that run may be the one
+pending or running run, and an item one of whose runs cannot be read, since that run may be the one
 to act on. Under `--json` the command prints one
 `{ "ok", "action": "cancel", "item", "results": [...] }` document whose `results` hold
 exactly what the run-id form prints for each run. A refusal prints
 `{ "ok": false, "action", "item", "reason", "error", "runs"? }`, where `reason` is
 `no_project`, `not_found`, `unreadable`, `no_run` or `several_runs`, and `runs` lists the
 runs to choose from.
+
+Under `--json` a cancel prints `{ "ok": true, "runId", "action": "cancel", "status": "cancelled",
+"previousStatus", "processStopped", "workflowName", "cleanupWarnings"?, "cascadeFailures"?,
+"blockedParentRunId"? }`. `previousStatus` is
+`pending` for a run withdrawn before it started and `running` otherwise; `processStopped` says
+whether cancel stopped another process that owned the run.
 
 When cancel refuses, it exits nonzero. Under `--json` it also prints `{ "ok": false, "error": ... }`.
 `workflow resume` and `workflow abandon` follow the same contract, so a script or bash node can
@@ -1867,7 +1882,7 @@ but one answers for its root, cancel records `cancelled` and the root's executor
 sub-run at its next status check. When no owner answers for the root either, cancel
 refuses and points at abandon, as for any other run. A sub-run resumed on its own (after a
 durable wait or a scheduled resume) has its own owner, and cancel stops that owner like
-any other run's. Only a `running` run can be
+any other run's. Only a `pending` or `running` run can be
 cancelled; abandon a paused or failed run instead.
 
 After termination is confirmed, `cancel` records cancellation through the same run-tree
