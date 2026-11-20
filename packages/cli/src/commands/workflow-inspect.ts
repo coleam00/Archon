@@ -118,14 +118,19 @@ async function printRunAttention(host: WorkflowHost, run: DashboardWorkflowRun):
   const attention = runAttention(run);
   if (attention?.kind === 'stalled_tool_calls') {
     console.log(formatToolAttention(attention));
-    for (const line of await stallMessageStatusLines(host, run.id)) console.log(line);
+    const stalledSteps = new Set(attention.calls.map(call => call.nodeId));
+    for (const line of await stallMessageStatusLines(host, run.id, stalledSteps)) console.log(line);
   }
   if (attention?.kind === 'usage_limit')
     console.log(usageLimitWaitLine(attention.nodeId, attention.resumeAt));
 }
 
-/** The engine's latest message to each stalled step, for a run whose tool calls need attention. */
-async function stallMessageStatusLines(host: WorkflowHost, runId: string): Promise<string[]> {
+/** The engine's latest message to each step that has stalled calls now; other steps' history is left out. */
+async function stallMessageStatusLines(
+  host: WorkflowHost,
+  runId: string,
+  stalledSteps: ReadonlySet<string>
+): Promise<string[]> {
   let rows: WorkflowEventRow[];
   try {
     rows = (await host.deps.store.listEventsForRuns([runId], ['stall_message'])).get(runId) ?? [];
@@ -133,8 +138,9 @@ async function stallMessageStatusLines(host: WorkflowHost, runId: string): Promi
     getLog().warn({ err: error as Error, runId }, 'cli.stall_messages_fetch_failed');
     return ['  Engine: messages to stalled sessions unavailable — see logs'];
   }
-  const latest = new Map<string | null, WorkflowEventRow>();
-  for (const row of rows) latest.set(row.step_name, row);
+  const latest = new Map<string, WorkflowEventRow>();
+  for (const row of rows)
+    if (row.step_name !== null && stalledSteps.has(row.step_name)) latest.set(row.step_name, row);
   return [...latest.values()].flatMap(row => {
     const line = stallMessageLine(row);
     return line === undefined ? [] : [`  Engine: ${line} (${formatAge(row.created_at)} ago)`];

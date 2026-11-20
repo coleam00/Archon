@@ -145,7 +145,16 @@ describe('workflowStatusCommand', () => {
     });
     const host = createTestWorkflowHost();
     host.deps.store.listEventsForRuns = async () =>
-      new Map([['live', [engineMessage(1), engineMessage(2)]]]);
+      new Map([
+        [
+          'live',
+          [
+            engineMessage(1),
+            engineMessage(2),
+            { ...engineMessage(2), id: 'stall-done', step_name: 'completed-build' },
+          ],
+        ],
+      ]);
     mockListDashboardRuns.mockResolvedValueOnce(
       statusRuns([
         {
@@ -187,6 +196,7 @@ describe('workflowStatusCommand', () => {
         'Engine: [implement] engine sent the stalled session a message (2 of 2)'
       );
       expect(printed).not.toContain('(1 of 2)');
+      expect(printed).not.toContain('completed-build');
       expect(printed).not.toContain('resume');
     }
   });

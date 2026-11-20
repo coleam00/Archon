@@ -37,32 +37,88 @@ type Arrival =
   | { from: 'notification'; value: ServerNotification }
   | { from: 'text'; value: string }
   | { from: 'notifications-end' }
-  | { from: 'texts-end' };
+  | { from: 'texts-end' }
+  | { from: 'error'; error: unknown };
 
-/** Both sources in arrival order, until the notifications end. */
+/** Arrivals in the order their reads settled, for one consumer. */
+function arrivalQueue(): { push(arrival: Arrival): void; take(): Promise<Arrival> } {
+  const queued: Arrival[] = [];
+  let wake: (() => void) | undefined;
+  return {
+    push(arrival): void {
+      queued.push(arrival);
+      wake?.();
+      wake = undefined;
+    },
+    async take(): Promise<Arrival> {
+      while (true) {
+        const next = queued.shift();
+        if (next !== undefined) return next;
+        await new Promise<void>(resolve => {
+          wake = resolve;
+        });
+      }
+    },
+  };
+}
+
+/** Start one read whose single reaction queues what it produced. */
+function read<T>(
+  iterator: AsyncIterator<T>,
+  arrivals: ReturnType<typeof arrivalQueue>,
+  toArrival: (result: IteratorResult<T>) => Arrival
+): void {
+  void iterator.next().then(
+    result => arrivals.push(toArrival(result)),
+    (error: unknown) => arrivals.push({ from: 'error', error })
+  );
+}
+
+/**
+ * Both sources in arrival order, until the notifications end. Each read gets exactly one
+ * reaction, attached when it starts, so a session that streams many notifications while
+ * no text arrives does not pile reactions onto the one pending text read.
+ */
 async function* interleaved(
   notifications: AsyncIterator<ServerNotification>,
   turnMessages: AsyncIterable<string> | undefined
 ): AsyncGenerator<Extract<Arrival, { value: unknown }>> {
   let texts = turnMessages?.[Symbol.asyncIterator]();
-  let notification: Promise<Arrival> | undefined;
-  let text: Promise<Arrival> | undefined;
+  const arrivals = arrivalQueue();
+  let readingNotification = false;
+  let readingText = false;
   while (true) {
-    notification ??= notifications
-      .next()
-      .then(r =>
+    if (!readingNotification) {
+      readingNotification = true;
+      read(notifications, arrivals, r =>
         r.done === true ? { from: 'notifications-end' } : { from: 'notification', value: r.value }
       );
-    if (texts)
-      text ??= texts
-        .next()
-        .then(r => (r.done === true ? { from: 'texts-end' } : { from: 'text', value: r.value }));
-    const next = await Promise.race(text ? [notification, text] : [notification]);
-    if (next.from === 'text' || next.from === 'texts-end') text = undefined;
-    else notification = undefined;
-    if (next.from === 'notifications-end') return;
-    if (next.from === 'texts-end') texts = undefined;
-    else yield next;
+    }
+    if (texts && !readingText) {
+      readingText = true;
+      read(texts, arrivals, r =>
+        r.done === true ? { from: 'texts-end' } : { from: 'text', value: r.value }
+      );
+    }
+    const next = await arrivals.take();
+    switch (next.from) {
+      case 'error':
+        throw next.error;
+      case 'notifications-end':
+        return;
+      case 'texts-end':
+        readingText = false;
+        texts = undefined;
+        break;
+      case 'text':
+        readingText = false;
+        yield next;
+        break;
+      case 'notification':
+        readingNotification = false;
+        yield next;
+        break;
+    }
   }
 }
 

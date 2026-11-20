@@ -165,7 +165,10 @@ its text result. Calls require a live, unsettled session. A provider that declar
 `turnMessages` capability receives the engine's message to a stalled session as
 `_archon/turn_message` notifications, which `serveProvider` hands to `sendQuery` as
 `turnMessages`; it delivers each text into the live session without interrupting the
-turn, and reports one it cannot deliver as a `warning`. Dynamic credential catalogs
+turn. A text its runtime refuses must be reported as a `warning` whose `code` is
+`TURN_MESSAGE_REFUSED_WARNING_CODE` (from `@archon/provider-contract`) and whose `message`
+is the runtime's error; only that code makes the engine record the refusal, so status and
+logs do not show the message as delivered. Dynamic credential catalogs
 and mid-run permission requests remain unsupported. A dynamic catalog is rejected.
 `_archon/log` carries structured metadata logs (`level`, `msg`, JSON `bindings`).
 `serveProvider` supplies an awaitable log sink to `create(log)`; `connectProvider` accepts

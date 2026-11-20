@@ -53,6 +53,7 @@ import {
   type FakeTurnScript,
 } from '../test/codex-app-server-fake';
 import { CodexProvider } from './provider';
+import { steered } from './turn-messages';
 import * as pluginProcess from '@archon/paths/plugin-process';
 import { TOOL_FREE_THREAD_CONFIG } from './turn-params';
 import type { CodexErrorInfo } from './protocol/v2/CodexErrorInfo';
@@ -611,6 +612,37 @@ describe('CodexProvider', () => {
       expect(chunks.filter(chunk => chunk.type === 'warning')).toEqual([]);
       expect(resultOf(chunks).failure).toBeUndefined();
       expect(chunks.at(-1)).toEqual({ type: 'settled' });
+    });
+
+    test('a long run of notifications attaches one reaction to the pending text read', async () => {
+      let reactions = 0;
+      class CountedPromise<T> extends Promise<T> {
+        override then<R1 = T, R2 = never>(
+          onFulfilled?: ((value: T) => R1 | PromiseLike<R1>) | null,
+          onRejected?: ((reason: unknown) => R2 | PromiseLike<R2>) | null
+        ): Promise<R1 | R2> {
+          reactions += 1;
+          return super.then(onFulfilled, onRejected);
+        }
+      }
+      const pendingText: AsyncIterable<string> = {
+        [Symbol.asyncIterator]: () => ({
+          next: () => new CountedPromise<IteratorResult<string>>(() => undefined),
+        }),
+      };
+      async function* notifications(): AsyncGenerator<ServerNotification> {
+        for (let i = 0; i < 1000; i++) yield turnCompleted('completed');
+      }
+      const connection = { notifications } as unknown as Parameters<typeof steered>[0];
+      let seen = 0;
+      for await (const _ of steered(
+        connection,
+        { threadId: THREAD_ID, turnId: TURN_ID },
+        pendingText
+      ))
+        seen += 1;
+      expect(seen).toBe(1000);
+      expect(reactions).toBe(1);
     });
 
     test("a refused steer is a warning with Codex's error, and the turn goes on", async () => {
