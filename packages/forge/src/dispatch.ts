@@ -110,8 +110,13 @@ function remoteHost(remote: string | null): string | undefined {
 }
 
 function selectHost(discovery: PluginDiscovery, request: ForgeRequest, host: string): string {
-  if (request.op !== 'resolve') return requestRepo(request).hostClaim ? host.slice(0, -4) : host;
+  if (request.op !== 'resolve') return repoClaim(requestRepo(request), host);
   return request.remote === null ? host : remotePluginHost(discovery, request.remote, host);
+}
+
+/** The claim whose plugin serves `repo`, whose own host is `host`. */
+function repoClaim(repo: RepoRef, host: string): string {
+  return repo.hostClaim ? host.slice(0, -4) : host;
 }
 
 /** The claim whose plugin serves `remote`, whose own host is `host`: what `resolve` selects. */
@@ -554,14 +559,14 @@ function accessHost(request: {
   return normalizeHost(request.repo?.host ?? request.host ?? '') || undefined;
 }
 
-/** The claim whose plugin a check selects, as `selectHost` selects it for a dispatch. */
+/** The claim whose plugin a check selects: the rule `selectHost` applies to a dispatch. */
 function accessClaim(
   discovery: PluginDiscovery,
   request: { remote?: string; repo?: RepoRef },
   own: string
 ): string {
   if (request.remote !== undefined) return remotePluginHost(discovery, request.remote, own);
-  return request.repo?.hostClaim ? own.slice(0, -4) : own;
+  return request.repo ? repoClaim(request.repo, own) : own;
 }
 
 type PreReadRefusalKind = Exclude<ForgeAccessRefusalKind, 'authorization' | 'not_found'>;
