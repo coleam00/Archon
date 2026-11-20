@@ -703,16 +703,13 @@ async function prepareCredentialPreflight(
     executesInContainer ? 'pending-container' : { cwd: configCwd }
   );
   if (!admission.isContinuation) {
-    const forgeInputs = await assertRunForgeAccess(host.deps, admission.workflow, prepared, {
+    admission.resolvedInputs = await assertRunForgeAccess(host.deps, admission.workflow, prepared, {
       cwd: repositoryCwd,
       settingsCwd: configCwd,
       codebaseId,
       inContainer: executesInContainer,
       supplied: admission.resolvedInputs,
     });
-    if (forgeInputs !== undefined) {
-      admission.resolvedInputs = { ...admission.resolvedInputs, ...forgeInputs };
-    }
   }
   return prepared;
 }

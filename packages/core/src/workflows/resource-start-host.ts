@@ -298,13 +298,12 @@ async function prepareBinding(
       runConfig,
     });
     // Before admission, so a binding its forge cannot serve never takes a slot.
-    const forgeInputs = await assertRunForgeAccess(host.deps, workflow, preparedAi, {
+    const inputs = await assertRunForgeAccess(host.deps, workflow, preparedAi, {
       cwd,
       settingsCwd: cwd,
       codebaseId: codebase.id,
       supplied: bindingInputs,
     });
-    const inputs = forgeInputs === undefined ? bindingInputs : { ...bindingInputs, ...forgeInputs };
     const launch: PreparedWorkflowLaunch = {
       version: 2,
       run: {

@@ -160,17 +160,16 @@ async function checkForegroundForge(
     resolvedInputs: Record<string, string> | undefined;
   }
 ): Promise<Record<string, string> | undefined> {
-  const checkForge = (settingsCwd: string): ReturnType<typeof assertRunForgeAccess> =>
+  const checkForge = (settingsCwd: string) =>
     assertRunForgeAccess(createWorkflowDeps(), workflow, prepared, {
       cwd: codebase.default_cwd,
       settingsCwd,
       codebaseId: codebase.id,
       supplied: resolvedInputs,
     });
-  const forgeInputs = await (adoptionLane?.kind === 'checkout-branch'
+  return adoptionLane?.kind === 'checkout-branch'
     ? withBranchLaunchSource(codebase.default_cwd, adoptionLane.taskBranch.branch, checkForge)
-    : checkForge(launchConfigCwd));
-  return forgeInputs === undefined ? resolvedInputs : { ...resolvedInputs, ...forgeInputs };
+    : checkForge(launchConfigCwd);
 }
 
 /**

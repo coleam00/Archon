@@ -274,14 +274,12 @@ async function startFreshInResumedWorktree(
   const freshAiConfiguration = await input.prepareLaunchAiConfiguration(workflow);
   const workflowDeps = createWorkflowDeps();
   await assertRunCredentials(workflowDeps, freshAiConfiguration, { cwd: scope.runCwd });
-  const forgeInputs = await assertRunForgeAccess(workflowDeps, workflow, freshAiConfiguration, {
+  const inputs = await assertRunForgeAccess(workflowDeps, workflow, freshAiConfiguration, {
     cwd: codebase.default_cwd,
     settingsCwd: scope.runCwd,
     codebaseId: codebase.id,
     supplied: input.resolvedInputs,
   });
-  const inputs =
-    forgeInputs === undefined ? input.resolvedInputs : { ...input.resolvedInputs, ...forgeInputs };
   await platform.sendMessage(
     conversationId,
     `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`

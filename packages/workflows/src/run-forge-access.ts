@@ -98,7 +98,11 @@ export type ForgeCheck = (
 ) => Promise<Omit<ForgeRequirementFailure, 'remote'> | undefined>;
 
 /** Where the run starts: its checkout, and whether it executes in a container. */
-export interface RunForgeAccessSite {
+export interface RunForgeAccessSite<
+  Supplied extends Readonly<Record<string, JsonValue>> | undefined =
+    | Readonly<Record<string, JsonValue>>
+    | undefined,
+> {
   /** The project checkout the run is cut from; a worktree of it has the same remotes. */
   readonly cwd: string;
   /**
@@ -114,7 +118,7 @@ export interface RunForgeAccessSite {
    * The check merges the pack's settings and the workflow's defaults under them, as the run
    * does at start, before reading the inputs that name its repository (`forge.repository`).
    */
-  readonly supplied: Readonly<Record<string, JsonValue>> | undefined;
+  readonly supplied: Supplied;
 }
 
 /**
@@ -125,23 +129,25 @@ export interface RunForgeAccessSite {
  * `forge.repository`; when they name none, some remote of the checkout must pass. A run
  * whose pack declares nothing returns at once.
  *
- * @returns the start inputs that name the repository the check judged, or undefined when
- *   it judged the checkout's remotes. The caller supplies them to the run: a run that
- *   executes in a worktree cut after this check reads its settings again from that
- *   worktree, which can name another repository.
+ * @returns the inputs the run starts with: `supplied`, plus the inputs that name the
+ *   repository the check judged. A run that executes in a worktree cut after this check
+ *   reads its settings again from that worktree, which can name another repository, so
+ *   the judged values must reach the run as supplied inputs.
  * @throws ForgeRequirementError naming each typed reason and its remedy.
  */
-export async function assertRunForgeAccess(
+export async function assertRunForgeAccess<
+  Supplied extends Readonly<Record<string, JsonValue>> | undefined,
+>(
   deps: WorkflowGithubDeps,
   workflow: Pick<ResolvedWorkflow, 'name' | 'pack' | 'inputs'>,
   /** The run's prepared configuration, before its GitHub credential is layered. */
   prepared: { readonly config: WorkflowEnvironment; readonly executionUserId?: string },
-  site: RunForgeAccessSite,
+  site: RunForgeAccessSite<Supplied>,
   check: ForgeCheck = checkThroughCli
-): Promise<ForgeRepositoryInputs | undefined> {
+): Promise<Supplied | ForgeRepositoryInputs> {
   const { name: workflowName, pack } = workflow;
   const needs = pack?.forge;
-  if (pack === undefined || needs === undefined) return undefined;
+  if (pack === undefined || needs === undefined) return site.supplied;
   const packKey = pack.key;
   function refuse(failures: ForgeRequirementFailure[], repository?: ForgeRepository): never {
     throw new ForgeRequirementError(workflowName, packKey, failures, repository);
@@ -183,14 +189,14 @@ export async function assertRunForgeAccess(
     // The run acts on this repository, so no other remote of the checkout can stand in.
     const failure = await check({ repo: target.repo, operations: needs.operations }, context);
     if (failure !== undefined) refuse([failure], target.repo);
-    return target.inputs;
+    return { ...site.supplied, ...target.inputs };
   }
   const failures: ForgeRequirementFailure[] = [];
   for (const { name, url } of target.remotes) {
     const failure = await check({ remote: url, operations: needs.operations }, context);
     // One remote that serves the run is enough: a mirror on a host no plugin claims, or one
     // the credential cannot read, must not refuse a run its canonical remote can serve.
-    if (failure === undefined) return undefined;
+    if (failure === undefined) return site.supplied;
     failures.push({ remote: name, ...failure });
   }
   refuse(failures);

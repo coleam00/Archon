@@ -215,7 +215,11 @@ describe('assertRunForgeAccess', () => {
 
     test('falls back to the checkout remotes when neither input is set', async () => {
       const check = mock<ForgeCheck>(async () => undefined);
-      expect(await run({ repo_host: '', repo_path: ' ' }, check)).toBeUndefined();
+      // The run starts with its own inputs: nothing names a repository to pin.
+      expect(await run({ repo_host: '', repo_path: ' ' }, check)).toEqual({
+        repo_host: '',
+        repo_path: ' ',
+      });
       await run(undefined, check);
       expect(check.mock.calls.map(([request]) => request)).toEqual([
         { remote: 'git@github.com:mirror/r.git', operations: ['pr.view'] },
@@ -245,14 +249,14 @@ describe('assertRunForgeAccess', () => {
         noGithub,
         settingNaming,
         prepared,
-        site(namingSettings(capableMirror(), 'o/target')),
+        site(namingSettings(capableMirror(), 'o/target'), false, { goal: 'ship' }),
         check
       );
       expect(check.mock.calls.map(([request]) => request)).toEqual([
         { repo: { host: 'github.com', path: 'o/target' }, operations: ['pr.view'] },
       ]);
-      // Returned for the caller to supply, so a worktree cut later cannot name another.
-      expect(judged).toEqual({ repo_host: 'github.com', repo_path: 'o/target' });
+      // The run starts with these, so a worktree cut later cannot name another repository.
+      expect(judged).toEqual({ goal: 'ship', repo_host: 'github.com', repo_path: 'o/target' });
     });
 
     test('reads the settings of the checkout the run starts in, not the project checkout', async () => {

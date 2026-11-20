@@ -383,16 +383,13 @@ async function prepareChildAiConfiguration(
     await assertRunCredentials(deps, childPrepared, { cwd: configCwd });
     if (resumeChild) return proceed({ config: childPrepared, inputs });
     // A child run executes on the host; it does not inherit a parent's container.
-    const forgeInputs = await assertRunForgeAccess(deps, childWorkflow, childPrepared, {
+    const checkedInputs = await assertRunForgeAccess(deps, childWorkflow, childPrepared, {
       cwd: configCwd,
       settingsCwd: configCwd,
       codebaseId: args.codebaseId,
       supplied: inputs,
     });
-    return proceed({
-      config: childPrepared,
-      inputs: forgeInputs === undefined ? inputs : { ...inputs, ...forgeInputs },
-    });
+    return proceed({ config: childPrepared, inputs: checkedInputs });
   } catch (error) {
     return refuse((error as Error).message, resumeChild?.run.id);
   }

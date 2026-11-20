@@ -57,10 +57,11 @@ describe('workflowRunCommand — --input declared inputs (#2554)', () => {
     expect(opts.inputs).toEqual({ diff: 'D1' });
   });
 
-  it('starts the run with the inputs naming the repository the forge check judged', async () => {
+  it('starts the run with the inputs the forge check returns', async () => {
     const { executeWorkflow } = await import('@archon/workflows/executor');
     const forgeAccess = await import('@archon/workflows/run-forge-access');
     const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue({
+      diff: 'D1',
       repo_host: 'github.com',
       repo_path: 'o/project',
     });

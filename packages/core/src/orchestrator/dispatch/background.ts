@@ -336,13 +336,12 @@ async function prepareLaunch(
   await assertRunCredentials(workflowDeps, preparedAiConfiguration, { cwd: launchConfigCwd });
   // Pack settings come from where the configuration above was read; remotes come from the
   // project, because a branch lane's snapshot is an archive with none.
-  const forgeInputs = await assertRunForgeAccess(workflowDeps, workflow, preparedAiConfiguration, {
+  const inputs = await assertRunForgeAccess(workflowDeps, workflow, preparedAiConfiguration, {
     cwd: codebase?.default_cwd ?? ctx.cwd,
     settingsCwd: launchConfigCwd,
     codebaseId: ctx.codebaseId,
     supplied: ctx.inputs,
   });
-  const inputs = forgeInputs === undefined ? ctx.inputs : { ...ctx.inputs, ...forgeInputs };
 
   return { workflow, preparedSource, preparedAiConfiguration, inputs };
 }

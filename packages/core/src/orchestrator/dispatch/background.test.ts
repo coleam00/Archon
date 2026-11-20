@@ -638,9 +638,10 @@ describe('dispatchBackgroundWorkflow', () => {
     }
   });
 
-  test('the run is created with the inputs naming the repository the forge check judged', async () => {
+  test('the run is created with the inputs the forge check returns', async () => {
     const forgeAccess = await import('@archon/workflows/run-forge-access');
     const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue({
+      goal: 'x',
       repo_host: 'github.com',
       repo_path: 'o/project',
     });
