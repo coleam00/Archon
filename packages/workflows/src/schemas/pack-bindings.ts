@@ -14,7 +14,9 @@ import { jsonValueSchema } from '../output-ref';
 import {
   asksSettledInputSourceSchema,
   asksSettledTriggerSchema,
+  endedItemKeySourceSchema,
   itemMappingSchema,
+  linkedTakesNoCheckout,
   resourceStartBindingIntentSchema,
   resourceStartOverlapSchema,
   runEndedTriggerSchema,
@@ -30,8 +32,9 @@ export const packBindingNameSchema = z
  * One launch input: literal text, a part of the operator's repository, the file written
  * for a sibling binding, (event bindings only) a field of the event, (event bindings with
  * `wake` only) the wait the event met, (run-ended and asks-settled bindings only) a part of
- * the run that ended or left the asks, as `on.runEnded.inputs` reads it, or (asks-settled
- * bindings only) the settled answers.
+ * the run that ended or left the asks, as `on.runEnded.inputs` reads it, (run-ended
+ * bindings only) the key of the ended run's item, or (asks-settled bindings only) the
+ * settled answers.
  */
 const packBindingInputSchema = z.union([
   z.string(),
@@ -40,6 +43,7 @@ const packBindingInputSchema = z.union([
   z.object({ event: z.string().min(1) }).strict(),
   z.object({ wait: z.literal(true) }).strict(),
   ...asksSettledInputSourceSchema.options,
+  endedItemKeySourceSchema,
 ]);
 export type PackBindingInput = z.infer<typeof packBindingInputSchema>;
 
@@ -127,7 +131,9 @@ const checkoutTakesDefaultIsolation = {
  * Starts when a run of `run_ended.workflow`, a workflow of this pack, completes with one
  * of the outcomes on an item. A trigger file holds one outcome, so each listed outcome
  * is written as its own file. `checkout: ended-run` starts it in the checkout the run
- * left, as `on.runEnded.checkout` does.
+ * left, as `on.runEnded.checkout` does. `linked` starts it on the items holding a link of
+ * that kind to the ended run's item instead of on that item, as `on.runEnded.linked` does,
+ * and takes no `checkout`.
  */
 export const packRunEndedBindingSchema = z
   .object({
@@ -137,8 +143,10 @@ export const packRunEndedBindingSchema = z
         workflow: z.string().min(1),
         outcome: oneOrDistinct(runEndedOutcomeSchema, 'outcomes'),
         checkout: runEndedTriggerSchema.shape.checkout,
+        linked: runEndedTriggerSchema.shape.linked,
       })
-      .strict(),
+      .strict()
+      .refine(linkedTakesNoCheckout.check, linkedTakesNoCheckout.message),
   })
   .strict()
   .refine(checkoutTakesDefaultIsolation.check, checkoutTakesDefaultIsolation.message);

@@ -7,8 +7,8 @@
  * sibling reference names a declared binding that is written as a file `trigger fire`
  * reads (a timer or fire-only binding), an event field is read only by an event binding, the
  * met wait only by an event binding with `wake`, a
- * part of the run only by a run-ended or asks-settled binding, and the settled answers
- * only by an asks-settled binding.
+ * part of the run only by a run-ended or asks-settled binding, the ended run's item key
+ * only by a run-ended binding, and the settled answers only by an asks-settled binding.
  */
 import type { Fail } from './pack-settings';
 import {
@@ -21,6 +21,7 @@ import {
   packTimerBindingSchema,
   type PackBinding,
   type PackBindingInput,
+  type PackBindingKind,
 } from './schemas/pack-bindings';
 
 const START_SCHEMAS = [
@@ -104,10 +105,22 @@ function inputProblem(
     return kind === 'event' && 'wake' in binding && binding.wake !== undefined
       ? undefined
       : 'reads the met wait, but only an event binding with wake has one';
+  return runSourceProblem(kind, input);
+}
+
+/** An input read from the run that ended or left the asks. */
+function runSourceProblem(
+  kind: PackBindingKind,
+  input: Exclude<PackBindingInput, string>
+): string | undefined {
   if ('answers' in input)
     return kind === 'asks_settled'
       ? undefined
       : 'reads the settled answers, but only an asks-settled binding has them';
+  if ('item' in input)
+    return kind === 'run_ended'
+      ? undefined
+      : "reads the ended run's item key, but only a run-ended binding has one";
   return kind === 'run_ended' || kind === 'asks_settled'
     ? undefined
     : 'reads the ended run, but only a run-ended or asks-settled binding has a run to read';

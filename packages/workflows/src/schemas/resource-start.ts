@@ -620,10 +620,9 @@ const runInputSources = [
   z.object({ result: z.string().refine(isJsonPointer, 'Invalid JSON Pointer') }).strict(),
   z.object({ input: z.string().min(1) }).strict(),
 ] as const;
-export const runEndedInputSourceSchema = z.union([
-  ...runInputSources,
-  z.object({ item: z.literal('key') }).strict(),
-]);
+/** The key of the ended run's item; a pack's run-ended binding reads it as the file does. */
+export const endedItemKeySourceSchema = z.object({ item: z.literal('key') }).strict();
+export const runEndedInputSourceSchema = z.union([...runInputSources, endedItemKeySourceSchema]);
 export type RunEndedInputSource = z.infer<typeof runEndedInputSourceSchema>;
 
 /**
@@ -639,6 +638,19 @@ export const runEndedLinkedSchema = z
   .object({ kind: itemLinkKindSchema, holder: z.enum(['from', 'to']) })
   .strict();
 export type RunEndedLinked = z.infer<typeof runEndedLinkedSchema>;
+
+/**
+ * The ended run's checkout is its own item's work, not the holder's. A pack's run-ended
+ * binding applies the same rule to its `run_ended:`.
+ */
+export const linkedTakesNoCheckout = {
+  check: (trigger: { linked?: unknown; checkout?: unknown }): boolean =>
+    trigger.linked === undefined || trigger.checkout === undefined,
+  message: {
+    message: 'A linked start takes no checkout: the ended run left it for its own item',
+    path: ['checkout'],
+  },
+};
 
 /**
  * `on.runEnded` of a trigger file: the binding starts when a run of `workflowName`
@@ -658,11 +670,7 @@ export const runEndedTriggerSchema = z
     linked: runEndedLinkedSchema.optional(),
   })
   .strict()
-  // The ended run's checkout is its own item's work, not the holder's.
-  .refine(trigger => trigger.linked === undefined || trigger.checkout === undefined, {
-    message: 'A linked start takes no checkout: the ended run left it for its own item',
-    path: ['checkout'],
-  });
+  .refine(linkedTakesNoCheckout.check, linkedTakesNoCheckout.message);
 export type RunEndedTrigger = z.infer<typeof runEndedTriggerSchema>;
 
 /**
