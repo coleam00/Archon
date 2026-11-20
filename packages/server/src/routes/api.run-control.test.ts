@@ -189,7 +189,7 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { success: boolean; message: string };
     expect(body).toMatchObject({ success: true });
-    expect(body.message).toContain('it had not started');
+    expect(body.message).toContain('had not started');
     expect(mockCancelWorkflowRun).toHaveBeenCalledTimes(1);
     expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
   });

@@ -464,7 +464,7 @@ async function resumeHeadlessRun(
 function cancelResultMessage(workflowName: string, result: CancelWorkflowResult): string {
   switch (result.kind) {
     case 'pending':
-      return `Cancelled queued workflow: ${workflowName} (it had not started)${cancelCleanupWarnings(result.cleanupWarnings)}`;
+      return `Cancelled pending workflow: ${workflowName} (its workflow had not started)${cancelCleanupWarnings(result.cleanupWarnings)}`;
     case 'cooperative':
       return result.cancelled
         ? `Cancelled workflow: ${workflowName}${cancelCleanupWarnings(result.cleanupWarnings)}`

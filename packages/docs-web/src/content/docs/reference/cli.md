@@ -1803,13 +1803,16 @@ surface (this command, `/workflow cancel` in chat, the Web UI's Cancel action,
 `POST /api/workflows/runs/{runId}/cancel`, the Slack Cancel button, and the chat agent's
 `manage_run` tool) does the same thing, decided by the run's status and who owns it:
 
-- **The run is `pending` and no owner answers for it** (an admitted start, or a hand start,
-  that no process has picked up; for a `workflow:` sub-run, none answers for its root
-  either): the run is recorded `cancelled` while it is still pending, so its start never
-  runs and its resource slot frees. Nothing ran, so no owner is stopped and no
-  host-command or checkout warning is printed. A pending run that a live process is
-  starting, or one that starts while cancel records it, is refused and left unchanged; cancel
-  it again once it is running. A start still `queued` for its resource has no run yet;
+- **The run is `pending` and no process holds it** (an admitted start, or a detached
+  launch, that no process has picked up; for a `workflow:` sub-run, no owner answers for
+  any of its ancestor runs either): cancel takes the run's owner lock, records it
+  `cancelled` while it is still pending, and releases the lock. A starter takes the same
+  lock and checks the run is still pending before it prepares a checkout, so the start
+  never runs and its resource slot frees. Cancel stops no process and prints no
+  host-command or checkout warning. A checkout an earlier, failed start already prepared
+  is left in place. A pending run that a live process is starting, or one that starts
+  while cancel records it, is refused and left unchanged; cancel it again once it is
+  running. A start still `queued` for its resource has no run yet;
   withdraw it with `archon trigger withdraw <request-id>`.
 - **The process handling the cancel executes the run** (a run the server started, cancelled
   from that server): the run is marked `cancelled` and its executor stops at its next
@@ -1835,8 +1838,8 @@ surface (this command, `/workflow cancel` in chat, the Web UI's Cancel action,
   trigger it. Inspect processes using the checkout (for example with `lsof`), verify
   ownership, and stop any leftovers before reusing or removing it. Windows uses
   the owner's Job Object, including descendants whose parent exited.
-- **No owner answers, or the owner cannot be stopped:** cancel fails and leaves the run
-  unchanged. When no owner answers, it prints what the run recorded (host, pid, last
+- **A running run whose owner does not answer, or cannot be stopped:** cancel fails and
+  leaves the run unchanged. When no owner answers, it prints what the run recorded (host, pid, last
   activity) and points you at `abandon`. A foreground `archon workflow run` or a run
   executing in another Archon server answers but cannot be stopped from here; interrupt
   the foreground command, or cancel the run on the server that executes it.
@@ -1872,15 +1875,17 @@ When cancel refuses, it exits nonzero. Under `--json` it also prints `{ "ok": fa
 `workflow resume` and `workflow abandon` follow the same contract, so a script or bash node can
 gate on the exit status.
 
-Refusing is deliberate: `cancelled` releases the run's worktree lock and resource slot,
-and a database transition cannot prove that host work stopped. After verifying that the
-owner process is gone, use `workflow abandon <run-id>`.
+Refusing a running run with no answering owner is deliberate: `cancelled` releases the
+run's worktree lock and resource slot, and a database transition cannot prove that host
+work stopped. After verifying that the owner process is gone, use
+`workflow abandon <run-id>`. A pending run with no owner needs no abandon; cancel ends it
+as described above.
 
-A `workflow:` sub-run normally executes inside its root run's process, and the root's row
-keeps the worktree lock and resource slot. When no owner answers for the sub-run itself
-but one answers for its root, cancel records `cancelled` and the root's executor stops the
-sub-run at its next status check. When no owner answers for the root either, cancel
-refuses and points at abandon, as for any other run. A sub-run resumed on its own (after a
+A running `workflow:` sub-run normally executes inside its root run's process, and the
+root's row keeps the worktree lock and resource slot. When no owner answers for the sub-run
+itself but one answers for its root, cancel records `cancelled` and the root's executor
+stops the sub-run at its next status check. When no owner answers for the root either,
+cancel refuses and points at abandon, as for any other running run. A sub-run resumed on its own (after a
 durable wait or a scheduled resume) has its own owner, and cancel stops that owner like
 any other run's. Only a `pending` or `running` run can be
 cancelled; abandon a paused or failed run instead.

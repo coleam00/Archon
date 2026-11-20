@@ -623,9 +623,9 @@ export interface StartAdmittedResourceStartInput {
 }
 
 /**
- * Start one admitted pending run through the engine port. The engine's pending claim
- * is the execution fence: if another starter already claimed the run, or its request
- * was withdrawn from the slot, the engine refuses before any node runs.
+ * Start one admitted pending run through the engine port. The run is read again under
+ * its owner lock, which `workflow cancel` holds to cancel a pending run, so a cancelled
+ * run gets no checkout. The engine's pending claim then fences execution.
  *
  * Owned preparation errors fail only a still-pending run. Submission belongs to the
  * engine: a rejection there does not establish that execution never started.
@@ -634,13 +634,14 @@ export async function startAdmittedResourceStart(
   input: StartAdmittedResourceStartInput
 ): Promise<WorkflowExecutionResult> {
   const { host } = input;
-  const { launch, run } = await loadAdmittedResourceStart(input);
-  const liveOwner = await startRunLiveOwner(run.id, {
+  const runId = (await loadAdmittedResourceStart(input)).run.id;
+  const liveOwner = await startRunLiveOwner(runId, {
     detachedProcessPid: input.detachedProcessPid,
   });
   let ownedExecutionClaim: string | null | undefined;
   let releaseGuard: (() => void) | undefined;
   try {
+    const { launch, run } = await loadAdmittedResourceStart(input);
     releaseGuard = input.guardOwnedRun?.({
       runId: run.id,
       liveOwner,
@@ -669,7 +670,7 @@ export async function startAdmittedResourceStart(
   } finally {
     releaseGuard?.();
     await liveOwner.close().catch((error: unknown) => {
-      log.error({ err: error as Error, runId: run.id }, 'resource_start.live_owner_close_failed');
+      log.error({ err: error as Error, runId }, 'resource_start.live_owner_close_failed');
     });
   }
 }

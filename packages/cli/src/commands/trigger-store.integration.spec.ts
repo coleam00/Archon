@@ -568,6 +568,95 @@ test('receipt preparation and real engine execution use supplied ports without S
   }
 });
 
+// Cancel commits after a starter read the run pending but before it took the owner lock.
+// The starter reads again under the lock and stops before preparation reaches the engine.
+test('a start cancelled before its starter holds the owner lock never prepares', async () => {
+  const root = tempRoots(await mkdtemp(join(tmpdir(), 'archon-trigger-cancel-')));
+  const project = join(await realpath(root), 'project');
+  const previousHome = process.env.ARCHON_HOME;
+  process.env.ARCHON_HOME = join(root, 'home');
+  registerBuiltinProviders();
+  setPlatformPolicies([]);
+  await mkdir(join(project, '.archon/workflows'), { recursive: true });
+  await writeFile(
+    join(project, '.archon/workflows/portable.yaml'),
+    'name: portable\ndescription: Portable trigger\nworktree:\n  enabled: false\nnodes:\n  - id: result\n    bash: echo done\n'
+  );
+  const host = hostForTest();
+  await registerFolder(host.records.codebases, project, 'portable');
+  const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
+  if (!user) throw new Error('Expected test identity');
+  try {
+    await host.deps.store.acceptStartReceipt(
+      acceptance(
+        {
+          bindingId: 'binding',
+          bindingRevision: '1',
+          hostId: 'host',
+          runAsUserId: user.id,
+          resource: 'portable',
+          capacity: 1,
+          overlap: 'queue',
+          launch: {
+            cwd: project,
+            workflowName: 'portable',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+        },
+        'delivery'
+      )
+    );
+    const admitted: string[] = [];
+    await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async id => {
+        admitted.push(id);
+      },
+    });
+    const [id] = admitted;
+    if (!id) throw new Error('Expected an admitted start');
+
+    const readRun = host.deps.store.getWorkflowRun.bind(host.deps.store);
+    let cancelledBetween = false;
+    host.deps.store.getWorkflowRun = async runId => {
+      const row = await readRun(runId);
+      if (runId === id && !cancelledBetween) {
+        cancelledBetween = true;
+        expect(await host.operations.cancelWorkflow(id, { kind: 'operator' })).toMatchObject({
+          kind: 'pending',
+        });
+      }
+      return row;
+    };
+    const submitted: string[] = [];
+    const engine = {
+      resume: host.engine.resume.bind(host.engine),
+      subscribe: host.engine.subscribe.bind(host.engine),
+      watchAttention: host.engine.watchAttention.bind(host.engine),
+      submit: async (input: Parameters<typeof host.engine.submit>[0]) => {
+        submitted.push(id);
+        return host.engine.submit(input);
+      },
+    };
+
+    const started = await startAdmittedResourceStart({
+      host: { ...host, engine },
+      hostId: 'host',
+      requestId: id,
+      createPlatform: () => new HeadlessPlatform(),
+    }).catch((error: unknown) => error);
+
+    expect(started).toMatchObject({ message: expect.stringContaining('cancelled, not pending') });
+    expect(submitted).toEqual([]);
+    expect((await readRun(id))?.status).toBe('cancelled');
+  } finally {
+    if (previousHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = previousHome;
+  }
+});
+
 test('receipt inspection rejects invalid limits through the in-memory store', async () => {
   const store = hostForTest().deps.store;
   for (const limit of [NaN, 1.5, 0, 1001]) {

@@ -537,7 +537,7 @@ async function cancelRun({ ctx, run }: ScopedWrite): Promise<string> {
   try {
     const result = await ctx.operations.cancelWorkflow(id, ctx.actor);
     if (result.kind === 'pending') {
-      return `Cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}) before it started; nothing ran.${cancelCleanupWarnings(result.cleanupWarnings)}`;
+      return `Cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}) while it was pending, before its workflow started.${cancelCleanupWarnings(result.cleanupWarnings)}`;
     }
     if (result.kind === 'cooperative') {
       return result.cancelled

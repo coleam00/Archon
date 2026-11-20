@@ -110,7 +110,7 @@ export async function cancelWorkflowRun(input: WorkflowCommand): Promise<Command
       case 'pending':
         return {
           success: true,
-          message: `Cancelled workflow \`${result.run.workflow_name}\` before it started; nothing ran.${cancelCleanupWarnings(result.cleanupWarnings)}`,
+          message: `Cancelled workflow \`${result.run.workflow_name}\` while it was pending, before its workflow started.${cancelCleanupWarnings(result.cleanupWarnings)}`,
         };
       case 'cooperative':
         return {

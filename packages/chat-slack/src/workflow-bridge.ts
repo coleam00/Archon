@@ -410,7 +410,7 @@ export class SlackWorkflowBridge {
       } else if (result.kind === 'cooperative') {
         await this.postCooperativeCancelNote(body, runId, result);
       } else if (result.kind === 'pending') {
-        let note = `Cancelled run \`${runId}\` before it started; nothing ran.`;
+        let note = `Cancelled run \`${runId}\` while it was pending, before its workflow started.`;
         for (const warning of result.cleanupWarnings ?? []) note += `\n:warning: ${warning}`;
         await this.postActionNote(body, runId, note);
       }

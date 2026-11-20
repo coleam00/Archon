@@ -131,9 +131,9 @@ export function cancelResultPayload(runId: string, result: CancelWorkflowResult)
 
 export function printCancelResult(runId: string, result: CancelWorkflowResult): void {
   if (result.kind === 'pending') {
-    console.log(`Cancelled queued workflow run: ${runId}`);
+    console.log(`Cancelled pending workflow run: ${runId}`);
     console.log(`Workflow: ${result.run.workflow_name}`);
-    console.log('It had not started; nothing ran and no checkout was touched.');
+    console.log('It was cancelled before its workflow started; no process was stopped.');
     printCleanupWarnings(result.cleanupWarnings);
     return;
   }

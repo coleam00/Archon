@@ -8,7 +8,11 @@ import { getArchonWorkspacesPath } from '@archon/paths/archon-paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { createServer } from 'node:net';
-import { runLiveOwnerPath, startRunLiveOwner } from '../../services/run-live-owner';
+import {
+  RunLiveOwnerAlreadyOwnedError,
+  runLiveOwnerPath,
+  startRunLiveOwner,
+} from '../../services/run-live-owner';
 import { DetachedRunOwnerUnavailableError } from '../../services/run-owner-stop';
 import {
   operator,
@@ -413,20 +417,46 @@ describe('cancelWorkflow', () => {
     }
   });
 
-  test("refuses a pending sub-run whose root's owner answers", async () => {
-    const rootRunId = `cancel-root-${crypto.randomUUID()}`;
-    const rootOwner = await startRunLiveOwner(rootRunId);
+  // An intermediate parent resumed on its own publishes its own endpoint and claims its
+  // children; its root may have no owner at all.
+  test('refuses a pending sub-run whose intermediate parent answers, though its root does not', async () => {
+    const parentId = `cancel-parent-${crypto.randomUUID()}`;
+    const parentOwner = await startRunLiveOwner(parentId);
     try {
-      mockGetWorkflowRun.mockResolvedValueOnce({ ...nestedSubRun(rootRunId), status: 'pending' });
+      mockGetRunAncestry.mockResolvedValueOnce([
+        makePausedRun({ id: parentId, status: 'running', parent_run_id: 'dead-root' }),
+        makePausedRun({ id: 'dead-root', status: 'paused' }),
+      ]);
+      mockGetWorkflowRun.mockResolvedValueOnce(
+        makePausedRun({ status: 'pending', parent_run_id: parentId })
+      );
 
       const error = await refusal();
 
       expect(error.reason).toBe('starting');
-      expect(error.message).toContain(rootRunId);
+      expect(error.message).toContain(parentId);
       expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
     } finally {
-      await rootOwner.close();
+      await parentOwner.close();
     }
+  });
+
+  // The fence: a starter takes the run's owner lock and re-reads the run before it
+  // prepares, so cancel must hold that lock while it writes.
+  test('holds the run owner lock while it records a pending run cancelled', async () => {
+    const runId = `cancel-fence-${crypto.randomUUID()}`;
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ id: runId, status: 'pending' }));
+    let starterDuringWrite: unknown;
+    mockCancelWorkflowRun.mockImplementationOnce(async () => {
+      starterDuringWrite = await startRunLiveOwner(runId).catch((error: unknown) => error);
+      return { cancelled: true };
+    });
+
+    expect(await cancelWorkflow(runId, operator)).toMatchObject({ kind: 'pending' });
+
+    expect(starterDuringWrite).toBeInstanceOf(RunLiveOwnerAlreadyOwnedError);
+    const later = await startRunLiveOwner(runId);
+    await later.close();
   });
 
   test('refuses a pending run that started before the cancel was recorded', async () => {
