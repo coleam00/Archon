@@ -494,7 +494,13 @@ export class CodexProvider implements IAgentProvider {
       // An abort while the setup above awaited found no process to stop.
       if (abortSignal?.aborted) throw new Error('Query aborted');
 
-      yield* reportedTurn(streamTurn({ ...request, connection: run.connection }), call, {
+      // Engine texts go to the tool turn only: a split call's tool-free final turn is short.
+      const toolTurn = {
+        ...request,
+        connection: run.connection,
+        turnMessages: requestOptions?.turnMessages,
+      };
+      yield* reportedTurn(streamTurn(toolTurn), call, {
         holdsSuccess: finalTurn !== undefined,
         catalogId,
         abortSignal,

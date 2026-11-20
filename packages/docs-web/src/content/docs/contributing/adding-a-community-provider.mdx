@@ -161,7 +161,11 @@ The wire uses ACP v1's `initialize`, `session/new`, `session/prompt`, and
 `session/cancel` lifecycle, with unchanged `ProviderChunk` values in `_archon/chunk`
 notifications. Stdout is exclusively newline-delimited JSON-RPC. Native tool specifications
 travel in the session request; `_archon/tool_call` invokes the host handler and returns
-its text result. Calls require a live, unsettled session. Dynamic credential catalogs
+its text result. Calls require a live, unsettled session. A provider that declares the
+`turnMessages` capability receives the engine's message to a stalled session as
+`_archon/turn_message` notifications, which `serveProvider` hands to `sendQuery` as
+`turnMessages`; it delivers each text into the live session without interrupting the
+turn, and reports one it cannot deliver as a `warning`. Dynamic credential catalogs
 and mid-run permission requests remain unsupported. A dynamic catalog is rejected.
 `_archon/log` carries structured metadata logs (`level`, `msg`, JSON `bindings`).
 `serveProvider` supplies an awaitable log sink to `create(log)`; `connectProvider` accepts

@@ -2,6 +2,7 @@
 import { installedProviders, missingProviderMessage } from '@archon/provider-contract';
 import { providerRegistry, getRegisteredProviders, isRegisteredProvider } from '@archon/providers';
 import {
+  DEFAULT_STALL_MESSAGE_LIMIT,
   DEFAULT_TOOL_CALL_ATTENTION_MS,
   liveWorkflowPolicy,
 } from '@archon/workflows/schemas/run-config';
@@ -111,6 +112,7 @@ export function getDefaults(): MergedConfig {
     },
     workflows: {
       toolCallAttentionMs: DEFAULT_TOOL_CALL_ATTENTION_MS,
+      stallMessageLimit: DEFAULT_STALL_MESSAGE_LIMIT,
       autoResumeOnQuotaReset: true,
     },
     commands: {

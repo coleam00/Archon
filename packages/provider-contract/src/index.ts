@@ -60,6 +60,7 @@ export {
   type ProviderWarning,
 } from './events';
 export { awaitingTurnSettlement, providerSettledSchema, type ProviderSettled } from './settled';
+export { createTurnMessageQueue, type TurnMessageQueue } from './turn-messages';
 export { providerCapabilitiesSchema, type ProviderCapabilities } from './capabilities';
 
 export {

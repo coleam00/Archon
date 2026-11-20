@@ -3,6 +3,8 @@ import { MAX_DURABLE_WAIT_MS } from './durable-wait';
 import { runAliasesConfigSchema, runTiersConfigSchema } from './model-binding';
 
 export const DEFAULT_TOOL_CALL_ATTENTION_MS = 30 * 60 * 1000;
+/** Messages the engine sends one stalled node attempt before it leaves the stall to the operator. */
+export const DEFAULT_STALL_MESSAGE_LIMIT = 2;
 
 const providerDefaultsSchema = z.record(z.string(), z.unknown());
 
@@ -23,6 +25,7 @@ type DeprecatedQuotaPolicyKey = (typeof DEPRECATED_QUOTA_POLICY_KEYS)[number];
 export const workflowRunContinuationConfigSchema = z
   .object({
     toolCallAttentionMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    stallMessageLimit: z.number().int().nonnegative().max(10).optional(),
     autoResumeOnQuotaReset: z.boolean().optional(),
     ...deprecatedQuotaPolicySchema.shape,
   })

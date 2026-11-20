@@ -19,7 +19,11 @@ mock.module('@archon/paths', () => ({
   getArchonHome: () => '/tmp/archon-home-unused',
 }));
 
-import { TOOL_OUTPUT_MAX_CHARS, type ProviderFailureClass } from '@archon/provider-contract';
+import {
+  TOOL_OUTPUT_MAX_CHARS,
+  createTurnMessageQueue,
+  type ProviderFailureClass,
+} from '@archon/provider-contract';
 import {
   checkFailureClasses,
   runProviderConformance,
@@ -228,6 +232,7 @@ describe('CodexProvider', () => {
       backgroundWork: 'reported' as const,
       sessionResume: true,
       sessionFork: true,
+      turnMessages: true,
       mcp: true,
       hooks: false,
       skills: false,
@@ -575,6 +580,66 @@ describe('CodexProvider', () => {
       });
       expect(paramsOf(server, 'initialize')?.capabilities).toBeNull();
       expect(paramsOf(server, 'thread/start')).not.toHaveProperty('dynamicTools');
+    });
+  });
+
+  describe('engine turn messages', () => {
+    test('steer a text into the active turn over the plugin wire, and the turn completes', async () => {
+      const { provider, server } = providerWith({
+        notifications: [itemStarted(command('exec-1', 'sleep 900'))],
+        completion: null,
+      });
+      // The stream asks for the next text only once the steer is answered; the agent
+      // then finishes the turn it was stuck in.
+      async function* turnMessages(): AsyncGenerator<string> {
+        yield 'engine check-in';
+        server.processes[0].send(itemCompleted(command('exec-1', 'sleep 900', { exitCode: 0 })));
+        server.processes[0].send(turnCompleted('completed'));
+      }
+      const chunks = await Array.fromAsync(
+        overStreams(() => provider, descriptor).sendQuery('p', '/workspace', undefined, {
+          turnMessages: turnMessages(),
+        })
+      );
+      expect(paramsOf(server, 'turn/steer')).toEqual({
+        threadId: THREAD_ID,
+        expectedTurnId: TURN_ID,
+        input: [{ type: 'text', text: 'engine check-in', text_elements: [] }],
+      });
+      expect(server.processes[0].methods).not.toContain('turn/interrupt');
+      expect(chunks.filter(chunk => chunk.type === 'warning')).toEqual([]);
+      expect(resultOf(chunks).failure).toBeUndefined();
+      expect(chunks.at(-1)).toEqual({ type: 'settled' });
+    });
+
+    test("a refused steer is a warning with Codex's error, and the turn goes on", async () => {
+      const sleep = command('exec-1', 'sleep 900');
+      const { provider, server } = providerWith({
+        notifications: [itemStarted(sleep)],
+        completion: null,
+        errors: { 'turn/steer': { code: -32600, message: 'no active turn to steer' } },
+      });
+      const turnMessages = createTurnMessageQueue();
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', '/workspace', undefined, {
+        turnMessages,
+      })) {
+        chunks.push(chunk);
+        if (chunk.type === 'tool_call') turnMessages.push('engine check-in');
+        if (chunk.type === 'warning') {
+          server.processes[0].send(itemCompleted(command('exec-1', 'sleep 900', { exitCode: 0 })));
+          server.processes[0].send(turnCompleted('completed'));
+        }
+      }
+      expect(chunks.filter(chunk => chunk.type === 'warning')).toEqual([
+        {
+          type: 'warning',
+          code: 'codex.turn_message_refused',
+          message: expect.stringContaining('no active turn to steer'),
+        },
+      ]);
+      expect(server.processes[0].methods).not.toContain('turn/interrupt');
+      expect(chunks.at(-1)).toEqual({ type: 'settled' });
     });
   });
 

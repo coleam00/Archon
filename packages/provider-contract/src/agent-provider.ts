@@ -272,6 +272,13 @@ export interface SendQueryOptions extends AgentRequestOptions {
   purpose?: 'title-generation';
   /** Observer for capped-provider admission transitions (queue visibility, #2817). */
   onAdmission?: (event: ProviderAdmissionEvent) => void;
+  /**
+   * Engine-written texts to deliver, in order, as user messages into this call's live
+   * session while its turn runs, without interrupting it. The engine passes it only to
+   * a provider that declares `turnMessages`. The provider stops reading when its turn
+   * ends, and reports a text its runtime refuses as a `warning`.
+   */
+  turnMessages?: AsyncIterable<string>;
   /** Raw YAML node config — provider translates internally to SDK-specific options. */
   nodeConfig?: NodeConfig;
   /** Per-provider defaults from .archon/config.yaml assistants section. */

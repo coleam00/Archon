@@ -32,3 +32,43 @@ export const checkoutSharedEventDataSchema = z
   .catchall(z.unknown());
 
 export type CheckoutSharedEventData = z.infer<typeof checkoutSharedEventDataSchema>;
+
+/**
+ * `stall_message` data. `sent: true` is a message the engine wrote into a stalled session
+ * (`count` of `limit` for that node attempt); `sent: false` records once per attempt that
+ * the provider cannot take one, so the stall stays with attention and `end-turn`.
+ */
+export const stallMessageEventDataSchema = z.discriminatedUnion('sent', [
+  z
+    .object({
+      sent: z.literal(true),
+      sender: z.literal('engine'),
+      provider: z.string(),
+      iteration: z.number().int().positive().optional(),
+      count: z.number().int().positive(),
+      limit: z.number().int().positive(),
+      open: z.array(
+        z
+          .object({
+            toolCallId: z.string(),
+            name: z.string(),
+            title: z.string().optional(),
+            openForMs: z.number().nonnegative(),
+            noProgressMs: z.number().nonnegative(),
+          })
+          .catchall(z.unknown())
+      ),
+      text: z.string(),
+    })
+    .catchall(z.unknown()),
+  z
+    .object({
+      sent: z.literal(false),
+      reason: z.string(),
+      provider: z.string(),
+      iteration: z.number().int().positive().optional(),
+    })
+    .catchall(z.unknown()),
+]);
+
+export type StallMessageEventData = z.infer<typeof stallMessageEventDataSchema>;

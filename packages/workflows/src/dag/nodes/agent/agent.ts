@@ -31,6 +31,7 @@ import {
 import { bindAgentNode, type AgentBinding } from './agent-binding';
 import { loadAgentPrompt } from './agent-prompt';
 import { createAttemptState, type AgentAttemptState, type AgentPassContext } from './agent-stream';
+import { createStallMessenger } from '../../../stall-message';
 import { runUntilStructuredOutputValid } from './agent-reask';
 
 export async function executeAgentNode(
@@ -164,6 +165,15 @@ export async function executeAgentNode(
     nodeKey,
     nodeStartTime,
     staleResumeRetry: session.namedResumeSourceNodeId === undefined,
+    stallMessenger: createStallMessenger({
+      store: deps.store,
+      runId: workflowRun.id,
+      stepName,
+      provider,
+      ...(iteration !== undefined ? { iteration } : {}),
+      capabilities: binding.capabilities,
+      policy: ctx.config.workflows,
+    }),
   };
 
   let result: WorkloadResult;

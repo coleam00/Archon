@@ -274,12 +274,11 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
         case 'thread/start':
           send({ id, result: threadStartResponse(THREAD_ID) });
           break;
-        case 'thread/resume':
-          send({
-            id,
-            result: threadResumeResponse((params as { threadId: string }).threadId),
-          });
+        case 'thread/resume': {
+          const { threadId } = params as { threadId: string };
+          send({ id, result: threadResumeResponse(threadId) });
           break;
+        }
         case 'thread/fork': {
           forks += 1;
           const source = (params as { threadId: string }).threadId;
@@ -290,6 +289,9 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
           activeThreadId = (params as { threadId: string }).threadId;
           send({ id, result: { turn: turnOf('inProgress', null) } satisfies TurnStartResponse });
           nextToolCall();
+          break;
+        case 'turn/steer':
+          send({ id, result: { turnId: TURN_ID } });
           break;
         case 'turn/interrupt':
           if (turn.ignoreInterrupt) break;

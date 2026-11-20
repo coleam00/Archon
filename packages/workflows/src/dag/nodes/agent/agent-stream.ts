@@ -20,6 +20,7 @@ import { createWatchdogResetRecorder, type WatchdogResetRecorder } from '../../.
 import { withIdleTimeout } from '../../../utils/idle-timeout';
 import { withStaleResumeRetry } from '../../../stale-resume';
 import { isEndTurnRequested } from '../../../end-turn-request';
+import type { createStallMessenger, StallMessagePass } from '../../../stall-message';
 import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { sumTokenUsage } from '../../usage';
@@ -64,6 +65,8 @@ export interface AgentPassContext {
   nodeStartTime: number;
   /** False for a named resume, which never falls back to a fresh session. */
   staleResumeRetry: boolean;
+  /** The attempt's messages to a stalled session; each pass opens its own channel. */
+  stallMessenger: ReturnType<typeof createStallMessenger>;
 }
 
 /**
@@ -128,19 +131,23 @@ export function createAttemptState(ctx: RunLayersContext, nodeId: string): Agent
 function passChunks(
   pc: AgentPassContext,
   prompt: string,
-  pass: StructuredOutputPass
+  pass: StructuredOutputPass,
+  stallMessages: StallMessagePass
 ): AsyncGenerator<MessageChunk> {
+  const queryOptions: SendQueryOptions = stallMessages.turnMessages
+    ? { ...pc.queryOptions, turnMessages: stallMessages.turnMessages }
+    : pc.queryOptions;
   // A same-session correction continues the thread this attempt wrote seconds ago, never a
   // fork of it. A stale-resume fallback would start a fresh session holding only the
   // correction text, so a failed resume here surfaces as the error it is.
   if (pass.continuesThread) {
     return pc.aiClient.sendQuery(prompt, pc.ctx.cwd, pass.resumeSessionId, {
-      ...pc.queryOptions,
+      ...queryOptions,
       forkSession: false,
     });
   }
   const send = (id: string | undefined): AsyncGenerator<MessageChunk> =>
-    pc.aiClient.sendQuery(prompt, pc.ctx.cwd, id, pc.queryOptions);
+    pc.aiClient.sendQuery(prompt, pc.ctx.cwd, id, queryOptions);
   if (!pc.staleResumeRetry) return send(pass.resumeSessionId);
   return withStaleResumeRetry(send, pass.resumeSessionId, {
     logContext: { workflowRunId: pc.ctx.workflowRun.id, nodeId: pc.node.id },
@@ -160,10 +167,11 @@ export async function runStreamPass(
 ): Promise<void> {
   resetPass(pc, state, pass);
   const providerEvents = createPassEventHandler(pc, state);
-  const shouldStopStream = stopCheck(pc, state, providerEvents);
+  const stallMessages = pc.stallMessenger.openPass();
+  const shouldStopStream = stopCheck(pc, state, providerEvents, stallMessages);
   try {
     for await (const msg of withIdleTimeout(
-      passChunks(pc, prompt, pass),
+      passChunks(pc, prompt, pass, stallMessages),
       pc.idleTimeoutMs,
       () => onIdleTimeout(pc, state),
       (msg, resetAt) => {
@@ -198,6 +206,7 @@ export async function runStreamPass(
       }
     }
   } finally {
+    stallMessages.close();
     await providerEvents.clearAttention();
   }
 
@@ -302,18 +311,20 @@ function createPassEventHandler(
 }
 
 /**
- * Refreshes tool attention and, throttled, aborts the stream once the run is no longer
- * streaming or the operator ended this stream's stalled turn.
+ * Refreshes tool attention, messages a stalled session, and, throttled, aborts the stream
+ * once the run is no longer streaming or the operator ended this stream's stalled turn.
  */
 function stopCheck(
   pc: AgentPassContext,
   state: AgentAttemptState,
-  providerEvents: ProviderEventHandler
+  providerEvents: ProviderEventHandler,
+  stallMessages: StallMessagePass
 ): () => Promise<boolean> {
   const { ctx, node, nodeKey } = pc;
   return async () => {
     await ctx.toolAttention.refresh();
     await providerEvents.refreshAttention();
+    await stallMessages.check(providerEvents.stall());
     const tickNow = Date.now();
     if (tickNow - (lastNodeCancelCheck.get(nodeKey) ?? 0) > CANCEL_CHECK_INTERVAL_MS) {
       lastNodeCancelCheck.set(nodeKey, tickNow);

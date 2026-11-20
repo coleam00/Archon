@@ -149,6 +149,7 @@ concurrency:
 # Live tool attention and the provider-limit wait are both on by default.
 workflows:
   toolCallAttentionMs: 1800000  # 30 minutes; 0 disables tool-call advisories
+  stallMessageLimit: 2          # messages the engine sends a stalled session; 0 turns them off
   autoResumeOnQuotaReset: true  # false fails a run on a provider usage or rate limit instead
 
 # Model tiers — optional cross-provider presets used by bundled workflows,
@@ -887,10 +888,15 @@ DISCORD_STREAMING_MODE=batch
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `toolCallAttentionMs` | `1800000` | Milliseconds without reported progress before an open provider tool call or reported background subtask raises advisory run attention. `0` disables publication; positive safe integers override the default |
+| `stallMessageLimit` | `2` | Messages the engine sends into a stalled session per node attempt, at least `toolCallAttentionMs` apart; see below. `0` turns them off. At most `10` |
 | `autoResumeOnQuotaReset` | `true` | Wait until the reset instead of failing when a provider reports that its usage or credit limit is used up and when it resets, or when a rate limit outlasts its retries. `false` fails the run in both cases |
 | `quotaFallbackDelayMs`, `quotaMaxAttempts`, `quotaDeadlineMs` | — | Deprecated and have no effect. They still parse, so an older config or a persisted run config stays readable, and loading one logs a deprecation warning |
 
 Tool-call attention leaves the run and node running. It never kills, fails, cancels, pauses, retries, or resumes work. `workflow wait`, `workflow status`, and the console show the affected node, provider, tool, provider title or command, and duration. Providers that declare reported background work also receive advisories for subtasks with no open parent tool, using their task type and description. Subtasks retain their timing when their parent tool completes. A subtask's running update renews its progress; its terminal status clears its advisory. A tool's terminal update clears its advisory; a correlated subtask update renews only its parent tool and clears its advisory until the threshold passes again. Unrelated text or tool events do not count as that tool's progress. Leaving running state hides the advisory, and resume clears old descriptors.
+
+Before a stall is left to the operator, the engine asks the agent. When a node attempt's stream has a stall raised, the engine writes one short message into the same live session: how long the open work has shown no progress and which tool call or background task is open. The message gives no instruction about the work; an agent that is waiting on purpose can say so and keep waiting. The engine never ends or interrupts the call. It sends at most `stallMessageLimit` messages per node attempt (a loop node counts per iteration attempt), at least one threshold apart; after that the stall stays in attention for `workflow end-turn` or `cancel`. Each message is a `stall_message` run event marked `sender: engine`, shows under the run in `workflow status` and in its progress output, and is logged as `workflow.stall_message_sent`.
+
+The agent reads the message at its next step, not inside a running tool call. Claude reads it after the current tool returns, or as a new turn when its turn has ended and it is waiting on background work. Codex adds it to its active turn; once Codex's turn has completed and only background work is running, Codex refuses it and the run shows a `codex.turn_message_refused` warning. A tool call that never returns is not reached by either: that case stays with attention and `end-turn`. A provider whose capabilities do not declare `turnMessages` (see the [capability matrix](/reference/provider-capabilities/)) gets no message, and the attempt records one `stall_message` event with `sent: false`.
 
 The threshold follows the same global, repository, and run-scoped `workflows` layering. It is an operator policy, not a workflow YAML field. Even with publication disabled, open tools and reported live subtasks suspend the silence watchdog before a result. After a result, silence counts toward the node's `idle_timeout` while waiting for settlement, even if work remains live. The node can time out before the attention threshold. A new running wake turn or newly started tool or subtask restores live-work protection until its next result. Streams without live work retain their idle timeout.
 

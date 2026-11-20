@@ -6477,6 +6477,7 @@ export interface components {
       };
       workflows?: {
         toolCallAttentionMs?: number;
+        stallMessageLimit?: number;
         autoResumeOnQuotaReset?: boolean;
         quotaFallbackDelayMs?: number;
         quotaMaxAttempts?: number;
@@ -11377,6 +11378,7 @@ export interface components {
       backgroundWork: 'reported' | 'none' | 'unobserved';
       sessionResume: boolean;
       sessionFork?: boolean;
+      turnMessages?: boolean;
       mcp: boolean;
       hooks: boolean;
       skills: boolean;
