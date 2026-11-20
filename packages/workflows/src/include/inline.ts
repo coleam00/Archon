@@ -144,6 +144,8 @@ interface InlineScope {
   commandContents: ReadonlyMap<string, IncludeCommandContent>;
   prefix: string;
   includeId: string;
+  /** `ComposedNodeMeta.includes` this level records on every node it inlines. */
+  includes: readonly string[];
   childTopLevelIds: ReadonlySet<string>;
   /** Original ids of child nodes no session-starting child node runs before. */
   sessionColdIds: ReadonlySet<string>;
@@ -168,6 +170,7 @@ function inlineInclude(
   commandContents: ReadonlyMap<string, IncludeCommandContent>,
   namedScripts: ReadonlyMap<string, ExecInputSource>,
   includeId: string,
+  includes: readonly string[],
   includerPack: PackIdentity
 ): ExpandedInclude {
   // Prove the child's lexical boundary before its nodes share the parent's flat id/output
@@ -181,7 +184,7 @@ function inlineInclude(
   }
   const fromOwnPack = isSamePack(includerPack, child.pack);
   const passed = includeInputs(includeNode, child, fromOwnPack);
-  let scope = inlineScope(includeNode, child, commandContents, includeId, passed, []);
+  let scope = inlineScope(includeNode, child, commandContents, includeId, includes, passed, []);
   let namespaced = child.nodes.map(cn => inlineChildNode(scope, cn));
 
   // From its own pack, a block reads the run's settings as it does run directly: each
@@ -197,6 +200,7 @@ function inlineInclude(
       child,
       commandContents,
       includeId,
+      includes,
       { ...passed, ...forwarded },
       forwardedSettings
     );
@@ -306,6 +310,7 @@ function inlineScope(
   child: ResolvedWorkflow,
   commandContents: ReadonlyMap<string, IncludeCommandContent>,
   includeId: string,
+  includes: readonly string[],
   resolvedInputs: Record<string, JsonValue>,
   forwarded: readonly string[]
 ): InlineScope {
@@ -323,6 +328,7 @@ function inlineScope(
   return {
     includeNode,
     includeId,
+    includes,
     child,
     commandContents,
     prefix,
@@ -416,7 +422,7 @@ function composedMeta(scope: InlineScope, cn: DagNode, wasEntry: boolean): Compo
   return {
     origin: scope.child.name,
     nodeId: cn.id,
-    includes: [scope.includeNode.id],
+    includes: [...scope.includes],
     ...(pack !== undefined ? { pack: { source: pack.source, key: pack.key } } : {}),
     ...(Object.keys(resolvedInputs).length > 0 ? { inputs: { ...resolvedInputs } } : {}),
     ...(scope.forwarded.length > 0 ? { forwarded: [...scope.forwarded] } : {}),
@@ -495,6 +501,12 @@ export function instantiateResolvedInclude(
      */
     namedScripts?: ReadonlyMap<string, ExecInputSource>;
     includeId?: string;
+    /**
+     * The include path recorded on the inlined nodes, as authored, outermost first.
+     * Defaults to the include node's own id. A runtime compose_fan_out instance has a
+     * generated include id, so it passes the fan-out node's authored path instead.
+     */
+    includes?: readonly string[];
     /** The pack of the workflow that authored the include, undefined outside a pack. */
     includerPack?: PackIdentity;
   } = {}
@@ -505,6 +517,7 @@ export function instantiateResolvedInclude(
     options.commandContents ?? new Map(),
     options.namedScripts ?? new Map(),
     options.includeId ?? boundaryIdComponent(includeNode.id),
+    options.includes ?? [includeNode.id],
     options.includerPack
   );
 }

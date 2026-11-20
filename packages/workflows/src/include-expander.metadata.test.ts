@@ -482,4 +482,38 @@ describe('describeExecutionNode — an included node names where it was written'
     });
     expect('composed' in describeExecutionNode(nodeById(expanded, 'plain')!)).toBe(false);
   });
+
+  test('a composed fan-out item names the authored include path, not its generated id', () => {
+    const leaf = wf('leaf', [{ id: 'work', bash: 'echo work' }]);
+    const middle = wf('middle', [
+      { id: 'list', bash: 'echo []' },
+      {
+        id: 'batch',
+        include: 'leaf',
+        depends_on: ['list'],
+        fan_out: { items: '$list.output', as: 'item' },
+      },
+    ]);
+    const top = wf('top', [{ id: 'outer', include: 'middle' }]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(leaf, middle, top));
+    expect(errors).toHaveLength(0);
+    const fanOut = nodeById(workflows.get('top')!, 'outer__batch');
+    if (fanOut?.kind !== 'compose_fan_out') throw new Error('expected the composed fan-out');
+
+    const instance = expandComposeInstance(
+      fanOut,
+      'item-a',
+      {},
+      workflows.get('leaf')!,
+      new Map(),
+      undefined
+    );
+    if ('error' in instance) throw new Error(instance.error);
+    const work = instance.nodes.find(node => node.id === 'outer__batch__item-a__work')!;
+    expect(descriptorOrigin(describeExecutionNode(work))).toEqual({
+      nodeId: 'work',
+      workflow: 'leaf',
+      includes: ['outer', 'batch'],
+    });
+  });
 });
