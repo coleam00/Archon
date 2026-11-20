@@ -35,9 +35,13 @@ inputs:
 
 # The forge operations the pack's scripts call. The engine checks them when a run of any
 # pack workflow starts, before a worktree, a slot or a node: the project's forge plugin
-# must advertise every one and have a credential. An operation only an agent calls from a
-# prompt is not listed; the host refuses that call by name on a plugin without it.
+# must advertise every one and have a credential the forge accepts in one read. An
+# operation only an agent calls from a prompt is not listed; the host refuses that call by
+# name on a plugin without it. `repository` names the inputs a run names its repository
+# in: a run that sets them is checked against that repository, any other against the
+# checkout's remotes.
 forge:
+  repository: { host: repo_host, path: repo_path }
   operations:
     - pr.view
     - pr.create
