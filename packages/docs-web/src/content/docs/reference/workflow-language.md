@@ -2989,7 +2989,10 @@ run's GitHub credential, about the repository the run acts on:
 
 A repository passes when its plugin advertises every listed capability, its credential
 resolves, and the forge accepts that credential in one read: a `pr.view` by head, at most one
-per remote checked and none that writes. A plugin that does not advertise `pr.view` has no
+per remote checked and none that writes. That read lists the repository's pull requests, so the
+credential needs pull-request read on the repository (on GitHub, the Pull requests read
+permission); a credential without it is refused at start with `authorization`, even when the
+listed operations would not need it. A plugin that does not advertise `pr.view` has no
 read to serve, so its check stops after the credential resolves. Otherwise the run is refused with a typed reason per
 repository or remote and the plugin's remedy. A refused trigger binding's receipt records them
 as `forgeRefusal`, read with [`archon trigger list`](/reference/cli/#trigger) or
@@ -3000,7 +3003,7 @@ as `forgeRefusal`, read with [`archon trigger list`](/reference/cli/#trigger) or
 | `no_plugin_for_host` | No installed or configured plugin claims the remote's host |
 | `unsupported_op` | The plugin lacks a listed capability; the refusal names each one |
 | `no_credential` | The plugin's credential is unset or empty |
-| `authorization` | The forge rejected the credential, for example an expired token |
+| `authorization` | The forge rejected the credential, for example an expired token, or one without pull-request read on the repository |
 | `not_found` | The credential cannot see the repository, or it does not exist |
 | `no_forge_repository` | The run sets only one of the two inputs `repository` names |
 | `no_forge_remote` | The checkout has no git remote, or the project is not a git repository |
@@ -3008,7 +3011,8 @@ as `forgeRefusal`, read with [`archon trigger list`](/reference/cli/#trigger) or
 | `check_failed` | The check could not answer, for example plugin discovery failed. A check that gave no answer names its exit code or signal and the command to rerun it by hand; its stderr is not kept, because it can carry the remote's URL or the credential |
 
 The check proves that a plugin serves the repository, that it advertises the listed
-capabilities, and that the forge accepts the credential for reading the repository. It does
+capabilities, and that the forge accepts the credential for reading the repository's pull
+requests. It does
 not prove that the credential may write, or may use every listed operation; the run's own
 forge calls prove that. A plugin that does not advertise `pr.view` gets no read, so for it the
 check proves only that the credential resolves.
