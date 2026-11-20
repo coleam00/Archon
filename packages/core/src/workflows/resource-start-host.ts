@@ -624,9 +624,8 @@ export interface StartAdmittedResourceStartInput {
 }
 
 /**
- * Start one admitted pending run through the engine port. The run is read again under
- * its owner lock, which `workflow cancel` holds to cancel a pending run, so a cancelled
- * run gets no checkout. The engine's pending claim then fences execution.
+ * Start one admitted pending run through the engine port. It is read again under its owner
+ * lock, which cancel holds for a pending run; the engine's pending claim fences execution.
  *
  * Owned preparation errors fail only a still-pending run. Submission belongs to the
  * engine: a rejection there does not establish that execution never started.
