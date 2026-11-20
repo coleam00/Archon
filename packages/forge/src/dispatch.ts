@@ -418,7 +418,7 @@ export type ForgeAccessCheck =
 
 /**
  * A head no pull request uses: the read asks for its pull request, which the forge answers
- * with none when the credential may read the repository.
+ * with none when the credential may read the repository's pull requests.
  */
 const ACCESS_READ_HEAD = 'archon-forge-check';
 
@@ -428,8 +428,10 @@ const ACCESS_READ_HEAD = 'archon-forge-check';
  * credential for the repository. The forge is `host`, `repo`'s host, or the plugin a
  * `resolve` of `remote` selects. A `remote` or `repo` check whose plugin advertises `pr.view`
  * then makes one read, a `pr.view` by head (after a `resolve` of a remote to its
- * repository), so a rejected or blind credential is refused; without it the check stops
- * after the credential resolves. A `host` check names no repository and runs no plugin operation.
+ * repository), so a rejected or blind credential is refused. The read lists pull requests,
+ * so on GitHub it needs pull-request read on the repository: a credential without it is
+ * refused, even when the run's own operations would not need it. Without `pr.view` the
+ * check stops after the credential resolves. A `host` check names no repository and runs no plugin operation.
  * No check proves what the credential may write. A refusal the operator can fix carries
  * their next step.
  */
@@ -536,7 +538,7 @@ async function readRepository(
     return {
       ok: false,
       error,
-      remedy: `The forge rejected the credential${source}: replace or refresh it, or connect your GitHub identity again when per-user GitHub is on.`,
+      remedy: `The forge rejected the credential${source} for the check's pull-request read: give it read access to the repository's pull requests, replace or refresh it, or connect your GitHub identity again when per-user GitHub is on.`,
     };
   }
   if (error.kind === 'not_found') {

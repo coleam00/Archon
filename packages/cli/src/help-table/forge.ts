@@ -86,7 +86,7 @@ export const forgeHelp: HelpGroup = {
       subcommand: 'check',
       spec: 'forge check',
       description:
-        'Check before a run spends that a plugin serves a host, supports the named\noperations and has a credential; for a remote or repo whose plugin serves\npr.view, one read proves the forge accepts the credential. Exits 1 with the\nreason',
+        'Check before a run spends that a plugin serves a host, supports the named\noperations and has a credential; for a remote or repo whose plugin serves\npr.view, one pr.view by head proves the forge accepts the credential, so it\nneeds pull-request read on the repository. Exits 1 with the reason',
       scopedFlags: [
         {
           spec: '--data <json>',
