@@ -1,5 +1,5 @@
 import { createLogger } from '@archon/paths';
-import type { MessageChunk } from '@archon/provider-contract';
+import { TURN_MESSAGE_REFUSED_WARNING_CODE, type MessageChunk } from '@archon/provider-contract';
 import type { AppServerConnection } from './app-server';
 import type { ServerNotification } from './protocol/ServerNotification';
 
@@ -86,7 +86,7 @@ async function steer(
     );
     return {
       type: 'warning',
-      code: 'codex.turn_message_refused',
+      code: TURN_MESSAGE_REFUSED_WARNING_CODE,
       message: `Codex did not take the engine's message into the turn: ${message}`,
     };
   }

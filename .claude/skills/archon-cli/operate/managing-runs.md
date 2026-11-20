@@ -260,9 +260,12 @@ under the run.
 
 The engine first asks the agent: it writes a short factual message into the same
 session, up to `workflows.stallMessageLimit` times (2 by default, one threshold apart),
-and never ends the call. `workflow status` shows `Engine: [node] engine asked the stalled
-session (1 of 2)`. The agent reads it at its next step, so it cannot reach a tool call
-that never returns; Claude and Codex take it, other providers record that they cannot.
+and never ends the call. `workflow status` shows `Engine: [node] engine sent the stalled
+session a message (1 of 2)`, or the provider's refusal when it refused one, and
+`workflow logs` prints each message with its text. The agent reads it at its next step,
+so it cannot reach a tool call that never returns; Claude and Codex take it, other
+providers record that they cannot. Set the limit in global or repository config; a run
+config file refuses it.
 
 - **`archon workflow end-turn <run-id>`** when the stalled work is done or useless and
   the rest of the run is worth keeping. It records a request; the live owner checks

@@ -210,6 +210,7 @@ async function runReaskAttempts(
   // One iteration attempt's message count spans its reasks; a transient retry is a new attempt.
   const stallMessenger = createStallMessenger({
     store: run.ctx.deps.store,
+    logDir: run.ctx.logDir,
     runId: run.ctx.workflowRun.id,
     stepName: run.stepName,
     provider: run.workflowProvider,
@@ -303,6 +304,7 @@ function newAttempt(run: LoopRun, stallMessages: StallMessagePass): StreamedAtte
     nodeId: node.id,
     stepName,
     attempt: run.attemptEvents,
+    stallMessages,
     // A loop node takes no `mcp:` file, so no MCP failure is the workflow's own.
     configuredMcpServers: new Set(),
     onMessageText: async text => {

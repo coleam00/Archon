@@ -167,6 +167,7 @@ export async function executeAgentNode(
     staleResumeRetry: session.namedResumeSourceNodeId === undefined,
     stallMessenger: createStallMessenger({
       store: deps.store,
+      logDir,
       runId: workflowRun.id,
       stepName,
       provider,

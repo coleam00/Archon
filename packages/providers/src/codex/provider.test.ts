@@ -22,6 +22,7 @@ mock.module('@archon/paths', () => ({
 import {
   TOOL_OUTPUT_MAX_CHARS,
   createTurnMessageQueue,
+  TURN_MESSAGE_REFUSED_WARNING_CODE,
   type ProviderFailureClass,
 } from '@archon/provider-contract';
 import {
@@ -634,7 +635,7 @@ describe('CodexProvider', () => {
       expect(chunks.filter(chunk => chunk.type === 'warning')).toEqual([
         {
           type: 'warning',
-          code: 'codex.turn_message_refused',
+          code: TURN_MESSAGE_REFUSED_WARNING_CODE,
           message: expect.stringContaining('no active turn to steer'),
         },
       ]);

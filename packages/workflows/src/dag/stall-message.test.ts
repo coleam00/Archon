@@ -5,7 +5,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { getProviderCapabilities } from '@archon/providers';
-import type { ProviderEvent } from '@archon/provider-contract';
+import { TURN_MESSAGE_REFUSED_WARNING_CODE, type ProviderEvent } from '@archon/provider-contract';
 import {
   createMockStore,
   withProviderCapabilities,
@@ -19,7 +19,7 @@ import {
 } from './test-utils';
 import { executeDagWorkflow } from '../dag-executor';
 
-type Work = 'stalls' | 'progresses';
+type Work = 'stalls' | 'progresses' | 'refuses';
 
 /** An agent node or a one-iteration loop node, both done on `DONE`. */
 function nodeOf(kind: 'agent' | 'loop') {
@@ -53,7 +53,7 @@ describe('the engine asks a stalled session', () => {
     await removeTempTree(testDir);
   });
 
-  async function runNode(kind: 'agent' | 'loop', provider: 'claude' | 'pi', work: Work) {
+  async function runNode(kind: 'agent' | 'loop', provider: 'claude' | 'codex' | 'pi', work: Work) {
     const store = createMockStore();
     const workflowRun = makeWorkflowRun(`stall-message-${kind}-${provider}-${work}`);
     store.getWorkflowRunStatus.mockImplementation(async () => workflowRun.status);
@@ -86,6 +86,12 @@ describe('the engine asks a stalled session', () => {
           const next = await options.turnMessages[Symbol.asyncIterator]().next();
           received.push(next.done === true ? undefined : next.value);
         }
+        if (work === 'refuses')
+          yield {
+            type: 'warning',
+            code: TURN_MESSAGE_REFUSED_WARNING_CODE,
+            message: 'no active turn to steer',
+          };
         yield { type: 'tool_call_update', toolCallId: 'call', status: 'completed' };
       }
       yield { type: 'agent_message_chunk', text: 'DONE' };
@@ -153,7 +159,23 @@ describe('the engine asks a stalled session', () => {
     expect(outcome.messages).toEqual([]);
   });
 
-  it('a provider that cannot take a message gets none, and the stall is recorded once', async () => {
+  it('a message the provider refuses is recorded as refused, not as delivered', async () => {
+    const outcome = await runNode('agent', 'codex', 'refuses');
+    expect(outcome.completed).toBe(true);
+    expect(outcome.messages.map(event => event.data)).toEqual([
+      expect.objectContaining({ sent: true, count: 1 }),
+      {
+        sent: false,
+        reason: 'provider_refused',
+        provider: 'codex',
+        count: 1,
+        limit: 2,
+        error: 'no active turn to steer',
+      },
+    ]);
+  });
+
+  it('a provider that cannot take a message gets none, and the stall is recorded', async () => {
     const outcome = await runNode('agent', 'pi', 'stalls');
     expect(outcome.offered).toBe(false);
     expect(outcome.completed).toBe(true);

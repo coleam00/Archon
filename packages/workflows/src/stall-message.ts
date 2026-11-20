@@ -7,6 +7,7 @@
  * attention threshold; past the bound the stall is left to attention as before.
  */
 import { createLogger } from '@archon/paths';
+import { logWorkflowEvent } from './logger';
 import { createTurnMessageQueue, type ProviderCapabilities } from '@archon/provider-contract';
 import {
   DEFAULT_STALL_MESSAGE_LIMIT,
@@ -19,6 +20,8 @@ import type { StreamStall } from './tool-call-attention';
 
 export interface StallMessengerOptions {
   store: Pick<IWorkflowStore, 'createWorkflowEvent'>;
+  /** Where the run's transcript lives: every record is also a transcript row. */
+  logDir: string;
   runId: string;
   /** The persisted step name the events are written under. */
   stepName: string;
@@ -37,6 +40,8 @@ export interface StallMessagePass {
   readonly turnMessages: AsyncIterable<string> | undefined;
   /** Sends a message when the pass's current stall calls for one. */
   check(stall: StreamStall | undefined): Promise<void>;
+  /** The provider refused the last message it was handed; `error` is its report. */
+  refused(error: string): Promise<void>;
   close(): void;
 }
 
@@ -44,6 +49,7 @@ export interface StallMessagePass {
 const SILENT_PASS: StallMessagePass = {
   turnMessages: undefined,
   check: () => Promise.resolve(),
+  refused: () => Promise.resolve(),
   close: () => undefined,
 };
 
@@ -67,15 +73,20 @@ export function createStallMessenger(options: StallMessengerOptions): {
   let lastSentAt = 0;
   let unsupportedRecorded = false;
 
-  const record = (data: StallMessageEventData): Promise<void> =>
-    // createWorkflowEvent logs its own failure and never throws: observability must not
-    // fail live work.
-    options.store.createWorkflowEvent({
+  // Both writers log their own failure and never throw: observability must not fail live work.
+  const record = async (data: StallMessageEventData): Promise<void> => {
+    await options.store.createWorkflowEvent({
       workflow_run_id: options.runId,
       event_type: 'stall_message',
       step_name: options.stepName,
       data,
     });
+    await logWorkflowEvent(options.logDir, options.runId, {
+      type: 'stall_message',
+      step: options.stepName,
+      stall_message: data,
+    });
+  };
   const logFields = {
     workflowRunId: options.runId,
     nodeId: options.stepName,
@@ -111,6 +122,20 @@ export function createStallMessenger(options: StallMessengerOptions): {
         turnMessages: queue,
         close: () => {
           queue.close();
+        },
+        async refused(error): Promise<void> {
+          createLogger('workflow.stall-message').warn(
+            { ...logFields, count, limit },
+            'workflow.stall_message_refused'
+          );
+          await record({
+            sent: false,
+            reason: 'provider_refused',
+            provider: options.provider,
+            ...(options.iteration !== undefined ? { iteration: options.iteration } : {}),
+            ...(count > 0 ? { count, limit } : {}),
+            error,
+          });
         },
         async check(stall): Promise<void> {
           if (stall === undefined || stall.length === 0 || count >= limit) return;

@@ -1,6 +1,7 @@
 import { formatDuration } from '@archon/paths/duration';
 import { toolCallDisplayName } from '@archon/provider-contract';
 import {
+  describeStallMessage,
   stallMessageEventDataSchema,
   type WorkflowEventRow,
 } from '@archon/workflows/schemas/workflow-event';
@@ -73,14 +74,7 @@ export function stallMessageLine(row: WorkflowEventRow): string | undefined {
   // A row another build wrote and this one cannot read is skipped, as provider rows are.
   const parsed = stallMessageEventDataSchema.safeParse(row.data);
   if (!parsed.success) return undefined;
-  const data = parsed.data;
-  const step =
-    data.iteration !== undefined
-      ? `${row.step_name} iteration ${String(data.iteration)}`
-      : row.step_name;
-  return data.sent
-    ? `[${step}] engine asked the stalled session (${String(data.count)} of ${String(data.limit)})`
-    : `[${step}] provider ${data.provider} cannot take an engine message; end the stalled turn with archon workflow end-turn ${row.workflow_run_id}`;
+  return describeStallMessage(row.step_name ?? '?', row.workflow_run_id, parsed.data);
 }
 
 function containerLine(phase: string, data: Record<string, unknown>): string {

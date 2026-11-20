@@ -166,8 +166,8 @@ export async function runStreamPass(
   pass: StructuredOutputPass
 ): Promise<void> {
   resetPass(pc, state, pass);
-  const providerEvents = createPassEventHandler(pc, state);
   const stallMessages = pc.stallMessenger.openPass();
+  const providerEvents = createPassEventHandler(pc, state, stallMessages);
   const shouldStopStream = stopCheck(pc, state, providerEvents, stallMessages);
   try {
     for await (const msg of withIdleTimeout(
@@ -259,7 +259,8 @@ function resetPass(
 
 function createPassEventHandler(
   pc: AgentPassContext,
-  state: AgentAttemptState
+  state: AgentAttemptState,
+  stallMessages: StallMessagePass
 ): ProviderEventHandler {
   const { ctx, nodeContext } = pc;
   const { platform, conversationId } = ctx;
@@ -285,6 +286,7 @@ function createPassEventHandler(
     nodeId: pc.node.id,
     stepName: pc.stepName,
     attempt: pc.attemptEvents,
+    stallMessages,
     configuredMcpServers: pc.nodeMcp.kind === 'load' ? pc.nodeMcp.servers : new Set(),
     onMessageText: async text => {
       state.outputText += text; // ALWAYS capture for $node_id.output

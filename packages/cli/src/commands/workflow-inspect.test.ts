@@ -183,7 +183,9 @@ describe('workflowStatusCommand', () => {
       const printed = consoleSpy.mock.calls.flat().join(' ');
       expect(printed).toContain('live is still running');
       expect(printed).toContain('bun test');
-      expect(printed).toContain('Engine: [implement] engine asked the stalled session (2 of 2)');
+      expect(printed).toContain(
+        'Engine: [implement] engine sent the stalled session a message (2 of 2)'
+      );
       expect(printed).not.toContain('(1 of 2)');
       expect(printed).not.toContain('resume');
     }

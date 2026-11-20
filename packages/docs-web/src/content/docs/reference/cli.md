@@ -2012,7 +2012,8 @@ newly started tool or subtask restores live-work protection until its next resul
 
 Before that, the engine sends the stalled session up to `workflows.stallMessageLimit`
 messages (2 by default) stating how long the work has shown no progress, without ending
-the call; `workflow status` shows them under the run. An agent that continues needs no
+the call; `workflow status` shows the latest under the run, and `workflow logs` prints
+each with its text, or the provider's refusal. An agent that continues needs no
 request. See [workflow attention settings](/reference/configuration/#workflow-attention-and-continuation-settings).
 
 The command records each observed `(streamId, toolCallId, raisedAt)` occurrence.

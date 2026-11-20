@@ -276,7 +276,8 @@ export interface SendQueryOptions extends AgentRequestOptions {
    * Engine-written texts to deliver, in order, as user messages into this call's live
    * session while its turn runs, without interrupting it. The engine passes it only to
    * a provider that declares `turnMessages`. The provider stops reading when its turn
-   * ends, and reports a text its runtime refuses as a `warning`.
+   * ends, and reports a text its runtime refuses as a `warning` with code
+   * `TURN_MESSAGE_REFUSED_WARNING_CODE`.
    */
   turnMessages?: AsyncIterable<string>;
   /** Raw YAML node config — provider translates internally to SDK-specific options. */

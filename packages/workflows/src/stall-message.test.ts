@@ -1,25 +1,40 @@
 import { describe, expect, mock, test } from 'bun:test';
+import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { createStallMessenger, type StallMessengerOptions } from './stall-message';
 import type { StreamStall } from './tool-call-attention';
 
 const MINUTE = 60_000;
+const track = trackTempRoots();
 
 function harness(overrides: Partial<StallMessengerOptions> = {}) {
   let time = 100 * MINUTE;
-  const createWorkflowEvent = mock(async (_event: unknown) => {});
+  const logDir = track(mkdtempSync(join(tmpdir(), 'stall-message-')));
+  const createWorkflowEvent = mock(async (_event: { data?: Record<string, unknown> }) => {});
   const messenger = createStallMessenger({
     store: { createWorkflowEvent },
+    logDir,
     runId: 'run',
     stepName: 'ci',
     provider: 'claude',
     capabilities: { turnMessages: true },
-    policy: { stallMessageLimit: 2, toolCallAttentionMs: 30 * MINUTE },
+    policy: { stallMessageLimit: 3, toolCallAttentionMs: 30 * MINUTE },
     now: () => time,
     ...overrides,
   });
   return {
     messenger,
-    createWorkflowEvent,
+    events: () => createWorkflowEvent.mock.calls.map(([event]) => event.data),
+    transcript: (): unknown[] => {
+      const path = join(logDir, 'run.jsonl');
+      if (!existsSync(path)) return [];
+      return readFileSync(path, 'utf8')
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as unknown);
+    },
     advance: (ms: number) => {
       time += ms;
     },
@@ -45,24 +60,31 @@ async function textsOf(pass: { turnMessages: AsyncIterable<string> | undefined; 
   return pass.turnMessages ? Array.fromAsync(pass.turnMessages) : [];
 }
 
+const countsOf = (h: ReturnType<typeof harness>) => h.events().map(data => data?.count);
+
 describe('stall messages', () => {
-  test('one message per stall, spaced by the threshold, up to the limit', async () => {
+  test('a message is sent only once a threshold has passed since the last, up to the limit', async () => {
     const h = harness();
     const pass = h.messenger.openPass();
     await pass.check(undefined);
+    expect(countsOf(h)).toEqual([]);
     await pass.check(stallOf(h));
+    expect(countsOf(h)).toEqual([1]);
     h.advance(29 * MINUTE);
     await pass.check(stallOf(h));
+    expect(countsOf(h)).toEqual([1]);
+    h.advance(MINUTE);
+    await pass.check(stallOf(h));
+    expect(countsOf(h)).toEqual([1, 2]);
+    h.advance(29 * MINUTE);
+    await pass.check(stallOf(h));
+    expect(countsOf(h)).toEqual([1, 2]);
     h.advance(MINUTE);
     await pass.check(stallOf(h));
     h.advance(60 * MINUTE);
     await pass.check(stallOf(h));
-    const texts = await textsOf(pass);
-    expect(texts).toHaveLength(2);
-    expect(h.createWorkflowEvent.mock.calls.map(([event]) => event)).toEqual([
-      expect.objectContaining({ data: expect.objectContaining({ sent: true, count: 1 }) }),
-      expect.objectContaining({ data: expect.objectContaining({ sent: true, count: 2 }) }),
-    ]);
+    expect(countsOf(h)).toEqual([1, 2, 3]);
+    expect(await textsOf(pass)).toHaveLength(3);
   });
 
   test('the count spans the passes of one attempt', async () => {
@@ -91,7 +113,43 @@ describe('stall messages', () => {
     const pass = h.messenger.openPass();
     expect(pass.turnMessages).toBeUndefined();
     await pass.check(stallOf(h));
-    expect(h.createWorkflowEvent).not.toHaveBeenCalled();
+    expect(h.events()).toEqual([]);
+  });
+
+  test('a provider that cannot take a message is recorded once per attempt, however long it stalls', async () => {
+    const h = harness({ provider: 'pi', capabilities: {} });
+    const first = h.messenger.openPass();
+    expect(first.turnMessages).toBeUndefined();
+    await first.check(stallOf(h));
+    h.advance(60 * MINUTE);
+    await first.check(stallOf(h));
+    const second = h.messenger.openPass();
+    await second.check(stallOf(h));
+    expect(h.events()).toEqual([{ sent: false, reason: 'provider_unsupported', provider: 'pi' }]);
+  });
+
+  test('a refused message is recorded against the message it refused, in events and the transcript', async () => {
+    const h = harness({ provider: 'codex' });
+    const pass = h.messenger.openPass();
+    await pass.check(stallOf(h));
+    await pass.refused('no active turn to steer');
+    const refusal = {
+      sent: false,
+      reason: 'provider_refused',
+      provider: 'codex',
+      count: 1,
+      limit: 3,
+      error: 'no active turn to steer',
+    };
+    expect(h.events()).toEqual([expect.objectContaining({ sent: true, count: 1 }), refusal]);
+    expect(h.transcript()).toEqual([
+      expect.objectContaining({
+        type: 'stall_message',
+        step: 'ci',
+        stall_message: expect.objectContaining({ sent: true, sender: 'engine', count: 1 }),
+      }),
+      expect.objectContaining({ type: 'stall_message', step: 'ci', stall_message: refusal }),
+    ]);
   });
 
   test('the text names the open work and how long it has shown no progress', async () => {
@@ -99,15 +157,11 @@ describe('stall messages', () => {
     const pass = h.messenger.openPass();
     await pass.check(stallOf(h, 5));
     const [text] = await textsOf(pass);
-    expect(text).toBe(
-      [
-        'Archon engine check-in (automatic message 1 of 2): no progress has been reported for 31 minutes on this open work:',
-        '- tool call Bash ("bun test"), open for 34 minutes',
-        '- background task local_bash ("watcher 1"), open for 34 minutes',
-        '- background task local_bash ("watcher 2"), open for 34 minutes',
-        '- and 2 more',
-        'This message carries no instruction about your work. If you are waiting on purpose, you can say so and keep waiting.',
-      ].join('\n')
-    );
+    expect(text).toContain('automatic message 1 of 3');
+    expect(text).toContain('no progress has been reported for 31 minutes');
+    expect(text).toContain('- tool call Bash ("bun test"), open for 34 minutes');
+    expect(text).toContain('- background task local_bash ("watcher 1"), open for 34 minutes');
+    expect(text).not.toContain('watcher 3');
+    expect(text).toContain('- and 2 more');
   });
 });

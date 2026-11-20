@@ -6477,7 +6477,6 @@ export interface components {
       };
       workflows?: {
         toolCallAttentionMs?: number;
-        stallMessageLimit?: number;
         autoResumeOnQuotaReset?: boolean;
         quotaFallbackDelayMs?: number;
         quotaMaxAttempts?: number;
