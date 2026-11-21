@@ -153,9 +153,9 @@ async function triggerWhoami(host: WorkflowHost): Promise<void> {
 /**
  * Each receipt, with `awaitingExecution`: its starts that are admitted but whose run no
  * executor has claimed, each with what this process observes of its executor (`state`).
- * One reads `unowned` when nothing runs it, such as when the process that admitted it died
- * before it spawned the executor; `archon trigger execute <requestId> --host <hostId>` runs
- * it once.
+ * One reads `unowned` only when nothing can be running it: its hand-off recorded that it
+ * started nothing, or the process it was handed to is gone from this host;
+ * `archon trigger execute <requestId> --host <hostId>` runs it once.
  * And `refusedBindings`: its bindings whose preparation failed or was refused, each with
  * the failed boundary and, for a refusal of the pack's forge needs, the reasons and remedies.
  * `hold` is the install hold when the receipt has a start it keeps (a binding not yet
