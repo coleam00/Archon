@@ -47,7 +47,6 @@ import {
   getLog,
   setupLockReasonFor,
 } from './shared';
-import type { WorktreeRemote } from './shared';
 
 type BranchCheckout =
   | ({ kind: 'checked_out' } & Awaited<ReturnType<typeof createNewBranch>>)
@@ -257,14 +256,8 @@ async function checkOutBranch(
     return { kind: 'checked_out', branchCreated: false };
   }
 
-  const remote = await checkWorktreeStart(repoPath, worktreeConfig);
-
-  // Base precedence: a per-dispatch --base override (request.baseOverride) wins,
-  // then explicit repo config, then the registered codebase's default branch
-  // (request.baseBranch), then auto-detect: the remote's default branch, or with no
-  // remote the checkout's current branch.
-  const preferredBaseBranch =
-    request.baseOverride ?? worktreeConfig?.baseBranch ?? request.baseBranch;
+  const remote = await checkWorktreeStart(repoPath, worktreeConfig, request);
+  const preferredBaseBranch = preferredBase(request, worktreeConfig);
 
   if (isPRIsolationRequest(request)) {
     if (remote.kind === 'none') {
@@ -284,7 +277,7 @@ async function checkOutBranch(
   const baseBranch =
     remote.kind === 'remote'
       ? await syncWorkspaceBeforeCreate(repoPath, preferredBaseBranch, remote.name)
-      : await resolveLocalBase(repoPath, preferredBaseBranch);
+      : remote.baseBranch;
   // For issues, tasks, threads: create new branch
   const created = await createNewBranch(
     request,
@@ -377,11 +370,31 @@ async function refreshIndex(worktreePath: string): Promise<void> {
   }
 }
 
+/** The base inputs a request carries; config comes from the repository. */
+export type WorktreeBaseInputs = Pick<IsolationRequest, 'baseOverride' | 'baseBranch'>;
+
 /**
- * The base-independent facts a new worktree needs, checked before anything is
- * created: which remote to fetch from (or none), and, with no remote, that the
- * repository has a commit to cut from. Creation calls this first, and trigger
- * preparation calls it before admission, so the two cannot disagree.
+ * Base precedence: a per-dispatch --base override (`baseOverride`) wins, then explicit
+ * repo config, then the registered codebase's default branch (`baseBranch`). Undefined
+ * means auto-detect: the remote's default branch, or with no remote the current branch.
+ */
+function preferredBase(
+  inputs: WorktreeBaseInputs,
+  worktreeConfig: WorktreeCreateConfig | null
+): string | undefined {
+  return inputs.baseOverride ?? worktreeConfig?.baseBranch ?? inputs.baseBranch;
+}
+
+/** Where a new worktree comes from: a remote to fetch the base from, or a local base. */
+export type WorktreeStart = { kind: 'remote'; name: string } | { kind: 'none'; baseBranch: string };
+
+/**
+ * What a new worktree needs before anything is created: the remote to fetch from, or,
+ * with no remote, a local base branch that has a commit. Creation calls this first, and
+ * trigger preparation calls it before admission, so the two cannot disagree. With a
+ * remote the base is left to creation, which fetches it; with none the base is decided
+ * here, since an item's landing branch, the one thing that could replace it at run
+ * start, needs a remote.
  *
  * Remote resolution: explicit config (worktree.remote) > auto-detect via
  * getDefaultRemote() > none when the repository has no remote > actionable
@@ -389,17 +402,21 @@ async function refreshIndex(worktreePath: string): Promise<void> {
  */
 export async function checkWorktreeStart(
   repoPath: RepoPath,
-  worktreeConfig: Pick<WorktreeCreateConfig, 'remote'> | null
-): Promise<WorktreeRemote> {
+  worktreeConfig: WorktreeCreateConfig | null,
+  base: WorktreeBaseInputs
+): Promise<WorktreeStart> {
   const remote = await resolveRemote(repoPath, worktreeConfig?.remote);
-  if (remote.kind === 'none') await assertHasLocalCommit(repoPath);
-  return remote;
+  if (remote.kind === 'remote') return remote;
+  return {
+    kind: 'none',
+    baseBranch: await resolveLocalBase(repoPath, preferredBase(base, worktreeConfig)),
+  };
 }
 
 async function resolveRemote(
   repoPath: RepoPath,
   configuredRemote?: string
-): Promise<WorktreeRemote> {
+): Promise<{ kind: 'remote'; name: string } | { kind: 'none' }> {
   const configured = configuredRemote?.trim();
   if (configured) {
     getLog().debug({ repoPath, remote: configured }, 'worktree.remote_from_config');
@@ -428,21 +445,6 @@ async function resolveRemote(
     `Cannot determine git remote for ${repoPath}: no 'origin' remote found and ` +
       `multiple remotes exist (${remoteNames.join(', ')}). ` +
       'Set worktree.remote in .archon/config.yaml to specify which remote to use.'
-  );
-}
-
-/** A repository with no remote and no local branch has nothing to cut a worktree from. */
-async function assertHasLocalCommit(repoPath: RepoPath): Promise<void> {
-  const { stdout } = await execFileAsync(
-    'git',
-    ['-C', repoPath, 'for-each-ref', '--count=1', '--format=%(refname)', 'refs/heads'],
-    { timeout: 10000 }
-  );
-  if (stdout.trim()) return;
-  throw new IsolationFailure(
-    'no_local_base',
-    `Cannot create a worktree for ${repoPath}: the repository has no commit to start from. ` +
-      'Commit once, or use `--no-worktree` to run in the live checkout.'
   );
 }
 

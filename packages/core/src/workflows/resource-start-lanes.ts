@@ -57,10 +57,10 @@ export function handoffIsolation(
 }
 
 /**
- * Refuse, before admission, a fresh worktree lane that no base could serve, so it never
- * takes a slot. A named branch may reuse a checkout at execution, so it is not checked.
- * Neither is the base: the item's landing branch can replace it when the run starts
- * (`landingLane`), so creation alone decides it.
+ * Refuse, before admission, a fresh worktree lane that is already known to fail, so it
+ * never takes a slot. A named branch may reuse a checkout at execution, so it is not
+ * checked. With a remote the base is not checked: creation fetches it, and the item's
+ * landing branch can replace it when the run starts (`landingLane`).
  */
 export async function assertLaneStartable(
   lane: PreparedWorkflowLaunch['execution']['isolation'],
@@ -68,7 +68,8 @@ export async function assertLaneStartable(
 ): Promise<void> {
   if (lane.kind !== 'worktree' || lane.branch) return;
   ensureIsolationConfigured();
-  await checkWorktreeStartable(toRepoPath(codebase.default_cwd));
+  const request = worktreeLaneRequest(lane, codebase, '');
+  await checkWorktreeStartable(request.canonicalRepoPath, request);
 }
 
 type WorktreeLaneSpec = Extract<

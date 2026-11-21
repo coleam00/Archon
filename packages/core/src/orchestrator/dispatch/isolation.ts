@@ -20,6 +20,7 @@ import type {
 export interface ForegroundIsolation {
   cwd: string;
   cutFromCommit: string | undefined;
+  resolvedBaseBranch?: string;
   ownedWorktree: OwnedWorktree | undefined;
 }
 
@@ -128,6 +129,7 @@ async function resolveNewIsolation(
       ? {
           cwd: result.cwd,
           cutFromCommit: result.cutFromCommit,
+          resolvedBaseBranch: result.resolvedBaseBranch,
           ownedWorktree: result.ownedWorktree,
         }
       : { cwd: result.cwd, cutFromCommit: undefined, ownedWorktree: undefined };

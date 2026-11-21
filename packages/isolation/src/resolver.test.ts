@@ -446,7 +446,7 @@ describe('IsolationResolver', () => {
     }
   });
 
-  test('create new — returns resolved with created method', async () => {
+  test('create new — returns resolved with created method and the base it was cut from', async () => {
     // A canonical path distinct from defaultCwd proves the rollback proof
     // carries the canonical repo path, not the codebase's working path.
     const canonicalRepoPath = git.toRepoPath('/repos/canonical-myrepo');
@@ -458,7 +458,7 @@ describe('IsolationResolver', () => {
         ...provider,
         create: async request => {
           capturedRequest = request as { canonicalRepoPath?: unknown };
-          return provider.create(request);
+          return { ...(await provider.create(request)), resolvedBaseBranch: 'trunk' };
         },
       },
     });
@@ -478,6 +478,7 @@ describe('IsolationResolver', () => {
         creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
         canonicalRepoPath,
         branchCreated: true,
+        resolvedBaseBranch: 'trunk',
       });
     }
   });

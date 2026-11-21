@@ -402,7 +402,26 @@ async function writeFiredReceipt(host: WorkflowHost, receiptId: string): Promise
     process.stderr.write(
       `New runs are held on this install (${describeInstallHold(held)}); this start waits until the hold is lifted.\n`
     );
+  for (const binding of retained?.bindings ?? []) {
+    const note = admittedStartNote(binding.disposition);
+    if (note) process.stderr.write(`${note}\n`);
+  }
   await writeJsonLine(retained && { ...retained, hold: held });
+}
+
+/**
+ * Admission checks what it can before a slot is taken, but the checkout is prepared
+ * when the run starts, in its own process. Say so, so an admitted receipt is not read
+ * as a run that is ready and cannot fail before its first node.
+ */
+function admittedStartNote(disposition: StartBindingInspection['disposition']): string | null {
+  const why =
+    'its checkout is prepared when it starts, and that can still fail before its first node, for example on a base branch the remote does not have';
+  if (disposition?.status === 'admitted')
+    return `Run ${disposition.runId} is admitted; ${why}. Watch it with \`archon workflow get ${disposition.runId}\`.`;
+  if (disposition?.status === 'queued')
+    return `Request ${disposition.requestId} is queued; when it starts, ${why}. Watch it with \`archon trigger inspect ${disposition.requestId}\`.`;
+  return null;
 }
 
 async function drainReceipt(

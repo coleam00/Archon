@@ -555,7 +555,7 @@ async function inheritAdoptedWorktree(
 async function createWorkerWorktree(
   input: WorkerCheckoutInput,
   codebase: Codebase
-): Promise<Pick<WorkerCheckout, 'cwd' | 'cutFromCommit' | 'ownedWorktree'>> {
+): Promise<Pick<WorkerCheckout, 'cwd' | 'cutFromCommit' | 'resolvedBaseBranch' | 'ownedWorktree'>> {
   const { ctx, workerPlatformId, workerConv } = input;
   // The worker id is unique to this run: a task checkout on its generated branch,
   // which completion removes. An adoption lane checks out the adopted exact branch.
@@ -585,7 +585,12 @@ async function createWorkerWorktree(
     getLog().warn({ err: toError(e), workerPlatformId }, 'orchestrator.worker_cwd_persist_failed');
   });
   return result.status === 'new'
-    ? { cwd: result.cwd, cutFromCommit: result.cutFromCommit, ownedWorktree: result.ownedWorktree }
+    ? {
+        cwd: result.cwd,
+        cutFromCommit: result.cutFromCommit,
+        resolvedBaseBranch: result.resolvedBaseBranch,
+        ownedWorktree: result.ownedWorktree,
+      }
     : { cwd: result.cwd };
 }
 

@@ -8,7 +8,7 @@
 import type { IIsolationProvider, RepoConfigLoader, WorktreeSetupExecutor } from './types';
 import type { RepoPath } from '@archon/git';
 import { WorktreeProvider } from './providers/worktree';
-import { checkWorktreeStart } from './providers/worktree/create';
+import { checkWorktreeStart, type WorktreeBaseInputs } from './providers/worktree/create';
 
 let configuredExecutor: WorktreeSetupExecutor | undefined;
 let provider: IIsolationProvider | null = null;
@@ -38,10 +38,14 @@ export function getIsolationProvider(): IIsolationProvider {
 }
 
 /**
- * Refuse a worktree start that cannot succeed whatever base it gets: an ambiguous
- * remote, or no remote and no commit. These are the checks `create()` runs first,
- * read through the configured loader, so a caller can refuse before taking a slot.
+ * Refuse a worktree start that is already known to fail: an ambiguous remote, or, with
+ * no remote, a base branch that is missing or has no commit. These are the checks
+ * `create()` runs first, read through the configured loader, so a caller can refuse
+ * before taking a slot.
  */
-export async function checkWorktreeStartable(repoPath: RepoPath): Promise<void> {
-  await checkWorktreeStart(repoPath, await configuredLoader(repoPath));
+export async function checkWorktreeStartable(
+  repoPath: RepoPath,
+  base: WorktreeBaseInputs
+): Promise<void> {
+  await checkWorktreeStart(repoPath, await configuredLoader(repoPath), base);
 }

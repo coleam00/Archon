@@ -30,6 +30,7 @@ export type IsolationResolution =
       env: IsolationEnvironmentRow;
       /** The commit a branch created by this resolution was cut from. */
       cutFromCommit?: string;
+      resolvedBaseBranch?: string;
     }
   | { status: 'none'; cwd: string; env: null };
 
@@ -193,6 +194,7 @@ function toIsolationResolution(result: ResolvedIsolation): IsolationResolution {
     cwd: result.cwd,
     env: result.env,
     ...(created?.cutFromCommit !== undefined ? { cutFromCommit: created.cutFromCommit } : {}),
+    resolvedBaseBranch: created?.resolvedBaseBranch,
   };
 }
 

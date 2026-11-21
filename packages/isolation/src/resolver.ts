@@ -184,6 +184,9 @@ function creationMethod(
     ...(isolatedEnv.metadata.cutFromCommit !== undefined
       ? { cutFromCommit: isolatedEnv.metadata.cutFromCommit }
       : {}),
+    ...(isolatedEnv.resolvedBaseBranch !== undefined
+      ? { resolvedBaseBranch: isolatedEnv.resolvedBaseBranch }
+      : {}),
   };
 }
 

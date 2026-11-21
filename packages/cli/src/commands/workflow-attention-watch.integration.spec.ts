@@ -202,6 +202,7 @@ test('a launch failure reaches protocol and text watchers without diagnostics', 
     'launch-proof':
       'name: launch-proof\ndescription: Launch failure.\nnodes:\n  - id: one\n    bash: echo unreachable\n',
   });
+  const origin = join(fixture.projectRoot, '..', 'origin.git');
   for (const argv of [
     ['git', 'init', '-q'],
     [
@@ -216,9 +217,13 @@ test('a launch failure reaches protocol and text watchers without diagnostics', 
       '-m',
       'base',
     ],
+    ['git', 'branch', '-M', 'main'],
+    ['git', 'init', '-q', '--bare', '-b', 'main', origin],
+    ['git', 'remote', 'add', 'origin', origin],
+    ['git', 'push', '-q', 'origin', 'main'],
   ])
-    expect(await Bun.spawn(argv, { cwd: fixture.projectRoot }).exited).toBe(0);
-  // A missing base fails when the worktree is cut, after the fire admitted the start.
+    expect(await Bun.spawn(argv, { cwd: fixture.projectRoot, stdout: 'ignore' }).exited).toBe(0);
+  // A base the remote lacks fails when the worktree is cut, after the fire admitted the start.
   writeFileSync(
     join(fixture.projectRoot, '.archon', 'config.yaml'),
     'worktree:\n  baseBranch: does-not-exist\n'
@@ -276,7 +281,7 @@ test('a launch failure reaches protocol and text watchers without diagnostics', 
     await readUntil('launch failed before the first node');
     expect(text).toContain(runId);
     const detail = JSON.parse((await runCli(fixture, ['workflow', 'get', runId, '--json'])).stdout);
-    expect(detail.metadata.error).toContain("Base branch 'does-not-exist' does not exist");
+    expect(detail.metadata.error).toContain("Configured base branch 'does-not-exist' not found");
     for (const output of [text, JSON.stringify(watch.lines)]) {
       expect(output).not.toContain('does-not-exist');
       expect(output).not.toContain('Could not create isolated workspace');

@@ -23,7 +23,7 @@ A worktree separates checkouts. It is not an execution or security sandbox: comm
 
 Use `--branch` with a descriptive name for work that changes code; it makes worktrees and pull requests easy to identify. Use `--no-worktree` only for read-only work. A workflow can pin the choice with `worktree.enabled` in its YAML. Don't start two runs on the same branch at once: one branch maps to one worktree.
 
-A new worktree branches from the base: `--base`, else `worktree.baseBranch`, else the registered default branch, else the remote's default branch. Archon fetches that base from the remote first. A repository with no remote also gets worktrees: Archon fetches nothing and branches from a local branch, the configured base or else the branch you have checked out, and the run records which base it used. It needs at least one commit, and with nothing configured on a detached HEAD it refuses rather than guess. A repository with several remotes and no `origin` needs `worktree.remote`.
+A new worktree branches from the base, chosen as in [base branch precedence](/reference/cli/#base-branch-precedence), and Archon fetches that base from the remote first. A repository with no remote also gets worktrees: Archon fetches nothing and branches from a local branch, the configured base or else the branch you have checked out, and the run records which base it used. It needs at least one commit, and with nothing configured on a detached HEAD it refuses rather than guess. A repository with several remotes and no `origin` needs `worktree.remote`.
 
 By default, worktrees live under `~/.archon/workspaces/<owner>/<repo>/worktrees/`. Set `worktree.path` in the repository's config for a repo-local location such as `.worktrees`, and add it to `.gitignore`.
 
