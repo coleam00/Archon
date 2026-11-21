@@ -22,6 +22,9 @@ import { gitOutput } from './check-test-cleanup-drift';
  *   (`scripts/check-ratchet.ts`) refuses entries the baseline gains unless a commit carries
  *   `Ratchet-Allow: scripts/mock-module-baseline.json`.
  *
+ * Each owning tsconfig's files are read by a child process of their own, one after another, so
+ * only one TypeScript program is in memory at a time (see `collectInChildren`).
+ *
  * Limits:
  * - Factory keys come from the factory's type, so an `as` cast can misstate them.
  * - Only literal specifiers are checked; a non-literal one is refused rather than skipped.
@@ -220,27 +223,56 @@ function mockedModules(files: readonly string[], options: ts.CompilerOptions): s
   });
 }
 
-/** Every `mock.module` call in `files` (absolute paths), read through each file's own tsconfig. */
-export function collectSites(root: string, files: readonly string[]): Collected {
+/** `files` (absolute paths) grouped by the tsconfig that owns each, in first-seen order. */
+export function groupByConfig(root: string, files: readonly string[]): Map<string, string[]> {
   const groups = new Map<string, string[]>();
   for (const file of files) {
     const config = owningConfig(root, file);
     groups.set(config, [...(groups.get(config) ?? []), file]);
   }
-  const results = [...groups].flatMap(([config, group]) => {
-    const { options, ambient } = compilerOptions(config);
-    const roots = new Set([...group, ...ambient, ...mockedModules(group, options)]);
-    const program = ts.createProgram([...roots], options);
-    const reader = new ProgramReader(root, program, options);
-    return group.flatMap(file => {
-      const source = program.getSourceFile(file);
-      if (source === undefined) throw new Error(`Cannot read ${file}`);
-      return mockCalls(source).map(call => readSite(reader, root, file, call));
-    });
+  return groups;
+}
+
+// JSC keeps the pages a collection frees, so the garbage left by parsing thousands of
+// declaration files would otherwise set the peak. A cheap collection every few hundred files
+// lets later files reuse those pages.
+const GC_EVERY = 500;
+
+/** Every `mock.module` call in `files`, which `config` owns, read through one program. */
+export function collectGroup(root: string, config: string, files: readonly string[]): Collected {
+  const { options, ambient } = compilerOptions(config);
+  const roots = new Set([...files, ...ambient, ...mockedModules(files, options)]);
+  const host = ts.createCompilerHost(options, true);
+  const getSourceFile = host.getSourceFile;
+  let parsed = 0;
+  host.getSourceFile = (...args) => {
+    if (++parsed % GC_EVERY === 0) Bun.gc(false);
+    return getSourceFile(...args);
+  };
+  const program = ts.createProgram([...roots], options, host);
+  const reader = new ProgramReader(root, program, options);
+  const results = files.flatMap(file => {
+    const source = program.getSourceFile(file);
+    if (source === undefined) throw new Error(`Cannot read ${file}`);
+    return mockCalls(source).map(call => readSite(reader, root, file, call));
   });
   return {
     sites: results.filter((result): result is MockSite => typeof result !== 'string'),
     errors: results.filter((result): result is string => typeof result === 'string'),
+  };
+}
+
+/** Every `mock.module` call in `files` (absolute paths), read through each file's own tsconfig. */
+export function collectSites(root: string, files: readonly string[]): Collected {
+  return mergeCollected(
+    [...groupByConfig(root, files)].map(([config, group]) => collectGroup(root, config, group))
+  );
+}
+
+function mergeCollected(parts: readonly Collected[]): Collected {
+  return {
+    sites: parts.flatMap(part => part.sites),
+    errors: parts.flatMap(part => part.errors),
   };
 }
 
@@ -340,8 +372,44 @@ function mockingFiles(root: string): string[] {
     .filter(path => existsSync(path) && readFileSync(path, 'utf8').includes('mock.module('));
 }
 
-if (import.meta.main) {
-  const { sites, errors } = collectSites(REPO_ROOT, mockingFiles(REPO_ROOT));
+/**
+ * Each group read by a fresh `--group` child, one at a time. A program over the core or server
+ * test graph holds about 0.9 GB of syntax trees, and JSC does not return freed pages to the OS,
+ * so reading every group in one process ratchets its memory up group after group. A child
+ * returns all of it when it exits. A child that fails fails the whole check: a group that
+ * crashed must never read as a group with no sites.
+ */
+function collectInChildren(root: string, files: readonly string[]): Collected {
+  const parts = [...groupByConfig(root, files)].map(([config, group]) => {
+    const child = Bun.spawnSync([process.execPath, 'run', import.meta.path, '--group', config], {
+      cwd: root,
+      stdin: Buffer.from(JSON.stringify(group)),
+      stdout: 'pipe',
+      stderr: 'inherit',
+    });
+    const name = toPosix(relative(root, config));
+    if (child.exitCode !== 0) {
+      throw new Error(
+        `Reading the mock.module() sites ${name} owns failed (${child.signalCode ?? `exit ${child.exitCode}`}).`
+      );
+    }
+    try {
+      return JSON.parse(child.stdout.toString()) as Collected;
+    } catch (error) {
+      throw new Error(`Reading the mock.module() sites ${name} owns wrote no result: ${error}`);
+    }
+  });
+  return mergeCollected(parts);
+}
+
+function runGroup(config: string): void {
+  const files = JSON.parse(readFileSync(0, 'utf8')) as string[];
+  // No process.exit after this write: Bun drops buffered stdout past 128 KiB on exit.
+  process.stdout.write(JSON.stringify(collectGroup(REPO_ROOT, config, files)));
+}
+
+function main(): void {
+  const { sites, errors } = collectInChildren(REPO_ROOT, mockingFiles(REPO_ROOT));
   const baselineFile = join(REPO_ROOT, BASELINE_PATH);
   if (process.argv.includes('--write')) {
     writeFileSync(baselineFile, `${JSON.stringify(computeBaseline(sites), null, 2)}\n`);
@@ -364,4 +432,12 @@ if (import.meta.main) {
   console.log(
     `mock.module() check passed: ${sites.length} sites, ${grandfathered} grandfathered in ${BASELINE_PATH}.`
   );
+}
+
+if (import.meta.main) {
+  const group = process.argv.indexOf('--group');
+  const config = group === -1 ? undefined : process.argv[group + 1];
+  if (group !== -1 && config === undefined) throw new Error('--group needs a tsconfig path');
+  if (config === undefined) main();
+  else runGroup(config);
 }
