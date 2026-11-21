@@ -155,6 +155,36 @@ export function registerAnswerTests() {
       expect(mockAnswerAttentionWait).not.toHaveBeenCalled();
     });
 
+    test('a message wait refuses an empty or whitespace message with a 400', async () => {
+      const messageRun: MockWorkflowRun = {
+        ...askRun(),
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 'ask',
+            kind: 'attention',
+            waitingSince: '2026-10-14T10:00:00.000Z',
+            message: 'What should we do?',
+            pauseId: 'pause-1',
+            form: 'message',
+            options: [],
+          },
+        },
+      };
+      mockGetWorkflowRun.mockResolvedValue(messageRun);
+      for (const text of [undefined, '', '   ']) {
+        const response = await post('/api/workflows/runs/run-ask/answer', {
+          occurrence: 'pause-1',
+          ...(text === undefined ? {} : { text }),
+        });
+        expect(response.status).toBe(400);
+        expect(((await response.json()) as { error: string }).error).toBe(
+          "Run run-ask's attention wait (form 'message') needs text."
+        );
+        expect(mockAnswerAttentionWait).not.toHaveBeenCalled();
+      }
+    });
+
     test('answers only the named fan-out child and validates its own choices', async () => {
       const children = [0, 1].map(index => ({
         ...askRun(),
