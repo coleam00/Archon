@@ -267,7 +267,10 @@ export interface ExecutionOwnerRecord {
 export function readExecutionOwner(
   metadata: Record<string, unknown> | undefined
 ): ExecutionOwnerRecord | undefined {
-  const raw = metadata?.[EXECUTION_OWNER_METADATA_KEY];
+  return readOwnerRecord(metadata?.[EXECUTION_OWNER_METADATA_KEY]);
+}
+
+function readOwnerRecord(raw: unknown): ExecutionOwnerRecord | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
   const { host, pid, uid } = raw as { host?: unknown; pid?: unknown; uid?: unknown };
   if (typeof host !== 'string' || host.length === 0) return undefined;
@@ -275,6 +278,36 @@ export function readExecutionOwner(
   return typeof uid === 'number' && Number.isInteger(uid) && uid >= 0
     ? { host, pid, uid }
     : { host, pid };
+}
+
+/**
+ * The process an admitted start was handed to, written by the process that handed it over
+ * right after the hand-off (`startAdmitted`), while the run is still `pending`. It covers
+ * the executor's boot, before its live-owner endpoint opens, and says on which host and as
+ * which user it runs, so a reader elsewhere does not take an unreachable endpoint as
+ * absence. Read only while the run is `pending`; once the executor claims the run,
+ * `execution_owner` takes over and this key is inert.
+ */
+export const START_EXECUTOR_METADATA_KEY = 'start_executor';
+
+export interface StartExecutorRecord extends ExecutionOwnerRecord {
+  /**
+   * The process exists only to run this start (a detached `trigger execute`), so while it
+   * lives it is starting it. False for a server that runs the start in-process: the server
+   * being alive says nothing about this one start.
+   */
+  dedicated: boolean;
+}
+
+/** Typed view of the start-executor record; undefined when none was written. */
+export function readStartExecutor(
+  metadata: Record<string, unknown> | undefined
+): StartExecutorRecord | undefined {
+  const raw = metadata?.[START_EXECUTOR_METADATA_KEY];
+  const owner = readOwnerRecord(raw);
+  if (owner === undefined) return undefined;
+  const { dedicated } = raw as { dedicated?: unknown };
+  return typeof dedicated === 'boolean' ? { ...owner, dedicated } : undefined;
 }
 
 /** Typed view of the run-lifecycle keys on a run's metadata; undefined when unset. */

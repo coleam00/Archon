@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
 import { heldRunOf } from './attention-queue';
+import type { ResourceStartRequestInspection } from './resource-start-store';
 import type { ItemMerge } from './schemas/item-merge';
 import type { ItemLanding } from './schemas/item-landing';
 import type { StoredItemAsk } from './schemas/item-ask';
@@ -462,6 +463,62 @@ describe('reading an item', () => {
     expect(isAdmitted).toBe(true);
     expect(result?.runs.map(run => run.id)).toEqual(['admitted']);
     expect(result?.queued).toEqual([]);
+  });
+
+  test('an admitted start reads what the observer sees of its executor, and unknown without one', async () => {
+    const admitted = run('admitted', { status: 'pending' });
+    const request: ResourceStartRequestInspection = {
+      id: 'admitted',
+      resource: 'build',
+      hostId: 'host',
+      overlap: 'queue',
+      status: 'admitted',
+      runStatus: 'pending',
+      blocker: null,
+      blockerRunStatus: null,
+      launch: {
+        version: 2,
+        run: {
+          id: 'admitted',
+          workflow_name: 'deliver',
+          codebase_id: 'codebase',
+          user_message: '',
+          metadata: {},
+        },
+        execution: {
+          cwd: '/repo',
+          conversationId: 'conversation',
+          isolation: { kind: 'in-place' },
+        },
+      },
+    };
+    const pending: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        getItemRuns: async () => ({ item, runs: [admitted], descendantIds: [] }),
+        getResourceStartRequest: async id => (id === 'admitted' ? request : null),
+      },
+    };
+    const awaiting = async (from: ItemReadSource) =>
+      (await readItem(from, item.projectKey, item.key))?.runs[0]?.awaitingExecution;
+    const executor = { host: 'here', pid: 4242, dedicated: true };
+
+    // A reader that cannot look never reports the executor absent.
+    expect(await awaiting(pending)).toEqual({
+      requestId: 'admitted',
+      hostId: 'host',
+      state: 'unknown',
+      executor: null,
+    });
+    expect(
+      await awaiting({
+        ...pending,
+        startExecutor: { observe: async () => ({ state: 'starting', executor }) },
+      })
+    ).toEqual({ requestId: 'admitted', hostId: 'host', state: 'starting', executor });
+    // The run moved on while it was observed: it no longer awaits execution.
+    expect(await awaiting({ ...pending, startExecutor: { observe: async () => null } })).toBeNull();
   });
 
   test('links read from this item: outgoing to what it points at, incoming from what points at it', async () => {

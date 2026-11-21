@@ -450,6 +450,7 @@ test('receipt preparation and real engine execution use supplied ports without S
       hostId: 'host',
       startAdmitted: async id => {
         admitted.push(id);
+        return null;
       },
     });
     const [id] = admitted;
@@ -498,6 +499,7 @@ test('receipt preparation and real engine execution use supplied ports without S
       hostId: 'host',
       startAdmitted: async requestId => {
         pending.push(requestId);
+        return null;
       },
     });
     const delayedId = pending[0];
@@ -688,6 +690,7 @@ async function prepareTriggerInputs(
       hostId: 'host',
       startAdmitted: async id => {
         admitted.push(id);
+        return null;
       },
     });
   } catch (error) {
@@ -803,7 +806,7 @@ async function fireFixture(fileStore = false): Promise<{
   };
 }
 
-const noDispatch = async (): Promise<void> => {};
+const noDispatch = async (): Promise<null> => null;
 /** An environment with no calling node, whatever the shell running the tests exports. */
 const NO_RUN: NodeJS.ProcessEnv = {};
 
@@ -978,6 +981,7 @@ test.each([true, false])(
         {
           dispatch: async requestId => {
             started.push(requestId);
+            return null;
           },
           env: NO_RUN,
         }
@@ -1033,6 +1037,7 @@ test('a damaged receipt does not stop preparing a healthy binding on the same ho
         hostId: 'host',
         startAdmitted: async requestId => {
           started.push(requestId);
+          return null;
         },
       }).catch((error: unknown) => error);
       if (!(failure instanceof ResourceStartDrainError)) throw new Error('Expected drain failure');
@@ -1274,6 +1279,7 @@ test('a triggered run pauses at a gate and an attention wait and continues after
       hostId: 'host',
       startAdmitted: async id => {
         admitted.push(id);
+        return null;
       },
     });
     const [runId] = admitted;

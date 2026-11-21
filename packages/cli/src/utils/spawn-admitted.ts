@@ -3,15 +3,19 @@ import { mkdir, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getArchonHome } from '@archon/paths';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import type { StartedExecutor } from '@archon/core/workflows/start-executor';
 import { cliProgramArguments } from './cli-program-arguments';
 import { DETACHED_RUN_OWNER_ENV } from './detached-run-control';
 
-/** Hand one admitted request to a detached `trigger execute` process with its own log. */
+/**
+ * Hand one admitted request to a detached `trigger execute` process with its own log, and
+ * name that process: it runs only this request.
+ */
 export async function spawnAdmitted(
   host: WorkflowHost,
   requestId: string,
   hostId: string
-): Promise<void> {
+): Promise<StartedExecutor> {
   const request = await host.deps.store.getResourceStartRequest(requestId);
   if (request?.status !== 'admitted') throw new Error('The admitted start request is unavailable.');
   const [executable, ...prefix] = cliProgramArguments();
@@ -35,6 +39,8 @@ export async function spawnAdmitted(
       child.once('spawn', resolveSpawn);
     });
     child.unref();
+    if (child.pid === undefined) throw new Error('The spawned executor reported no process id.');
+    return { pid: child.pid, dedicated: true };
   } finally {
     await log.close();
   }

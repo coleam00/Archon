@@ -13,6 +13,7 @@ import {
   drainResourceStartHost,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
+import type { StartedExecutor } from '@archon/core/workflows/start-executor';
 import { createLogger } from '@archon/paths';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 
@@ -30,7 +31,7 @@ export function createServerResourceStartHost(
   hostId: string,
   host: WorkflowHost
 ): ServerResourceStartHost {
-  const startAdmitted = async (requestId: string): Promise<void> => {
+  const startAdmitted = async (requestId: string): Promise<StartedExecutor> => {
     // Not awaited: a run can take hours and must not hold the drain or a webhook ACK.
     void startAdmittedResourceStart({
       requestId,
@@ -73,6 +74,8 @@ export function createServerResourceStartHost(
           'resource_start.start_failed'
         );
       });
+    // The server runs it in-process; being alive, it proves nothing about this one start.
+    return { pid: process.pid, dedicated: false };
   };
 
   let running: Promise<void> | undefined;

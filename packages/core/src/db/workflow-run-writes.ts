@@ -162,16 +162,31 @@ export async function updateWorkflowRun(
   }
 }
 
-export async function updateWorkflowRunMetadataIfRunning(
+export function updateWorkflowRunMetadataIfRunning(
   id: string,
+  metadata: WorkflowRun['metadata']
+): Promise<boolean> {
+  return mergeRunMetadataIfStatus(id, 'running', metadata);
+}
+
+export function updateWorkflowRunMetadataIfPending(
+  id: string,
+  metadata: WorkflowRun['metadata']
+): Promise<boolean> {
+  return mergeRunMetadataIfStatus(id, 'pending', metadata);
+}
+
+async function mergeRunMetadataIfStatus(
+  id: string,
+  status: 'running' | 'pending',
   metadata: WorkflowRun['metadata']
 ): Promise<boolean> {
   validateWorkflowWaitMetadata(metadata);
   const result = await pool.query(
     `UPDATE remote_agent_workflow_runs
      SET metadata = ${getDialect().jsonMerge('metadata', 2)}
-     WHERE id = $1 AND status = 'running'`,
-    [id, JSON.stringify(mutableRunMetadata(metadata))]
+     WHERE id = $1 AND status = $3`,
+    [id, JSON.stringify(mutableRunMetadata(metadata)), status]
   );
   return (result.rowCount ?? 0) > 0;
 }

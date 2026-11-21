@@ -59,6 +59,7 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import type { WorkflowEventRow } from './schemas/workflow-event';
+import { awaitingExecutionSchema } from './schemas/start-executor';
 import {
   installHoldSchema,
   queuedItemStartSchema,
@@ -70,6 +71,7 @@ import {
 import type { IWorkflowStore } from './store';
 import {
   awaitingExecution,
+  type StartExecutorObserver,
   type SkippedItemStart,
   type ResourceStartRequestInspection,
 } from './resource-start-store';
@@ -115,12 +117,8 @@ export const itemRunSchema = z.object({
    * trigger source. Null for a start by hand, which has no receipt.
    */
   cause: startCauseSchema.nullable(),
-  /**
-   * Set while the run's start is admitted but no executor has claimed it. If the process
-   * that admitted it died, it stays set until an operator runs it once:
-   * `archon trigger execute <requestId> --host <hostId>`.
-   */
-  awaitingExecution: z.object({ requestId: z.string(), hostId: z.string() }).nullable(),
+  /** Set while the run's start is admitted but no executor has claimed it. */
+  awaitingExecution: awaitingExecutionSchema.nullable(),
   /** The totals recorded on the run row; null where the run recorded no figure. */
   spend: z.object({
     usd: z.number().nullable(),
@@ -360,6 +358,8 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'getInstallHold'
       | 'listHeldItemStarts'
     >;
+  /** Observes an awaiting start's executor; without it, the start reads `unknown`. */
+  startExecutor?: StartExecutorObserver;
 }
 
 function readResult(
@@ -408,7 +408,7 @@ async function itemRun(
     startedAt: run.started_at.toISOString(),
     completedAt: run.completed_at?.toISOString() ?? null,
     cause: receipt ? startCause(receipt) : null,
-    awaitingExecution: awaitingExecution(request),
+    awaitingExecution: await awaitingExecution(request, run, source.startExecutor),
     spend: {
       usd: usage.costUsd ?? null,
       inputTokens: usage.tokens?.input ?? null,

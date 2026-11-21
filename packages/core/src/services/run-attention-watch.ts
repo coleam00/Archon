@@ -6,9 +6,16 @@
  * This service never mutates run lifecycle state.
  */
 import { createLogger } from '@archon/paths';
+import { probePidLiveness } from '@archon/paths/process-owner';
+import type {
+  StartExecutorObservation,
+  StartExecutorState,
+} from '@archon/workflows/schemas/start-executor';
 import {
+  readStartExecutor,
   TOOL_CALL_ATTENTION_METADATA_KEY,
   type ExecutionOwnerRecord,
+  type StartExecutorRecord,
   type RunAttention,
   type WorkflowRun,
   type WorkflowRunStatus,
@@ -437,6 +444,47 @@ export async function observeRunOwner(
     if (read === 2) return 'unreachable';
     current = await store.getWorkflowRun(run.id);
   }
+}
+
+/**
+ * Observe the executor of a `pending` admitted run (`StartExecutorObservation`). Its
+ * live-owner endpoint answering proves it is starting; it opens only once the executor has
+ * booted and loaded the request. Before that, the start-executor record its hand-off wrote
+ * (`readStartExecutor`) is the evidence: a process on this host and user that runs only
+ * this start and is still alive is starting it. An executor on another host or user, or a
+ * live server that runs the start in-process, reads `unknown`: this process cannot see it.
+ * When the recorded process is gone, or none was recorded, a second read tells a run its
+ * executor just claimed from one nobody runs. Null once the run is not pending. Elapsed
+ * time is never an input. Observing never changes the run.
+ */
+export async function observeStartExecutor(
+  store: RunAttentionReadStore,
+  run: WorkflowRun
+): Promise<StartExecutorObservation | null> {
+  if (run.status !== 'pending') return null;
+  const executor = readStartExecutor(run.metadata) ?? null;
+  const endpoint = await watchRunLiveOwner(run.id, () => undefined);
+  if (endpoint.kind === 'attached') {
+    endpoint.handle.unsubscribe();
+    return { state: 'starting', executor };
+  }
+  if (endpoint.kind === 'unproven') return { state: 'unknown', executor };
+  const recorded = executor === null ? 'gone' : recordedExecutorState(executor);
+  if (recorded !== 'gone') return { state: recorded, executor };
+  const current = await store.getWorkflowRun(run.id);
+  return current?.status === 'pending' ? { state: 'unowned', executor } : null;
+}
+
+/** What a recorded executor proves while its endpoint is closed, or `gone` when it exited. */
+function recordedExecutorState(
+  executor: StartExecutorRecord
+): Exclude<StartExecutorState, 'unowned'> | 'gone' {
+  if (!isOwnerEndpointLocal(executor)) return 'unknown';
+  const liveness = probePidLiveness(executor.pid);
+  // EPERM: the pid exists under another user. Only ESRCH proves it gone.
+  if (liveness.status === 'returned' || liveness.code === 'EPERM')
+    return executor.dedicated ? 'starting' : 'unknown';
+  return liveness.code === 'ESRCH' ? 'gone' : 'unknown';
 }
 
 function withoutRunningAttention(run: WorkflowRun): WorkflowRun;

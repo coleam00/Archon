@@ -866,6 +866,7 @@ for (const corruption of [
         hostId: 'host',
         startAdmitted: async id => {
           started.push(id);
+          return null;
         },
       }).catch((caught: unknown) => caught);
       expect(started).toEqual([...queued.slice(0, offset), queued.at(-1)!]);
@@ -975,6 +976,7 @@ for (const [damage, owner] of [
         hostId: 'host',
         startAdmitted: async id => {
           started.push(id);
+          return null;
         },
       }).catch((caught: unknown) => caught);
       expect(started).toEqual([queued.run.id]);
@@ -1060,6 +1062,7 @@ async function pendingForgeBinding() {
       hostId: 'host',
       startAdmitted: async id => {
         started.push(id);
+        return null;
       },
     });
   return { store, receiptId, started, drain };
