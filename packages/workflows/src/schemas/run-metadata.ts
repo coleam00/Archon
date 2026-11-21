@@ -124,6 +124,10 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
   // Prefer the logical map (#2637); fall back to the legacy text map, accepting only a
   // plain object of string values there — the legacy writer always stored strings, so a
   // non-conforming value is corrupt/foreign metadata, not a shape to coerce.
+  // SQLite's dialect merge (json_patch, RFC 7396) deletes any null-valued interior key,
+  // so a logical map that held nulls loses them when merged (#5939). The text map keeps
+  // them (as "null"), so keys in the text map that are absent from the logical map are
+  // restored as null rather than dropped.
   // Metadata is DB-round-tripped JSON, so a plain object here can only hold JSON
   // values — the casts assert what the storage layer already guarantees.
   const rawValues = asPlainObject(metadata?.[SUBRUN_METADATA_KEYS.inputsValues]) as
@@ -134,6 +138,19 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
     rawLegacy !== undefined && Object.values(rawLegacy).every(v => typeof v === 'string')
       ? (rawLegacy as Record<string, string>)
       : undefined;
+  const inputs =
+    rawValues !== undefined
+      ? legacyInputs !== undefined
+        ? {
+            ...Object.fromEntries(
+              Object.keys(legacyInputs)
+                .filter(k => !Object.hasOwn(rawValues, k))
+                .map(k => [k, null])
+            ),
+            ...rawValues,
+          }
+        : rawValues
+      : legacyInputs;
   // A path contract this binary wrote must parse; a malformed one fails rather than
   // authorizing nothing. A legacy field projection is only usable as a contract when it
   // is exactly an array of strings; anything else degrades to "no contract".
@@ -148,7 +165,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
     parentNodeId: typeof parentNodeId === 'string' ? parentNodeId : undefined,
     childIndex: typeof childIndex === 'number' ? childIndex : undefined,
     fanOutItemHash: typeof fanOutItemHash === 'string' ? fanOutItemHash : undefined,
-    inputs: rawValues ?? legacyInputs,
+    inputs,
     // Presence-keyed rather than truthiness: `false`/`0`/`null` are legitimate values.
     summaryValue:
       metadata !== undefined && Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryValue)
