@@ -6,6 +6,7 @@
  */
 import { execFileAsync, toBranchName, toRepoPath } from '@archon/git';
 import {
+  checkWorktreeStartable,
   getIsolationProvider,
   recordWorktreeAdoption,
   type WorktreeSetupExecutor,
@@ -53,6 +54,21 @@ export function handoffIsolation(
   return workflow.mutates_checkout === false
     ? { isolation: { kind: 'worktree', fromBranch: handoff.commit }, lane: 'copy' }
     : { isolation: { kind: 'worktree', branch: handoff.branch }, lane: 'continue' };
+}
+
+/**
+ * Refuse, before admission, a fresh worktree lane that no base could serve, so it never
+ * takes a slot. A named branch may reuse a checkout at execution, so it is not checked.
+ * Neither is the base: the item's landing branch can replace it when the run starts
+ * (`landingLane`), so creation alone decides it.
+ */
+export async function assertLaneStartable(
+  lane: PreparedWorkflowLaunch['execution']['isolation'],
+  codebase: Codebase
+): Promise<void> {
+  if (lane.kind !== 'worktree' || lane.branch) return;
+  ensureIsolationConfigured();
+  await checkWorktreeStartable(toRepoPath(codebase.default_cwd));
 }
 
 type WorktreeLaneSpec = Extract<

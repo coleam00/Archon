@@ -455,10 +455,8 @@ function submitRun(
       : {}),
     ...(preCreatedRun ? { preCreatedRun } : {}),
     ...(request.options.item === undefined ? {} : { item: request.options.item }),
-    ...(workspace.cutFromCommit !== undefined ? { cutFromCommit: workspace.cutFromCommit } : {}),
-    ...(workspace.resolvedBaseBranch !== undefined
-      ? { resolvedBaseBranch: workspace.resolvedBaseBranch }
-      : {}),
+    cutFromCommit: workspace.cut.cutFromCommit,
+    resolvedBaseBranch: workspace.cut.resolvedBaseBranch,
     ownedWorktree: workspace.ownedWorktree,
   };
   lease.executionSubmitted = true;

@@ -210,10 +210,8 @@ type RunConversation = Extract<RunDestination, { kind: 'conversation' }>['conver
 export interface RunWorkspace {
   workingCwd: string;
   isolationEnvId: string | undefined;
-  /** Set only when this invocation created the run's branch (#3305). */
-  cutFromCommit: string | undefined;
-  /** The base this invocation's new worktree was cut from. */
-  resolvedBaseBranch?: string;
+  /** The commit and base this invocation cut the run's branch from; empty otherwise (#3305). */
+  cut: Pick<RegisteredWorktree, 'cutFromCommit' | 'resolvedBaseBranch'>;
   ownedWorktree: OwnedWorktree | undefined;
   /**
    * Repo/worktree and folder-in-place both run on the host; the folder-backend seam sets
@@ -295,7 +293,7 @@ export async function prepareForegroundLaunch(
   const workspace: RunWorkspace = {
     workingCwd: cwd,
     isolationEnvId: undefined,
-    cutFromCommit: undefined,
+    cut: {},
     ownedWorktree: undefined,
     execContext: { kind: 'host' },
     container: undefined,
@@ -655,8 +653,7 @@ async function provisionWorktree(
   workspace.workingCwd = created.env.workingPath;
   workspace.isolationEnvId = created.envId;
   workspace.ownedWorktree = created.ownedWorktree;
-  workspace.cutFromCommit = created.cutFromCommit;
-  workspace.resolvedBaseBranch = created.resolvedBaseBranch;
+  workspace.cut = created;
   getLog().info({ path: workspace.workingCwd }, 'worktree_created');
 }
 

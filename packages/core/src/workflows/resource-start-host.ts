@@ -25,8 +25,6 @@ import {
  * detached process, the server runs it in-process. Admission, the execution claim
  * fence, and recovery stay behind the supplied store; nothing here declares an owner dead.
  */
-import { toRepoPath } from '@archon/git';
-import { checkWorktreeStartable } from '@archon/isolation';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { createLogger, canonicalizeProjectPath } from '@archon/paths';
@@ -81,8 +79,7 @@ import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { handOffAdmitted, type StartedExecutor } from './start-executor';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
-import { executionLane, handoffIsolation } from './resource-start-lanes';
-import { ensureIsolationConfigured } from '../orchestrator/dispatch/isolation-resolver';
+import { assertLaneStartable, executionLane, handoffIsolation } from './resource-start-lanes';
 import { selectStartedWorkflow } from './binding-workflow';
 import { refuseInPlaceLanding, resolveRunLanding } from './item-landing';
 
@@ -277,14 +274,7 @@ async function prepareBinding(
       handoff = { ...intent.checkoutFrom, lane: chosen.lane };
     } else {
       isolation = resolveBindingIsolation(intent.launch.isolation, workflow, codebase);
-      // Before admission, so a start whose worktree cannot be cut from any base never
-      // takes a slot. A named branch may reuse a checkout at execution, so it is not
-      // checked. The base is not checked either: the item's landing branch can replace
-      // it when the run starts (`landingLane`), so creation alone decides it.
-      if (isolation.kind === 'worktree' && !isolation.branch) {
-        ensureIsolationConfigured();
-        await checkWorktreeStartable(toRepoPath(codebase.default_cwd));
-      }
+      await assertLaneStartable(isolation, codebase);
     }
 
     source = await finalizeWorkflowSource(host.deps, source, { cwd, codebaseId: codebase.id });
@@ -749,9 +739,7 @@ async function prepareAdmittedResourceSubmission(
       baseBranch,
       ownedWorktree: execution.ownedWorktree,
       ...(execution.cutFromCommit !== undefined ? { cutFromCommit: execution.cutFromCommit } : {}),
-      ...(execution.resolvedBaseBranch !== undefined
-        ? { resolvedBaseBranch: execution.resolvedBaseBranch }
-        : {}),
+      resolvedBaseBranch: execution.resolvedBaseBranch,
       // A hand-off lane too: it keeps the handed-on checkout and proposes against the base.
       ...(baseOverride ? { baseOverride } : {}),
       resolveChildIsolation: createCodebaseChildResolver(
