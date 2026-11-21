@@ -11,6 +11,7 @@ import {
   ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
+import type { StartedExecutor } from '@archon/core/workflows/start-executor';
 import {
   getTriggersPath,
   readOnBindings,
@@ -24,6 +25,7 @@ import {
   collectCredentialValues,
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
+import { observeStartExecutor } from '@archon/core/services/run-attention-watch';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import {
   awaitingExecution,
@@ -113,7 +115,7 @@ export function drainFailureReasons(errors: readonly unknown[]): string {
 export function drainHost(
   host: WorkflowHost,
   hostId: string,
-  dispatch: (requestId: string, hostId: string) => Promise<void>
+  dispatch: TriggerDispatch
 ): Promise<void> {
   return drainResourceStartHost({
     ...host,
@@ -134,7 +136,14 @@ type TriggerOptions = {
   noItem?: boolean;
 };
 
-export type TriggerDispatch = (requestId: string, hostId: string) => Promise<void>;
+/**
+ * Hands an admitted request to its executor and names the process running it, or null when
+ * the request already ran to its end in this call.
+ */
+export type TriggerDispatch = (
+  requestId: string,
+  hostId: string
+) => Promise<StartedExecutor | null>;
 
 async function triggerWhoami(host: WorkflowHost): Promise<void> {
   const cliId = resolveCliUserId();
@@ -147,8 +156,10 @@ async function triggerWhoami(host: WorkflowHost): Promise<void> {
 
 /**
  * Each receipt, with `awaitingExecution`: its starts that are admitted but whose run no
- * executor has claimed. One stays there when the process that admitted it died before it
- * spawned the executor; `archon trigger execute <requestId> --host <hostId>` runs it once.
+ * executor has claimed, each with what this process observes of its executor (`state`).
+ * One reads `unowned` only when nothing can be running it: its hand-off recorded that it
+ * started nothing, or the process it was handed to is gone from this host;
+ * `archon trigger execute <requestId> --host <hostId>` runs it once.
  * And `refusedBindings`: its bindings whose preparation failed or was refused, each with
  * the failed boundary and, for a refusal of the pack's forge needs, the reasons and remedies.
  * `hold` is the install hold when the receipt has a start it keeps (a binding not yet
@@ -197,7 +208,12 @@ async function receiptAwaitingExecution(
   for (const binding of bindings) {
     if (binding.requestStatus !== 'admitted' || !binding.disposition) continue;
     const request = await host.deps.store.getResourceStartRequest(binding.disposition.requestId);
-    const waiting = awaitingExecution(request);
+    const run = await host.deps.store.getWorkflowRun(binding.disposition.requestId);
+    const waiting =
+      run &&
+      (await awaitingExecution(request, run, {
+        observe: pending => observeStartExecutor(host.deps.store, pending),
+      }));
     if (waiting) awaiting.push(waiting);
   }
   return awaiting;
@@ -729,7 +745,11 @@ export async function triggerCommand(
 ): Promise<void> {
   const dispatch: TriggerDispatch =
     dependencies.dispatch ??
-    ((requestId, hostId) => triggerCommand(host, 'execute', [requestId], { host: hostId }));
+    (async (requestId, hostId) => {
+      // Runs in the foreground to its end, so nothing is left to record as starting.
+      await triggerCommand(host, 'execute', [requestId], { host: hostId });
+      return null;
+    });
   switch (action) {
     case 'whoami':
       return triggerWhoami(host);

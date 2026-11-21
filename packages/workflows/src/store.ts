@@ -554,6 +554,11 @@ export interface IWorkflowStore
     id: string,
     metadata: WorkflowRun['metadata']
   ): Promise<boolean>;
+  /** Atomically merge metadata only while pending; false means nothing was written. */
+  updateWorkflowRunMetadataIfPending(
+    id: string,
+    metadata: WorkflowRun['metadata']
+  ): Promise<boolean>;
   updateWorkflowActivity(id: string): Promise<void>;
   getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null>;
   /**

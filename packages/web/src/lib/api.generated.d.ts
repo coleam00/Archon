@@ -8136,6 +8136,13 @@ export interface components {
         awaitingExecution: {
           requestId: string;
           hostId: string;
+          /** @enum {string} */
+          state: 'starting' | 'unowned' | 'unknown';
+          executor: {
+            host: string;
+            pid: number;
+            uid?: number;
+          } | null;
         } | null;
         spend: {
           usd: number | null;
@@ -8795,6 +8802,13 @@ export interface components {
           awaitingExecution: {
             requestId: string;
             hostId: string;
+            /** @enum {string} */
+            state: 'starting' | 'unowned' | 'unknown';
+            executor: {
+              host: string;
+              pid: number;
+              uid?: number;
+            } | null;
           } | null;
           spend: {
             usd: number | null;

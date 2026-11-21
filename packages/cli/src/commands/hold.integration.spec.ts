@@ -103,8 +103,9 @@ test('a fire under the hold is listed as held and starts exactly once after the 
     })
   );
   const dispatched: string[] = [];
-  const dispatch = async (requestId: string): Promise<void> => {
+  const dispatch = async (requestId: string): Promise<null> => {
     dispatched.push(requestId);
+    return null;
   };
 
   const [set] = await jsonLines(() => holdCommand(host, 'set', { json: true }, dispatch));

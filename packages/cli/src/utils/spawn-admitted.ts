@@ -2,11 +2,18 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getArchonHome } from '@archon/paths';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import { HandOffUncertainError, type StartedExecutor } from '@archon/core/workflows/start-executor';
 import { cliProgramArguments } from './cli-program-arguments';
 import { DETACHED_RUN_OWNER_ENV } from './detached-run-control';
-import { startTriggerExecutor } from './run-job-escape';
+import { startTriggerExecutor, TriggerExecutorRelayError } from './run-job-escape';
 
-/** Hand one admitted request to a detached `trigger execute` process with its own log. */
+/**
+ * Hand one admitted request to a detached `trigger execute` process with its own log, and
+ * name that process when it started here. Through a Windows run's broker the pid is not
+ * reported, so it resolves null and nothing is recorded. A plain rejection means nothing
+ * started (`handOffAdmitted` records it as a failed hand-off); a broker relay that failed
+ * part way leaves that open and rejects with `HandOffUncertainError`.
+ */
 export async function spawnAdmitted(
   host: {
     readonly deps: {
@@ -15,20 +22,28 @@ export async function spawnAdmitted(
   },
   requestId: string,
   hostId: string
-): Promise<void> {
+): Promise<StartedExecutor | null> {
   const request = await host.deps.store.getResourceStartRequest(requestId);
   if (request?.status !== 'admitted') throw new Error('The admitted start request is unavailable.');
   const logDirectory = join(getArchonHome(), 'logs');
   await mkdir(logDirectory, { recursive: true });
-  // Inside a Windows run this starts through the run's job broker: the executor is another
-  // run's owner and must not end with the run that started it.
-  await startTriggerExecutor(
-    {
-      args: ['trigger', 'execute', requestId, '--host', hostId],
-      cwd: request.launch.execution.cwd,
-      env: { ...process.env, ARCHON_HOME: getArchonHome(), [DETACHED_RUN_OWNER_ENV]: '1' },
-      log: join(logDirectory, `trigger-run-${requestId}.log`),
-    },
-    cliProgramArguments()
-  );
+  let pid: number | undefined;
+  try {
+    // Inside a Windows run this starts through the run's job broker: the executor is another
+    // run's owner and must not end with the run that started it.
+    pid = await startTriggerExecutor(
+      {
+        args: ['trigger', 'execute', requestId, '--host', hostId],
+        cwd: request.launch.execution.cwd,
+        env: { ...process.env, ARCHON_HOME: getArchonHome(), [DETACHED_RUN_OWNER_ENV]: '1' },
+        log: join(logDirectory, `trigger-run-${requestId}.log`),
+      },
+      cliProgramArguments()
+    );
+  } catch (error) {
+    if (error instanceof TriggerExecutorRelayError)
+      throw new HandOffUncertainError(error.message, { cause: error });
+    throw error;
+  }
+  return pid === undefined ? null : { pid };
 }

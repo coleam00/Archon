@@ -190,6 +190,16 @@ export class InMemoryStore {
     return true;
   };
 
+  updateWorkflowRunMetadataIfPending: IWorkflowStore['updateWorkflowRunMetadataIfPending'] = async (
+    id,
+    metadata
+  ) => {
+    const run = this.runs.get(id);
+    if (run?.status !== 'pending') return false;
+    Object.assign(run.metadata, structuredClone(metadata));
+    return true;
+  };
+
   updateWorkflowActivity = (): Promise<void> => Promise.resolve();
 
   getWorkflowRunStatus = (id: string): Promise<WorkflowRun['status'] | null> =>

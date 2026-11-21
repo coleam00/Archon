@@ -28,6 +28,7 @@ import * as itemWaitsDb from '../db/item-waits';
 import * as workflowDb from '../db/workflows';
 import * as resourceStarts from '../db/resource-starts';
 import { acceptStartReceipt } from '../db/start-receipt-writes';
+import { updateWorkflowRunMetadataIfPending } from '../db/workflow-run-writes';
 import * as installHold from '../db/install-hold';
 import { toHydratedTimestamp } from '../db/timestamps';
 import * as workflowEventDb from '../db/workflow-events';
@@ -288,6 +289,7 @@ export function createWorkflowStore(): IWorkflowStore {
     recoverCancelledFanOutRun: workflowDb.recoverCancelledFanOutRun,
     updateWorkflowRun: workflowDb.updateWorkflowRun,
     updateWorkflowRunMetadataIfRunning: workflowDb.updateWorkflowRunMetadataIfRunning,
+    updateWorkflowRunMetadataIfPending,
     updateWorkflowActivity: workflowDb.updateWorkflowActivity,
     getWorkflowRunStatus: workflowDb.getWorkflowRunStatus,
     completeWorkflowRun: workflowDb.completeWorkflowRun,

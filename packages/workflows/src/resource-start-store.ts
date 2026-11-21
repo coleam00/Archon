@@ -7,6 +7,7 @@ import {
   readAdmissionCheckoutGuard,
 } from './schemas/resource-start';
 import type { z } from 'zod';
+import type { AwaitingExecution, StartExecutorObservation } from './schemas/start-executor';
 import type {
   ForgeRefusal,
   InstallHold,
@@ -32,6 +33,8 @@ import type { WorkflowResource } from './schemas/resource-name';
 import type { ResumeClaimCursor, ResumeRefusal } from './store';
 import { itemHolder, itemHoldKey } from './item-hold';
 import type { AttentionRead } from './schemas/attention-degraded';
+
+export type { AwaitingExecution, StartExecutorObservation } from './schemas/start-executor';
 
 export function skippedFireNotice(
   receipt: Pick<SourceReceiptInput, 'deliveryId' | 'sourceActor'>,
@@ -212,28 +215,39 @@ export interface HeldPreparation {
   hold: InstallHold;
 }
 
-/** An admitted start whose run has not begun, and the host whose executor runs it. */
-export interface AwaitingExecution {
-  requestId: string;
-  hostId: string;
+/**
+ * What this process observes of a pending admitted start's executor. Null when the run is
+ * no longer pending by the time it looks, so the start no longer awaits execution.
+ */
+export interface StartExecutorObserver {
+  observe(run: WorkflowRun): Promise<StartExecutorObservation | null>;
 }
 
 /**
  * The start `request` holds when it is admitted but its run has not begun: no executor has
- * claimed it. Normally that lasts a moment. If the process that admitted it died before it
- * spawned the executor, it stays so until an operator runs it once with
- * `archon trigger execute <requestId> --host <hostId>`. Nothing tells a dead admitter from
- * a slow one, so this is reported, never acted on. A hand start's request is claimed by the
- * process that made it, so it is never this.
+ * claimed it. Normally that lasts while the executor boots and prepares. If the process
+ * that admitted it died before it handed the start over, or the executor died before its
+ * claim, it stays so until an operator runs it once with
+ * `archon trigger execute <requestId> --host <hostId>`; the observer tells the two apart
+ * where it can prove which (`StartExecutorState`). Without an observer the state is `unknown`,
+ * never `unowned`: a reader that cannot look never reports the executor absent. A hand
+ * start's request is claimed by the process that made it, so it is never this.
  */
-export function awaitingExecution(
-  request: Pick<ResourceStartRequestInspection, 'id' | 'hostId' | 'status' | 'runStatus'> | null
-): AwaitingExecution | null {
-  return request?.status === 'admitted' &&
-    request.runStatus === 'pending' &&
-    request.hostId !== DIRECT_START_HOST_ID
-    ? { requestId: request.id, hostId: request.hostId }
-    : null;
+export async function awaitingExecution(
+  request: Pick<ResourceStartRequestInspection, 'id' | 'hostId' | 'status' | 'runStatus'> | null,
+  run: WorkflowRun,
+  observer: StartExecutorObserver | undefined
+): Promise<AwaitingExecution | null> {
+  if (
+    request?.status !== 'admitted' ||
+    request.runStatus !== 'pending' ||
+    request.hostId === DIRECT_START_HOST_ID
+  )
+    return null;
+  const waiting = { requestId: request.id, hostId: request.hostId };
+  if (observer === undefined) return { ...waiting, state: 'unknown', executor: null };
+  const observed = await observer.observe(run);
+  return observed === null ? null : { ...waiting, ...observed };
 }
 
 export function validateStartReceiptLimit(limit = 50): number {

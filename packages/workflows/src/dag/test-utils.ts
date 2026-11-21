@@ -214,6 +214,9 @@ export function createMockStore(): MockWorkflowStore {
       updateWorkflowRunMetadataIfRunning: mock<
         IWorkflowStore['updateWorkflowRunMetadataIfRunning']
       >(async () => true),
+      updateWorkflowRunMetadataIfPending: mock<
+        IWorkflowStore['updateWorkflowRunMetadataIfPending']
+      >(async () => true),
       updateWorkflowRun: mock<IWorkflowStore['updateWorkflowRun']>(
         async (_id, _updates) => undefined
       ),

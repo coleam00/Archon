@@ -2103,6 +2103,12 @@ declare module 'archon:script' {
       readonly awaitingExecution: {
         readonly requestId: string;
         readonly hostId: string;
+        readonly state: 'starting' | 'unowned' | 'unknown';
+        readonly executor: {
+          readonly host: string;
+          readonly pid: number;
+          readonly uid?: number;
+        } | null;
       } | null;
       readonly spend: {
         readonly usd: number | null;
@@ -2623,6 +2629,12 @@ declare module 'archon:script' {
         readonly awaitingExecution: {
           readonly requestId: string;
           readonly hostId: string;
+          readonly state: 'starting' | 'unowned' | 'unknown';
+          readonly executor: {
+            readonly host: string;
+            readonly pid: number;
+            readonly uid?: number;
+          } | null;
         } | null;
         readonly spend: {
           readonly usd: number | null;

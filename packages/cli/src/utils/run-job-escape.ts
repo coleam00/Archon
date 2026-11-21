@@ -5,7 +5,7 @@ import { createConnection, createServer, type Socket } from 'node:net';
 import type { Readable, Writable } from 'node:stream';
 import { resolve } from 'node:path';
 import { parseArgs } from 'util';
-import { BUNDLED_IS_BINARY } from '@archon/paths';
+import { BUNDLED_IS_BINARY, createLogger } from '@archon/paths';
 import { cliArgOptions } from '../args';
 import type { runDetachedControlCommand } from '../commands/workflow-detach';
 import { withDrainedExit } from './exit-with-drain';
@@ -126,16 +126,18 @@ export function isTriggerExecutor(args: readonly string[]): boolean {
 }
 
 /**
- * Start a detached trigger executor appending its output to `log`, and resolve once it has
- * started. It does not wait for the executor, which runs a whole workflow.
+ * Start a detached trigger executor appending its output to `log`, and resolve with its pid
+ * once it has started. It does not wait for the executor, which runs a whole workflow. It
+ * rejects only before the executor starts.
  */
 async function spawnTriggerExecutor(
   [command, ...args]: readonly [string, ...string[]],
   cwd: string,
   env: Readonly<Record<string, string | undefined>>,
   log: string
-): Promise<void> {
+): Promise<number> {
   const file = await open(log, 'a', 0o600);
+  let pid: number;
   try {
     const child = spawn(command, args, {
       cwd,
@@ -144,13 +146,38 @@ async function spawnTriggerExecutor(
       windowsHide: true,
       env,
     });
-    await new Promise<void>((resolveSpawn, reject) => {
+    // Node sets `pid` before `spawn` fires, so a missing pid means nothing started.
+    pid = await new Promise<number>((resolveSpawn, reject) => {
       child.once('error', reject);
-      child.once('spawn', resolveSpawn);
+      child.once('spawn', () =>
+        child.pid === undefined
+          ? reject(new Error('The spawned executor reported no process id.'))
+          : resolveSpawn(child.pid)
+      );
     });
     child.unref();
-  } finally {
+  } catch (error) {
     await file.close();
+    throw error;
+  }
+  // The executor holds its own copy of the log descriptor; closing ours cannot undo the start.
+  await file.close().catch((error: unknown) => {
+    createLogger('cli.run-job-escape').warn(
+      { err: error as Error },
+      'trigger_executor.log_close_failed'
+    );
+  });
+  return pid;
+}
+
+/**
+ * Relaying a trigger executor through the run's broker failed. The broker may have started
+ * it before the failure, so whether it runs is unknown.
+ */
+export class TriggerExecutorRelayError extends Error {
+  constructor(options: ErrorOptions) {
+    super('The run job broker did not confirm the trigger executor', options);
+    this.name = 'TriggerExecutorRelayError';
   }
 }
 
@@ -165,34 +192,41 @@ export interface TriggerExecutorLaunch {
 /**
  * Start a detached trigger executor. Inside a Windows run it starts through that run's
  * broker, so it is outside the run's job and outlives the run; elsewhere it starts here.
+ * Resolves with the executor's pid when it started here, and with undefined when the broker
+ * started it, since the broker does not report it. A failed relay rejects with
+ * {@link TriggerExecutorRelayError}.
  */
 export async function startTriggerExecutor(
   launch: TriggerExecutorLaunch,
   localProgram: readonly [string, ...string[]]
-): Promise<void> {
+): Promise<number | undefined> {
   const pipe = process.env[RUN_JOB_ESCAPE_ENV];
-  if (pipe === undefined) {
-    await spawnTriggerExecutor(
+  if (pipe === undefined)
+    return spawnTriggerExecutor(
       [...localProgram, ...launch.args],
       launch.cwd,
       launch.env,
       launch.log
     );
-    return;
-  }
   const discard = async (): Promise<void> => undefined;
-  const code = await relayOutsideRunJob(
-    pipe,
-    {
-      argv: [...brokerProgram(), ...launch.args],
-      cwd: launch.cwd,
-      env: launch.env,
-      log: launch.log,
-    },
-    { stdout: discard, stderr: discard }
-  );
+  let code: number;
+  try {
+    code = await relayOutsideRunJob(
+      pipe,
+      {
+        argv: [...brokerProgram(), ...launch.args],
+        cwd: launch.cwd,
+        env: launch.env,
+        log: launch.log,
+      },
+      { stdout: discard, stderr: discard }
+    );
+  } catch (error) {
+    throw new TriggerExecutorRelayError({ cause: error });
+  }
   if (code !== 0)
     throw new Error(`The run job broker could not start the trigger executor (${String(code)})`);
+  return undefined;
 }
 
 /** Run one relayed invocation and stream its output and exit status back. */
