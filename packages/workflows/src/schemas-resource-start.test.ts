@@ -165,6 +165,37 @@ describe('item mapping', () => {
       expect(mappedItemKey(mapping, value)).toEqual({ ok: false, reason });
   });
 
+  test("a run-ended or asks-settled file reads the item's answers; a linked one is refused", async () => {
+    const { triggerConfigSchema } = await import('./schemas/resource-start');
+    const file = (on: unknown) => ({
+      version: 1,
+      sourceInstanceId: 'source',
+      binding: {
+        bindingId: 'b',
+        bindingRevision: null,
+        hostId: 'h',
+        runAsUserId: 'u',
+        resource: 'r',
+        overlap: 'queue',
+        launch: { cwd: '/repo', workflowName: 'w', inputs: {}, isolation: { kind: 'default' } },
+      },
+      on,
+    });
+    const inputs = { decided: { item: 'answers' } };
+    const runEnded = { workflowName: 'plan', outcome: 'done', inputs };
+    for (const on of [
+      { runEnded },
+      { asksSettled: { workflowName: 'plan', settled: 'answered', inputs } },
+    ])
+      expect(triggerConfigSchema.safeParse(file(on)).success).toBe(true);
+    const linked = triggerConfigSchema.safeParse(
+      file({ runEnded: { ...runEnded, linked: { kind: 'part_of', holder: 'to' } } })
+    );
+    expect(linked.error?.issues.map(issue => issue.message)).toEqual([
+      "A linked start is on a holder item, so it cannot read the item's answers; read them in the started stage",
+    ]);
+  });
+
   test('a trigger file maps an item only when fire-only', async () => {
     const { triggerConfigSchema } = await import('./schemas/resource-start');
     const fireOnly = {

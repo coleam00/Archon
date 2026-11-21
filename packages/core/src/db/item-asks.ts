@@ -242,6 +242,21 @@ async function recordSettlement(
   );
   const row = asking.rows[0];
   const metadata = row === undefined ? undefined : jsonColumn(row.metadata);
+  const itemId = settledSet.rows[0]?.item_id;
+  // Every ask on the item, read here so this close's answer is in it. Degrading, not
+  // throwing: an old unreadable ask fails only a binding that reads the item's answers.
+  const itemAsks =
+    itemId === undefined
+      ? []
+      : readAsks(
+          (
+            await query<AskRow>(
+              `SELECT * FROM remote_agent_item_asks WHERE item_id = $1
+               ORDER BY created_at, run_id, position`,
+              [itemId]
+            )
+          ).rows
+        );
   const receipts = startsOnSettle(
     settledSet.rows.map(readAskOrThrow),
     row === undefined
@@ -251,7 +266,8 @@ async function recordSettlement(
             metadata !== null && typeof metadata === 'object' && !Array.isArray(metadata)
               ? (metadata as Record<string, unknown>)
               : {},
-        }
+        },
+    itemAsks
   );
   for (const receipt of receipts) await insertStartReceipt(query, receipt);
   return receipts;
@@ -272,12 +288,14 @@ function priorClose(ask: StoredItemAsk, write: CloseWrite): ItemAskCloseResult |
 
 /**
  * Builds the starts a settled set causes, inside the settling transaction: the set's rows
- * after this close, and the metadata of the run that left them, null when it was deleted.
- * See `createAsksSettledStarts` in core's workflows.
+ * after this close, the metadata of the run that left them, null when it was deleted, and
+ * every ask on the set's item after this close, oldest first. See `createAsksSettledStarts`
+ * in core's workflows.
  */
 export type StartsOnSettle = (
   rows: readonly StoredItemAsk[],
-  run: { metadata: Record<string, unknown> } | null
+  run: { metadata: Record<string, unknown> } | null,
+  itemAsks: readonly AttentionRead<StoredItemAsk>[]
 ) => readonly SourceReceiptAcceptance[];
 
 async function closeItemAsk(
