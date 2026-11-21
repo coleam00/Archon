@@ -2037,6 +2037,12 @@ counts toward `idle_timeout` while waiting for settlement, even with live work;
 the node can fail before the attention threshold. A new running wake turn or
 newly started tool or subtask restores live-work protection until its next result.
 
+Before that, the engine sends the stalled session up to `workflows.stallMessageLimit`
+messages (2 by default) stating how long the work has shown no progress, without ending
+the call; `workflow status` shows the latest under the run, and `workflow logs` prints
+each with its text, or the provider's refusal. An agent that continues needs no
+request. See [workflow attention settings](/reference/configuration/#workflow-attention-and-continuation-settings).
+
 The command records each observed `(streamId, toolCallId, raisedAt)` occurrence.
 A live owner checks about every ten seconds and aborts only one of its own current
 stalls that matches all three fields by equality. The attempt fails as `timeout`;

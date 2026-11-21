@@ -25,8 +25,11 @@ interface ToolCallAttentionOptions {
   streamId?: string;
 }
 
-/** The stall occurrences currently published by a stream. */
-export type StreamStall = Pick<ToolCallAttention, 'streamId' | 'toolCallId' | 'raisedAt'>[];
+/** The stall occurrences currently published by a stream, with the facts each one shows. */
+export type StreamStall = Pick<
+  ToolCallAttention,
+  'streamId' | 'toolCallId' | 'raisedAt' | 'name' | 'title' | 'startedAt' | 'lastProgressAt'
+>[];
 
 type SubtaskEvent = Extract<ProviderEvent, { type: 'subtask' }>;
 
@@ -129,11 +132,17 @@ function createToolCallAttention(
   async function writeSnapshot(): Promise<boolean> {
     const calls = stalledCalls();
     stall = undefined;
-    const occurrences = calls.map(({ streamId, toolCallId, raisedAt }) => ({
-      streamId,
-      toolCallId,
-      raisedAt,
-    }));
+    const occurrences = calls.map(
+      ({ streamId, toolCallId, raisedAt, name, title, startedAt, lastProgressAt }) => ({
+        streamId,
+        toolCallId,
+        raisedAt,
+        name,
+        ...(title !== undefined ? { title } : {}),
+        startedAt,
+        lastProgressAt,
+      })
+    );
     const snapshot = JSON.stringify(toolCallAttentionArraySchema.parse(calls));
     if (snapshot === persisted) {
       stall = occurrences.length === 0 ? undefined : occurrences;

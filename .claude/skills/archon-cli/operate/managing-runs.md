@@ -258,6 +258,16 @@ item and the `--watch` stream does not report it. `workflow wait <run-id>`
 returns it as `attention.kind: "stalled_tool_calls"`, and `workflow status` prints it
 under the run.
 
+The engine first asks the agent: it writes a short factual message into the same
+session, up to `workflows.stallMessageLimit` times (2 by default, one threshold apart),
+and never ends the call. `workflow status` shows `Engine: [node] engine sent the stalled
+session a message (1 of 2)`, or the provider's refusal when it refused one, and
+`workflow logs` prints each message with its text. The agent reads it at its next step,
+so it cannot reach a tool call that never returns. Any provider whose capabilities
+declare `turnMessages` takes it (Claude and Codex today, and a plugin that declares it);
+one that does not records that it cannot. `stallMessageLimit: 0` sends and records
+nothing. Set the limit in global or repository config; a run config file refuses it.
+
 - **`archon workflow end-turn <run-id>`** when the stalled work is done or useless and
   the rest of the run is worth keeping. It records a request; the live owner checks
   about every ten seconds and ends that turn if the same stall is still there. The

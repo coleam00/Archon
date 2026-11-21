@@ -18,6 +18,7 @@ import type { AppServerConnection, ParamsOf } from './app-server';
 import { withDeliveredCredentialConfig, type CodexLogin, type ThreadParams } from './login';
 import { toolResponse, type buildCodexNativeTools } from './native-tools';
 import type { ServerNotification } from './protocol/ServerNotification';
+import { steered, type TurnIds } from './turn-messages';
 import type { McpServerStatusUpdatedNotification } from './protocol/v2/McpServerStatusUpdatedNotification';
 import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot';
 import type { ThreadItem } from './protocol/v2/ThreadItem';
@@ -259,6 +260,8 @@ function codexHomeOf(initializeResponse: unknown): string {
 
 export interface TurnRequest {
   abortSignal: AbortSignal | undefined;
+  /** Engine texts to steer into the active turn (`SendQueryOptions.turnMessages`). */
+  turnMessages?: AsyncIterable<string>;
   tools: ReturnType<typeof buildCodexNativeTools>;
   connection: AppServerConnection;
   login: CodexLogin | undefined;
@@ -285,12 +288,6 @@ export interface TurnRequest {
   onTurn: (turnId: string) => void;
   /** Receives the context window Codex reports for the turn's model. */
   onContextWindow: (tokens: number) => void;
-}
-
-/** The ids of the parent thread and turn this stream observes. */
-interface TurnIds {
-  threadId: string;
-  turnId: string;
 }
 
 /** What the notifications of one turn have shown so far. */
@@ -394,8 +391,9 @@ export async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageC
   const turnId = await startTurn(request, threadId, observation);
   const ids = { threadId, turnId };
 
-  for await (const notification of connection.notifications()) {
-    yield* observeNotification(request, ids, observation, notification);
+  for await (const next of steered(connection, ids, request.turnMessages)) {
+    if (!('method' in next)) yield next;
+    else yield* observeNotification(request, ids, observation, next);
     // While observed work remains live, starts on this parent turn and recognized
     // descendant threads are still accepted after parent completion. No live work ends
     // observation; it does not establish that Codex cannot report another start later.

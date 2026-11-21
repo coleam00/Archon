@@ -16,6 +16,13 @@ export const providerCapabilitiesSchema = z.object({
    * while leaving the source unchanged. Omission means unsupported.
    */
   sessionFork: z.boolean().optional(),
+  /**
+   * Whether the provider can deliver an engine-written user message (`turnMessages`)
+   * into the live session while a turn runs, without interrupting it. The agent reads
+   * the message at its next step, so it cannot reach a tool call that never returns.
+   * Omission means unsupported.
+   */
+  turnMessages: z.boolean().optional(),
   mcp: z.boolean(),
   hooks: z.boolean(),
   skills: z.boolean(),
