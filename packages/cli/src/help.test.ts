@@ -270,7 +270,7 @@ Options:
   --workflow-source <path>   Read the workflow, its commands and scripts from this checkout root
                              (<path>/.archon/workflows) instead of --cwd (which stays the workspace the run acts on)
   --no-worktree              Run on branch directly without worktree isolation
-  --folder                   Register the current directory (with or without git) as a folder project; workflow run runs in place
+  --folder                   Register the target directory (the project add path, else the current directory), with or without git, as a folder project; workflow run runs in place
   --container                Run a folder project in container isolation
   --input <name>=<value>     Supply a declared workflow input; repeat per input
   --input-file <name>=<path> Supply a declared workflow input from a file's contents; repeat per input

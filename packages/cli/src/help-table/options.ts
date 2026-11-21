@@ -57,7 +57,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--folder',
     description:
-      'Register the current directory (with or without git) as a folder project; workflow run runs in place',
+      'Register the target directory (the project add path, else the current directory), with or without git, as a folder project; workflow run runs in place',
     owners: [
       { command: 'workflow', subcommand: 'run' },
       { command: 'project', subcommand: 'add' },
