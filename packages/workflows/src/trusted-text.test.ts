@@ -5,6 +5,8 @@ import {
   assertTrustedTextProviderSupported,
   assertTrustedTextWorkflowSupported,
   inheritedTrustedTextMetadata,
+  trustedTextInputs,
+  type TrustedTextRunMetadata,
 } from './trusted-text';
 import type { DagNode } from './schemas';
 
@@ -18,6 +20,41 @@ ${node}`).workflow;
 }
 
 describe('trusted text protected-mode boundary', () => {
+  test('the snapshot owns its named input and conflicting values fail closed', () => {
+    const snapshot: TrustedTextRunMetadata = {
+      schemaVersion: 1,
+      requirement: {
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        maintainersPath: '.archon/maintainers.json',
+        input: 'accepted_item',
+      },
+      title: 'Accepted',
+      body: 'Snapshot',
+      contentDigest: 'a'.repeat(64),
+      policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+    };
+    const value = { title: 'Accepted', body: 'Snapshot' };
+    expect(trustedTextInputs(undefined, snapshot)).toEqual({ accepted_item: value });
+    expect(
+      trustedTextInputs(
+        { other: true, accepted_item: { body: 'Snapshot', title: 'Accepted' } },
+        snapshot
+      )
+    ).toEqual({ other: true, accepted_item: value });
+    for (const wrong of [
+      null,
+      'Snapshot',
+      { title: 'Caller', body: 'Snapshot' },
+      { ...value, other: 'Unaccepted' },
+    ]) {
+      expect(() => trustedTextInputs({ accepted_item: wrong }, snapshot)).toThrow(
+        'trusted_text_input_mismatch'
+      );
+    }
+  });
   test('propagates the accepted snapshot to child run metadata', () => {
     const snapshot = { schemaVersion: 1, title: 'Accepted' };
     expect(inheritedTrustedTextMetadata({ trusted_text: snapshot })).toEqual({

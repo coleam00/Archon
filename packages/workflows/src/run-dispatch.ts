@@ -40,6 +40,7 @@ import {
   TRUSTED_TEXT_METADATA_KEY,
   TrustedTextAdmissionError,
   type TrustedTextRunMetadata,
+  trustedTextInputs,
 } from './trusted-text';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -188,8 +189,19 @@ async function authorizePreCreatedTrustedText(
   run: ExecuteWorkflowOptions['preCreatedRun'],
   isContinuation: boolean
 ): Promise<void> {
-  if (!run || readTrustedTextMetadata(run)) return;
+  if (!run) return;
   try {
+    const snapshot = readTrustedTextMetadata(run);
+    if (snapshot) {
+      run.metadata = {
+        ...run.metadata,
+        ...runInputsMetadata(
+          trustedTextInputs(readSubrunMetadata(run.metadata).inputs, snapshot),
+          true
+        ),
+      };
+      return;
+    }
     const trustedText = await authorizeDeclaredItem(deps, run);
     if (trustedText) {
       if (isContinuation) throw new Error('trusted_text_unprotected_continuation');

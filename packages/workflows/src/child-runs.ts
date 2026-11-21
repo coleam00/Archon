@@ -31,8 +31,12 @@ import type {
   WorkflowWithSource,
 } from './schemas';
 import { findWorkflowLoadError } from './schemas/workflow';
-import { SUBRUN_METADATA_KEYS, runInputsMetadata } from './schemas';
-import { inheritedTrustedTextMetadata } from './trusted-text';
+import { SUBRUN_METADATA_KEYS, runInputsMetadata, readSubrunMetadata } from './schemas';
+import {
+  inheritedTrustedTextMetadata,
+  readTrustedTextMetadata,
+  trustedTextInputs,
+} from './trusted-text';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
@@ -343,12 +347,18 @@ async function guardChildAncestry(
 // child run row exists: a contract violation must never leave an orphan worktree
 // or a doomed child row behind.
 function resolveChildInputs(
-  { nodeId, inputs }: RunChildWorkflowArgs,
+  { nodeId, inputs, parentRun, resumeChild }: RunChildWorkflowArgs,
   childWorkflow: ResolvedWorkflow
 ): ChildPhase<Record<string, JsonValue> | undefined> {
   try {
+    const snapshot = readTrustedTextMetadata(parentRun);
+    if (snapshot && resumeChild) {
+      const inherited = readTrustedTextMetadata(resumeChild.run);
+      if (!inherited) return refuse('trusted_text_unprotected_continuation');
+      trustedTextInputs(readSubrunMetadata(resumeChild.run.metadata).inputs, inherited);
+    }
     const resolved = resolveCallerInputs(
-      inputs ?? {},
+      snapshot ? trustedTextInputs(inputs, snapshot) : (inputs ?? {}),
       childWorkflow,
       `Node '${nodeId}'`,
       `sub-run workflow '${childWorkflow.name}'`

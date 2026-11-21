@@ -55,6 +55,84 @@ async function blockedBy(
 }
 
 describe('concurrent-run guard', () => {
+  it.each(['missing', 'matching', 'conflicting', 'resume-conflicting'] as const)(
+    'an inherited pre-created snapshot owns its stored input: %s',
+    async mode => {
+      const trustedText: TrustedTextRunMetadata = {
+        schemaVersion: 1,
+        requirement: {
+          subject: {
+            kind: 'issue',
+            ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+          },
+          maintainersPath: '.archon/maintainers.json',
+          input: 'trusted_item',
+        },
+        title: 'Accepted',
+        body: 'Snapshot',
+        contentDigest: 'a'.repeat(64),
+        policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+      };
+      const accepted = { title: 'Accepted', body: 'Snapshot' };
+      const conflict = mode === 'conflicting' || mode === 'resume-conflicting';
+      const run = makeRun({
+        status: mode === 'resume-conflicting' ? 'running' : 'pending',
+        metadata: {
+          trusted_text: trustedText,
+          ...(mode === 'missing'
+            ? {}
+            : {
+                inputs_values: {
+                  trusted_item: conflict ? { title: 'Caller', body: 'Unaccepted' } : accepted,
+                },
+              }),
+        },
+      });
+      const store = makeStore();
+      const deps = makeDeps(store);
+      deps.trustedText = {
+        readEvidence: async () => {
+          throw new Error('unexpected evidence read');
+        },
+        authorize: async () => {
+          throw new Error('unexpected authorization');
+        },
+        recheck: async () => undefined,
+      };
+      const input = {
+        deps,
+        options: { preCreatedRun: run },
+        workflow: makeWorkflow({
+          webSearchMode: 'disabled',
+          inputs: { trusted_item: { required: true } },
+          nodes: [
+            {
+              id: 'reader',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Read' },
+              allowed_tools: ['Read'],
+            },
+          ],
+        }),
+      };
+      if (conflict) {
+        await expect(startWorkflow(input)).rejects.toThrow('trusted_text_input_mismatch');
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+        expect(store.claimPendingWorkflowRun).not.toHaveBeenCalled();
+      } else {
+        await startWorkflow(input);
+        expect(dagCall(0)?.workflowRun.metadata.inputs_values).toMatchObject({
+          trusted_item: accepted,
+        });
+        expect(
+          mocked(store.updateWorkflowRun).mock.calls.some(([, update]) =>
+            isDeepStrictEqual(update.metadata?.inputs_values, { trusted_item: accepted })
+          )
+        ).toBe(true);
+      }
+    }
+  );
+
   it('refuses a manual start that bypasses prepared trusted-text authorization', async () => {
     const store = makeStore();
     const deps = makeDeps(store);

@@ -7,6 +7,8 @@ import type { ExecuteWorkflowOptions } from './executor';
 import type { WorkflowRun } from './schemas/workflow-run';
 import { readSubrunMetadata, runInputsMetadata } from './schemas/run-metadata';
 import type { ProviderCapabilities } from '@archon/provider-contract';
+import type { JsonValue } from './output-ref';
+import { isDeepStrictEqual } from 'node:util';
 
 const actorSchema = z.object({
   host: z.string().min(1),
@@ -54,6 +56,18 @@ export function inheritedTrustedTextMetadata(
 ): Record<string, unknown> {
   const snapshot = parentMetadata[TRUSTED_TEXT_METADATA_KEY];
   return snapshot === undefined ? {} : { [TRUSTED_TEXT_METADATA_KEY]: snapshot };
+}
+
+/** The accepted snapshot, not a caller or a default, owns this input. */
+export function trustedTextInputs(
+  inputs: Readonly<Record<string, JsonValue>> | undefined,
+  snapshot: TrustedTextRunMetadata
+): Record<string, JsonValue> {
+  const name = snapshot.requirement.input;
+  const value = { title: snapshot.title, body: snapshot.body };
+  if (inputs && Object.hasOwn(inputs, name) && !isDeepStrictEqual(inputs[name], value))
+    throw new TrustedTextAdmissionError('trusted_text_input_mismatch');
+  return { ...inputs, [name]: value };
 }
 
 export interface TrustedTextEvidence {
@@ -172,6 +186,7 @@ export async function recheckTrustedTextAdmission(
   if (!snapshot) return;
   try {
     if (!deps.trustedText) throw new Error('trusted_text_host_unavailable');
+    trustedTextInputs(readSubrunMetadata(run.metadata).inputs, snapshot);
     assertTrustedTextWorkflowSupported(workflow);
     await deps.trustedText.recheck(snapshot);
   } catch (error) {

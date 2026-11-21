@@ -14,6 +14,7 @@ import {
   dagOptions,
   makeWorkflowRun,
   mockSendQueryDag,
+  persistedEvents,
 } from './test-utils';
 
 let root: string;
@@ -186,4 +187,47 @@ test("protected sequential agents still fork only this run's history", async () 
   expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
   expect(mockSendQueryDag.mock.calls[1][2]).toBe('dag-session-id');
   expect(deps.trustedText.recheck).toHaveBeenCalledTimes(2);
+});
+
+test('a later agent rejects input drift even when the inherited snapshot still rechecks', async () => {
+  const deps = createMockDeps();
+  const run = makeWorkflowRun('protected', {
+    metadata: {
+      trusted_text: snapshot,
+      inputs_values: { trusted_item: { title: snapshot.title, body: snapshot.body } },
+    },
+  });
+  deps.trustedText = {
+    readEvidence: async () => {
+      throw new Error('unexpected evidence read');
+    },
+    authorize: async () => {
+      throw new Error('unexpected authorization');
+    },
+    recheck: async () => undefined,
+  };
+  mockSendQueryDag.mockImplementationOnce(async function* () {
+    run.metadata.inputs_values = { trusted_item: { title: 'Caller', body: 'Unaccepted' } };
+    yield { type: 'result', sessionId: 'accepted-session' };
+  });
+  await executeDagWorkflow(
+    dagOptions({
+      deps,
+      cwd: root,
+      workflowRun: run,
+      workflow: {
+        name: 'input-drift',
+        webSearchMode: 'disabled',
+        nodes: ['first', 'second'].map((id, index) => ({
+          id,
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'Read' },
+          allowed_tools: ['Read'],
+          ...(index ? { depends_on: ['first'] } : {}),
+        })),
+      },
+    })
+  );
+  expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(persistedEvents(deps.store))).toContain('trusted_text_input_mismatch');
 });
