@@ -652,12 +652,8 @@ describe('workflowRunCommand — detach', () => {
   // check in the child.
   it('refuses an isolating launch whose project lookup fails, before forking', async () => {
     jest.useRealTimers();
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const codebaseDb = await import('@archon/core/db/codebases');
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
-      errors: [],
-    });
+    // A worktree run looks its project up to plan its definitions, before discovery.
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockRejectedValueOnce(
       new Error('ECONNREFUSED')
     );

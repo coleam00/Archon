@@ -1,11 +1,11 @@
-import { mkdir, rename, rm } from 'fs/promises';
+import { copyFile, mkdir, rename, rm, stat } from 'fs/promises';
 import { dirname, join } from 'path';
 import * as archonPaths from '@archon/paths';
 import { BUNDLED_VERSION } from '@archon/paths/bundled-build';
 import type { WorkflowSourceConfig } from '../schemas/workflow-run';
 import { resolveBundledScope, writeBundledScope } from './bundled-scope';
 import { listInstalledPacks, type InstalledPluginRecord } from './installed-packs';
-import { WorkflowSourceUnavailableError } from './integrity';
+import { isSystemError, WorkflowSourceUnavailableError } from './integrity';
 import {
   digestEntries,
   foldDigest,
@@ -72,6 +72,13 @@ export async function captureWorkflowSource(opts: {
    * started cannot give the child a different revision from its parent.
    */
   installedFrom?: InstalledPacksRoot;
+  /** The directory recorded as the authoring origin, when `sourceRoot` is a temporary composition. */
+  origin?: string;
+  /**
+   * Also freeze `sourceRoot/.archon/config.yaml`, under `project/.archon/config.yaml`, so
+   * the run reads the project config it started with and the digest covers it.
+   */
+  includeProjectConfig?: boolean;
 }): Promise<WorkflowSourceCapture> {
   const {
     sourceRoot,
@@ -79,6 +86,7 @@ export async function captureWorkflowSource(opts: {
     commandFolder,
     sourceConfig = DEFAULT_WORKFLOW_SOURCE_CONFIG,
   } = opts;
+  const origin = opts.origin ?? sourceRoot;
 
   // The bundled scope is not among the jobs: it is this build's own, read once into a
   // {@link BundledScope} and written from there.
@@ -92,8 +100,9 @@ export async function captureWorkflowSource(opts: {
   await rm(staging, { recursive: true, force: true });
   try {
     const manifest = await stageCapture(staging, jobs, installed, {
-      origin: sourceRoot,
+      origin,
       sourceConfig,
+      projectConfig: opts.includeProjectConfig ? join(sourceRoot, PROJECT_CONFIG_FILE) : undefined,
     });
 
     // Replace rather than merge: a stale capture at this path would silently mix two
@@ -104,7 +113,7 @@ export async function captureWorkflowSource(opts: {
 
     logCaptured(sourceRoot, captureRoot, manifest);
     return {
-      origin: sourceRoot,
+      origin,
       manifest,
       anchor: { root: captureRoot, digest: manifest.digest, config: manifest.source_config },
     };
@@ -112,6 +121,18 @@ export async function captureWorkflowSource(opts: {
     await rm(staging, { recursive: true, force: true }).catch(() => {
       /* best-effort: the partial directory is inert, and the original error matters more */
     });
+    throw error;
+  }
+}
+
+/** The project config, relative to a project root. */
+const PROJECT_CONFIG_FILE = join('.archon', 'config.yaml');
+
+async function isFile(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
+  } catch (error) {
+    if (isSystemError(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) return false;
     throw error;
   }
 }
@@ -176,7 +197,7 @@ async function stageCapture(
   staging: string,
   jobs: readonly CaptureJob[],
   installed: InstalledCapture,
-  source: { origin: string; sourceConfig: WorkflowSourceConfig }
+  source: { origin: string; sourceConfig: WorkflowSourceConfig; projectConfig?: string }
 ): Promise<WorkflowSourceManifest> {
   let fileCount = 0;
   let byteCount = 0;
@@ -188,6 +209,14 @@ async function stageCapture(
     const copied = await copyListing(await listTree(job.from), target);
     fileCount += copied.files;
     byteCount += copied.bytes;
+  }
+  if (source.projectConfig !== undefined && (await isFile(source.projectConfig))) {
+    const target = join(staging, PROJECT_SCOPE_DIR, PROJECT_CONFIG_FILE);
+    await mkdir(dirname(target), { recursive: true });
+    await copyFile(source.projectConfig, target);
+    fileCount += 1;
+    byteCount += (await stat(target)).size;
+    scopesCaptured.add('project');
   }
 
   // The run's own bundled bytes, written from what this process already holds. They have

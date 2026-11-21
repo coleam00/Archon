@@ -16,7 +16,7 @@ export const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--project <id|name>',
-    description: `Bind to a registered repository (see project list). Source/config come from --cwd;\nisolated execution uses the registered checkout. Use --no-worktree to execute in --cwd.\nCannot combine with ${RUN_PROJECT_CONFLICT_FLAGS.map(flag => `--${flag}`).join(', ')}.`,
+    description: `Bind to a registered repository (see project list). Definitions come from the base branch\nwith --cwd's uncommitted changes on top; isolated execution uses the registered checkout.\nUse --no-worktree to execute in --cwd.\nCannot combine with ${RUN_PROJECT_CONFLICT_FLAGS.map(flag => `--${flag}`).join(', ')}.`,
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
@@ -43,7 +43,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--workflow-source <path>',
     description:
-      'Read the workflow, its commands and scripts from this checkout root\n(<path>/.archon/workflows) instead of --cwd (which stays the workspace the run acts on)',
+      "Read the workflow, its commands and scripts from this checkout root as it is\n(<path>/.archon/workflows), instead of the base branch with --cwd's uncommitted changes on top\n(--cwd stays the workspace the run acts on)",
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {

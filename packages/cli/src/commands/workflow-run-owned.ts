@@ -8,6 +8,7 @@ import {
 } from '../utils/detached-run-control';
 import { consumeDetachedResumeReceiptRequest } from '../utils/detached-resume-receipt';
 import { getLog, type WorkflowRunOptions } from './workflow-shared';
+import { writeStderr } from '../utils/stdout';
 import { recordDetachedChildStartupFailure } from './workflow-detach';
 import { runDryRun } from './workflow-dry-run';
 import {
@@ -30,6 +31,56 @@ import {
   recordConversationLaunch,
 } from './workflow-run-launch';
 import { executeOwnedRun } from './workflow-run-execution';
+import { pinnedInPlace, previewPlan } from './workflow-run-definitions';
+import {
+  DefinitionSourceError,
+  withLayeredDefinitions,
+} from '@archon/core/workflows/definition-source';
+
+/**
+ * A dry run reads the definitions the real run would: the base branch with the checkout's
+ * uncommitted changes on top, composed for the length of the dry run, unless the run reads
+ * a directory as it is (an explicit source, an in-place or folder run) or its workflow
+ * pins itself in place.
+ */
+async function previewRun(request: OwnedRunRequest): Promise<void> {
+  const { host, cwd, userMessage, options, workflowName } = request;
+  const preview = async (previewRoot: string | undefined): Promise<'done' | 'in-place'> => {
+    const selection = await selectRunWorkflow({ ...request, previewRoot });
+    const { workflow, runConfig, modelOverrides } = selection;
+    if (previewRoot !== undefined && workflow.worktree?.enabled === false) return 'in-place';
+    await runDryRun(
+      host,
+      workflow,
+      cwd,
+      userMessage,
+      options,
+      runConfig,
+      modelOverrides,
+      previewRoot
+    );
+    return 'done';
+  };
+  const plan = await previewPlan(cwd, options);
+  if (plan.kind === 'directory') {
+    await preview(undefined);
+    return;
+  }
+  let outcome: 'done' | 'in-place';
+  try {
+    outcome = await withLayeredDefinitions(plan, composed => preview(composed.root));
+  } catch (error) {
+    if (!(error instanceof DefinitionSourceError)) throw error;
+    // A dry run still previews a checkout whose base cannot be read, so a workflow can be
+    // tried before the project has a remote; it says the real run would refuse.
+    if (!(await pinnedInPlace(host, cwd, workflowName)))
+      await writeStderr(
+        `${error.message}\nPreviewing the checkout as it is; a real run would refuse to start.\n`
+      );
+    outcome = 'in-place';
+  }
+  if (outcome === 'in-place') await preview(undefined);
+}
 
 /**
  * One attempt of a run, under an owner that reclaims its captured source unless the run
@@ -39,13 +90,12 @@ import { executeOwnedRun } from './workflow-run-execution';
 async function runWorkflowWithOwnedSource(
   request: OwnedRunRequest
 ): Promise<PendingWaitContinuation | undefined> {
-  const { host, cwd, userMessage, options } = request;
-  const selection = await selectRunWorkflow(request);
+  const { host, options } = request;
   if (options.dryRun) {
-    const { workflow, runConfig, modelOverrides } = selection;
-    await runDryRun(host, workflow, cwd, userMessage, options, runConfig, modelOverrides);
+    await previewRun(request);
     return undefined;
   }
+  const selection = await selectRunWorkflow(request);
   const admission = await admitRunExecution(request, selection);
   if (options.detach) {
     await launchDetachedOwnedRun(request, admission);

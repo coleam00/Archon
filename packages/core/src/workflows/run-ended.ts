@@ -34,10 +34,15 @@ import {
   type TriggerConfig,
 } from '@archon/workflows/schemas/resource-start';
 import type { WorkflowItem, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowDeps } from '@archon/workflows/deps';
+import type { IWorkflowStore } from '@archon/workflows/store';
 import { declaredOutcome, outcomeValues } from '@archon/workflows/completed-outcome';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import {
+  discoverBindingWorkflows,
+  type BindingDefinitionsDeps,
+  type DefinitionsProject,
+} from './definition-source';
+import { preparedLanding } from './binding-definitions';
 import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
 import { getArchonHome } from '@archon/paths';
 import { selectStartedWorkflow, type StartedWorkflow } from './binding-workflow';
@@ -438,13 +443,12 @@ export function declaredInputNames(workflow: Pick<ResolvedWorkflow, 'inputs' | '
  */
 export async function runEndedBindingCheck(
   { binding, runEnded }: RunEndedBinding,
-  deps: Pick<WorkflowDeps, 'loadConfig' | 'providers'>
+  deps: BindingDefinitionsDeps,
+  landing?: (project: DefinitionsProject) => Promise<string | undefined>
 ): Promise<string[]> {
-  const discovered = await discoverWorkflowsWithConfig(
-    binding.launch.discoveryCwd ?? binding.launch.cwd,
-    deps.loadConfig,
-    deps.providers
-  );
+  const read = await discoverBindingWorkflows(binding.launch, deps, landing);
+  if ('refused' in read) return [read.refused];
+  const { discovered } = read;
   const workflows = discovered.workflows.map(found => found.workflow);
   const problems: string[] = [];
   // A completion matches the ended run's own name exactly, so this does too.
@@ -500,8 +504,7 @@ export function startedWorkflowProblems(
  */
 export async function runEndedTriggerCheck(
   bindings: readonly RunEndedBinding[],
-  deps: Pick<WorkflowDeps, 'loadConfig' | 'providers'> &
-    Pick<RunEndedStartsDependencies, 'projectKeyOf'>
+  deps: BindingDefinitionsDeps & Pick<RunEndedStartsDependencies, 'projectKeyOf'>
 ): Promise<string[][]> {
   const problems: string[][] = [];
   const stages = new Map<string, number[]>();
@@ -552,7 +555,8 @@ export async function runEndedTriggerCheck(
  */
 export function createRunEndedPreflight(
   dependencies: Omit<RunEndedStartsDependencies, 'now' | 'endedCheckout'> &
-    Pick<WorkflowDeps, 'loadConfig' | 'providers'>
+    BindingDefinitionsDeps &
+    Pick<IWorkflowStore, 'getItemLanding' | 'listItemLinks'>
 ): (run: WorkflowRun) => Promise<void> {
   return async run => {
     if (!run.item_id) return;
@@ -564,7 +568,11 @@ export function createRunEndedPreflight(
     if (!item) throw new Error(`Run '${run.id}' names item '${run.item_id}', which is missing`);
     for (const candidate of candidates) {
       if ((await bindingProjectKey(candidate, dependencies)) !== item.projectKey) continue;
-      const problems = await runEndedBindingCheck(candidate, dependencies);
+      // The stage would start on this item, so its definitions come from the item's
+      // landing branch when it records one.
+      const problems = await runEndedBindingCheck(candidate, dependencies, project =>
+        preparedLanding(dependencies, project, item)
+      );
       if (problems.length > 0)
         throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
     }

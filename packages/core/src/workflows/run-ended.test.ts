@@ -9,6 +9,13 @@ import { providerRegistry } from '@archon/providers';
 import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
 import { createRunEndedPreflight, createRunEndedStarts, launchProjectKey } from './run-ended';
 
+/** Lookups the checks never reach in these tests: no project is registered. */
+const NO_PROJECT_LOOKUPS = {
+  projectOf: async () => null,
+  getItemLanding: async () => null,
+  listItemLinks: async () => [],
+};
+
 const track = trackTempRoots();
 
 const ITEM = { id: 'item-row', projectKey: 'acme/widgets', key: 'issue-7' };
@@ -170,6 +177,7 @@ describe('run-ended starts', () => {
       ...dependencies,
       providers: providerRegistry,
       loadConfig: () => Promise.reject(new Error('a run with no item loads no config')),
+      ...NO_PROJECT_LOOKUPS,
     });
     expect(await preflight(noItem)).toBeUndefined();
   });
@@ -326,6 +334,7 @@ describe('run-ended starts', () => {
           ...dependencies,
           providers: providerRegistry,
           loadConfig: () => Promise.reject(new Error('not reached')),
+          ...NO_PROJECT_LOOKUPS,
         })(endedRun()),
     ]) {
       const refused = read();

@@ -2,6 +2,7 @@
  * `archon pack bindings` against a minimal fixture pack, discovered from a real project
  * folder: what it writes is read back with the schemas of the loaders that consume it.
  */
+import { closeDatabase } from '@archon/core/db/connection';
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
@@ -196,6 +197,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   logSpy.mockRestore();
+  // A check reads the scratch home's codebase records; close the database before it goes.
+  await closeDatabase();
   await removeTempTree(root);
   if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
   else process.env.ARCHON_HOME = originalArchonHome;

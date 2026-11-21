@@ -4,6 +4,10 @@ import { join, resolve } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
+import {
+  DefinitionSourceError,
+  withLayeredDefinitions,
+} from '@archon/core/workflows/definition-source';
 import { checkoutRootAbove } from '@archon/core/workflows/binding-workflow';
 import {
   parseRunModelAssignments,
@@ -24,6 +28,15 @@ import {
   type ResolvedContinuation,
 } from '@archon/workflows/run-source';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { preparedSourceConfigRoot } from '@archon/workflows/workflow-source';
+import {
+  basePlan,
+  directoryPlan,
+  inPlacePlan,
+  pinnedInPlace,
+  runDefinitionsPlan,
+  type RunDefinitionsPlan,
+} from './workflow-run-definitions';
 import { resolveWorkflowName, suggestWorkflowNames } from '@archon/workflows/router';
 import { resolveTopLevelInputs } from '@archon/workflows/utils/workflow-requirements';
 import {
@@ -70,6 +83,8 @@ export interface OwnedRunRequest {
   readonly options: WorkflowRunOptions;
   readonly detachedProcessOwner: boolean;
   readonly launchToken?: string;
+  /** A dry run's composed base-plus-local definitions; it takes no capture. */
+  readonly previewRoot?: string;
   readonly notifyResumeAccepted?: (runId: string) => void;
 }
 
@@ -159,7 +174,7 @@ export async function selectRunWorkflow(request: OwnedRunRequest): Promise<RunSe
 
   const source: RunSourceSlot = { preparedSource: undefined, originalStagedRoot: undefined };
   if (!isContinuation && !options.dryRun && !options.stubsInitPath) {
-    await captureRunSource(request, source, options.discoveryCwd ?? cwd, preCreatedRun);
+    await captureFreshRunSource(request, source, preCreatedRun);
   }
   const { workflowEntries, errors } = await discoverRunWorkflows(
     request,
@@ -307,21 +322,86 @@ function assertDetachedRowWorkflow(row: WorkflowRun | undefined, workflow: Resol
 }
 
 /**
- * Capture `sourceRoot` into `slot`, filed under the pre-created run when one exists. A
- * capture it replaces is removed unless the replacement reused its directory.
+ * Settle the definitions once the lane is known: a run planned on the base branch that
+ * runs in place reads its checkout instead, and one whose base turned out to be another
+ * branch (a superseded run's item lands elsewhere) reads that branch. The graph and its
+ * gates are judged again against the new capture.
+ */
+async function settleRunDefinitions(
+  request: OwnedRunRequest,
+  admission: OwnedRunAdmission,
+  base: { branch: string } | undefined
+): Promise<void> {
+  const definitions = admission.preparedSource?.definitions;
+  if (definitions?.from !== 'base') return;
+  if (!admission.wantsIsolation)
+    await recaptureForLane(request, admission, inPlacePlan(definitions.checkout));
+  else if (base !== undefined && base.branch !== definitions.branch)
+    await recaptureForLane(
+      request,
+      admission,
+      await basePlan(request.host, request.cwd, request.options, base.branch)
+    );
+}
+
+/**
+ * Capture a fresh run's definitions by its plan. When the base cannot be composed, a
+ * workflow the checkout pins in place reads its checkout as it is, as any in-place run
+ * does, so it does not fail for want of a base it never needs.
+ */
+async function captureFreshRunSource(
+  request: OwnedRunRequest,
+  slot: RunSourceSlot,
+  preCreatedRun: WorkflowRun | undefined
+): Promise<void> {
+  const { host, cwd, options } = request;
+  try {
+    await captureRunSource(
+      request,
+      slot,
+      await runDefinitionsPlan(host, cwd, options),
+      preCreatedRun
+    );
+  } catch (error) {
+    if (
+      !(error instanceof DefinitionSourceError) ||
+      !(await pinnedInPlace(host, cwd, request.workflowName))
+    )
+      throw error;
+    await captureRunSource(request, slot, inPlacePlan(cwd), preCreatedRun);
+  }
+}
+
+/**
+ * Capture a definitions plan into `slot`, filed under the pre-created run when one exists.
+ * A capture it replaces is removed unless the replacement reused its directory.
  */
 async function captureRunSource(
   request: OwnedRunRequest,
   slot: RunSourceSlot,
-  sourceRoot: string,
+  plan: RunDefinitionsPlan,
   preCreatedRun: WorkflowRun | undefined
 ): Promise<PreparedWorkflowSource> {
+  const sourceRoot = plan.kind === 'base' ? plan.checkout : plan.root;
+  // Keep the capture filed under the run it belongs to when the row already exists.
+  const runId = preCreatedRun ? { runId: preCreatedRun.id } : {};
   try {
-    const replacement = await prepareWorkflowSource(request.host.deps, {
-      sourceRoot,
-      // Keep the capture filed under the run it belongs to when the row already exists.
-      ...(preCreatedRun ? { runId: preCreatedRun.id } : {}),
-    });
+    const replacement =
+      plan.kind === 'base'
+        ? await withLayeredDefinitions(plan, composed =>
+            prepareWorkflowSource(request.host.deps, {
+              sourceRoot: composed.root,
+              origin: plan.checkout,
+              includeProjectConfig: true,
+              definitions: composed.definitions,
+              ...runId,
+            })
+          )
+        : await prepareWorkflowSource(request.host.deps, {
+            sourceRoot,
+            ...(plan.definitions ? { definitions: plan.definitions } : {}),
+            ...runId,
+          });
     // From here the owner reclaims it unless a run adopts it, whichever way we leave.
     request.owner.hold(replacement);
     const stale = slot.preparedSource;
@@ -334,6 +414,7 @@ async function captureRunSource(
     }
     return replacement;
   } catch (error) {
+    if (error instanceof DefinitionSourceError) throw error;
     throw new Error(
       `Failed to capture workflow source from ${sourceRoot}: ${(error as Error).message}`
     );
@@ -353,7 +434,7 @@ async function discoverRunWorkflows(
   errors: readonly WorkflowLoadError[];
 }> {
   const { host, cwd, options } = request;
-  const discoveryCwd = options.discoveryCwd ?? cwd;
+  const discoveryCwd = options.discoveryCwd ?? request.previewRoot ?? cwd;
   const { workflows: workflowEntries, errors } = continuation
     ? { workflows: continuation.workflows, errors: continuation.errors }
     : preparedSource
@@ -583,17 +664,12 @@ function recordedLaunchInputs(row: WorkflowRun): Record<string, string> | undefi
 export async function recaptureForLane(
   request: OwnedRunRequest,
   admission: OwnedRunAdmission,
-  sourceRoot: string
+  plan: RunDefinitionsPlan
 ): Promise<void> {
   const { host, workflowName, options } = request;
-  const preparedSource = await captureRunSource(
-    request,
-    admission,
-    sourceRoot,
-    admission.preCreatedRun
-  );
+  const preparedSource = await captureRunSource(request, admission, plan, admission.preCreatedRun);
   const rediscovered = await discoverWorkflowsWithConfig(
-    sourceRoot,
+    plan.kind === 'base' ? plan.checkout : plan.root,
     host.deps.loadConfig,
     host.deps.providers,
     preparedSource.roots
@@ -632,8 +708,10 @@ export async function prepareLaneAiConfiguration(
   request: OwnedRunRequest,
   admission: OwnedRunAdmission,
   lane: LaneConfigSource,
-  executesInContainer: boolean
+  executesInContainer: boolean,
+  base: { branch: string } | undefined
 ): Promise<PreparedRunAiConfiguration> {
+  await settleRunDefinitions(request, admission, base);
   const prepared = await prepareLaneCredentials(request, admission, lane, executesInContainer);
   if (!admission.isContinuation) {
     // A branch lane's config is read from an archive of the branch, which has no remotes.
@@ -658,7 +736,7 @@ async function prepareLaneCredentials(
   const recaptures = request.options.discoveryCwd === undefined;
   if (lane.kind === 'branch') {
     return withBranchLaunchSource(lane.codebase.default_cwd, lane.branch, async snapshot => {
-      if (recaptures) await recaptureForLane(request, admission, snapshot);
+      if (recaptures) await recaptureForLane(request, admission, directoryPlan(snapshot));
       return prepareCredentialPreflight(
         request,
         admission,
@@ -668,7 +746,8 @@ async function prepareLaneCredentials(
       );
     });
   }
-  if (lane.recapture && recaptures) await recaptureForLane(request, admission, lane.cwd);
+  if (lane.recapture && recaptures)
+    await recaptureForLane(request, admission, directoryPlan(lane.cwd));
   return prepareCredentialPreflight(
     request,
     admission,
@@ -688,6 +767,7 @@ async function prepareCredentialPreflight(
   const { host } = request;
   const { preCreatedRun, continuationRun, modelOverrides } = admission;
   const prepared = await prepareRunAiConfiguration(host.deps, admission.workflow, configCwd, {
+    configRoot: preparedSourceConfigRoot(admission.preparedSource, configCwd),
     codebaseId,
     aiConfigurationRun: preCreatedRun ?? admission.aiConfigurationRun,
     ...(preCreatedRun ? { inheritAiConfiguration: true } : {}),

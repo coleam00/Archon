@@ -221,6 +221,9 @@ const { generatedTaskBranch, VerificationImageInventoryError, VERIFICATION_IMAGE
   await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
   generatedTaskBranch,
+  resolveWorktreeBase: mock(async () => {
+    throw new Error('resolveWorktreeBase is not mocked here');
+  }),
   refuseUnappliedStartPoint: mock(async () => undefined),
   VerificationImageInventoryError,
   VERIFICATION_IMAGE_RUN_LABEL,

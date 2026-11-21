@@ -19,7 +19,7 @@
  * run-ended hand-off, which refuses a branch that moved off the recorded commit.
  */
 import { existsSync } from 'node:fs';
-import type { WorkflowDeps } from '@archon/workflows/deps';
+import type { IWorkflowStore } from '@archon/workflows/store';
 import type { JsonValue } from '@archon/workflows/output-ref';
 import { chosenAskOption, type StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import {
@@ -33,7 +33,12 @@ import {
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { readAsksResult, readSubrunMetadata } from '@archon/workflows/schemas/run-metadata';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import {
+  discoverBindingWorkflows,
+  type BindingDefinitionsDeps,
+  type DefinitionsProject,
+} from './definition-source';
+import { preparedLanding } from './binding-definitions';
 import {
   bindingProjectKey,
   bindingReceipt,
@@ -263,13 +268,12 @@ function settledAnswer(row: StoredItemAsk): JsonValue {
  */
 export async function asksSettledBindingCheck(
   { binding, asksSettled }: AsksSettledBinding,
-  deps: Pick<WorkflowDeps, 'loadConfig' | 'providers'>
+  deps: BindingDefinitionsDeps,
+  landing?: (project: DefinitionsProject) => Promise<string | undefined>
 ): Promise<string[]> {
-  const discovered = await discoverWorkflowsWithConfig(
-    binding.launch.discoveryCwd ?? binding.launch.cwd,
-    deps.loadConfig,
-    deps.providers
-  );
+  const read = await discoverBindingWorkflows(binding.launch, deps, landing);
+  if ('refused' in read) return [read.refused];
+  const { discovered } = read;
   const workflows = discovered.workflows.map(found => found.workflow);
   const started = selectStartedWorkflow(binding.launch, discovered);
   return [
@@ -331,8 +335,7 @@ function askingWorkflowProblems(
  */
 export async function asksSettledTriggerCheck(
   bindings: readonly AsksSettledBinding[],
-  deps: Pick<WorkflowDeps, 'loadConfig' | 'providers'> &
-    Pick<RunEndedStartsDependencies, 'projectKeyOf'>
+  deps: BindingDefinitionsDeps & Pick<RunEndedStartsDependencies, 'projectKeyOf'>
 ): Promise<string[][]> {
   const problems: string[][] = [];
   const stages: string[][] = [];
@@ -424,7 +427,8 @@ function sharingFiles(
  */
 export function createAsksSettledPreflight(
   dependencies: Omit<RunEndedStartsDependencies, 'now' | 'endedCheckout'> &
-    Pick<WorkflowDeps, 'loadConfig' | 'providers'>
+    BindingDefinitionsDeps &
+    Pick<IWorkflowStore, 'getItemLanding' | 'listItemLinks'>
 ): (run: WorkflowRun) => Promise<void> {
   return async run => {
     if (!run.item_id) return;
@@ -436,7 +440,11 @@ export function createAsksSettledPreflight(
     if (!item) throw new Error(`Run '${run.id}' names item '${run.item_id}', which is missing`);
     for (const candidate of candidates) {
       if ((await bindingProjectKey(candidate, dependencies)) !== item.projectKey) continue;
-      const problems = await asksSettledBindingCheck(candidate, dependencies);
+      // The stage would start on this item, so its definitions come from the item's
+      // landing branch when it records one.
+      const problems = await asksSettledBindingCheck(candidate, dependencies, project =>
+        preparedLanding(dependencies, project, item)
+      );
       if (problems.length > 0)
         throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
     }

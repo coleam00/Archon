@@ -1041,7 +1041,7 @@ describe('fork PRs', () => {
 });
 
 describe('base branch and remote', () => {
-  const baseSynced = (branch: string | undefined, mode = 'fast-forward', remote = 'origin') =>
+  const baseSynced = (branch: string | undefined, mode = 'fetch-only', remote = 'origin') =>
     expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/repo', branch, { mode, remote });
   const cutFrom = (startPoint: string, branch = 'archon/issue-42') =>
     expect(execSpy).toHaveBeenCalledWith(
@@ -1127,9 +1127,9 @@ describe('base branch and remote', () => {
   test.each([
     ['resets a managed clone', '/test/.archon/workspaces/owner/repo/source', 'reset'],
     [
-      'fast-forwards a checkout that only shares the workspaces prefix',
+      'only fetches a checkout that only shares the workspaces prefix',
       '/test/.archon/workspaces-old/owner/repo/source',
-      'fast-forward',
+      'fetch-only',
     ],
   ])('%s before cutting', async (_label, repoPath, mode) => {
     await withConfig({}).create({ ...issueRequest, canonicalRepoPath: git.toRepoPath(repoPath) });
@@ -1173,7 +1173,7 @@ describe('base branch and remote', () => {
   test('uses the configured remote without auto-detecting one', async () => {
     await withConfig({ baseBranch: git.toBranchName('main'), remote: 'mar' }).create(issueRequest);
 
-    baseSynced('main', 'fast-forward', 'mar');
+    baseSynced('main', 'fetch-only', 'mar');
     expect(getDefaultRemoteSpy).not.toHaveBeenCalled();
     cutFrom('mar/main');
   });
@@ -1183,7 +1183,20 @@ describe('base branch and remote', () => {
 
     await provider.create(issueRequest);
 
-    baseSynced('main', 'fast-forward', 'upstream');
+    baseSynced('main', 'fetch-only', 'upstream');
+  });
+
+  test('a start commit is cut from as is, with no fetch', async () => {
+    const env = await withConfig({}).create({
+      ...issueRequest,
+      workflowType: 'task',
+      identifier: 'layered',
+      startCommit: { commit: 'abc123', branch: git.toBranchName('dev') },
+    });
+
+    expect(syncWorkspaceSpy).not.toHaveBeenCalled();
+    expect(env.resolvedBaseBranch).toBe('dev');
+    cutFrom('abc123', 'archon/task-layered');
   });
 
   test('fromBranch start-point is not remote-prefixed (task workflow)', async () => {
@@ -1194,7 +1207,7 @@ describe('base branch and remote', () => {
       taskBranch: { kind: 'new', fromBranch: git.toBranchName('develop') },
     });
 
-    baseSynced('main', 'fast-forward', 'upstream');
+    baseSynced('main', 'fetch-only', 'upstream');
     cutFrom('develop', 'archon/task-my-feature');
   });
 

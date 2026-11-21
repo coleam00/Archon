@@ -207,3 +207,52 @@ describe('workflow run --dry-run --workflow-source', () => {
     expect(result.outcome).toBe('completed');
   });
 });
+
+describe('the definitions of a run on a git checkout', () => {
+  function git(cwd: string, ...args: string[]): void {
+    const done = Bun.spawnSync(['git', '-C', cwd, ...args]);
+    if (done.exitCode !== 0) throw new Error(done.stderr.toString());
+  }
+  const commit = (cwd: string, message: string) =>
+    git(cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qam', message);
+  const sample = (node: string) =>
+    `name: sample\ndescription: sample\nnodes:\n  - id: ${node}\n    bash: echo ${node}\n`;
+
+  test('a dry run traces the workflow landed on the base, as the real run would', async () => {
+    const fx = fixture();
+    const remote = join(fx.source, 'remote.git');
+    Bun.spawnSync(['git', 'init', '-q', '--bare', '--initial-branch=main', remote]);
+    const upstream = join(fx.source, 'upstream');
+    Bun.spawnSync(['git', 'clone', '-q', remote, upstream]);
+    write(join(upstream, '.archon', 'workflows', 'sample.yaml'), sample('old'));
+    git(upstream, 'add', '-A');
+    commit(upstream, 'old');
+    git(upstream, 'push', '-q', 'origin', 'main');
+    await removeTempTree(fx.target);
+    Bun.spawnSync(['git', 'clone', '-q', remote, fx.target]);
+    write(join(upstream, '.archon', 'workflows', 'sample.yaml'), sample('landed'));
+    commit(upstream, 'landed');
+    git(upstream, 'push', '-q', 'origin', 'main');
+
+    const result = await dryRun(fx, 'sample', null);
+
+    expect(result.trace.map(entry => entry.nodeId)).toEqual(['landed']);
+  });
+
+  test('a workflow pinned in place runs on a checkout with no remote', async () => {
+    const fx = fixture();
+    git(fx.target, 'init', '-q');
+    write(
+      join(fx.target, '.archon', 'workflows', 'inplace.yaml'),
+      'name: inplace\ndescription: in place\nworktree:\n  enabled: false\nnodes:\n  - id: one\n    bash: echo in-place\n'
+    );
+    git(fx.target, 'add', '-A');
+    commit(fx.target, 'base');
+
+    const result = await captureWorkflowCommand(fx.home, async host => {
+      await workflowRunCommand(host, fx.target, 'inplace', '', {});
+    });
+
+    expect(result.status, result.output).toBe(0);
+  });
+});

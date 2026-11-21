@@ -44,6 +44,7 @@ async function graphApp(
         providers: providerRegistry,
         triggersDirectory: () => triggersDirectory,
         projectKeyOf: async () => null,
+        projectOf: async () => null,
       }),
   });
   return app;
