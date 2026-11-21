@@ -1357,6 +1357,49 @@ describe('runFixtures', () => {
   });
 });
 
+describe('bundled fixtures follow the bundled-workflow setting', () => {
+  /** A project whose own fixture is valid, beside a bundled scope with a fixture of its own. */
+  function projectWithBundledFixture(): { cwd: string; sourceRoots: WorkflowSourceRoots } {
+    const cwd = makeTempProject();
+    writeWorkflowDirs(cwd, ['mine']);
+    const bundled = makeTempProject();
+    mkdirSync(join(bundled, 'ship', 'fixtures'), { recursive: true });
+    writeFileSync(join(bundled, 'ship', 'ship-wf.yaml'), stubWorkflowYaml('ship-wf'));
+    writeFileSync(join(bundled, 'ship', 'fixtures', 'ship.stubs.yaml'), STUB_FIXTURE);
+    return { cwd, sourceRoots: { ...isolatedSourceRoots(cwd), bundledWorkflows: bundled } };
+  }
+
+  it('skips them when bundled workflows are off, so a workflow left out of the catalog is not a failure', async () => {
+    const { cwd, sourceRoots } = projectWithBundledFixture();
+
+    const report = await runFixtures({
+      workflows: workflowsOnDisk(cwd, ['mine-wf'], 'mine'),
+      cwd,
+      sourceRoots,
+      sourceConfig: { ...DEFAULT_WORKFLOW_SOURCE_CONFIG, load_default_workflows: false },
+    });
+
+    expect(report.results.map(r => r.fixture)).toEqual(['mine/fixtures/mine.stubs.yaml']);
+    expect(report).toMatchObject({ passed: 1, failed: 0 });
+  });
+
+  it('still checks them when bundled workflows are on, and reports one that has no workflow', async () => {
+    const { cwd, sourceRoots } = projectWithBundledFixture();
+
+    const report = await runFixtures({
+      workflows: workflowsOnDisk(cwd, ['mine-wf'], 'mine'),
+      cwd,
+      sourceRoots,
+    });
+
+    expect(report.results.map(r => [r.fixture, r.pass])).toEqual([
+      ['mine/fixtures/mine.stubs.yaml', true],
+      ['ship/fixtures/ship.stubs.yaml', false],
+    ]);
+    expect(report.results[1].failureReason).toContain('no discovered workflow matches');
+  });
+});
+
 describe('discovery and fixture execution agree (#3183)', () => {
   for (const [label, path] of [
     ['directly under the workflows root', 'hello'],
