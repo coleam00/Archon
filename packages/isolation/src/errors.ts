@@ -95,6 +95,7 @@ export type IsolationFailureKind =
   | 'branch_checked_out'
   | 'branch_exists'
   | 'path_exists'
+  | 'start_commit_missing'
   | 'worktree_registered'
   | 'setup_unfinished'
   | 'docker_unreachable'
@@ -150,6 +151,7 @@ const FAILURE_MESSAGES = {
   branch_checked_out: undefined,
   branch_exists: undefined,
   path_exists: undefined,
+  start_commit_missing: undefined,
   worktree_registered: undefined,
   setup_unfinished: undefined,
 } satisfies Record<IsolationFailureKind, string | undefined>;

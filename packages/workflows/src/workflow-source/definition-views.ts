@@ -332,6 +332,34 @@ export async function writeView(view: DefinitionView, tree: string): Promise<voi
   for (const [path, entry] of view) await writeEntry(tree, path, entry, blobs);
 }
 
+/**
+ * Make the directories above `path` real directories inside `tree`, never following a
+ * link: a link an earlier layer wrote there points outside the tree, and going through it
+ * would read or change files that are not the run's. For a write a link in the way is
+ * replaced by a directory. For a removal there is nothing under a link to remove, so it
+ * answers false.
+ */
+async function parentsInTree(tree: string, path: string, forWrite: boolean): Promise<boolean> {
+  const parts = path.split('/').slice(0, -1);
+  let at = tree;
+  for (const part of parts) {
+    at = join(at, part);
+    let info;
+    try {
+      info = await lstat(at);
+    } catch {
+      if (!forWrite) return false;
+      await mkdir(at);
+      continue;
+    }
+    if (info.isDirectory()) continue;
+    if (!forWrite) return false;
+    await rm(at, { force: true });
+    await mkdir(at);
+  }
+  return true;
+}
+
 /** Lay `entry` (or its absence) at `path` under `tree`, replacing what is there. */
 export async function writeEntry(
   tree: string,
@@ -340,9 +368,10 @@ export async function writeEntry(
   blobs: ReadonlyMap<string, Buffer> = new Map()
 ): Promise<void> {
   const target = join(tree, path);
+  if (!(await parentsInTree(tree, path, entry !== undefined))) return;
+  // `rm` removes a link itself, never what it points at.
   await rm(target, { recursive: true, force: true });
   if (entry === undefined) return;
-  await mkdir(dirname(target), { recursive: true });
   if (entry.kind === 'link') {
     await symlink(entry.target, target);
     return;

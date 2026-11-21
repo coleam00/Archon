@@ -86,6 +86,7 @@ import {
   captureBindingDefinitions,
   definitionsStartCommit,
   recaptureInPlace,
+  refuseWorktreeAfterInPlace,
 } from './binding-definitions';
 
 const log = createLogger('resource-start-host');
@@ -269,7 +270,9 @@ async function prepareBinding(
     if (source.definitions?.from === 'base' && workflow.worktree?.enabled === false) {
       source = await recaptureInPlace(host, source, cwd);
       owner.hold(source);
-      workflow = await selectBindingWorkflow(host, intent.launch, cwd, source.roots);
+      workflow = refuseWorktreeAfterInPlace(
+        await selectBindingWorkflow(host, intent.launch, cwd, source.roots)
+      );
     }
     await recordSelectedWorkflow(source.anchor.root, workflow.name);
     await assertBindingRequirements(host, intent, workflow);

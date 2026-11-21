@@ -10,6 +10,7 @@ import {
   type PreparedWorkflowSource,
 } from '@archon/workflows/run-source';
 import type { ResourceStartBindingIntent } from '@archon/workflows/schemas/resource-start';
+import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import {
   readWorkflowSourceState,
   type WorkflowItem,
@@ -84,6 +85,20 @@ export async function preparedLanding(
     if (error instanceof LandingBranchRefusedError) return undefined;
     throw error;
   }
+}
+
+/**
+ * The checkout's own copy of a workflow the base pins in place must run in place too:
+ * its isolation is decided from this copy, and a worktree run must not read checkout-only
+ * definitions. A copy that does not pin itself in place refuses the start.
+ */
+export function refuseWorktreeAfterInPlace(workflow: ResolvedWorkflow): ResolvedWorkflow {
+  if (workflow.worktree?.enabled === false) return workflow;
+  throw new Error(
+    `Workflow '${workflow.name}' runs in place on the base branch, but the checkout's copy does ` +
+      'not; its start is refused. Bring the checkout up to date with the base branch, or name ' +
+      'a source with launch.discoveryCwd.'
+  );
 }
 
 /**

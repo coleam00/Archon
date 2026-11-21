@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import {
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -404,6 +405,25 @@ describe("a run's definitions", () => {
     const error = await refusal(checkout);
 
     expect(error.message).toContain('.archon/workflows/build.yaml: uncommitted in');
+  });
+
+  test('never touch files outside the composition when a tracked directory becomes a link out of the repository', async () => {
+    const { checkout, upstream } = project();
+    write(upstream, '.archon/scripts/tasks/victim.txt', 'tracked\n');
+    commitAll(upstream, 'tasks');
+    git(upstream, 'push', '-q', 'origin', 'dev');
+    git(checkout, 'pull', '-q');
+    const outside = join(dirname(checkout), 'outside');
+    write(outside, 'victim.txt', 'outside\n');
+    rmSync(join(checkout, '.archon/scripts/tasks'), { recursive: true });
+    symlinkSync(outside, join(checkout, '.archon/scripts/tasks'));
+
+    const linked = await withLayeredDefinitions({ checkout }, async composed =>
+      lstatSync(join(composed.root, '.archon/scripts/tasks')).isSymbolicLink()
+    );
+
+    expect(linked).toBe(true);
+    expect(readFileSync(join(outside, 'victim.txt'), 'utf8')).toBe('outside\n');
   });
 
   test('drop a linked workflow directory the checkout removed', async () => {

@@ -342,6 +342,15 @@ async function settleRunDefinitions(
       admission,
       await basePlan(request.host, request.cwd, request.options, base.branch)
     );
+  else return;
+  // The lane was chosen for the workflow first read; the recaptured one must agree with it.
+  const pinned = admission.workflow.worktree?.enabled;
+  if (pinned !== undefined && pinned !== admission.wantsIsolation)
+    throw new Error(
+      `Workflow '${admission.workflow.name}' ${pinned ? 'requires a worktree' : 'runs in place'} in the ` +
+        `definitions this run now reads, unlike the ones it was admitted with. Nothing was started; ` +
+        'bring the checkout and the base branch into agreement, or name a source with --workflow-source.'
+    );
 }
 
 /**

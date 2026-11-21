@@ -264,8 +264,9 @@ async function checkOutBranch(
   // A start commit was fetched when the run's definitions were captured; fetching again
   // here could cut the code from a newer commit than the definitions.
   const startCommit = request.workflowType === 'task' ? request.startCommit : undefined;
-  const baseBranch =
-    startCommit?.branch ?? (await syncWorkspaceBeforeCreate(repoPath, preferredBaseBranch, remote));
+  const baseBranch = startCommit
+    ? await ensureStartCommit(repoPath, startCommit, remote)
+    : await syncWorkspaceBeforeCreate(repoPath, preferredBaseBranch, remote);
 
   if (isPRIsolationRequest(request)) {
     // For PRs: fetch and checkout the PR branch (actual or synthetic)
@@ -434,6 +435,41 @@ async function resolveRemote(repoPath: RepoPath, configuredRemote?: string): Pro
     `Cannot determine git remote for ${repoPath}: no 'origin' remote found and ` +
       `multiple remotes exist (${remoteList}). ` +
       'Set worktree.remote in .archon/config.yaml to specify which remote to use.'
+  );
+}
+
+/**
+ * The base branch of a start commit, once the commit is in this repository. The run's
+ * definitions were read where it was launched, which with `--project` can be another clone
+ * than this registered one; then the base branch is fetched here too. A commit the fetch
+ * does not bring (the branch was rewritten since) refuses rather than cut from another.
+ */
+async function ensureStartCommit(
+  repoPath: RepoPath,
+  startCommit: { commit: string; branch: BranchName },
+  remote: string
+): Promise<string> {
+  const present = async (): Promise<boolean> => {
+    try {
+      await execFileAsync(
+        'git',
+        ['-C', repoPath, 'cat-file', '-e', `${startCommit.commit}^{commit}`],
+        {
+          timeout: 10000,
+        }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (await present()) return startCommit.branch;
+  await syncWorkspaceBeforeCreate(repoPath, startCommit.branch, remote);
+  if (await present()) return startCommit.branch;
+  throw new IsolationFailure(
+    'start_commit_missing',
+    `Commit ${startCommit.commit.slice(0, 12)}, which this run's definitions were read at, is not ` +
+      `in ${repoPath} even after fetching ${remote}/${startCommit.branch}. Start the run again.`
   );
 }
 

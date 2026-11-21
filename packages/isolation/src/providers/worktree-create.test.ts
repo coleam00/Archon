@@ -1199,6 +1199,44 @@ describe('base branch and remote', () => {
     cutFrom('abc123', 'archon/task-layered');
   });
 
+  test('a start commit read in another clone is fetched here before the cut', async () => {
+    let fetched = false;
+    syncWorkspaceSpy.mockImplementation(async () => {
+      fetched = true;
+      return syncResult('dev');
+    });
+    execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+      if (args.includes('cat-file') && !fetched) throw new Error('fatal: not a valid object');
+      return { stdout: '', stderr: '' };
+    });
+    const request = {
+      ...issueRequest,
+      workflowType: 'task' as const,
+      identifier: 'layered',
+      startCommit: { commit: 'abc123', branch: git.toBranchName('dev') },
+    };
+
+    await withConfig({}).create(request);
+    baseSynced('dev');
+    cutFrom('abc123', 'archon/task-layered');
+  });
+
+  test('a start commit the fetch does not bring refuses instead of cutting from another', async () => {
+    execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+      if (args.includes('cat-file')) throw new Error('fatal: not a valid object');
+      return { stdout: '', stderr: '' };
+    });
+
+    await expect(
+      withConfig({}).create({
+        ...issueRequest,
+        workflowType: 'task',
+        identifier: 'rewritten',
+        startCommit: { commit: 'abc123', branch: git.toBranchName('dev') },
+      })
+    ).rejects.toThrow('Commit abc123');
+  });
+
   test('fromBranch start-point is not remote-prefixed (task workflow)', async () => {
     await withConfig({ baseBranch: git.toBranchName('main'), remote: 'upstream' }).create({
       ...issueRequest,
