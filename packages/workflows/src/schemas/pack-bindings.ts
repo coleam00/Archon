@@ -11,10 +11,9 @@
  */
 import { z } from 'zod';
 import { jsonValueSchema } from '../output-ref';
+import { asksSettledInputSourceSchema, endedItemKeySourceSchema } from './binding-input-source';
 import {
-  asksSettledInputSourceSchema,
   asksSettledTriggerSchema,
-  endedItemKeySourceSchema,
   itemMappingSchema,
   linkedTakesNoCheckout,
   resourceStartBindingIntentSchema,
@@ -33,8 +32,9 @@ export const packBindingNameSchema = z
  * for a sibling binding, (event bindings only) a field of the event, (event bindings with
  * `wake` only) the wait the event met, (run-ended and asks-settled bindings only) a part of
  * the run that ended or left the asks, as `on.runEnded.inputs` reads it, (run-ended
- * bindings only) the key of the ended run's item, or (asks-settled bindings only) the
- * settled answers.
+ * bindings only) the key of the ended run's item, (asks-settled bindings only) the
+ * settled answers, or (asks-settled and non-linked run-ended bindings) every answer on the
+ * item.
  */
 const packBindingInputSchema = z.union([
   z.string(),

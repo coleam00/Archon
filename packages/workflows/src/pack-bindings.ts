@@ -8,9 +8,11 @@
  * reads (a timer or fire-only binding), an event field is read only by an event binding, the
  * met wait only by an event binding with `wake`, a
  * part of the run only by a run-ended or asks-settled binding, the ended run's item key
- * only by a run-ended binding, and the settled answers only by an asks-settled binding.
+ * only by a run-ended binding, the settled answers only by an asks-settled binding, and
+ * the item's answers by either, except a linked run-ended binding.
  */
 import type { Fail } from './pack-settings';
+import { readsItemAnswers } from './schemas/binding-input-source';
 import {
   packBindingKind,
   packBindingNameSchema,
@@ -105,11 +107,12 @@ function inputProblem(
     return kind === 'event' && 'wake' in binding && binding.wake !== undefined
       ? undefined
       : 'reads the met wait, but only an event binding with wake has one';
-  return runSourceProblem(kind, input);
+  return runSourceProblem(binding, kind, input);
 }
 
-/** An input read from the run that ended or left the asks. */
+/** An input read from the run that ended or left the asks, or from the item it is on. */
 function runSourceProblem(
+  binding: PackBinding,
   kind: PackBindingKind,
   input: Exclude<PackBindingInput, string>
 ): string | undefined {
@@ -117,6 +120,7 @@ function runSourceProblem(
     return kind === 'asks_settled'
       ? undefined
       : 'reads the settled answers, but only an asks-settled binding has them';
+  if (readsItemAnswers(input)) return itemAnswersProblem(binding, kind);
   if ('item' in input)
     return kind === 'run_ended'
       ? undefined
@@ -124,6 +128,15 @@ function runSourceProblem(
   return kind === 'run_ended' || kind === 'asks_settled'
     ? undefined
     : 'reads the ended run, but only a run-ended or asks-settled binding has a run to read';
+}
+
+/** The item's answers belong to the item a run-ended or asks-settled start is on. */
+function itemAnswersProblem(binding: PackBinding, kind: PackBindingKind): string | undefined {
+  if (kind !== 'run_ended' && kind !== 'asks_settled')
+    return "reads the item's answers, but only a run-ended or asks-settled binding starts on an item that has them";
+  return 'run_ended' in binding && binding.run_ended.linked !== undefined
+    ? "reads the item's answers, but a linked start is on a holder item; read them in the started stage"
+    : undefined;
 }
 
 /** A sibling reference is written as a file path, so it must name a file a run can fire. */
