@@ -11,10 +11,10 @@
  * next pickup; any other answer leaves it held, because a live owner and an orphan
  * cannot be told apart here.
  *
- * The merge and split queues claim the same documents through the same claim, so an
- * item has one owner at a time across intake and those queues. The build queue claims
- * nothing: the engine admits one build run per item, and its run writes its record with
- * `updateWorkItem`. The records are `facts.build` (./build.ts), `facts.merge`
+ * The split queue claims the same documents through the same claim, so an item has one
+ * owner at a time across intake and that queue. The build queue and the merge stage claim
+ * nothing: the engine admits one build run and one merge run per item, and each run
+ * writes its record with `updateWorkItem`. The records are `facts.build` (./build.ts), `facts.merge`
  * (./merge.ts) and `facts.split` (./split.ts).
  */
 

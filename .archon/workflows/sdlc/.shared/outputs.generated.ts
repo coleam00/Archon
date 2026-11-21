@@ -360,19 +360,30 @@ export interface WorkflowOutputs {
       };
     };
   };
+  'archon-merge-pick': {
+    pick: {
+      readonly started: ReadonlyArray<number>;
+      readonly summary: string;
+    };
+  };
   'archon-merge-queue': {
     facts: {
-      readonly path: 'idle' | 'record' | 'sweep';
+      readonly path: 'settle' | 'wait' | 'judge';
+      readonly item: Readonly<Record<string, unknown>>;
+      readonly pr: Readonly<Record<string, unknown>> | null;
+      readonly url: string;
+      readonly facts: Readonly<Record<string, unknown>> | null;
       readonly base: Readonly<Record<string, unknown>> | null;
-      readonly base_error: string;
-      readonly items: ReadonlyArray<Readonly<Record<string, unknown>>>;
-      readonly settled: ReadonlyArray<Readonly<Record<string, unknown>>>;
+      readonly record: Readonly<Record<string, unknown>> | null;
+      readonly validation: Readonly<Record<string, unknown>> | null;
+      readonly protected: ReadonlyArray<string>;
       readonly lane: string;
       readonly ci: string;
+      readonly answer: Readonly<Record<string, unknown>> | null;
+      readonly settled: Readonly<Record<string, unknown>> | null;
     };
-    sweep: {
-      readonly decisions: ReadonlyArray<{
-        readonly number: number;
+    judge: {
+      readonly decision: {
         readonly action: 'merge' | 'wait';
         readonly class: 'clear' | 'unclear';
         readonly head: string;
@@ -381,7 +392,6 @@ export interface WorkflowOutputs {
         readonly brief: string;
         readonly ask: null;
       } | {
-        readonly number: number;
         readonly action: 'return';
         readonly class: 'clear' | 'unclear';
         readonly head: string;
@@ -390,7 +400,6 @@ export interface WorkflowOutputs {
         readonly brief: string;
         readonly ask: null;
       } | {
-        readonly number: number;
         readonly action: 'ask';
         readonly class: 'clear' | 'unclear';
         readonly head: string;
@@ -399,88 +408,21 @@ export interface WorkflowOutputs {
         readonly brief: string;
         readonly ask: {
           readonly question: string;
-          readonly options: ReadonlyArray<{
-            readonly id: string;
-            readonly label: string;
-            readonly does: string;
-            readonly value: {
-              readonly effect: 'merge' | 'return' | 'park';
-              readonly ruling: string;
-            };
-          }>;
+          readonly context: string;
           readonly recommendation: {
             readonly option: string;
             readonly why: string;
-            readonly confidence: 'low' | 'medium' | 'high';
           };
         };
-      } | {
-        readonly number: number;
-        readonly action: 'ask';
-        readonly class: 'clear' | 'unclear';
-        readonly head: string;
-        readonly reran: boolean;
-        readonly reason: string;
-        readonly brief: string;
-        readonly ask: {
-          readonly question: string;
-          readonly options: ReadonlyArray<{
-            readonly id: string;
-            readonly label: string;
-            readonly does: string;
-            readonly value: {
-              readonly effect: 'merge' | 'park';
-              readonly ruling: string;
-            };
-          }>;
-          readonly recommendation: {
-            readonly option: string;
-            readonly why: string;
-            readonly confidence: 'low' | 'medium' | 'high';
-          };
-        };
-      }>;
-      readonly base: {
-        readonly summary: string;
       };
-      readonly summary: string;
+      readonly base: string;
     };
-    merge: {
-      readonly gated: ReadonlyArray<{
-        readonly number: number;
-        readonly head: string;
-        readonly refusals: ReadonlyArray<string>;
-        readonly merge_commit: string | null;
-      }>;
-    };
-    record: {
-      readonly merged: ReadonlyArray<number>;
+    settle: {
+      readonly outcome: 'merged' | 'merged_retriage' | 'returned' | 'parked' | 'waiting' | 'asked';
       readonly summary: string;
-      readonly question: string;
-      readonly options: ReadonlyArray<{
-        readonly id: string;
-        readonly label: string;
-        readonly does: string;
-        readonly value: Readonly<Record<string, unknown>>;
-      }>;
-      readonly recommendation: Readonly<Record<string, unknown>> | null;
-      readonly kind: '' | 'approve';
-      readonly item: string;
-      readonly pr: string;
-      readonly asked: Readonly<Record<string, unknown>> | null;
-      readonly healthy: boolean;
-    };
-    retriage: {
-      readonly retriaged: ReadonlyArray<number>;
-      readonly summary: string;
-    };
-    drain: {
-      readonly summary: string;
-    };
-    ruling: {
-      readonly decision: 'merge' | 'return' | 'park';
-      readonly section: string;
-      readonly summary: string;
+      readonly number: number;
+      readonly head: string;
+      readonly brief: string;
     };
   };
   'archon-metrics-prs': {
@@ -921,27 +863,18 @@ export const OUTPUT_ENUMS = {
   },
   'archon-merge-queue': {
     facts: {
-      path: ['idle', 'record', 'sweep'],
+      path: ['settle', 'wait', 'judge'],
     },
-    sweep: {
-      'decisions[].anyOf[0].action': ['merge', 'wait'],
-      'decisions[].anyOf[0].class': ['clear', 'unclear'],
-      'decisions[].anyOf[1].action': ['return'],
-      'decisions[].anyOf[1].class': ['clear', 'unclear'],
-      'decisions[].anyOf[2].action': ['ask'],
-      'decisions[].anyOf[2].class': ['clear', 'unclear'],
-      'decisions[].anyOf[2].ask.options[].value.effect': ['merge', 'return', 'park'],
-      'decisions[].anyOf[2].ask.recommendation.confidence': ['low', 'medium', 'high'],
-      'decisions[].anyOf[3].action': ['ask'],
-      'decisions[].anyOf[3].class': ['clear', 'unclear'],
-      'decisions[].anyOf[3].ask.options[].value.effect': ['merge', 'park'],
-      'decisions[].anyOf[3].ask.recommendation.confidence': ['low', 'medium', 'high'],
+    judge: {
+      'decision.anyOf[0].action': ['merge', 'wait'],
+      'decision.anyOf[0].class': ['clear', 'unclear'],
+      'decision.anyOf[1].action': ['return'],
+      'decision.anyOf[1].class': ['clear', 'unclear'],
+      'decision.anyOf[2].action': ['ask'],
+      'decision.anyOf[2].class': ['clear', 'unclear'],
     },
-    record: {
-      kind: ['', 'approve'],
-    },
-    ruling: {
-      decision: ['merge', 'return', 'park'],
+    settle: {
+      outcome: ['merged', 'merged_retriage', 'returned', 'parked', 'waiting', 'asked'],
     },
   },
   'archon-plan': {
