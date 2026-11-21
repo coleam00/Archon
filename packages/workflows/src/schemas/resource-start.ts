@@ -1,6 +1,10 @@
 import { z } from 'zod';
-import { isJsonPointer } from '../json-pointer';
 import { jsonValueSchema } from '../output-ref';
+import {
+  asksSettledInputSourceSchema,
+  linkedReadsNoItemAnswers,
+  runEndedInputSourceSchema,
+} from './binding-input-source';
 import { itemLinkKindSchema } from './item-link';
 import { attentionOptionSchema } from './wait-node';
 import { ITEM_KEY_MAX_LENGTH, itemKeySchema, workflowRunOriginSchema } from './workflow-run';
@@ -611,21 +615,6 @@ export const sourceReceiptAcceptanceSchema = z
 export type SourceReceiptAcceptance = z.infer<typeof sourceReceiptAcceptanceSchema>;
 
 /**
- * Where a run-ended binding reads one input of the stage it starts: a JSON Pointer into
- * the ended run's result (its `returns:` node output), one of the ended run's own inputs
- * by name, or the key of the ended run's item (which item ended, for a linked start).
- * Data only: no expression, and nothing here names a workflow.
- */
-const runInputSources = [
-  z.object({ result: z.string().refine(isJsonPointer, 'Invalid JSON Pointer') }).strict(),
-  z.object({ input: z.string().min(1) }).strict(),
-] as const;
-/** The key of the ended run's item; a pack's run-ended binding reads it as the file does. */
-export const endedItemKeySourceSchema = z.object({ item: z.literal('key') }).strict();
-export const runEndedInputSourceSchema = z.union([...runInputSources, endedItemKeySourceSchema]);
-export type RunEndedInputSource = z.infer<typeof runEndedInputSourceSchema>;
-
-/**
  * `on.runEnded.linked`: the stage starts on the items the ended run's item is linked to
  * (the holders), not on that item, once for every holder each time the run ends with the
  * outcome; the stage judges whether its item is ready. `kind` names the link and `holder`
@@ -670,7 +659,8 @@ export const runEndedTriggerSchema = z
     linked: runEndedLinkedSchema.optional(),
   })
   .strict()
-  .refine(linkedTakesNoCheckout.check, linkedTakesNoCheckout.message);
+  .refine(linkedTakesNoCheckout.check, linkedTakesNoCheckout.message)
+  .refine(linkedReadsNoItemAnswers.check, linkedReadsNoItemAnswers.message);
 export type RunEndedTrigger = z.infer<typeof runEndedTriggerSchema>;
 
 /**
@@ -685,17 +675,6 @@ export interface LinkedRunEndedStart {
   endedItemId: string;
   acceptance: SourceReceiptAcceptance;
 }
-
-/**
- * Where an asks-settled binding reads one input of the stage it starts: what a run-ended
- * binding reads from the run that left the asks, or `{answers: true}` for the settled set
- * itself, each ask with its question, how it closed and who closed it.
- */
-export const asksSettledInputSourceSchema = z.union([
-  ...runInputSources,
-  z.object({ answers: z.literal(true) }).strict(),
-]);
-export type AsksSettledInputSource = z.infer<typeof asksSettledInputSourceSchema>;
 
 /**
  * `on.asksSettled` of a trigger file: the binding starts when the asks a run of

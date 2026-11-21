@@ -94,7 +94,8 @@ describe('asks-settled starts', () => {
     const { directory, build } = await prepareWith({
       'build.json': trigger({ progress: { result: '/missing' } }),
     });
-    const [receipt] = build?.(SETTLED, { metadata: asksResultMetadata({ summary: 'x' }) }) ?? [];
+    const [receipt] =
+      build?.(SETTLED, { metadata: asksResultMetadata({ summary: 'x' }) }, []) ?? [];
     expect(receipt).toMatchObject({
       outcome: 'unmatched',
       receipt: { deliveryId: RUN_ID, itemKey: ITEM.key },
@@ -105,13 +106,13 @@ describe('asks-settled starts', () => {
 
   test('when the asking run is gone, only a binding that reads nothing but the answers starts', async () => {
     const reads = await prepareWith({ 'build.json': trigger({ issue: { input: 'issue' } }) });
-    expect(reads.build?.(SETTLED, null)).toMatchObject([
+    expect(reads.build?.(SETTLED, null, [])).toMatchObject([
       { outcome: 'unmatched', reason: expect.stringContaining(`run '${RUN_ID}'`) },
     ]);
     const answersOnly = await prepareWith({
       'build.json': trigger({ decisions: { answers: true } }),
     });
-    expect(answersOnly.build?.(SETTLED, null)).toMatchObject([
+    expect(answersOnly.build?.(SETTLED, null, [])).toMatchObject([
       {
         outcome: 'matched',
         bindings: [
@@ -153,10 +154,10 @@ describe('asks-settled starts', () => {
 
     test('each option starts its own binding, once', async () => {
       const { build } = await prepareWith(routes);
-      expect(started(build?.([answered(0, { decision: 'keep', text: '' })], null))).toEqual([
+      expect(started(build?.([answered(0, { decision: 'keep', text: '' })], null, []))).toEqual([
         'build',
       ]);
-      expect(started(build?.([answered(0, { decision: 'drop', text: '' })], null))).toEqual([
+      expect(started(build?.([answered(0, { decision: 'drop', text: '' })], null, []))).toEqual([
         'replan',
       ]);
     });
@@ -171,7 +172,7 @@ describe('asks-settled starts', () => {
       ],
     ] as const)('%s starts no option binding', async (_, rows) => {
       const { build } = await prepareWith(routes);
-      expect(build?.(rows, null)).toEqual([]);
+      expect(build?.(rows, null, [])).toEqual([]);
     });
 
     test('withdrawn asks are not counted, and a binding without option still starts on a mixed set', async () => {
@@ -180,7 +181,7 @@ describe('asks-settled starts', () => {
         'review.json': trigger({}, PROJECT_CWD, {}, 'review'),
       });
       expect(
-        started(build?.([answered(0, { decision: 'keep', text: '' }), SETTLED[1]], null))
+        started(build?.([answered(0, { decision: 'keep', text: '' }), SETTLED[1]], null, []))
       ).toEqual(['build', 'review']);
       expect(
         started(
@@ -189,7 +190,8 @@ describe('asks-settled starts', () => {
               answered(0, { decision: 'keep', text: '' }),
               answered(1, { decision: 'drop', text: '' }),
             ],
-            null
+            null,
+            []
           )
         )
       ).toEqual(['review']);
@@ -239,7 +241,7 @@ describe('asks-settled starts', () => {
         handoff: { runId: RUN_ID, branch: 'archon/plan-1', commit },
         worktree: tmpdir(),
       });
-      expect(build?.(SETTLED, { metadata })).toMatchObject([
+      expect(build?.(SETTLED, { metadata }, [])).toMatchObject([
         {
           outcome: 'matched',
           bindings: [
@@ -262,7 +264,7 @@ describe('asks-settled starts', () => {
       ['a deleted asking run', null, 'no longer exists'],
     ] as const)('refuses the start naming why on %s', async (_, run, why) => {
       const { build } = await prepareWith(takesCheckout);
-      const [receipt] = build?.(SETTLED, run) ?? [];
+      const [receipt] = build?.(SETTLED, run, []) ?? [];
       expect(receipt).toMatchObject({ outcome: 'unmatched', bindings: [] });
       expect(receipt?.reason).toContain(`Checkout: `);
       expect(receipt?.reason).toContain(why);
