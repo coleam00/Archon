@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { repoRefSchema } from './identity';
 import { forgeResponseSchema, pluginIdentitySchema, pluginMetadataSchema } from './operations';
 
 export const cliForgeMetadataRequestSchema = z.object({
@@ -9,24 +10,26 @@ export const cliForgeMetadataRequestSchema = z.object({
 
 /**
  * `forge check`: the capabilities a workflow will call, asked before it spends. The forge
- * is named by `host`, or by a git `remote` whose plugin is selected as a `resolve` of that
- * remote selects one. The two are exclusive alternatives, so the exported contract and
- * the declaration generated from it refuse a request that names both or neither.
+ * is named by `host`, by a git `remote` whose plugin is selected as a `resolve` of that
+ * remote selects one, or by a `repo`. The three are exclusive alternatives, so the
+ * exported contract and the declaration generated from it refuse a request that names
+ * more than one or none. A `remote` or `repo` check also reads that repository.
  */
 const checkRequestBase = z.object({
   operationId: z.string().min(1),
   op: z.literal('check'),
   operations: z.array(z.string().min(1)),
 });
-const forgeNamedOnce = 'name the forge by exactly one of host or remote';
+const forgeNamedOnce = 'name the forge by exactly one of host, remote or repo';
 const forgeName = z
   .string({ error: issue => (issue.input === undefined ? forgeNamedOnce : undefined) })
   .trim()
   .min(1);
-const notBoth = z.never({ error: forgeNamedOnce }).optional();
+const notAlso = z.never({ error: forgeNamedOnce }).optional();
 export const cliForgeCheckRequestSchema = z.union([
-  checkRequestBase.extend({ host: forgeName, remote: notBoth }),
-  checkRequestBase.extend({ remote: forgeName, host: notBoth }),
+  checkRequestBase.extend({ host: forgeName, remote: notAlso, repo: notAlso }),
+  checkRequestBase.extend({ remote: forgeName, host: notAlso, repo: notAlso }),
+  checkRequestBase.extend({ repo: repoRefSchema, host: notAlso, remote: notAlso }),
 ]);
 const cliForgeCheckSchema = z.object({
   host: z.string().min(1),

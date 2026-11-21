@@ -57,6 +57,7 @@ import { writeJsonLine } from '../utils/stdout';
 import {
   triggerConfigSchema,
   type AsksSettledInputSource,
+  type RunEndedInputSource,
 } from '@archon/workflows/schemas/resource-start';
 import { loadWorkflows } from './workflow-list';
 
@@ -134,6 +135,13 @@ function bindingPath(target: Target, id: string, value?: string): string {
 }
 
 /**
+ * An input read from the run that ended or left the asks. Pack load lets the ended item's
+ * key reach only a run-ended binding, and every written file is checked by the trigger
+ * loader's schema before it is written.
+ */
+type RunInputSource = RunEndedInputSource | AsksSettledInputSource;
+
+/**
  * The trigger files a run-ended or asks-settled binding is written as: one per outcome for
  * a run-ended binding, and for an asks-settled binding one per option, or one when it names
  * no option, under the name it had before options existed.
@@ -144,7 +152,7 @@ function onFiles(
   pack: DeclaredPack,
   target: Target,
   intent: Record<string, unknown>,
-  fromRun: Record<string, AsksSettledInputSource>
+  fromRun: Record<string, RunInputSource>
 ): Generated[] {
   const mapped = Object.keys(fromRun).length > 0 ? { inputs: fromRun } : {};
   const file = (name: string, on: Record<string, unknown>) => ({
@@ -175,13 +183,14 @@ function onFiles(
       };
     });
   }
-  const { workflow, outcome, checkout } = kinded.binding.run_ended;
+  const { workflow, outcome, checkout, linked } = kinded.binding.run_ended;
   const workflowName = workflowNameFor(pack, id, workflow);
   return (typeof outcome === 'string' ? [outcome] : outcome).map(value => {
     const runEnded = {
       workflowName,
       outcome: value,
       ...(checkout === undefined ? {} : { checkout }),
+      ...(linked === undefined ? {} : { linked }),
       ...mapped,
     };
     return {
@@ -202,7 +211,7 @@ function generate(
 ): Generated[] {
   const literals: Record<string, string> = {};
   const fields: Record<string, { source: 'field'; field: string }> = {};
-  const fromRun: Record<string, AsksSettledInputSource> = {};
+  const fromRun: Record<string, RunInputSource> = {};
   let waitInput: string | undefined;
   const resolveInput = (name: string, input: PackBindingInput): void => {
     if (typeof input === 'string') literals[name] = input;

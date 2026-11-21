@@ -26,7 +26,7 @@ import { followUp } from '../../.shared/follow-up.ts';
 import { type QualifiedPr, sameRepo } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
 import { openOrderMembers } from '../../.shared/order.ts';
-import { itemKey, PICKUP_ORDER, read, sortCandidates, type WorkItem } from '../../.shared/workitem.ts';
+import { itemKey, PICKUP_ORDER, read, readWorkItem, sortCandidates, type WorkItem } from '../../.shared/workitem.ts';
 
 type Repo = QualifiedPr['repo'];
 
@@ -74,7 +74,13 @@ function main(): void {
     emit({ fired: [], summary: 'The message starts no build in this run.' });
     return;
   }
-  const numbers = issue === null ? waiting(repo).map(doc => doc.subject.number) : [issue];
+  const listed = issue === null ? waiting(repo).map(doc => doc.subject.number) : [issue];
+  // Read again just before each fire: a build another pick started can decide an item
+  // while this pick works down its list, and a start for it would then be refused.
+  const numbers = listed.filter(number => {
+    const doc = readWorkItem(number);
+    return doc !== null && buildWaits(doc);
+  });
   const lines = numbers.map(number =>
     followUp(
       binding,

@@ -157,6 +157,10 @@ test('acceptance persists and returns the single validated dispatch evidence', a
                 title: 'Title',
                 body: 'Body',
                 contentDigest,
+                editor: null,
+                lastEditedAt: null,
+                titleEditor: null,
+                titleEditedAt: null,
                 policy: {
                   maintainersPath: '.archon/maintainers.json',
                   head: 'a'.repeat(40),
@@ -914,9 +918,62 @@ test('forge check by remote selects the plugin a resolve of that remote selects'
     ok: false,
     error: {
       kind: 'invalid_request',
-      message: expect.stringContaining('name the forge by exactly one of host or remote'),
+      message: expect.stringContaining('name the forge by exactly one of host, remote or repo'),
     },
   });
+});
+
+test('forge check reads a remote or repository and refuses a credential the forge rejects', async () => {
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-check-')));
+  const env = (token: string) => ({
+    HOME: root,
+    ARCHON_HOME: root,
+    PATH: '',
+    TEST_FORGE_TOKEN: token,
+  });
+  const operations = ['pr.view'];
+  const repo = { host: 'forge.example', path: 'a/b' };
+
+  for (const target of [{ remote: 'git@forge.example:a/b.git' }, { repo }]) {
+    const accepted = await checkForge({ ...target, operations }, env('accepted'), 'access');
+    expect(accepted.code).toBe(0);
+    expect(accepted.response).toMatchObject({
+      ok: true,
+      result: { op: 'check', value: { host: 'forge.example' } },
+    });
+
+    const expired = await checkForge({ ...target, operations }, env('expired-token'), 'access');
+    expect(expired.code).toBe(1);
+    expect(expired.response).toMatchObject({
+      ok: false,
+      error: { kind: 'authorization' },
+      remedy: expect.stringContaining('TEST_FORGE_TOKEN'),
+    });
+    expect(JSON.stringify(expired.response)).not.toContain('expired-token');
+  }
+
+  const unseen = await checkForge(
+    { repo: { host: 'forge.example', path: 'missing/repo' }, operations },
+    env('accepted'),
+    'access'
+  );
+  expect(unseen.code).toBe(1);
+  expect(unseen.response).toMatchObject({ ok: false, error: { kind: 'not_found' } });
+
+  // A host check names no repository, so it reads nothing, whatever the token.
+  const byHost = await checkForge(
+    { host: 'forge.example', operations },
+    env('expired-token'),
+    'access'
+  );
+  expect(byHost.response).toMatchObject({ ok: true });
+
+  // A plugin with no pr.view has no read to serve: the check passes as it did before.
+  const noRead = await checkForge(
+    { remote: 'git@forge.example:a/b.git', operations: ['checks.state'] },
+    env('expired-token')
+  );
+  expect(noRead.response).toMatchObject({ ok: true });
 });
 
 test('forge check under a source checkout answers for the source GitHub plugin', async () => {

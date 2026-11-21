@@ -4999,6 +4999,11 @@ export interface components {
       runId: string;
       nodeId: string;
       name: string;
+      composed?: {
+        nodeId: string;
+        workflow: string;
+        includes: string[];
+      };
       /** @enum {string} */
       status: 'running' | 'completed' | 'failed' | 'skipped';
       duration?: number;
@@ -5013,6 +5018,11 @@ export interface components {
               id: string;
               /** @enum {string} */
               kind: 'agent';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
               source:
                 | {
                     /** @enum {string} */
@@ -5030,37 +5040,72 @@ export interface components {
               kind: 'exec';
               /** @enum {string} */
               runtime: 'sh' | 'bun' | 'uv';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'loop';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
               command?: string;
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'loop_group';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'gate';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'halt';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'wait';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'workflow';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
               /** @enum {boolean} */
               fanOut?: true;
             }
@@ -5068,6 +5113,11 @@ export interface components {
               id: string;
               /** @enum {string} */
               kind: 'compose_fan_out';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               /** @enum {string} */
@@ -6671,6 +6721,11 @@ export interface components {
                 id: string;
                 /** @enum {string} */
                 kind: 'agent';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
                 source:
                   | {
                       /** @enum {string} */
@@ -6688,37 +6743,72 @@ export interface components {
                 kind: 'exec';
                 /** @enum {string} */
                 runtime: 'sh' | 'bun' | 'uv';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'loop';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
                 command?: string;
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'loop_group';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'gate';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'halt';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'wait';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'workflow';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
                 /** @enum {boolean} */
                 fanOut?: true;
               }
@@ -6726,6 +6816,11 @@ export interface components {
                 id: string;
                 /** @enum {string} */
                 kind: 'compose_fan_out';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 /** @enum {string} */

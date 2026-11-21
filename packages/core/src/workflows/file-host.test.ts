@@ -1000,7 +1000,8 @@ for (const [damage, owner] of [
   });
 }
 
-test('a binding whose pack forge this checkout cannot reach is refused before admission', async () => {
+/** A project whose `factory` pack declares forge needs, with one pending binding to `deliver`. */
+async function pendingForgeBinding() {
   const root = roots(await mkdtemp(join(tmpdir(), 'host-forge-')));
   process.env.ARCHON_HOME = join(root, 'home');
   // Preparing a binding loads the project's config, which needs the host's policies and providers.
@@ -1053,13 +1054,20 @@ test('a binding whose pack forge this checkout cannot reach is refused before ad
   });
 
   const started: string[] = [];
-  const error = await drainResourceStartHost({
-    ...host,
-    hostId: 'host',
-    startAdmitted: async id => {
-      started.push(id);
-    },
-  }).catch((caught: unknown) => caught);
+  const drain = () =>
+    drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async id => {
+        started.push(id);
+      },
+    });
+  return { store, receiptId, started, drain };
+}
+
+test('a binding whose pack forge this checkout cannot reach is refused before admission', async () => {
+  const { store, receiptId, started, drain } = await pendingForgeBinding();
+  const error = await drain().catch((caught: unknown) => caught);
 
   if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
   expect(error.failures).toMatchObject([
@@ -1082,4 +1090,22 @@ test('a binding whose pack forge this checkout cannot reach is refused before ad
       },
     },
   ]);
+});
+
+test('a binding starts with the inputs naming the repository the forge check judged', async () => {
+  const forgeAccess = await import('@archon/workflows/run-forge-access');
+  const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue({
+    repo_host: 'github.com',
+    repo_path: 'o/project',
+  });
+  try {
+    const { store, started, drain } = await pendingForgeBinding();
+    await drain();
+    expect(started).toHaveLength(1);
+    expect((await store.getWorkflowRun(started[0]!))?.metadata).toMatchObject({
+      inputs: { repo_host: 'github.com', repo_path: 'o/project' },
+    });
+  } finally {
+    assertForge.mockRestore();
+  }
 });

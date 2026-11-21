@@ -5,6 +5,7 @@ import type { EffortLevel } from './schemas/effort';
 import type { TierName } from './schemas/model-binding';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import { sessionPreview, tokenUsageSchema } from '@archon/provider-contract';
+import { readComposedMeta } from './compiled-command';
 import {
   nodeExecutionMetadataSchema,
   type ExecutionBinding,
@@ -16,11 +17,18 @@ import {
 } from './schemas/node-execution';
 
 export function describeExecutionNode(node: DagNode): NodeDescriptor {
+  const meta = readComposedMeta(node);
   const { id, kind } = node;
+  const base = {
+    id,
+    ...(meta !== undefined
+      ? { composed: { nodeId: meta.nodeId, workflow: meta.origin, includes: [...meta.includes] } }
+      : {}),
+  };
   switch (kind) {
     case 'agent':
       return {
-        id,
+        ...base,
         kind,
         source:
           node.source.kind === 'command'
@@ -28,13 +36,13 @@ export function describeExecutionNode(node: DagNode): NodeDescriptor {
             : { kind: 'inline' },
       };
     case 'exec':
-      return { id, kind, runtime: node.runtime };
+      return { ...base, kind, runtime: node.runtime };
     case 'loop':
-      return { id, kind, ...(node.loop.command ? { command: node.loop.command } : {}) };
+      return { ...base, kind, ...(node.loop.command ? { command: node.loop.command } : {}) };
     case 'workflow':
-      return { id, kind, ...(node.fan_out !== undefined ? { fanOut: true } : {}) };
+      return { ...base, kind, ...(node.fan_out !== undefined ? { fanOut: true } : {}) };
     default:
-      return { id, kind };
+      return { ...base, kind };
   }
 }
 

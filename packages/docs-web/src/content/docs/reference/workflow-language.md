@@ -2097,7 +2097,12 @@ nodes; an include in a `loop_group` body produces body-local nodes. There is no 
   underscore) within that scope. Including `archon-review` under `id: review` yields
   `review__scope`, `review__code`, `review__synthesize`, and so on. These
   namespaced ids are what appear in the event stream and in `archon workflow get <id>`;
-  body-local events additionally carry their enclosing group prefix.
+  body-local events additionally carry their enclosing group prefix. To show such a node
+  by a readable name, read its `composed` origin instead of splitting the id: a node
+  event, its stored `data.node` and a Web `dag_node` frame carry `composed: { nodeId,
+  workflow, includes }`, the id as written, the workflow that declared it, and the
+  include ids that brought it in, outermost first. A node the run's own workflow
+  declares has no `composed`.
 - **Edges and command bodies.** Internal `depends_on` edges and `$id.output` references are
   rewired to the namespaced ids automatically. This includes named `command:` and
   `loop.command` files: discovery resolves their bodies and compiles them into the flat DAG
@@ -2885,7 +2890,11 @@ completes on that item with `run_ended.outcome`. `{ input: <name> }` and
 declare the outcome or an input read from it, or the started workflow does not declare an input
 mapped to it. `run_ended.checkout: ended-run` starts the workflow in the checkout the ended run
 left, as [`on.runEnded.checkout`](/guides/workflow-triggers/#work-in-the-checkout-the-ended-run-left)
-does.
+does. `run_ended.linked: { kind: <link kind>, holder: from | to }` starts the workflow on every
+item holding an active link of that kind to the ended run's item instead of on that item, as
+[`on.runEnded.linked`](/guides/workflow-triggers/#start-a-stage-on-an-item-when-the-items-it-links-to-end)
+does, and takes no `checkout`. A `{ item: key }` input, run-ended bindings only, passes the key
+of the item whose run ended.
 
 An `asks_settled:` binding is an
 [asks-settled trigger file](/guides/workflow-triggers/#start-a-stage-again-when-its-asks-are-answered):
@@ -2949,32 +2958,69 @@ A pack whose workflows call the forge names the capabilities they call, once, in
 # .archon/workflows/review-kit/.pack/pack.yaml
 forge:
   operations: [pr.view, pr.create, comment.upsert, resolve:subject]
+  repository: { host: repo_host, path: repo_path }
 ```
 
 Each entry is a capability a [forge plugin](/reference/forge/) advertises: an operation name,
-or a finer token such as `resolve:subject`. The list must not be empty; any other key under
-`forge:` is refused, and an invalid block fails every workflow of the pack, naming the file.
+or a finer token such as `resolve:subject`. The list must not be empty. `repository` is
+optional and names two workflow inputs that carry the repository a run acts on, its host and
+its path. Any other key under `forge:` is refused, and an invalid block fails every workflow
+of the pack, naming the file.
 
 Every fresh run of a workflow of the pack is checked when it starts, before a worktree, a
-queue slot or any node: started by hand, from chat or the Web UI, by a trigger binding (before
-admission, so a refused binding takes no slot), or as a `workflow:` sub-run, which is checked
-against its own pack. An `include:`d block's own pack is not checked. A resumed or approved
+queue slot or any node: started by hand, from chat or the Web UI (a fresh run the resume menu
+offers included), by a trigger binding (before admission, so a refused binding takes no slot),
+or as a `workflow:` sub-run, which is checked against its own pack. An `include:`d block's own
+pack is not checked. A resumed or approved
 run is not checked again. The engine asks
-[`archon forge check`](/reference/forge/#check-forge-access-before-a-run-spends) for each
-remote of the project's checkout, with the run's GitHub credential; the run starts when one
-remote names a forge whose plugin advertises every listed capability and whose credential
-resolves. No forge operation runs. Otherwise the run is refused with a typed reason per remote
-and the plugin's remedy. A refused trigger binding's receipt records them as `forgeRefusal`,
-read with [`archon trigger list`](/reference/cli/#trigger) or `archon trigger inspect`:
+[`archon forge check`](/reference/forge/#check-forge-access-before-a-run-spends), with the
+run's GitHub credential, about the repository the run acts on:
+
+- When the run's inputs, with its pack settings and input defaults merged in as the run
+  starts with them, set both inputs `repository` names, the check judges that repository
+  alone. The settings are read where the run reads its other configuration at start: an
+  adopted run's worktree or branch, a sub-run's parent checkout, or else the project's
+  checkout. The run then starts with both inputs set to the values judged, so a worktree
+  created after the check whose settings name another repository does not move the run. The
+  checkout's remotes are not read, so a capable mirror cannot start a run whose repository
+  fails.
+- When they set neither, or the pack declares no `repository`, the check asks for each remote
+  of the project's checkout, and the run starts when one remote passes. A mirror no plugin
+  claims, or one the credential cannot read, does not refuse a run its canonical remote serves.
+  The check does not prove the run acts on a checked remote: when a worktree created after the
+  check names a repository in its own pack settings, the run reads that repository there,
+  unchecked.
+- When they set only one, the run is refused with `no_forge_repository`.
+
+A repository passes when its plugin advertises every listed capability, its credential
+resolves, and the forge accepts that credential in one read: a `pr.view` by head, at most one
+per remote checked and none that writes. That read lists the repository's pull requests, so the
+credential needs pull-request read on the repository (on GitHub, the Pull requests read
+permission); a credential without it is refused at start with `authorization`, even when the
+listed operations would not need it. A plugin that does not advertise `pr.view` has no
+read to serve, so its check stops after the credential resolves. Otherwise the run is refused with a typed reason per
+repository or remote and the plugin's remedy. A refused trigger binding's receipt records them
+as `forgeRefusal`, read with [`archon trigger list`](/reference/cli/#trigger) or
+`archon trigger inspect`:
 
 | Reason | Meaning |
 | --- | --- |
 | `no_plugin_for_host` | No installed or configured plugin claims the remote's host |
 | `unsupported_op` | The plugin lacks a listed capability; the refusal names each one |
 | `no_credential` | The plugin's credential is unset or empty |
+| `authorization` | The forge rejected the credential, for example an expired token, or one without pull-request read on the repository |
+| `not_found` | The credential cannot see the repository, or it does not exist |
+| `no_forge_repository` | The run sets only one of the two inputs `repository` names |
 | `no_forge_remote` | The checkout has no git remote, or the project is not a git repository |
 | `no_forge_path` | The run executes in a container, or the host publishes no `ARCHON_CLI_COMMAND` |
 | `check_failed` | The check could not answer, for example plugin discovery failed. A check that gave no answer names its exit code or signal and the command to rerun it by hand; its stderr is not kept, because it can carry the remote's URL or the credential |
+
+The check proves that a plugin serves the repository, that it advertises the listed
+capabilities, and that the forge accepts the credential for reading the repository's pull
+requests. It does
+not prove that the credential may write, or may use every listed operation; the run's own
+forge calls prove that. A plugin that does not advertise `pr.view` gets no read, so for it the
+check proves only that the credential resolves.
 
 A pack that declares no `forge:` block is not checked.
 [`archon validate workflows`](/reference/cli/#validate-workflows-name) warns about a listed

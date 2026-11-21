@@ -228,8 +228,9 @@ async function answerMetadata(input: ForgeInput, context: ForgeCommandContext): 
 
 /**
  * A preflight for a workflow about to spend: the plugin, its capabilities and the
- * credential source, read the way dispatch reads them. No plugin operation runs, so
- * there is nothing to audit.
+ * credential source, read the way dispatch reads them, and for a remote or repository
+ * whose plugin advertises `pr.view` one read with that credential. The read is not audited: a check runs before the run it
+ * guards exists.
  */
 async function answerCheck(input: ForgeInput, context: ForgeCommandContext): Promise<number> {
   const { op, supplied } = input;

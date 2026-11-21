@@ -1,7 +1,7 @@
 import { create as createIsolationEnvironment } from './isolation-environments';
 import { execFileAsync, toBranchName } from '@archon/git';
 // @archon-test-isolated
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test, spyOn } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -53,6 +53,8 @@ import { CoreTrustedTextHost, TrustedTextRefusedError } from '../workflows/trust
 import type { TrustedTextRunMetadata } from '@archon/workflows/trusted-text';
 import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
+import * as forgeAccess from '@archon/workflows/run-forge-access';
+import type { ForgeCheckRequest } from '@archon/workflows/run-forge-access';
 
 let root = '';
 const CODEBASE_ID = '33333333-3333-4333-8333-333333333333';
@@ -199,6 +201,143 @@ afterEach(async () => {
 });
 
 describe('durable resource starts', () => {
+  test.each(['forge-refused', 'waiting-acceptance', 'accepted'] as const)(
+    'a protected pack binding preserves the judged repository and trust ordering: %s',
+    async state => {
+      const project = join(await realpath(root), 'protected-pack');
+      const pack = join(project, '.archon', 'workflows', 'factory');
+      await mkdir(join(pack, '.pack'), { recursive: true });
+      await mkdir(join(pack, 'reader'), { recursive: true });
+      await mkdir(join(project, '.archon', 'packs'), { recursive: true });
+      await writeFile(
+        join(pack, '.pack', 'pack.yaml'),
+        `inputs:
+  repo_host: {}
+  repo_path: {}
+forge:
+  operations: [pr.view]
+  repository: { host: repo_host, path: repo_path }
+`
+      );
+      await writeFile(
+        join(project, '.archon', 'packs', 'factory.yaml'),
+        'settings:\n  repo_host: github.com\n  repo_path: owner/repo\n'
+      );
+      await writeFile(
+        join(pack, 'reader', 'reader.yaml'),
+        `name: reader
+description: protected pack
+webSearchMode: disabled
+inputs:
+  trusted_item:
+    required: true
+nodes:
+  - id: read
+    prompt: Read
+    allowed_tools: [Read]
+`
+      );
+      await getDatabase().query(
+        'UPDATE remote_agent_codebases SET default_cwd = $1 WHERE id = $2',
+        [project, CODEBASE_ID]
+      );
+      const requirement: TrustedTextRunMetadata['requirement'] = {
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        maintainersPath: '.archon/maintainers.json',
+        input: 'trusted_item',
+      };
+      const snapshot: TrustedTextRunMetadata = {
+        schemaVersion: 1,
+        requirement,
+        title: 'Accepted',
+        body: 'Snapshot',
+        contentDigest: 'a'.repeat(64),
+        editProvenance: {
+          editor: null,
+          lastEditedAt: null,
+          titleEditor: null,
+          titleEditedAt: null,
+        },
+        policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+      };
+      const receiptId = await acceptTestBinding({
+        cwd: project,
+        workflowName: 'reader',
+        trustedText: requirement,
+      });
+      const started: string[] = [];
+      const host = testResourceHost(started);
+      const order: string[] = [];
+      const checked: ForgeCheckRequest[] = [];
+      host.deps.trustedText = {
+        declare: async () => {
+          order.push('declare');
+        },
+        authorize: async () => {
+          order.push('authorize');
+          if (state === 'waiting-acceptance')
+            throw new TrustedTextRefusedError('waiting_acceptance');
+          return snapshot;
+        },
+        readEvidence: async () => {
+          throw new Error('unexpected evidence read');
+        },
+        recheck: async () => undefined,
+      };
+      const realAssert = forgeAccess.assertRunForgeAccess;
+      const spy = spyOn(forgeAccess, 'assertRunForgeAccess').mockImplementation(
+        (deps, workflow, prepared, site) =>
+          realAssert(deps, workflow, prepared, site, async request => {
+            order.push('forge');
+            checked.push(request);
+            return state === 'forge-refused'
+              ? { reason: 'authorization', message: 'Rejected credential' }
+              : undefined;
+          })
+      );
+      const oldCommand = process.env.ARCHON_CLI_COMMAND;
+      process.env.ARCHON_CLI_COMMAND = JSON.stringify(['archon']);
+      try {
+        if (state === 'accepted') {
+          await drainResourceStartHost(host);
+          expect(started).toHaveLength(1);
+          const run = await getWorkflowRun(started[0]!);
+          expect(run?.metadata.inputs_values).toMatchObject({
+            repo_host: 'github.com',
+            repo_path: 'owner/repo',
+            trusted_item: { title: 'Accepted', body: 'Snapshot' },
+          });
+          expect(run?.metadata.trusted_text).toEqual(snapshot);
+        } else {
+          const failure = await drainResourceStartHost(host).catch((error: unknown) => error);
+          if (!(failure instanceof ResourceStartDrainError)) throw failure;
+          expect(failure.failures[0]?.error).toMatchObject({
+            message: expect.stringContaining(
+              state === 'forge-refused' ? 'Rejected credential' : 'waiting_acceptance'
+            ),
+          });
+          expect(started).toEqual([]);
+          expect((await getStartReceipt(receiptId))?.bindings[0]?.error).toContain(
+            state === 'forge-refused' ? 'launch_preparation_failed' : 'waiting_acceptance'
+          );
+        }
+        expect(order).toEqual(
+          state === 'forge-refused' ? ['forge'] : ['forge', 'declare', 'authorize']
+        );
+        expect(checked).toEqual([
+          { repo: { host: 'github.com', path: 'owner/repo' }, operations: ['pr.view'] },
+        ]);
+      } finally {
+        spy.mockRestore();
+        if (oldCommand === undefined) delete process.env.ARCHON_CLI_COMMAND;
+        else process.env.ARCHON_CLI_COMMAND = oldCommand;
+      }
+    }
+  );
+
   // Cold preparation of 101 waiting bindings exceeds Bun's default twenty-second timeout.
   test('wait, accept and drain starts the same protected binding with its accepted input', async () => {
     const projectPath = join(root, 'project');

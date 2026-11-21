@@ -596,6 +596,8 @@ Only links active when the run completes count: a link ended before then causes 
 
 `archon workflow runs --item <holder> --json` shows each started run with `cause` `{"kind": "run_ended", "runId": <the run whose end caused it>, "sourceInstanceId"}`. The receipt's delivery ID is `<ended run ID>:<holder item ID>`. `archon trigger check` checks a linked binding as it checks any run-ended binding, does not report it as a duplicate of a same-item binding to the same stage, and does not report one that starts the workflow whose end fires it, since that start is on another item.
 
+A workflow pack can declare this binding as a [`run_ended:` binding](/reference/workflow-language/#pack-bindings) with `linked`; [`archon pack bindings`](/reference/cli/#pack-bindings) writes it, checked, and `archon trigger add` registers it.
+
 A form that starts the stage once, when every linked item has ended the workflow with the outcome, is not built yet ([issue 5867](https://github.com/coleam00/Archon/issues/5867)).
 
 ## Start a stage again when its asks are answered

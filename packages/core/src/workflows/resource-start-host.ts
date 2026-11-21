@@ -226,8 +226,8 @@ function resolveBindingIsolation(
     : { kind: 'in-place' };
 }
 
-// The row is created with only the authored inputs. The run fixes its pack settings and
-// declared defaults on the row when it starts (resolveRunDispatch), and a resume reads that.
+// The row holds the authored inputs and those naming the judged repository. The run fixes
+// its settings and defaults on the row at start (resolveRunDispatch); a resume reads that.
 function authoredInputsMetadata(inputs: Record<string, JsonValue>): Record<string, JsonValue> {
   if (Object.keys(inputs).length === 0) return {};
   return {
@@ -314,7 +314,12 @@ async function prepareBinding(
       runConfig,
     });
     // Check declared forge access before trusted-text preparation performs its own forge read.
-    await assertRunForgeAccess(host.deps, workflow, preparedAi, { cwd, codebaseId: codebase.id });
+    const checkedInputs = await assertRunForgeAccess(host.deps, workflow, preparedAi, {
+      cwd,
+      settingsCwd: cwd,
+      codebaseId: codebase.id,
+      supplied: ordinaryInputs ?? { ...intent.launch.inputs, ...intent.eventInputs },
+    });
     const trustedText = await authorizeTrustedBinding(
       host,
       intent,
@@ -322,7 +327,11 @@ async function prepareBinding(
       codebase,
       identity.receiptId
     );
-    const inputs = ordinaryInputs ?? resolveBindingInputs(intent, workflow, trustedText);
+    const inputs = resolveBindingInputs(
+      { ...intent, launch: { ...intent.launch, inputs: checkedInputs } },
+      workflow,
+      trustedText
+    );
     let isolation: PreparedWorkflowLaunch['execution']['isolation'];
     let handoff: CheckoutHandoffRunMetadata | undefined;
     if (intent.checkoutFrom) {

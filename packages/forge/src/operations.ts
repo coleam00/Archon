@@ -132,8 +132,14 @@ type PluginRemedyKind = (typeof pluginRemedyKinds)[number];
 /**
  * The `forge check` refusals the operator fixes, each answered with a remedy. A run
  * refused at start reports these kinds as they are; any other failure is the check's own.
+ * `authorization` and `not_found` come from the check's read of the repository.
  */
-export const forgeAccessRefusalKinds = ['no_plugin_for_host', ...pluginRemedyKinds] as const;
+export const forgeAccessRefusalKinds = [
+  'no_plugin_for_host',
+  ...pluginRemedyKinds,
+  'authorization',
+  'not_found',
+] as const;
 export type ForgeAccessRefusalKind = (typeof forgeAccessRefusalKinds)[number];
 export function isForgeAccessRefusalKind(kind: string): kind is ForgeAccessRefusalKind {
   return (forgeAccessRefusalKinds as readonly string[]).includes(kind);
@@ -223,8 +229,6 @@ export const forgeErrorSchema = z.object({
     ...temporaryErrorKinds,
     ...forgeAccessRefusalKinds,
     'conflict',
-    'authorization',
-    'not_found',
     'forge_error',
     'invalid_request',
     'invalid_response',
