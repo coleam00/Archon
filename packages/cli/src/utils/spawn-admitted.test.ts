@@ -2,6 +2,7 @@
 // @archon-test-windows
 import { afterAll, expect, mock, test } from 'bun:test';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { createServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -83,4 +84,60 @@ test('a hand-off whose broker relay fails is uncertain, not a failure', async ()
   } finally {
     Reflect.deleteProperty(process.env, RUN_JOB_ESCAPE_ENV);
   }
+});
+
+/** Hand the executor to a broker at a socket under `root` that answers its invocation with `answer`. */
+async function withBroker(
+  root: string,
+  answer: (socket: Socket) => void,
+  body: () => Promise<void>
+): Promise<void> {
+  const pipe =
+    process.platform === 'win32'
+      ? `\\\\.\\pipe\\spawn-admitted-${crypto.randomUUID()}`
+      : join(root, 'broker.sock');
+  const server = createServer(socket => {
+    socket.setEncoding('utf8');
+    let received = '';
+    socket.on('data', (chunk: string) => {
+      received += chunk;
+      if (received.includes('\n')) answer(socket);
+    });
+  });
+  await new Promise<void>(resolveListen => server.listen(pipe, resolveListen));
+  process.env[RUN_JOB_ESCAPE_ENV] = pipe;
+  try {
+    await body();
+  } finally {
+    Reflect.deleteProperty(process.env, RUN_JOB_ESCAPE_ENV);
+    await new Promise<void>(resolveClose => server.close(() => resolveClose()));
+  }
+}
+
+test('a hand-off the broker refused before spawn is a failure, not uncertain', async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'spawn-admitted-')));
+  process.env.ARCHON_HOME = root;
+  await withBroker(
+    root,
+    socket => socket.end('{"error":"EACCES: permission denied, open"}\n'),
+    async () => {
+      const handOff = spawnAdmitted(admittedIn(root), 'request', 'host');
+      await expect(handOff).rejects.toThrow('EACCES');
+      await expect(handOff).rejects.not.toBeInstanceOf(HandOffUncertainError);
+    }
+  );
+});
+
+test('a hand-off whose broker drops the connection mid-relay is uncertain', async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'spawn-admitted-')));
+  process.env.ARCHON_HOME = root;
+  await withBroker(
+    root,
+    socket => socket.destroy(),
+    async () => {
+      await expect(spawnAdmitted(admittedIn(root), 'request', 'host')).rejects.toBeInstanceOf(
+        HandOffUncertainError
+      );
+    }
+  );
 });
