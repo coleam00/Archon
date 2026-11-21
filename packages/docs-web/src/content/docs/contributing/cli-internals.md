@@ -23,7 +23,7 @@ packages/cli/
 │   │   ├── workflow-query.ts # workflow list/test/status/get/runs/logs/wait
 │   │   ├── workflow-run-*.ts # workflow run: select, admit, launch, execute
 │   │   ├── isolation.ts    # isolation list/cleanup (list/merged-cleanup delegate to @archon/core/operations)
-│   │   ├── isolation-schedule.ts # isolation cleanup schedule: the macOS merged-cleanup timer
+│   │   ├── isolation-schedule.ts # isolation cleanup schedule: the merged-cleanup OS timer, installed through triggers/native-schedule
 │   │   ├── setup.ts        # setup command implementation
 │   │   ├── chat.ts         # chat command implementation
 │   │   ├── validate.ts     # validate command implementation

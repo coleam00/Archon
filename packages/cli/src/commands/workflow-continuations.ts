@@ -22,8 +22,8 @@ import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
 
 import {
-  installMacosNativeSchedule,
-  removeMacosNativeSchedule,
+  installNativeSchedule,
+  removeNativeSchedule,
   type NativeScheduleConfig,
 } from '../triggers/native-schedule';
 
@@ -46,6 +46,8 @@ export function workflowWakeScheduleConfig(intervalSeconds = 5): NativeScheduleC
     archonHome,
     path: process.env.PATH ?? '',
     schedule: { intervalSeconds, runAtLoad: true },
+    // A watcher writes a line every pass, forever; a log of it would only grow.
+    output: 'discard',
     removeCommand: 'archon workflow wake schedule remove',
   };
 }
@@ -250,11 +252,16 @@ async function wakeSchedule(args: string[], values: Values, json: boolean): Prom
     );
   }
   validateFlags(values, operation === 'install' ? ['interval'] : []);
+  // A long-lived watcher is not the one-shot job the systemd and Task Scheduler backends run.
+  if (process.platform !== 'darwin')
+    throw new Error(
+      'Native wake scheduling is supported only on macOS. Use the documented long-lived systemd or Task Scheduler recipe on this host.'
+    );
   const config = workflowWakeScheduleConfig(parseIntervalSeconds(values, 5));
   const result =
     operation === 'install'
-      ? { path: await installMacosNativeSchedule(config) }
-      : { removed: await removeMacosNativeSchedule(config.id) };
+      ? { path: (await installNativeSchedule(config)).path }
+      : { removed: await removeNativeSchedule(config) };
   if (json) await writeJsonLine({ ok: true, action: `wake schedule ${operation}`, ...result });
   else console.log(`wake schedule ${operation}: ${JSON.stringify(result)}`);
   return 0;
