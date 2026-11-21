@@ -55,9 +55,16 @@ zero-file runs. An absent report after exit 0 emits a diagnostic and contributes
 results, preserving Bun's exit code; absence after a nonzero exit remains a runner error.
 The wrapper cannot distinguish successful zero-file execution from report loss after exit 0.
 
-CI is the full validation gate. While working, choose checks for the files and packages
-you changed: package `type-check` and `test` scripts, `bun run lint`,
-or `bun run test <path>` for root scripts. Keep package tests isolated through their runners.
+CI is the full validation gate. While working and before you push, run
+`bun run check:changed`. It finds the packages your change touches against the merge base
+with `origin/dev` (`--base <ref>` for another), adds every package that depends on them
+through the manifests, and runs those packages' own `type-check` and `test` scripts, the root
+script and pack projects when the change reaches them, then `bun run lint` and the ratchet.
+It prints the packages it checked and skipped, and `--list` prints only that. A change to
+the root manifest, the lockfile, CI, shared config or a file it cannot place runs the full
+local set and says why. It leaves to CI the generated files, package boundaries, format, the
+installer, Windows and macOS, and couplings the manifests do not declare. For one test file,
+`bun run test <path>` is enough. Keep package tests isolated through their runners.
 The isolation PR lookup conformance test requires `jq` on PATH to execute the production `gh --jq` projection.
 
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
@@ -101,6 +108,8 @@ not accepted. Removed collisions must lose their ledger entries; stale entries f
 is excluded with the provider package; `generate:codex-protocol` owns it.
 
 ```bash
+bun run check:changed                       # changed packages and their dependents
+bun run check:changed --list                # print that scope without running it
 bun run validate                            # optional local checks
 bun run validate --only generated-files     # generated artifacts
 bun run validate --only format              # formatting, also run by the staged-file hook
