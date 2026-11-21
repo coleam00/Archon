@@ -370,6 +370,44 @@ export function collectLoopUntilDeprecationWarnings(
   }
 }
 
+/**
+ * `signal_completes` only changes how a legacy interactive loop gates, so without
+ * `interactive: true` it does nothing. The warning says to remove the line rather than
+ * add `interactive`, which is itself a deprecated legacy pause field.
+ */
+export function collectSignalCompletesWithoutInteractiveWarnings(
+  node: DagNode | IncludeDirective,
+  id: string,
+  warnings: string[]
+): void {
+  // Skipped for the same reason as in collectLoopUntilDeprecationWarnings: discovery
+  // parses and warns on the include target by itself.
+  if (isIncludeDirective(node)) return;
+  const mode =
+    isLoopNode(node) && node.loop.signal_completes === true && node.loop.interactive !== true
+      ? 'loop'
+      : isLoopGroupNode(node) &&
+          node.loop_group.signal_completes === true &&
+          node.loop_group.interactive !== true
+        ? 'loop_group'
+        : undefined;
+  if (mode !== undefined) {
+    const message =
+      `Node '${id}': '${mode}.signal_completes' has no effect without '${mode}.interactive: true'. ` +
+      'A loop that is not interactive already completes when its completion condition is met. ' +
+      'Remove the line.';
+    warnings.push(message);
+    getLog().debug({ id, warning: message }, 'signal_completes_without_interactive_ignored');
+  }
+
+  if (isLoopGroupNode(node)) {
+    for (const bodyNode of node.loop_group.nodes) {
+      if (!isIncludeDirective(bodyNode))
+        collectSignalCompletesWithoutInteractiveWarnings(bodyNode, bodyNode.id, warnings);
+    }
+  }
+}
+
 function legacyPauseShapes(node: DagNode, raw: unknown): LegacyPauseShape[] {
   const shapes: LegacyPauseShape[] = [];
   if (isGateNode(node)) {
@@ -454,34 +492,6 @@ export function collectLegacyPauseWarnings(
     const message = `${guidance.join(' ')} It keeps running as before until rewritten.`;
     warnings.push(message);
     getLog().debug({ shape, nodeIds, warning: message }, 'legacy_pause_deprecated');
-  }
-}
-
-function hasSignalCompletesWithoutInteractive(
-  ns: readonly (DagNode | IncludeDirective)[]
-): boolean {
-  return ns.some(
-    n =>
-      !isIncludeDirective(n) &&
-      ((isLoopNode(n) && n.loop.signal_completes === true && n.loop.interactive !== true) ||
-        (isLoopGroupNode(n) &&
-          ((n.loop_group.signal_completes === true && n.loop_group.interactive !== true) ||
-            hasSignalCompletesWithoutInteractive(n.loop_group.nodes))))
-  );
-}
-
-/**
- * Warn (non-blocking) when signal_completes is set without interactive: the flag
- * only changes interactive-gate behavior — a non-interactive loop already
- * completes on the signal, so the author's intent is likely a missing
- * `interactive: true`. The workflow still loads.
- */
-export function warnSignalCompletesWithoutInteractive(
-  nodes: readonly (DagNode | IncludeDirective)[],
-  filename: string
-): void {
-  if (hasSignalCompletesWithoutInteractive(nodes)) {
-    getLog().warn({ filename }, 'signal_completes_without_interactive_ignored');
   }
 }
 

@@ -28,9 +28,10 @@ import {
   WorkflowRunPauseConflictError,
   type IWorkflowStore,
   type WorkflowEventInput,
-  type WorkflowResumeCursor,
+  type ResumeClaimCursor,
   waitCompletionEvents,
   FAN_OUT_CANCEL_REASONS,
+  requireOwnerlessLease,
   resumeCursorMatches,
   waitAnsweredEvent,
   labeledAttentionWait,
@@ -41,8 +42,12 @@ import {
   sourceReleaseMetadata,
   executionClaim,
   EXECUTION_CLAIM_METADATA_KEY,
+  currentExecutionOwner,
   sourceReleasedEvent,
+  operatorPauseRequestWrite,
+  operatorPauseWrite,
 } from '../store';
+import { EXECUTION_OWNER_METADATA_KEY } from '../schemas/run-metadata';
 import {
   isTerminalRunStatus,
   isWorkflowWaitContext,
@@ -76,14 +81,32 @@ export type TransactionView = Omit<
   | 'upsertWorkflowNodeSession'
   | 'deleteWorkflowNodeSessions'
   | 'releasePausedRunSlot'
-  | 'listItemRuns'
+  | 'getItemRuns'
   | 'getItem'
+  | 'listItemRulings'
+  | 'recordItemRuling'
+  | 'withdrawItemRuling'
+  | 'listItemsInWindow'
+  | 'getItemMerge'
+  | 'recordItemMerge'
+  | 'getItemLanding'
+  | 'recordItemLanding'
+  | 'listItemLinks'
+  | 'recordItemLink'
+  | 'endItemLink'
+  | 'listOpenItemAsks'
+  | 'listItemAsks'
+  | 'getItemAsk'
+  | 'answerItemAsk'
+  | 'withdrawItemAsk'
+  | 'listOpenItemWaits'
+  | 'withdrawItemWaits'
 > & {
   /**
    * The run `resumeWorkflowRun(id, cursor)` would continue; throws what it would throw
    * otherwise. Lets a store decide slot admission before the resume changes anything.
    */
-  resumableRun(id: string, cursor?: WorkflowResumeCursor): WorkflowRun;
+  resumableRun(id: string, cursor?: ResumeClaimCursor): WorkflowRun;
   recordCapacityWait(id: string): void;
   clearCapacityWait(id: string): void;
 };
@@ -121,9 +144,11 @@ export function createTransactionView(
       event_order: ++eventOrder,
     });
   };
-  const resumableRun = (id: string, cursor?: WorkflowResumeCursor): WorkflowRun => {
+  const resumableRun = (id: string, cursor?: ResumeClaimCursor): WorkflowRun => {
+    requireOwnerlessLease(id, cursor);
     const run = row(id);
-    if (!isResumable(run) || (cursor !== undefined && !resumeCursorMatches(run, cursor)))
+    const statusAllows = isResumable(run) || cursor?.kind === 'ownerless';
+    if (!statusAllows || (cursor !== undefined && !resumeCursorMatches(run, cursor)))
       throw new WorkflowNotResumableError(id, run.status);
     return run;
   };
@@ -207,6 +232,7 @@ export function createTransactionView(
       codebase_id: input.codebase_id ?? null,
       status: 'pending',
       outcome: null,
+      completed_outcome: null,
       started_at: new Date(),
       active_phase_started_at: null,
       completed_at: null,
@@ -282,6 +308,7 @@ export function createTransactionView(
       const run = runs.get(id);
       if (run?.status !== 'pending') return null;
       run.status = 'running';
+      run.metadata[EXECUTION_OWNER_METADATA_KEY] = currentExecutionOwner();
       run.working_path ??= workingPath ?? null;
       run.last_activity_at = new Date();
       return structuredClone(run);
@@ -319,18 +346,32 @@ export function createTransactionView(
     completeWorkflowRun: async (
       id,
       completion,
-      metadata
+      metadata,
+      result
     ): ReturnType<IWorkflowStore['completeWorkflowRun']> => {
       validateWorkflowWaitMetadata(metadata);
+      // A start receipt, a linked start, an ask and a wait name an item, and items are refused
+      // here before a run starts, so none can reach this write.
+      if (
+        (result?.startReceipts?.length ?? 0) > 0 ||
+        (result?.linkedStarts?.length ?? 0) > 0 ||
+        (result?.asks?.length ?? 0) > 0 ||
+        (result?.waits?.length ?? 0) > 0
+      )
+        throw new FileStoreUnsupportedError('items');
       const run = structuredClone(row(id));
       if (run.status !== 'running') throw new Error('Run not in running state');
       run.status = 'completed';
+      const outcome = result?.outcome;
+      run.outcome = outcome?.kind === 'boolean' ? outcome.value : null;
+      run.completed_outcome = outcome?.value ?? null;
       Object.assign(run.metadata, mutableRunMetadata(metadata));
       terminal(run, {
         workflow_run_id: id,
         event_type: TERMINAL_RUN_EVENT_TYPE.completed,
         data: completion,
       });
+      return { startReceipts: [] };
     },
     failWorkflowRun: async (id, error, options): ReturnType<IWorkflowStore['failWorkflowRun']> => {
       const run = prepareWorkflowRunFailure(id, runs.get(id), error, options);
@@ -485,9 +526,13 @@ export function createTransactionView(
       );
       return prior;
     },
-    cancelWorkflowRun: async (id, details) => {
+    cancelWorkflowRun: async (id, details, options) => {
       const run = structuredClone(runs.get(id));
-      if (!run || CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(run.status))
+      if (
+        !run ||
+        CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(run.status) ||
+        (options?.pendingOnly && run.status !== 'pending')
+      )
         return { cancelled: false };
       run.status = 'cancelled';
       const { step_name, ...data } = details ?? {};
@@ -550,6 +595,23 @@ export function createTransactionView(
       Object.assign(run.metadata, sourceReleaseMetadata(release, new Date().toISOString()));
       record(sourceReleasedEvent(id, release));
       return { released: true };
+    },
+    requestOperatorPause: async (id, requested) => {
+      const run = runs.get(id);
+      if (!run) return undefined;
+      const write = operatorPauseRequestWrite(run, requested);
+      if (write?.metadata) Object.assign(run.metadata, structuredClone(write.metadata));
+      return write?.request;
+    },
+    pauseWorkflowRunForOperator: async (id, claimId) => {
+      const run = runs.get(id);
+      const write = run && operatorPauseWrite(run, claimId, new Date().toISOString());
+      if (!run || write === undefined) return { paused: false };
+      run.status = 'paused';
+      run.last_activity_at = new Date();
+      Object.assign(run.metadata, write.metadata);
+      record(write.event);
+      return { paused: true };
     },
     pauseWorkflowRunForWait: async (id, wait, pause) => {
       const run = row(id);

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';

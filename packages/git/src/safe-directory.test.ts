@@ -50,36 +50,20 @@ describe('git utilities', () => {
         { timeout: 10000 }
       );
     });
-
-    test('uses execFileAsync (not shell exec)', async () => {
-      execSpy.mockResolvedValue(output());
-
-      await git.addSafeDirectory(repo('/workspace/path with spaces'));
-
-      // If this were shell exec, spaces in the path would cause issues.
-      // execFileAsync passes args as array, so path with spaces is safe.
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        [
-          'config',
-          '--global',
-          '--fixed-value',
-          '--replace-all',
-          'safe.directory',
-          '/workspace/path with spaces',
-          '/workspace/path with spaces',
-        ],
-        { timeout: 10000 }
-      );
-    });
     test('times out a hung initial config read before any write', async () => {
       execSpy.mockRestore();
       const realExec = git.execFileAsync;
       let killed = false;
+      // The product's 10 s limit is asserted, then a short one stands in for it, so the
+      // kill still comes from the real exec without waiting out 10 s.
       execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (_file, args, options) => {
         expect(args).toContain('--get-all');
+        expect(options?.timeout).toBe(10000);
         try {
-          return await realExec(process.execPath, ['-e', 'setTimeout(() => {}, 12000)'], options);
+          return await realExec(process.execPath, ['-e', 'setTimeout(() => {}, 12000)'], {
+            ...options,
+            timeout: 200,
+          });
         } catch (error) {
           killed = error instanceof Error && 'killed' in error && error.killed === true;
           throw error;

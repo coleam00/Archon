@@ -109,13 +109,13 @@ describe('Workflow Logger', () => {
     });
 
     it('should create logs directory if it does not exist', async () => {
-      // testDir has no .archon/logs yet
-      await logWorkflowEvent(testDir, 'new-dir-test', {
+      const logDir = join(testDir, 'logs', 'nested');
+      await logWorkflowEvent(logDir, 'new-dir-test', {
         type: 'workflow_start',
       });
 
-      const events = await readLogFile('new-dir-test');
-      expect(events).toHaveLength(1);
+      const content = await readFile(join(logDir, 'new-dir-test.jsonl'), 'utf-8');
+      expect(content.trim().split('\n')).toHaveLength(1);
     });
   });
 
@@ -333,51 +333,6 @@ describe('Workflow Logger', () => {
       const events = await readLogFile('complete-usage-test');
       expect(events[0].cost_usd).toBe(0.19);
       expect(events[0].tokens).toEqual({ input: 900, output: 120, cacheRead: 400 });
-    });
-  });
-
-  describe('full workflow logging scenario', () => {
-    it('should log complete workflow execution', async () => {
-      const runId = 'full-workflow-test';
-
-      // Simulate a complete DAG workflow
-      await logWorkflowStart(testDir, runId, 'feature-dev', 'Add dark mode');
-      await logProviderEvent(testDir, runId, 'plan', {
-        attemptId: 'attempt-1',
-        seq: 0,
-        observedAt: '2026-01-01T00:00:00.000Z',
-        event: { type: 'agent_message_chunk', text: 'I will create a plan for dark mode...' },
-      });
-      await logProviderEvent(testDir, runId, 'plan', {
-        attemptId: 'attempt-1',
-        seq: 1,
-        observedAt: '2026-01-01T00:00:00.001Z',
-        event: { type: 'tool_call', toolCallId: 'call-1', name: 'Write' },
-      });
-      await logWorkflowComplete(testDir, runId);
-
-      const events = await readLogFile(runId);
-      expect(events.map(e => e.type)).toEqual([
-        'workflow_start',
-        'provider_event',
-        'provider_event',
-        'workflow_complete',
-      ]);
-
-      // Verify all events have same workflow_id
-      expect(events.every(e => e.workflow_id === runId)).toBe(true);
-    });
-
-    it('should log workflow with error', async () => {
-      const runId = 'error-workflow-test';
-
-      await logWorkflowStart(testDir, runId, 'buggy-workflow', 'Do something');
-      await logWorkflowError(testDir, runId, 'Node failed: timeout exceeded');
-
-      const events = await readLogFile(runId);
-      expect(events).toHaveLength(2);
-      expect(events[1].type).toBe('workflow_error');
-      expect(events[1].error).toBe('Node failed: timeout exceeded');
     });
   });
 

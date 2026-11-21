@@ -2,22 +2,35 @@
  * How a DAG pass ends once its layers have run: the node-outcome tally, the failure and
  * usage-limit dispositions, the write-back gate, and the completion write.
  */
-import type { WorkflowDeps } from '../deps';
+import type { RunEndedFacts, RunEndedStarts, WorkflowDeps } from '../deps';
 import type {
   NodeOutput,
   ResolvedWorkflow,
+  RunCompletedOutcome,
   WorkflowRun,
   WorkflowUsageLimitWaitContext,
 } from '../schemas';
 import { SUBRUN_METADATA_KEYS } from '../schemas';
+import { asksResultMetadata } from '../schemas/run-metadata';
 import type { RunExitReason } from '../schemas/run-terminal-reason';
 import {
+  RESULT_COMMIT_METADATA_KEY,
   WORKTREE_DISPOSITION_METADATA_KEY,
   type WorktreeDisposition,
 } from '../schemas/terminal-record';
+import { readCompletingResult, sampleResultCommit } from '../run-result';
 import { getWorkflowEventEmitter } from '../event-emitter';
 import { requireTerminalStatusWrite } from '../terminal-status-write';
-import { rootOutputFields, type DeclaredOutputPaths } from '../output-ref';
+import { rootOutputFields, type DeclaredOutputPaths, type JsonValue } from '../output-ref';
+import { declaredOutcome, readCompletedOutcome } from '../completed-outcome';
+import { readCompletedItemFacts, type CompletedItemFacts } from '../completed-asks';
+import {
+  asksCheckoutMetadata,
+  type AsksCheckout,
+  type SourceReceiptAcceptance,
+} from '../schemas/resource-start';
+import { keepHandedOff } from './handed-off-worktree';
+import { resolveRunInputs } from './references';
 import { logWorkflowComplete, logWorkflowError, type WorkflowUsage } from '../logger';
 import { isProviderLimit, rootFailures, type ProviderLimitFailure } from '../executor-shared';
 import { safeSendMessage } from '../platform-messages';
@@ -35,6 +48,8 @@ export type RunTerminalContext = Pick<
   | 'deps'
   | 'platform'
   | 'conversationId'
+  | 'cwd'
+  | 'returnsCheckout'
   | 'config'
   | 'workflowRun'
   | 'artifactsDir'
@@ -97,6 +112,12 @@ export async function finishRun(
   // skipped and lands here again with `pending_writeback` set — it applies or
   // discards and falls through to completion. A pause receipt short-circuits after
   // the suspension attempt; other outcomes fall through to completeWorkflowRun.
+  // The result is read before the write-back gate, so a returns node that broke its
+  // declared outcome or asks fails the run before anyone is asked to approve its changes.
+  const returned = await readReturnedResult(ctx, runTranscriptUsage);
+  if (returned === undefined) return;
+  const { outcome } = returned;
+
   if (ctx.execContext.kind === 'container' && ctx.containerCtx) {
     const gate = await runContainerWriteBackGate(
       deps,
@@ -109,9 +130,204 @@ export async function finishRun(
     if (typeof gate === 'object') return gate;
   }
 
+  const handOffs = await readHandOffs(ctx, returned, runTranscriptUsage);
+  if (handOffs === undefined) return;
+  const { starts, asksCheckout, result } = handOffs;
+
   const terminal = selectTerminalOutput(workflow, workflowRun, nodeOutputs);
-  await completeRun(ctx, nodeCounts, terminal, runTranscriptUsage);
+  const written = await completeRun(
+    ctx,
+    nodeCounts,
+    terminal,
+    runTranscriptUsage,
+    completionResult(returned, starts),
+    asksCheckout,
+    result
+  );
+  await reportNoOutcome(ctx, outcome);
+  // The receipts the write wrote, which include those it resolved for linked starts.
+  await reportUnstartedStages(ctx, written.startReceipts);
   return terminal.output;
+}
+
+/** What the completing write records beside the status, or nothing when there is none. */
+function completionResult(
+  returned: ReturnedResult,
+  starts: RunEndedStarts
+): Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3] {
+  const result = {
+    ...returned,
+    ...(starts.receipts.length > 0 ? { startReceipts: starts.receipts } : {}),
+    ...(starts.linked.length > 0 ? { linkedStarts: starts.linked } : {}),
+  };
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+/** What the run's returns node said the engine records with the completion. */
+type ReturnedResult = CompletedItemFacts & { outcome?: RunCompletedOutcome };
+
+/**
+ * The outcome, asks and waits the run completes with, or undefined when one is not of its
+ * declared form and the run was failed naming the field: no outcome is written and no
+ * ask or wait is opened.
+ */
+async function readReturnedResult(
+  ctx: RunTerminalContext,
+  runTranscriptUsage: WorkflowUsage
+): Promise<ReturnedResult | undefined> {
+  const { workflow, workflowRun, nodeOutputs } = ctx;
+  const outcome = readCompletedOutcome(workflow, nodeOutputs);
+  if (outcome.kind === 'invalid') {
+    await failAtCompletion(ctx, outcome.error, runTranscriptUsage, 'dag.outcome_invalid_fail');
+    return undefined;
+  }
+  const left = readCompletedItemFacts(workflow, workflowRun, nodeOutputs);
+  if (left.kind === 'invalid') {
+    await failAtCompletion(ctx, left.error, runTranscriptUsage, left.site);
+    return undefined;
+  }
+  return { ...(outcome.kind === 'outcome' ? { outcome: outcome.outcome } : {}), ...left.facts };
+}
+
+/**
+ * A workflow that declares an outcome but whose returns node did not complete (a `when:`
+ * can skip it) completes with none, so nothing bound to its outcome starts; say so where
+ * the run ends, since the completion alone does not show why no stage followed.
+ */
+async function reportNoOutcome(
+  ctx: RunTerminalContext,
+  outcome: RunCompletedOutcome | undefined
+): Promise<void> {
+  const { workflow, nodeOutputs } = ctx;
+  if (outcome !== undefined || workflow.returns === undefined) return;
+  if (declaredOutcome(workflow) === undefined) return;
+  const why =
+    nodeOutputs.get(workflow.returns)?.state === 'skipped' ? 'was skipped' : 'did not complete';
+  await safeSendMessage(
+    ctx.platform,
+    ctx.conversationId,
+    `\u2139\ufe0f Workflow '${workflow.name}' completed with no outcome: its returns node '${workflow.returns}' ${why}, so nothing bound to its outcome starts.`,
+    { workflowId: ctx.workflowRun.id }
+  );
+}
+
+/**
+ * A binding that matched this end but could not start its stage (its result pointer did
+ * not resolve, or the run left no checkout to take) is recorded on its receipt; say so
+ * where the run ends, so the completion does not read as a hand-off that happened.
+ */
+async function reportUnstartedStages(
+  ctx: RunTerminalContext,
+  receipts: readonly SourceReceiptAcceptance[]
+): Promise<void> {
+  for (const accepted of receipts) {
+    if (accepted.outcome === 'matched') continue;
+    await safeSendMessage(
+      ctx.platform,
+      ctx.conversationId,
+      `\u26a0\ufe0f The next stage was not started: ${accepted.reason ?? 'its binding was rejected'}. Receipt ${accepted.receipt.id} records it (archon trigger inspect ${accepted.receipt.id}). Fix what it names, then start the stage again: for a binding that maps inputs, with archon trigger fire --item <key>; for one that takes this run's checkout (on.runEnded.checkout), which a fire refuses, run '${ctx.workflow.name}' again on the item in a worktree, and its end starts the stage.`,
+      { workflowId: ctx.workflowRun.id }
+    );
+  }
+}
+
+/**
+ * What this end hands on, read before the write that ends the run so it commits with it:
+ * the run's result, the starts its outcome causes, and the checkout its asks hand an
+ * asks-settled binding with `checkout` (read now, so a start gets the commit this run
+ * ended on). Undefined when the result or a trigger could not be read and the run was
+ * failed naming why.
+ */
+async function readHandOffs(
+  ctx: RunTerminalContext,
+  { outcome, asks }: ReturnedResult,
+  runTranscriptUsage: WorkflowUsage
+): Promise<
+  | {
+      starts: RunEndedStarts;
+      asksCheckout: AsksCheckout | undefined;
+      result: JsonValue | undefined;
+    }
+  | undefined
+> {
+  const { deps, workflow, workflowRun } = ctx;
+  const startsOnEnd = outcome !== undefined && deps.runEndedStarts !== undefined;
+  try {
+    const result =
+      startsOnEnd || asks !== undefined
+        ? await readCompletingResult(deps.store, workflowRun, workflow.returns)
+        : undefined;
+    const starts =
+      outcome === undefined || !deps.runEndedStarts
+        ? { receipts: [], linked: [] }
+        : await deps.runEndedStarts(runEndedFacts(workflow, workflowRun, outcome, result));
+    const asksCheckout = asks?.length ? await deps.asksCheckout?.(workflowRun) : undefined;
+    return { starts, asksCheckout, result };
+  } catch (error) {
+    await failAtCompletion(
+      ctx,
+      `Workflow '${workflow.name}' completed, but its result or triggers could not be read: ${(error as Error).message}. Fix what it names, then resume the run.`,
+      runTranscriptUsage,
+      'dag.completion_triggers_fail'
+    );
+    return undefined;
+  }
+}
+
+/** The ended run as a run-ended binding reads it: its result, inputs and declarations. */
+function runEndedFacts(
+  workflow: ResolvedWorkflow,
+  workflowRun: WorkflowRun,
+  outcome: RunCompletedOutcome,
+  result: JsonValue | undefined
+): RunEndedFacts {
+  const declared = declaredOutcome(workflow);
+  // Unreachable: a run completes with an outcome only when its workflow declares one.
+  if (declared === undefined) throw new Error(`Workflow '${workflow.name}' declares no outcome`);
+  return {
+    run: workflowRun,
+    declaredInputs: [
+      ...Object.keys(workflow.inputs ?? {}),
+      ...Object.keys(workflow.pack?.settings ?? {}),
+    ],
+    outcomeForm: declared.form,
+    outcome,
+    result,
+    inputs: resolveRunInputs(workflowRun) ?? {},
+  };
+}
+
+/** The asking run's result, kept on its row for the bindings its settled asks start. */
+function keptAsksResult(
+  completion: Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3],
+  value: JsonValue | undefined
+): Record<string, string> {
+  return completion?.asks === undefined || value === undefined ? {} : asksResultMetadata(value);
+}
+
+/**
+ * Fail a run whose nodes all completed but that cannot complete: its returns node broke
+ * its declared outcome, or the starts its end causes could not be read.
+ */
+async function failAtCompletion(
+  ctx: RunTerminalContext,
+  failMsg: string,
+  runTranscriptUsage: WorkflowUsage,
+  site: string
+): Promise<void> {
+  const { deps, platform, conversationId, workflow, workflowRun, logDir } = ctx;
+  await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
+    (logErr: Error) => {
+      getLog().error(
+        { err: logErr, workflowRunId: workflowRun.id },
+        'dag.workflow_error_log_write_failed'
+      );
+    }
+  );
+  await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
+    workflowId: workflowRun.id,
+  });
+  await failRun(deps, workflowRun, workflow.name, failMsg, 'node_error', site);
 }
 
 function countNodeStates(nodeOutputs: ReadonlyMap<string, NodeOutput>, total: number): NodeCounts {
@@ -168,7 +384,7 @@ function noSuccessfulNodesMessage(
 ): string {
   const failedNodes: string[] = [];
   for (const [nodeId, output] of nodeOutputs) {
-    if (output.state === 'failed') failedNodes.push(nodeId);
+    if (output.state === 'failed') failedNodes.push(`${nodeId}${kindSuffix(output)}`);
   }
   return failedNodes.length > 0
     ? `DAG workflow '${workflowName}' failed: node${failedNodes.length > 1 ? 's' : ''} ${failedNodes.join(', ')} failed. ` +
@@ -177,13 +393,20 @@ function noSuccessfulNodesMessage(
         'Check node conditions, trigger rules, and upstream failures.';
 }
 
+/** A failed node's recorded kind, the name a `retry.on_error` policy targets, as ` (kind)`. */
+function kindSuffix(output: NodeOutput): string {
+  return output.state === 'failed' && output.failureKind !== undefined
+    ? ` (${output.failureKind})`
+    : '';
+}
+
 function partialFailureMessage(
   workflowName: string,
   nodeOutputs: ReadonlyMap<string, NodeOutput>
 ): string {
   const failedNodes = [...nodeOutputs.entries()]
     .filter(([, o]) => o.state === 'failed')
-    .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
+    .map(([id, o]) => `'${id}'${kindSuffix(o)}: ${o.state === 'failed' ? o.error : 'unknown'}`)
     .join('; ');
   return `DAG workflow '${workflowName}' completed with failures: ${failedNodes}`;
 }
@@ -240,66 +463,92 @@ async function completeRun(
   ctx: RunTerminalContext,
   nodeCounts: NodeCounts,
   terminal: TerminalOutput,
-  runTranscriptUsage: WorkflowUsage
-): Promise<void> {
+  runTranscriptUsage: WorkflowUsage,
+  result: Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3],
+  asksCheckout: AsksCheckout | undefined,
+  returnedValue: JsonValue | undefined
+): ReturnType<WorkflowDeps['store']['completeWorkflowRun']> {
   const { deps, workflow, workflowRun, logDir } = ctx;
   const duration = Date.now() - ctx.startedAt;
 
-  // Emit completion, then record it. The transcript and the live event do not depend
-  // on the status write and used to run whether or not it succeeded, so the
-  // (now-throwing) write goes last. Terminal telemetry is reported by the run store
-  // after the write commits.
+  // Record completion, then emit it. A reader of the live event re-reads the run for its
+  // outcome, which lands only in the completion write (#5660), so the event follows the
+  // write. It is still emitted when the write throws, as it was before the write could
+  // throw. Terminal telemetry is reported by the run store after the write commits.
   await logWorkflowComplete(logDir, workflowRun.id, runTranscriptUsage);
-  const emitter = getWorkflowEventEmitter();
-  emitter.emit({
-    type: 'workflow_completed',
-    runId: workflowRun.id,
-    workflowName: workflow.name,
-    duration,
-  });
-  emitter.unregisterRun(workflowRun.id);
 
-  const { completedRun, worktreeDisposition } = await assessCompletedWorktree(deps, workflowRun);
-
-  await requireTerminalStatusWrite(
-    deps.store.completeWorkflowRun(
-      workflowRun.id,
-      { duration_ms: duration },
-      {
-        node_counts: nodeCounts,
-        // Cost and token totals are NOT written here — `persistRunUsage` already wrote
-        // them at the run tail, before this branch was chosen (#2469). Keeping a second
-        // copy here would be two writers of the same three keys, free to drift.
-        // A sub-run persists its terminal summary so the parent can thread it as
-        // `$<node>.output` on re-entry. Gated on parent_run_id to bound metadata
-        // growth to child runs only (top-level runs return the summary directly).
-        // `summary_value` is the additive logical sibling (#2637): old binaries keep
-        // reading `summary`, new parents prefer the typed value when present.
-        ...(workflowRun.parent_run_id && terminal.output ? { summary: terminal.output } : {}),
-        ...(workflowRun.parent_run_id && terminal.output && terminal.structuredOutput !== undefined
-          ? { [SUBRUN_METADATA_KEYS.summaryValue]: terminal.structuredOutput }
-          : {}),
-        // The callee-owned field contract (#2453). Gated on the same terminal output as
-        // the two keys above, so a blank/incomplete `returns:` node stamps no contract
-        // at all rather than one nothing satisfies. `summary_declared_fields` is derived
-        // from the paths and still written for older binaries, which read only it.
-        ...(workflowRun.parent_run_id &&
-        terminal.output &&
-        terminal.declaredOutputPaths !== undefined
-          ? {
-              [SUBRUN_METADATA_KEYS.summaryDeclaredOutputPaths]: terminal.declaredOutputPaths,
-              [SUBRUN_METADATA_KEYS.summaryDeclaredFields]: rootOutputFields(
-                terminal.declaredOutputPaths
-              ),
-            }
-          : {}),
-        ...(worktreeDisposition
-          ? { [WORKTREE_DISPOSITION_METADATA_KEY]: worktreeDisposition }
-          : {}),
-      }
-    ),
-    { workflowRunId: workflowRun.id, site: 'dag_db_complete_failed' }
+  const assessed = await assessCompletedWorktree(deps, workflowRun);
+  const { completedRun } = assessed;
+  const worktreeDisposition = keepHandedOff(
+    assessed.worktreeDisposition,
+    workflowRun,
+    result,
+    asksCheckout
   );
+  const resultCommit = await sampleResultCommit(ctx, workflowRun.id);
+
+  let written: Awaited<ReturnType<WorkflowDeps['store']['completeWorkflowRun']>>;
+  try {
+    written = await requireTerminalStatusWrite(
+      deps.store.completeWorkflowRun(
+        workflowRun.id,
+        { duration_ms: duration },
+        {
+          node_counts: nodeCounts,
+          // Cost and token totals are NOT written here — `persistRunUsage` already wrote
+          // them at the run tail, before this branch was chosen (#2469). Keeping a second
+          // copy here would be two writers of the same three keys, free to drift.
+          // A sub-run persists its terminal summary so the parent can thread it as
+          // `$<node>.output` on re-entry. Gated on parent_run_id to bound metadata
+          // growth to child runs only (top-level runs return the summary directly).
+          // `summary_value` is the additive logical sibling (#2637): old binaries keep
+          // reading `summary`, new parents prefer the typed value when present.
+          ...(workflowRun.parent_run_id && terminal.output ? { summary: terminal.output } : {}),
+          ...(workflowRun.parent_run_id &&
+          terminal.output &&
+          terminal.structuredOutput !== undefined
+            ? { [SUBRUN_METADATA_KEYS.summaryValue]: terminal.structuredOutput }
+            : {}),
+          // The callee-owned field contract (#2453). Gated on the same terminal output as
+          // the two keys above, so a blank/incomplete `returns:` node stamps no contract
+          // at all rather than one nothing satisfies. `summary_declared_fields` is derived
+          // from the paths and still written for older binaries, which read only it.
+          ...(workflowRun.parent_run_id &&
+          terminal.output &&
+          terminal.declaredOutputPaths !== undefined
+            ? {
+                [SUBRUN_METADATA_KEYS.summaryDeclaredOutputPaths]: terminal.declaredOutputPaths,
+                [SUBRUN_METADATA_KEYS.summaryDeclaredFields]: rootOutputFields(
+                  terminal.declaredOutputPaths
+                ),
+              }
+            : {}),
+          ...(worktreeDisposition
+            ? { [WORKTREE_DISPOSITION_METADATA_KEY]: worktreeDisposition }
+            : {}),
+          [RESULT_COMMIT_METADATA_KEY]: resultCommit,
+          // An asks-settled binding reads the result when the asks settle, by then from
+          // the row alone. Gated on the asks a top-level run declares, like the asks.
+          ...keptAsksResult(result, returnedValue),
+          ...(asksCheckout === undefined ? {} : asksCheckoutMetadata(asksCheckout)),
+        },
+        // The one write of the run's outcome (#5660): it lands with the completed status,
+        // so no reader sees an outcome on a run that has not ended. The starts the end
+        // causes and the asks the run leaves land in the same write.
+        result
+      ),
+      { workflowRunId: workflowRun.id, site: 'dag_db_complete_failed' }
+    );
+  } finally {
+    const emitter = getWorkflowEventEmitter();
+    emitter.emit({
+      type: 'workflow_completed',
+      runId: workflowRun.id,
+      workflowName: workflow.name,
+      duration,
+    });
+    emitter.unregisterRun(workflowRun.id);
+  }
 
   // The terminal record already carries the decision. Removing the checkout is cleanup
   // of terminal data, so a refusal or failure leaves it in place, the run completed, and
@@ -320,6 +569,7 @@ async function completeRun(
     const lost = wouldBeLost(worktreeDisposition);
     if (lost) await sendRetentionWarning(ctx, keptPath, lost);
   }
+  return written;
 }
 
 /** What removing a kept checkout would lose, or undefined when keeping it needs no warning. */
@@ -469,7 +719,7 @@ export async function failRun(
 ): Promise<void> {
   const emitter = getWorkflowEventEmitter();
   try {
-    const { failed } = await requireTerminalStatusWrite(
+    const { failed, failureKind } = await requireTerminalStatusWrite(
       deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason }),
       { workflowRunId: workflowRun.id, site }
     );
@@ -479,6 +729,7 @@ export async function failRun(
         runId: workflowRun.id,
         workflowName,
         error: failMsg,
+        ...(failureKind !== undefined ? { failureKind } : {}),
       });
     }
   } finally {

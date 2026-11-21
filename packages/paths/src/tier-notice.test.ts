@@ -33,11 +33,6 @@ describe('tier-notice state cache', () => {
     expect(readTierNoticeState()).toBeNull();
   });
 
-  test('persists and reads back the shown version', () => {
-    markTierNoticeShown('1.2.3');
-    expect(readTierNoticeState()?.shownForVersion).toBe('1.2.3');
-  });
-
   test('re-records when the version changes', () => {
     markTierNoticeShown('1.2.3');
     expect(readTierNoticeState()?.shownForVersion).toBe('1.2.3');

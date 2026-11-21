@@ -18,6 +18,8 @@ import { join } from 'node:path';
 import type {
   ForgeFailure,
   ForgeOperations,
+  ItemRead,
+  ItemWindow,
   NodeOutcomesListing,
   StartDisposition,
   StateClaimResult,
@@ -314,6 +316,43 @@ export function outcomes(): NodeOutcomesListing {
 }
 
 /**
+ * The item this run belongs to (`archon workflow runs --item-of`): the item of the run's
+ * root, since a `workflow:` child carries none of its own. It holds the item's runs, open
+ * questions, and its answers and rulings in one list, oldest first; a withdrawn ruling
+ * stays, with `withdrawn` set. `links` holds every link from or to the item, each with
+ * its direction and the other item; an ended link stays, with `ended` set. Null when the
+ * run is on no item. Read it in a `script:` node and `emit()` what a later node needs; the
+ * engine hands rulings and links to no node itself.
+ * A container run cannot call it, as it cannot call `state`.
+ */
+export function item(): ItemRead | null {
+  const answer = archon('workflow runs', ['--item-of', runId(), '--json']);
+  if (answer.code === 0 && isRecord(answer.value)) return answer.value as ItemRead;
+  if (answer.code === 1 && isRecord(answer.value) && answer.value.error === 'not_found')
+    return null;
+  throw failed('workflow runs --item-of', answer);
+}
+
+/**
+ * A page of this project's items with a run started in a window (`archon workflow
+ * items`), each read as `item()` reads one, with all its runs. `since` and `until` take
+ * `archon metrics` syntax (default the last 30 days); `limit` is at most 100. Pass a page's
+ * `next` as `after`, alone, to read the following page; `next` is null on the last.
+ */
+export function items(
+  query: { since?: string; until?: string; limit?: number; after?: string } = {}
+): ItemWindow {
+  const args = ['--json'];
+  if (query.since !== undefined) args.push('--since', query.since);
+  if (query.until !== undefined) args.push('--until', query.until);
+  if (query.limit !== undefined) args.push('--limit', String(query.limit));
+  if (query.after !== undefined) args.push('--after', query.after);
+  const answer = archon('workflow items', args);
+  if (answer.code !== 0 || !isRecord(answer.value)) throw failed('workflow items', answer);
+  return answer.value as ItemWindow;
+}
+
+/**
  * Tell whoever watches the attention stream what this run did (`archon workflow notice`):
  * one short line, with labels a reader filters and counts by. It asks nothing of anyone:
  * the run does not pause and nobody can answer. Emit one when something real happened,
@@ -330,6 +369,11 @@ export function notice(text: string, labels: Readonly<Record<string, string>> = 
 export interface TriggerFireOptions {
   /** One delivery id starts at most one run; build it from values a retry repeats. */
   readonly deliveryId?: string;
+  /**
+   * The item the started run is on (`--item`), or `null` for no item (`--no-item`).
+   * Left out, a fire from a run on an item inherits it.
+   */
+  readonly item?: string | null;
 }
 
 /** A fire's receipt and the admission its binding's request got; null when it got none. */
@@ -354,8 +398,14 @@ export const trigger = {
       Object.entries(inputs).sort(([left], [right]) => (left < right ? -1 : 1))
     );
     const delivery = options.deliveryId === undefined ? [] : ['--delivery-id', options.deliveryId];
+    const item =
+      options.item === undefined
+        ? []
+        : options.item === null
+          ? ['--no-item']
+          : ['--item', options.item];
     const answer = withJsonFile(sorted, path =>
-      archon('trigger fire', ['--config', binding, ...delivery, '--inputs', path])
+      archon('trigger fire', ['--config', binding, ...delivery, ...item, '--inputs', path])
     );
     const receipt = answer.value;
     if (answer.code !== 0 || !isRecord(receipt) || typeof receipt.id !== 'string')

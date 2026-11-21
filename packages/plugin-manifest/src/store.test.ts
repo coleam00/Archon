@@ -81,6 +81,7 @@ const providerReceipt = {
       ...Object.fromEntries(Object.keys(providerCapabilitiesSchema.shape).map(key => [key, false])),
       backgroundWork: 'none',
       sessionFork: undefined,
+      structuredOutputCorrection: undefined,
       knownToolNames: undefined,
       renamedTools: undefined,
     },

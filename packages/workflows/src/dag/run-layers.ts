@@ -3,6 +3,7 @@
  * whether it is replayed from a prior pass, skipped, or dispatched, and folding each
  * layer's results into the shared run context.
  */
+import { observeReturnsCheckout } from '../run-result';
 import { ParentStatusReadError } from '../parent-status-read';
 import { isWorkflowExecutionInterruption } from '../execution-interruption';
 import { peerAdmissions } from '../interaction-admission';
@@ -16,6 +17,7 @@ import {
   nodeUsesPersistedScope,
   readSubrunMetadata,
   isNodeContextResume,
+  startsSequentialSession,
 } from '../schemas';
 import type { PersistedNodeOutput } from '../store';
 import type { NodeExecutionResult } from '../node-record-serialization';
@@ -26,7 +28,8 @@ import { writeNodeArtifact } from '../artifacts-index';
 import { safeSendMessage } from '../platform-messages';
 import { getLog } from './log';
 import { incrementalLoopUsage, sumTokenUsage } from './usage';
-import { RunSourceUnreadableError, settledValuesOrThrow } from './node-source';
+import { RunSourceUnreadableError, settleSequentially, settledValuesOrThrow } from './node-source';
+import type { OperatorPauseBoundary } from './operator-pause-boundary';
 import {
   beginExecution,
   ownsBodySessionCursor,
@@ -41,54 +44,42 @@ import { skipNode } from './skip-node';
 import { dispatchNode } from './dispatch';
 import { nodePackDir } from '../pack-dir';
 import { runWithPackDir } from '../workflow-variables';
+import { releaseAdmittedScratch, releaseInvocationScratch, runInNodeScratch } from './node-scratch';
 import { getStaleCachedDependencies } from './stale-dependencies';
-/**
- * Await thunks one at a time, collecting outcomes in `Promise.allSettled` shape so the
- * caller's result handling is identical for the sequential and concurrent paths.
- */
-async function settleSequentially(
-  thunks: readonly (() => Promise<LayerNodeResult>)[]
-): Promise<PromiseSettledResult<LayerNodeResult>[]> {
-  const settled: PromiseSettledResult<LayerNodeResult>[] = [];
-  for (const thunk of thunks) {
-    try {
-      settled.push({ status: 'fulfilled', value: await thunk() });
-    } catch (reason) {
-      settled.push({ status: 'rejected', reason });
-    }
-  }
-  return settled;
-}
-
 /**
  * Walk the topological `layers` of a DAG (or subgraph), executing each layer's nodes
  * concurrently within each admission phase, aggregating results into `ctx.nodeOutputs` and usage into
  * `ctx`. Stops early (returns) when a between-layer status check sees a non-running run
  * state (paused/cancelled/deleted) — the caller always proceeds to its own terminal tally.
+ * The top-level walk also stops at `pause`: before each layer dispatches, or before the
+ * next node of a layer it runs one node at a time.
  *
  * Shared by the top-level DAG, `executeLoopGroupNode`'s per-iteration body and each
  * composed fan-out instance; `ctx.stepNamePrefix` is empty for the top-level DAG.
  */
-export async function runLayers(ctx: RunLayersContext): Promise<void> {
+export async function runLayers(
+  ctx: RunLayersContext,
+  pause?: OperatorPauseBoundary
+): Promise<void> {
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
 
   for (let layerIdx = 0; layerIdx < ctx.layers.length; layerIdx++) {
     if (ctx.containerPause?.publish && ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause')
       break;
     await ctx.toolAttention.refresh();
+    if (await pause?.stopsHere()) break;
     const layer = ctx.layers[layerIdx];
-    await runLayer(ctx, layer, layerIdx);
+    await runLayer(ctx, layer, layerIdx, pause);
 
-    await ctx.afterLayer?.();
-
-    if (await stopsBetweenLayers(ctx, layerIdx)) break;
+    if (pause?.reached || (await stopsBetweenLayers(ctx, layerIdx))) break;
   }
 }
 
 async function runLayer(
   ctx: RunLayersContext,
   layer: readonly DagNode[],
-  layerIdx: number
+  layerIdx: number,
+  pause: OperatorPauseBoundary | undefined
 ): Promise<void> {
   const isParallelLayer = layer.length > 1;
 
@@ -116,12 +107,14 @@ async function runLayer(
   for (const phase of phases) {
     if (ctx.containerPause?.publish && ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause')
       break;
+    if (pause?.reached) break;
     const layerHadFailure = await runLayerPhase(
       ctx,
       phase,
       isParallelLayer,
       serializeLayer,
-      guardedLayerSnapshots
+      guardedLayerSnapshots,
+      pause
     );
 
     if (layerHadFailure) {
@@ -135,48 +128,68 @@ async function runLayerPhase(
   layer: readonly DagNode[],
   isParallelLayer: boolean,
   serializeLayer: boolean,
-  guardedLayerSnapshots: Set<string> | undefined
+  guardedLayerSnapshots: Set<string> | undefined,
+  pause: OperatorPauseBoundary | undefined
 ): Promise<boolean> {
   const peers =
     ctx.interactionAdmission && layer.some(canSuspend)
       ? peerAdmissions(ctx.interactionAdmission, layer.length)
       : undefined;
+  // Mixed checkout guards still require sequential execution within each phase.
+  const sequential = serializeLayer && layer.some(isCheckoutGuarded);
+  const mayRun = sequential ? undefined : new Set(layer.map(node => node.id));
   const nodeThunks = layer.map(
     (node, index): (() => Promise<LayerNodeResult>) =>
       async (): Promise<LayerNodeResult> => {
+        const invocation =
+          ctx.unfinishedInvocations?.get(
+            nodeInvocationKey(ctx.stepNamePrefix + node.id, ctx.loopGroupPath)
+          )?.invocation ?? newNodeInvocation(ctx.loopGroupPath);
         const nodeCtx: RunLayersContext = {
           ...ctx,
           currentExecution: undefined,
           interactionAdmission: peers?.[index].admission ?? ctx.interactionAdmission,
           guardedLayerSnapshots,
-          nodeInvocation:
-            ctx.unfinishedInvocations?.get(
-              nodeInvocationKey(ctx.stepNamePrefix + node.id, ctx.loopGroupPath)
-            )?.invocation ?? newNodeInvocation(ctx.loopGroupPath),
+          nodeInvocation: invocation,
         };
         try {
+          const admitted = await admitNode(nodeCtx, node);
+          if (admitted !== undefined) mayRun?.delete(node.id);
+          if (admitted !== undefined) {
+            await releaseAdmittedScratch(
+              nodeCtx,
+              node,
+              invocation.id,
+              admitted,
+              ctx.priorCompletedNodes
+            );
+          }
           const result =
-            (await admitNode(nodeCtx, node)) ??
-            (await runWithPackDir(
-              await nodePackDir(nodeCtx.workflowSourceRoots, nodeCtx.workflowPack, node),
-              () => dispatchNode(nodeCtx, node, isParallelLayer)
+            admitted ??
+            (await runInNodeScratch(nodeCtx, node, invocation.id, async () =>
+              runWithPackDir(
+                await nodePackDir(nodeCtx.workflowSourceRoots, nodeCtx.workflowPack, node),
+                () => dispatchNode(nodeCtx, node, isParallelLayer)
+              )
             ));
+          if (admitted === undefined)
+            await observeReturnsCheckout(nodeCtx, node.id, result.output, mayRun);
           if (result.output.state === 'failed') nodeCtx.interactionAdmission?.failed(node.id);
           return result;
         } catch (error) {
           if (isWorkflowExecutionInterruption(error)) throw error;
           nodeCtx.interactionAdmission?.failed(node.id);
+          // A failed admission settles an invocation a prior pass may have left scratch for.
+          await releaseInvocationScratch(nodeCtx, node, invocation.id);
           return await recordPreExecutionFailure(nodeCtx, node, error);
         } finally {
           peers?.[index].finished();
         }
       }
   );
-  // Mixed checkout guards still require sequential execution within each phase.
-  const layerResults =
-    serializeLayer && layer.some(isCheckoutGuarded)
-      ? await settleSequentially(nodeThunks)
-      : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
+  const layerResults = sequential
+    ? await settleSequentially(nodeThunks, pause && (() => pause.stopsHere()))
+    : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
 
   const layerHadFailure = await aggregateLayerResults(ctx, layer, layerResults, isParallelLayer);
   settledValuesOrThrow(layerResults, ctx.workflowRun.id);
@@ -594,7 +607,7 @@ async function aggregateLayerResults(
     if (output.state === 'completed' && node?.output_type) {
       await writeTypedArtifacts(ctx, node, node.output_type, output.output);
     }
-    advanceSequentialSession(ctx, result.value, isParallelLayer);
+    advanceSequentialSession(ctx, result.value, node, isParallelLayer);
     if (output.state === 'failed') layerHadFailure = true;
   }
   return layerHadFailure;
@@ -635,10 +648,18 @@ function addNodeUsage(ctx: RunLayersContext, { nodeId, output }: LayerNodeResult
 }
 
 /** A completed node's session, when its provider attested it. */
-function completedSession({ output, sessionProvider }: LayerNodeResult): SessionCursor | undefined {
+function completedSession({
+  output,
+  sessionProvider,
+  sessionModel,
+}: LayerNodeResult): SessionCursor | undefined {
   if (output.state !== 'completed' || output.sessionId === undefined) return undefined;
   if (sessionProvider === undefined) return undefined;
-  return { sessionId: output.sessionId, provider: sessionProvider };
+  return {
+    sessionId: output.sessionId,
+    provider: sessionProvider,
+    ...(sessionModel !== undefined ? { model: sessionModel } : {}),
+  };
 }
 
 function recordSessionCursors(
@@ -707,10 +728,14 @@ async function writeTypedArtifacts(
 function advanceSequentialSession(
   ctx: RunLayersContext,
   result: LayerNodeResult,
+  node: DagNode | undefined,
   isParallelLayer: boolean
 ): void {
   const { output } = result;
   if (output.state !== 'completed' || isParallelLayer || output.sessionId === undefined) return;
+  // Include expansion decides which block nodes start fresh from the same predicate,
+  // so a node kind moves the cursor here only once it is counted there too.
+  if (node === undefined || !startsSequentialSession(node)) return;
   // Tag the cursor with the provider that created the session (#1992). A session
   // id from a path that can't attest its provider is never threaded — fail-safe:
   // a fresh downstream session beats a guaranteed-broken cross-provider resume.

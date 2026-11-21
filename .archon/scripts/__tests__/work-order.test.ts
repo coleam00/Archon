@@ -56,7 +56,7 @@ function store(documents: Record<string, unknown>): Record<string, string> {
     HOME: home,
     DATABASE_URL: '',
     ARCHON_TELEMETRY_DISABLED: '1',
-    INTAKE_STATE_CWD: gitCheckout({}, track),
+    INTAKE_STATE_CWD: gitCheckout(track),
     INTAKE_HOST_CLI: JSON.stringify(hostCli()),
   };
   inStore(env, () => {
@@ -76,85 +76,65 @@ function inStore<T>(env: Record<string, string>, body: () => T): T {
   }
 }
 
-/** Run the pickup; the fake forge answers as issue `serves`, so claiming another issue fails the run. */
-function facts(env: Record<string, string>, inputs: Record<string, string>, runId: string, serves = 0): Record<string, unknown> {
-  const result: ScriptRun = runPackScript('build-queue/scripts/facts', {
+/** Run the pick with no message; returns the issues it fired a build for, in order. */
+function fired(env: Record<string, string>, inputs: Record<string, string>): unknown {
+  const result: ScriptRun = runPackScript('build-pick/scripts/fire', {
     cwd: env.INTAKE_STATE_CWD,
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
-    tracker: {
-      issue: { number: serves, author: 'Maintainer', body: 'The contract.' },
-      issueLabels: ['archon-ready'],
-      repositoryLabels: [],
-      pr: { state: 'OPEN', headRefName: 'feature' },
-    },
     inputs: {
       ...env,
-      WORKFLOW_ID: runId,
-      INPUTS_REPO_HOST: PR.repo.host,
-      INPUTS_REPO_PATH: PR.repo.path,
+      WORKFLOW_ID: 'run-1',
       INPUTS_REPO: JSON.stringify(PR.repo),
-      INPUTS_ROUND_LIMIT: '3',
-      INPUTS_NUMBER: '',
+      INPUTS_INTERPRETED: 'null',
+      INPUTS_CHOSEN: 'null',
+      INPUTS_BUILD_QUEUE_BINDING: '/bindings/build-queue.json',
       ...inputs,
     },
   });
-  if (result.code !== 0) throw new Error(`facts exited ${String(result.code)}: ${result.stderr}`);
-  return JSON.parse(result.stdout) as Record<string, unknown>;
+  if (result.code !== 0) throw new Error(`fire exited ${String(result.code)}: ${result.stderr}`);
+  return (JSON.parse(result.stdout) as { fired: unknown }).fired;
 }
 
-const claimedNumber = (output: Record<string, unknown>): unknown => (output.item as { number: number } | null)?.number ?? null;
+const ORDERS_ONLY = { INPUTS_ORDERS_ONLY: 'true' };
 
-describe('build-queue pickup with work orders', () => {
-  test('off, the pickup ignores orders; on, it claims only a member of an open order', () => {
+describe('the pick with work orders', () => {
+  test('off, the pick ignores orders; on, it starts only the members of an open order', () => {
     // 8 sorts first on urgency, but only 9 is in the order.
     const documents = { 'work/7': waiting(7), 'work/8': waiting(8, 'now'), 'work/9': waiting(9), 'work-order/next': order([9]) };
-    expect(claimedNumber(facts(store(documents), {}, 'run-off', 8))).toBe(8);
-    expect(claimedNumber(facts(store(documents), { INPUTS_ORDERS_ONLY: 'false' }, 'run-off', 8))).toBe(8);
-    expect(claimedNumber(facts(store(documents), { INPUTS_ORDERS_ONLY: 'true' }, 'run-on', 9))).toBe(9);
+    expect(fired(store(documents), {})).toEqual([8, 7, 9]);
+    expect(fired(store(documents), ORDERS_ONLY)).toEqual([9]);
   }, 60_000);
 
-  test('on, with no open order, nothing is claimed', () => {
+  test('on, an item the queue already built a round for gets its next round though no order holds it', () => {
+    const begun = { ...waiting(7), facts: { ...waiting(7).facts, build: { status: 'next', brief: 'continue', rounds: [], decisions: [], at: AT } satisfies BuildRecord } };
+    expect(fired(store({ 'work/7': begun, 'work/8': waiting(8) }), ORDERS_ONLY)).toEqual([7]);
+  }, 60_000);
+
+  test('on, with no open order, nothing starts', () => {
     for (const orders of [{}, { 'work-order/old': order([7], 'done') }]) {
-      const env = store({ 'work/7': waiting(7), ...orders });
-      expect(facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-on')).toMatchObject({ path: 'idle', item: null });
-      expect(inStore(env, () => state.get('work/7').value)).toMatchObject({ claim: null });
+      expect(fired(store({ 'work/7': waiting(7), ...orders }), ORDERS_ONLY)).toEqual([]);
     }
   }, 60_000);
 
-  test('an open order whose members all merged is marked done once, and builds nothing more', () => {
+  test('an open order whose members all merged is marked done, and builds nothing more', () => {
     const env = store({ 'work/7': merged(7), 'work/8': merged(8), 'work/9': waiting(9), 'work-order/next': order([7, 8]) });
-    expect(facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-1')).toMatchObject({ path: 'idle' });
-    const done = inStore(env, () => state.get('work-order/next'));
-    expect(done.value).toMatchObject({ members: [7, 8], status: 'done' });
-    expect(typeof (done.value as WorkOrder).done_at).toBe('string');
-    facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-2');
-    expect(inStore(env, () => state.get('work-order/next').revision)).toBe(done.revision);
-  }, 60_000);
-
-  test('an order with an unmerged member stays open and keeps its members building', () => {
-    const env = store({ 'work/7': merged(7), 'work/9': waiting(9), 'work-order/next': order([7, 9]) });
-    expect(claimedNumber(facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-1', 9))).toBe(9);
-    expect(inStore(env, () => state.get('work-order/next').value)).toMatchObject({ status: 'open', done_at: null });
+    expect(fired(env, ORDERS_ONLY)).toEqual([]);
+    expect(inStore(env, () => state.get('work-order/next')).value).toMatchObject({ members: [7, 8], status: 'done' });
   }, 60_000);
 
   test('a member re-triaged after its merge is not finished: the order stays open and the member builds again', () => {
     const rebuilt = merged(7);
     const retriaged = { ...rebuilt, facts: { ...rebuilt.facts, triage: { ...TRIAGE, at: '2026-11-06T01:00:00.000Z' } } };
-    const env = store({ 'work/7': retriaged, 'work/8': merged(8), 'work-order/next': order([7, 8]) });
-    expect(claimedNumber(facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-1', 7))).toBe(7);
+    const env = store({ 'work/7': retriaged, 'work/8': merged(8), 'work/9': waiting(9), 'work-order/next': order([7, 8, 9]) });
+    expect(fired(env, ORDERS_ONLY)).toEqual([7, 9]);
     expect(inStore(env, () => state.get('work-order/next').value)).toMatchObject({ status: 'open', done_at: null });
-  }, 60_000);
-
-  test('on, a named item is claimed though no open order holds it, so its follow-up rounds still start', () => {
-    const env = store({ 'work/7': waiting(7) });
-    expect(claimedNumber(facts(env, { INPUTS_ORDERS_ONLY: 'true', INPUTS_NUMBER: '7' }, 'run-1', 7))).toBe(7);
   }, 60_000);
 });
 
 describe('a work order from the run\'s message', () => {
   /** Run the order script as run `run-1`, started as `user-1`. */
   function writeOrder(env: Record<string, string>, declared: unknown, calls: string): ScriptRun {
-    return runPackScript('build-queue/scripts/order', {
+    return runPackScript('build-pick/scripts/order', {
       cwd: env.INTAKE_STATE_CWD,
       forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
       inputs: {
@@ -168,7 +148,7 @@ describe('a work order from the run\'s message', () => {
     });
   }
 
-  test('is written open, approved by the run\'s user, claims nothing, and sends an unseen member to intake', () => {
+  test('is written open, approved by the run\'s user, and sends an unseen member to intake', () => {
     const env = store({ 'work/7': waiting(7) });
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
     const result = writeOrder(env, { id: 'next', members: [7, 8], unresolved: [] }, calls);
@@ -180,7 +160,6 @@ describe('a work order from the run\'s message', () => {
       status: 'open',
       done_at: null,
     });
-    expect(inStore(env, () => state.get('work/7').value)).toMatchObject({ claim: null });
     const launches = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).filter(argv => argv[1] === 'run');
     expect(launches).toHaveLength(1);
     expect(launches[0]).toEqual(expect.arrayContaining(['archon-intake', 'number=8']));

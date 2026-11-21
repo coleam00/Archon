@@ -1,5 +1,4 @@
 import { scriptInvocation } from '../../script-invocation';
-import { scriptApiPreload } from '../../script-api/preload';
 import { bashInvocation } from '../../bash-invocation';
 import { mkdir } from 'node:fs/promises';
 import { execFileAsync, resolveBashPath } from '@archon/git';
@@ -19,6 +18,7 @@ import {
 import { collectCredentialValues } from '@archon/paths/credential-redaction';
 import { assertWorkflowSourceIntegrity } from '../../workflow-source';
 import { buildExecNodeEnvironment } from '../../exec-environment';
+import { currentNodeScratchDir } from '../../workflow-variables';
 import type { NodeExecutionMetadata } from '../../schemas/node-execution';
 import type { ExecNode } from '../../schemas';
 import type { DryRunContext } from '../context';
@@ -38,6 +38,8 @@ export async function executeCodeNode(
     // a pure-stub dry run creates no directory.
     await mkdir(ctx.artifactsDir, { recursive: true });
     await mkdir(ctx.stateDir, { recursive: true });
+    const nodeScratchDir = currentNodeScratchDir();
+    if (nodeScratchDir !== undefined) await mkdir(nodeScratchDir, { recursive: true });
     const env = {
       ...process.env,
       ...ctx.envVars,
@@ -108,12 +110,7 @@ async function resolveCodeInvocation(
     return { command: resolveBashPath(), ...bashInvocation(code) };
   }
   if (isInlineScript(code)) {
-    return scriptInvocation(
-      node.runtime,
-      { kind: 'inline', code },
-      node.deps,
-      scriptApiPreload(node.runtime, ctx.artifactsDir)
-    );
+    return scriptInvocation(node.runtime, { kind: 'inline', code }, node.deps, ctx.artifactsDir);
   }
   await assertWorkflowSourceIntegrity(ctx.sourceRoots);
   const script = (await discoverScriptsForCwd(ctx.cwd, ctx.sourceRoots)).get(code);
@@ -122,6 +119,6 @@ async function resolveCodeInvocation(
     script.runtime,
     { kind: 'file', path: script.path },
     node.deps,
-    scriptApiPreload(script.runtime, ctx.artifactsDir)
+    ctx.artifactsDir
   );
 }

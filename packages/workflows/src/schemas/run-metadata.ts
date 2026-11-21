@@ -158,6 +158,29 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
   };
 }
 
+/**
+ * The result a top-level run that declares `returns.asks` completed with: the value its
+ * terminal record holds as `returns` (see `recordedReturn`). Written only by the completing write, and only when the value is
+ * defined, so an asks-settled binding can read the run's result once its asks settle,
+ * long after the process that held its node outputs has exited.
+ *
+ * Stored as JSON text, not as a JSON value: older binaries merged SQLite metadata with
+ * `json_patch`, which deletes every null-valued key at any depth, so they wrote it as text
+ * and read only text. Write it with `asksResultMetadata` and read it with `readAsksResult`.
+ */
+const ASKS_RESULT_METADATA_KEY = 'asks_result';
+
+/** The metadata that keeps a run's `returns:` value for its asks-settled bindings. */
+export function asksResultMetadata(value: JsonValue): Record<string, string> {
+  return { [ASKS_RESULT_METADATA_KEY]: JSON.stringify(value) };
+}
+
+/** The `returns:` value kept by `asksResultMetadata`, or undefined when none was kept. */
+export function readAsksResult(metadata: Record<string, unknown>): JsonValue | undefined {
+  const text = metadata[ASKS_RESULT_METADATA_KEY];
+  return typeof text === 'string' ? (JSON.parse(text) as JsonValue) : undefined;
+}
+
 export const CANCELLED_REASON_METADATA_KEY = 'cancelled_reason';
 
 export const ISOLATION_ENV_ID_METADATA_KEY = 'isolation_env_id';
@@ -222,13 +245,14 @@ export function readContinuationMode(
 }
 
 /**
- * The host, process and user that last took over executing this run, stamped by the
- * executor each time it starts or resumes execution. The live-owner endpoint is
- * local to one host and one user, so when no owner answers, this record is what
- * `abandon` shows the operator, including whether the owner ran on another host or
- * as another user. It is a report, never a liveness signal: nothing decides a run is
- * dead from it. `workflow wait` reads its host and uid only to refuse reporting owner
- * loss when this host and user could not reach that owner's endpoint.
+ * The host, process and user that last took over executing this run. The store writes it
+ * in the same update that makes the run `running` for that process (a pending claim or a
+ * resume, `currentExecutionOwner`), so no reader sees a new claim beside the previous
+ * owner. The live-owner endpoint is local to one host and one user, so when no owner
+ * answers, this record is what `abandon` shows the operator, including whether the owner
+ * ran on another host or as another user. It is a report, never a liveness signal:
+ * nothing decides a run is dead from it. `workflow wait` and resume read its host and uid
+ * only to refuse when this host and user could not reach that owner's endpoint.
  */
 export const EXECUTION_OWNER_METADATA_KEY = 'execution_owner';
 

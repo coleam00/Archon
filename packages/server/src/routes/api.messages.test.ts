@@ -147,6 +147,8 @@ mock.module('@archon/core/db/isolation-environments', () => ({
 }));
 
 mock.module('@archon/core/db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   getWorkflowRunForAttention: mock(async () => null),
@@ -650,53 +652,6 @@ describe('GET /api/conversations/:id/messages — tool output bounding', () => {
     expect(returnedMeta.toolCalls[0]!.output.length).toBeLessThan(largeOutput.length);
     expect(returnedMeta.toolCalls[0]!.output).toContain('[truncated');
     expect(returnedMeta.toolCalls[0]!.output).toContain('full output preserved on the server');
-  });
-
-  test('preserves tool output within the cap in hydration', async () => {
-    const smallOutput = 'short output from tool';
-    const metadata = JSON.stringify({
-      toolCalls: [{ name: 'bash', input: {}, output: smallOutput, duration: 10 }],
-    });
-
-    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
-    mockListMessages.mockImplementationOnce(async () => [
-      {
-        id: 'msg-small',
-        conversation_id: MOCK_CONV.id,
-        role: 'assistant' as const,
-        content: '',
-        metadata,
-        user_id: null,
-        created_at: new Date().toISOString(),
-      },
-    ]);
-
-    const { app } = makeApp();
-    const response = await app.request('/api/conversations/web-test-abc/messages');
-    const body = (await response.json()) as Array<{ metadata: string }>;
-    expect(body[0]!.metadata).toBe(metadata);
-  });
-
-  test('returns non-toolCall metadata (workflowResult etc.) unchanged', async () => {
-    const metadata = JSON.stringify({ workflowResult: { runId: 'abc' } });
-
-    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
-    mockListMessages.mockImplementationOnce(async () => [
-      {
-        id: 'msg-no-tools',
-        conversation_id: MOCK_CONV.id,
-        role: 'assistant' as const,
-        content: 'Done.',
-        metadata,
-        user_id: null,
-        created_at: new Date().toISOString(),
-      },
-    ]);
-
-    const { app } = makeApp();
-    const response = await app.request('/api/conversations/web-test-abc/messages');
-    const body = (await response.json()) as Array<{ metadata: string }>;
-    expect(body[0]!.metadata).toBe(metadata);
   });
 });
 

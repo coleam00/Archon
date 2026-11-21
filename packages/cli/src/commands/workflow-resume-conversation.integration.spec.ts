@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * A resumed run keeps writing to its own conversation (#3328).
  *
@@ -14,7 +15,7 @@ import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findRepoRoot } from '@archon/git';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -23,6 +24,7 @@ import { workflowRunCommand } from './workflow-run-owned';
 import type { WorkflowRunOptions } from './workflow-shared';
 import { captureWorkflowCommand } from '../test-support/command';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
+import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
 
 const CLI_ENTRY = join(import.meta.dir, '..', 'cli.ts');
 const cleanupPaths: string[] = [];
@@ -91,9 +93,8 @@ function runCli(fixture: Fixture, args: string[]): { status: number | null; outp
   return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
 }
 
-// The run's working path must be the string the CLI derives from `--cwd`, because
-// `--resume` looks the run up by exact path. The CLI uses git's toplevel, which on
-// Windows differs from realpath (separators, 8.3 short names under %TEMP%).
+// The run's working path is the string the CLI derives from `--cwd`: git's toplevel,
+// which on Windows differs from realpath (separators, 8.3 short names under %TEMP%).
 async function runForeground(fixture: Fixture, name: string, options: WorkflowRunOptions = {}) {
   const cwd = (await findRepoRoot(fixture.repo)) ?? fixture.repo;
   return captureWorkflowCommand(fixture.archonHome, async host =>
@@ -173,27 +174,6 @@ function readThreadState(fixture: Fixture): ThreadState {
         ),
       };
     })();
-  } finally {
-    database.close();
-  }
-}
-
-/**
- * The platform id of a conversation row.
- *
- * The run row holds a database id while the CLI's `--conversation-id` and its detached
- * ack both speak the platform id, so comparing the two needs this hop.
- */
-function readPlatformConversationId(fixture: Fixture, conversationId: string): string {
-  const database = openDatabase(fixture);
-  try {
-    const row = database
-      .query<{ platform_conversation_id: string }, [string]>(
-        'SELECT platform_conversation_id FROM remote_agent_conversations WHERE id = ?'
-      )
-      .get(conversationId);
-    if (!row) throw new Error(`no conversation row for ${conversationId}`);
-    return row.platform_conversation_id;
   } finally {
     database.close();
   }
@@ -457,50 +437,6 @@ describe('resumed runs keep one conversation', () => {
     expect(metadata.filter(entry => 'segment' in entry)).toEqual([]);
   }, 120_000);
 
-  test('workflow run <name> --resume continues the run existing thread', async () => {
-    const fixture = makeFixture();
-    const before = await seedFailedRun(fixture);
-
-    const resumed = await runForeground(fixture, WORKFLOW_NAME, { resume: true });
-    expect(resumed.output).toContain("Bash node 'boom' failed");
-
-    expectResumedInPlace(readThreadState(fixture), before);
-  }, 120_000);
-
-  // The detached launch is the one form where the id is not used in this process: the
-  // parent resolves it and pins it onto the child's argv, and the child is what opens
-  // the conversation. Nothing else here would catch that pin carrying a fresh id.
-  test('workflow run <name> --resume --detach hands the child the run existing thread', async () => {
-    const fixture = makeFixture();
-    const before = await seedFailedRun(fixture);
-    // Read before the launch: nothing is writing yet, and the thread the ack must name
-    // is already decided.
-    const platformConversationId = readPlatformConversationId(fixture, before.runConversationId);
-
-    const launched = runCli(fixture, [
-      'workflow',
-      'run',
-      WORKFLOW_NAME,
-      '--cwd',
-      fixture.repo,
-      '--no-worktree',
-      '--resume',
-      '--detach',
-      '--json',
-    ]);
-    if (launched.status !== 0) throw new Error(`detached launch failed: ${launched.output}`);
-    const ack = JSON.parse(launched.output.trim()) as { runId: string; conversationId: string };
-    detachedRunIds.add(ack.runId);
-    // The ack is the launch's public contract: it tells an automation which run and which
-    // thread the background work belongs to, so both must name what already exists.
-    expect(ack.runId).toBe(before.runId);
-    expect(ack.conversationId).toBe(platformConversationId);
-
-    // The snapshot the wait already took: at that point the conversation rows are final,
-    // so asserting on it beats a second read that would race the child to its exit.
-    expectResumedInPlace(await waitForDetachedDispatch(fixture), before);
-  }, 120_000);
-
   test('workflow resume <run-id> --detach keeps the child in the run existing thread', async () => {
     const fixture = makeFixture();
     const before = await seedFailedRun(fixture);
@@ -585,6 +521,74 @@ function expectNoConversation(fixture: Fixture): void {
 
 // Every CLI continuation entry point resolves the same destination, so each must stay
 // headless for a run created without provenance.
+/**
+ * Leave the seeded run the way a killed process leaves it: still `running`, owned by a
+ * process on this host that no longer answers. Returns the execution claim it holds.
+ */
+function markKilledWhileRunning(fixture: Fixture, runId: string): string {
+  const database = new Database(join(fixture.archonHome, 'archon.db'));
+  try {
+    const claim = randomUUID();
+    const owner = { host: hostname(), pid: 999_999, uid: process.getuid?.() };
+    database
+      .query(
+        "UPDATE remote_agent_workflow_runs SET status = 'running', completed_at = NULL, metadata = json_set(metadata, '$.execution_claim', ?, '$.execution_owner', json(?)) WHERE id = ?"
+      )
+      .run(claim, JSON.stringify(owner), runId);
+    return claim;
+  } finally {
+    database.close();
+  }
+}
+
+function readRunClaim(fixture: Fixture, runId: string): { status: string; claim: string | null } {
+  const database = openDatabase(fixture);
+  try {
+    const row = database
+      .query<{ status: string; claim: string | null }, [string]>(
+        "SELECT status, json_extract(metadata, '$.execution_claim') AS claim FROM remote_agent_workflow_runs WHERE id = ?"
+      )
+      .get(runId);
+    if (!row) throw new Error(`run ${runId} missing`);
+    return row;
+  } finally {
+    database.close();
+  }
+}
+
+describe('a run its killed process left running', () => {
+  test('workflow resume <run-id> continues it from its completed nodes', async () => {
+    const fixture = makeFixture();
+    const before = await seedFailedRun(fixture, false);
+    const claim = markKilledWhileRunning(fixture, before.runId);
+
+    const resumed = await resumeForeground(fixture, before.runId);
+
+    // `boom` runs again and fails; `settle` completed before the kill and is skipped.
+    expect(resumed.output).toContain("Bash node 'boom' failed");
+    expect(resumed.output).not.toContain('settled');
+    const after = readRunClaim(fixture, before.runId);
+    expect(after.status).toBe('failed');
+    expect(after.claim).not.toBe(claim);
+  }, 120_000);
+
+  test('workflow resume <run-id> refuses while its owner answers and names the owner', async () => {
+    const fixture = makeFixture();
+    const before = await seedFailedRun(fixture, false);
+    const claim = markKilledWhileRunning(fixture, before.runId);
+    const owner = await startRunLiveOwner(before.runId);
+    try {
+      const resumed = await resumeForeground(fixture, before.runId);
+
+      expect(resumed.status).toBe(1);
+      expect(resumed.output).toContain(`host ${hostname()}, pid 999999`);
+      expect(readRunClaim(fixture, before.runId)).toEqual({ status: 'running', claim });
+    } finally {
+      await owner.close();
+    }
+  }, 120_000);
+});
+
 describe('origin-free continuations stay headless', () => {
   test('workflow approve continues an origin-free run without a conversation', async () => {
     const fixture = makeFixture();

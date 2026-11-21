@@ -7,14 +7,12 @@
  * or, when none did, the one triage routed the item to continue. The queue claims them
  * with intake's claim, so an item has one owner at a time across the three queues.
  *
- * Every read and the merge go through the forge contract (`forge` of `archon:script`), using the
- * operations in `MERGE_QUEUE_FORGE_OPERATIONS`.
+ * Every read and the merge go through the forge contract (`forge` of `archon:script`).
  */
 
-import { itemPullRequest, type Validation } from './build.ts';
+import { buildWaits, itemPullRequest, type Validation } from './build.ts';
 import { type QualifiedPr } from './identity.ts';
 import { record } from './inputs.ts';
-import { requireForge } from './forge-check.ts';
 import { forge } from 'archon:script';
 import { viewPr } from './pr.ts';
 import { type Ask, type DecisionEntry, withDecision } from './queue.ts';
@@ -102,7 +100,8 @@ export function answeredMergeDecision(effect: MergeEffect): `answered: ${MergeEf
  */
 export function mergeWaits(doc: WorkItem): boolean {
   const build = doc.facts.build;
-  if (build?.status !== 'ready') return false;
+  // A re-triaged item is the build queue's until its round ends: no claim says so.
+  if (build?.status !== 'ready' || buildWaits(doc)) return false;
   const merge = doc.facts.merge;
   if (merge === undefined || merge.status === 'waiting' || merge.status === 'asking') return true;
   return build.at > merge.at;
@@ -233,27 +232,6 @@ export function waitedOn(facts: PrFacts, base: BaseFacts | null, ci: CiMode): st
     facts.default_head,
     base?.checks.state ?? null,
   ]);
-}
-
-/** The forge operations the merge queue reads and merges through. */
-export const MERGE_QUEUE_FORGE_OPERATIONS = [
-  'pr.view',
-  'pr.merge',
-  'pr.threads',
-  'checks.state',
-  'checks.commit',
-  'checks.rerun',
-  'pr.merge-state',
-  'workitem.comments',
-] as const;
-
-/**
- * Refuse a plugin that lacks a merge-queue operation or has no credential
- * (`archon forge check`) before anything is claimed: every pull request it could not
- * read would otherwise wait, then park.
- */
-export function requireMergeSource(repo: QualifiedPr['repo']): void {
-  requireForge(repo.host, MERGE_QUEUE_FORGE_OPERATIONS);
 }
 
 export interface BaseFacts {

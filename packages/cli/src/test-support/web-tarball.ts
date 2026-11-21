@@ -78,9 +78,8 @@ function concatBytes(blocks: Uint8Array[]): Uint8Array<ArrayBuffer> {
  * The exact bytes the fixture claims to carry. Every test that extracts asserts
  * the file lands with THIS content, not merely that a file exists — a hand-rolled
  * binary format that nothing validates is a worse trap than the hang it replaced.
- * A `size` field short by a few bytes, dropped padding, or a missing terminator
- * all still produce an `index.html` and a clean extraction; only comparing content
- * catches them.
+ * A `size` field short by a few bytes still produces an `index.html` and a clean
+ * extraction; only comparing content catches it.
  */
 export const FIXTURE_INDEX_HTML = '<html>ok</html>';
 

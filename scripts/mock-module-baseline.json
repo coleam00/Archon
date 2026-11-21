@@ -115,7 +115,6 @@
     "packages/cli/src/test-support/workflow-harness-core.ts": [
       "@archon/core",
       "@archon/core/config/config-loader",
-      "@archon/core/config/run-config",
       "@archon/core/credentials/config",
       "@archon/core/db/env-vars",
       "@archon/core/handlers/clone",
@@ -164,10 +163,7 @@
     "packages/core/src/db/conversation-visibility.integration.test.ts": ["./connection"],
     "packages/core/src/db/conversations.test.ts": ["./connection"],
     "packages/core/src/db/env-vars.test.ts": ["./connection", "@archon/paths"],
-    "packages/core/src/db/isolation-environments.live-run.integration.test.ts": [
-      "./connection",
-      "@archon/paths"
-    ],
+    "packages/core/src/db/isolation-environments.live-run.integration.test.ts": ["./connection"],
     "packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts": [
       "./connection"
     ],
@@ -384,7 +380,6 @@
       "@archon/isolation",
       "@archon/paths",
       "@archon/providers",
-      "@archon/workflows/router",
       "@archon/workflows/run-source",
       "@archon/workflows/utils/tool-formatter",
       "@archon/workflows/workflow-discovery",
@@ -2238,14 +2233,6 @@
       "updateGlobalConfig",
       "writeConfigFile"
     ],
-    "packages/core/src/config/run-config.ts": [
-      "loadWorkflowRunConfigFile",
-      "normalizeRunConfigSemantics",
-      "parseWorkflowRunConfig",
-      "unsealWorkflowRunConfig",
-      "workflowRunConfigFromRun",
-      "workflowRunConfigKeys"
-    ],
     "packages/core/src/config/store-selection.ts": ["assertFileStoreConfiguration"],
     "packages/core/src/credentials/config.ts": ["assertProviderKeysKeyAtBoot"],
     "packages/core/src/credentials/connect-service.ts": [
@@ -2339,11 +2326,8 @@
       "deactivateSession",
       "deleteOldSessions",
       "getActiveSession",
-      "getSessionChain",
-      "getSessionHistory",
       "transitionSession",
-      "updateSession",
-      "updateSessionMetadata"
+      "updateSession"
     ],
     "packages/core/src/db/user-ai-prefs-store.ts": [
       "clearUserAiPrefs",
@@ -2417,8 +2401,6 @@
       "findAdoptingRuns",
       "findChildRuns",
       "findOpenWorkRuns",
-      "findResumableRun",
-      "findResumableRunByParentConversation",
       "findWorkflowRunsByIdPrefix",
       "getActiveWorkflowRun",
       "getActiveWorkflowRunByPath",
@@ -2437,6 +2419,7 @@
       "listDashboardRuns",
       "listDueWorkflowContinuations",
       "listNotifiedTerminalRuns",
+      "listResumableRunsByParentConversation",
       "listRunsNeedingAttention",
       "listWorkflowEventSignalCandidates",
       "listWorkflowRuns",
@@ -2678,12 +2661,9 @@
       "GitFailure",
       "InvalidBaseBranchError",
       "addSafeDirectory",
-      "checkout",
       "cloneRepository",
-      "commitAllChanges",
       "countCommitsAhead",
       "countCommitsMissingFromRemotes",
-      "detectForge",
       "execFileAsync",
       "fetchWithRetry",
       "findRepoRoot",
@@ -2695,7 +2675,6 @@
       "getDefaultRemote",
       "getGitCheckoutIdentity",
       "getLastCommitDate",
-      "getRemoteUrl",
       "getUniqueCommitCount",
       "getWorktreeBase",
       "githubTokenCredentials",
@@ -2705,7 +2684,6 @@
       "isAncestorOf",
       "isBranchMerged",
       "isPatchEquivalent",
-      "isProjectScopedWorktreeBase",
       "isRevCoveredBy",
       "isSameWorktreePath",
       "isWorktreePath",
@@ -2765,7 +2743,6 @@
       "readWorktreeCreationId",
       "recordWorktreeAdoption",
       "registerWorktree",
-      "resetIsolationProvider",
       "resolveFolderBackend",
       "resolveRepoLocalOverride",
       "validateWorktreePostCreate",
@@ -3028,7 +3005,6 @@
       "logWorkflowEvent",
       "logWorktreeSetup"
     ],
-    "packages/workflows/src/router.ts": ["resolveWorkflowName"],
     "packages/workflows/src/run-paths.ts": [
       "isFolderCodebase",
       "prepareRunPaths",

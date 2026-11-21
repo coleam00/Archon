@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import { filedIssues, splitMarker } from '../../workflows/sdlc/.shared/split';
 import { state } from 'archon:script';
-import { mirrorLabels, newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
+import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
 import { gitCheckout, hostCli, labelWrites, packScriptRunner, PR, type ScriptRun, type TrackerIssue } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
@@ -39,7 +39,7 @@ interface Install {
 }
 
 function install(): Install {
-  const checkout = gitCheckout({}, track);
+  const checkout = gitCheckout(track);
   const home = track(mkdtempSync(join(tmpdir(), 'archon-split-home-')));
   return {
     checkout,
@@ -130,7 +130,6 @@ describe('split publish', () => {
     ]);
     expect(labelWrites(first, 7).add).toContain('archon-prd');
     expect(first.closes).toEqual([]);
-    expect(stored(at)).toMatchObject({ claim: null, facts: { split: { status: 'done', kind: 'prd' } } });
 
     // A re-triage sends the item back; the next split lists the same keys.
     seed(at);
@@ -184,12 +183,7 @@ describe('split publish', () => {
     expect(run.createdIssues).toEqual([]);
     expect(run.comments).toEqual([{ issue: 7, body: `<!-- archon-split -->\n\n${COMMENT}` }]);
     expect(labelWrites(run, 7)).toEqual({ add: ['archon-plan'], remove: ['archon-split'] });
-    const doc = stored(at);
-    expect(doc).toMatchObject({ stage: 'plan', claim: null, facts: { split: { status: 'whole', route: 'plan' } } });
-    expect(doc.history.at(-1)).toMatchObject({ stage: 'split', outcome: 'whole', summary: 'Measure first.' });
-    // Intake's mirror of the document agrees with the labels publish wrote.
-    expect(mirrorLabels(doc)).toContain('archon-plan');
-    expect(mirrorLabels(doc)).not.toContain('archon-split');
+    expect(stored(at)).toMatchObject({ stage: 'plan', claim: null, facts: { split: { status: 'whole', route: 'plan' } } });
   });
 
   test('an item an earlier split filed issues from cannot be built whole', () => {

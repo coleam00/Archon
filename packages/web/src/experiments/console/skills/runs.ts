@@ -2,7 +2,7 @@ import type { paths } from '@/lib/api.generated';
 import type { ListRunsOptions, RunsAttention } from '../primitives/run';
 export type { ListRunsOptions, RunsAttention } from '../primitives/run';
 import { requestJson, buildApiUrl } from '../lib/http';
-import { toRun, type Run } from '../primitives/run';
+import { toOwnerLostHolders, toRun, type Run } from '../primitives/run';
 import { toRunEvent, type RunEvent, type RunNodeState } from '../primitives/event';
 import type { components } from '@/lib/api.generated';
 
@@ -42,7 +42,11 @@ export async function listRuns(
 export async function listRunsNeedingAttention(): Promise<RunsAttention> {
   const res = await requestJson('/api/runs/attention', 'get');
   if (!('runs' in res)) throw new Error('Attention endpoint returned counts instead of runs');
-  return { runs: res.runs.map(toRun), degraded: res.degraded ?? [] };
+  return {
+    runs: res.runs.map(toRun),
+    ownerLost: toOwnerLostHolders(res.items),
+    degraded: res.degraded ?? [],
+  };
 }
 
 export async function listGlobalCounts(): Promise<RunCounts> {

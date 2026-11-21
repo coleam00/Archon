@@ -10,7 +10,7 @@ import {
   workflowWaitDue,
   type WorkflowRun,
 } from '../schemas/workflow-run';
-import type { IWorkflowStore } from '../store';
+import type { IWorkflowStore, MetricRecordRow } from '../store';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import type { DashboardWorkflowRun } from '../schemas/workflow-run-listing';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
@@ -33,7 +33,6 @@ type TransactionReads = Pick<
   | 'findChildRuns'
   | 'getRunAncestry'
   | 'getActiveWorkflowRunByPath'
-  | 'findResumableRun'
   | 'findWorkflowRunsByIdPrefix'
   | 'findAdoptingRuns'
   | 'listAttentionQueueRows'
@@ -50,11 +49,9 @@ export const listRunEvents = (events: WorkflowEventRow[], id: string): WorkflowE
 export const newestFirst = (rows: WorkflowRun[]): WorkflowRun[] =>
   rows.sort((a, b) => b.started_at.getTime() - a.started_at.getTime());
 
+/** Resumable without a cursor; a `running` run needs a matching `ownerless` cursor too. */
 export const isResumable = (run: WorkflowRun): boolean =>
-  run.status === 'paused' ||
-  run.status === 'failed' ||
-  (run.status === 'running' &&
-    (run.last_activity_at === null || run.last_activity_at.getTime() < Date.now() - 86_400_000));
+  run.status === 'paused' || run.status === 'failed';
 
 /** A run `cancelResumableRunsForConversation(conversationId)` cancels. */
 export const isConversationResetTarget = (run: WorkflowRun, conversationId: string): boolean =>
@@ -82,6 +79,14 @@ function readMetrics(event: WorkflowEventRow): unknown {
   const structured = event.data.structured_output;
   if (typeof structured !== 'object' || structured === null) return undefined;
   return (structured as { metrics?: unknown }).metrics ?? undefined;
+}
+
+/** `structured_output.metric_dimensions`, when the output has one. */
+function readMetricDimensions(event: WorkflowEventRow): Pick<MetricRecordRow, 'metricDimensions'> {
+  const structured = event.data.structured_output as { metric_dimensions?: unknown };
+  return structured.metric_dimensions === undefined
+    ? {}
+    : { metricDimensions: structuredClone(structured.metric_dimensions) };
 }
 
 /** The read side of a transaction view: queries over the transaction's runs and events. */
@@ -192,6 +197,7 @@ export function createTransactionReads(
               nodeType: typeof event.data.type === 'string' ? event.data.type : null,
               completedAt: event.created_at,
               metrics: structuredClone(metrics),
+              ...readMetricDimensions(event),
             },
           ];
         }),
@@ -234,14 +240,6 @@ export function createTransactionReads(
               workflowPathPriorityTime(a).getTime() - workflowPathPriorityTime(b).getTime() ||
               (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
           )[0] ?? null
-      ),
-    findResumableRun: async (name, path) =>
-      structuredClone(
-        newestFirst(
-          [...runs.values()].filter(
-            run => run.workflow_name === name && run.working_path === path && isResumable(run)
-          )
-        )[0] ?? null
       ),
     findWorkflowRunsByIdPrefix: async (prefix, codebaseId) =>
       structuredClone(

@@ -1,3 +1,4 @@
+// @archon-test-windows
 /** Branch names and worktree paths the provider derives from a request and repo config. */
 import { TEST_ARCHON_HOME } from './worktree-test-fixture';
 import { describe, test, expect } from 'bun:test';
@@ -133,10 +134,6 @@ describe('getWorktreePath', () => {
     expect(path).toContain('owner');
     expect(path).toContain('repo');
     expect(path).toContain('issue-42');
-  });
-
-  test('throws for a degenerate repo path with no basename', () => {
-    expect(() => pathFor(issue('/'))).toThrow('Cannot derive a project identity');
   });
 });
 

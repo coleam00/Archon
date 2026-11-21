@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   CHECKS_LOGS_DEFAULT_BYTES,
   WORKITEM_SEARCH_DEFAULT_LIMIT,
@@ -93,8 +94,12 @@ function matchesResolvedHost(request: ForgeRequest, observed: string, host: stri
 /** The bare host an HTTPS remote on the default port names, or undefined for any other remote. */
 export function httpsDefaultPortHost(request: ForgeRequest): string | undefined {
   if (request.op !== 'resolve' || !request.remote) return undefined;
+  return httpsDefaultPortRemoteHost(request.remote);
+}
+
+export function httpsDefaultPortRemoteHost(remote: string): string | undefined {
   try {
-    const { url, host } = parseRemoteUrl(request.remote.trim());
+    const { url, host } = parseRemoteUrl(remote.trim());
     // HTTPS :443 used to select bare-host claims before explicit ports were preserved.
     if (url.protocol === 'https:' && host === `${url.hostname}:443`) {
       return normalizeHost(url.hostname);
@@ -407,6 +412,25 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
     value.comment.bodyDigest === contentDigest(request.body),
   'pr.thread.resolve': (request, value) =>
     sameTarget(value.target, request.ref) && value.thread === request.thread && value.resolved,
+  'pr.review.submit': (request, value) =>
+    sameTarget(value.target, request.ref) &&
+    sameRef(value.review.ref, request.ref) &&
+    value.review.commit === request.commit &&
+    value.review.key === request.key &&
+    value.comments.length === request.comments.length &&
+    request.comments.every(
+      (comment, index) =>
+        value.comments[index]?.path === comment.path && value.comments[index].line === comment.line
+    ),
+  'attachment.put': (request, value) => {
+    const bytes = Buffer.from(request.content, 'base64');
+    return (
+      sameTarget(value.target, request.repo) &&
+      value.attachment.contentType === request.contentType &&
+      value.attachment.bytes === bytes.byteLength &&
+      value.attachment.digest === createHash('sha256').update(bytes).digest('hex')
+    );
+  },
   'workitem.edit-body': (request, value) =>
     sameTarget(value.target, request.ref) &&
     sameRef(value.workitem.ref, request.ref) &&

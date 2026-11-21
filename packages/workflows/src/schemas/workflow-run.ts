@@ -37,7 +37,7 @@ export const workflowRunOriginSchema = z
 
 export type WorkflowRunOrigin = z.infer<typeof workflowRunOriginSchema>;
 
-const ITEM_KEY_MAX_LENGTH = 200;
+export const ITEM_KEY_MAX_LENGTH = 200;
 /** An item's key within its project. The engine gives it no meaning and never parses it. */
 export const itemKeySchema = z.string().min(1).max(ITEM_KEY_MAX_LENGTH);
 
@@ -69,7 +69,18 @@ export const workflowRunSchema = z.object({
   parent_conversation_id: z.string().nullable(),
   codebase_id: z.string().nullable(),
   status: workflowRunStatusSchema,
+  /**
+   * The authored verdict of a workflow whose `returns.outcome` is a boolean. Kept for
+   * readers that predate `completed_outcome`; written at completion, as that is.
+   */
   outcome: workflowRunOutcomeSchema.nullable(),
+  /**
+   * The outcome this run completed with, from `returns.outcome`: an enum value as it is,
+   * a boolean as `succeeded` or `failed`. Written only in the write that completes the
+   * run, so a reader that sees one can rely on the run being over. Null for any run that
+   * did not complete, or whose workflow declares no outcome.
+   */
+  completed_outcome: z.string().nullable(),
   user_message: z.string(),
   metadata: z.record(z.string(), z.unknown()),
   started_at: z.date(),
@@ -122,6 +133,17 @@ export const workflowRunSchema = z.object({
 });
 
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;
+
+/**
+ * The outcome to show for a run. A run completed by a binary from before
+ * `completed_outcome` has only `outcome`; a run that did not complete shows none, though
+ * an older binary may have written `outcome` on it while it ran.
+ */
+export function displayedRunOutcome(
+  run: Pick<WorkflowRun, 'status' | 'outcome' | 'completed_outcome'>
+): string | null {
+  return run.completed_outcome ?? (run.status === 'completed' ? run.outcome : null);
+}
 
 // ---------------------------------------------------------------------------
 // ArtifactType

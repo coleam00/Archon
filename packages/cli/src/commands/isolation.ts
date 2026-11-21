@@ -28,12 +28,18 @@ import {
   removeEnvironment,
   type RemoveEnvironmentResult,
 } from '@archon/core/services/cleanup/remove-environment';
-import { getCleanupRunLock, getLiveRunBlocker } from '@archon/core/services/cleanup/run-lock';
+import {
+  getCleanupRunLock,
+  getUseBlocker,
+  useBlockerLogFields,
+} from '@archon/core/services/cleanup/run-lock';
 import {
   listEnvironments,
   cleanupMergedEnvironments,
   type CleanupOperationResult,
+  type MergedCleanupOutcome,
 } from '@archon/core/operations/isolation-operations';
+import { writeJsonLine } from '../utils/stdout';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -147,9 +153,12 @@ async function cleanupStaleWorktree(
       staleDays: daysStale,
     });
     if (lock.kind === 'locked') {
-      const { runId, runStatus, display } = lock.blocker;
-      getLog().info({ envId: env.id, runId, runStatus }, 'skip_stale_live_run');
-      console.log(`  Status: Skipped — ${display}`);
+      const { blocker } = lock;
+      getLog().info(
+        { envId: env.id, ...useBlockerLogFields(blocker) },
+        `skip_stale_${blocker.reason}`
+      );
+      console.log(`  Status: Skipped — ${blocker.display}`);
       return 'skipped';
     }
     if (lock.kind === 'unpushed') {
@@ -280,52 +289,118 @@ function printCleanupOperationResult(result: CleanupOperationResult): void {
   }
 }
 
+type MergedCleanupReport = { codebaseId: string; repositoryUrl: string | null; path: string } & (
+  | MergedCleanupOutcome
+  | { kind: 'failed'; error: string }
+);
+
+async function cleanupMergedCodebase(
+  codebase: Awaited<ReturnType<typeof listEnvironments>>['codebases'][number],
+  options: { includeClosed?: boolean }
+): Promise<MergedCleanupReport> {
+  const identity = {
+    codebaseId: codebase.codebaseId,
+    repositoryUrl: codebase.repositoryUrl,
+    path: codebase.defaultCwd,
+  };
+  try {
+    const outcome = await cleanupMergedEnvironments(
+      codebase.codebaseId,
+      codebase.defaultCwd,
+      options
+    );
+    return { ...identity, ...outcome };
+  } catch (error) {
+    const err = error as Error;
+    getLog().warn({ err, codebaseId: codebase.codebaseId }, 'merged_cleanup_failed');
+    return { ...identity, kind: 'failed', error: err.message };
+  }
+}
+
+function printMergedCleanupReport(report: MergedCleanupReport): void {
+  switch (report.kind) {
+    case 'swept':
+      printCleanupOperationResult(report.result);
+      return;
+    case 'repository-gone':
+      console.log(
+        `  Repository gone: ${report.path} does not exist; its environments were not checked.`
+      );
+      for (const { branchName, workingPath } of report.environments) {
+        console.log(`    ${branchName}: ${workingPath}`);
+      }
+      console.log(
+        '  To release a record, delete its worktree directory once nothing in it is needed, ' +
+          'then run `archon isolation list`.'
+      );
+      return;
+    case 'failed':
+      console.error(`  Error processing codebase: ${report.error}`);
+  }
+}
+
+function mergedCleanupFailures(report: MergedCleanupReport): number {
+  if (report.kind === 'failed') return 1;
+  return report.kind === 'swept' ? report.result.errors.length : 0;
+}
+
+function printMergedCleanupSummary(reports: readonly MergedCleanupReport[]): void {
+  const totals = { cleaned: 0, skipped: 0, failed: 0, repositoryGone: 0 };
+  for (const report of reports) {
+    totals.failed += mergedCleanupFailures(report);
+    if (report.kind === 'repository-gone') totals.repositoryGone += report.environments.length;
+    if (report.kind === 'swept') {
+      totals.cleaned += report.result.removed.length;
+      totals.skipped += report.result.skipped.length;
+    }
+  }
+  const notChecked =
+    totals.repositoryGone > 0
+      ? `, ${String(totals.repositoryGone)} not checked (repository gone)`
+      : '';
+  console.log(
+    `\nMerged cleanup complete: ${String(totals.cleaned)} cleaned, ${String(totals.skipped)} skipped, ${String(totals.failed)} failed${notChecked}`
+  );
+}
+
+/** Sweep every codebase in turn, printing each report as it lands unless `quiet`. */
+async function sweepMergedCodebases(
+  codebases: Awaited<ReturnType<typeof listEnvironments>>['codebases'],
+  options: { includeClosed?: boolean },
+  quiet: boolean
+): Promise<MergedCleanupReport[]> {
+  const reports: MergedCleanupReport[] = [];
+  for (const codebase of codebases) {
+    if (!quiet) console.log(`\nChecking ${codebase.repositoryUrl ?? codebase.defaultCwd}...`);
+    const report = await cleanupMergedCodebase(codebase, options);
+    if (!quiet) printMergedCleanupReport(report);
+    reports.push(report);
+  }
+  return reports;
+}
+
 /**
  * Cleanup worktrees covered by Git integration or an eligible PR
  * Retains remote branches for operator inspection
  */
 export async function isolationCleanupMergedCommand(
-  options: { includeClosed?: boolean } = {}
+  options: { includeClosed?: boolean; json?: boolean } = {}
 ): Promise<0 | 1> {
-  console.log('Finding worktrees covered by Git integration or eligible pull requests...');
+  const { json = false, ...sweepOptions } = options;
+  if (!json)
+    console.log('Finding worktrees covered by Git integration or eligible pull requests...');
 
   const { codebases } = await listEnvironments();
 
-  if (codebases.length === 0) {
+  if (codebases.length === 0 && !json) {
     console.log('No codebases with active environments found.');
     return 0;
   }
 
-  let totalCleaned = 0;
-  let totalSkipped = 0;
-  let totalFailed = 0;
-
-  for (const codebase of codebases) {
-    try {
-      console.log(`\nChecking ${codebase.repositoryUrl ?? codebase.defaultCwd}...`);
-
-      const result = await cleanupMergedEnvironments(
-        codebase.codebaseId,
-        codebase.defaultCwd,
-        options
-      );
-
-      printCleanupOperationResult(result);
-      totalFailed += result.errors.length;
-      totalCleaned += result.removed.length;
-      totalSkipped += result.skipped.length;
-    } catch (error) {
-      const err = error as Error;
-      getLog().warn({ err, codebaseId: codebase.codebaseId }, 'merged_cleanup_failed');
-      console.error(`  Error processing codebase: ${err.message}`);
-      totalFailed++;
-    }
-  }
-
-  console.log(
-    `\nMerged cleanup complete: ${String(totalCleaned)} cleaned, ${String(totalSkipped)} skipped, ${String(totalFailed)} failed`
-  );
-  return totalFailed > 0 ? 1 : 0;
+  const reports = await sweepMergedCodebases(codebases, sweepOptions, json);
+  if (json) await writeJsonLine({ codebases: reports });
+  else printMergedCleanupSummary(reports);
+  return reports.some(report => mergedCleanupFailures(report) > 0) ? 1 : 0;
 }
 
 type CompletionEnvironment = IsolationEnvironmentRow & { codebase_default_cwd: string };
@@ -354,7 +429,7 @@ async function checkCompletionLiveRun(
   blockers: string[]
 ): Promise<void> {
   try {
-    const liveRun = await getLiveRunBlocker(env.id);
+    const liveRun = await getUseBlocker(env.id);
     if (liveRun) blockers.push(liveRun.display);
   } catch (error) {
     const err = error as Error;

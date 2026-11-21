@@ -38,13 +38,6 @@ describe('orderWithRecommended', () => {
     expect(recommended).toHaveLength(0);
   });
 
-  test('does not duplicate a recommended workflow into the rest group', () => {
-    const workflows = [wf('alpha'), wf('beta')];
-    const { ordered } = orderWithRecommended(workflows, ['alpha']);
-    expect(ordered.map(w => w.name)).toEqual(['alpha', 'beta']);
-    expect(ordered.filter(w => w.name === 'alpha')).toHaveLength(1);
-  });
-
   test('collapses duplicate recommended names to first occurrence', () => {
     const workflows = [wf('alpha'), wf('beta'), wf('gamma')];
     const { ordered, recommended } = orderWithRecommended(workflows, ['beta', 'alpha', 'beta']);

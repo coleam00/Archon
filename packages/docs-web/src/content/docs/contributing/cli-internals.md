@@ -23,6 +23,7 @@ packages/cli/
 │   │   ├── workflow-query.ts # workflow list/test/status/get/runs/logs/wait
 │   │   ├── workflow-run-*.ts # workflow run: select, admit, launch, execute
 │   │   ├── isolation.ts    # isolation list/cleanup (list/merged-cleanup delegate to @archon/core/operations)
+│   │   ├── isolation-schedule.ts # isolation cleanup schedule: the macOS merged-cleanup timer
 │   │   ├── setup.ts        # setup command implementation
 │   │   ├── chat.ts         # chat command implementation
 │   │   ├── validate.ts     # validate command implementation
@@ -83,7 +84,7 @@ packages/cli/
 
 **Code:** `packages/cli/src/cli.ts`
 
-Repository env normally overrides home env. The CLI preserves the user-scope `GH_CONFIG_DIR` (including its absence), so repository env cannot redirect the stored gh login. Inside a workflow, inherited GitHub identity values take precedence over both env files, including empty values that disable host credentials. See [forge plugin configuration](/reference/forge/#plugin-configuration).
+Repository env normally overrides home env. The CLI preserves the user-scope `GH_CONFIG_DIR` (including its absence), so repository env cannot redirect the stored gh login. Inside a workflow, and in the start-time forge check of a pack that declares `forge:` (the check spawns the CLI with `ARCHON_RUN_GITHUB_IDENTITY=1`), inherited GitHub identity values take precedence over both env files, including empty values that disable host credentials. See [forge plugin configuration](/reference/forge/#plugin-configuration).
 
 **Project resolution:**
 
@@ -167,7 +168,7 @@ Repository env normally overrides home env. The CLI preserves the user-scope `GH
 ┌───────────────────────────┐   ┌───────────────────────────────────┐
 │ launchDetachedOwnedRun()  │   │ prepareForegroundLaunch()         │
 │ Pre-flight, write the run │   │ Destination, project, adoption    │
-│ row, fork the child       │   │ lane, --resume binding, AI config │
+│ row, fork the child       │   │ lane, resume binding, AI config   │
 └───────────────────────────┘   └───────────────┬───────────────────┘
                                                 │
                                                 ▼
@@ -288,7 +289,10 @@ archon isolation cleanup [days] (default: 7)
 
 ## `isolation cleanup --merged` Flow
 
-1. `isolationCleanupMergedCommand` calls `cleanupMergedWorktrees` for each codebase.
+1. `isolationCleanupMergedCommand` calls `cleanupMergedEnvironments` for each codebase. When
+   the codebase's checkout directory does not exist, it returns `repository-gone` with the
+   codebase's worktree environments and does not sweep them; otherwise it runs
+   `cleanupMergedWorktrees`.
 2. `judgeBranchForRemoval` first checks base ancestry and patch equivalence, requiring
    coverage of both the branch ref and worktree HEAD. Otherwise it checks the branch-name PR. A merged PR authorizes
    removal only if its head covers every existing local tip: worktree HEAD and
@@ -393,11 +397,15 @@ When `--branch` is provided:
 2. **Health check:** `provider.healthCheck(path)` on existing
 3. **Branch verification:** Read the current local branch. Refuse a different branch or detached
    HEAD, naming the requested branch, actual branch, and path without changing the checkout.
-4. **Reuse:** If found, healthy, and on the requested branch (warns if `--from` was specified but not applied)
+4. **Reuse:** If found, healthy, and on the requested branch (refused when `--from` is given and is not in the worktree's history)
 5. **Create:** If not found or unhealthy -- passes a `taskBranch: { kind: 'new', fromBranch }`
    selection to the provider when `--from` is specified. Adoption instead passes
    `taskBranch: { kind: 'existing', branch }`, which checks out that exact local branch
    without creating a child branch or syncing it to a remote.
+
+A `--detach` launch runs steps 1 to 4, including the `--from` refusal, in the parent before it
+forks (`reusedBranchWorktree` in `workflow-branch-reuse.ts`), so the caller gets the refusal as the result. The child runs them
+again against the live checkout.
 
 Worktrees stored at: `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch-slug>/`
 

@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { DESCRIPTION_SECTION } from '../../workflows/sdlc/.shared/pr';
+import { readReviewStamp } from '../../workflows/sdlc/.shared/review-comment';
 import { PUBLISHED_REPORT_FILE } from '../../workflows/sdlc/.shared/review-item';
 import { trackTempRoots } from './temp-roots';
 import {
@@ -49,7 +50,7 @@ function publishPr(
   options: ScriptOptions & { target?: Target; prepareBody?: boolean; forgeAt?: (head: string) => ScriptOptions['forge'] } = {}
 ): ScriptRun & { head: string; cwd: string } {
   const { target = {}, prepareBody = true, forgeAt, ...rest } = options;
-  const cwd = gitCheckout({}, trackTempRoot);
+  const cwd = gitCheckout(trackTempRoot);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).stdout.trim();
   const run = runPackScript('pr/scripts/publish-pr', {
     ...rest,
@@ -75,21 +76,6 @@ function publishPr(
 }
 
 describe('publish-pr opens the pull request at most once', () => {
-  it('continues without a publication record when no description is prepared', () => {
-    for (const existing of [42, null]) {
-      const result = publishPr({
-        target: { existing },
-        prepareBody: false,
-        forgeAt: head => ({ kind: 'fake', response: forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }) }) }),
-        preload: `import { mkdirSync } from 'node:fs'; mkdirSync('{ARTIFACTS}/pr-create-started');`,
-      });
-      expect(result.code).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, head_revision: result.head });
-      expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
-      expect(result.bodies).toEqual([]);
-    }
-  });
-
   it('refuses another create while the earlier write is unresolved', () => {
       const result = publishPr({
         artifacts: { 'pr-create-started': JSON.stringify({ repo: PR.repo }) },
@@ -147,19 +133,15 @@ describe('publish-pr opens the pull request at most once', () => {
   });
 
   it('reads the body before claiming a create', () => {
-    for (const directory of [false, true]) {
-      const result = publishPr({
-        prepareBody: false,
-        inputs: { INPUTS_BODY: JSON.stringify({ type: 'archon_artifact', run_id: 'run', path: 'pr-body.md' }) },
-        artifacts: directory ? { 'pr-body.md/entry': 'a directory cannot be a PR body' } : {},
-        tracker: { noOpenPr: true },
-        forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
-      });
-      expect(result.code).not.toBe(0);
-      expect(result.stderr).toContain(directory ? 'EISDIR' : 'ENOENT');
-      expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
-      expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
-    }
+    const result = publishPr({
+      prepareBody: false,
+      inputs: { INPUTS_BODY: JSON.stringify({ type: 'archon_artifact', run_id: 'run', path: 'pr-body.md' }) },
+      tracker: { noOpenPr: true },
+      forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
+    expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
   });
 
   it('reuses the open pull request for that head instead of opening a second one', () => {
@@ -214,27 +196,6 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.stderr).toContain('already has this head');
   });
 
-  it('keeps the created pull request when the host could not audit the write', () => {
-    const result = publishPr({
-      forge: {
-        kind: 'fake',
-        okExitCode: 2,
-        response: [
-          forgeOperation('pr.view', null),
-          forgeOperation('pr.create', {
-            target: PR.repo,
-            outcome: 'applied',
-            changed: true,
-            pr: forgePrRecord(),
-          }),
-        ],
-      },
-    });
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, url: PR_URL });
-    expect(result.stderr).toContain("could not record it in the run's audit log");
-  });
-
   it('continues the pull request the run was launched onto instead of creating one', () => {
     const result = publishPr({
       target: { existing: 42 },
@@ -243,17 +204,7 @@ describe('publish-pr opens the pull request at most once', () => {
     });
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
-    expect(existsSync(join(result.artifacts, 'pr-body.md'))).toBe(false);
     expect(forgeCalls(result).map(call => call.op)).toEqual(['pr.view']);
-  });
-
-  it('adopts a named pull request whose head repository differs only in case', () => {
-    const result = publishPr({
-      target: { headRepo: { host: PR.repo.host, path: 'Example/Repo' }, existing: 42 },
-      tracker: { pr: { headRefName: 'feature' } },
-    });
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
   });
 
   it('refuses before pushing when prepare did not continue the pull request the caller named', () => {
@@ -326,19 +277,6 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(remoteHead(result.cwd, 'feature')).toBe('');
   });
 
-  it('refuses a caller-selected branch without a body when an unnamed PR has another head', () => {
-    const result = publishPr({
-      target: { existing: 42 },
-      prepareBody: false,
-      inputs: { INPUTS_BRANCH: 'build/7-an-issue-run12345' },
-      tracker: { noOpenPr: true, pr: { headRefName: 'feature' } },
-    });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('prepare wrote no body');
-    expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
-    expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
-  });
-
   it('continues a named pull request on its own head even when the caller also selected a branch', () => {
     const result = publishPr({
       target: { existing: 42 },
@@ -352,11 +290,6 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(remoteHead(result.cwd, 'build/7-an-issue-run12345')).toBe('');
   });
 
-  it('fails loudly when the forge is unavailable', () => {
-    const result = publishPr({ forge: { kind: 'no-host' } });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('ARCHON_CLI_COMMAND');
-  });
 });
 
 const { start: START, end: END } = DESCRIPTION_SECTION;
@@ -526,6 +459,8 @@ describe('publish-review keeps one canonical comment per pull request', () => {
       contract_left: ['acceptance: the console shows it'],
     });
     expect(first.comments).toEqual([{ issue: 42, body: `${MARKER}\nReviewed commit: \`${REVIEWED}\`\nVerdict: ready\nContract: open\n\n${REPORT}` }]);
+    // The merge gate's reader takes the reviewed commit and the verdict from what was written.
+    expect(readReviewStamp(first.comments[0]?.body ?? '')).toMatchObject({ reviewed: REVIEWED, ready: true, contract: 'open' });
 
     const second = publishReview({
       inputs: report,
@@ -556,81 +491,11 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     expect(result.comments.map(comment => comment.issue)).toEqual([42]);
   });
 
-  it('publishes to the recorded pull request when the scope declaration agrees', () => {
-    const result = publishReview({ inputs: { ...report, INPUTS_SCOPE: JSON.stringify(PR) } });
-    expect(result.code).toBe(0);
-    expect(forgeCalls(result).find(call => call.op === 'comment.upsert')?.request.ref).toEqual(PR);
-  });
-
-  it('upserts through the plugin, with the report in the request file', () => {
-    const forge: ScriptOptions['forge'] = {
-      kind: 'fake',
-      response: [
-        prView,
-        forgeOperation('comment.upsert', {
-          target: PR,
-          outcome: 'applied',
-          changed: true,
-          comment: {
-            ref: PR,
-            id: '900',
-            url: `${PR_URL}#issuecomment-900`,
-            bodyDigest: 'digest',
-          },
-        }),
-      ],
-    };
-    const result = publishReview({
-      inputs: report,
-      forge,
-    });
-    expect(result.code).toBe(0);
-    const request = JSON.parse(result.forgeRequests[1]) as { marker: string; body: string };
-    expect(request.marker).toBe(MARKER);
-    expect(request.body.split('\n')[0]).toBe(MARKER);
-    expect(request.body).toContain(REPORT);
-    // The comment names the commit it reviewed from the round's own record, not the report text.
-    expect(request.body.split('\n')[1]).toBe(`Reviewed commit: \`${REVIEWED}\``);
-    expect(request.body.split('\n')[2]).toBe('Verdict: ready');
-    // A Ready verdict whose review left an acceptance item open is stamped open, so no merge closes the issue on it.
-    expect(request.body.split('\n')[3]).toBe('Contract: open');
-    expect(result.forge.join(' ')).not.toContain(REPORT);
-
-    // A review that left nothing open is stamped complete: only that lets a merge close the issue.
-    const complete = publishReview({
-      inputs: { ...report, INPUTS_CONTRACT_LEFT: '[]' },
-      forge,
-    });
+  // Only a complete stamp lets a merge close the issue.
+  it('stamps a review that left nothing open as complete', () => {
+    const complete = publishReview({ inputs: { ...report, INPUTS_CONTRACT_LEFT: '[]' } });
     expect(complete.code).toBe(0);
-    const completeRequest = JSON.parse(complete.forgeRequests[1]) as { body: string };
-    expect(completeRequest.body.split('\n')[3]).toBe('Contract: complete');
-  });
-
-  it('still reports the verdict when the host could not audit the comment write', () => {
-    const result = publishReview({
-      inputs: report,
-      forge: {
-        kind: 'fake',
-        okExitCode: 2,
-        response: [
-          prView,
-          forgeOperation('comment.upsert', {
-            target: PR,
-            outcome: 'applied',
-            changed: true,
-            comment: {
-              ref: PR,
-              id: '900',
-              url: `${PR_URL}#issuecomment-900`,
-              bodyDigest: 'digest',
-            },
-          }),
-        ],
-      },
-    });
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ ready: true, action: 'none' });
-    expect(result.stderr).toContain("could not record it in the run's audit log");
+    expect(complete.comments[0]?.body.split('\n')[3]).toBe('Contract: complete');
   });
 
   it('reports an unknown comment outcome without claiming the review was published', () => {

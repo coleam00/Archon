@@ -38,16 +38,6 @@ describe('AsyncQueue', () => {
     expect(received).toEqual([1, 2, 3]);
   });
 
-  test('resolves pending waiter when push arrives later', async () => {
-    const q = new AsyncQueue<string>();
-    const iter = q[Symbol.asyncIterator]();
-    const pending = iter.next();
-    queueMicrotask(() => q.push('hello'));
-    const r = await pending;
-    expect(r.done).toBe(false);
-    if (!r.done) expect(r.value).toBe('hello');
-  });
-
   test('preserves FIFO order across push and waiter', async () => {
     const q = new AsyncQueue<number>();
     const iter = q[Symbol.asyncIterator]();
@@ -56,9 +46,10 @@ describe('AsyncQueue', () => {
     q.push(20);
     const r1 = await p1;
     const r2 = await iter.next();
-    if (!r1.done) expect(r1.value).toBe(10);
-    if (!r2.done) expect(r2.value).toBe(20);
-  });
+    expect(r1).toEqual({ value: 10, done: false });
+    expect(r2).toEqual({ value: 20, done: false });
+    // A broken waiter hangs instead of failing; bound it well under the suite default.
+  }, 1000);
 
   test('second iterator call throws (single-consumer invariant)', () => {
     const q = new AsyncQueue<number>();
@@ -186,6 +177,14 @@ describe('buildResultChunk', () => {
     expect(chunk.type).toBe('result');
     if (chunk.type === 'result') {
       expect(chunk.tokens).toEqual({
+        calls: [
+          {
+            input: 10,
+            output: 5,
+            cacheRead: 0,
+            cacheWrite: 0,
+          },
+        ],
         input: 10,
         output: 5,
         cacheRead: 0,
@@ -211,6 +210,8 @@ describe('buildResultChunk', () => {
       },
     ]);
     expect(chunk).toMatchObject({ type: 'result', resolvedModel: { id: 'claude-opus-5' } });
+    if (chunk.type !== 'result') throw new Error('expected result');
+    expect(chunk.tokens?.calls?.[0]?.model).toBe('claude-opus-5');
   });
 
   test('omits resolvedModel when Pi does not report a responseModel', () => {
@@ -218,6 +219,8 @@ describe('buildResultChunk', () => {
       { role: 'assistant', model: 'large', usage, stopReason: 'stop', content: [] },
     ]);
     expect(chunk).not.toHaveProperty('resolvedModel');
+    if (chunk.type !== 'result') throw new Error('expected result');
+    expect(chunk.tokens?.calls?.[0]).not.toHaveProperty('model');
   });
 
   test('flags isError for stopReason=error and surfaces errorMessage', () => {
@@ -1101,6 +1104,32 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
     };
   }
 
+  test('keeps each request with its identity, and the requests sum to the turn totals', () => {
+    const make = (id: string, input: number, output: number) => ({
+      ...assistant({ input, output, cacheRead: 20, cacheWrite: 5, cost: 0 }, 'stop'),
+      provider: 'foundry',
+      model: 'large',
+      responseModel: 'gpt-6.1-sol',
+      responseId: id,
+    });
+    const result = buildResultChunk([make('one', 200_000, 10), make('two', 400_000, 30)]);
+    if (result.type !== 'result' || result.tokens === undefined) throw new Error('expected usage');
+    const tokens = result.tokens;
+    const calls = tokens.calls ?? [];
+    expect(calls.map(call => [call.responseId, call.provider, call.model])).toEqual([
+      ['one', 'foundry', 'gpt-6.1-sol'],
+      ['two', 'foundry', 'gpt-6.1-sol'],
+    ]);
+    // Compared with the totals, not fixed numbers: both sides go through usageToTokens.
+    const sum = (pick: (call: (typeof calls)[number]) => number | undefined): number =>
+      calls.reduce((total, call) => total + (pick(call) ?? 0), 0);
+    expect(sum(call => call.input)).toBe(tokens.input ?? 0);
+    expect(sum(call => call.output)).toBe(tokens.output ?? 0);
+    expect(sum(call => call.cacheRead)).toBe(tokens.cacheRead ?? 0);
+    expect(sum(call => call.cacheWrite)).toBe(tokens.cacheWrite ?? 0);
+    expect(tokens.callsPartial).toBeUndefined();
+  });
+
   const toolResult = { role: 'toolResult', toolCallId: 't', content: [] };
 
   function agentEnd(messages: Record<string, unknown>[]): AgentSessionEvent {
@@ -1163,6 +1192,11 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
     ]);
 
     expect(result.tokens).toEqual({
+      calls: expect.arrayContaining([
+        expect.objectContaining({ input: 1000, output: 700 }),
+        expect.objectContaining({ input: 1000, output: 1500 }),
+        expect.objectContaining({ input: 1200, output: 40 }),
+      ]),
       input: 900 + 100 + (150 + 850) + (200 + 1000),
       output: 700 + 1500 + 40,
       cacheRead: 850 + 1000,
@@ -1343,6 +1377,8 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
       ]),
     ]);
 
+    expect(result.tokens?.callsPartial).toBe(true);
+    expect(result.tokens?.calls?.map(call => call.input)).toEqual([150, 300]);
     expect(result.tokens?.input).toBe(150 + 90000 + 20000 + 300);
     expect(result.tokens?.output).toBe(4000 + 400 + 400 + 30);
     expect(result.cost).toBeCloseTo(0.15 + 0.09 + 0.02 + 0.3, 10);

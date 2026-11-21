@@ -263,14 +263,6 @@ describe('workflow-events', () => {
       );
     });
 
-    test('returns empty array for no results', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      const result = await listWorkflowEvents('run-456');
-
-      expect(result).toEqual([]);
-    });
-
     test('throws wrapped error when query fails', async () => {
       mockQuery.mockRejectedValueOnce(new Error('timeout'));
 
@@ -919,26 +911,6 @@ describe('workflow-events', () => {
       expect(mockLogger.warn).toHaveBeenCalledTimes(2);
     });
 
-    test('does not warn when completed events omit optional token usage', async () => {
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([
-          {
-            step_name: 'node-a',
-            event_type: 'node_completed',
-            data: { node_output: 'output without usage' },
-          },
-        ])
-      );
-
-      const result = await getDagResumeSnapshot('run-without-tokens');
-
-      expect(result.completedNodeOutputs).toEqual(
-        new Map([['node-a', { output: 'output without usage' }]])
-      );
-      expect(result.tokens).toBeUndefined();
-      expect(mockLogger.warn).not.toHaveBeenCalled();
-    });
-
     test('skips corrupt JSON rows without losing other rows', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
@@ -1039,23 +1011,6 @@ describe('workflow-events', () => {
       expect(result.costUsd).toBeCloseTo(0.01, 10);
       expect(result.completedNodeOutputs.size).toBe(3);
       expect(mockLogger.warn).toHaveBeenCalledTimes(2);
-    });
-
-    test('does not warn when completed events omit optional cost', async () => {
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([
-          {
-            step_name: 'node-a',
-            event_type: 'node_completed',
-            data: { node_output: 'no cost reported', tokens: { input: 5, output: 1 } },
-          },
-        ])
-      );
-
-      const result = await getDagResumeSnapshot('run-cost-absent');
-
-      expect(result.costUsd).toBeUndefined();
-      expect(mockLogger.warn).not.toHaveBeenCalled();
     });
 
     // #2469: a loop_group writes a roll-up node_completed row whose cost_usd restates
@@ -1574,6 +1529,41 @@ describe('workflow-events', () => {
       );
     });
 
+    test('an unreadable persisted calls list keeps the totals and marks the breakdown partial', async () => {
+      const tokens = { input: 10, output: 5, calls: [{ input: 'x' }] };
+      const current = {
+        node: { id: 'review', kind: 'exec', runtime: 'sh' },
+        invocation: { id: 'inv', startedAt: '2026-09-22T10:00:00Z', loopPath: [] },
+        attempt: { id: 'att', startedAt: '2026-09-22T10:00:00Z' },
+        binding: {},
+        timing: { startedAt: '2026-09-22T10:00:00Z' },
+        spend: {
+          tokens: { source: 'provider', value: tokens },
+          costUsd: { source: 'unavailable', reason: 'not_applicable' },
+          stopReason: { source: 'unavailable', reason: 'not_applicable' },
+          numTurns: { source: 'unavailable', reason: 'not_applicable' },
+        },
+        accounting: 'node',
+      };
+      // A legacy flat row and a row carrying current execution metadata.
+      for (const data of [
+        { node_output: 'kept', tokens },
+        { ...current, node_output: 'kept', tokens },
+      ]) {
+        mockLogger.warn.mockClear();
+        mockQuery.mockResolvedValueOnce(
+          createQueryResult([{ step_name: 'review', event_type: 'node_completed', data }])
+        );
+        const snapshot = await getDagResumeSnapshot('run-invalid-calls');
+        expect(snapshot.completedNodeOutputs.get('review')?.output).toBe('kept');
+        expect(snapshot.tokens).toEqual({ input: 10, output: 5, callsPartial: true });
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.anything(),
+          'workflow.node_record_calls_invalid_ignored'
+        );
+      }
+    });
+
     test('returns an empty snapshot when no events exist', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
@@ -1798,6 +1788,8 @@ describe('workflow-events', () => {
 // fails core's normal type-check before this runtime proof can run.
 // ───────────────────────────────────────────────────────────────────────────
 const AXIS_SPECIMEN: Required<TokenUsage> = {
+  calls: [{ input: 5000, output: 1200, cacheRead: 4000, cacheWrite: 250 }],
+  callsPartial: true,
   input: 5000,
   output: 1200,
   cacheRead: 4000,

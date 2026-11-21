@@ -11,7 +11,7 @@ import {
   mockDiscoverWorkflowsWithConfig,
   mockDispatchBackgroundWorkflow,
   mockExecuteWorkflow,
-  mockFindResumableRunByParentConversation,
+  mockListResumableRunsByParentConversation,
   mockGetCodebase,
   mockGetOrCreateConversation,
   mockHandleCommand,
@@ -26,7 +26,7 @@ import { handleMessage } from '../orchestrator-agent';
 import type { setupRoutingTests } from './workflow-dispatch-adoption';
 export function registerLaunchInputTests(fixture: ReturnType<typeof setupRoutingTests>) {
   test('foreground_resume_detected: falls through to fresh run when hydration returns null', async () => {
-    // When findResumableRunByParentConversation returns a run but
+    // When listResumableRunsByParentConversation returns a run but
     // hydrateResumableRun finds nothing worth resuming (zero completed nodes,
     // no interactive-loop state), the orchestrator must NOT throw — it sends
     // a user-visible notice and starts a fresh run on the same worktree.
@@ -37,13 +37,13 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
       Promise.resolve(makeCodebase({ default_branch: 'develop' }))
     );
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'empty-prior-run',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
     mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
@@ -88,8 +88,8 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(makeResumableRun({ id: 'empty-config-run', status: 'paused' }))
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([makeResumableRun({ id: 'empty-config-run', status: 'paused' })])
     );
     mockInspectResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
@@ -130,13 +130,13 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'empty-prior-run',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
     mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
@@ -217,13 +217,13 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'empty-prior-run',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
     mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
@@ -248,16 +248,59 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     expect(sent).toContain('starting fresh in the same worktree');
   });
 
-  test('calls dispatchBackgroundWorkflow for a fresh run on web', async () => {
-    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+  const startFreshFromResumeMenu = async (
+    assertForge: ReturnType<typeof spyOn>
+  ): Promise<ReturnType<typeof makeForegroundPlatform>> => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeDispatchConversation({ cwd: '/worktrees/conv' }))
+    );
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-
-    const platform = makePlatform(); // getPlatformType returns 'web'
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([makeResumableRun({ id: 'empty-prior-run', status: 'paused' })])
+    );
+    mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
+    expect(assertForge).toHaveBeenCalledTimes(1);
+    expect(assertForge.mock.calls[0]?.[3]).toMatchObject({
+      cwd: '/repos/test-repo',
+      settingsCwd: '/worktrees/conv',
+    });
+    return platform;
+  };
 
-    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
-    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  test('a fresh run from the resume menu starts with the inputs naming the repository the forge check judged', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue({
+      repo_host: 'github.com',
+      repo_path: 'o/project',
+    });
+    try {
+      await startFreshFromResumeMenu(assertForge);
+      const opts = mockExecuteWorkflow.mock.calls[0]?.[7] as { inputs?: unknown };
+      expect(opts.inputs).toEqual({ repo_host: 'github.com', repo_path: 'o/project' });
+    } finally {
+      assertForge.mockRestore();
+    }
+  });
+
+  test('a forge refusal stops a fresh run from the resume menu before execution', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockRejectedValue(
+      new forgeAccess.ForgeRequirementError('test-workflow', 'factory', [
+        { reason: 'authorization', message: 'the forge rejected the credential' },
+      ])
+    );
+    try {
+      const platform = await startFreshFromResumeMenu(assertForge);
+      expect(platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n')).toContain(
+        '(authorization)'
+      );
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    } finally {
+      assertForge.mockRestore();
+    }
   });
 
   test('calls dispatchBackgroundWorkflow for a fresh run on a background-default adapter', async () => {
@@ -411,6 +454,54 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     }
   });
 
+  test('foreground forge refusal stops before isolation or execution, reading the registered checkout', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const refusal = new forgeAccess.ForgeRequirementError('test-workflow', 'factory', [
+      { reason: 'no_forge_remote', message: 'the checkout has no git remote' },
+    ]);
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockRejectedValue(refusal);
+    const platform = makeForegroundPlatform();
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeDispatchConversation({ cwd: '/worktrees/conv' }))
+    );
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
+    try {
+      await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
+      expect(assertForge.mock.calls[0]?.[3]).toMatchObject({
+        cwd: '/repos/test-repo',
+        settingsCwd: '/repos/test-repo',
+      });
+      expect(platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n')).toContain(
+        '(no_forge_remote)'
+      );
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    } finally {
+      assertForge.mockRestore();
+    }
+  });
+
+  test('a fresh foreground run starts with the inputs naming the repository the forge check judged', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue({
+      repo_host: 'github.com',
+      repo_path: 'o/project',
+    });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
+    try {
+      await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+        actor: operator,
+      });
+      const opts = mockExecuteWorkflow.mock.calls[0]?.[7] as { inputs?: unknown };
+      expect(opts.inputs).toEqual({ repo_host: 'github.com', repo_path: 'o/project' });
+    } finally {
+      assertForge.mockRestore();
+    }
+  });
+
   test('threads context.workflowModelOverrides into a fresh foreground run', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
@@ -544,8 +635,8 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(makeResumableRun({ id: 'paused-run', status: 'paused' }))
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([makeResumableRun({ id: 'paused-run', status: 'paused' })])
     );
 
     await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {

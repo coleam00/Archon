@@ -3,6 +3,7 @@ import type { Codebase, Conversation } from '@archon/core';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun, RunOwnerObservation } from '@archon/core/schemas/workflow-run';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
+import { operatorPause } from '@archon/workflows/schemas/operator-pause';
 import {
   isApprovalContext,
   runAttention,
@@ -104,6 +105,7 @@ export function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
     ...row,
     metadata: toApiRunMetadata(row.metadata),
     attention: toApiRunAttention(row),
+    operator_pause: operatorPause(row),
     started_at: toISOString(row.started_at),
     active_phase_started_at: toISOString(row.active_phase_started_at),
     completed_at: toISOString(row.completed_at),
@@ -120,6 +122,7 @@ export function toApiDashboardWorkflowRun(
     owner_observation: ownerObservation,
     metadata: toApiRunMetadata(row.metadata),
     attention: toApiRunAttention(row),
+    operator_pause: operatorPause(row),
     started_at: toISOString(row.started_at),
     active_phase_started_at: toISOString(row.active_phase_started_at),
     completed_at: toISOString(row.completed_at),

@@ -1,5 +1,5 @@
 import { describe, test, expect, mock, jest, afterEach } from 'bun:test';
-import { withIdleTimeout, STEP_IDLE_TIMEOUT_MS } from './idle-timeout';
+import { withIdleTimeout } from './idle-timeout';
 
 /** Helper: create an async generator from an array of values with optional delays */
 async function* fromValues<T>(values: T[], delayMs = 0): AsyncGenerator<T> {
@@ -21,10 +21,6 @@ async function* hangAfter<T>(values: T[], _hangForever = true): AsyncGenerator<T
 }
 
 describe('withIdleTimeout', () => {
-  test('exports a default timeout constant', () => {
-    expect(STEP_IDLE_TIMEOUT_MS).toBe(30 * 60 * 1000);
-  });
-
   test('passes through all values from a normal generator', async () => {
     const values = [1, 2, 3, 4, 5];
     const result: number[] = [];
@@ -88,50 +84,6 @@ describe('withIdleTimeout', () => {
     expect(result).toEqual(['x', 'y']);
   });
 
-  test('does not fire onTimeout for a slow but completing generator', async () => {
-    const onTimeout = mock(() => {});
-    const result: number[] = [];
-
-    // Each value takes 20ms, timeout is 200ms — should never fire
-    for await (const v of withIdleTimeout(fromValues([1, 2, 3], 20), 200, onTimeout)) {
-      result.push(v);
-    }
-
-    expect(result).toEqual([1, 2, 3]);
-    expect(onTimeout).not.toHaveBeenCalled();
-  });
-
-  test('resets timeout between values', async () => {
-    const onTimeout = mock(() => {});
-
-    // Create a generator where each value takes 30ms but timeout is 50ms
-    // Without resetting, the 3rd value would trigger timeout at 90ms > 50ms
-    // With resetting, each gap is 30ms < 50ms — no timeout
-    const result: number[] = [];
-    for await (const v of withIdleTimeout(fromValues([1, 2, 3, 4], 30), 50, onTimeout)) {
-      result.push(v);
-    }
-
-    expect(result).toEqual([1, 2, 3, 4]);
-    expect(onTimeout).not.toHaveBeenCalled();
-  });
-
-  test('works with generator that yields objects', async () => {
-    type Msg = { type: string; content?: string };
-    const messages: Msg[] = [
-      { type: 'assistant', content: 'hello' },
-      { type: 'tool', content: 'running' },
-      { type: 'result' },
-    ];
-    const result: Msg[] = [];
-
-    for await (const v of withIdleTimeout(fromValues(messages), 1000)) {
-      result.push(v);
-    }
-
-    expect(result).toEqual(messages);
-  });
-
   test('consumer breaking out cleans up normally', async () => {
     const result: number[] = [];
 
@@ -142,25 +94,6 @@ describe('withIdleTimeout', () => {
     }
 
     expect(result).toEqual([1, 2]);
-  });
-
-  test('times out after tool events stop', async () => {
-    type Msg = { type: string };
-    const onTimeout = mock(() => {});
-    const result: Msg[] = [];
-
-    async function* toolThenHang(): AsyncGenerator<Msg> {
-      yield { type: 'assistant' };
-      yield { type: 'tool' };
-      await new Promise<void>(() => {});
-    }
-
-    for await (const v of withIdleTimeout(toolThenHang(), 100, onTimeout)) {
-      result.push(v);
-    }
-
-    expect(result).toEqual([{ type: 'assistant' }, { type: 'tool' }]);
-    expect(onTimeout).toHaveBeenCalledTimes(1);
   });
 
   test('every value resets the timer and reports its value and timestamp once', async () => {

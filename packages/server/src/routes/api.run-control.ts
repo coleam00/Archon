@@ -7,6 +7,8 @@ import {
   AbandonOwnerNotStoppedError,
   AbandonRefusedError,
   CancelRefusedError,
+  type CancelWorkflowResult,
+  ResumeRefusedError,
   describeAbandonOwner,
   describeReleasedWorktrees,
   type WorkflowOperations,
@@ -14,10 +16,8 @@ import {
 import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
 import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
-import {
-  RESUMABLE_WORKFLOW_STATUSES,
-  TERMINAL_WORKFLOW_STATUSES,
-} from '@archon/workflows/schemas/workflow-run';
+import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
+import { checkedResumeCursor } from '@archon/workflows/store';
 import { isConversationOwnershipEnforced } from '../auth';
 import { resumeWorkflowRunFromServer } from '../services/workflow-resume-service';
 import type { OrchestratorDispatch } from './api-message-dispatch';
@@ -194,8 +194,9 @@ export function registerRunControlRoutes(
   } = operations;
 
   // POST /api/workflows/runs/:runId/cancel - Cancel a workflow run through the shared
-  // owner-checked cancel: cooperative for a run this server executes, an owner stop for
-  // one another process owns, and a 409 refusal when no owner answers.
+  // owner-checked cancel: a pending run no process is starting is cancelled before it
+  // starts, cooperative for a run this server executes, an owner stop for one another
+  // process owns, and a 409 refusal when no owner answers or a process is starting it.
   registerOpenApiRoute(cancelWorkflowRunRoute, async c => {
     const runId = c.req.param('runId') ?? '';
     try {
@@ -204,23 +205,7 @@ export function registerRunControlRoutes(
         return apiError(c, 404, 'Workflow run not found');
       }
       const result = await cancelWorkflow(runId, await resolveRunActor(c));
-      if (result.kind === 'cooperative') {
-        return c.json({
-          success: true,
-          message: result.cancelled
-            ? `Cancelled workflow: ${run.workflow_name}${cancelCleanupWarnings(result.cleanupWarnings)}`
-            : `Workflow ${run.workflow_name} already finished — nothing to cancel.`,
-        });
-      }
-      let message = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled workflow: ${run.workflow_name}`;
-      message += cancelCleanupWarnings(result.cleanupWarnings);
-      if (result.cascadeFailures > 0) {
-        message += ` — warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
-      }
-      if (result.blockedParentRunId) {
-        message += ` — parent run ${result.blockedParentRunId} was blocked on this sub-run and stays paused; resume it so it reads this sub-run's outcome, or abandon it too`;
-      }
-      return c.json({ success: true, message });
+      return c.json({ success: true, message: cancelResultMessage(run.workflow_name, result) });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
       if (error instanceof CancelRefusedError) {
@@ -241,10 +226,7 @@ export function registerRunControlRoutes(
       }
       const actor = await resolveRunActor(c);
       await assertRunActionAllowed(run, actor, 'resume');
-      if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
-        return apiError(c, 400, `Cannot resume workflow in '${run.status}' status`);
-      }
-      await resumeWorkflow(runId, actor);
+      const checked = await resumeWorkflow(runId, actor);
       // Dispatch resume by sending `/workflow resume <id>` to the parent web
       // conversation; the command handler validates the run and hands the
       // orchestrator a resume request carrying that run. Explicit targeting (not
@@ -253,7 +235,7 @@ export function registerRunControlRoutes(
       if (!run.parent_conversation_id) {
         // No parent conversation to dispatch a chat message through at all —
         // every CLI-launched run (#2008). Execute directly instead of 400ing.
-        return await resumeHeadlessRun(c, runId, run, actor);
+        return await resumeHeadlessRun(c, runId, checked, actor);
       }
       const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
       if (!parentConv?.platform_conversation_id || parentConv.platform_type !== 'web') {
@@ -293,6 +275,7 @@ export function registerRunControlRoutes(
       });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
+      if (error instanceof ResumeRefusedError) return apiError(c, 400, error.message);
       getLog().error({ err: error, runId }, 'api.workflow_run_resume_failed');
       return apiError(c, 500, 'Failed to resume workflow run');
     }
@@ -454,7 +437,9 @@ async function resumeHeadlessRun(
   const headless = await resumeWorkflowRunFromServer(
     createSqlWorkflowHost(),
     run,
-    actor.kind === 'user' ? actor.userId : undefined
+    actor.kind === 'user' ? actor.userId : undefined,
+    undefined,
+    checkedResumeCursor(run)
   );
   if (headless.kind === 'waiting_for_capacity' || headless.kind === 'resource_busy')
     return apiError(c, 409, headless.message);
@@ -473,4 +458,27 @@ async function resumeHeadlessRun(
     success: true,
     message: `Resuming workflow: ${run.workflow_name}`,
   });
+}
+
+/** The API's one-line report of a cancel that did not refuse. */
+function cancelResultMessage(workflowName: string, result: CancelWorkflowResult): string {
+  switch (result.kind) {
+    case 'pending':
+      return `Cancelled pending workflow: ${workflowName} (its workflow had not started)${cancelCleanupWarnings(result.cleanupWarnings)}`;
+    case 'cooperative':
+      return result.cancelled
+        ? `Cancelled workflow: ${workflowName}${cancelCleanupWarnings(result.cleanupWarnings)}`
+        : `Workflow ${workflowName} already finished — nothing to cancel.`;
+    case 'stopped': {
+      let message = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled workflow: ${workflowName}`;
+      message += cancelCleanupWarnings(result.cleanupWarnings);
+      if (result.cascadeFailures > 0) {
+        message += ` — warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
+      }
+      if (result.blockedParentRunId) {
+        message += ` — parent run ${result.blockedParentRunId} was blocked on this sub-run and stays paused; resume it so it reads this sub-run's outcome, or abandon it too`;
+      }
+      return message;
+    }
+  }
 }

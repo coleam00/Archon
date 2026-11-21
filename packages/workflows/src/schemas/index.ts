@@ -86,11 +86,10 @@ export type {
 // DAG node types
 export {
   triggerRuleSchema,
-  TRIGGER_RULES,
   dagNodeBaseSchema,
   nodeContextSchema,
   isNodeContextResume,
-  isTriggerRule,
+  isNodeContextSame,
 } from './dag-node-base';
 export {
   nodeMcpSchema,
@@ -136,6 +135,7 @@ export {
   inputEnvKey,
   bindingDirectiveSchema,
   isBindingDirective,
+  isBindingDirectiveShape,
   isTypedOutputsDirective,
 } from './node-bindings';
 export {
@@ -149,6 +149,7 @@ export {
   isWorkflowNode,
   isComposeFanOutNode,
   isIncludeDirective,
+  startsSequentialSession,
 } from './node-guards';
 export {
   collectLoopBodyNodeIds,
@@ -159,7 +160,6 @@ export {
   ignoredFieldsForNode,
   isOutputFormatEnforced,
   BASH_NODE_AI_FIELDS,
-  SCRIPT_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
   LOOP_GROUP_NODE_AI_FIELDS,
   INCLUDE_NODE_IGNORED_FIELDS,
@@ -220,6 +220,7 @@ export type {
   WorkflowInputSpec,
   WorkflowBase,
   WorkflowDefinition,
+  WorkflowResultContract,
 } from './workflow';
 
 // Workflow run state
@@ -279,6 +280,7 @@ export {
 export type {
   WorkflowRunStatus,
   WorkflowRunOutcome,
+  RunCompletedOutcome,
   WorkflowStepStatus,
   NodeState,
   SkipCause,
@@ -346,8 +348,18 @@ export {
   pauseCauseOfApproval,
   pauseCauseOfWait,
   readPauseCause,
+  isOperatorPaused,
   type PauseCause,
 } from './pause-cause';
+export {
+  OPERATOR_PAUSE_METADATA_KEY,
+  operatorPause,
+  describeOperatorPause,
+  operatorPauseSchema,
+  readOperatorPauseRecord,
+  type OperatorPause,
+  type OperatorPauseRecord,
+} from './operator-pause';
 export type { WorkflowRunOrigin } from './workflow-run';
 
 export * from './workflow-event';

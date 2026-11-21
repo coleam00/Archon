@@ -10,14 +10,16 @@
  */
 import type { AttentionRead } from './schemas/attention-degraded';
 import type { IResourceStartStore } from './resource-start-store';
+import type { LinkedRunEndedStart, SourceReceiptAcceptance } from './schemas/resource-start';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { ProviderEventQuery, ProviderEventRecord } from './schemas/provider-event';
 import type { WorkflowEventRow } from './schemas/workflow-event';
+import type { NodeFailureKind } from './schemas/node-execution';
 import type { ExpectedApprovalGate } from './schemas/workflow-run';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
 import type {
   WorkflowRun,
-  WorkflowRunOutcome,
+  RunCompletedOutcome,
   WorkflowRunStatus,
   ApprovalContext,
   WorkflowAttentionWaitContext,
@@ -26,8 +28,21 @@ import type {
   WorkflowRunNodeSession,
 } from './schemas';
 import type { IStateDocumentStore } from './state-document-store';
+import type { ItemAct } from './schemas/item-act';
+import type {
+  ItemAsk,
+  ItemAskActInput,
+  ItemAskCloseResult,
+  StoredItemAsk,
+} from './schemas/item-ask';
+import type { AttentionAnswer } from './schemas/run-wait';
+import type { ItemWait, ItemWaitsWithdrawResult, StoredItemWait } from './schemas/item-wait';
 import type { AttentionAnswerWrite, AttentionLabelWrite } from './store/attention-writes';
-import type { PauseCursor, WorkflowResumeCursor } from './store/continuation-cursors';
+import type {
+  PauseCursor,
+  ResumeClaimCursor,
+  WorkflowResumeCursor,
+} from './store/continuation-cursors';
 import type { IWorkflowEventFeed } from './store/event-feed';
 import type {
   GatePauseEventInput,
@@ -41,6 +56,7 @@ import type { DagResumeSnapshot } from './store/resume-snapshot';
 import type { WorkflowRunFailureOptions } from './workflow-run-failure';
 import type {
   FanOutCancelReason,
+  OperatorPauseRequest,
   SourceReleaseWrite,
   WorkflowCancellationEventDetails,
   WorkflowWaitCompletion,
@@ -121,6 +137,8 @@ export interface MetricRecordRow {
   completedAt: string;
   /** The raw `structured_output.metrics` value; the engine parses it. */
   metrics: unknown;
+  /** The raw `structured_output.metric_dimensions` value, when the output has one. */
+  metricDimensions?: unknown;
 }
 
 /**
@@ -186,9 +204,151 @@ export interface IWorkflowStore
 
   findOpenWorkRuns(options?: { codebaseId?: string; limit?: number }): Promise<WorkflowRun[]>;
   findAdoptingRuns(runId: string): Promise<WorkflowRun[]>;
-  /** Every run of one item in a project, in the order they started. */
-  listItemRuns(projectKey: string, itemKey: string): Promise<WorkflowRun[]>;
+  /**
+   * The item `itemKey` names in a project, with every run whose `item_id` is that item, in
+   * the order they started; null when the project has no item under the key. A `workflow:`
+   * sub-run never carries an item, so the runs are top-level runs and continuations. A run
+   * row that does not normalize is reported as unreadable in its place, not thrown.
+   * `descendantIds` holds every run below those runs, at any depth and width, found by
+   * `parent_run_id` without reading the rows, so an unreadable child is still found.
+   */
+  getItemRuns(
+    projectKey: string,
+    itemKey: string
+  ): Promise<{
+    item: import('./schemas/workflow-run').WorkflowItem;
+    runs: AttentionRead<WorkflowRun>[];
+    descendantIds: string[];
+  } | null>;
   getItem(id: string): Promise<import('./schemas/workflow-run').WorkflowItem | null>;
+  /**
+   * The rulings recorded on an item, oldest first, each with its withdrawal folded in. A
+   * row that does not read is reported as unreadable in its place, not thrown.
+   */
+  listItemRulings(itemId: string): Promise<import('./schemas/item-ruling').ItemRulingRead[]>;
+  /**
+   * Record a ruling on the item `key` names in a project, writing the item on first use
+   * the way a start does, so a ruling can come before any run.
+   */
+  recordItemRuling(
+    input: { projectKey: string; key: string; text: string } & ItemAct
+  ): Promise<import('./schemas/item-ruling').ItemRuling>;
+  /**
+   * Withdraw a ruling by appending a withdrawal; the ruling's own row is never changed.
+   * Throws `ItemRulingNotFoundError` for an id that names no ruling and
+   * `ItemRulingWithdrawnError` for one already withdrawn.
+   */
+  withdrawItemRuling(
+    input: { rulingId: string; projectKey?: string } & ItemAct
+  ): Promise<import('./schemas/item-ruling').ItemRuling>;
+  /**
+   * The items of a project with one of their own runs (`item_id` set, so not a
+   * `workflow:` child) started in `[since, until)`, ordered by item id, after
+   * `afterItemId` when given. The id order is a resume key, not a ranking.
+   */
+  listItemsInWindow(query: {
+    projectKey: string;
+    since: Date;
+    until: Date;
+    afterItemId: string | null;
+    limit: number;
+  }): Promise<import('./schemas/workflow-run').WorkflowItem[]>;
+  /** The merge recorded on an item; null when none is. An unreadable row is reported, not thrown. */
+  getItemMerge(
+    itemId: string
+  ): Promise<
+    | import('./schemas/item-merge').ItemMerge
+    | import('./schemas/item-merge').ItemMergeDegraded
+    | null
+  >;
+  /**
+   * Record that the item `key` names merged, as the forge reported it. Recorded once: a
+   * second report keeps the first and returns it with `recorded: false`. Null when the
+   * project has no item under the key; a merge never creates an item.
+   */
+  recordItemMerge(
+    input: import('./schemas/item-merge').ItemMergeReport
+  ): Promise<import('./schemas/item-merge').ItemMergeRecorded | null>;
+  /** The landing branch recorded on an item; null when none is. An unreadable row is reported, not thrown. */
+  getItemLanding(
+    itemId: string
+  ): Promise<
+    | import('./schemas/item-landing').ItemLanding
+    | import('./schemas/item-landing').ItemLandingDegraded
+    | null
+  >;
+  /**
+   * Record the branch the item `key` names lands on, writing the item on first use.
+   * Recording again replaces the branch.
+   */
+  recordItemLanding(
+    input: import('./schemas/item-landing').ItemLandingReport
+  ): Promise<import('./schemas/item-landing').ItemLanding>;
+  /**
+   * Every link from or to an item, ended ones included, in recording order. A row that does
+   * not read is reported as unreadable in its place, not thrown.
+   */
+  listItemLinks(itemId: string): Promise<import('./schemas/item-link').ItemLinkRead[]>;
+  /**
+   * Record a link between the items two keys name in a project, writing each on first use.
+   * An active link of the same kind and direction is returned with `created: false`.
+   * Throws `ItemLinkSelfError` when both keys name one item.
+   */
+  recordItemLink(
+    input: {
+      projectKey: string;
+      fromKey: string;
+      toKey: string;
+      kind: import('./schemas/item-link').ItemLinkKind;
+    } & ItemAct
+  ): Promise<{ link: import('./schemas/item-link').ItemLink; created: boolean }>;
+  /**
+   * End a link, recording who ended it and when; what the link says is never changed.
+   * Throws `ItemLinkNotFoundError`, `ItemLinkOutsideProjectError` with `projectKey`, or
+   * `ItemLinkEndedError` for a link already ended.
+   */
+  endItemLink(
+    input: { linkId: string; projectKey?: string } & ItemAct
+  ): Promise<import('./schemas/item-link').ItemLink>;
+  /**
+   * Every open ask, oldest first. An ask whose stored value does not read is reported in
+   * its place as its run's unreadable entry, not thrown. A store without items has none.
+   */
+  listOpenItemAsks(): Promise<AttentionRead<StoredItemAsk>[]>;
+  /**
+   * Every ask left on the item, open or closed, oldest set first. The rows are the item's
+   * record of its asks: they outlive the run that left them, so its answers and settled
+   * sets still read after that run is deleted.
+   */
+  listItemAsks(itemId: string): Promise<AttentionRead<StoredItemAsk>[]>;
+  /** One ask, open or closed; null when no ask has the id. Throws when its row does not read. */
+  getItemAsk(id: string): Promise<StoredItemAsk | null>;
+  /**
+   * Answer an open ask. The same answer to an answered ask is `unchanged`; any other close
+   * stands and the answer is `refused`. The write that closes the last open ask of its set
+   * records `asks_settled` on the run that left them, once, and in the same transaction
+   * writes the starts that settlement causes (asks-settled bindings), returned as the
+   * result's `startReceipts`. A binding that cannot be read refuses a settling close,
+   * naming the file, and nothing is recorded.
+   */
+  answerItemAsk(
+    input: { askId: string; answer: AttentionAnswer } & ItemAskActInput
+  ): Promise<ItemAskCloseResult>;
+  /**
+   * Withdraw an open ask. A withdrawn ask is `unchanged`; an answered or replaced one is
+   * `refused`. Settles its set as `answerItemAsk` does.
+   */
+  withdrawItemAsk(input: { askId: string } & ItemAskActInput): Promise<ItemAskCloseResult>;
+  /**
+   * The open waits completed runs left (`returns.waits`), oldest set first; with `itemId`,
+   * those on that item only. A store without items has none.
+   */
+  listOpenItemWaits(itemId?: string): Promise<StoredItemWait[]>;
+  /**
+   * Withdraw the open waits run `runId` left: they close unmet and nothing starts. A set
+   * that is no longer open is `refused` with how it closed.
+   */
+  withdrawItemWaits(runId: string): Promise<ItemWaitsWithdrawResult>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */
   listWorkflowEvents(
@@ -237,7 +397,11 @@ export interface IWorkflowStore
   /**
    * Fresh execution must win this pending-to-running CAS before doing any work.
    * `workingPath` is the checkout the run will use; the claim stamps it on a row
-   * created without one.
+   * created without one. The claim records the calling process as the run's execution
+   * owner (`currentExecutionOwner`). A store with items throws `WorkflowItemHeldError`,
+   * writing nothing, while another run of the run's workflow holds its item (`holdsItem`).
+   * A store with the install hold throws `InstallHeldError`, writing nothing, while the hold
+   * is set and nothing admitted the run (a top-level run with no start request).
    */
   claimPendingWorkflowRun(id: string, workingPath?: string): Promise<WorkflowRun | null>;
   /**
@@ -277,7 +441,6 @@ export interface IWorkflowStore
     workingPath: string,
     self?: { id: string; startedAt: Date; excludeRunIds?: string[] }
   ): Promise<WorkflowRun | null>;
-  findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
   /**
    * Return at most `limit` due continuations, defaulting to 25: time waits past their
    * deadline, signaled event waits, due quota resumes, and answered gates and attention
@@ -335,13 +498,25 @@ export interface IWorkflowStore
     payload?: unknown
   ): Promise<{ signaled: boolean }>;
   /**
-   * A resume of a run admitted through a resource start takes a slot or throws
+   * Flip a resumable run to `running`, mint a new execution claim and record the calling
+   * process as its execution owner in the same update (`currentExecutionOwner`), or throw
+   * `WorkflowNotResumableError`. A failed or paused run resumes with or without a
+   * `cursor`. A `running` run resumes only with an `ownerless` cursor whose claim still
+   * matches; the caller has checked that no owner answers for it, and an admitted one
+   * keeps the resource slot it already holds. That cursor must carry the caller's held
+   * live-owner lease for this run, or the store throws before it changes anything
+   * (`requireOwnerlessLease`).
+   *
+   * A resume of a failed or paused run admitted through a resource start takes a slot or throws
    * `WorkflowResourceBusyError` (`resourceResumeBlocker`). A paused run refused while ready
    * to continue (answered, due or signaled, or claimed with a `cursor`) records its first
    * refusal (`CAPACITY_WAIT_METADATA_KEY`) before the error is thrown, so it keeps its place
    * while the host retries (`resumeRefusal`).
+   *
+   * A failed run on an item resumes only while no other run of its workflow holds that
+   * item; otherwise it stays failed and `WorkflowItemHeldError` is thrown.
    */
-  resumeWorkflowRun(id: string, cursor?: WorkflowResumeCursor): Promise<WorkflowRun>;
+  resumeWorkflowRun(id: string, cursor?: ResumeClaimCursor): Promise<WorkflowRun>;
   /**
    * Give back the resource slot of a run admitted through a resource start, while it is
    * still paused at exactly `cursor`, and clear any capacity wait it carries. Called once
@@ -371,7 +546,6 @@ export interface IWorkflowStore
     id: string,
     updates: Partial<Pick<WorkflowRun, 'metadata' | 'output_root'>> & {
       status?: Exclude<WorkflowRunStatus, 'completed' | 'failed' | 'cancelled'>;
-      outcome?: WorkflowRunOutcome;
       working_path?: string;
     }
   ): Promise<void>;
@@ -390,12 +564,48 @@ export interface IWorkflowStore
    * only when it won the status change, it reports `buildRunTerminalTelemetry` over the
    * run's row and event log. The engine sends no terminal event itself. The SQL store
    * does this in `packages/core/src/db/workflow-terminal-telemetry.ts`.
+   *
+   * This is the only writer of the run's outcome. `result.outcome` sets
+   * `completed_outcome` to its value, and `outcome` to it for the boolean form; both are
+   * null when it is absent, replacing anything an older binary wrote while the run ran.
+   *
+   * `result.startReceipts` are the starts this end causes (run-ended bindings). They are
+   * accepted in the same transaction, and only when this call wins the change from
+   * `running` to `completed`, so a start exists exactly when the end does: a crash
+   * after the commit leaves them pending for their host's next drain, and a second
+   * completion is refused before it can write them again. A store without items refuses
+   * a non-empty list.
+   *
+   * `result.linkedStarts` are run-ended bindings whose stage starts on the items linked to
+   * the ended run's item. The store resolves them in the same transaction, after the
+   * completing write: one receipt on each item holding an active link of the named kind
+   * at the named end, so a link ended before the run completed causes nothing. A store
+   * without items refuses a non-empty list.
+   *
+   * It returns every receipt this call wrote, from both lists, and not those that replayed;
+   * the caller starts those.
+   *
+   * `result.asks` is present when the run's workflow declares `returns.asks` and the run is
+   * top-level. In the same transaction, and only when this call wins, the asks still open
+   * from that workflow on the run's item close as `replaced`, and these open in their
+   * place, so the asks exist exactly when the completion does. A store refuses a
+   * non-empty list for a run with no item; a store without items refuses any.
+   *
+   * `result.waits` is the same for `returns.waits`: the open waits of that workflow on the
+   * run's item close as `replaced` and these open, in the same transaction.
    */
   completeWorkflowRun(
     id: string,
     completion: { duration_ms: number },
-    metadata?: Record<string, unknown>
-  ): Promise<void>;
+    metadata?: Record<string, unknown>,
+    result?: {
+      outcome?: RunCompletedOutcome;
+      startReceipts?: readonly SourceReceiptAcceptance[];
+      linkedStarts?: readonly LinkedRunEndedStart[];
+      asks?: readonly ItemAsk[];
+      waits?: readonly ItemWait[];
+    }
+  ): Promise<{ startReceipts: SourceReceiptAcceptance[] }>;
   /**
    * Atomically fail a pending or running run and persist its matching lifecycle event.
    * `failed` is false when the run was already terminal: a no-op that leaves the winning
@@ -411,7 +621,14 @@ export interface IWorkflowStore
     id: string,
     error: string,
     options?: WorkflowRunFailureOptions
-  ): Promise<{ failed: boolean }>;
+  ): Promise<{
+    failed: boolean;
+    /**
+     * When this call failed the run: the recorded kind of the node it failed at, from the
+     * terminal record written in the same transaction. Absent when no node failure caused it.
+     */
+    failureKind?: NodeFailureKind;
+  }>;
   /**
    * Pause a running run for human review, stamping the approval context. Optional
    * `extraMetadata` is folded into the SAME atomic metadata write (e.g. the
@@ -437,6 +654,22 @@ export interface IWorkflowStore
     release: SourceReleaseWrite,
     beforePublish?: () => Promise<void>
   ): Promise<{ released: boolean }>;
+  /**
+   * Record an operator's pause request on a running run (`operatorPauseRequestWrite`),
+   * checked and written atomically: a request already pending is returned unchanged, so
+   * concurrent requests agree on one. Undefined when the run is missing or not running.
+   */
+  requestOperatorPause(
+    id: string,
+    requested: OperatorPauseRequest['requested']
+  ): Promise<OperatorPauseRequest | undefined>;
+  /**
+   * Claim-checked transition from running to paused for an operator's pending pause
+   * request (`operatorPauseWrite`): records when it paused, `pause_cause: operator`, and
+   * commits `operator_paused` in the same transaction. A run that is no longer running,
+   * carries another claim or has no pending request is left unchanged with no event.
+   */
+  pauseWorkflowRunForOperator(id: string, claimId: string | null): Promise<{ paused: boolean }>;
   /**
    * Pause a running run on a wait, committing `wait_started` for a new wait or
    * `wait_continued` (`waitContinuedEvent`) for one a resume reached again.
@@ -474,11 +707,14 @@ export interface IWorkflowStore
   releaseWritebackClaim(id: string): Promise<void>;
   /**
    * Atomically cancel the run and persist its matching lifecycle event.
+   * `pendingOnly` cancels only a run still pending, so a caller that has not claimed the
+   * run never cancels one another process claimed meanwhile; a mismatch writes nothing.
    * Reports terminal telemetry after a won commit (see completeWorkflowRun).
    */
   cancelWorkflowRun(
     id: string,
-    event?: WorkflowCancellationEventDetails
+    event?: WorkflowCancellationEventDetails,
+    options?: { pendingOnly?: true }
   ): Promise<{ cancelled: boolean }>;
   /**
    * Atomically identify and cancel a fan-out child owned by the engine.
@@ -541,7 +777,8 @@ export interface IWorkflowStore
   } | null>;
 
   // Per-node provider sessions persisted across workflow re-runs (opt-in via
-  // `persist_session: true` on a node, or `persist_sessions: true` at workflow root).
+  // `persist_session: true` on a node, `persist_sessions: true` at workflow root, or
+  // `context: same`, whose rows are scoped `item:<item_id>`).
   // The executor lists a scope's rows once at run start, so a run continues the sessions
   // that existed when it started, never one a concurrent run wrote afterwards (#2667).
   listWorkflowNodeSessions(scope: {
@@ -550,6 +787,7 @@ export interface IWorkflowStore
   }): Promise<readonly WorkflowNodeSession[]>;
   upsertWorkflowNodeSession(
     params: WorkflowNodeSessionKey & {
+      model: string | null;
       provider_session_id: string;
       last_run_id: string | null;
     }

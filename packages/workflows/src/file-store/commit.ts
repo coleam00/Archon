@@ -25,6 +25,8 @@ export const persistedRunSchema = workflowRunSchema.extend({
   last_activity_at: z.coerce.date().nullable(),
   completed_at: z.coerce.date().nullable(),
   item_id: z.null().default(null),
+  // Absent from runs a binary before #5660 wrote.
+  completed_outcome: z.string().nullable().default(null),
 });
 const lineSchema = z.object({
   seq: z.number().int().positive(),

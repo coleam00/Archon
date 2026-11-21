@@ -23,7 +23,15 @@ export interface NodeSnapshot {
   state: NodeState;
   durationMs?: number;
   error?: string;
+  /** The recorded failure kind, the name a `retry.on_error` policy targets. */
+  failureKind?: string;
 }
+
+/**
+ * An outcome to show. `read_failed` is only the legacy `authoredOutcome: 'unavailable'`;
+ * a completed outcome is always shown as its value, even a named value `unavailable`.
+ */
+export type ShownOutcome = { kind: 'value'; value: string } | { kind: 'read_failed' };
 
 export interface RunSnapshot {
   runId: string;
@@ -31,9 +39,12 @@ export interface RunSnapshot {
   startedAt: number;
   nodes: NodeSnapshot[];
   status: 'running' | 'paused' | RunTerminalStatus;
-  authoredOutcome?: TerminalEvent['authoredOutcome'];
+  /** The outcome the run completed with, named or boolean; see `shownOutcome`. */
+  outcome?: ShownOutcome;
   totalCostUsd?: number;
   failureReason?: string;
+  /** The recorded kind of the node a failed run failed at. */
+  failureKind?: string;
   approvalDeliveryFailed?: boolean;
 }
 
@@ -269,7 +280,9 @@ export function buildStatusBlocks(
         n.state === 'completed' && typeof n.durationMs === 'number'
           ? ` · ${formatElapsed(n.durationMs)}`
           : '';
-      const errSuffix = n.state === 'failed' && n.error ? ` — ${truncate(n.error, 120)}` : '';
+      const failure =
+        n.state === 'failed' ? failureText(n.failureKind, n.error && truncate(n.error, 120)) : '';
+      const errSuffix = failure ? ` — ${failure}` : '';
       return `${glyph} \`${n.nodeName}\`${duration}${errSuffix}`;
     });
     blocks.push({
@@ -302,16 +315,41 @@ export function buildStatusBlocks(
   };
 }
 
+/**
+ * The outcome to show for a terminal event or notice. An archon-chat/1 host from before
+ * `completedOutcome` sends only the boolean `authoredOutcome`.
+ */
+export function shownOutcome(
+  message: Pick<TerminalEvent, 'completedOutcome' | 'authoredOutcome'>
+): ShownOutcome | undefined {
+  if (message.completedOutcome !== undefined)
+    return { kind: 'value', value: message.completedOutcome };
+  if (message.authoredOutcome === 'unavailable') return { kind: 'read_failed' };
+  if (message.authoredOutcome !== undefined)
+    return { kind: 'value', value: message.authoredOutcome };
+  return undefined;
+}
+
+const READ_FAILED_TEXT = 'unavailable — failed to read persisted run';
+
+// A named outcome has no length limit on the wire; Slack rejects text over 3000 characters.
+const OUTCOME_TEXT_MAX = 200;
+
+function outcomeText(outcome: ShownOutcome): string {
+  return outcome.kind === 'read_failed'
+    ? READ_FAILED_TEXT
+    : truncate(outcome.value, OUTCOME_TEXT_MAX);
+}
+
 function buildStatusHeader(snapshot: RunSnapshot, header: string, elapsed: string): KnownBlock {
-  const authoredOutcomeLabel =
-    snapshot.authoredOutcome === 'unavailable'
-      ? 'unavailable — failed to read persisted run'
-      : snapshot.authoredOutcome === undefined
-        ? undefined
-        : `\`${snapshot.authoredOutcome}\``;
-  const runFacts = authoredOutcomeLabel
-    ? `\n*Execution status:* \`${snapshot.status}\` · *Authored outcome:* ${authoredOutcomeLabel}`
-    : '';
+  const runFacts =
+    snapshot.outcome === undefined
+      ? ''
+      : `\n*Execution status:* \`${snapshot.status}\` · *Authored outcome:* ${
+          snapshot.outcome.kind === 'read_failed'
+            ? READ_FAILED_TEXT
+            : `\`${outcomeText(snapshot.outcome)}\``
+        }`;
   return {
     type: 'section',
     text: {
@@ -319,6 +357,15 @@ function buildStatusHeader(snapshot: RunSnapshot, header: string, elapsed: strin
       text: `${header}${runFacts}\n*Workflow:* \`${snapshot.workflowName}\` · *Run:* \`${shortRunId(snapshot.runId)}\` · *Elapsed:* ${elapsed}`,
     },
   };
+}
+
+/**
+ * A failure's text led by its recorded kind. Either may be absent: a kind with no text is
+ * still shown, and an empty result means there is nothing to show.
+ */
+function failureText(failureKind: string | undefined, text: string | undefined): string {
+  if (failureKind === undefined) return text ?? '';
+  return text ? `(${failureKind}) ${text}` : `(${failureKind})`;
 }
 
 function buildStatusFooter(
@@ -329,8 +376,12 @@ function buildStatusFooter(
   if (terminalStatus && typeof snapshot.totalCostUsd === 'number') {
     footerParts.push(`total cost: $${snapshot.totalCostUsd.toFixed(4)}`);
   }
-  if ((snapshot.status === 'failed' || snapshot.status === 'cancelled') && snapshot.failureReason) {
-    footerParts.push(`reason: ${truncate(snapshot.failureReason, 200)}`);
+  if (snapshot.status === 'failed' || snapshot.status === 'cancelled') {
+    const reason = failureText(
+      snapshot.failureKind,
+      snapshot.failureReason && truncate(snapshot.failureReason, 200)
+    );
+    if (reason) footerParts.push(`reason: ${reason}`);
   }
   if (footerParts.length > 0) {
     return {
@@ -353,9 +404,7 @@ function statusFallbackText(
         ? `Workflow ${snapshot.workflowName} paused`
         : `Workflow ${snapshot.workflowName} running`
   }${
-    snapshot.authoredOutcome
-      ? ` · authored outcome: ${snapshot.authoredOutcome === 'unavailable' ? 'unavailable — failed to read persisted run' : snapshot.authoredOutcome}`
-      : ''
+    snapshot.outcome ? ` · authored outcome: ${outcomeText(snapshot.outcome)}` : ''
   }${approvalRecovery ? ` · ${approvalRecovery}` : ''}`;
 }
 
@@ -570,10 +619,8 @@ export function buildNoticeTerminalBlocks(notice: TerminalNotice): {
   fallbackText: string;
 } {
   const facts: string[] = [];
-  if (notice.authoredOutcome)
-    facts.push(
-      `authored outcome: ${notice.authoredOutcome === 'unavailable' ? 'unavailable — failed to read persisted run' : notice.authoredOutcome}`
-    );
+  const outcome = shownOutcome(notice);
+  if (outcome) facts.push(`authored outcome: ${outcomeText(outcome)}`);
   if (notice.totalCostUsd !== undefined)
     facts.push(`total cost: $${notice.totalCostUsd.toFixed(4)}`);
   const blocks: KnownBlock[] = [
@@ -589,7 +636,9 @@ export function buildNoticeTerminalBlocks(notice: TerminalNotice): {
     });
   return {
     blocks,
-    fallbackText: `${TERMINAL_HEADER[notice.status]} (${notice.workflowName})`,
+    fallbackText: `${TERMINAL_HEADER[notice.status]} (${notice.workflowName})${
+      outcome ? ` · authored outcome: ${outcomeText(outcome)}` : ''
+    }`,
   };
 }
 

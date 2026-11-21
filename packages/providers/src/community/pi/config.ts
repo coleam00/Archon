@@ -94,14 +94,11 @@ const processFields = {
    */
   env: z.record(z.string(), z.string()).optional(),
   /**
-   * Maximum number of concurrent Pi `session.prompt()` calls allowed.
-   * When this limit is reached, additional calls queue and wait rather than
-   * fail. Pi/Minimax does not throttle concurrent requests at the SDK layer
-   * (unlike the Claude SDK), so this prevents cascading 429/rate-limit failures
-   * when many parallel workflow nodes invoke Pi simultaneously.
-   *
-   * Set to a positive integer matching your Pi API tier's concurrency limit.
-   * Omit for unlimited (not recommended for production batches).
+   * Install-wide cap on simultaneous Pi provider attempts. Provider admission in
+   * core reads it from `~/.archon/config.yaml` at every attempt and enforces it
+   * across all Archon processes; extra attempts wait for a slot. Pi backends do
+   * not throttle concurrent requests, so large parallel batches without a cap
+   * hit rate limits. Omit for no Pi cap.
    */
   maxConcurrent: z.number().int().positive().optional(),
 };
@@ -113,7 +110,10 @@ export const configSchemas = {
       .never({ error: 'Pi extension environment mutates process.env and is process-scoped' })
       .optional(),
     maxConcurrent: z
-      .never({ error: 'Pi concurrency is initialized once for the process lifetime' })
+      .never({
+        error:
+          'Pi concurrency is an install-wide cap that provider admission enforces across processes',
+      })
       .optional(),
   }),
   snapshot: snapshotConfigSchema(portableFields, processFields),

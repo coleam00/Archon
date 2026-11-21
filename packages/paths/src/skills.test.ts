@@ -60,10 +60,6 @@ describe('resolveSkillDirectories', () => {
     expect(resolveSkillDirectories(fake.cwd, undefined)).toEqual({ paths: [], missing: [] });
   });
 
-  test('returns empty paths and missing for empty array', () => {
-    expect(resolveSkillDirectories(fake.cwd, [])).toEqual({ paths: [], missing: [] });
-  });
-
   test('skips empty strings and non-string entries', () => {
     // Cast through unknown so we can exercise the runtime guard against
     // wonky callers; the type system rules these out at compile time.

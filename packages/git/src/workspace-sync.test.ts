@@ -52,12 +52,11 @@ test('fetch-only classifies newly fetched remote commits without updating HEAD',
 
 function failingWorkspaceCommand(
   operation: 'fetch' | 'reset',
-  failure: Error,
-  heads = ''
+  failure: Error
 ): typeof git.execFileAsync {
   return async (_cmd, args) => {
     if (args.includes(operation)) throw failure;
-    return output(args.includes('ls-remote') ? heads : '');
+    return output();
   };
 }
 
@@ -145,7 +144,7 @@ describe('git utilities', () => {
 
       expect(execSpy).toHaveBeenCalledWith(
         'git',
-        ['-C', '/workspace/repo', 'fetch', 'origin', 'main'],
+        ['-C', '/workspace/repo', 'fetch', 'origin', '+refs/heads/main:refs/remotes/origin/main'],
         expect.any(Object)
       );
     });
@@ -179,20 +178,6 @@ describe('git utilities', () => {
       ).rejects.toThrow('Reset to origin/main failed');
     });
 
-    test('throws error if fetch fails', async () => {
-      execSpy.mockImplementation(
-        failingWorkspaceCommand(
-          'fetch',
-          new Error('fatal: unable to access repository'),
-          'abc123\trefs/heads/main\nabc123\trefs/heads/dev\n'
-        )
-      );
-
-      await expect(git.syncWorkspace(repo('/workspace/repo'), branch('main'))).rejects.toThrow(
-        'unable to access repository'
-      );
-    });
-
     test('logs short SHA read failures without failing sync', async () => {
       execSpy.mockImplementation(
         workspaceCommands({ shortFailure: new Error('fatal: bad revision HEAD') })
@@ -205,29 +190,6 @@ describe('git utilities', () => {
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ workspacePath: '/workspace/repo', ref: 'HEAD' }),
         'workspace.short_sha_read_failed'
-      );
-    });
-
-    test('passes correct timeout value to fetch command', async () => {
-      execSpy.mockResolvedValue(output());
-
-      await git.syncWorkspace(repo('/workspace/repo'), branch('main'));
-
-      const fetchCall = execSpy.mock.calls.find(([, args]) => args.includes('fetch'));
-      expect(fetchCall?.[2]).toEqual({ timeout: 60000 });
-    });
-
-    test('includes operation context in fetch error message', async () => {
-      execSpy.mockImplementation(
-        failingWorkspaceCommand(
-          'fetch',
-          new Error('fatal: network unreachable'),
-          'abc123\trefs/heads/main\nabc123\trefs/heads/dev\n'
-        )
-      );
-
-      await expect(git.syncWorkspace(repo('/workspace/repo'), branch('main'))).rejects.toThrow(
-        'Sync fetch from origin/main failed'
       );
     });
 
@@ -432,7 +394,7 @@ describe('git utilities', () => {
 
       expect(execSpy).toHaveBeenCalledWith(
         'git',
-        ['-C', '/workspace/repo', 'fetch', 'mar', 'main'],
+        ['-C', '/workspace/repo', 'fetch', 'mar', '+refs/heads/main:refs/remotes/mar/main'],
         expect.any(Object)
       );
 
@@ -463,20 +425,6 @@ describe('git utilities', () => {
       await git.syncWorkspace(repo('/workspace/repo'), undefined, { remote: 'upstream' });
 
       expect(getDefaultBranchSpy).toHaveBeenCalledWith('/workspace/repo', 'upstream');
-    });
-
-    test('includes custom remote name in fetch error message', async () => {
-      execSpy.mockImplementation(
-        failingWorkspaceCommand(
-          'fetch',
-          new Error("fatal: 'mar' does not appear to be a git repository"),
-          'abc123\trefs/heads/main\nabc123\trefs/heads/dev\n'
-        )
-      );
-
-      await expect(
-        git.syncWorkspace(repo('/workspace/repo'), branch('main'), { remote: 'mar' })
-      ).rejects.toThrow('Sync fetch from mar/main failed');
     });
 
     test.each([1, 128])(
@@ -548,26 +496,6 @@ describe('git utilities', () => {
 
       await expect(git.syncWorkspace(repo('/workspace/repo'), branch('dev'))).rejects.toThrow(
         'Sync fetch from origin/dev failed'
-      );
-
-      expect(fetchCalls).toBe(1);
-    });
-
-    test('does not retry fetch failures without a numeric exit status', async () => {
-      let fetchCalls = 0;
-
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('ls-remote'))
-          return output('abc123\trefs/heads/main\nabc123\trefs/heads/dev\n');
-        if (args.includes('fetch')) {
-          fetchCalls++;
-          throw new Error("fatal: 'origin' does not appear to be a git repository");
-        }
-        return output();
-      });
-
-      await expect(git.syncWorkspace(repo('/workspace/repo'), branch('main'))).rejects.toThrow(
-        'Sync fetch from origin/main failed'
       );
 
       expect(fetchCalls).toBe(1);

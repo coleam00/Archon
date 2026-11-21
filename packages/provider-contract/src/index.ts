@@ -28,6 +28,8 @@ export {
   SESSION_PREVIEW_LENGTH,
   sessionPreview,
   tokenUsageSchema,
+  modelCallUsageSchema,
+  type ModelCallUsage,
   type ProviderResult,
   type ProviderStopReason,
   type ResolvedModel,
@@ -58,6 +60,11 @@ export {
   type ProviderWarning,
 } from './events';
 export { awaitingTurnSettlement, providerSettledSchema, type ProviderSettled } from './settled';
+export {
+  createTurnMessageQueue,
+  TURN_MESSAGE_REFUSED_WARNING_CODE,
+  type TurnMessageQueue,
+} from './turn-messages';
 export { providerCapabilitiesSchema, type ProviderCapabilities } from './capabilities';
 
 export {

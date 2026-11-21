@@ -1,6 +1,10 @@
 // @archon-test-isolated
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { getDatabaseType, resetDatabase } from './connection';
+import { existsSync, mkdtempSync, symlinkSync } from 'fs';
+import { tmpdir } from 'os';
+import { dirname, join, resolve } from 'path';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { getDatabase, getDatabaseType, resetDatabase } from './connection';
 
 describe('connection', () => {
   describe('getDatabaseType', () => {
@@ -44,15 +48,51 @@ describe('connection', () => {
       process.env.DATABASE_URL = '';
       expect(getDatabaseType()).toBe('sqlite');
     });
+  });
+});
 
-    it('should not initialize database connection', () => {
-      // getDatabaseType should work without connecting to database
-      // This is important for version command that runs without db
-      delete process.env.DATABASE_URL;
+describe('getDatabase', () => {
+  const trackTempRoot = trackTempRoots();
+  let originalHome: string | undefined;
+  let originalDatabaseUrl: string | undefined;
 
-      // Should not throw even without a database available
-      const result = getDatabaseType();
-      expect(result).toBe('sqlite');
-    });
+  beforeEach(() => {
+    originalHome = process.env.ARCHON_HOME;
+    originalDatabaseUrl = process.env.DATABASE_URL;
+    resetDatabase();
+  });
+
+  afterEach(() => {
+    for (const [key, value] of [
+      ['ARCHON_HOME', originalHome],
+      ['DATABASE_URL', originalDatabaseUrl],
+    ] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    resetDatabase();
+  });
+
+  function useHomeManagingThisCheckout(): string {
+    const home = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-home-')));
+    const repoRoot = resolve(import.meta.dir, '..', '..', '..', '..');
+    symlinkSync(dirname(repoRoot), join(home, 'workspaces'), 'junction');
+    process.env.ARCHON_HOME = home;
+    return home;
+  }
+
+  it('refuses, writing nothing, when this checkout sits inside the home workspaces', () => {
+    const home = useHomeManagingThisCheckout();
+    delete process.env.DATABASE_URL;
+
+    expect(() => getDatabase()).toThrow(/Set ARCHON_HOME to a scratch directory/);
+    expect(existsSync(join(home, 'archon.db'))).toBe(false);
+  });
+
+  it('refuses before selecting PostgreSQL, and says a scratch home leaves DATABASE_URL as is', () => {
+    useHomeManagingThisCheckout();
+    process.env.DATABASE_URL = 'postgresql://user@127.0.0.1:1/live';
+
+    expect(() => getDatabase()).toThrow(/scratch ARCHON_HOME does not change which database/);
   });
 });

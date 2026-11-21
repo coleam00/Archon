@@ -24,7 +24,9 @@ describe('CommandHandler', () => {
         expect(result.success).toBe(true);
         expect(result.message).toContain('Archon Orchestrator');
         expect(result.message).toContain('/workflow list');
-        expect(result.message).toContain('/workflow resume <id>` — Resume a failed or paused run');
+        expect(result.message).toContain(
+          '/workflow resume <id>` — Resume a failed, paused or killed run'
+        );
         expect(result.message).toContain('/status');
       });
     });

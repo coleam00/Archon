@@ -118,6 +118,17 @@ streaming:
 #   - platform: slack
 #     destination: C0123456789
 
+# Item tracker (global config only, off when absent): Archon keeps one status comment on
+# the issue or pull request an item's key names, and posts a new comment for each
+# question, ask, ruling and final result, with or without a running server. includeUsage adds cost and token counts. See "Show progress on the item's tracker" in the workflow triggers guide.
+# itemTracker:
+#   includeUsage: false
+#   projects:
+#     - project: acme/widgets
+#       repo: { host: github.com, path: acme/widgets }
+#       keys:
+#         - { prefix: 'issue-', kind: issue }
+
 # Server-wide conversation admission
 # Precedence: default (10) < global YAML < MAX_CONCURRENT_CONVERSATIONS.
 # Repository config cannot change this limit.
@@ -138,6 +149,7 @@ concurrency:
 # Live tool attention and the provider-limit wait are both on by default.
 workflows:
   toolCallAttentionMs: 1800000  # 30 minutes; 0 disables tool-call advisories
+  stallMessageLimit: 2          # messages the engine sends a stalled session; 0 turns them off
   autoResumeOnQuotaReset: true  # false fails a run on a provider usage or rate limit instead
 
 # Model tiers — optional cross-provider presets used by bundled workflows,
@@ -170,11 +182,11 @@ Invalid assistants config in '/Users/you/.archon/config.yaml':
 
 `archon doctor` reports the same failure as the **Config files** check. To repair `~/.archon/config.yaml` through Archon, change the invalid value from the console settings; any other settings, `archon ai tier set`, or `archon ai alias set` change is refused until that value is fixed, because Archon validates the whole file before writing it. An `assistants:` entry for a provider this install has not registered is ignored, as before — there is no provider to validate it.
 
-The other blocks, `tiers`, `aliases`, `workflows`, `streaming`, `attentionNotices` and `concurrency`, fail the same way when their own check refuses a value. So does a file that is not valid YAML, whose top level is not a map of settings, or that Archon cannot read. The failure names the file and stops startup, `archon doctor`, run starts, chat messages and workflow listings such as `archon workflow list`; Archon never loads the file with that block replaced by defaults. Only a missing file falls back: `~/.archon/config.yaml` is created from the template, and a missing repository config uses defaults.
+The other blocks, `tiers`, `aliases`, `workflows`, `streaming`, `attentionNotices`, `itemTracker` and `concurrency`, fail the same way when their own check refuses a value. So does a file that is not valid YAML, whose top level is not a map of settings, or that Archon cannot read. The failure names the file and stops startup, `archon doctor`, run starts, chat messages and workflow listings such as `archon workflow list`; Archon never loads the file with that block replaced by defaults. Only a missing file falls back: `~/.archon/config.yaml` is created from the template, and a missing repository config uses defaults.
 
 ## Provider concurrency caps
 
-`concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default database-wide caps. A provider without an entry has no admission cap unless Pi has `assistants.pi.maxConcurrent` configured. For Pi, the stricter of these two caps applies across plugin processes. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.
+`concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default database-wide caps. A provider without an entry has no admission cap unless Pi has `assistants.pi.maxConcurrent` configured. For Pi, the stricter of `concurrency.providers.pi` and `assistants.pi.maxConcurrent` applies, and this admission is the only cap that enforces either. Both are read from `~/.archon/config.yaml` at every attempt, so a changed value takes effect without a restart. A value in a repository `.archon/config.yaml` is validated but caps nothing. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.
 
 - **Attempts, not runs.** One attempt holds one slot from the moment the provider starts until its stream has closed. Retry backoff between attempts holds no slot. A rate limit is retried with backoff as before; it never lowers the cap.
 - **Waiting.** An attempt that finds the cap full waits and checks again about once a second. Cancelling the run stops the wait without starting the attempt. Until queue visibility lands, a waiting node looks idle, and a wait longer than the node's `idle_timeout` ends the node like any other idle node.
@@ -214,11 +226,11 @@ Run config accepts settings whose consumers still execute after the run is dispa
 - `worktree` and `container` already affected isolation.
 - `botName`, `streaming`, `paths`, and `concurrency` are process-scoped or have no per-run consumer.
 - `recommendedWorkflows` is listing-only.
-- `assistants.pi.env` and `assistants.pi.maxConcurrent` are install settings rather than per-run settings. Pi concurrency is enforced at host admission for process providers; bundled Pi also retains its in-process semaphore.
+- `assistants.pi.env` and `assistants.pi.maxConcurrent` are install settings rather than per-run settings. Pi concurrency is enforced by provider admission; see [Provider concurrency caps](#provider-concurrency-caps).
 
 Unknown keys, unregistered providers, invalid effort values, and alias names without `@` also fail instead of being ignored. CLI accepts a local path; the HTTP run API accepts inline validated content and never a caller-selected server path.
 
-Fresh runs seal the normalized layer before recording it. The sealed layer exposes its source label and configured key paths, not plaintext `env` or raw provider-default values. The separate launch AI record stores resolved profiles and credential-free provider defaults. A continuation restores that sealed layer without rereading the original file, and child workflows inherit it. Detached CLI launches also transfer the already-validated sealed layer to the child instead of rereading the caller's file. This is why `--config` cannot be supplied with `--resume`.
+Fresh runs seal the normalized layer before recording it. The sealed layer exposes its source label and configured key paths, not plaintext `env` or raw provider-default values. The separate launch AI record stores resolved profiles and credential-free provider defaults. A continuation restores that sealed layer without rereading the original file, and child workflows inherit it. Detached CLI launches also transfer the already-validated sealed layer to the child instead of rereading the caller's file. This is why a resume takes no `--config`.
 
 ## Repository Configuration
 
@@ -366,7 +378,7 @@ Each command has a timeout of `worktree.postCreateTimeout` milliseconds (default
 
 On Windows the timeout uses `taskkill /T /F` to end the tree still attached to the command at that moment. Descendants whose parent already exited can be missed, and command exit does not end background jobs. Redirect their output so they do not hold setup's output pipes open. Windows owner-stop paths retain their existing tree/console behavior; there is no POSIX stdin lifeline.
 
-The first nonzero exit, timeout, spawn error, unconfirmed group termination, or audit-write failure aborts creation. The error includes the command and captured output with known credentials redacted. Cleanup removes only a clean checkout owned by this attempt; installer output or other changes may leave it locked. Inspect the reported path before unlocking or removing it. A worktree does not sandbox commands or undo external side effects. Cooperative cancel while a foreground or server owner remains alive does not interrupt setup; cancelling a pending run remains unsupported.
+The first nonzero exit, timeout, spawn error, unconfirmed group termination, or audit-write failure aborts creation. The error includes the command and captured output with known credentials redacted. Cleanup removes only a clean checkout owned by this attempt; installer output or other changes may leave it locked. Inspect the reported path before unlocking or removing it. A worktree does not sandbox commands or undo external side effects. Cooperative cancel while a foreground or server owner remains alive does not interrupt setup. Cancel refuses a pending run whose setup a process on this machine is running; it cannot see setup running on another machine that shares the database (see [`workflow cancel`](/reference/cli/#workflow-cancel)).
 
 Setup uses the same host subprocess environment as `bash:` nodes: the cleaned host environment plus effective run configuration and managed project variables. Project variables override file-config values; run credential restrictions remain in force. Archon does not automatically load the target repository's `.env`, including one copied by `copyFiles`. A setup script can explicitly source it.
 
@@ -709,7 +721,7 @@ Archon loads its own environment files, separate from the target repository's ap
 3. Load `~/.archon/.env` with `override: true` (archon config wins over shell-inherited vars and source-checkout values).
 4. Load `<cwd>/.archon/.env` with `override: true` (repo scope wins over user scope).
 
-The CLI makes exceptions to this order: selected chat scope is read from the explicit `--chat-project-id` argument before Archon env loading; env files and the old `ARCHON_WORKFLOW_CODEBASE_ID` variable cannot supply or override it. Repository env cannot set `GH_CONFIG_DIR`; the CLI preserves the user-scope value, including its absence. Inside a workflow, an inherited `GH_CONFIG_DIR`, `GH_TOKEN`, `GITHUB_TOKEN` or `COPILOT_GITHUB_TOKEN`, including an empty value, wins over both files. The standalone server follows the general load order above, including repository overrides of `GH_CONFIG_DIR`. See [forge configuration](/reference/forge/#plugin-configuration) and [GitHub credentials](/reference/forge/#github-credentials-and-check-observations).
+The CLI makes exceptions to this order: selected chat scope is read from the explicit `--chat-project-id` argument before Archon env loading; env files and the old `ARCHON_WORKFLOW_CODEBASE_ID` variable cannot supply or override it. Repository env cannot set `GH_CONFIG_DIR`; the CLI preserves the user-scope value, including its absence. Inside a workflow, and in the start-time forge check of a pack that declares `forge:`, an inherited `GH_CONFIG_DIR`, `GH_TOKEN`, `GITHUB_TOKEN` or `COPILOT_GITHUB_TOKEN`, including an empty value, wins over both files. The standalone server follows the general load order above, including repository overrides of `GH_CONFIG_DIR`. See [forge configuration](/reference/forge/#plugin-configuration) and [GitHub credentials](/reference/forge/#github-credentials-and-check-observations).
 
 A repository's `<cwd>/.archon/.env` cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`. If it does, Archon refuses to start and names the file and the key. Those keys decide which Archon home and which executables Archon uses, so a repository could otherwise choose which plugins run. Set them in your shell, your scheduler or `~/.archon/.env` instead.
 
@@ -876,12 +888,17 @@ DISCORD_STREAMING_MODE=batch
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `toolCallAttentionMs` | `1800000` | Milliseconds without reported progress before an open provider tool call or reported background subtask raises advisory run attention. `0` disables publication; positive safe integers override the default |
+| `stallMessageLimit` | `2` | Messages the engine sends into a stalled session per node attempt, at least `toolCallAttentionMs` apart; see below. `0` turns them off. At most `10`. Global and repository config only: a run config file or the run API refuses it |
 | `autoResumeOnQuotaReset` | `true` | Wait until the reset instead of failing when a provider reports that its usage or credit limit is used up and when it resets, or when a rate limit outlasts its retries. `false` fails the run in both cases |
 | `quotaFallbackDelayMs`, `quotaMaxAttempts`, `quotaDeadlineMs` | — | Deprecated and have no effect. They still parse, so an older config or a persisted run config stays readable, and loading one logs a deprecation warning |
 
 Tool-call attention leaves the run and node running. It never kills, fails, cancels, pauses, retries, or resumes work. `workflow wait`, `workflow status`, and the console show the affected node, provider, tool, provider title or command, and duration. Providers that declare reported background work also receive advisories for subtasks with no open parent tool, using their task type and description. Subtasks retain their timing when their parent tool completes. A subtask's running update renews its progress; its terminal status clears its advisory. A tool's terminal update clears its advisory; a correlated subtask update renews only its parent tool and clears its advisory until the threshold passes again. Unrelated text or tool events do not count as that tool's progress. Leaving running state hides the advisory, and resume clears old descriptors.
 
-The threshold follows the same global, repository, and run-scoped `workflows` layering. It is an operator policy, not a workflow YAML field. Even with publication disabled, open tools and reported live subtasks suspend the silence watchdog before a result. After a result, silence counts toward the node's `idle_timeout` while waiting for settlement, even if work remains live. The node can time out before the attention threshold. A new running wake turn or newly started tool or subtask restores live-work protection until its next result. Streams without live work retain their idle timeout.
+Before a stall is left to the operator, the engine asks the agent. When a node attempt's stream has a stall raised, the engine writes one short message into the same live session: how long the open work has shown no progress and which tool call or background task is open. The message gives no instruction about the work; an agent that is waiting on purpose can say so and keep waiting. The engine never ends or interrupts the call. It sends at most `stallMessageLimit` messages per node attempt (a loop node counts per iteration attempt), at least one threshold apart; after that the stall stays in attention for `workflow end-turn` or `cancel`. Each message is a `stall_message` run event marked `sender: engine` and a row in the run's transcript, so `workflow logs` prints it with the text the engine handed to the provider. `workflow status` shows the latest one under the run, and it is logged as `workflow.stall_message_sent`. These record that the engine handed the message to the provider; a provider that then refuses it reports a `turn_message.refused` warning, and the run records a second `stall_message` with `sent: false, reason: provider_refused` and the provider's error, which `status` and `logs` show in its place.
+
+The agent reads the message at its next step, not inside a running tool call. Claude reads it after the current tool returns, or as a new turn when its turn has ended and it is waiting on background work. Codex adds it to its active turn; once Codex's turn has completed and only background work is running, Codex refuses it, and the refusal is recorded as above. A tool call that never returns is not reached by either: that case stays with attention and `end-turn`. Any provider, including a plugin, whose capabilities declare `turnMessages` (see the [capability matrix](/reference/provider-capabilities/)) is sent messages. One that does not gets none, and while messages are on, the attempt records one `stall_message` event with `sent: false` on its first stall. With `stallMessageLimit: 0` or `toolCallAttentionMs: 0`, nothing is sent or recorded.
+
+The threshold follows the same global, repository, and run-scoped `workflows` layering; `stallMessageLimit` follows only the global and repository layers, because a run's own config is stored with the run and older binaries refuse a key they do not know. It is an operator policy, not a workflow YAML field. Even with publication disabled, open tools and reported live subtasks suspend the silence watchdog before a result. After a result, silence counts toward the node's `idle_timeout` while waiting for settlement, even if work remains live. The node can time out before the attention threshold. A new running wake turn or newly started tool or subtask restores live-work protection until its next result. Streams without live work retain their idle timeout.
 
 Attention stores only ids, timestamps, and bounded display fields. It never copies raw tool inputs, outputs, assistant messages, or reasoning from provider transcripts. Commands are redacted against known credentials from the effective environment and protected credential values, including file-delivered credentials. Arbitrary secrets unknown to Archon cannot be discovered by that redaction.
 

@@ -6,24 +6,26 @@
  * is the ruling and the item continues. The option's ruling and the person's words are written
  * into the issue body as one dated "Current scope" section and read back, so the next
  * run and its review read the ruling as the contract. Then the answer is recorded on the
- * work item as the item's next owner, and the claim is released: `continue` keeps it in
- * the build queue, `ready` hands its pull request to the merge queue, and `park` stops
- * all work until a re-triage. A `continue` then starts the item's next build-queue run
- * at once through the operator's build-queue binding; if it does not start, the item
- * waits for the next queue run as before.
+ * work item as the item's next owner: `continue` keeps it in the build queue, `ready`
+ * hands its pull request to the merge queue, and `park` stops all work until a
+ * re-triage. The build-pick the engine starts when this run ends starts a `continue`'s
+ * next round.
  *
- * Bound inputs: INPUTS_ITEM from facts; INPUTS_ASKED, what apply asked; INPUTS_DECISION,
- * the id of the chosen option (`other` for the wait's own), and INPUTS_TEXT, the answer's text;
- * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
+ * The node is the run's `returns` node, so it also runs when nothing was asked, and then
+ * hands on apply's decision (INPUTS_APPLIED) unchanged.
+ *
+ * Bound inputs: INPUTS_ITEM and INPUTS_READ_AT from facts; INPUTS_ASKED, what apply
+ * asked; INPUTS_DECISION, the id of the chosen option (`other` for the wait's own), and
+ * INPUTS_TEXT, the answer's text.
  */
 
-import { type AskedBy, type BuildAsk, type BuildEffect, type BuildStatus, itemPullRequest, nextRound, withBuild } from '../../.shared/build.ts';
+import { type AskedBy, type BuildAsk, type BuildEffect, type BuildStatus, itemPullRequest, withBuild } from '../../.shared/build.ts';
 import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { answeredChoice, rulingHeading } from '../../.shared/queue.ts';
-import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
+import { readWorkItem, updateWorkItem } from '../../.shared/workitem.ts';
 
 interface Asked {
   readonly ask: BuildAsk;
@@ -35,6 +37,9 @@ const STATUS = { continue: 'next', ready: 'ready', park: 'parked' } as const sat
   BuildEffect,
   BuildStatus
 >;
+
+/** The run's outcome for each effect, as the `build-pick-after-build` binding reads it. */
+const OUTCOME = { continue: 'continue', ready: 'ready', park: 'parked' } as const satisfies Record<BuildEffect, string>;
 
 /** Refuse a ready answer before any write when the item has no pull request to hand on. */
 function requireReadyPr(item: QualifiedPr, id: string): void {
@@ -54,7 +59,11 @@ function main(): void {
   const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
   const asked = nullableJson(input('asked')) as Asked | null;
-  if (asked === null) throw new Error('the answer arrived with nothing asked');
+  // Nothing was asked: apply's decision is how the run left the item.
+  if (asked === null) {
+    emit({ decision: input('applied'), section: '', summary: '' });
+    return;
+  }
   const choice = answeredChoice(asked.ask, input('decision').trim(), 'continue');
   const { effect } = choice.value;
   const words = input('text').trim();
@@ -71,9 +80,9 @@ function main(): void {
     effect === 'continue'
       ? `${asked.brief}\n\nThe maintainer chose "${choice.label}": ${choice.does}${heading === '' ? '' : ` The ruling is the issue body's "${heading}" section, which is part of the contract.`}`
       : '';
-  updateClaimed(item, runId, doc =>
+  updateWorkItem(item, doc =>
     withBuild(doc, {
-      at,
+      at: input('read_at'),
       run_id: runId,
       round: null,
       entry: {
@@ -86,15 +95,14 @@ function main(): void {
       },
       status: STATUS[effect],
       brief,
-      release: true,
     })
   );
   const next = {
-    continue: () => nextRound(item, runId),
+    continue: () => 'its next round starts once this run ends',
     ready: () => 'its pull request waits for the merge queue',
     park: () => 'the queue stops working it until a re-triage',
   }[effect]();
-  emit({ decision: effect, section: heading, summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${next}.` });
+  emit({ decision: OUTCOME[effect], section: heading, summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${next}.` });
 }
 
 try {

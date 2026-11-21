@@ -1,5 +1,9 @@
 import type { ApprovalContext } from './schemas/workflow-run';
-import type { NodeExecutionMetadata } from './schemas/node-execution';
+import type {
+  ComposedNodeOrigin,
+  NodeExecutionMetadata,
+  NodeFailureKind,
+} from './schemas/node-execution';
 /**
  * WorkflowEventEmitter - typed event emitter for workflow execution observability.
  *
@@ -47,6 +51,8 @@ interface WorkflowFailedEvent {
   runId: string;
   workflowName: string;
   error: string;
+  /** The recorded kind of the node this failure happened at, from its terminal record. */
+  failureKind?: NodeFailureKind;
 }
 
 interface LoopIterationStartedEvent {
@@ -89,6 +95,8 @@ interface NodeStartedEvent {
   runId: string;
   nodeId: string;
   nodeName: string; // command name or node.id for inline prompts
+  /** Where an included node was written; absent on the run's own nodes. */
+  composed?: ComposedNodeOrigin;
   provider?: string; // resolved AI provider (absent for bash/script nodes)
   model?: string; // resolved model string (absent for bash/script nodes)
   tier?: TierName; // only set when node.model was a tier keyword
@@ -100,6 +108,7 @@ interface NodeSuspendedEvent {
   runId: string;
   nodeId: string;
   nodeName: string;
+  composed?: ComposedNodeOrigin;
   execution: NodeExecutionMetadata;
 }
 
@@ -109,6 +118,7 @@ interface NodeCompletedEvent {
   runId: string;
   nodeId: string;
   nodeName: string;
+  composed?: ComposedNodeOrigin;
   duration?: number;
   costUsd?: number;
   stopReason?: string;
@@ -121,6 +131,7 @@ interface NodeFailedEvent {
   runId: string;
   nodeId: string;
   nodeName: string;
+  composed?: ComposedNodeOrigin;
   error: string;
 }
 
@@ -130,6 +141,7 @@ interface NodeSkippedEvent {
   runId: string;
   nodeId: string;
   nodeName: string;
+  composed?: ComposedNodeOrigin;
   reason: Exclude<NodeSkipReason, 'prior_success'>;
   cause: SkipCause;
 }
@@ -144,6 +156,7 @@ interface NodeSkippedPriorSuccessEvent {
   runId: string;
   nodeId: string;
   nodeName: string;
+  composed?: ComposedNodeOrigin;
 }
 
 /**

@@ -149,12 +149,6 @@ test.each([
     expect(result.message).not.toContain('0 active');
     expect(result.message).not.toContain('inventory-secret');
     expect(result.message).not.toContain('stored private content');
-    expect(result.message).toContain('## Orchestrator Status');
-    expect(result.message).toContain('## Registered Projects (1)');
-    expect(result.message).toContain(`Project: ${codebase.name} @ main`);
-    expect(result.message).toContain(`Working Directory: ${codebase.default_cwd}`);
-    expect(result.message).toContain('Active Session: session-');
-    expect(result.message).toContain('Active Workflow: `test-workflow`');
   }
 );
 

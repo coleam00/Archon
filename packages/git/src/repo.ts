@@ -143,46 +143,6 @@ export async function getDefaultRemote(repoPath: RepoPath): Promise<string | nul
 }
 
 /**
- * Get the URL configured for a git remote (default: 'origin').
- * Returns null if the remote does not exist.
- */
-export async function getRemoteUrl(repoPath: RepoPath, remote = 'origin'): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote', 'get-url', remote], {
-      timeout: 10000,
-    });
-    return stdout.trim() || null;
-  } catch (error) {
-    const err = error as Error & { stderr?: string };
-    if (error instanceof GitFailure && error.kind === 'unclassified' && error.code === 2) {
-      try {
-        await execFileAsync(
-          'git',
-          ['-C', repoPath, 'config', '--local', '--get', `remote.${remote}.url`],
-          {
-            timeout: 10000,
-          }
-        );
-      } catch (inspectionError) {
-        if (
-          inspectionError instanceof GitFailure &&
-          inspectionError.kind === 'unclassified' &&
-          inspectionError.code === 1
-        )
-          return null;
-      }
-    }
-
-    // Unexpected error - surface it
-    getLog().error({ repoPath, remote, err, stderr: err.stderr }, 'get_remote_url_failed');
-    throw new Error(
-      `Failed to get remote URL for ${repoPath} (remote: ${remote}): ${err.message}`,
-      { cause: error }
-    );
-  }
-}
-
-/**
  * Sync workspace with its remote.
  * Fetches the base branch from the remote, then updates local state according to mode.
  *
@@ -281,9 +241,13 @@ async function fetchWorkspaceBranch(
   baseBranch: BranchName | undefined
 ): Promise<void> {
   try {
-    await fetchWithRetry(workspacePath, [remote, branchToSync], {
-      timeout: 60000,
-    });
+    // Name the destination: a bare branch updates `<remote>/<branch>` only when the remote's
+    // fetch refspec covers it, which a single-branch clone's does not for any other branch.
+    await fetchWithRetry(
+      workspacePath,
+      [remote, `+refs/heads/${branchToSync}:refs/remotes/${remote}/${branchToSync}`],
+      { timeout: 60000 }
+    );
   } catch (error) {
     const err = error as Error;
     if (baseBranch) {

@@ -75,8 +75,7 @@ const {
   clearWorkflowWaitContext,
   listWorkflowEventSignalCandidates,
   getWorkflowRun,
-  findResumableRun,
-  findResumableRunByParentConversation,
+  listResumableRunsByParentConversation,
   cancelResumableRunsForConversation,
   resolveApprovalGate,
   resolveAndCancelApprovalGate,
@@ -142,8 +141,8 @@ describe('resumeWorkflowRun — real SQLite (CAS + orphan recovery)', () => {
     // Left behind, the reason would outlive the stop it describes: the run resumes,
     // completes, and still reports that the operator interrupted it — the #2329 defect
     // that metadata.error already had, through the same key. Real SQLite matters here:
-    // json_patch is RFC 7396, so the null in the patch REMOVES the key rather than
-    // storing a JSON null, and only an actual database proves which one happened.
+    // the null in the patch must REMOVE the key rather than store a JSON null, and only
+    // an actual database proves which one happened.
     await seed('failed-interrupted', 'failed', "datetime('now')", {
       error: 'Process terminated (SIGINT)',
       stop_reason: { reason: 'process_terminated', signal: 'SIGINT' },
@@ -318,13 +317,9 @@ describe('gate approve staging — real SQLite end-to-end (#2075)', () => {
       approveWorkflow('gate-1', 'again', { kind: 'operator' }, { via: 'cli' })
     ).rejects.toThrow('already approved and is awaiting resume');
 
-    // Both resumable pickups find the staged run: the orchestrator's
-    // parent-conversation query and the CLI's working-path query
-    // (approve --json → later `run --resume` contract).
-    const byParent = await findResumableRunByParentConversation('wf-gate', 'conv-1', 'cb-1');
-    expect(byParent?.id).toBe('gate-1');
-    const byPath = await findResumableRun('wf-gate', '/repo/wt');
-    expect(byPath?.id).toBe('gate-1');
+    // The orchestrator's parent-conversation pickup finds the staged run.
+    const byParent = await listResumableRunsByParentConversation('wf-gate', 'conv-1', 'cb-1');
+    expect(byParent.map(run => run.id)).toEqual(['gate-1']);
 
     // Resume CAS flips it to running; a concurrent second resume loses the race.
     const resumed = await resumeWorkflowRun('gate-1');
@@ -530,8 +525,12 @@ describe('gate reject staging — real SQLite end-to-end (#2075)', () => {
     ).rejects.toThrow('already rejected and is awaiting resume');
 
     // The staged rework is resumable.
-    const byParent = await findResumableRunByParentConversation('wf-gate-reject', 'conv-1', 'cb-1');
-    expect(byParent?.id).toBe('gate-reject');
+    const byParent = await listResumableRunsByParentConversation(
+      'wf-gate-reject',
+      'conv-1',
+      'cb-1'
+    );
+    expect(byParent.map(run => run.id)).toEqual(['gate-reject']);
     expect((await resumeWorkflowRun('gate-reject')).status).toBe('running');
   });
 
@@ -699,7 +698,7 @@ describe('terminal workflow transitions — real SQLite', () => {
   });
 
   test('records a signal stop on the row while the event keeps its bare exit reason', async () => {
-    // Real SQLite so the json_patch merge actually runs: the row keeps `error` and gains
+    // Real SQLite so the metadata merge actually runs: the row keeps `error` and gains
     // the structured stop reason the operator surfaces read, and the terminal event's
     // `exit_reason` stays the bare enum string the telemetry reader parses.
     await seed('terminal-interrupted', 'running', "datetime('now')", { unrelated: 'keep me' });
@@ -753,9 +752,8 @@ describe('terminal workflow transitions — real SQLite', () => {
   });
 
   test('a new failure replaces a prior stop reason instead of merging into it', async () => {
-    // SQLite's json_patch is RFC 7396 and RECURSES into a nested object, so merging a
-    // reason-only record over a signalled one would leave the old signal attached to the
-    // new reason — the #2673 defect through the same mechanism. A row can reach 'running'
+    // Merging a reason-only record into a signalled one would leave the old signal
+    // attached to the new reason, the #2673 defect. A row can reach 'running'
     // again still carrying a stop reason: recoverCancelledFanOutRun puts a 'cancelled' run
     // back without touching metadata, and cancelWorkflowRun accepts a 'failed' run.
     await seed('terminal-restopped', 'running', "datetime('now')", {

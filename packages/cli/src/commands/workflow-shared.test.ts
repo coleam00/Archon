@@ -1,3 +1,4 @@
+import { makeContinuationRun } from '../test-support/workflow-continuation-fixture';
 import * as chatScope from '../workflow-scope';
 import {
   mockCreateWorkflowEvent,
@@ -66,6 +67,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       codebase_id: 'cb-1',
       status: 'completed',
       outcome: null,
+      completed_outcome: null,
       user_message: 'task',
       metadata: {},
       active_phase_started_at: null,
@@ -702,7 +704,6 @@ describe('workflowRunCommand — continuation conversation lookup', () => {
     const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
     const conversationDb = await import('@archon/core/db/conversations');
     const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDb = await import('@archon/core/db/workflows');
     const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
 
     (
@@ -710,12 +711,6 @@ describe('workflowRunCommand — continuation conversation lookup', () => {
     ).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'resume-thread' })],
       errors: [],
-    });
-    (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-prior',
-      working_path: null,
-      workflow_name: 'resume-thread',
-      conversation_id: 'conv-prior',
     });
     (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       preCreatedRun: { id: 'run-prior', workflow_name: 'resume-thread' },
@@ -734,6 +729,13 @@ describe('workflowRunCommand — continuation conversation lookup', () => {
     await expect(
       workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'resume-thread', 'go', {
         resume: true,
+        continuationRun: makeContinuationRun({
+          id: 'run-prior',
+          working_path: null,
+          workflow_name: 'resume-thread',
+          conversation_id: 'conv-prior',
+          codebase_id: null,
+        }),
       })
     ).rejects.toThrow(
       "Failed to load conversation 'conv-prior' for workflow run 'run-prior': database busy"

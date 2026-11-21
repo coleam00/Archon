@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { expect, test } from 'bun:test';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';

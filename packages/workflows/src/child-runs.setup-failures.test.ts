@@ -235,3 +235,55 @@ nodes:
     expect(child?.status).toBe('failed');
   });
 });
+
+describe('a sub-run whose pack declares forge needs this checkout cannot meet', () => {
+  let cwd: string;
+  const originalArchonHome = process.env.ARCHON_HOME;
+
+  beforeEach(async () => {
+    cwd = join(tmpdir(), `subrun-forge-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const pack = join(cwd, '.archon', 'workflows', 'factory');
+    await mkdir(join(pack, '.pack'), { recursive: true });
+    await mkdir(join(pack, 'deliver'), { recursive: true });
+    await writeFile(join(pack, '.pack', 'pack.yaml'), 'forge:\n  operations: [pr.view]\n');
+    await writeFile(
+      join(pack, 'deliver', 'deliver.yaml'),
+      'name: deliver\ndescription: d\nnodes:\n  - id: work\n    bash: echo SHOULD_NOT_RUN\n'
+    );
+    await writeFile(
+      join(cwd, '.archon', 'workflows', 'parent.yaml'),
+      'name: parent\ndescription: d\nnodes:\n  - id: sub\n    workflow: deliver\n'
+    );
+    process.env.ARCHON_HOME = join(cwd, 'home');
+  });
+
+  afterEach(async () => {
+    await removeTempTree(cwd);
+    if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = originalArchonHome;
+  });
+
+  it('is refused before its run row exists, naming the typed reason', async () => {
+    const { workflows } = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
+    const parent = workflows.find(w => w.workflow.name === 'parent')?.workflow;
+    if (!parent) throw new Error('parent not discovered');
+    const store = new InMemoryStore();
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv',
+      cwd,
+      parent,
+      'goal',
+      { conversationId: 'conv-db' }
+    );
+    expect(result.success).toBe(false);
+    const failed = store.events.find(e => e.event_type === 'node_failed' && e.step_name === 'sub');
+    expect(String(failed?.data?.error)).toContain("pack 'factory' needs a forge");
+    expect(String(failed?.data?.error)).toContain('(no_forge_remote)');
+    expect([...store.runs.values()].filter(run => run.parent_run_id !== null)).toHaveLength(0);
+  });
+});

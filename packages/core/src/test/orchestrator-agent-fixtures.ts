@@ -40,6 +40,7 @@ export function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     codebase_id: 'codebase-1',
     status: 'paused',
     outcome: null,
+    completed_outcome: null,
     user_message: 'original prompt',
     metadata: {},
     active_phase_started_at: null,

@@ -101,7 +101,7 @@ describe('serializeToYaml', () => {
   });
 
   test('every fixture serializes without throwing and starts with its name', () => {
-    for (const [key, fixture] of Object.entries(FIXTURES)) {
+    for (const fixture of Object.values(FIXTURES)) {
       const yaml = serializeToYaml(fixture);
       expect(yaml.startsWith(`name: ${fixture.name}`)).toBe(true);
       expect(yaml.includes('nodes:')).toBe(true);
@@ -110,7 +110,6 @@ describe('serializeToYaml', () => {
       for (const node of fixture.nodes) {
         expect(yaml).toContain(`- id: ${node.id}`);
       }
-      expect(key.length).toBeGreaterThan(0);
     }
   });
 

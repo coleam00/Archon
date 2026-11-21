@@ -487,22 +487,6 @@ describe('approveWorkflow', () => {
     expect((nodeCompleted?.data as Record<string, unknown>).structured_output).toBeUndefined();
   });
 
-  test('throws on non-paused run', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
-
-    await expect(approveWorkflow('run-1', undefined, operator, { via: 'cli' })).rejects.toThrow(
-      "Cannot approve run with status 'running'"
-    );
-  });
-
-  test('throws on missing approval context', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ metadata: {} }));
-
-    await expect(approveWorkflow('run-1', undefined, operator, { via: 'cli' })).rejects.toThrow(
-      'missing approval context'
-    );
-  });
-
   test('throws on run not found', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(null);
 

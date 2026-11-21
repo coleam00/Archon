@@ -5,6 +5,8 @@ import {
   issueLifecycleEventSchema,
   labelChangedEventSchema,
   prLifecycleEventSchema,
+  reviewChangedEventSchema,
+  reviewStateSchema,
   type ForgeEvent,
 } from './events';
 import { repoRefSchema, type RepoRef } from './identity';
@@ -32,6 +34,12 @@ export const forgeEventFieldSchema = z.enum([
   'comment.id',
   'comment.author.id',
   'comment.author.login',
+  'review.id',
+  'review.state',
+  'review.nativeState',
+  'review.commit',
+  'review.author.id',
+  'review.author.login',
   'check.revision',
   'check.unit.kind',
   'check.unit.id',
@@ -56,6 +64,13 @@ const predicateSchema = z.union([
       field: z.literal('pr.base.branch'),
       equals: z.string().min(1).optional(),
       in: z.array(z.string().min(1)).min(1).optional(),
+    })
+    .refine(value => (value.equals === undefined) !== (value.in === undefined)),
+  z
+    .object({
+      field: z.literal('review.state'),
+      equals: reviewStateSchema.optional(),
+      in: z.array(reviewStateSchema).min(1).optional(),
     })
     .refine(value => (value.equals === undefined) !== (value.in === undefined)),
   z
@@ -112,6 +127,10 @@ const rawForgeEventSelectorSchema = z.discriminatedUnion('kind', [
     actions: z.array(commentChangedEventSchema.shape.action).min(1),
   }),
   selectorIdentitySchema.extend({
+    kind: reviewChangedEventSchema.shape.kind,
+    actions: z.array(reviewChangedEventSchema.shape.action).min(1),
+  }),
+  selectorIdentitySchema.extend({
     kind: z.literal('check.changed'),
     actions: z.tuple([z.literal('changed')]),
   }),
@@ -163,6 +182,20 @@ const fieldsByKind = {
     'comment.author.id',
     'comment.author.login',
   ]),
+  'review.changed': new Set<ForgeEventField>([
+    'event.kind',
+    'event.action',
+    'repository.host',
+    'repository.path',
+    'subject.kind',
+    'subject.number',
+    'review.id',
+    'review.state',
+    'review.nativeState',
+    'review.commit',
+    'review.author.id',
+    'review.author.login',
+  ]),
   'check.changed': new Set<ForgeEventField>([
     'event.kind',
     'event.action',
@@ -179,6 +212,14 @@ const fieldsByKind = {
   ]),
 } as const;
 
+/** Whether events of `kind` can carry `field`, so a binding may read it. */
+export function isForgeEventFieldAvailable(
+  kind: keyof typeof fieldsByKind,
+  field: ForgeEventField
+): boolean {
+  return fieldsByKind[kind].has(field);
+}
+
 export const forgeEventSelectorSchema = rawForgeEventSelectorSchema.superRefine((selector, ctx) => {
   if (selector.kind === 'check.changed' && selector.subject !== undefined) {
     ctx.addIssue({
@@ -192,11 +233,14 @@ export const forgeEventSelectorSchema = rawForgeEventSelectorSchema.superRefine(
       path: ['subject', 'kind'],
       message: 'issue.lifecycle subject must be an issue',
     });
-  } else if (selector.kind === 'pr.lifecycle' && selector.subject?.kind === 'issue') {
+  } else if (
+    (selector.kind === 'pr.lifecycle' || selector.kind === 'review.changed') &&
+    selector.subject?.kind === 'issue'
+  ) {
     ctx.addIssue({
       code: 'custom',
       path: ['subject', 'kind'],
-      message: 'pr.lifecycle subject must be a PR',
+      message: `${selector.kind} subject must be a PR`,
     });
   }
   selector.predicates?.forEach((predicate, index) => {
@@ -250,6 +294,7 @@ function eventRepo(event: ForgeEvent): RepoRef {
     case 'issue.lifecycle':
       return event.issue.repo;
     case 'pr.lifecycle':
+    case 'review.changed':
       return event.pr.repo;
     case 'label.changed':
     case 'comment.changed':
@@ -264,6 +309,7 @@ function eventSubject(event: ForgeEvent): { kind: 'issue' | 'pr'; number: number
     case 'issue.lifecycle':
       return { kind: 'issue', number: event.issue.number };
     case 'pr.lifecycle':
+    case 'review.changed':
       return { kind: 'pr', number: event.pr.number };
     case 'label.changed':
     case 'comment.changed':
@@ -312,6 +358,12 @@ const FIELD_READERS: Readonly<Record<ForgeEventField, FieldReader>> = {
   'comment.id': fieldOf('comment.changed', event => event.comment.id),
   'comment.author.id': fieldOf('comment.changed', event => event.comment.author?.id),
   'comment.author.login': fieldOf('comment.changed', event => event.comment.author?.login),
+  'review.id': fieldOf('review.changed', event => event.review.id),
+  'review.state': fieldOf('review.changed', event => event.review.state),
+  'review.nativeState': fieldOf('review.changed', event => event.review.nativeState),
+  'review.commit': fieldOf('review.changed', event => event.review.commit),
+  'review.author.id': fieldOf('review.changed', event => event.review.author?.id),
+  'review.author.login': fieldOf('review.changed', event => event.review.author?.login),
   'check.revision': fieldOf('check.changed', event => event.revision),
   'check.unit.kind': fieldOf('check.changed', event => event.unit.kind),
   'check.unit.id': fieldOf('check.changed', event => event.unit.id),
@@ -322,7 +374,11 @@ const FIELD_READERS: Readonly<Record<ForgeEventField, FieldReader>> = {
   'check.result': fieldOf('check.changed', event => event.result),
 };
 
-function fieldValue(event: ForgeEvent, field: ForgeEventField): ForgeFieldValue | undefined {
+/** The field's value on `event`, or undefined when the event does not carry it. */
+export function readForgeEventField(
+  event: ForgeEvent,
+  field: ForgeEventField
+): ForgeFieldValue | undefined {
   return FIELD_READERS[field](event);
 }
 
@@ -342,7 +398,7 @@ export function matchForgeEvent(selector: ForgeEventSelector, event: ForgeEvent)
   )
     return false;
   return (selector.predicates ?? []).every(predicate => {
-    const value = fieldValue(event, predicate.field);
+    const value = readForgeEventField(event, predicate.field);
     return predicate.equals !== undefined
       ? value === predicate.equals
       : predicate.in?.some(candidate => candidate === value) === true;
@@ -363,7 +419,7 @@ export function mapForgeInputs<T>(
       inputs[name] = binding.value;
       continue;
     }
-    const value = fieldValue(event, binding.field);
+    const value = readForgeEventField(event, binding.field);
     if (value === undefined)
       return {
         ok: false,

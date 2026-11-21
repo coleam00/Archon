@@ -1,5 +1,13 @@
 /**
- * Release a terminal run's scratch and tagged artifact caches.
+ * Release scratch: a node invocation's own when it ends, and a terminal run's whole
+ * scratch and tagged artifact caches when the run ends.
+ *
+ * `releaseNodeScratch` removes one invocation's `$NODE_SCRATCH_DIR` once that invocation
+ * has completed, failed or been skipped; the layer walker calls it, so the invocation's
+ * own processes have ended, and also when a resumed run skips or replays an invocation
+ * that a prior pass left suspended. Run-end release below
+ * stays the backstop for an invocation that never got there (interrupted, or its
+ * process died).
  *
  * Scratch is removed only once the run is terminal and nothing of it can still write
  * into it. `releaseRunScratch` proves the second half itself: the run's recorded
@@ -23,22 +31,29 @@
  * Scratch and descendant directories carrying a valid CACHEDIR.TAG are disposable;
  * untagged evidence and the artifacts root are retained. Git worktrees a node added
  * under scratch are removed from the run's repository first, so their registrations
- * do not outlive their files. A container run's are not: its paths are the container's.
+ * do not outlive their files. At run end a container run's are not: they live in the
+ * container's git, which container teardown removes with the container. A node's own
+ * scratch in a live container is deregistered through that container's git.
  */
 
 import { hostname } from 'node:os';
 import { lstat, open, readdir, realpath, rm } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { execFileAsync, GitFailure } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { isPidProvablyGone } from '@archon/paths/process-owner';
 import {
+  getNodeScratchDir,
+  getNodeScratchRoot,
   getRunArtifactsDirForRoot,
   getRunScratchDir,
   isPathInside,
   resolveRunStorageRoot,
 } from '@archon/paths/archon-paths';
+import type { ExecutionContext } from '@archon/provider-contract';
 import { isContainerRun, readExecutionOwner, type WorkflowRun } from './schemas/workflow-run';
+import { probeContainerMarker } from './checkout-observation';
+import { buildSubprocessDockerArgs } from './subprocess';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -110,9 +125,118 @@ export async function releaseRunScratch(run: ScratchRun): Promise<void> {
     (await scratchParentIsDirectory(artifactsDir, logContext)) &&
     (await isDirectory(getRunScratchDir(artifactsDir), logContext))
   ) {
-    await deregisterScratchWorktrees(run.working_path, getRunScratchDir(artifactsDir), logContext);
+    await deregisterScratchWorktrees(
+      hostGit(run.working_path),
+      getRunScratchDir(artifactsDir),
+      logContext
+    );
   }
   await removeScratchAndCaches(artifactsDir, logContext, caches);
+}
+
+/**
+ * Remove one node invocation's scratch directory, deregistering the git worktrees under
+ * it from `repoPath` first. In a container run the node registered them in the
+ * container's git, at the same absolute paths, so they are deregistered there. Never
+ * throws: a failed release is logged and the node's result stands; run-end release
+ * retries the removal.
+ *
+ * Nothing is touched unless every directory from `artifactsDir` down to the node-scratch
+ * root is a real directory: through a linked ancestor, the path would name files and
+ * worktrees outside the run. A link in place of the invocation's own directory is removed
+ * without following it.
+ */
+export async function releaseNodeScratch({
+  artifactsDir,
+  invocationId,
+  repoPath,
+  execContext,
+  logContext,
+}: {
+  artifactsDir: string;
+  invocationId: string;
+  repoPath: string;
+  execContext: ExecutionContext;
+  logContext: Record<string, unknown>;
+}): Promise<void> {
+  const scratchDir = getNodeScratchDir(artifactsDir, invocationId);
+  try {
+    const stat = await lstat(scratchDir).catch((error: unknown) => {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
+      throw error;
+    });
+    if (!(await nodeScratchRootIsDirectory(artifactsDir, logContext))) {
+      if (stat) {
+        getLog().warn({ ...logContext, path: scratchDir }, 'node_scratch.ancestor_not_directory');
+      }
+      return;
+    }
+    // Git is asked even when the directory is empty or gone: a node that deleted a
+    // worktree's files left its registration behind, and only Git knows it. A link in
+    // place of the directory is never followed, so it is only removed.
+    if (!stat || stat.isDirectory()) {
+      const git =
+        execContext.kind === 'container'
+          ? await containerGit(execContext, repoPath, logContext)
+          : hostGit(repoPath);
+      if (git) await deregisterScratchWorktrees(git, scratchDir, logContext);
+    }
+    await rm(scratchDir, { recursive: true, force: true });
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+    getLog().warn({ ...logContext, err: error, path: scratchDir }, 'node_scratch.remove_failed');
+  }
+}
+
+/**
+ * Whether `artifactsDir`, its engine child, the run's scratch and the node-scratch root
+ * are all real directories, links rejected. Creation checks it too, so a node is never
+ * handed a directory outside the run.
+ */
+export async function nodeScratchRootIsDirectory(
+  artifactsDir: string,
+  logContext: Record<string, unknown>
+): Promise<boolean> {
+  return (
+    (await scratchParentIsDirectory(artifactsDir, logContext)) &&
+    (await isDirectory(getRunScratchDir(artifactsDir), logContext)) &&
+    (await isDirectory(getNodeScratchRoot(artifactsDir), logContext))
+  );
+}
+
+/**
+/** Runs `git` against one repository, on the host or in the run's container. */
+type RepoGit = (args: string[], timeout: number) => Promise<{ stdout: string }>;
+
+function hostGit(repoPath: string): RepoGit {
+  return (args, timeout) => execFileAsync('git', ['-C', repoPath, ...args], { timeout });
+}
+
+/**
+ * Git in the run's container, or undefined when the container's checkout is not a
+ * repository (a folder project), which has no worktrees to deregister. The container's
+ * own failures are not that answer: they are logged and nothing is deregistered.
+ */
+async function containerGit(
+  execContext: Extract<ExecutionContext, { kind: 'container' }>,
+  repoPath: string,
+  logContext: Record<string, unknown>
+): Promise<RepoGit | undefined> {
+  const marker = await probeContainerMarker(repoPath, execContext);
+  if (marker === 'none') return undefined;
+  if (marker === 'failed') {
+    getLog().warn({ ...logContext, path: repoPath }, 'run_scratch.container_probe_failed');
+    return undefined;
+  }
+  return (args, timeout) =>
+    execFileAsync(
+      'docker',
+      buildSubprocessDockerArgs(execContext, 'git', ['-C', repoPath, ...args], {
+        cwd: repoPath,
+        env: {},
+      }),
+      { timeout }
+    );
 }
 
 /**
@@ -125,7 +249,7 @@ export async function releaseRunScratch(run: ScratchRun): Promise<void> {
  * rest of scratch.
  */
 async function deregisterScratchWorktrees(
-  repoPath: string,
+  git: RepoGit,
   scratchDir: string,
   logContext: Record<string, unknown>
 ): Promise<void> {
@@ -137,21 +261,17 @@ async function deregisterScratchWorktrees(
     getLog().warn({ ...logContext, err: error, path }, 'run_scratch.worktree_deregister_failed');
   };
   try {
-    // Git prints resolved paths, so the scratch directory is resolved to compare.
-    const root = await realpath(scratchDir);
-    const { stdout } = await execFileAsync(
-      'git',
-      ['-C', repoPath, 'worktree', 'list', '--porcelain', '-z'],
-      { timeout: 10000 }
-    );
+    // Git prints resolved paths, so the scratch directory is resolved to compare. A
+    // container mounts it at the path as given, so that form is matched too.
+    // The parent is resolved, not `scratchDir` itself, which a node may have deleted.
+    const roots = [scratchDir, join(await realpath(dirname(scratchDir)), basename(scratchDir))];
+    const { stdout } = await git(['worktree', 'list', '--porcelain', '-z'], 10000);
     for (const field of stdout.split('\0')) {
       if (!field.startsWith('worktree ')) continue;
       const path = field.slice('worktree '.length);
-      if (!isPathInside(root, path, { includeRoot: true })) continue;
+      if (!roots.some(root => isPathInside(root, path, { includeRoot: true }))) continue;
       // `--force`: a scratch worktree is throwaway, and uncommitted changes must not keep it.
-      await execFileAsync('git', ['-C', repoPath, 'worktree', 'remove', '--force', path], {
-        timeout: 30000,
-      }).catch((error: unknown) => {
+      await git(['worktree', 'remove', '--force', path], 30000).catch((error: unknown) => {
         warn(path, error);
       });
     }

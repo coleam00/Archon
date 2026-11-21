@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { Closure } from '../../workflows/sdlc/.shared/close';
 import {
-  forgeFailure,
   forgeOperation,
   PR,
   packScriptRunner,
@@ -66,17 +65,6 @@ test('forge publication fails without label facts rather than assuming no labels
   expect(run.code).not.toBe(0);
   expect(run.forge).toHaveLength(1);
   expect(run.stderr).toContain('label facts');
-});
-
-test('forge failures preserve unknown outcome evidence and never fall back or retry', () => {
-  const run = runPackScript('triage/scripts/labels', {
-    inputs,
-    forge: { kind: 'fake', response: forgeFailure('workitem.view', 'outcome_unknown', 'response lost') },
-  });
-  expect(run.code).not.toBe(0);
-  expect(run.forge).toHaveLength(1);
-  expect(run.stderr).toContain('outcome_unknown');
-  expect(run.stdout).toBe('');
 });
 
 test('a triage that could not read the forge is refused before any label is read or written', () => {

@@ -265,10 +265,25 @@ test('a destination thread hosts the notice, and the follow-up closes it in that
       runId: 'run-1',
       workflowName: 'deploy',
       status: 'completed',
+      completedOutcome: 'built',
       totalCostUsd: 0.5,
     },
   });
   expect(slack.posts[1]).toMatchObject({ channel: 'C9', thread_ts: '100.1' });
+  expect(JSON.stringify(blocksOf(1))).toContain('authored outcome: built');
+  await plugin.attentionNotice({
+    destination: 'C9:100.1',
+    conversationId,
+    notice: {
+      type: 'terminal',
+      runId: 'run-2',
+      workflowName: 'deploy',
+      status: 'completed',
+      completedOutcome: 'unavailable',
+    },
+  });
+  expect(JSON.stringify(blocksOf(2))).toContain('authored outcome: unavailable');
+  expect(JSON.stringify(blocksOf(2))).not.toContain('failed to read');
   expect(JSON.stringify(blocksOf(1))).toContain('total cost: $0.5000');
   expect(slack.updates).toEqual([
     expect.objectContaining({
@@ -277,6 +292,30 @@ test('a destination thread hosts the notice, and the follow-up closes it in that
       text: expect.stringContaining('Closed'),
     }),
   ]);
+});
+
+test.each([
+  ['a named outcome', { completedOutcome: 'return' }, ' · authored outcome: return'],
+  [
+    'a boolean outcome',
+    { completedOutcome: 'failed', authoredOutcome: 'failed' },
+    ' · authored outcome: failed',
+  ],
+  ['no declared outcome', {}, ''],
+] as const)('a terminal notice posts %s in its text', async (_, fields, suffix) => {
+  await plugin.attentionNotice({
+    destination: 'C9',
+    notice: {
+      type: 'terminal',
+      runId: 'run-1',
+      workflowName: 'deploy',
+      status: 'completed',
+      ...fields,
+    },
+  });
+  expect(slack.posts[0]).toMatchObject({
+    text: `:white_check_mark: Workflow completed (deploy)${suffix}`,
+  });
 });
 
 test('a failed terminal post still closes the run notices, and the failure surfaces', async () => {

@@ -1,6 +1,6 @@
 /**
  * The host CLI for queue and discoveries script tests: `workflow runs --json` answers from
- * the rows in `RUN_LISTING`, and `workflow get <id> --json` with the row of that id, `workflow run <name>` acknowledges `launched-<name>` and
+ * the rows in `RUN_LISTING` (`--item-of` answers the item `RUN_ITEM_KEY` names), and `workflow get <id> --json` with the row of that id, `workflow run <name>` acknowledges `launched-<name>` and
  * `trigger fire` a receipt whose binding was admitted as run `fired-run`, without
  * starting anything (either refuses, exit 1, when `ARCHON_RUN_REFUSES` is set); every
  * other command runs the real CLI, whose argv the test passes as a JSON array in
@@ -23,7 +23,12 @@ import { fakeLeaseLive } from './fake-lease.ts';
 
 const argv = process.argv.slice(2);
 if (process.env.ARCHON_CALL_LOG) appendFileSync(process.env.ARCHON_CALL_LOG, `${JSON.stringify(argv)}\n`);
-if (argv[0] === 'workflow' && argv[1] === 'runs') {
+if (argv[0] === 'workflow' && argv[1] === 'runs' && argv.includes('--item-of')) {
+  // The run's item, from `RUN_ITEM_KEY`; a run with none is on no item.
+  const key = process.env.RUN_ITEM_KEY ?? '';
+  if (key === '') process.exitCode = 1;
+  process.stdout.write(JSON.stringify(key === '' ? { ok: false, error: 'not_found' } : { item: { id: 'item', projectKey: 'project', key }, runs: [] }));
+} else if (argv[0] === 'workflow' && argv[1] === 'runs') {
   // The project's run listing, from `RUN_LISTING` (a JSON array of run rows).
   const runs = JSON.parse(process.env.RUN_LISTING ?? '[]') as unknown[];
   process.stdout.write(JSON.stringify({ runs, total: runs.length, scopeFallback: false }));

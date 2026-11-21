@@ -341,19 +341,12 @@ describe('buildCustomProviderModelsPath', () => {
         env: { [credentialEnvKey]: 'acting-user-secret' },
         protectedEnvKeys: [credentialEnvKey],
       });
-      // Two layered guarantees for the security contract:
-      //  (1) The per-call file must NEVER contain the literal protected value
-      //      (`acting-user-secret`). Verified below — this is the round-2
-      //      review's regression-critical assertion.
-      //  (2) The file either contains no protected value (no `${VAR}` in the
-      //      user template) and we return undefined, OR the per-call file
-      //      contains a placeholder the SDK cannot resolve (covered by the
-      //      `${GH_TOKEN}` test above). Either way, no path the SDK walks
-      //      can produce the protected value from the per-call file.
-      if (result !== undefined) {
-        const written = JSON.stringify(readModelsJson(result));
-        expect(written).not.toContain('acting-user-secret');
-      }
+      // A per-call file must be written: without one, Pi reads the user's
+      // models.json and resolves the reference from the host environment.
+      // That file must never contain the literal protected value.
+      expect(result).toBeDefined();
+      const written = JSON.stringify(readModelsJson(result as string));
+      expect(written).not.toContain('acting-user-secret');
     }
   );
 
@@ -422,15 +415,9 @@ describe('buildCustomProviderModelsPath', () => {
       env: { UNCLOSED: 'value' },
       protectedEnvKeys: [],
     });
-    // The literal `$` is in the apiKey, so `value.includes('$')` returns
-    // true and we enter the parser; the parser keeps `$` literal, no env
-    // references resolve, and we return undefined (no substitution
-    // produced). Either outcome is acceptable as long as the SDK agrees.
-    // Confirm we don't crash and don't produce a substituted value.
-    if (result !== undefined) {
-      const written = readModelsJson(result);
-      expect(written.providers.mygw.apiKey).toBe('prefix-${UNCLOSED');
-    }
+    // The parser keeps `$` literal and no env reference resolves, so there is
+    // nothing to substitute: no per-call file, and Pi reads the user's value.
+    expect(result).toBeUndefined();
   });
 
   test('handles ${1badname} (non-identifier) by treating as literal', () => {
@@ -442,10 +429,7 @@ describe('buildCustomProviderModelsPath', () => {
       env: { '1bad': 'value' },
       protectedEnvKeys: [],
     });
-    if (result !== undefined) {
-      const written = readModelsJson(result);
-      expect(written.providers.mygw.apiKey).toBe('${1bad}');
-    }
+    expect(result).toBeUndefined();
   });
 
   test('handles trailing $ in template', () => {
@@ -455,11 +439,8 @@ describe('buildCustomProviderModelsPath', () => {
       env: { MYGW_API_KEY: 'tok' },
       protectedEnvKeys: [],
     });
-    // Trailing `$` with no following character → literal `$`.
-    if (result !== undefined) {
-      const written = readModelsJson(result);
-      expect(written.providers.mygw.apiKey).toBe('end-with-dollar$');
-    }
+    // Trailing `$` with no following character → literal `$`, nothing to substitute.
+    expect(result).toBeUndefined();
   });
 
   test('returns undefined when user models.json has no providers key', () => {

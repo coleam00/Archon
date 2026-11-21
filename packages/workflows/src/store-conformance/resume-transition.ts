@@ -1,7 +1,14 @@
 import { expect, test } from 'bun:test';
-import { executionClaim, WorkflowNotResumableError } from '../store';
+import {
+  currentExecutionOwner,
+  executionClaim,
+  ownerlessResumeCursor,
+  WorkflowNotResumableError,
+} from '../store';
+import { readExecutionOwner } from '../schemas/run-metadata';
 import { workflowPathPriorityTime } from '../workflow-path-lock';
 import type { WorkflowStoreHarness } from '../store-conformance';
+import { testRunOwnerLease } from './fixtures';
 
 const approval = { nodeId: 'review', message: 'Choose', type: 'approval' as const };
 const schedule = {
@@ -13,6 +20,40 @@ const schedule = {
 };
 
 export function describeResumeTransitionConformance(getHarness: () => WorkflowStoreHarness): void {
+  // A resumer elsewhere must read the process that now executes the run, never the one
+  // before it, or it finds nothing answering and starts a second executor.
+  test('the claim and every resume record the calling process as owner in the same update', async () => {
+    const { store } = getHarness();
+    const gone = { execution_owner: { host: 'gone-host', pid: 1 } };
+    const run = await store.createWorkflowRun({
+      workflow_name: 'owned',
+      user_message: '',
+      working_path: '/owned',
+    });
+    await store.updateWorkflowRun(run.id, { metadata: gone });
+    const owner = async () => readExecutionOwner((await store.getWorkflowRun(run.id))?.metadata);
+    const claimed = await store.claimPendingWorkflowRun(run.id);
+    expect(readExecutionOwner(claimed?.metadata)).toEqual(currentExecutionOwner());
+    expect(await owner()).toEqual(currentExecutionOwner());
+
+    await store.updateWorkflowRun(run.id, { metadata: gone });
+    const running = await store.getWorkflowRun(run.id);
+    if (!running) throw new Error('Missing run');
+    const resumed = await store.resumeWorkflowRun(
+      run.id,
+      ownerlessResumeCursor(running, testRunOwnerLease(running.id))
+    );
+    expect(readExecutionOwner(resumed.metadata)).toEqual(currentExecutionOwner());
+    expect(await owner()).toEqual(currentExecutionOwner());
+
+    await store.updateWorkflowRun(run.id, { metadata: gone });
+    await store.failWorkflowRun(run.id, 'failed');
+    expect(readExecutionOwner((await store.resumeWorkflowRun(run.id)).metadata)).toEqual(
+      currentExecutionOwner()
+    );
+    expect(await owner()).toEqual(currentExecutionOwner());
+  });
+
   test('a resumed old run yields to the current checkout holder and keeps creation listing order', async () => {
     const { store, backdate } = getHarness();
     const path = '/timestamp-priority';
@@ -195,7 +236,15 @@ export function describeResumeTransitionConformance(getHarness: () => WorkflowSt
       const creation = new Date('2000-01-01');
       await harness.backdate(run.id, { started_at: creation, last_activity_at: creation });
       const before = await store.listWorkflowEvents(run.id);
-      const resumed = await store.resumeWorkflowRun(run.id);
+      const current = await store.getWorkflowRun(run.id);
+      if (!current) throw new Error('Missing run');
+      const resumed =
+        status === 'running'
+          ? await store.resumeWorkflowRun(
+              run.id,
+              ownerlessResumeCursor(current, testRunOwnerLease(current.id))
+            )
+          : await store.resumeWorkflowRun(run.id);
       expect(resumed.started_at).toEqual(creation);
       expect(resumed.active_phase_started_at?.getTime()).toBeGreaterThan(creation.getTime());
       expect(resumed.last_activity_at).toEqual(resumed.active_phase_started_at);

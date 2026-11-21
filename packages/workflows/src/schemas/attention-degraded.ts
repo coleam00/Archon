@@ -9,7 +9,7 @@ export const attentionDegradedSchema = attentionDegradedBaseSchema.extend({
   runId: z.string().optional(),
 });
 export type AttentionDegraded = z.infer<typeof attentionDegradedSchema>;
-type IdentifiedAttentionDegraded = AttentionDegraded & { runId: string };
+export type IdentifiedAttentionDegraded = AttentionDegraded & { runId: string };
 export type AttentionRead<T> = T | IdentifiedAttentionDegraded;
 
 export function isAttentionDegraded<T extends object>(

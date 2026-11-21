@@ -54,15 +54,16 @@ import { validateDagStructure } from './loader/dag-structure';
 import {
   validateLoopGroupProseCompletion,
   validateRunBudgetShape,
-  validateWorkflowOutcomeDeclaration,
+  validateWorkflowResultContract,
 } from './loader/contracts';
 import { resolveWorkflow } from './graph-plan';
-import type { IncludeCommandContent } from './compiled-command';
+import { attachForwardedFanOutWith, type IncludeCommandContent } from './compiled-command';
 import { IncludeExpansionError } from './include/expansion-error';
 import {
   boundaryIdComponent,
   instantiateResolvedInclude,
   type ExpandedInclude,
+  type PackIdentity,
 } from './include/inline';
 import type { ExecInputSource } from './exec-input-validation';
 import {
@@ -119,8 +120,10 @@ interface NodeListExpansion {
  *
  * `commandContents` maps command NAME → file content, null when no candidate resolves, or a
  * path-bearing error when a higher-precedence scope cannot be inspected or a matched file
- * cannot be read. Discovery pre-resolves every include-target command with
- * execution-equivalent precedence and never falls through after either error. A caller that
+ * cannot be read. Discovery pre-resolves every command of every workflow with
+ * execution-equivalent precedence and never falls through after either error. The
+ * flattened graph check also reads each remaining command node's body from it, so a
+ * reference in a command file is checked like the same text inline. A caller that
  * omits the map may still expand workflows without commands. Included command nodes fail
  * composition; included loop commands fail before a fresh AI turn but remain discoverable
  * so an already-paused loop can resume from its persisted read-once snapshot.
@@ -221,7 +224,10 @@ function expandOne(expansion: IncludeExpansion, name: string, stack: string[]): 
   // hand-written node, cycles introduced by edge rewiring, unknown deps, and the
   // equivalent failures inside every recursively expanded loop_group body.
   const structureError =
-    validateDagStructure(expanded.nodes, { includeAliases: expanded.includeAliases }) ||
+    validateDagStructure(expanded.nodes, {
+      includeAliases: expanded.includeAliases,
+      commandContents: expansion.commandContents,
+    }) ||
     validateLoopGroupProseCompletion(expanded.nodes) ||
     // Only here: a producer inside an included block is invisible before flattening.
     validateTypedOutputOrder(expanded.nodes);
@@ -243,7 +249,7 @@ function expandOne(expansion: IncludeExpansion, name: string, stack: string[]): 
     ...(dedupedRequires.length > 0 ? { requires: dedupedRequires } : {}),
   };
   const contractError =
-    validateWorkflowOutcomeDeclaration(authoredResult) ?? validateRunBudgetShape(authoredResult);
+    validateWorkflowResultContract(authoredResult) ?? validateRunBudgetShape(authoredResult);
   if (contractError !== null) {
     throw new IncludeExpansionError(contractError);
   }
@@ -300,11 +306,19 @@ function expandNodeList(
     includeAliases: new Map(),
   };
 
+  const includerPack = expansion.rawByName.get(workflowName)?.pack;
   for (const node of nodes) {
     if (isComposeFanOutNode(node)) {
-      expandComposeFanOut(expansion, list, node, [...stack, workflowName]);
+      expandComposeFanOut(expansion, list, node, [...stack, workflowName], includerPack);
     } else if (isIncludeDirective(node)) {
-      expandIncludeDirective(expansion, list, node, [...stack, workflowName], declarationScope);
+      expandIncludeDirective(
+        expansion,
+        list,
+        node,
+        [...stack, workflowName],
+        declarationScope,
+        includerPack
+      );
     } else if (isLoopGroupNode(node)) {
       expandLoopGroupBody(expansion, list, node, workflowName, stack, declarationScope);
     } else {
@@ -345,7 +359,8 @@ function expandComposeFanOut(
   expansion: IncludeExpansion,
   list: NodeListExpansion,
   node: ComposeFanOutNode,
-  stack: string[]
+  stack: string[],
+  includerPack: PackIdentity
 ): void {
   const child = expandTarget(expansion, node, stack);
   const suspensionPaths = collectComposedSuspensionPaths(
@@ -362,7 +377,7 @@ function expandComposeFanOut(
   // Exercise the exact ordinary-include instantiation once at load time. Width is
   // still deferred, but the block's input contract and packaged command resources
   // are static and must fail before upstream nodes can spend.
-  instantiateResolvedInclude(
+  const { forwardedSettings } = instantiateResolvedInclude(
     {
       id: node.id,
       kind: 'include',
@@ -370,11 +385,30 @@ function expandComposeFanOut(
       with: { ...(node.with ?? {}), [node.fan_out.as]: null },
     },
     child,
-    expansion.commandContents,
-    expansion.namedScripts
+    {
+      commandContents: expansion.commandContents,
+      namedScripts: expansion.namedScripts,
+      includerPack,
+    }
   );
   list.includedRequirements.push(...(child.requires ?? []));
-  list.expandedNodes.push(node);
+  // A setting forwarded from the block's own pack is written into the node's `with:`, so
+  // an outer include from another pack sees `$INPUTS.<name>` in a `with:` slot it must
+  // supply, and each runtime item receives what it supplied. A forward still standing at
+  // run time is left to each item's own same-pack instantiation (planComposeInstances).
+  if (forwardedSettings.length === 0) {
+    list.expandedNodes.push(node);
+    return;
+  }
+  const forwarding: ComposeFanOutNode = {
+    ...node,
+    with: {
+      ...(node.with ?? {}),
+      ...Object.fromEntries(forwardedSettings.map(name => [name, `$INPUTS.${name}`])),
+    },
+  };
+  attachForwardedFanOutWith(forwarding, forwardedSettings);
+  list.expandedNodes.push(forwarding);
 }
 
 function expandIncludeDirective(
@@ -382,18 +416,18 @@ function expandIncludeDirective(
   list: NodeListExpansion,
   node: IncludeDirective,
   stack: string[],
-  declarationScope: string
+  declarationScope: string,
+  includerPack: PackIdentity
 ): void {
   const child = expandTarget(expansion, node, stack);
   warnDroppedWorkflowLevelFields(node, child);
   list.includedRequirements.push(...(child.requires ?? []));
-  const inlined = instantiateResolvedInclude(
-    node,
-    child,
-    expansion.commandContents,
-    expansion.namedScripts,
-    `${declarationScope}${boundaryIdComponent(node.id)}`
-  );
+  const inlined = instantiateResolvedInclude(node, child, {
+    commandContents: expansion.commandContents,
+    namedScripts: expansion.namedScripts,
+    includeId: `${declarationScope}${boundaryIdComponent(node.id)}`,
+    includerPack,
+  });
   list.includesById.set(node.id, inlined);
   list.includeAliases.set(inlined.primarySink, node.id);
   list.expandedNodes.push(...inlined.namespaced);

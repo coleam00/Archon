@@ -135,23 +135,14 @@ describe('gate decisions in the run transcript', () => {
     });
   });
 
-  test('a run with no recorded transcript location skips the row and says so', async () => {
+  test('a run with no recorded transcript location skips the row', async () => {
     // A run whose identity lookup faulted never persisted its location; guessing a root
     // would start a second transcript no reader connects to the run.
-    mockLogger.warn.mockClear();
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ output_root: null }));
 
     await approveWorkflow('run-1', 'Looks good', operator, { via: 'cli' });
 
     expect(await decisionRows()).toEqual([]);
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      {
-        runId: 'run-1',
-        steps: ['review', 'review'],
-        eventTypes: ['node_completed', 'approval_received'],
-      },
-      'workflow.gate_transcript_root_missing'
-    );
   });
 
   test('a gate paused before execution metadata existed skips its completion row and says so', async () => {

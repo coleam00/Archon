@@ -8,7 +8,6 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
-import type { StreamStall } from './tool-call-attention';
 
 /** Requests bind to the owner-observed stall, never to the requester's clock. */
 export const END_TURN_REQUEST_METADATA_KEY = 'end_turn_request';
@@ -57,7 +56,7 @@ export function planEndTurn(run: Pick<WorkflowRun, 'status' | 'metadata'>): EndT
 export async function isEndTurnRequested(
   store: Pick<IWorkflowStore, 'getWorkflowRun'>,
   runId: string,
-  stall: StreamStall
+  stall: readonly Pick<ToolCallAttention, 'streamId' | 'toolCallId' | 'raisedAt'>[]
 ): Promise<boolean> {
   const run = await store.getWorkflowRun(runId);
   if (run?.status !== 'running') return false;

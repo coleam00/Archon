@@ -11,11 +11,11 @@
  * the item's outcome waits on those as much as on the filed ones.
  */
 
+import type { OUTPUT_ENUMS } from './outputs.generated.ts';
 import type { Pickup, WorkItem } from './workitem.ts';
 
-/** What the slice agent judged the item to be; a test proves archon-split.yaml's enum agrees. */
-export const SPLIT_KINDS = ['prd', 'epic', 'bundle'] as const;
-export type SplitKind = (typeof SPLIT_KINDS)[number];
+/** What the slice agent judged the item to be, as archon-split.yaml's slice node declares it. */
+export type SplitKind = (typeof OUTPUT_ENUMS)['archon-split']['slice']['split.anyOf[0].kind'][number];
 
 export interface SplitIssue {
   readonly key: string;

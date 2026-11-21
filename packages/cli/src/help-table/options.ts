@@ -33,7 +33,10 @@ export const orderedFlags: FlagHelp[] = [
     spec: '--base-branch <name>',
     description:
       'Initial repository registration only; omit to follow the remote default. Use --base for a run override.',
-    owners: [{ command: 'workflow', subcommand: 'run' }],
+    owners: [
+      { command: 'workflow', subcommand: 'run' },
+      { command: 'project', subcommand: 'add' },
+    ],
   },
   {
     spec: '--base <branch>',
@@ -43,7 +46,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--workflow-source <path>',
     description:
-      'Read the workflow, its commands and scripts from this directory\ninstead of --cwd (which stays the workspace the run acts on)',
+      'Read the workflow, its commands and scripts from this checkout root\n(<path>/.archon/workflows) instead of --cwd (which stays the workspace the run acts on)',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
@@ -54,8 +57,11 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--folder',
     description:
-      'Register the current directory (with or without git) as a folder project and run in place',
-    owners: [{ command: 'workflow', subcommand: 'run' }],
+      'Register the target directory (the project add path, else the current directory), with or without git, as a folder project; workflow run runs in place',
+    owners: [
+      { command: 'workflow', subcommand: 'run' },
+      { command: 'project', subcommand: 'add' },
+    ],
   },
   {
     spec: '--container',
@@ -64,8 +70,12 @@ export const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--input <name>=<value>',
-    description:
-      'Supply a declared workflow input; repeat per input (mutually exclusive with --resume)',
+    description: 'Supply a declared workflow input; repeat per input',
+    owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
+    spec: '--input-file <name>=<path>',
+    description: "Supply a declared workflow input from a file's contents; repeat per input",
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
@@ -81,14 +91,6 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--config-from-run <run-id>',
     description: 'Start a fresh run with the run config another run was started with',
-    owners: [{ command: 'workflow', subcommand: 'run' }],
-  },
-  {
-    spec: '--resume',
-    description:
-      'Resume the newest eligible failed, paused, or stale running run of this workflow\n' +
-      'Running is stale when activity is missing or older than one day; verify its owner is gone first.\n' +
-      'Mutually exclusive with --branch',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
@@ -164,7 +166,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--json',
     description:
-      'Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume, project list/config)',
+      'Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/pause/abandon/resume, project list/add/config)',
     owners: [],
   },
   {
@@ -190,12 +192,15 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--as <name>',
     description:
-      "For 'workflow approve/reject/respond/answer': the name the answerer declares for itself,\nrecorded with an attention wait's answer as a claim (never checked; refused at a gate)",
+      "For 'workflow approve/reject/respond/answer/rule/link/pause': the name the answerer declares for itself,\nrecorded with an attention wait's answer, a ruling, a link or a pause as a claim (never checked; refused at a gate)",
     owners: [
       { command: 'workflow', subcommand: 'approve' },
       { command: 'workflow', subcommand: 'reject' },
       { command: 'workflow', subcommand: 'respond' },
       { command: 'workflow', subcommand: 'answer' },
+      { command: 'workflow', subcommand: 'rule' },
+      { command: 'workflow', subcommand: 'link' },
+      { command: 'workflow', subcommand: 'pause' },
     ],
   },
   {
@@ -213,7 +218,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--no-wait',
     description:
-      "For 'workflow run': refuse, naming the resource, instead of waiting when the workflow's\nresource is full",
+      "For 'workflow run': refuse instead of waiting, naming the resource when the workflow's\nresource is full, or the holding run when another run of the workflow on the same --item\nis not terminal (with or without a resource:), or who set the install hold while it is set",
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
@@ -232,12 +237,25 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--item <key>',
     description:
-      "The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': list its runs",
+      "The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on",
     owners: [
       { command: 'workflow', subcommand: 'run' },
       { command: 'workflow', subcommand: 'runs' },
+      { command: 'workflow', subcommand: 'rule' },
+      { command: 'workflow', subcommand: 'merged' },
+      { command: 'workflow', subcommand: 'landing' },
+      { command: 'workflow', subcommand: 'link' },
+      { command: 'workflow', subcommand: 'wait' },
+      { command: 'workflow', subcommand: 'cancel' },
+      { command: 'workflow', subcommand: 'abandon' },
       { command: 'trigger', subcommand: 'fire' },
     ],
+  },
+  {
+    spec: '--no-item',
+    description:
+      "For 'trigger fire': start the run on no item instead of inheriting the firing run's item",
+    owners: [{ command: 'trigger', subcommand: 'fire' }],
   },
   {
     spec: '--open',
@@ -247,8 +265,12 @@ export const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--limit <n>',
-    description: "For 'workflow runs': max rows (default 20)",
-    owners: [{ command: 'workflow', subcommand: 'runs' }],
+    description:
+      "For 'workflow runs': max rows (default 20); for 'workflow items': items a page (default 20, at most 100)",
+    owners: [
+      { command: 'workflow', subcommand: 'runs' },
+      { command: 'workflow', subcommand: 'items' },
+    ],
   },
   {
     spec: '--timeout <seconds>',

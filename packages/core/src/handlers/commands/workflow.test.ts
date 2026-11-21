@@ -438,25 +438,6 @@ describe('CommandHandler', () => {
         expect(startRequest(result.workflow).args).toBe('#42 add dark mode');
       });
 
-      test('should parse --force after workflow name and strip it from args', async () => {
-        spyDiscoverWorkflows.mockResolvedValueOnce({
-          workflows: [
-            makeTestWorkflowWithSource({ name: 'test-workflow', description: 'A test workflow' }),
-          ],
-          errors: [],
-        });
-
-        const result = await handleCommand(
-          conversationWithCodebase,
-          '/workflow run test-workflow --force do it',
-          operator
-        );
-
-        expect(result.success).toBe(true);
-        expect(startRequest(result.workflow).force).toBe(true);
-        expect(startRequest(result.workflow).args).toBe('do it');
-      });
-
       test('should parse --force anywhere in workflow args and strip it', async () => {
         spyDiscoverWorkflows.mockResolvedValueOnce({
           workflows: [
@@ -543,19 +524,15 @@ describe('CommandHandler', () => {
         stubWorkflowCodebase();
       });
 
-      test('should show run command in workflow usage help', async () => {
+      test('should show run, status and resume in workflow usage help', async () => {
         const result = await handleCommand(conversationWithCodebase, '/workflow invalid', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('/workflow run');
-      });
-
-      test('should show status in workflow usage help', async () => {
-        const result = await handleCommand(conversationWithCodebase, '/workflow invalid', operator);
-
-        expect(result.success).toBe(false);
         expect(result.message).toContain('/workflow status');
-        expect(result.message).toContain('/workflow resume <id> - Resume a failed or paused run');
+        expect(result.message).toContain(
+          '/workflow resume <id> - Resume a failed, paused or killed run'
+        );
       });
     });
   });

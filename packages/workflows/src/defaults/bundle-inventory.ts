@@ -17,6 +17,7 @@ import {
   yamlCountError,
 } from '../workflow-discovery/pack-layout';
 import { getRuntimeForExtension } from '../script-runtime';
+import { ITEM_METRICS_FILE } from '../schemas/item-metric';
 import { METRIC_VIEWS_FILE } from '../schemas/metric-view';
 import type { BundledScriptPack } from './bundled-script-pack';
 
@@ -111,15 +112,16 @@ async function entryType(
   return entry.isSymbolicLink() ? await stat(join(directory, entry.name)) : entry;
 }
 
-// `.shared/` holds a pack's runtime modules, its markdown documents and its metric
-// views. Other files stay out: untracked strays such as `__pycache__/*.pyc` would
+// `.shared/` holds a pack's runtime modules, its markdown documents, its metric views and
+// its item metrics. Other files stay out: untracked strays such as `__pycache__/*.pyc` would
 // otherwise be selected and fail generation.
 function isSharedFile(name: string): boolean {
   const extension = extname(name);
   return (
     getRuntimeForExtension(extension) !== undefined ||
     extension === '.md' ||
-    name === METRIC_VIEWS_FILE
+    name === METRIC_VIEWS_FILE ||
+    name === ITEM_METRICS_FILE
   );
 }
 

@@ -235,6 +235,17 @@ export const prReviewsRequestSchema = requestBase.extend({
   op: z.literal('pr.reviews'),
   ref: prRefSchema,
 });
+/**
+ * The caller's identity for a review posted through `pr.review.submit`, such as its run
+ * id. One line with no `>`, so a plugin can carry it inside an HTML comment.
+ */
+export const reviewKeySchema = z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/);
+/**
+ * `submitKey` is the key a review was posted with through `pr.review.submit`; on a
+ * `review_comment` it is that of the review the comment belongs to. Absent means the
+ * item was not posted through that operation, or a plugin older than the field answered.
+ * It tells Archon's own reviews from others; it is not an authenticated identity.
+ */
 export const reviewItemSchema = z.object({
   kind: z.enum(['review', 'review_comment']),
   id: text,
@@ -244,6 +255,7 @@ export const reviewItemSchema = z.object({
   createdAt: z.iso.datetime({ offset: true }).nullable(),
   url: z.url(),
   body: z.string(),
+  submitKey: reviewKeySchema.optional(),
 });
 export const prReviewsSchema = z.object({ ref: prRefSchema, items: z.array(reviewItemSchema) });
 /** Every review thread on a pull request, read in full: a partial list could hide an open one. */
@@ -347,6 +359,25 @@ const repoPathSchema = text.refine(
   value => value.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..'),
   'path must be repository-relative with no empty, . or .. segments'
 );
+/**
+ * A comment-kind review of the pull request at exactly `commit`, its head. It is
+ * presentation: nothing gates on it and no verdict is read back from it.
+ *
+ * Each comment's `line` is a line of `path` at `commit`. A comment whose line the
+ * diff does not show is written into the review's summary instead of inline. A
+ * review already posted with the same `key` at the same `commit` answers in place
+ * of a second one.
+ */
+export const prReviewSubmitRequestSchema = requestBase.extend({
+  op: z.literal('pr.review.submit'),
+  ref: prRefSchema,
+  commit: gitObjectIdSchema,
+  key: reviewKeySchema,
+  summary: text,
+  comments: z.array(
+    z.object({ path: repoPathSchema, line: z.number().int().positive(), body: text })
+  ),
+});
 /** One file's text at a commit. */
 export const repoFileRequestSchema = requestBase.extend({
   op: z.literal('repo.file'),
@@ -359,6 +390,42 @@ export const repoFileSchema = z.object({
   path: repoPathSchema,
   revision: gitObjectIdSchema,
   text: z.string(),
+});
+/** The image types `attachment.put` stores. SVG is left out: it can carry script. */
+export const attachmentContentTypeSchema = z.enum([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
+/** The most decoded bytes one `attachment.put` stores. */
+export const ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+/**
+ * An image stored with the forge so a comment or review can embed it, such as a
+ * screenshot a stage took. It is presentation: anyone who can read `repo` can
+ * read the file, and nothing prunes it. The forge names the file by its content,
+ * so no caller-supplied name reaches it; what the bytes show is the caller's
+ * responsibility.
+ */
+export const attachmentPutRequestSchema = requestBase.extend({
+  op: z.literal('attachment.put'),
+  repo: repoRefSchema,
+  contentType: attachmentContentTypeSchema,
+  // A pattern rather than `z.base64()`: its JSON Schema `contentEncoding` keyword is
+  // one the script API type generator cannot state.
+  content: z
+    .string()
+    .regex(
+      /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
+      'content must be base64'
+    )
+    .refine(
+      value => {
+        const bytes = Buffer.byteLength(value, 'base64');
+        return bytes > 0 && bytes <= ATTACHMENT_MAX_BYTES;
+      },
+      `content must decode to between 1 byte and ${String(ATTACHMENT_MAX_BYTES)} bytes`
+    ),
 });
 /** Replace an issue's body. */
 export const workItemEditBodyRequestSchema = requestBase.extend({
@@ -412,7 +479,9 @@ export const mutationRequestSchemas = [
   repoLabelEnsureRequestSchema,
   prThreadReplyRequestSchema,
   prThreadResolveRequestSchema,
+  prReviewSubmitRequestSchema,
   workItemEditBodyRequestSchema,
+  attachmentPutRequestSchema,
 ] as const;
 export const mutationRequestSchema = z.discriminatedUnion('op', mutationRequestSchemas);
 export type ForgeMutationRequest = z.infer<typeof mutationRequestSchema>;
@@ -634,9 +703,46 @@ export const mutationResultSchemas = [
     op: prThreadResolveRequestSchema.shape.op,
     value: appliedSchema.extend({ thread: text, resolved: z.literal(true) }),
   }),
+  // `comments` has one entry per request comment, in request order: `inline` on its
+  // line, or `summary` when its line is outside the diff and it went into the body.
+  z.object({
+    op: prReviewSubmitRequestSchema.shape.op,
+    value: appliedSchema.extend({
+      target: prRefSchema,
+      review: z.object({
+        ref: prRefSchema,
+        id: text,
+        url: z.url(),
+        commit: gitObjectIdSchema,
+        key: reviewKeySchema,
+        bodyDigest: text,
+      }),
+      comments: z.array(
+        z.object({
+          path: text,
+          line: z.number().int().positive(),
+          placed: z.enum(['inline', 'summary']),
+        })
+      ),
+    }),
+  }),
   z.object({
     op: workItemEditBodyRequestSchema.shape.op,
     value: appliedSchema.extend({ workitem: workItemRecordSchema, bodyDigest: text }),
+  }),
+  // `digest` is the sha256 hex of the stored bytes; `changed: false` means the forge
+  // already held them. `url` renders as the image in a comment on `target`.
+  z.object({
+    op: attachmentPutRequestSchema.shape.op,
+    value: appliedSchema.extend({
+      target: repoRefSchema,
+      attachment: z.object({
+        url: z.url(),
+        digest: text,
+        bytes: z.number().int().positive(),
+        contentType: attachmentContentTypeSchema,
+      }),
+    }),
   }),
 ] as const;
 

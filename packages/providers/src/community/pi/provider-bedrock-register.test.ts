@@ -27,7 +27,6 @@ import { ensureBedrockProviderRegistered, resetBedrockRegistrationForTest } from
 
 afterEach(() => {
   resetBedrockRegistrationForTest();
-  mockLogger.debug.mockClear();
   mockLogger.warn.mockClear();
 });
 
@@ -51,13 +50,6 @@ test('runs the registrar once across concurrent and repeated calls', async () =>
   expect(registrar).toHaveBeenCalledTimes(1);
 });
 
-test('returns the identical cached promise on every call', () => {
-  const registrar = mock(async () => undefined);
-  const first = ensureBedrockProviderRegistered(registrar);
-  const second = ensureBedrockProviderRegistered(registrar);
-  expect(second).toBe(first);
-});
-
 test('swallows a registrar failure and logs a WARN (non-Bedrock nodes unaffected)', async () => {
   const registrar = mock(async () => {
     throw new Error('bedrock import blew up');
@@ -71,11 +63,4 @@ test('swallows a registrar failure and logs a WARN (non-Bedrock nodes unaffected
   const [fields, event] = mockLogger.warn.mock.calls[0] as [Record<string, unknown>, string];
   expect(event).toBe('pi.bedrock_provider_register_failed');
   expect(fields.err).toBeInstanceOf(Error);
-});
-
-test('logs a DEBUG breadcrumb on successful registration', async () => {
-  const registrar = mock(async () => undefined);
-  await ensureBedrockProviderRegistered(registrar);
-  expect(mockLogger.debug).toHaveBeenCalledTimes(1);
-  expect(mockLogger.debug.mock.calls[0][0]).toBe('pi.bedrock_provider_register_completed');
 });

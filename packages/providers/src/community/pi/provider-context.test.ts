@@ -13,9 +13,15 @@ import {
   readEnv,
   scriptedAgentEnd,
 } from './provider-test-fixture';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { PiProvider } from './provider';
 describe('PiProvider context', () => {
+  const tempRoot = trackTempRoots();
+
   test('requestOptions.systemPrompt threads through to DefaultResourceLoader', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
@@ -174,18 +180,25 @@ describe('PiProvider context', () => {
     expect(loaderArgs?.systemPrompt).toBeUndefined();
   });
 
-  test('non-Anthropic backend keeps Pi built-in prompt (systemPrompt undefined)', async () => {
+  test("a node's declared skill reaches Pi's resource loader", async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
+    const cwd = tempRoot(mkdtempSync(join(tmpdir(), 'archon-pi-node-skill-')));
+    const skillDir = join(cwd, '.agents', 'skills', 'alpha');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'SKILL.md'), '# alpha\n');
 
     await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
+      new PiProvider().sendQuery('hi', cwd, undefined, {
+        model: 'google/gemini-2.5-pro',
+        nodeConfig: { skills: ['alpha'] },
+      })
     );
 
     const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
       | Record<string, unknown>
       | undefined;
-    expect(loaderArgs?.systemPrompt).toBeUndefined();
+    expect(loaderArgs?.additionalSkillPaths).toEqual([skillDir]);
   });
 
   test('nodeConfig.skills with unknown name yields a warning, does not abort', async () => {

@@ -278,10 +278,12 @@ Controls session continuity between iterations:
 The first iteration is always fresh regardless of this setting.
 
 A structured-output re-ask (see [`until_field`](#until_field)) does **not** disturb
-threading. It runs in its own throwaway session so an invalid turn is not carried
-forward as context, and that session is discarded — the next iteration still resumes
-the conversation the loop was already threading. The repaired answer still reaches it
-through `$LOOP_PREV_OUTPUT`.
+threading. On Pi and Copilot it runs in its own throwaway session so an invalid turn is
+not carried forward as context, and that session is discarded — the next iteration still
+resumes the conversation the loop was already threading. The repaired answer still
+reaches it through `$LOOP_PREV_OUTPUT`. On Codex the correction continues the
+iteration's own thread with only the schema errors, so that thread stays the one the
+next iteration resumes.
 
 ### `until_bash`
 
@@ -402,8 +404,9 @@ carries the same value.
 **Per-provider behavior is the same as any other node.** On a provider with
 *enforced* structured output (Claude, Codex, OpenCode) the schema constrains
 decoding. On a *best-effort* provider the model is asked for the schema (Pi through
-a `structured_output` tool call, Copilot through the prompt), and a payload that fails
-validation is re-asked up to three times **within the same iteration** — a reask does not consume a loop iteration. If those are
+a `structured_output` tool call, Copilot through the prompt). On Pi, Copilot and Codex
+a payload that fails validation is re-asked up to three times **within the same
+iteration** — a reask does not consume a loop iteration. If those are
 exhausted, the node **fails** with the validation errors; it is never treated as an
 incomplete iteration. See
 [provider capabilities](/reference/provider-capabilities/).
@@ -586,7 +589,7 @@ If you need to accumulate results across iterations, write them to files in
 
 | Scenario | Behavior |
 |----------|----------|
-| Iteration fails | A transient, rate-limited or capacity (`overloaded`) failure retries the iteration. Any other failure fails the node (no more iterations) |
+| Iteration fails | A transient, rate-limited or capacity (`overloaded`) failure retries the iteration. With `retry.on_error: schema_unmet`, an iteration whose output did not meet its schema retries too. Any other failure fails the node (no more iterations) |
 | Max iterations exceeded | Node fails with descriptive error; with `on_exhausted: complete`, node completes with the last iteration's output |
 | Workflow cancelled | Detected between iterations, node stops |
 | Idle timeout per iteration | The iteration is retried as a transient failure, whether or not its provider produced output first |
@@ -608,7 +611,7 @@ nodes:
 
 `max_attempts` is required when declaring `retry:` and accepts integers 1–5, counting retries after the initial attempt. `delay_ms` accepts 0–60000 on loops and defaults to 3000 when omitted. Zero skips ordinary transient retry waits. The budget resets for each iteration; retries do not consume `max_iterations`.
 
-Only `on_error: transient` or omission is supported on loops; `all` is a load error. Unknown, fatal and output-contract failures are not retried by this policy. Structured-output reasks have their own separate budget.
+Loops support `on_error: transient`, `on_error: schema_unmet` or omission; `all` is a load error. `schema_unmet` keeps the transient retries and also retries an iteration whose output did not meet its `output_format` schema; it does not retry unknown failures. Unknown, fatal and output-contract failures are not retried by this policy. Structured-output reasks have their own separate budget.
 
 Rate limits and capacity retain the shared AI-node exceptions: at least five retries, regardless of `max_attempts`. Rate limits wait around 45 seconds with ±50% jitter and keep the larger budget for the rest of the iteration. Capacity waits use centers of 45, 90, 180, 300 and 300 seconds with ±50% jitter; its larger budget applies only while the current failure is capacity. `delay_ms: 0` does not bypass either schedule. See [Retry Configuration](/reference/workflow-language/#retry-configuration).
 
@@ -938,6 +941,45 @@ The resolved provider must match the source and
 support session resume and immutable forks. Missing context or a replacement owner
 session ID fails the node rather than starting a new conversation.
 
+### One node across rounds: `context: same`
+
+When the node that builds is also the node that fixes, it does not need a pre-loop
+source. `context: same` continues its own session from the previous round:
+
+```yaml
+nodes:
+  - id: corrections
+    loop_group:
+      max_iterations: 3
+      until_bash: 'ready=$review.output.done; [ "$ready" = true ]'
+      nodes:
+        - id: build
+          context: same
+          prompt: |
+            Implement the requested change, or correct what the review found:
+            $LOOP_PREV.review.output.findings
+        - id: review
+          depends_on: [build]
+          context: fresh
+          prompt: Review the change and report whether it is ready.
+          output_format:
+            type: object
+            properties:
+              done: { type: boolean }
+              findings: { type: string }
+            required: [done, findings]
+            additionalProperties: false
+```
+
+Round one starts fresh. Each later round continues `build`'s session in place, whatever
+`fresh_context` says, and whether `build` runs alone or beside other nodes; nodes side by
+side that each declare `same` each keep their own session. A pause inside the loop keeps
+the cursor. When the run has an item, every round's session is also recorded under it,
+so the next run's `build` on that item forks the last round's session in its first round,
+and a failure resume continues the newest round. See
+[Continuing a node's own session](/reference/workflow-language/#continuing-a-nodes-own-session)
+for the full order and what happens on a provider or model change.
+
 ### Same-iteration sessions
 
 A command or prompt in the body can also continue a session produced earlier in the
@@ -1002,9 +1044,18 @@ Suspension and failure have different recovery rules:
 - **Same-iteration sessions after a nested pause**: a nested group's pause between a
   same-body source and its consumer resumes within the paused iteration, which re-runs
   the source. The consumer forks the re-run, matching the `$source.output` it reads.
-- **Failure resume** (`/workflow resume <id>` after a crash/failure): there is
-  no persisted iteration cursor — the loop_group node restarts from
-  **iteration 1**. Per-body-node resume granularity is not supported in v1.
+- **Failure resume** (`/workflow resume <id>` after a crash/failure): the group
+  resumes in the iteration it stopped in, read from the run's body-node history. An
+  iteration whose body did not finish re-runs in full. One whose body finished re-runs
+  only its completion check, then the group goes on to the next iteration; in an
+  interactive group it re-runs in full, because its gate was never reached. Earlier
+  iterations stay done, and `$LOOP_PREV.*` reads the last completed one, restored the
+  same way as after a pause; if its history or full output cannot be restored, the
+  resume fails. Iterations already used count
+  against `max_iterations`, so a group that failed by running out of iterations fails
+  again without running one. With `fresh_context: false`, the re-entered iteration starts
+  a new session. A `context: same` node continues the newest round's session it recorded
+  under the run's item; a run without an item starts it fresh.
 
 ### What is NOT supported on loop_group nodes (v1)
 
@@ -1014,7 +1065,9 @@ Suspension and failure have different recovery rules:
   [`until_field`](#until_field).
 - `retry` (the loop manages its own iteration) — rejected at parse time.
 - Cross-run `persist_session` for body AI nodes. In-run iterations use the ambient
-  cursor governed by `fresh_context`, or explicit named owner cursors described above.
+  cursor governed by `fresh_context`, explicit named owner cursors, or `context: same`,
+  all described above. A `context: same` body node also continues across runs on the
+  same item.
 - Per-body-node resume (skip-to-failed-body-node) — the whole iteration re-runs.
 - `$LOOP_PREV.<id>.output[N]` history indexing — only the immediately prior
   iteration is reachable.
@@ -1075,9 +1128,10 @@ release did not record that output, so its first resumed iteration sees both as 
 
 By default a legacy interactive loop gates even on an iteration that met its completion
 condition. `signal_completes: true` completes the node on that iteration instead, so the
-gate appears only on iterations that did not complete. Setting it without
-`interactive: true` has no effect and emits a loader warning. Replace it with a terminal
-wait whose `when:` skips it on success, as in the second example under
+gate appears only on iterations that did not complete. Without `interactive: true` the
+flag has no effect, and the load warnings (`archon validate`) say to remove it. Replace
+the interactive shape with a terminal wait whose `when:` skips it on success, as in the
+second example under
 [Pausing to ask inside the body](#pausing-to-ask-inside-the-body).
 
 ## See Also

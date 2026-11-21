@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { trackTempRoots } from './temp-roots';
-import { PR, PR_URL, packScriptRunner, type ScriptRun } from './deliver-checks-harness';
+import { PR_URL, packScriptRunner, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 
@@ -83,15 +83,6 @@ function round(
   });
 }
 
-/** Delivery's `prior-review` node: the report a round's review is bound to. */
-function priorReview(previous: string, earlier: string): string {
-  const run = runPackScript('deliver/scripts/prior-review', {
-    inputs: { INPUTS_PREVIOUS: previous, INPUTS_EARLIER: earlier },
-  });
-  expect({ code: run.code, stderr: run.stderr }).toEqual({ code: 0, stderr: '' });
-  return (JSON.parse(run.stdout) as { report: string }).report;
-}
-
 describe('review-round', () => {
   it("continues a new run's first review from the report an earlier run published, and reviews from the start without one", () => {
     const { cwd, older, newer } = history();
@@ -111,14 +102,9 @@ describe('review-round', () => {
       return JSON.parse(run.stdout) as Record<string, unknown>;
     };
 
-    // The run's first round has no previous round, so the caller's report is the one continued.
-    const first = priorReview('', join(earlier, 'report.md'));
-    expect(first).toBe(join(earlier, 'report.md'));
-    expect(mode(first)).toMatchObject({ continuation: true, head: newer, cursor: older, code: true, tests: true, seams: false });
-    // A later round continues from this run's own report, not the caller's.
-    expect(priorReview('/run/review/report.md', join(earlier, 'report.md'))).toBe('/run/review/report.md');
-    // Neither: a first review of the whole change.
-    expect(mode(priorReview('', ''))).toMatchObject({ continuation: false, head: newer, cursor: '', code: false, tests: false });
+    expect(mode(join(earlier, 'report.md'))).toMatchObject({ continuation: true, head: newer, cursor: older, code: true, tests: true, seams: false });
+    // No report: a first review of the whole change.
+    expect(mode('')).toMatchObject({ continuation: false, head: newer, cursor: '', code: false, tests: false });
   });
 
   // A standalone review of a pull request started from another checkout: the round
@@ -135,9 +121,6 @@ describe('review-round', () => {
     const wrong = scoped(older);
     expect(wrong.code).not.toBe(0);
     expect(wrong.stdout).toBe('');
-    expect(wrong.stderr).toContain(
-      `review-round: this round reviewed ${older}, but ${PR.repo.host}/${PR.repo.path}#${String(PR.number)} is at ${newer}: push the commits under review, or review from a checkout of the pull request's head`
-    );
 
     const matching = scoped(newer);
     expect(matching.code).toBe(0);

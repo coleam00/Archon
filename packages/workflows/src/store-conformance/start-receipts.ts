@@ -394,6 +394,21 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       expect(await store.hasStartReceiptForDelivery('source', 'other-delivery')).toBe(false);
       expect(await store.hasStartReceiptForDelivery('other-source', 'delivery')).toBe(false);
     });
+    test('receiptIds selects only the pending bindings of those receipts, and none when empty', async () => {
+      const store = harness.store;
+      const older = acceptance();
+      const named = { ...acceptance(), receipt: { ...acceptance().receipt, deliveryId: 'named' } };
+      await store.acceptStartReceipt(older);
+      await store.acceptStartReceipt(named);
+      expect(
+        await store.listPendingStartBindings({
+          hostId: 'host',
+          limit: 1,
+          receiptIds: [named.receipt.id],
+        })
+      ).toMatchObject([{ receiptId: named.receipt.id }]);
+      expect(await store.listPendingStartBindings({ hostId: 'host', receiptIds: [] })).toEqual([]);
+    });
     test('preparation failure and reset require the exact current owner', async () => {
       const store = harness.store,
         input = acceptance();
@@ -425,6 +440,50 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
         })
       ).toBe(true);
       expect(await store.listPendingStartBindings({ hostId: 'host' })).toEqual([]);
+    });
+    test('a forge refusal is stored with the failure and read back on the receipt', async () => {
+      const store = harness.store,
+        refused = acceptance(),
+        failed = { ...acceptance(), receipt: { ...acceptance().receipt, deliveryId: 'other' } };
+      const forgeRefusal = {
+        pack: 'sdlc',
+        failures: [
+          {
+            remote: 'origin',
+            reason: 'unsupported_op',
+            message: 'the plugin does not advertise every declared operation',
+            unsupported: ['pr.merge'],
+            remedy: 'Upgrade the forge plugin.',
+          },
+          { reason: 'no_forge_path', message: 'no host command' },
+        ],
+      };
+      for (const [input, refusal] of [
+        [refused, forgeRefusal],
+        [failed, undefined],
+      ] as const) {
+        await store.acceptStartReceipt(input);
+        const identity = {
+          receiptId: input.receipt.id,
+          bindingId: binding.bindingId,
+          ownerId: 'owner',
+        };
+        expect(await store.claimStartBindingPreparation(identity)).toBe(true);
+        expect(
+          await store.failStartBindingPreparation({
+            ...identity,
+            retryable: false,
+            error: 'launch_preparation_failed',
+            ...(refusal ? { forgeRefusal: refusal } : {}),
+          })
+        ).toBe(true);
+      }
+      expect((await store.getStartReceipt(refused.receipt.id))?.bindings).toMatchObject([
+        { status: 'rejected', error: 'launch_preparation_failed', forgeRefusal },
+      ]);
+      expect((await store.getStartReceipt(failed.receipt.id))?.bindings).toMatchObject([
+        { status: 'rejected', error: 'launch_preparation_failed', forgeRefusal: null },
+      ]);
     });
     for (const { name, timestamps } of [
       {

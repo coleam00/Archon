@@ -6,6 +6,7 @@ import {
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
   deadlineWaitCursor,
+  ownerlessResumeCursor,
   type PauseCursor,
   type IWorkflowStore,
 } from '../store';
@@ -23,6 +24,7 @@ import {
   schedule,
   running,
   rejection,
+  testRunOwnerLease,
 } from './fixtures';
 
 export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarness): void {
@@ -52,27 +54,34 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
         expect(await harness.store.admitResourceStart(intent)).toEqual(decisions[index]);
       }
     });
-    for (const activity of ['null', 'stale'] as const) {
-      test(`admitted running runs cannot resume with ${activity} activity`, async () => {
-        const intent = start();
-        const id = intent.launch.run.id;
-        await store.admitResourceStart(intent);
-        await store.updateWorkflowRun(id, { status: 'running' });
-        await harness.backdate(id, {
-          last_activity_at: activity === 'null' ? null : new Date('2020-01-01T00:00:00Z'),
-        });
-        const before = await store.getWorkflowRun(id);
-        expect(before?.last_activity_at).toEqual(
-          activity === 'null' ? null : new Date('2020-01-01T00:00:00Z')
-        );
-        const events = await store.listWorkflowEvents(id);
-        expect(await rejection(store.resumeWorkflowRun(id))).toBeInstanceOf(
-          WorkflowNotResumableError
-        );
-        expect(await store.getWorkflowRun(id)).toEqual(before);
-        expect(await store.listWorkflowEvents(id)).toEqual(events);
+    test('an admitted running run resumed without its owner keeps exactly its one slot', async () => {
+      const intent = start('queue', 'host', 2);
+      const id = intent.launch.run.id;
+      await store.admitResourceStart(intent);
+      await store.updateWorkflowRun(id, { status: 'running' });
+      const before = await store.getWorkflowRun(id);
+      if (!before) throw new Error('run missing');
+      // Without a cursor, a running run is never resumable, however old its activity.
+      await harness.backdate(id, { last_activity_at: null });
+      expect(await rejection(store.resumeWorkflowRun(id))).toBeInstanceOf(
+        WorkflowNotResumableError
+      );
+      expect(
+        (
+          await store.resumeWorkflowRun(
+            id,
+            ownerlessResumeCursor(before, testRunOwnerLease(before.id))
+          )
+        ).status
+      ).toBe('running');
+      // Capacity two: the resumed run holds one slot, so one more start fits and the next queues.
+      expect(await store.admitResourceStart(start('queue', 'host', 2))).toMatchObject({
+        status: 'admitted',
       });
-    }
+      expect(await store.admitResourceStart(start('queue', 'host', 2))).toMatchObject({
+        status: 'queued',
+      });
+    });
     test('a failed admitted run cannot resume past a new holder or a queued promise', async () => {
       const first = start(),
         holder = start(),
@@ -606,35 +615,49 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
         { id: intents[4].launch.run.id },
       ]);
     });
-    test('admission keeps FIFO across hosts, skips overlap and withdraws queued work', async () => {
+    test('admission keeps FIFO per host, passes over another host, skips overlap and withdraws queued work', async () => {
       const store = harness.store;
       const owner = start(),
         queued = start('queue', 'other'),
         later = start(),
+        last = start(),
         skipped = start('skip');
       await store.admitResourceStart(owner);
       expect(await store.admitResourceStart(queued)).toMatchObject({
         status: 'queued',
         blocker: { kind: 'run', id: owner.launch.run.id },
       });
+      // Another host's queued start does not block this host; the full slot does.
       expect(await store.admitResourceStart(later)).toMatchObject({
         status: 'queued',
-        blocker: { kind: 'request', id: queued.launch.run.id },
+        blocker: { kind: 'run', id: owner.launch.run.id },
       });
+      // This host's own queue does.
       expect(await store.admitResourceStart(skipped)).toMatchObject({
         status: 'skipped',
-        blocker: { kind: 'request', id: queued.launch.run.id },
+        blocker: { kind: 'request', id: later.launch.run.id },
       });
       expect(await store.getWorkflowRun(skipped.launch.run.id)).toBeNull();
       await store.claimPendingWorkflowRun(owner.launch.run.id);
       await store.completeWorkflowRun(owner.launch.run.id, { duration_ms: 1 });
-      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([]);
-      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toEqual(queued.launch);
-      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toBeNull();
+      // The slot is free. The other host's older start waits only for its own drain, so
+      // it blocks neither this host's queue nor its new starts; this host's queue keeps
+      // its own order.
+      expect(await store.admitResourceStart(last)).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'request', id: later.launch.run.id },
+      });
       expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([
         { status: 'admitted', requestId: later.launch.run.id, runId: later.launch.run.id },
       ]);
-      expect(await store.listQueuedResourceStartsForHost('host')).toEqual([]);
+      expect(await store.listQueuedResourceStartsForHost('other')).toMatchObject([
+        { id: queued.launch.run.id },
+      ]);
+      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toEqual(queued.launch);
+      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toBeNull();
+      expect(await store.listQueuedResourceStartsForHost('host')).toMatchObject([
+        { id: last.launch.run.id },
+      ]);
     });
   });
 }

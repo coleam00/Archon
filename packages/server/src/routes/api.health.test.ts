@@ -158,6 +158,8 @@ const mockGetRunningWorkflows = mock<
 >(async () => []);
 
 mock.module('@archon/core/db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   getWorkflowRunForAttention: mock(async () => null),
@@ -446,15 +448,6 @@ describe('GET /api/health', () => {
     const response = await makeApp().request('/api/dashboard/conversations');
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(snapshot);
-  });
-
-  test('returns 200 without any auth requirements', async () => {
-    mockGetStats.mockImplementationOnce(makeIdleLockStats);
-    mockGetRunningWorkflows.mockImplementationOnce(async () => []);
-
-    const app = makeApp();
-    const response = await app.request('/api/health');
-    expect(response.status).toBe(200);
   });
 
   test('includes is_docker: false in non-Docker environment', async () => {

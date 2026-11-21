@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { itemReadSchema } from '../item-read';
+import { itemWindowSchema } from '../item-window';
 import { nodeOutcomesListingSchema } from '../schemas/node-outcomes';
 import { resourceStartDispositionSchema } from '../schemas/resource-start';
 import {
@@ -53,6 +55,18 @@ const types: readonly (readonly [string, string, z.ZodType, 'input' | 'output'])
     'NodeOutcomesListing',
     "The engine's listing of what each node of the run has recorded.",
     nodeOutcomesListingSchema,
+    'output',
+  ],
+  [
+    'ItemRead',
+    'The item a run belongs to: its runs, open questions, answers with rulings, oldest first, and links.',
+    itemReadSchema,
+    'output',
+  ],
+  [
+    'ItemWindow',
+    "A page of the project's items with a run started in a window, each read whole.",
+    itemWindowSchema,
     'output',
   ],
   [

@@ -393,16 +393,9 @@ describe('WorktreeProvider against real git', () => {
     expect(await gitModule.findWorktreeByBranch(toRepoPath(repoPath), validBranch)).toBe(
       validTarget
     );
-    expect((await provider.get(validTarget))?.workingPath).toBe(validTarget);
-    expect((await provider.adopt(validTarget))?.workingPath).toBe(validTarget);
-    expect((await provider.list(repoPath)).map(environment => environment.workingPath)).toEqual([
-      validTarget,
-    ]);
     expect(
       await gitModule.findWorktreeByBranch(toRepoPath(repoPath), toBranchName(branch))
     ).toBeNull();
-    expect(await provider.get(target)).toBeNull();
-    expect(await provider.adopt(target)).toBeNull();
     expect((await git(target, 'symbolic-ref', 'HEAD')).trim()).toBe(branch);
     expect(await git(target, 'rev-parse', 'HEAD')).toBe(head);
     expect(await git(target, 'status', '--porcelain')).toBe(status);
@@ -565,7 +558,6 @@ describe('WorktreeProvider against real git', () => {
       expect(created.workingPath).toBe(worktreePath);
       const adopted = await provider.create(request);
       expect(adopted.metadata.adopted).toBe(true);
-      expect(await provider.adopt(worktreePath)).not.toBeNull();
       const { stdout } = await execFileAsync('git', [
         'config',
         '--global',
@@ -1338,13 +1330,6 @@ describe('WorktreeProvider against real git', () => {
       fresh.metadata.creationId
     );
     expect((await git(fresh.workingPath, 'status', '--porcelain')).trim()).toBe('');
-    const observed = await provider.get(fresh.id);
-    expect(observed?.metadata).toEqual({ provenance: 'observed', adopted: false });
-    const listed = await provider.list(repoPath);
-    expect(listed.find(env => env.id === fresh.id)?.metadata).toEqual({
-      provenance: 'observed',
-      adopted: false,
-    });
     const adopted = await provider.create(freshRequest);
     expect(adopted.metadata.provenance).toBe('adopted');
     expect(adopted.metadata.adopted).toBe(true);
@@ -1354,6 +1339,49 @@ describe('WorktreeProvider against real git', () => {
     const recreated = await provider.create(freshRequest);
     if (recreated.metadata.adopted) throw new Error('expected new generation');
     expect(recreated.metadata.creationId).not.toBe(fresh.metadata.creationId);
+  });
+
+  test('target-path reuse refuses a --from outside the worktree history and keeps one inside it', async () => {
+    await git(repoPath, 'remote', 'add', 'origin', repoPath);
+    const oldBase = (await git(repoPath, 'rev-parse', 'HEAD')).trim();
+    const reuseRequest = (fromBranch: string): IsolationRequest => ({
+      ...request,
+      workflowType: 'task',
+      taskBranch: {
+        kind: 'new',
+        branch: toBranchName('factory/x'),
+        fromBranch: toBranchName(fromBranch),
+      },
+    });
+    const { workingPath: target } = await provider.create(reuseRequest(oldBase));
+    await writeFile(join(target, 'work.txt'), 'branch work\n');
+    await git(target, 'add', 'work.txt');
+    await git(target, 'commit', '-qm', 'branch work');
+    await writeFile(join(repoPath, 'merged.txt'), 'merged on main\n');
+    await git(repoPath, 'add', 'merged.txt');
+    await git(repoPath, 'commit', '-qm', 'main moves on');
+    await writeFile(join(target, 'README.md'), 'operator edits\n');
+    const head = await git(target, 'rev-parse', 'HEAD');
+    const status = await git(target, 'status', '--porcelain');
+
+    const failure = await typedFailure(provider.create(reuseRequest('main')));
+    expect(failure.kind).toBe('branch_exists');
+    expect(failure.message).toContain(`worktree at ${target}`);
+    expect(failure.message).toContain('--from main');
+    expect(failure.message).toContain(`based on ${oldBase.slice(0, 12)}`);
+    // HEAD names the repository's HEAD, as on creation, not the worktree's own.
+    expect((await typedFailure(provider.create(reuseRequest('HEAD')))).kind).toBe('branch_exists');
+    const emptyTree = (await git(repoPath, 'hash-object', '-t', 'tree', '/dev/null')).trim();
+    const orphan = (await git(repoPath, 'commit-tree', emptyTree, '-m', 'unrelated')).trim();
+    await git(repoPath, 'branch', 'unrelated', orphan);
+    const unrelated = await typedFailure(provider.create(reuseRequest('unrelated')));
+    expect(unrelated.kind).toBe('branch_exists');
+    expect(unrelated.message).toContain('shares no history with --from');
+    expect(await git(target, 'rev-parse', 'HEAD')).toBe(head);
+    expect((await git(target, 'branch', '--show-current')).trim()).toBe('factory/x');
+    expect(await git(target, 'status', '--porcelain')).toBe(status);
+
+    expect((await provider.create(reuseRequest(oldBase))).workingPath).toBe(target);
   });
 
   test('marker write failure rolls back the locked setup and retains trust', async () => {

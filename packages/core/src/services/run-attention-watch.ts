@@ -405,8 +405,10 @@ export function runOwnerLossWatch(store: RunAttentionReadStore): RunOwnerLossWat
 }
 
 /**
- * What this process observes about a running row's owner, by the rule `workflow wait`
- * uses for `owner_lost`. Null when the row is not running, so it makes no ownership claim.
+ * What this process observes about a row's owner, by the rule `workflow wait` uses for
+ * `owner_lost`: a running row, or a paused parent whose sub-run tree runs in its process.
+ * Null when the row's state needs no owner (an ordinary pause, a pending or terminal row),
+ * so it makes no ownership claim.
  * Reads only the owner endpoints and the stored row: how long the run has been quiet is
  * not an input, and the run is never mutated.
  */
@@ -421,7 +423,7 @@ export async function observeRunOwner(
   };
   let current: WorkflowRun | null = run;
   for (let read = 1; ; read++) {
-    if (current?.status !== 'running') return null;
+    if (current?.status !== 'running' && current?.status !== 'paused') return null;
     const resolution = await resolveRunAttention(ownerStore, withoutRunningAttention(current));
     if (resolution.kind !== 'owner_required') return null;
     const attachment = await attachRunOwner(resolution, () => undefined);

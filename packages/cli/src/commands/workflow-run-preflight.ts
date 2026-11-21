@@ -34,17 +34,10 @@ import { readChatProjectScope } from '../workflow-scope';
 import { resolveCliUserId } from '../utils/cli-user';
 import { getLog, type WorkflowRunOptions } from './workflow-shared';
 
-/** The refusal when `--resume` finds nothing to continue. */
+/** The refusal when a resume arrives without the run it continues. */
 export function buildNoResumableRunError(workflowName: string, cwd: string): Error {
-  return new Error(`No resumable run found for workflow '${workflowName}' at path '${cwd}'.`);
-}
-
-/** The refusal when the resumable-run lookup itself could not answer. */
-export function buildResumeLookupFailureError(error: Error): Error {
   return new Error(
-    'Cannot resume: Database lookup failed.\n' +
-      `Error: ${error.message}\n` +
-      'Hint: Check your database connection before using --resume.'
+    `Cannot resume workflow '${workflowName}' at path '${cwd}': the run to continue was not found.`
   );
 }
 
@@ -355,24 +348,13 @@ export function countWorkflowSources(
  * Refusals that depend only on how the run was invoked, checked before the dry-run
  * branch so a dry run reports them too.
  */
-export function assertInvocationFlags(options: WorkflowRunOptions, isContinuation: boolean): void {
-  if (isContinuation && options.modelAssignments && options.modelAssignments.length > 0) {
-    throw new Error(
-      '--resume and --model are mutually exclusive. A resumed run keeps its original model bindings.'
-    );
-  }
-
+export function assertInvocationFlags(options: WorkflowRunOptions): void {
   if (options.registrationBaseBranch !== undefined) {
     if (!options.registrationBaseBranch.trim())
       throw new Error('--base-branch requires a nonempty branch name.');
-    if (
-      options.resume ||
-      options.adoptRunId !== undefined ||
-      options.supersedesRunId !== undefined ||
-      options.dryRun
-    )
+    if (options.adoptRunId !== undefined || options.supersedesRunId !== undefined || options.dryRun)
       throw new Error(
-        '--base-branch applies only to initial registration and cannot be combined with --resume, --adopt, --supersedes, or --dry-run.'
+        '--base-branch applies only to initial registration and cannot be combined with --adopt, --supersedes, or --dry-run.'
       );
   }
 
@@ -394,11 +376,7 @@ export function assertInvocationFlags(options: WorkflowRunOptions, isContinuatio
  * workflowRunCommand is the authoritative boundary for programmatic callers.
  */
 export function assertExecutionFlags(options: WorkflowRunOptions): void {
-  if (options.item !== undefined) {
-    if (options.resume)
-      throw new Error('--item names the item of a new run; a resumed run keeps its own.');
-    assertItemKey(options.item);
-  }
+  if (options.item !== undefined) assertItemKey(options.item);
   if (options.branchName !== undefined && options.noWorktree) {
     throw new Error(
       '--branch and --no-worktree are mutually exclusive.\n' +
@@ -418,21 +396,6 @@ export function assertExecutionFlags(options: WorkflowRunOptions): void {
       '--base has no effect with --no-worktree.\n' + 'Remove --base or drop --no-worktree.'
     );
   }
-  if (options.resume && options.branchName !== undefined) {
-    throw new Error(
-      '--resume and --branch are mutually exclusive.\n' +
-        '  --resume reuses the existing worktree from the failed run.\n' +
-        '  Remove --branch when using --resume.'
-    );
-  }
-  if (options.resume && options.inputs !== undefined && options.inputs.length > 0) {
-    throw new Error(
-      '--resume and --input are mutually exclusive.\n' +
-        "  A resume replays the original invocation's inputs, recorded on the run.\n" +
-        '  Drop --input to resume, or start a fresh run to supply different values.'
-    );
-  }
-
   assertContinuationFlags(options);
 }
 
@@ -443,7 +406,6 @@ export function assertExecutionFlags(options: WorkflowRunOptions): void {
 function assertContinuationFlags(options: WorkflowRunOptions): void {
   if (options.adoptRunId !== undefined) {
     const conflicts: string[] = [];
-    if (options.resume) conflicts.push('--resume');
     if (options.branchName !== undefined) conflicts.push('--branch');
     if (options.fromBranch !== undefined) conflicts.push('--from/--from-branch');
     if (options.baseBranch !== undefined) conflicts.push('--base');
@@ -454,10 +416,6 @@ function assertContinuationFlags(options: WorkflowRunOptions): void {
           '  Adoption resolves its own lane: reuse the adopted worktree, or cut a fresh one from its branch.'
       );
     }
-  } else if (options.supersedesRunId !== undefined && options.resume) {
-    throw new Error(
-      '--supersedes records a FRESH-lane rerun as replacing a prior open item; it cannot be combined with --resume.'
-    );
   }
 }
 

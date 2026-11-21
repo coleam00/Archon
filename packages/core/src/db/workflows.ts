@@ -44,8 +44,7 @@ export {
   listNotifiedTerminalRuns,
 } from './workflow-run-lists';
 export {
-  findResumableRun,
-  findResumableRunByParentConversation,
+  listResumableRunsByParentConversation,
   resumeWorkflowRun,
   recoverCancelledFanOutRun,
   releasePausedRunSlot,
@@ -77,6 +76,8 @@ export {
   cancelFanOutRun,
   cancelResumableRunsForConversation,
   releaseRunForUnreadableSource,
+  pauseWorkflowRunForOperator,
+  requestOperatorPause,
   type WorkflowRunInsert,
 } from './workflow-run-transitions';
 export {

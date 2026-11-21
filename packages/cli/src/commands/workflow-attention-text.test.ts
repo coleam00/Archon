@@ -110,13 +110,33 @@ test('an unreadable item, a failed run and a lost owner say which run and what s
   });
   expect(red).toContain('summary: main is red: lint fails on dev.');
   expect(red).toContain(more);
-  const lost = text({ type: 'owner_lost', ...run, observedStatus: 'running' });
+  const lost = text({ type: 'owner_lost', ...run, observedStatus: 'running', item: 'issue-7' });
   expect(lost).toContain(more);
+  expect(lost).toContain('item issue-7');
+  expect(lost).toContain('archon workflow resume run-1');
   expect(lost).toContain('archon workflow abandon run-1');
+  // The list's item for the same holder names its item and both actions too.
+  const listed = opened({
+    ...base,
+    kind: 'owner_lost',
+    ref: 'run-1',
+    item: { id: 'item-row', projectKey: 'acme/web', key: 'issue-7' },
+    run: held,
+    observedStatus: 'paused',
+  });
+  expect(listed).toContain('item issue-7');
+  expect(listed).toContain('archon workflow resume run-1');
+  expect(listed).toContain('archon workflow abandon run-1');
   // A run that ended well needs nobody, so it points nowhere.
   expect(
     text({ type: 'terminal', ...run, status: 'completed', outcome: null, cause: null })
   ).not.toContain(more);
+  expect(
+    text({ type: 'terminal', ...run, status: 'completed', outcome: null, cause: null })
+  ).toContain('Run run-1 completed.');
+  expect(
+    text({ type: 'terminal', ...run, status: 'completed', outcome: 'built', cause: null })
+  ).toContain('Run run-1 completed (built).');
 });
 
 test('the close of an ask is one line that says who answered when that was recorded', () => {
@@ -146,13 +166,35 @@ test('the close of an ask is one line that says who answered when that was recor
   ).toHaveLength(1);
 });
 
-test('an item no run holds is named by its ref and offers no run command', () => {
+test('an item no run holds is named by its ref and answered by it, not by a run command', () => {
   const { run: _, ...withoutRun } = ask;
-  const block = opened({ ...withoutRun, ref: 'ask:1' });
+  const block = opened({
+    ...withoutRun,
+    ref: 'ask:1',
+    context: 'Review passed.\nMerging now blocks the Friday deploy.',
+  });
   expect(block).toContain('ask:1');
   expect(block).toContain('Merge pull request 42?');
   expect(block).toContain('option merge: Squash-merge it.');
-  expect(block).not.toContain('archon workflow');
+  expect(block).toContain('archon workflow answer --ref ask:1 --choose <option>');
+  // The listing is the only text read of an ask, so its whole context is in it.
+  expect(block).toContain('context: Review passed.');
+  expect(block).toContain('Merging now blocks the Friday deploy.');
+  // An open ask, not a paused run, with the item it belongs to and its whole question.
+  const long = `Merge pull request 42 ${'and its follow-up '.repeat(20)}now?`;
+  const listed = attentionItemLines(
+    {
+      ...withoutRun,
+      ref: 'ask:2',
+      message: long,
+      item: { id: 'item-row', projectKey: 'acme/widgets', key: 'issues/42' },
+    },
+    'brief'
+  ).join('\n');
+  expect(listed).toContain('ask:2  open ask');
+  expect(listed).toContain('item issues/42');
+  expect(listed).toContain(long);
+  expect(listed).not.toContain('paused');
   expect(
     text({
       type: 'resolved',

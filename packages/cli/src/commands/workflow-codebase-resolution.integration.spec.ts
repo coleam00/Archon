@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterEach, expect, test, mock } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { listCodebaseRegistrations } from '@archon/core/db/codebases';

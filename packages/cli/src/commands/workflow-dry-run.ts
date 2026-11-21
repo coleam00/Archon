@@ -18,7 +18,7 @@ import type {
 } from '@archon/workflows/schemas/run-config';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { resolveTopLevelInputs } from '@archon/workflows/utils/workflow-requirements';
-import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
+import { liveSourceRoots, workflowSourceConfigFrom } from '@archon/workflows/workflow-source';
 import {
   dryRunWorkflow,
   formatDryRunTrace,
@@ -28,6 +28,7 @@ import {
 import { resolveCliUserId } from '../utils/cli-user';
 import { writeJsonLine, writeStdout } from '../utils/stdout';
 import { getLog, type WorkflowRunOptions } from './workflow-shared';
+import { readSuppliedInputs } from './workflow-run-admission';
 
 export async function resolveDryRunEnvironment(
   host: WorkflowHost,
@@ -71,7 +72,6 @@ function assertDryRunFlags(options: WorkflowRunOptions): void {
     ['--no-worktree', options.noWorktree === true],
     ['--folder', options.folder === true],
     ['--container', options.container === true],
-    ['--resume', options.resume === true],
     ['--detach', options.detach === true],
   ] as const;
   const incompatibleFlag = incompatible.find(([, present]) => present)?.[0];
@@ -140,10 +140,7 @@ export async function runDryRun(
   // with the same errors (undeclared key, missing required) before any trace output.
   // Only the supplied entries travel; the simulator layers pack settings and declared
   // defaults under them through `resolveRunStartInputs`, the merge a real run starts with.
-  const dryRunInputs = resolveTopLevelInputs(
-    workflow,
-    options.inputs ? parseInputAssignments(options.inputs) : undefined
-  );
+  const dryRunInputs = resolveTopLevelInputs(workflow, await readSuppliedInputs(options));
 
   // Relative stub paths resolve from `--cwd`, as the CLI reference states. They are the
   // operator's dry-run inputs, not part of the workflow's source, so `--workflow-source`
@@ -178,6 +175,14 @@ export async function runDryRun(
   const dryRunConfig = options.execCode
     ? await resolveDryRunEnvironment(host, cwd, dryRunFileConfig, runConfig?.layer)
     : applyWorkflowRunConfigLayer(dryRunFileConfig, runConfig?.layer);
+  // Source text (commands, named scripts, `$PACK_DIR`) and the source's own settings
+  // (`commands.folder`, `defaults.loadDefaultCommands`) come from where the workflow was
+  // discovered, as a real run's capture reads them (`prepareWorkflowSource`). Not caught:
+  // a malformed source config fails here for the same reason as above.
+  const sourceRoot = options.discoveryCwd ?? cwd;
+  const sourceFileConfig =
+    sourceRoot === cwd ? dryRunFileConfig : await host.deps.loadConfig(sourceRoot);
+  const sourceRoots = liveSourceRoots(sourceRoot, workflowSourceConfigFrom(sourceFileConfig));
   const dryRunBaseProfile = await buildDryRunBaseProfile(host, dryRunFileConfig, runConfig);
   const dryRunModelOverrides = resolveRunModelOverrides(
     host.deps.providers,
@@ -188,6 +193,7 @@ export async function runDryRun(
     workflow,
     userMessage,
     cwd,
+    sourceRoots,
     stubs,
     ...(dryRunInputs ? { inputs: dryRunInputs } : {}),
     execCode: options.execCode,

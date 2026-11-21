@@ -69,13 +69,15 @@ A pull request is the factory's product; a closed issue is its purpose. `archon-
 
 Each record names its issue as the subject and the build-queue runs that worked it as its producing runs, so `archon metrics sdlc.issues_merged --json` reports what those runs cost.
 
-Every record is also written under its route: `sdlc.issues_merged.plan`, `sdlc.issue_asks.investigate` and so on, for `investigate`, `plan`, `deliver` and `continue`. A metric record has no field to split by, so the route is in the name. An issue's route is the one the first of its recorded build rounds that declares a route took. When none declares one, the item's intake stage stands in while it is still a route, and otherwise the issue counts only in the totals. Judge a route by its share merged, its cost and its asks:
+Each record carries its issue's route as the `route` dimension: `investigate`, `plan`, `deliver` or `continue`. An issue's route is the one the first of its recorded build rounds that declares a route took. When none declares one, the item's intake stage stands in while it is still a route, and otherwise the record carries no route and falls in the split's `none` group. Judge a route by its share merged, its cost and its asks, split by the dimension (see [Splitting by a dimension](/guides/metrics/#splitting-by-a-dimension)):
 
 ```bash
-archon metrics sdlc.issues_merged.plan --since 30d
-archon metrics sdlc.issues_built.plan --since 30d
-archon metrics sdlc.issue_asks.plan --compare <when this checkout picked up a pack change>
+archon metrics sdlc.issues_merged --by-dimension route --since 30d
+archon metrics sdlc.issues_built --by-dimension route --since 30d
+archon metrics sdlc.issue_asks --by-dimension route --compare <when this checkout picked up a pack change>
 ```
+
+The split covers only records written after the route became a dimension. Earlier records keep their route only in the old per-route names, such as `sdlc.issues_merged.plan`, which still read as before until they age out of the window. Their totals carry no dimension, so a window that mixes old and new records counts them in the `none` group, and a window holding only old records fails `--by-dimension route` with `no record carries a dimension "route"`. Read the old per-route names for that period.
 
 A work item keeps its last ten build rounds and its last twenty decisions per queue, so an issue past either undercounts its rounds or asks, and one whose first round fell out can move to its next round's route.
 
@@ -97,7 +99,7 @@ A round recorded when its run was released before it decided has no verdicts on 
 
 A merged pull request is listed in `review_rounds_skipped`, with the reason, and counts in none of these when a round without verdicts has lost its run's artifacts, when its work item dropped the build rounds that may have carried it, or when it merged without a Ready review on record.
 
-Two measures are reported in the node's `not_available` output instead of recorded, because no record carries them: the share of merged pull requests later reverted or fixed by a follow-up, and the share of blocking findings on code the change did not modify. Neither is estimated from prose.
+Two measures are not recorded, because no record carries them: the share of merged pull requests later reverted or fixed by a follow-up, and the share of blocking findings on code the change did not modify. Neither is estimated from prose.
 
 These are scores, so they appear on the console's Details screen, not as overview cards. Compare them across a pack change, or by the model that ran the review's code lens:
 

@@ -5,11 +5,14 @@ import { tmpdir } from 'os';
 import { mkdir, writeFile, readFile, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { execFileAsync, resolveBashPath } from '@archon/git';
-import type { NodeOutput } from '../schemas';
+import type { DagNode, NodeOutput } from '../schemas';
+import { dagNodeSchema } from '../schemas';
+import { COMPOSED_NODE, type NodeWithComposedMeta } from '../compiled-command';
 import { executeDagWorkflow } from '../dag-executor';
 import { OutputRefError } from '../output-ref';
 import {
   type ShellInputContext,
+  inputEnvVars,
   resolveNodeBindings,
   substituteNodeOutputRefs as substituteNodeOutputRefsInScopes,
 } from './references';
@@ -49,6 +52,28 @@ describe('output reference errors name the reference as written', () => {
     ).toThrow("'$ghost.output.a'");
   });
 
+  // A script node's own binding wins over a composed input of the same name (#5760), so
+  // the composed directive is never resolved and its producer's state cannot fail the node.
+  it.each(['failed', 'skipped'] as const)(
+    "a script node's own binding shadows a composed directive whose producer %s",
+    state => {
+      const node = dagNodeSchema.parse({
+        id: 'use__run',
+        script: 'console.log(1)',
+        runtime: 'bun',
+        with: { x: 'local' },
+      }) as DagNode & NodeWithComposedMeta;
+      node[COMPOSED_NODE] = {
+        origin: 'blk',
+        nodeId: 'run',
+        includes: ['use'],
+        inputs: { x: { from: '$a.output' } },
+      };
+      const outputs = new Map([['a', makeOutput(state)]]);
+      expect(inputEnvVars(node, ctx(outputs), undefined).INPUTS_X).toBe('local');
+    }
+  );
+
   it('unknown producers in current and prior templates', () => {
     expect(() => substituteNodeOutputRefs('x $ghost.output.a', new Map())).toThrow(
       "'$ghost.output.a'"
@@ -60,29 +85,29 @@ describe('output reference errors name the reference as written', () => {
     ).toThrow("'$LOOP_PREV.ghost.output.x'");
   });
 
-  it('outcome_field', async () => {
+  it('returns.outcome', async () => {
     const testDir = join(
       tmpdir(),
       `dag-outcome-ref-${Date.now()}-${Math.random().toString(36).slice(2)}`
     );
     await mkdir(testDir, { recursive: true });
+    const store = createMockStore();
     try {
-      await expect(
-        executeDagWorkflow(
-          dagOptions({
-            deps: createMockDeps(createMockStore()),
-            platform: createMockPlatform(),
-            cwd: testDir,
-            workflow: {
-              name: 'outcome-ref',
-              returns: 'r',
-              outcome_field: 'green',
-              nodes: [{ id: 'r', kind: 'exec', runtime: 'sh', script: "printf '%s' '{}'" }],
-            },
-            workflowRun: makeWorkflowRun('outcome-ref'),
-          })
-        )
-      ).rejects.toThrow("'$r.output.green'");
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            name: 'outcome-ref',
+            returns: 'r',
+            result: { outcome: 'green' },
+            nodes: [{ id: 'r', kind: 'exec', runtime: 'sh', script: "printf '%s' '{}'" }],
+          },
+          workflowRun: makeWorkflowRun('outcome-ref'),
+        })
+      );
+      expect(store.failWorkflowRun.mock.calls[0]?.[1]).toContain("'$r.output.green'");
     } finally {
       await removeTempTree(testDir);
     }

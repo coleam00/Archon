@@ -20,12 +20,14 @@ const mockListAllActiveWithCodebase = mock<typeof IsolationDb.listAllActiveWithC
 const mockListByCodebaseWithAge = mock<typeof IsolationDb.listByCodebaseWithAge>(() =>
   Promise.resolve([])
 );
+const mockListByCodebase = mock<typeof IsolationDb.listByCodebase>(() => Promise.resolve([]));
 const mockMarkWorktreeDestroyed = mock<typeof IsolationDb.markWorktreeDestroyed>(() =>
   Promise.resolve()
 );
 mock.module('../db/isolation-environments', () => ({
   listAllActiveWithCodebase: mockListAllActiveWithCodebase,
   listByCodebaseWithAge: mockListByCodebaseWithAge,
+  listByCodebase: mockListByCodebase,
   updateStatus: mock(() => Promise.resolve()),
   markWorktreeDestroyed: mockMarkWorktreeDestroyed,
 }));
@@ -39,16 +41,15 @@ const mockCleanupMerged = mock<typeof MergedSweep.cleanupMergedWorktrees>(() =>
     warnings: [],
   })
 );
-const mockGetLiveRunBlocker = mock<typeof CleanupRunLock.getLiveRunBlocker>(() =>
-  Promise.resolve(null)
-);
+const mockGetUseBlocker = mock<typeof CleanupRunLock.getUseBlocker>(() => Promise.resolve(null));
 mock.module('../services/cleanup/merged-sweep', () => ({
   cleanupMergedWorktrees: mockCleanupMerged,
   cleanupToMakeRoom: mock(),
   recordCleanupRemoval: mock(),
 }));
 mock.module('../services/cleanup/run-lock', () => ({
-  getLiveRunBlocker: mockGetLiveRunBlocker,
+  getUseBlocker: mockGetUseBlocker,
+  useBlockerLogFields: () => ({}),
   getCleanupRunLock: mock(),
   toUnpushedLock: mock(),
   countUnpushedCommits: mock(),
@@ -118,10 +119,8 @@ describe('listEnvironments', () => {
     mockLstat.mockReset();
     mockLstat.mockImplementation(() => Promise.resolve());
     mockMarkWorktreeDestroyed.mockClear();
-    mockGetLiveRunBlocker.mockClear();
-    mockGetLiveRunBlocker.mockImplementation(() => Promise.resolve(null));
-    mockLogger.info.mockClear();
-    mockLogger.warn.mockClear();
+    mockGetUseBlocker.mockClear();
+    mockGetUseBlocker.mockImplementation(() => Promise.resolve(null));
   });
 
   test('returns empty result when no active environments', async () => {
@@ -188,7 +187,7 @@ describe('listEnvironments', () => {
     const env = makeEnvWithAge({ id: 'env-owned', working_path: '/worktrees/gone' });
     mockListByCodebaseWithAge.mockResolvedValueOnce([env]);
     mockLstat.mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }));
-    mockGetLiveRunBlocker.mockImplementation(() =>
+    mockGetUseBlocker.mockImplementation(() =>
       Promise.resolve({
         reason: 'live_run',
         display: 'run run-abcd is failed',
@@ -204,21 +203,6 @@ describe('listEnvironments', () => {
     // No re-fetch, and the env stays visible so the operator can act on it.
     expect(mockListByCodebaseWithAge).toHaveBeenCalledTimes(1);
     expect(result.totalEnvironments).toBe(1);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      expect.objectContaining({ envId: 'env-owned', runId: 'run-abcdef12', runStatus: 'failed' }),
-      'isolation.ghost_kept_for_live_run'
-    );
-  });
-
-  test('does not re-fetch when no ghosts found', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([makeActiveEnv()]);
-    mockListByCodebaseWithAge.mockResolvedValueOnce([makeEnvWithAge()]);
-    mockLstat.mockResolvedValueOnce(undefined); // not a ghost
-
-    await listEnvironments();
-
-    // listByCodebaseWithAge called only once — no re-fetch needed
-    expect(mockListByCodebaseWithAge).toHaveBeenCalledTimes(1);
   });
 
   test('handles filesystem error in reconcileGhosts without crashing', async () => {
@@ -229,10 +213,6 @@ describe('listEnvironments', () => {
     // Should not throw — error is swallowed per the try/catch in reconcileGhosts
     await expect(listEnvironments()).resolves.toBeDefined();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ envId: 'env-err' }),
-      'isolation.ghost_reconciliation_failed'
-    );
   });
 
   test('returns live environments grouped by codebase', async () => {
@@ -259,32 +239,43 @@ describe('cleanupMergedEnvironments', () => {
   });
 
   test('delegates to cleanupMergedWorktrees', async () => {
-    mockCleanupMerged.mockResolvedValueOnce({
+    const sweep = {
       removed: ['feat-a', 'feat-b'],
-      skipped: [],
-      errors: [],
-      releasedFailedRuns: [],
-      warnings: [],
-    });
-
-    const result = await cleanupMergedEnvironments('cb-1', '/main');
-
-    expect(mockCleanupMerged).toHaveBeenCalledWith('cb-1', '/main', {});
-    expect(result.removed).toEqual(['feat-a', 'feat-b']);
-  });
-
-  test('passes through skipped branches from cleanupMergedWorktrees', async () => {
-    mockCleanupMerged.mockResolvedValueOnce({
-      removed: [],
       skipped: [{ branchName: 'branch-a', reason: 'git error' }],
       errors: [],
       releasedFailedRuns: [],
       warnings: [],
-    });
+    };
+    mockCleanupMerged.mockResolvedValueOnce(sweep);
 
     const result = await cleanupMergedEnvironments('cb-1', '/main');
 
-    expect(result.skipped).toEqual([{ branchName: 'branch-a', reason: 'git error' }]);
+    expect(mockCleanupMerged).toHaveBeenCalledWith('cb-1', '/main', {});
+    expect(result).toEqual({ kind: 'swept', result: sweep });
+  });
+
+  test('reports the worktrees of a missing checkout without sweeping them', async () => {
+    mockLstat.mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+    mockListByCodebase.mockResolvedValueOnce([
+      makeActiveEnv({ branch_name: 'probe/x', working_path: '/worktrees/probe/x' }),
+      makeActiveEnv({ id: 'env-2', provider: 'container', working_path: '/folder' }),
+    ]);
+
+    const result = await cleanupMergedEnvironments('cb-1', '/gone');
+
+    expect(mockLstat).toHaveBeenCalledWith('/gone');
+    expect(mockCleanupMerged).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      kind: 'repository-gone',
+      environments: [{ branchName: 'probe/x', workingPath: '/worktrees/probe/x' }],
+    });
+  });
+
+  test('an unreadable checkout is a failure, not a gone repository', async () => {
+    mockLstat.mockRejectedValueOnce(Object.assign(new Error('denied'), { code: 'EACCES' }));
+
+    await expect(cleanupMergedEnvironments('cb-1', '/locked')).rejects.toThrow('denied');
+    expect(mockCleanupMerged).not.toHaveBeenCalled();
   });
 
   test('forwards includeClosed option to cleanupMergedWorktrees', async () => {

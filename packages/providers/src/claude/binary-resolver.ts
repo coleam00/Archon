@@ -18,7 +18,6 @@
  * undefined so the caller omits `pathToClaudeCodeExecutable` entirely and
  * the SDK resolves via its normal node_modules lookup.
  */
-import { existsSync as _existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { BUNDLED_IS_BINARY, createLogger } from '@archon/paths';
@@ -28,11 +27,6 @@ import {
   type BinaryPathKind,
 } from '../shared/binary-resolution';
 import { ClassifiedProviderError } from '../shared/failure';
-
-/** Wrapper for existsSync — enables spyOn in tests (direct imports can't be spied on). */
-export function fileExists(path: string): boolean {
-  return _existsSync(path);
-}
 
 /** Platform-specific Claude Code binary filename: `claude.exe` on Windows, `claude` elsewhere. */
 export const CLAUDE_BINARY_NAME = process.platform === 'win32' ? 'claude.exe' : 'claude';

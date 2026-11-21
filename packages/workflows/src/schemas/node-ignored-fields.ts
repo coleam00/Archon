@@ -47,9 +47,6 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'persist_session',
 ];
 
-/** AI-specific fields that are meaningless on script nodes — same as bash nodes */
-export const SCRIPT_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS;
-
 /** Fields ignored by a loop's own provider call, derived from its authored projection. */
 export const LOOP_NODE_AI_FIELDS: readonly string[] = [
   ...BASH_NODE_AI_FIELDS.filter(field => !(field in loopAiAuthoringSchema.shape)),

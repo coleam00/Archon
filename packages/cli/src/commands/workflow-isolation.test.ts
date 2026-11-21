@@ -11,6 +11,7 @@ import {
   createDetachedChildFixture,
   finishStartupWindow,
   createTestWorkflowHost,
+  mockRefuseUnappliedStartPoint,
 } from '../test-support/workflow-command-harness';
 import { InvalidCodebaseDefaultCwdError } from '@archon/core/utils/codebase-path';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock, jest } from 'bun:test';
@@ -354,36 +355,31 @@ describe('run codebase resolution', () => {
     }
   });
 
-  it.each([false, true])(
-    'refuses foreign name-based resume before reading its source (detach=%s)',
-    async detach => {
-      scopeSpy.mockReturnValue(child.id);
-      const workflowDb = await import('@archon/core/db/workflows');
-      (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-        id: 'foreign-run',
-        codebase_id: parent.id,
-        workflow_name: 'probe',
-        status: 'paused',
-      });
-      const { mockResolveContinuationWorkflow } = await import(
-        '../test-support/workflow-command-harness'
-      );
-      mockResolveContinuationWorkflow.mockClear();
-      try {
-        await expect(
-          workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', {
-            resume: true,
-            detach,
-          })
-        ).rejects.toThrow('/setproject');
-        expect(mockResolveContinuationWorkflow).not.toHaveBeenCalled();
-        expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
-        expect(executor.executeWorkflow).not.toHaveBeenCalled();
-      } finally {
-        scopeSpy.mockReturnValue(undefined);
-      }
+  it('refuses resuming a foreign project run before reading its source', async () => {
+    scopeSpy.mockReturnValue(child.id);
+    const { mockResolveContinuationWorkflow } = await import(
+      '../test-support/workflow-command-harness'
+    );
+    mockResolveContinuationWorkflow.mockClear();
+    try {
+      await expect(
+        workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', {
+          resume: true,
+          continuationRun: makeContinuationRun({
+            id: 'foreign-run',
+            codebase_id: parent.id,
+            workflow_name: 'probe',
+            status: 'paused',
+          }),
+        })
+      ).rejects.toThrow('/setproject');
+      expect(mockResolveContinuationWorkflow).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+      expect(executor.executeWorkflow).not.toHaveBeenCalled();
+    } finally {
+      scopeSpy.mockReturnValue(undefined);
     }
-  );
+  });
 
   it('passes the registration choice while leaving this run base unset', async () => {
     await workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', {
@@ -503,7 +499,6 @@ describe('run codebase resolution', () => {
   });
 
   for (const incompatible of [
-    { resume: true },
     { adoptRunId: 'old' },
     { supersedesRunId: 'old' },
     { dryRun: true },
@@ -1177,7 +1172,7 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
   // Auto-registration failure → truthful CLI error
   // -------------------------------------------------------------------------
 
-  it('surfaces auto-registration failures on --resume instead of claiming the repo is invalid', async () => {
+  it('surfaces auto-registration failures on a continuation instead of claiming the repo is invalid', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const { registerRepository } = await import('@archon/core');
     const conversationDb = await import('@archon/core/db/conversations');
@@ -1497,6 +1492,54 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
     }
   });
 
+  it('refuses a --from the reused worktree does not contain before recording adoption', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const isolationDb = await import('@archon/core/db/isolation-environments');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/test/path',
+    });
+    (git.getCurrentBranchStrict as ReturnType<typeof mock>).mockResolvedValueOnce('my-feature');
+    (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'env-1',
+      working_path: '/worktrees/feat',
+      provider: 'worktree',
+      branch_name: 'my-feature',
+      workflow_type: 'task',
+      workflow_id: 'my-feature',
+    });
+    const refusal = new Error('--from dev is not in its history');
+    mockRefuseUnappliedStartPoint.mockRejectedValueOnce(refusal);
+    (isolationDb.updateMetadata as ReturnType<typeof mock>).mockClear();
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
+        branchName: 'my-feature',
+        fromBranch: ' dev ',
+      })
+    ).rejects.toBe(refusal);
+    expect(mockRefuseUnappliedStartPoint).toHaveBeenLastCalledWith(
+      '/test/path',
+      '/worktrees/feat',
+      'my-feature',
+      'dev'
+    );
+    expect(isolationDb.updateMetadata).not.toHaveBeenCalled();
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
   it('warns that --base did not change the cut-from when reusing a worktree', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const { executeWorkflow } = await import('@archon/workflows/executor');
@@ -1540,8 +1583,8 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
         branchName: 'my-feature',
         baseBranch: 'epic/foo',
       });
-      // Unlike --from (which is fully ignored on reuse), --base is PARTIALLY
-      // applied: the cut-from is already fixed, but $BASE_BRANCH still moves.
+      // --base is PARTIALLY applied on reuse: the cut-from is already fixed, but
+      // $BASE_BRANCH still moves.
       // The wording has to say so, or it trades one silent surprise for another.
       expect(consoleWarnSpy).toHaveBeenCalledWith(
         expect.stringContaining('--base epic/foo did not change the cut-from')
@@ -1838,66 +1881,6 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
     };
     expect(opts.baseOverride).toBe('epic/foo');
     expect(opts.baseBranch).toBe('develop');
-  });
-
-  it('warns that --base did not change the cut-from when resuming a run', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDb = await import('@archon/core/db/workflows');
-
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
-      errors: [],
-    });
-    // A null hydration aborts the resume before executeWorkflow, so the run must
-    // carry prior state for this path to reach the dispatch.
-    (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      preCreatedRun: { id: 'run-prior', workflow_name: 'assist' },
-      priorCompletedNodes: new Map([['node-a', 'done']]),
-    });
-    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'conv-123',
-    });
-    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'cb-123',
-      default_cwd: '/test/path',
-      default_branch: 'develop',
-    });
-    // working_path null keeps the resume on the caller cwd, skipping the
-    // existsSync probe (fs is deliberately not mocked in this suite).
-    (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-prior',
-      working_path: null,
-      workflow_name: 'assist',
-    });
-    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
-    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
-      success: true,
-      workflowRunId: 'run-123',
-    });
-
-    const consoleWarnSpy = spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
-        resume: true,
-        baseBranch: 'epic/foo',
-      });
-      // --resume adopts the prior run's worktree, so its cut-from is as fixed as
-      // it is on --branch reuse -- but flagBase still reaches executeWorkflow as
-      // baseOverride and moves $BASE_BRANCH. Same half-applied shape, same
-      // warning.
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('--base epic/foo did not change the cut-from')
-      );
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('it still applies to the PR target')
-      );
-    } finally {
-      consoleWarnSpy.mockRestore();
-    }
   });
 
   it('lets --from win the cut-from while --base still drives the PR target', async () => {

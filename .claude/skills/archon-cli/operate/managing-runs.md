@@ -54,6 +54,7 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | List a run's artifact files | `archon workflow artifacts <run-id> --json` |
 | Read one artifact | `archon workflow artifacts <run-id> <path>` |
 | List registered projects (and their `--project` keys) | `archon project list --json` |
+| Register this checkout before its first run (`--folder` for a non-git directory) | `archon project add --json` |
 | Active runs (this project) | `archon workflow status --json` |
 | Active runs (all projects) | `archon workflow status --all --json` |
 | Block until the run ends or needs attention | `archon workflow wait <run-id> --json` |
@@ -70,7 +71,7 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | End a stalled turn on a running run, keep the run | `archon workflow end-turn <run-id>` |
 | Stop a running run (its live owner first) | `archon workflow cancel <run-id>` |
 | Mark paused/failed/orphaned run cancelled | `archon workflow abandon <run-id>` |
-| Resume failed/paused from completed nodes | `archon workflow resume <run-id>` |
+| Resume a failed, paused or killed `running` run from completed nodes | `archon workflow resume <run-id>` |
 
 ## Answering a decision well
 
@@ -258,6 +259,16 @@ item and the `--watch` stream does not report it. `workflow wait <run-id>`
 returns it as `attention.kind: "stalled_tool_calls"`, and `workflow status` prints it
 under the run.
 
+The engine first asks the agent: it writes a short factual message into the same
+session, up to `workflows.stallMessageLimit` times (2 by default, one threshold apart),
+and never ends the call. `workflow status` shows `Engine: [node] engine sent the stalled
+session a message (1 of 2)`, or the provider's refusal when it refused one, and
+`workflow logs` prints each message with its text. The agent reads it at its next step,
+so it cannot reach a tool call that never returns. Any provider whose capabilities
+declare `turnMessages` takes it (Claude and Codex today, and a plugin that declares it);
+one that does not records that it cannot. `stallMessageLimit: 0` sends and records
+nothing. Set the limit in global or repository config; a run config file refuses it.
+
 - **`archon workflow end-turn <run-id>`** when the stalled work is done or useless and
   the rest of the run is worth keeping. It records a request; the live owner checks
   about every ten seconds and ends that turn if the same stall is still there. The
@@ -266,8 +277,9 @@ under the run.
   request was recorded, not acted on: follow with `workflow wait <run-id>`. It refuses
   a run that is not `running` or has nothing stalled.
 - **`cancel`** when the whole run should stop.
-- **`resume`** refuses a running run. Use it once the run has failed or paused, for
-  example after an ended turn exhausts its retries.
+- **`resume`** refuses a running run whose owner still answers, which a stalled run's
+  does. Use it once the run has failed or paused, for example after an ended turn
+  exhausts its retries.
 
 A silent turn with no open tool or background work is a different case: its node's
 `idle_timeout` fails it as before, with no request needed.
@@ -284,12 +296,12 @@ Terminal ≠ good. The three JSON modes expose different data:
 
 | Command | Read |
 |---|---|
-| `get <id> --json` | top-level normalized `outcome` (`succeeded`/`failed`) and `leave_behind.artifactFiles` |
+| `get <id> --json` | top-level `completed_outcome` (set only once the run completed), the boolean form's `outcome` (`succeeded`/`failed`), and `leave_behind.artifactFiles` |
 | `get <id> --verbose --json` | ordered `nodes` summaries and parse warnings |
 | `get <id> --verbose --events --json` | raw `events` rows |
 
-`outcome_field` selects a boolean from the return node, but the run stores only
-the normalized top-level outcome. It does not expose the authored field name
+`returns.outcome` selects a boolean or a string enum from the return node, but the
+run stores only the resulting top-level outcome. It does not expose the authored field name
 (`green`, `ready`, or `rooted`) as another top-level property. Locate the report
 through `leave_behind.artifactFiles`, then read the artifact before reporting to
 the user.

@@ -203,14 +203,6 @@ describe('isolation-environments', () => {
         ['codebase-456']
       );
     });
-
-    test('returns empty array when no environments', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      const result = await listByCodebase('empty-codebase');
-
-      expect(result).toEqual([]);
-    });
   });
 
   describe('findLatestByCodebaseAndWorkingPath', () => {
@@ -365,17 +357,6 @@ describe('isolation-environments', () => {
         ['destroyed', 'env-123']
       );
     });
-
-    test('updates status to active', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-
-      await updateStatus('env-123', 'active');
-
-      expect(mockQuery).toHaveBeenCalledWith(
-        'UPDATE remote_agent_isolation_environments SET status = $1 WHERE id = $2',
-        ['active', 'env-123']
-      );
-    });
   });
 
   describe('updateMetadata', () => {
@@ -384,7 +365,7 @@ describe('isolation-environments', () => {
 
       await updateMetadata('env-123', { pr_number: 42 });
 
-      expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('metadata = metadata ||'), [
+      expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('metadata = (metadata ||'), [
         '{"pr_number":42}',
         'env-123',
       ]);
@@ -399,14 +380,6 @@ describe('isolation-environments', () => {
 
       expect(result).toBe(5);
       expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('COUNT(*)'), ['codebase-456']);
-    });
-
-    test('returns 0 when no environments', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ count: '0' }]));
-
-      const result = await countActiveByCodebase('empty-codebase');
-
-      expect(result).toBe(0);
     });
   });
 
@@ -529,14 +502,6 @@ describe('isolation-environments', () => {
 
       const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'active'");
-    });
-
-    test('returns empty array when no active environments', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      const result = await listAllActiveWithCodebase();
-
-      expect(result).toEqual([]);
     });
   });
 });

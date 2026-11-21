@@ -10,11 +10,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ts from 'typescript';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { ForgeError, forge, HostCommandError, notice, state, trigger } from './module';
+import { ForgeError, forge, HostCommandError, item, items, notice, state, trigger } from './module';
 import { scriptApiDeclaration } from './text';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-script-api-')));
 const previous = process.env.ARCHON_CLI_COMMAND;
+const previousRun = process.env.WORKFLOW_ID;
 
 beforeAll(() => {
   const host = join(root, 'host.ts');
@@ -45,9 +46,18 @@ if (command === 'forge') {
   const text = args.at(-1)!;
   if (text === 'too many') answer({ ok: false, action: 'notice', error: 'limit reached', reason: 'run_limit' }, 1);
   else writeFileSync(${JSON.stringify(join(root, 'notice.json'))}, JSON.stringify(args.slice(2)));
+} else if (command === 'workflow' && sub === 'runs') {
+  const runId = args[args.indexOf('--item-of') + 1];
+  if (runId === 'on-item') answer({ item: { key: 'issue-7' }, answers: [{ kind: 'ruling' }] });
+  else if (runId === 'no-item') answer({ ok: false, error: 'not_found', run: runId }, 1);
+  else answer({ ok: false, error: 'database locked' }, 1);
+} else if (command === 'workflow' && sub === 'items') {
+  if (args.includes('broken')) answer({ ok: false, error: 'after is not a cursor this read returned' }, 1);
+  else answer({ window: { since: 'a', until: 'b' }, items: [], next: null, args: args.slice(2) });
 } else if (command === 'trigger') {
   const inputs = readFileSync(args[args.indexOf('--inputs') + 1]!, 'utf8');
-  answer({ id: 'receipt-1', args: args.slice(2, 6), bindings: [{ disposition: { status: 'admitted', requestId: 'q', runId: inputs } }] });
+  writeFileSync(${JSON.stringify(join(root, 'trigger.json'))}, JSON.stringify(args.slice(2, -2)));
+  answer({ id: 'receipt-1', bindings: [{ disposition: { status: 'admitted', requestId: 'q', runId: inputs } }] });
 }
 `
   );
@@ -58,6 +68,8 @@ afterAll(async () => {
   await removeTempTree(root);
   if (previous === undefined) delete process.env.ARCHON_CLI_COMMAND;
   else process.env.ARCHON_CLI_COMMAND = previous;
+  if (previousRun === undefined) delete process.env.WORKFLOW_ID;
+  else process.env.WORKFLOW_ID = previousRun;
 });
 
 function thrownBy(run: () => unknown): unknown {
@@ -126,6 +138,17 @@ test('trigger.fire hands the binding its inputs in a stable order and returns th
   });
 });
 
+test('trigger.fire names the item, declines one, or leaves the host to inherit it', () => {
+  const sent = (options: Parameters<typeof trigger.fire>[2]): unknown => {
+    trigger.fire('/bindings/next.json', {}, options);
+    return JSON.parse(readFileSync(join(root, 'trigger.json'), 'utf8'));
+  };
+  const config = ['--config', '/bindings/next.json'];
+  expect(sent({ item: 'item-2' })).toEqual([...config, '--item', 'item-2']);
+  expect(sent({ item: null })).toEqual([...config, '--no-item']);
+  expect(sent({})).toEqual(config);
+});
+
 test('notice sends its text after the labels, and a refusal is the host error', () => {
   notice('-merged pull request 7', { kind: 'merged', pr: '7' });
   expect(JSON.parse(readFileSync(join(root, 'notice.json'), 'utf8'))).toEqual([
@@ -143,13 +166,41 @@ test('notice sends its text after the labels, and a refusal is the host error', 
   expect((refused as Error).message).toContain('limit reached');
 });
 
+test("item reads this run's item, null when the run is on none, and a host failure throws", () => {
+  process.env.WORKFLOW_ID = 'on-item';
+  expect(item()).toEqual({ item: { key: 'issue-7' }, answers: [{ kind: 'ruling' }] } as never);
+  process.env.WORKFLOW_ID = 'no-item';
+  expect(item()).toBeNull();
+  process.env.WORKFLOW_ID = 'broken';
+  const failure = thrownBy(() => item());
+  expect(failure).toBeInstanceOf(HostCommandError);
+  expect((failure as Error).message).toContain('database locked');
+});
+
+test('items hands its query to the host command and returns the page it printed', () => {
+  expect(items({ since: '7d', limit: 50 })).toEqual({
+    window: { since: 'a', until: 'b' },
+    items: [],
+    next: null,
+    args: ['--json', '--since', '7d', '--limit', '50'],
+  } as never);
+  expect((items({ after: 'cursor' }) as unknown as { args: string[] }).args).toEqual([
+    '--json',
+    '--after',
+    'cursor',
+  ]);
+  const failure = thrownBy(() => items({ after: 'broken' }));
+  expect(failure).toBeInstanceOf(HostCommandError);
+  expect((failure as Error).message).toContain('not a cursor');
+});
+
 test('the declaration alone type-checks a script against the forge and state contracts', () => {
   const declaration = join(root, 'archon-script.d.ts');
   const script = join(root, 'script.ts');
   writeFileSync(declaration, scriptApiDeclaration);
   writeFileSync(
     script,
-    `import { ForgeError, forge, input, outcomes, state, trigger } from 'archon:script';
+    `import { ForgeError, forge, input, item, outcomes, state, trigger } from 'archon:script';
 const repo = { host: 'forge.example', path: 'team/repo' };
 const view = forge('pr.view', { selector: { kind: 'number', ref: { repo, number: 7 } } });
 export const head: string | undefined = view?.pr.head;
@@ -171,6 +222,9 @@ export const conflict: 'revision_moved' | 'lease_held' | 'lease_not_held' | numb
 state.put('queue/a', {});
 export const states: string[] = outcomes().nodes.map(node => node.state);
 export const started: string | undefined = trigger.fire('binding.json').disposition?.requestId;
+export const rulings: string[] = (item()?.answers ?? []).flatMap(answer =>
+  answer.kind === 'ruling' && answer.withdrawn === null ? [answer.text] : []
+);
 `
   );
   const program = ts.createProgram([script, declaration], {

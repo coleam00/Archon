@@ -47,6 +47,7 @@ layout below. Existing projects keep their names and storage.
 │       │   │   │   ├── node-output-spills/  # oversized shell handoffs (*.nodeoutput)
 │       │   │   │   ├── node-outcomes/       # node-outcome observation files
 │       │   │   │   ├── scratch/             # throwaway checkouts and installs; removed when the run ends
+│       │   │   │   │   └── nodes/<invocation>/  # $NODE_SCRATCH_DIR; removed when that node invocation ends
 │       │   │   │   └── typed-artifacts/     # typed-artifact observation files
 │       │   │   └── nodes/          #     typed output sidecars (<id>.md + <id>.meta.json)
 │       │   ├── scopes/<workflow>/<scope>/   # cross-invocation artifacts (persist_session)
@@ -92,7 +93,10 @@ layout below. Existing projects keep their names and storage.
   removed once the run is completed, failed or cancelled (including a failed run that is
   resumed later) and its nodes have stopped. Git worktrees of the run's repository that a
   node added under scratch are removed from that repository first, so no registration
-  outlives its files. Tagged cache directories anywhere beneath `$ARTIFACTS_DIR` are removed
+  outlives its files. A node invocation's own scratch, `.archon/scratch/nodes/<invocation-id>/`
+  (`$NODE_SCRATCH_DIR`), is removed the same way, worktrees first, as soon as that invocation
+  completes, fails or is skipped; one that is suspended keeps it until it resumes and ends, and one the resumed run skips (a skipped `loop_group` takes its suspended body nodes with it) or replays as completed (a gate answered while the run was paused) loses it then. A resumed `loop_group` removes its answered terminal body gate's or settled wait's directory before it moves on, and one that ends removes any body directory a prior pass left behind. In a container run its worktrees are removed through the container's git.
+  Tagged cache directories anywhere beneath `$ARTIFACTS_DIR` are removed
   at that same release point. A container run's scratch and tagged caches are removed when
   its container is. A run whose nodes Archon cannot confirm stopped (its owner ran on another
   host, or its owner process is still alive) keeps its scratch and caches until the operator
@@ -108,6 +112,8 @@ layout below. Existing projects keep their names and storage.
   artifacts path, relative cache path and `estimatedFreedBytes`: allocated blocks counted
   once per inode within that subtree. This is an estimate, not an exact free-space delta
   (hard links outside the subtree, shared storage and compression can affect reclamation).
+  On Windows, NTFS can report no allocation for recently written files, so the estimate
+  there can be 0 for a cache that held data.
   A failed measurement is logged and reports a null estimate if removal succeeds; failed
   removals are logged without changing the run's outcome.
   `archon workflow cleanup` deletes old database run records, not these directories.

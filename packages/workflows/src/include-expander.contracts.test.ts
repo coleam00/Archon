@@ -48,7 +48,7 @@ describe('expandWorkflowIncludes — returns drives primarySink (#2470)', () => 
     expect(inlinePrompt(consume) ?? '').toBe('value: $outer__blk__result.output');
   });
 
-  test('validates an outer outcome_field against the rebound flattened return node', () => {
+  test('validates an outer returns.outcome against the rebound flattened return node', () => {
     const resultNode = {
       id: 'result',
       prompt: 'result',
@@ -61,7 +61,7 @@ describe('expandWorkflowIncludes — returns drives primarySink (#2470)', () => 
     const inner = wf('inner', [resultNode], { returns: 'result' });
     const outer = wf('outer', [{ id: 'blk', include: 'inner' }], {
       returns: 'blk',
-      outcome_field: 'green',
+      result: { outcome: 'green' },
     });
 
     const { workflows, errors } = expandWorkflowIncludes(mapOf(inner, outer));
@@ -69,11 +69,13 @@ describe('expandWorkflowIncludes — returns drives primarySink (#2470)', () => 
     expect(errors).toHaveLength(0);
     expect(workflows.get('outer')).toMatchObject({
       returns: 'blk__result',
-      outcome_field: 'green',
+      result: { outcome: 'green' },
     });
   });
 
-  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+  // loader/contracts.test.ts proves each composition keyword's selector rules; one keyword
+  // here proves those rules still run after include rebinding.
+  for (const keyword of ['allOf']) {
     test(`checks composed ${keyword} outcome selectors after include rebinding`, () => {
       for (const [field, required, expected] of [
         ['green', ['green'], null],
@@ -98,7 +100,7 @@ describe('expandWorkflowIncludes — returns drives primarySink (#2470)', () => 
         );
         const outer = wf('outer', [{ id: 'blk', include: 'inner' }], {
           returns: 'blk',
-          outcome_field: field,
+          result: { outcome: field },
         });
         const { workflows, errors } = expandWorkflowIncludes(mapOf(inner, outer));
         if (expected === null) {
@@ -112,7 +114,7 @@ describe('expandWorkflowIncludes — returns drives primarySink (#2470)', () => 
     });
   }
 
-  test('rejects an outer outcome_field after return rebinding when the child contract is invalid', () => {
+  test('rejects an outer returns.outcome after return rebinding when the child contract is invalid', () => {
     const inner = wf(
       'inner',
       [
@@ -130,14 +132,14 @@ describe('expandWorkflowIncludes — returns drives primarySink (#2470)', () => 
     );
     const outer = wf('outer', [{ id: 'blk', include: 'inner' }], {
       returns: 'blk',
-      outcome_field: 'green',
+      result: { outcome: 'green' },
     });
 
     const { workflows, errors } = expandWorkflowIncludes(mapOf(inner, outer));
 
     expect(workflows.has('outer')).toBe(false);
     expect(errors.find(error => error.filename === 'outer')?.error).toContain(
-      'must explicitly declare type: boolean'
+      'must declare type: boolean, or type: string with a non-empty enum of strings'
     );
   });
 
@@ -155,23 +157,23 @@ describe('expandWorkflowIncludes — returns drives primarySink (#2470)', () => 
           },
         },
       ],
-      { returns: 'result', outcome_field: 'green' }
+      { returns: 'result', result: { outcome: 'green' } }
     );
     const middle = wf('middle', [{ id: 'leaf-block', include: 'leaf' }], {
       returns: 'leaf-block',
     });
     const outer = wf('outer', [{ id: 'middle-block', include: 'middle' }], {
       returns: 'middle-block',
-      outcome_field: 'green',
+      result: { outcome: 'green' },
     });
 
     const { workflows, errors } = expandWorkflowIncludes(mapOf(leaf, middle, outer));
 
     expect(errors).toHaveLength(0);
-    expect(workflows.get('middle')?.outcome_field).toBeUndefined();
+    expect(workflows.get('middle')?.result).toBeUndefined();
     expect(workflows.get('outer')).toMatchObject({
       returns: 'middle-block__leaf-block__result',
-      outcome_field: 'green',
+      result: { outcome: 'green' },
     });
   });
 });

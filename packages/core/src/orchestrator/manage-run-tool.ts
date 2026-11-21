@@ -6,6 +6,7 @@ import {
   attentionChoiceSummary,
   attentionLabels,
   attentionRevision,
+  displayedRunOutcome,
   isApprovalContext,
   isContainerRun,
   legacyOccurrenceStep,
@@ -13,6 +14,7 @@ import {
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import { attentionLabelKeySchema, attentionLabelsSchema } from '@archon/workflows/schemas/dag-node';
+import { describeOperatorPause, operatorPause } from '@archon/workflows/schemas/operator-pause';
 import { z } from 'zod';
 import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import type { RunAttention, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -180,7 +182,7 @@ const HELP_OVERVIEW = [
   '  list     — recent runs in this project (id, workflow, status, authored outcome, active nodes). No params.',
   '  get      — one run’s detail. Params: runId.',
   '  resume   — check a failed/paused run can resume from completed nodes. Params: runId.',
-  '  cancel   — stop a running run. Params: runId, confirm=true.',
+  '  cancel   — stop a running run, or withdraw a pending one. Params: runId, confirm=true.',
   '  abandon  — discard a paused/failed run. Params: runId, confirm=true.',
   '  approve  — approve a paused gate or attention wait. Params: runId, confirm=true, optional accept/message.',
   '  reject   — reject a paused gate or attention wait. Params: runId, message=reason, confirm=true.',
@@ -197,7 +199,7 @@ const HELP_BY_ACTION: Record<Exclude<Action, 'help'>, string> = {
   resume:
     'resume — validate that a failed/paused run can resume from its completed nodes. Required: runId. Does NOT re-run it — it stays in its current status; continue it from the run’s controls or by re-invoking the workflow.',
   cancel:
-    'cancel — stop a running run. Required: runId, confirm=true. Irreversible. A run this server executes stops at its next status check; a run another process owns has that process stopped first. When no owner answers, cancel refuses and leaves the run unchanged; abandon is the way to release it once the user confirms its process is gone.',
+    'cancel — stop a running run, or withdraw a pending run before it starts. Required: runId, confirm=true. Irreversible. A pending run that no process is starting is cancelled and never runs. A running run this server executes stops at its next status check; a run another process owns has that process stopped first. When no owner answers for a running run, cancel refuses and leaves the run unchanged; abandon is the way to release it once the user confirms its process is gone.',
   abandon:
     'abandon — discard a paused/failed (non-terminal) run. Required: runId, confirm=true. Irreversible: the run becomes cancelled.',
   approve:
@@ -310,8 +312,8 @@ async function handleList(ctx: ManageRunContext): Promise<string> {
   const lines = runs.map(r => {
     const activeNodes =
       r.active_nodes.length > 0 ? ` · active node(s): ${r.active_nodes.join(', ')}` : '';
-    const outcome = r.outcome ? ` · authored outcome: ${r.outcome}` : '';
-    return `- ${r.id.slice(0, 8)} · ${r.workflow_name} · ${r.status}${outcome}${activeNodes}`;
+    const outcome = displayedRunOutcome(r);
+    return `- ${r.id.slice(0, 8)} · ${r.workflow_name} · ${r.status}${outcome !== null ? ` · authored outcome: ${outcome}` : ''}${activeNodes}`;
   });
   return `${runs.length.toString()} run(s) (most recent first):\n${lines.join('\n')}`;
 }
@@ -337,7 +339,8 @@ function formatRunDetail(run: WorkflowRun): string {
 
 function formatRunSummary(run: WorkflowRun): string[] {
   const parts = [`Run ${run.id.slice(0, 8)} · ${run.workflow_name}`, `status: ${run.status}`];
-  if (run.outcome !== null) parts.push(`authored outcome: ${run.outcome}`);
+  const outcome = displayedRunOutcome(run);
+  if (outcome !== null) parts.push(`authored outcome: ${outcome}`);
   parts.push(`started: ${formatTimestamp(run.started_at)}`);
   if (run.completed_at !== null) parts.push(`finished: ${formatTimestamp(run.completed_at)}`);
   const error = run.metadata.error;
@@ -375,36 +378,28 @@ function formatRunAttention(run: WorkflowRun): string[] {
 }
 
 function formatRunGate(run: WorkflowRun): string[] {
-  const parts: string[] = [];
-  const rawApproval = run.metadata.approval;
-  if (
-    run.status === 'paused' &&
-    isApprovalContext(rawApproval) &&
-    rawApproval.type === 'interactive_loop'
-  ) {
-    parts.push(
-      `gate: awaiting approval (node ${rawApproval.nodeId}, iteration ${String(rawApproval.iteration ?? '?')})`
-    );
-    parts.push(`completionSignaled: ${rawApproval.completionSignaled === true ? 'true' : 'false'}`);
-    if (rawApproval.completionSignaled === true) {
-      parts.push(
-        '-> approve with NO message (or accept:true) to FINALIZE without re-running; approve with a message to run another iteration.'
-      );
-    }
-    const excerpt = (rawApproval.signaledOutput ?? '').trim().slice(0, 300);
-    if (excerpt) parts.push(`output: ${excerpt}`);
+  // Any gate beside an operator pause is history.
+  const pause = operatorPause(run);
+  if (pause !== null) return [describeOperatorPause(pause)];
+  const gate = run.metadata.approval;
+  if (run.status !== 'paused' || !isApprovalContext(gate)) return [];
+  if (gate.type === 'interactive_loop') {
+    const excerpt = (gate.signaledOutput ?? '').trim().slice(0, 300);
+    return [
+      `gate: awaiting approval (node ${gate.nodeId}, iteration ${String(gate.iteration ?? '?')})`,
+      `completionSignaled: ${gate.completionSignaled === true ? 'true' : 'false'}`,
+      ...(gate.completionSignaled === true
+        ? [
+            '-> approve with NO message (or accept:true) to FINALIZE without re-running; approve with a message to run another iteration.',
+          ]
+        : []),
+      ...(excerpt ? [`output: ${excerpt}`] : []),
+    ];
   }
-  if (
-    run.status === 'paused' &&
-    isApprovalContext(rawApproval) &&
-    (rawApproval.type === 'approval' || rawApproval.type === undefined) &&
-    rawApproval.decisionsAuthored === true &&
-    rawApproval.decisions !== undefined
-  ) {
-    const ids = rawApproval.decisions.map(d => d.id).join(', ');
-    parts.push(`gate: decisions: ${ids} (use action=respond with one of these)`);
-  }
-  return parts;
+  const authored = gate.type === 'approval' || gate.type === undefined;
+  if (!authored || gate.decisionsAuthored !== true || gate.decisions === undefined) return [];
+  const ids = gate.decisions.map(d => d.id).join(', ');
+  return [`gate: decisions: ${ids} (use action=respond with one of these)`];
 }
 
 // ─── Write handlers ─────────────────────────────────────────────────────────
@@ -541,6 +536,9 @@ async function cancelRun({ ctx, run }: ScopedWrite): Promise<string> {
   const id = run.id;
   try {
     const result = await ctx.operations.cancelWorkflow(id, ctx.actor);
+    if (result.kind === 'pending') {
+      return `Cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}) while it was pending, before its workflow started.${cancelCleanupWarnings(result.cleanupWarnings)}`;
+    }
     if (result.kind === 'cooperative') {
       return result.cancelled
         ? `Cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}). Its executor stops at its next status check.${cancelCleanupWarnings(result.cleanupWarnings)}`

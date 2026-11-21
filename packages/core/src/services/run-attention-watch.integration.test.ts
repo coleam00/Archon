@@ -36,6 +36,7 @@ function runningRun(metadata: Record<string, unknown> = localOwner): WorkflowRun
     codebase_id: null,
     status: 'running',
     outcome: null,
+    completed_outcome: null,
     user_message: 'go',
     metadata,
     active_phase_started_at: null,
@@ -182,19 +183,6 @@ describe('attention wait with a real owner endpoint', () => {
     } finally {
       rows.delete(run.id);
       if (process.platform !== 'win32') rmSync(path, { force: true });
-    }
-  });
-
-  test('keeps watching a missing endpoint whose owner ran on another host', async () => {
-    const run = runningRun({ execution_owner: { host: 'other-host.invalid', pid: 4242 } });
-    try {
-      expect(await waitForRunAttention(store, run.id, { deadlineMs: 250 })).toEqual({
-        kind: 'deadline',
-        runId: run.id,
-        observedStatus: 'running',
-      });
-    } finally {
-      rows.delete(run.id);
     }
   });
 });

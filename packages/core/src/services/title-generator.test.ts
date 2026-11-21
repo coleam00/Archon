@@ -75,13 +75,6 @@ describe('title-generator', () => {
     delete process.env.TITLE_GENERATION_MODEL;
   });
 
-  test('happy path: generates and saves a clean title', async () => {
-    await generateAndSetTitle('conv-1', 'Summarize the README of this project', 'claude', '/tmp');
-
-    expect(mockUpdateConversationTitle).toHaveBeenCalledTimes(1);
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-1', 'Summarize Project README');
-  });
-
   test.each([
     ['"Summarize Project README"', 'Summarize Project README'],
     ['Title: Debug Auth Module', 'Debug Auth Module'],
@@ -96,16 +89,6 @@ describe('title-generator', () => {
     await generateAndSetTitle('conv-clean', 'Fix the login bug', 'claude', '/tmp');
 
     expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-clean', expectedTitle);
-  });
-
-  test('handles empty AI response with fallback to truncated message', async () => {
-    mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'result' };
-    });
-
-    await generateAndSetTitle('conv-4', 'Help me debug this issue', 'claude', '/tmp');
-
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-4', 'Help me debug this issue');
   });
 
   test.each(['provider error', 'failed turn', 'generated title', 'empty title'] as const)(

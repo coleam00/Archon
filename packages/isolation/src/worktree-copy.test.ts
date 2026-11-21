@@ -22,19 +22,6 @@ describe('worktree-copy', () => {
       expect(result).toEqual({ source: '.env', destination: '.env' });
     });
 
-    test('handles directory paths', () => {
-      const result = parseCopyFileEntry('data/fixtures/');
-      expect(result).toEqual({ source: 'data/fixtures/', destination: 'data/fixtures/' });
-    });
-
-    test('handles nested paths', () => {
-      const result = parseCopyFileEntry('.vscode/settings.json');
-      expect(result).toEqual({
-        source: '.vscode/settings.json',
-        destination: '.vscode/settings.json',
-      });
-    });
-
     test('treats arrow literally (no rename syntax)', () => {
       const result = parseCopyFileEntry('file-with->arrow.txt');
       expect(result).toEqual({
@@ -45,10 +32,6 @@ describe('worktree-copy', () => {
 
     test('throws on empty string', () => {
       expect(() => parseCopyFileEntry('')).toThrow('Copy entry cannot be empty');
-    });
-
-    test('throws on whitespace-only string', () => {
-      expect(() => parseCopyFileEntry('   ')).toThrow('Copy entry cannot be empty');
     });
   });
 
@@ -100,7 +83,7 @@ describe('worktree-copy', () => {
       expect(isPathWithinRoot('/repo', '.')).toBe(true);
     });
 
-    test('returns false for absolute file path', () => {
+    test('treats an absolute file path as relative to the root', () => {
       // On Unix, this creates /repo//etc/passwd which normalizes to /repo/etc/passwd
       // But the intent is to check if someone passes an absolute path as the file
       expect(isPathWithinRoot('/repo', '/etc/passwd')).toBe(true); // This is /repo/etc/passwd

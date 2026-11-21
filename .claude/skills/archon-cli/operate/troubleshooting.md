@@ -82,7 +82,7 @@ A node references `$BASE_BRANCH`, but the run has no resolved base. Causes:
 2. For the reused-branch child, start a new parent run so the child cuts a new isolated branch with a known base.
 3. Or remove the `$BASE_BRANCH` reference if the node doesn't need it.
 
-A resumed run keeps its recorded base unless it is retargeted with `--base`. See [`$BASE_BRANCH` fail-fast](https://archon.diy/reference/variables/#base_branch-fail-fast).
+A resumed run keeps its recorded base, even an unresolved one; `--base` is refused when continuing a run. To use a different base, start a new run. See [`$BASE_BRANCH` fail-fast](https://archon.diy/reference/variables/#base_branch-fail-fast).
 
 ### "Claude Code not found" / "Codex CLI binary not found"
 
@@ -110,7 +110,7 @@ Four possibilities:
    - Any cancel (Web UI Cancel, `archon workflow cancel <run-id>`, chat `/workflow cancel [id]`) stops a live owner process before marking the row cancelled, and refuses when no owner answers — an orphan row gets that refusal, with the host and pid it recorded
    - Verified orphan: `archon workflow abandon <run-id>` (or Abandon in the Web UI after the refused Cancel, or `/workflow abandon <id>` in chat) — marks the row cancelled
 3. **A node is past its `idle_timeout`.** The default is 30 minutes of complete silence (the timer resets on every streamed message — it's a deadlock detector, not a work limiter). Override with per-node `idle_timeout` (ms) if a node legitimately goes quiet for longer.
-4. **A tool call or background command never finished.** While the provider reports open work, `idle_timeout` does not fire. `archon workflow wait <run-id>` and `archon workflow status` show `stalled_tool_calls` attention once that work has made no progress for `workflows.toolCallAttentionMs` (30 minutes by default). `archon workflow end-turn <run-id>` ends that turn without cancelling the run; see `managing-runs.md`, "A stalled turn".
+4. **A tool call or background command never finished.** While the provider reports open work, `idle_timeout` does not fire. `archon workflow wait <run-id>` and `archon workflow status` show `stalled_tool_calls` attention once that work has made no progress for `workflows.toolCallAttentionMs` (30 minutes by default). The engine first sends the agent up to `workflows.stallMessageLimit` messages in its session (shown in `workflow status`); if it still does not continue, `archon workflow end-turn <run-id>` ends that turn without cancelling the run; see `managing-runs.md`, "A stalled turn".
 
 ### Workflow fails mid-way; how do I resume?
 
@@ -122,7 +122,7 @@ archon workflow get <run-id>
 archon workflow resume <run-id>
 ```
 
-`archon workflow resume <run-id>` targets that exact run and reuses its recorded working path/worktree. As a convenience, `archon workflow run my-workflow --resume` resumes the most recent resumable run for that workflow at the invocation cwd. A bare `archon workflow run my-workflow` starts a fresh run.
+`archon workflow resume <run-id>` targets that exact run and reuses its recorded working path/worktree. It takes a failed or paused run, or a run its killed process left `running` when no owner answers for it. A bare `archon workflow run my-workflow` starts a fresh run.
 
 **Session caveat:** A cold resume does not reconstruct the ambient sequential
 `context: shared` cursor. Explicit `context: { resume: node-id }` ancestry is

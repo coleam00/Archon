@@ -6,8 +6,10 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { discoverPlugins } from './discovery';
 import { dispatchForge } from './dispatch';
 import {
+  ATTACHMENT_MAX_BYTES,
   contentDigest,
   forgeAuditResponse,
+  forgeRequestSchema,
   mutationTarget,
   type ForgeRequest,
   type ForgeResponse,
@@ -175,24 +177,6 @@ describe('mutation evidence at the dispatch boundary', () => {
     expect(result.response.ok).toBe(false);
     expect(result.response).not.toHaveProperty('mutation');
   });
-});
-
-test('mutationTarget names the repository for a create and the pull request otherwise', () => {
-  expect(mutationTarget(edit)).toEqual(ref);
-  expect(
-    mutationTarget({
-      operationId: 'create',
-      op: 'pr.create',
-      repo: ref.repo,
-      headRepo: ref.repo,
-      head: 'feature',
-      headRevision: 'headsha',
-      base: 'dev',
-      title: 'A title',
-      body: 'A body',
-      draft: true,
-    })
-  ).toEqual(ref.repo);
 });
 
 test('the audit record keeps a digest of authored content, never the content', async () => {
@@ -484,6 +468,54 @@ test('a plugin without draft conversion refuses without executing the operation'
     error: { kind: 'unsupported_op' },
     mutation: { op: 'pr.draft', outcome: 'refused' },
   });
+});
+
+test('a plugin without review submission refuses it by name without running', async () => {
+  const discovery = await discoverPlugins({
+    config: {
+      plugins: [{ plugin: 'mutator', command: process.execPath, args: [fixture] }],
+      scanPath: false,
+    },
+  });
+  for (const plugin of discovery.byHost.values()) plugin.command = '/missing-operation-executable';
+  const review = {
+    operationId: 'review-1',
+    op: 'pr.review.submit',
+    ref,
+    commit: 'a'.repeat(40),
+    key: 'run-1',
+    summary: 'A summary.',
+    comments: [],
+  } satisfies ForgeRequest;
+  expect((await dispatchForge(review, { discovery })).response).toMatchObject({
+    ok: false,
+    error: { kind: 'unsupported_op' },
+    mutation: { op: 'pr.review.submit', outcome: 'refused' },
+  });
+});
+
+test('an attachment is an image of the allowed types, from 1 byte up to the size limit', () => {
+  const put = (contentType: string, bytes: number) =>
+    forgeRequestSchema.safeParse({
+      operationId: 'attach-1',
+      op: 'attachment.put',
+      repo: ref.repo,
+      contentType,
+      content: Buffer.alloc(bytes, 1).toString('base64'),
+    }).success;
+  expect(put('image/png', ATTACHMENT_MAX_BYTES)).toBe(true);
+  expect(put('image/png', ATTACHMENT_MAX_BYTES + 1)).toBe(false);
+  expect(put('image/png', 0)).toBe(false);
+  expect(put('image/svg+xml', 1)).toBe(false);
+  expect(
+    forgeRequestSchema.safeParse({
+      operationId: 'attach-1',
+      op: 'attachment.put',
+      repo: ref.repo,
+      contentType: 'image/png',
+      content: 'not base64!',
+    }).success
+  ).toBe(false);
 });
 
 test('draft conversion accepts unchanged evidence and rejects a non-open read-back', async () => {

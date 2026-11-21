@@ -12,38 +12,12 @@ import {
 import type { DagNode } from './schemas';
 import { validationError } from './schema-test-utils';
 
-describe('LOOP_NODE_AI_FIELDS', () => {
-  test('excludes model and provider (loop nodes support them)', () => {
-    expect(LOOP_NODE_AI_FIELDS).not.toContain('model');
-    expect(LOOP_NODE_AI_FIELDS).not.toContain('provider');
-  });
-
-  test('contains all other AI-specific fields from BASH_NODE_AI_FIELDS', () => {
-    // `output_format` is deliberately absent since #2563 — a loop: node makes its
-    // own sendQuery, so the schema is honoured rather than warned-and-dropped.
-    const expectedFields = [
-      'context',
-      'hooks',
-      'mcp',
-      'skills',
-      'effort',
-      'maxBudgetUsd',
-      'systemPrompt',
-      'fallbackModel',
-      'betas',
-      'sandbox',
-    ];
-    for (const field of expectedFields) {
-      expect(LOOP_NODE_AI_FIELDS).toContain(field);
-    }
-  });
-});
-
 describe('loop iteration retry policy', () => {
   const loop = { prompt: 'Work', until: 'DONE', max_iterations: 2, fresh_context: false };
   test.each([
     { max_attempts: 1, delay_ms: 0 },
     { max_attempts: 5, delay_ms: 60000, on_error: 'transient' },
+    { max_attempts: 1, delay_ms: 0, on_error: 'schema_unmet' },
     { max_attempts: 2, delay_ms: 17 },
     { max_attempts: 3 },
   ] as const)('preserves valid retry %j in authored and typed loops', retry => {

@@ -34,6 +34,7 @@ export interface WorkflowOperationsDeps {
     | 'getRunAncestry'
     | 'persistWorkflowEvent'
     | 'cancelWorkflowRun'
+    | 'requestOperatorPause'
     | 'resolveApprovalGate'
     | 'resolveAndCancelApprovalGate'
     | 'answerAttentionWait'

@@ -4,11 +4,9 @@
  * of pull request number to what the forge reports. `state` is the real CLI's, named by
  * `FAKE_HOST_CLI` and run in `FAKE_STATE_CWD`, as a surface write outside any run (inside
  * one it would refuse with exit 5, because its store has no such run), so the revision
- * rule and the deleted documents are the store's own. Only `state put` is intercepted, by
- * two files in `$FAKE_DIR`: `put-fails` makes it fail (exit 1), and `put-conflicts` has
- * another run win first, the real CLI writing the same document at the revision the
- * caller names, so the store then refuses the caller's write. Every call's argv is
- * appended to `calls.log`, a `forge pr.view` with its pull request number.
+ * rule and the deleted documents are the store's own. Only `state put` is intercepted: a
+ * `put-fails` file in `$FAKE_DIR` makes it fail (exit 1). Every call's argv is appended
+ * to `calls.log`, a `forge pr.view` with its pull request number.
  */
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
@@ -54,7 +52,6 @@ if (argv[0] === 'state') {
     process.stderr.write('state is read-only');
     process.exitCode = 1;
   } else {
-    if (put && existsSync(join(dir, 'put-conflicts'))) host(input);
     const result = host(input);
     process.stdout.write(result.stdout);
     process.stderr.write(result.stderr);

@@ -20,6 +20,8 @@ import {
   type ExecutionDiagnostics,
   type NodeCacheRecord,
   type NodeCostScope,
+  composedOrigin,
+  type ComposedNodeOrigin,
   type NodeDescriptor,
   type NodeExecutionRecord,
   type NodeStateRecord,
@@ -476,6 +478,13 @@ export function nodeDisplayName(node: NodeDescriptor | DagNode): string {
   return unqualifiedResourceName(node.source.name);
 }
 
+/** The `composed` key an included node's event carries next to its name; nothing for the
+ * run's own nodes, so their events keep their shape. */
+export function withComposedOrigin(node: NodeDescriptor): { composed?: ComposedNodeOrigin } {
+  const composed = composedOrigin(node);
+  return composed !== undefined ? { composed } : {};
+}
+
 export function serializeNodeTranscript(
   record: NodeStateRecord
 ): Omit<import('./logger').WorkflowEvent, 'ts' | 'workflow_id'> | undefined {
@@ -488,6 +497,8 @@ export function serializeNodeTranscript(
   const base = { step: record.node.id, execution };
   const usage = transcriptUsage(record);
   const content = transcriptNodeContent(record.node);
+  const fanOutOutcome = record.diagnostics?.fanOutOutcome;
+  const fanOut = fanOutOutcome !== undefined ? { fan_out_outcome: fanOutOutcome } : {};
   switch (lifecycle.status) {
     case 'started':
       return { ...base, type: 'node_start', content };
@@ -495,6 +506,7 @@ export function serializeNodeTranscript(
       return {
         ...base,
         ...usage,
+        ...fanOut,
         type: 'node_complete',
         content,
         ...(record.timing.durationMs !== undefined
@@ -502,7 +514,7 @@ export function serializeNodeTranscript(
           : {}),
       };
     case 'failed':
-      return { ...base, ...usage, type: 'node_error', error: lifecycle.error };
+      return { ...base, ...usage, ...fanOut, type: 'node_error', error: lifecycle.error };
     case 'skipped':
       return { ...base, type: 'node_skipped', content: lifecycle.reason, cause: lifecycle.cause };
     case 'suspended':
@@ -536,6 +548,7 @@ export function serializeNodeEmitter(
     runId: record.runId,
     nodeId: record.node.id,
     nodeName: nodeDisplayName(record.node),
+    ...withComposedOrigin(record.node),
   };
   if ('cache' in record)
     return record.cache.action === 'replayed'

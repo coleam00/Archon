@@ -116,74 +116,72 @@ function draft() {
   };
 }
 
-for (const attached of [false, true]) {
-  for (const refusal of [
-    'long',
-    'detailed launch',
-    'detailed conversation',
-    'empty launch',
-    'empty conversation',
-    'proxy',
-  ] as const) {
-    test(`draft displays ${refusal} refusal and stays open (attached: ${String(attached)})`, async () => {
-      const message = `Launch refused: ${'credential preflight detail; '.repeat(12)}TAIL-MUST-BE-VISIBLE`;
-      const detail = `No codebase with id missing-project-${'x'.repeat(250)}-DETAIL-TAIL`;
-      const detailed = refusal.startsWith('detailed');
-      const conversationRefused = refusal.endsWith('conversation');
-      const html = `<img src=x onerror="alert(1)">${'Bad gateway '.repeat(40)}`;
-      const requests: { url: string; body: RequestInit['body'] }[] = [];
-      globalThis.window = { location: { origin: 'http://localhost' } } as Window &
-        typeof globalThis;
-      set(K.workflows(projectCwd), {
-        workflows: [toWorkflow({ workflow: { name: 'review-block' }, source: 'project' })],
-        recommended: [],
-      });
-      globalThis.fetch = Object.assign(
-        async (input: RequestInfo | URL, init?: RequestInit) => {
-          const url = String(input);
-          requests.push({ url, body: init?.body });
-          if (url === '/api/conversations' && !conversationRefused)
-            return Response.json({ conversationId: 'web-test' });
-          if (detailed) return Response.json({ error: message, detail }, { status: 400 });
-          return refusal === 'long'
-            ? Response.json({ error: message }, { status: 409 })
-            : new Response(refusal === 'proxy' ? html : '', { status: 502 });
-        },
-        { preconnect: originalFetch.preconnect }
-      );
-
-      const card = draft();
-      if (attached) card.attach();
-      card.button('Start run')();
-      await new Promise(resolve => setTimeout(resolve, 0));
-      const rendered = card.render();
-      expect(rendered).toContain('Cancel draft');
-      card.button('Start run');
-      if (attached) expect(rendered).toContain('brief.txt');
-      if (detailed) {
-        expect(rendered).toContain(`${message}: ${detail}`);
-        expect(rendered).toContain('DETAIL-TAIL');
-      } else if (refusal === 'long') {
-        expect(rendered).toContain(message);
-        expect(rendered).toContain('TAIL-MUST-BE-VISIBLE');
-      } else if (refusal === 'proxy') {
-        expect(rendered).toContain('&lt;img');
-        expect(rendered).not.toContain('<img');
-        expect(rendered).toContain(
-          `${html.slice(0, 200).replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')}...`
-        );
-      } else {
-        expect(rendered).toContain('API error 502');
-        expect(rendered).toContain(
-          refusal === 'empty conversation'
-            ? '/api/conversations'
-            : '/api/workflows/review-block/run'
-        );
-      }
-      expect(requests).toHaveLength(conversationRefused ? 1 : 2);
-      if (!conversationRefused) expect(requests[1]?.body instanceof FormData).toBe(attached);
+// Each refusal shape renders the same way with or without files; one attached case
+// covers the multipart request and that the attachment survives the refusal.
+for (const [refusal, attached] of [
+  ['long', false],
+  ['detailed launch', false],
+  ['detailed conversation', false],
+  ['empty launch', false],
+  ['empty conversation', false],
+  ['proxy', false],
+  ['long', true],
+] as const) {
+  test(`draft displays ${refusal} refusal and stays open (attached: ${String(attached)})`, async () => {
+    const message = `Launch refused: ${'credential preflight detail; '.repeat(12)}TAIL-MUST-BE-VISIBLE`;
+    const detail = `No codebase with id missing-project-${'x'.repeat(250)}-DETAIL-TAIL`;
+    const detailed = refusal.startsWith('detailed');
+    const conversationRefused = refusal.endsWith('conversation');
+    const html = `<img src=x onerror="alert(1)">${'Bad gateway '.repeat(40)}`;
+    const requests: { url: string; body: RequestInit['body'] }[] = [];
+    globalThis.window = { location: { origin: 'http://localhost' } } as Window & typeof globalThis;
+    set(K.workflows(projectCwd), {
+      workflows: [toWorkflow({ workflow: { name: 'review-block' }, source: 'project' })],
+      recommended: [],
     });
-  }
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        requests.push({ url, body: init?.body });
+        if (url === '/api/conversations' && !conversationRefused)
+          return Response.json({ conversationId: 'web-test' });
+        if (detailed) return Response.json({ error: message, detail }, { status: 400 });
+        return refusal === 'long'
+          ? Response.json({ error: message }, { status: 409 })
+          : new Response(refusal === 'proxy' ? html : '', { status: 502 });
+      },
+      { preconnect: originalFetch.preconnect }
+    );
+
+    const card = draft();
+    if (attached) card.attach();
+    card.button('Start run')();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const rendered = card.render();
+    expect(rendered).toContain('Cancel draft');
+    card.button('Start run');
+    if (attached) expect(rendered).toContain('brief.txt');
+    if (detailed) {
+      expect(rendered).toContain(`${message}: ${detail}`);
+      expect(rendered).toContain('DETAIL-TAIL');
+    } else if (refusal === 'long') {
+      expect(rendered).toContain(message);
+      expect(rendered).toContain('TAIL-MUST-BE-VISIBLE');
+    } else if (refusal === 'proxy') {
+      expect(rendered).toContain('&lt;img');
+      expect(rendered).not.toContain('<img');
+      expect(rendered).toContain(
+        `${html.slice(0, 200).replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')}...`
+      );
+    } else {
+      expect(rendered).toContain('API error 502');
+      expect(rendered).toContain(
+        refusal === 'empty conversation' ? '/api/conversations' : '/api/workflows/review-block/run'
+      );
+    }
+    expect(requests).toHaveLength(conversationRefused ? 1 : 2);
+    if (!conversationRefused) expect(requests[1]?.body instanceof FormData).toBe(attached);
+  });
 }
 
 test('a required input does not block Start run, and the engine refusal is shown on the card', async () => {
