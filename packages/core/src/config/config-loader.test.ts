@@ -556,6 +556,25 @@ assistants:
       expect(writtenContent).toContain('opus');
     });
 
+    test('keeps comments and layout in the file it rewrites', async () => {
+      mockFsReadFile.mockResolvedValue(`# my archon config
+botName: Archon # keep this comment
+assistants:
+  claude:
+    model: sonnet
+`);
+
+      await updateGlobalConfig({ defaultAssistant: 'claude' });
+
+      const writtenContent = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(writtenContent).toContain('# my archon config\n');
+      expect(writtenContent).toContain('botName: Archon # keep this comment\n');
+      expect(Bun.YAML.parse(writtenContent)).toMatchObject({
+        botName: 'Archon',
+        defaultAssistant: 'claude',
+      });
+    });
+
     test('preserves existing non-updated fields', async () => {
       mockFsReadFile.mockResolvedValue(`
 defaultAssistant: codex
