@@ -20,7 +20,7 @@ import type {
   ForgeOperations,
   ItemLanding,
   ItemLink,
-  ItemMerge,
+  ItemMergeRecorded,
   ItemRead,
   ItemWindow,
   NodeOutcomesListing,
@@ -391,12 +391,6 @@ export function linkItem(request: ItemLinkRequest): ItemLink & { readonly create
   };
 }
 
-/** `recorded` is false when the item already carried a merge; `merge` is then the first. */
-export interface ItemMergeRecorded {
-  readonly merge: ItemMerge;
-  readonly recorded: boolean;
-}
-
 /**
  * Record that this run's own item's change merged (`archon workflow merged`), as the forge
  * reported it: `change` names the change, such as a pull request URL, `at` is an ISO time
@@ -413,7 +407,7 @@ export function recordMerge(merge: {
   const command = 'workflow merged';
   const args = ['--item', ownItemKey(command), '--change', merge.change, '--at', merge.at];
   if (typeof merge.commit === 'string') args.push('--commit', merge.commit);
-  return itemWrite(command, args) as unknown as ItemMergeRecorded;
+  return itemWrite(command, args) as ItemMergeRecorded;
 }
 
 /**

@@ -3159,17 +3159,20 @@ declare module 'archon:script' {
     } | null;
   };
 
-  /** The merge recorded on an item, as the forge reported it. */
-  export type ItemMerge = {
-    readonly change: string;
-    readonly commit: string | null;
-    readonly at: string;
-    readonly recordedAt: string;
-    readonly via: string;
-    readonly fromRun: {
-      readonly runId: string;
-      readonly nodePath: string;
-    } | null;
+  /** `recorded` is false when the item already carried a merge; `merge` is then the first. */
+  export type ItemMergeRecorded = {
+    readonly merge: {
+      readonly change: string;
+      readonly commit: string | null;
+      readonly at: string;
+      readonly recordedAt: string;
+      readonly via: string;
+      readonly fromRun: {
+        readonly runId: string;
+        readonly nodePath: string;
+      } | null;
+    };
+    readonly recorded: boolean;
   };
 
   /** The branch an item's change lands on. */
@@ -3359,11 +3362,6 @@ declare module 'archon:script' {
   export function linkItem(request: ItemLinkRequest): ItemLink & {
       readonly created: boolean;
   };
-  /** `recorded` is false when the item already carried a merge; `merge` is then the first. */
-  export interface ItemMergeRecorded {
-      readonly merge: ItemMerge;
-      readonly recorded: boolean;
-  }
   /**
    * Record that this run's own item's change merged (`archon workflow merged`), as the forge
    * reported it: `change` names the change, such as a pull request URL, `at` is an ISO time
