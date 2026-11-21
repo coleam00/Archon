@@ -281,33 +281,31 @@ function readOwnerRecord(raw: unknown): ExecutionOwnerRecord | undefined {
 }
 
 /**
- * The process an admitted start was handed to, written by the process that handed it over
- * right after the hand-off (`startAdmitted`), while the run is still `pending`. It covers
- * the executor's boot, before its live-owner endpoint opens, and says on which host and as
- * which user it runs, so a reader elsewhere does not take an unreachable endpoint as
- * absence. Read only while the run is `pending`; once the executor claims the run,
- * `execution_owner` takes over and this key is inert.
+ * How the hand-off of an admitted start ended, written by the process that handed it over
+ * while the run is still `pending`. `handed_off` names the process the start was handed
+ * to: a detached `trigger execute`, or a server running it in-process. `hand_off_failed`
+ * records that the hand-off started nothing. It is evidence for a reader while the run
+ * waits for its executor's claim, never a liveness signal: a live pid is not proof that
+ * the process is still this executor, and only the live-owner endpoint proves that. What
+ * it can prove is absence: a failed hand-off, or a recorded process that no longer exists.
+ * Once the executor claims the run, `execution_owner` takes over and this key is inert.
  */
 export const START_EXECUTOR_METADATA_KEY = 'start_executor';
 
-export interface StartExecutorRecord extends ExecutionOwnerRecord {
-  /**
-   * The process exists only to run this start (a detached `trigger execute`), so while it
-   * lives it is starting it. False for a server that runs the start in-process: the server
-   * being alive says nothing about this one start.
-   */
-  dedicated: boolean;
-}
+export type StartExecutorRecord =
+  | ({ kind: 'handed_off' } & ExecutionOwnerRecord)
+  | { kind: 'hand_off_failed' };
 
-/** Typed view of the start-executor record; undefined when none was written. */
+/** Typed view of the start-executor record; undefined when none was written or it does not read. */
 export function readStartExecutor(
   metadata: Record<string, unknown> | undefined
 ): StartExecutorRecord | undefined {
   const raw = metadata?.[START_EXECUTOR_METADATA_KEY];
-  const owner = readOwnerRecord(raw);
-  if (owner === undefined) return undefined;
-  const { dedicated } = raw as { dedicated?: unknown };
-  return typeof dedicated === 'boolean' ? { ...owner, dedicated } : undefined;
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const { kind } = raw as { kind?: unknown };
+  if (kind === 'hand_off_failed') return { kind };
+  const owner = kind === 'handed_off' ? readOwnerRecord(raw) : undefined;
+  return owner === undefined ? undefined : { kind: 'handed_off', ...owner };
 }
 
 /** Typed view of the run-lifecycle keys on a run's metadata; undefined when unset. */

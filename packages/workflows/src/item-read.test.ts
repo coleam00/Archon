@@ -502,7 +502,7 @@ describe('reading an item', () => {
     };
     const awaiting = async (from: ItemReadSource) =>
       (await readItem(from, item.projectKey, item.key))?.runs[0]?.awaitingExecution;
-    const executor = { host: 'here', pid: 4242, dedicated: true };
+    const executor = { host: 'here', pid: 4242 };
 
     // A reader that cannot look never reports the executor absent.
     expect(await awaiting(pending)).toEqual({

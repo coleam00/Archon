@@ -229,7 +229,7 @@ export interface StartExecutorObserver {
  * that admitted it died before it handed the start over, or the executor died before its
  * claim, it stays so until an operator runs it once with
  * `archon trigger execute <requestId> --host <hostId>`; the observer tells the two apart
- * where this process can see the executor. Without an observer the state is `unknown`,
+ * where it can prove which (`StartExecutorState`). Without an observer the state is `unknown`,
  * never `unowned`: a reader that cannot look never reports the executor absent. A hand
  * start's request is claimed by the process that made it, so it is never this.
  */

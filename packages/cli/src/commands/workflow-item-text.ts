@@ -100,17 +100,18 @@ function skippedLines(start: ItemSkippedStart): string[] {
  * starts it; one this process cannot observe points to the inspection instead.
  */
 function awaitingExecutionText(waiting: NonNullable<ItemRun['awaitingExecution']>): string {
-  const executor = waiting.executor;
+  const { executor } = waiting;
   switch (waiting.state) {
     case 'starting':
-      return `admitted, starting${executor ? ` (process ${String(executor.pid)})` : ''}`;
+      // The owner endpoint proves it; the recorded pid is only who it was handed to.
+      return 'admitted, starting';
     case 'unowned':
       return `admitted, not started, and no process is running it. Start it: archon trigger execute ${waiting.requestId} --host ${waiting.hostId}`;
     case 'unknown': {
       const where = executor
-        ? ` (handed to ${executor.dedicated ? 'process' : 'server process'} ${String(executor.pid)} on ${executor.host})`
+        ? ` (handed to process ${String(executor.pid)} on ${executor.host})`
         : '';
-      return `admitted, not started; this process cannot see its executor${where}. Inspect it: archon trigger inspect ${waiting.requestId}`;
+      return `admitted, not started; this process cannot confirm its executor${where}. Inspect it: archon trigger inspect ${waiting.requestId}`;
     }
   }
 }

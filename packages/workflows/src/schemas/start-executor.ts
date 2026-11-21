@@ -1,24 +1,25 @@
 import { z } from 'zod';
 
 /**
- * Whether an admitted start whose run has not begun has an executor, as this process
- * observes it per read; never persisted. `starting`: its executor's live-owner endpoint
- * answers, or the process it was handed to runs only this start and is alive here.
- * `unowned`: no executor runs it on this host and user, and the run is still pending;
- * `archon trigger execute <requestId> --host <hostId>` runs it once. `unknown`: this
- * process cannot tell, because the executor was handed to another host or user, or is a
- * server whose own life says nothing about this start, or no observer was given. Elapsed
- * time is never an input.
+ * What this process observes of the executor of an admitted start whose run has not begun;
+ * observed per read, never persisted. `starting`: the run's live-owner endpoint answers,
+ * the only proof that a process is executing this start. `unowned`: the run is still
+ * pending and nothing can be running it, because its hand-off recorded that it started
+ * nothing or the process it was handed to no longer exists on this host;
+ * `archon trigger execute <requestId> --host <hostId>` runs it once. `unknown`: this process
+ * cannot tell, because nothing was recorded yet, the recorded process is on another host or
+ * user, or a process holds the recorded pid but does not answer as this run's owner (an
+ * executor still booting, or another process that reused the pid). Elapsed time is never
+ * an input.
  */
 export const startExecutorStateSchema = z.enum(['starting', 'unowned', 'unknown']);
 export type StartExecutorState = z.infer<typeof startExecutorStateSchema>;
 
 /** The process an admitted start was handed to (`START_EXECUTOR_METADATA_KEY`). */
-export const startExecutorRecordSchema = z.object({
+export const startExecutorProcessSchema = z.object({
   host: z.string(),
   pid: z.number().int(),
   uid: z.number().int().optional(),
-  dedicated: z.boolean(),
 });
 
 /**
@@ -30,7 +31,7 @@ export const awaitingExecutionSchema = z.object({
   requestId: z.string(),
   hostId: z.string(),
   state: startExecutorStateSchema,
-  executor: startExecutorRecordSchema.nullable(),
+  executor: startExecutorProcessSchema.nullable(),
 });
 export type AwaitingExecution = z.infer<typeof awaitingExecutionSchema>;
 

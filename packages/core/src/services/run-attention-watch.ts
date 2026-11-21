@@ -6,11 +6,8 @@
  * This service never mutates run lifecycle state.
  */
 import { createLogger } from '@archon/paths';
-import { probePidLiveness } from '@archon/paths/process-owner';
-import type {
-  StartExecutorObservation,
-  StartExecutorState,
-} from '@archon/workflows/schemas/start-executor';
+import { isPidProvablyGone } from '@archon/paths/process-owner';
+import type { StartExecutorObservation } from '@archon/workflows/schemas/start-executor';
 import {
   readStartExecutor,
   TOOL_CALL_ATTENTION_METADATA_KEY,
@@ -447,44 +444,52 @@ export async function observeRunOwner(
 }
 
 /**
- * Observe the executor of a `pending` admitted run (`StartExecutorObservation`). Its
- * live-owner endpoint answering proves it is starting; it opens only once the executor has
- * booted and loaded the request. Before that, the start-executor record its hand-off wrote
- * (`readStartExecutor`) is the evidence: a process on this host and user that runs only
- * this start and is still alive is starting it. An executor on another host or user, or a
- * live server that runs the start in-process, reads `unknown`: this process cannot see it.
- * When the recorded process is gone, or none was recorded, a second read tells a run its
- * executor just claimed from one nobody runs. Null once the run is not pending. Elapsed
- * time is never an input. Observing never changes the run.
+ * Observe the executor of a `pending` admitted run (`StartExecutorObservation`). Only the
+ * run's live-owner endpoint answering proves a process is executing it: `starting`. Without
+ * that, the run is read again, because its hand-off record may postdate the caller's copy,
+ * and the record (`readStartExecutor`) can prove only absence: a hand-off that started
+ * nothing, or a process it named on this host and user that no longer exists. That reads
+ * `unowned` once one more read finds the run still pending, since an executor claims the run
+ * before it can exit having run it. Every other case reads `unknown`: no record yet, an
+ * executor elsewhere, or a live pid, which may be an executor still booting or another
+ * process that reused the pid. Null once the run is not pending. Elapsed time is never an
+ * input. Observing never changes the run.
  */
 export async function observeStartExecutor(
   store: RunAttentionReadStore,
   run: WorkflowRun
 ): Promise<StartExecutorObservation | null> {
   if (run.status !== 'pending') return null;
-  const executor = readStartExecutor(run.metadata) ?? null;
   const endpoint = await watchRunLiveOwner(run.id, () => undefined);
   if (endpoint.kind === 'attached') {
     endpoint.handle.unsubscribe();
-    return { state: 'starting', executor };
+    return { state: 'starting', executor: handedTo(readStartExecutor(run.metadata)) };
   }
-  if (endpoint.kind === 'unproven') return { state: 'unknown', executor };
-  const recorded = executor === null ? 'gone' : recordedExecutorState(executor);
-  if (recorded !== 'gone') return { state: recorded, executor };
   const current = await store.getWorkflowRun(run.id);
-  return current?.status === 'pending' ? { state: 'unowned', executor } : null;
+  if (current?.status !== 'pending') return null;
+  const record = readStartExecutor(current.metadata);
+  const executor = handedTo(record);
+  if (endpoint.kind === 'unproven' || !provesAbsence(record)) return { state: 'unknown', executor };
+  return (await store.getWorkflowRun(run.id))?.status === 'pending'
+    ? { state: 'unowned', executor }
+    : null;
 }
 
-/** What a recorded executor proves while its endpoint is closed, or `gone` when it exited. */
-function recordedExecutorState(
-  executor: StartExecutorRecord
-): Exclude<StartExecutorState, 'unowned'> | 'gone' {
-  if (!isOwnerEndpointLocal(executor)) return 'unknown';
-  const liveness = probePidLiveness(executor.pid);
-  // EPERM: the pid exists under another user. Only ESRCH proves it gone.
-  if (liveness.status === 'returned' || liveness.code === 'EPERM')
-    return executor.dedicated ? 'starting' : 'unknown';
-  return liveness.code === 'ESRCH' ? 'gone' : 'unknown';
+/** The process the record names, without its kind; null when it names none. */
+function handedTo(record: StartExecutorRecord | undefined): StartExecutorObservation['executor'] {
+  if (record?.kind !== 'handed_off') return null;
+  const { kind: _kind, ...executor } = record;
+  return executor;
+}
+
+/**
+ * True when the record proves nothing runs the start: its hand-off started nothing, or the
+ * process it named is on this host and user and no process has its pid (ESRCH).
+ */
+function provesAbsence(record: StartExecutorRecord | undefined): boolean {
+  if (record === undefined) return false;
+  if (record.kind === 'hand_off_failed') return true;
+  return isOwnerEndpointLocal(record) && isPidProvablyGone(record.pid);
 }
 
 function withoutRunningAttention(run: WorkflowRun): WorkflowRun;

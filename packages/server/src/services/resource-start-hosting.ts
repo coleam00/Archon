@@ -74,8 +74,8 @@ export function createServerResourceStartHost(
           'resource_start.start_failed'
         );
       });
-    // The server runs it in-process; being alive, it proves nothing about this one start.
-    return { pid: process.pid, dedicated: false };
+    // The server runs it in-process, so the executor is this process.
+    return { pid: process.pid };
   };
 
   let running: Promise<void> | undefined;

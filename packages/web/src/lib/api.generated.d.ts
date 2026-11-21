@@ -8139,7 +8139,6 @@ export interface components {
             host: string;
             pid: number;
             uid?: number;
-            dedicated: boolean;
           } | null;
         } | null;
         spend: {
@@ -8806,7 +8805,6 @@ export interface components {
               host: string;
               pid: number;
               uid?: number;
-              dedicated: boolean;
             } | null;
           } | null;
           spend: {

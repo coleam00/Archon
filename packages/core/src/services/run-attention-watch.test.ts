@@ -1080,12 +1080,12 @@ describe('observeRunOwner', () => {
 });
 
 describe('observeStartExecutor', () => {
-  const executor = (over: Record<string, unknown> = {}) => ({
+  const handedOff = (over: Record<string, unknown> = {}) => ({
     start_executor: {
+      kind: 'handed_off',
       host: hostname(),
       pid: process.pid,
       ...(localUid === undefined ? {} : { uid: localUid }),
-      dedicated: true,
       ...over,
     },
   });
@@ -1094,47 +1094,73 @@ describe('observeStartExecutor', () => {
   const pending = (id: string, metadata: Record<string, unknown>): WorkflowRun =>
     putRun(id, { status: 'pending', metadata });
 
-  test('an answering endpoint is starting, and the probe lets go of it', async () => {
+  test('only an answering endpoint is starting, and the probe lets go of it', async () => {
     const observed = await observeStartExecutor(store, pending('booted', {}));
 
-    expect(observed).toEqual({ state: 'starting', executor: null });
+    expect(observed?.state).toBe('starting');
     expect(ownerUnsubscribes[0]).toHaveBeenCalledTimes(1);
   });
 
-  test('a live executor that runs only this start is starting before its endpoint opens', async () => {
+  test('a live recorded pid without an answering endpoint is unknown, never starting', async () => {
+    // It may be an executor still booting, or another process that took the pid.
     reachableOwners = new Set();
-    const run = pending('booting', executor());
 
-    expect((await observeStartExecutor(store, run))?.state).toBe('starting');
+    expect(await observeStartExecutor(store, pending('booting', handedOff()))).toEqual({
+      state: 'unknown',
+      executor: {
+        host: hostname(),
+        pid: process.pid,
+        ...(localUid === undefined ? {} : { uid: localUid }),
+      },
+    });
   });
 
-  test('a start nobody runs is unowned: no executor recorded, or the recorded one is gone', async () => {
+  test('a start with no record yet is unknown: a missing record proves nothing', async () => {
     reachableOwners = new Set();
 
-    expect(await observeStartExecutor(store, pending('dropped', {}))).toEqual({
-      state: 'unowned',
+    expect(await observeStartExecutor(store, pending('unrecorded', {}))).toEqual({
+      state: 'unknown',
       executor: null,
     });
+  });
+
+  test('a start is unowned when its hand-off started nothing or its process is gone', async () => {
+    reachableOwners = new Set();
+    const failed = { start_executor: { kind: 'hand_off_failed' } };
+
+    expect((await observeStartExecutor(store, pending('failed', failed)))?.state).toBe('unowned');
     expect(
-      (await observeStartExecutor(store, pending('died', executor({ pid: gonePid }))))?.state
+      (await observeStartExecutor(store, pending('died', handedOff({ pid: gonePid }))))?.state
     ).toBe('unowned');
   });
 
-  test('an executor this process cannot see is unknown', async () => {
+  test('ownership is judged from the run as it is now, not the caller copy', async () => {
     reachableOwners = new Set();
-    const remote = pending('remote', executor({ host: 'other-host.invalid' }));
-    const server = pending('server', executor({ dedicated: false }));
+    const stale = pending('recorded-later', {});
+    rows.set('recorded-later', { ...stale, metadata: handedOff({ pid: gonePid }) });
 
-    expect((await observeStartExecutor(store, remote))?.state).toBe('unknown');
-    expect((await observeStartExecutor(store, server))?.state).toBe('unknown');
+    expect((await observeStartExecutor(store, stale))?.state).toBe('unowned');
+  });
+
+  test('an executor this process cannot see is unknown, even when its pid is free here', async () => {
+    reachableOwners = new Set();
+    const remote = handedOff({ host: 'other-host.invalid', pid: gonePid });
+
+    expect((await observeStartExecutor(store, pending('remote', remote)))?.state).toBe('unknown');
     mockWatchRunLiveOwner.mockImplementationOnce(async () => ({ kind: 'unproven' }));
-    expect((await observeStartExecutor(store, pending('slow', {})))?.state).toBe('unknown');
+    const failed = { start_executor: { kind: 'hand_off_failed' } };
+    expect((await observeStartExecutor(store, pending('slow', failed)))?.state).toBe('unknown');
   });
 
   test('a start its executor claimed between reads is no longer awaiting execution', async () => {
     reachableOwners = new Set();
-    const run = pending('claimed', executor({ pid: gonePid }));
-    rows.set('claimed', { ...run, status: 'running' });
+    const run = pending('claimed', handedOff({ pid: gonePid }));
+    let reads = 0;
+    mockGetWorkflowRun.mockImplementation(async (id: string) => {
+      const row = rows.get(id) ?? null;
+      // The first read still finds it pending; the executor claims it before the second.
+      return row && ++reads > 1 ? { ...row, status: 'running' } : row;
+    });
 
     expect(await observeStartExecutor(store, run)).toBeNull();
     expect(await observeStartExecutor(store, putRun('running'))).toBeNull();

@@ -77,7 +77,7 @@ import type { WorkflowHost } from './host-store';
 import { registerRepository } from '../handlers/clone';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
-import { recordStartExecutor, type StartedExecutor } from './start-executor';
+import { handOffAdmitted, type StartedExecutor } from './start-executor';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { executionLane, handoffIsolation } from './resource-start-lanes';
 import { selectStartedWorkflow } from './binding-workflow';
@@ -492,8 +492,7 @@ async function startAdmittedRequest(
   receiptId: string | undefined
 ): Promise<void> {
   try {
-    // Recording never throws, so a failure here is the hand-off's own.
-    await recordStartExecutor(host.deps.store, requestId, await host.startAdmitted(requestId));
+    await handOffAdmitted(host, requestId);
   } catch (error) {
     failures.push({ receiptId, error });
   }

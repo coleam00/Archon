@@ -1838,38 +1838,50 @@ async function expectAllBindingsPrepared(error: unknown): Promise<void> {
   ).toEqual([{ status: 'rejected', count: 201 }]);
 }
 
-test('a drain records the process it handed an admitted start to on the pending run', async () => {
-  const { createSqlWorkflowHost } = await import('../workflows/sql-host');
-  const { drainResourceStartHost } = await import('../workflows/resource-start-host');
-  const host = createSqlWorkflowHost();
-  const [holder, next] = [launch(crypto.randomUUID()), launch(crypto.randomUUID())];
-  for (const prepared of [holder, next])
-    await host.deps.store.admitResourceStart({
-      resource: 'resource',
-      capacity: 1,
+for (const handOff of ['handed_off', 'hand_off_failed'] as const) {
+  test(`a drain records how it handed an admitted start over on the pending run: ${handOff}`, async () => {
+    const { createSqlWorkflowHost } = await import('../workflows/sql-host');
+    const { drainResourceStartHost } = await import('../workflows/resource-start-host');
+    const host = createSqlWorkflowHost();
+    const [holder, next] = [launch(crypto.randomUUID()), launch(crypto.randomUUID())];
+    for (const prepared of [holder, next])
+      await host.deps.store.admitResourceStart({
+        resource: 'resource',
+        capacity: 1,
+        hostId: 'host',
+        overlap: 'queue',
+        launch: prepared,
+      });
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
+      [holder.run.id]
+    );
+
+    const drained = await drainResourceStartHost({
+      ...host,
       hostId: 'host',
-      overlap: 'queue',
-      launch: prepared,
-    });
-  await getDatabase().query(
-    "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
-    [holder.run.id]
-  );
+      startAdmitted: async () => {
+        if (handOff === 'hand_off_failed') throw new Error('spawn failed');
+        return { pid: 4242 };
+      },
+    }).catch((error: unknown) => error);
 
-  await drainResourceStartHost({
-    ...host,
-    hostId: 'host',
-    startAdmitted: async () => ({ pid: 4242, dedicated: true }),
+    const run = await getWorkflowRun(next.run.id);
+    expect(run?.status).toBe('pending');
+    if (handOff === 'handed_off') {
+      expect(drained).toBeUndefined();
+      expect(run?.metadata.start_executor).toMatchObject({
+        kind: handOff,
+        host: hostname(),
+        pid: 4242,
+      });
+    } else {
+      // The hand-off's own failure is still reported to the drain's caller.
+      expect(drained).toBeInstanceOf(Error);
+      expect(run?.metadata.start_executor).toEqual({ kind: handOff });
+    }
   });
-
-  const run = await getWorkflowRun(next.run.id);
-  expect(run?.status).toBe('pending');
-  expect(run?.metadata.start_executor).toMatchObject({
-    host: hostname(),
-    pid: 4242,
-    dedicated: true,
-  });
-});
+}
 
 test('a run end prepares every start it caused, past one page of receipts and one page of bindings', async () => {
   const { createSqlWorkflowHost } = await import('../workflows/sql-host');

@@ -2108,7 +2108,6 @@ declare module 'archon:script' {
           readonly host: string;
           readonly pid: number;
           readonly uid?: number;
-          readonly dedicated: boolean;
         } | null;
       } | null;
       readonly spend: {
@@ -2635,7 +2634,6 @@ declare module 'archon:script' {
             readonly host: string;
             readonly pid: number;
             readonly uid?: number;
-            readonly dedicated: boolean;
           } | null;
         } | null;
         readonly spend: {
