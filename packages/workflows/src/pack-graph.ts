@@ -18,7 +18,11 @@ import type { PackBinding } from './schemas/pack-bindings';
 import { kindedPackBinding } from './schemas/pack-bindings';
 import { loopBodyStepNamePrefix, resolvedBodyNodes } from './graph-plan';
 import { isComposeFanOutNode, isLoopGroupNode } from './schemas/node-guards';
-import { asksSettledTriggerSchema, type RunEndedLinked } from './schemas/resource-start';
+import {
+  asksSettledTriggerSchema,
+  runEndedLinkedSchema,
+  type RunEndedLinked,
+} from './schemas/resource-start';
 import type {
   ResolvedWorkflow,
   WorkflowLoadResult,
@@ -89,6 +93,11 @@ const arrowEndsSchema = {
   from: arrowFromSchema,
   /** The workflow the arrow starts; it may be outside the pack. */
   to: z.string(),
+  /**
+   * The link the arrow starts its stage over, with the result list naming the items when
+   * it has `items`, or null when it starts on the ended run's own item.
+   */
+  linked: runEndedLinkedSchema.nullable(),
 };
 const declaredSourceSchema = z.object({
   binding: z.string(),
@@ -352,7 +361,9 @@ interface DeclaredArrow {
 }
 
 const sameLink = (a: RunEndedLinked | null, b: RunEndedLinked | null): boolean =>
-  a === null || b === null ? a === b : a.kind === b.kind && a.holder === b.holder;
+  a === null || b === null
+    ? a === b
+    : a.kind === b.kind && a.holder === b.holder && a.items === b.items;
 
 function declaredArrows(input: GraphInput): DeclaredArrow[] {
   const names = input.stages.map(stage => stage.name);
@@ -402,7 +413,7 @@ function graphArrows(input: GraphInput): PackGraphArrow[] {
   const arrows: PackGraphArrow[] = [];
   const matched = new Set<InstalledArrow>();
   for (const { binding, from, to, linked } of declaredArrows(input)) {
-    const ends = { from, to };
+    const ends = { from, to, linked };
     const files = input.installed.filter(
       entry =>
         sameLink(entry.linked, linked) &&
@@ -426,6 +437,7 @@ function graphArrows(input: GraphInput): PackGraphArrow[] {
     arrows.push({
       from: entry.from,
       to: entry.launchWorkflow,
+      linked: entry.linked,
       active: true,
       declared: null,
       installed: installedSource(entry),

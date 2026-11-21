@@ -109,6 +109,7 @@ describe('a pack graph', () => {
       {
         from: { stage: 'a', outcome: 'ready' },
         to: 'b',
+        linked: null,
         active: true,
         declared: { binding: 'b-after-a', problems: [] },
         installed: { file: '/home/triggers/file-b.json', sourceInstanceId: 'file-b', problems: [] },
@@ -116,6 +117,7 @@ describe('a pack graph', () => {
       {
         from: { stage: 'b', outcome: 'done' },
         to: 'c',
+        linked: null,
         active: false,
         declared: { binding: 'c-after-b', problems: [] },
         installed: null,
@@ -255,6 +257,7 @@ describe('a pack graph', () => {
       {
         from: { stage: 'a', outcome: 'ready' },
         to: 'elsewhere',
+        linked: null,
         active: true,
         declared: null,
         installed: {
@@ -302,6 +305,33 @@ describe('a pack graph', () => {
       ['/home/triggers/order.json', 'order-after-member'],
       ['/home/triggers/same-item.json', null],
       ['/home/triggers/depends.json', null],
+    ]);
+  });
+
+  test('an arrow shows the items a linked binding names, and only the same items match', () => {
+    const named = { ...partOfOrder, items: '/start' };
+    const declared = packRunEndedBindingSchema.parse({
+      workflow: 'b',
+      resource: 'b',
+      overlap: 'queue',
+      run_ended: { workflow: 'a', outcome: 'ready', linked: named },
+    });
+    const graph = graphOf(stages(stage('a', ['ready']), stage('b', ['done'])), {
+      declared: { 'order-after-split': declared },
+      installed: [
+        { ...installed('a', 'ready', 'b', 'every-holder'), linked: partOfOrder },
+        { ...installed('a', 'ready', 'b', 'named'), linked: named },
+      ],
+    });
+    expect(
+      graph.arrows.map(arrow => [
+        arrow.installed?.file ?? null,
+        arrow.declared?.binding ?? null,
+        arrow.linked,
+      ])
+    ).toEqual([
+      ['/home/triggers/named.json', 'order-after-split', named],
+      ['/home/triggers/every-holder.json', null, partOfOrder],
     ]);
   });
 

@@ -649,7 +649,12 @@ function arrowText(arrow: PackGraph['arrows'][number]): string {
     'outcome' in arrow.from
       ? `${arrow.from.stage}:${arrow.from.outcome}`
       : `${arrow.from.stage}:asks(${arrow.from.settled}${arrow.from.option === undefined ? '' : `: ${arrow.from.option}`})`;
-  return `  ${from} -> ${arrow.to} [${state}]${note}`;
+  const link = arrow.linked;
+  const linked =
+    link === null
+      ? ''
+      : ` linked ${link.kind} ${link.holder}${link.items === undefined ? '' : `, items ${link.items}`}`;
+  return `  ${from} -> ${arrow.to}${linked} [${state}]${note}`;
 }
 
 /** The graph as plain lines; `--json` prints the read itself, which is the contract. */
