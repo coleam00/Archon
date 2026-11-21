@@ -17,6 +17,7 @@
 import { describe, test, expect, beforeAll, afterAll, afterEach } from 'bun:test';
 import { Pool, type PoolClient } from 'pg';
 import { getSchemaSQL } from './bundled-schema';
+import { endPgPool } from '../test/end-pg-pool';
 
 const baseUrl = process.env.ARCHON_TEST_PG_URL;
 const SCRATCH_DB = 'archon_pg_event_commit_order_test';
@@ -55,7 +56,7 @@ describe.skipIf(!baseUrl)('workflow event order — real Postgres', () => {
   });
 
   afterAll(async () => {
-    await pool?.end();
+    if (pool) await endPgPool(pool);
     if (admin) {
       await admin.query(`DROP DATABASE IF EXISTS "${SCRATCH_DB}" WITH (FORCE)`);
       await admin.end();

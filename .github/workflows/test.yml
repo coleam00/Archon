@@ -37,7 +37,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
 
 env:
-  BUN_VERSION: '1.4.2'
+  BUN_VERSION: '1.4.5'
 
 # A pull request's newer push replaces its older run. A push to dev or main is the complete
 # verification of that merge (the pull request ran only the Linux jobs), so each pushed
