@@ -251,7 +251,7 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
   receive: async () => ({ status: 'rejected', reason: 'unauthenticated' }),
   observe: async ({ waits, forge }) => {
     for (const wait of waits) await forge.commitChecks({ remote: wait.remote, revision: wait.about });
-    return { acceptances: [{ ...config, receipt: { ...config.receipt, id: crypto.randomUUID() } }], unserved: [] };
+    return { acceptances: [{ ...config, receipt: { ...config.receipt, id: crypto.randomUUID() } }], unserved: [], failed: [] };
   },
 });\n`
       );
@@ -263,7 +263,11 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
             {
               sourceInstanceId: 'github',
               module: modulePath,
-              config: wakeReceipt(HEAD, { deliveryId: 'observe:check:77:completed:success' }),
+              // As the plugin makes it: one binding, on the wait's item.
+              config: wakeReceipt(HEAD, {
+                deliveryId: 'observe:check:77:completed:success:next-stage:pr-7',
+                item: 'pr-7',
+              }),
               observe: { everySeconds: 15 },
             },
           ],
@@ -284,6 +288,9 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
             reads.push(`${request.remote}@${request.revision}`);
             return {} as never;
           },
+          prReviews: async () => {
+            throw new Error('No review is read for a check wait');
+          },
         },
       });
       const at = (seconds: number) => new Date(Date.parse('2026-01-01T00:00:00Z') + seconds * 1000);
@@ -301,7 +308,7 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
       // same delivery when observed again, a replay, and does not wake it twice.
       await completeWithWaits(harness, [checks(HEAD)]);
       const [again] = (await observer?.pass(at(15))) ?? [];
-      expect(again).toMatchObject({ waits: 1, commits: 1, receipts: [] });
+      expect(again).toMatchObject({ waits: 1, reads: 1, receipts: [] });
       expect(await harness.store.listOpenItemWaits()).toHaveLength(1);
     } finally {
       await removeTempTree(root);

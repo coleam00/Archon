@@ -278,7 +278,7 @@ const REMOTE = 'https://github.com/owner/repo.git';
  * `about`) and returns `acceptances`, each with a fresh receipt id as a plugin would.
  */
 async function observingFixture(
-  plugin: { acceptances: unknown[]; revision?: string },
+  plugin: { acceptances: unknown[]; revision?: string; prNumber?: number; failed?: unknown[] },
   observe: unknown = { everySeconds: 60 }
 ) {
   const root = await mkdtemp(join(tmpdir(), 'archon-webhook-source-'));
@@ -290,10 +290,12 @@ async function observingFixture(
     `export default ({ config }) => ({
   receive: async () => ({ status: 'rejected', reason: 'unauthenticated' }),
   observe: async ({ waits, forge }) => {
-    await forge.commitChecks({ remote: waits[0].remote, revision: config.revision ?? waits[0].about });
+    if (config.prNumber) await forge.prReviews({ remote: waits[0].remote, number: config.prNumber });
+    else await forge.commitChecks({ remote: waits[0].remote, revision: config.revision ?? waits[0].about });
     return {
       acceptances: config.acceptances.map(a => ({ ...a, receipt: { ...a.receipt, id: crypto.randomUUID() } })),
       unserved: [],
+      failed: config.failed ?? [],
     };
   },
 });\n`,
@@ -326,16 +328,21 @@ function waitStore(waits: Partial<StoredItemWait>[]): ItemWaitObserverStore {
         closed: null,
         ...wait,
       })),
+    getItem: (async () => ({ key: 'pr-7' })) as never,
     getWorkflowRun: (async () => ({ codebase_id: 'codebase-1' })) as never,
     getCodebase: (async () => ({ repository_url: REMOTE })) as never,
   };
 }
 
 function forgeReader() {
-  const reads: { remote: string; revision: string }[] = [];
+  const reads: ({ remote: string; revision: string } | { remote: string; number: number })[] = [];
   return {
     reads,
     commitChecks: async (input: { remote: string; revision: string }) => {
+      reads.push(input);
+      return {} as never;
+    },
+    prReviews: async (input: { remote: string; number: number }) => {
       reads.push(input);
       return {} as never;
     },
@@ -373,10 +380,58 @@ describe('observing open item waits', () => {
     const forge = forgeReader();
     const observer = createItemWaitObserver({ sources, store: waitStore([{}]), forge });
     const [report] = (await observer?.pass(new Date())) ?? [];
-    expect(report).toMatchObject({ source: 'source-1', waits: 1, commits: 0, receipts: [] });
+    expect(report).toMatchObject({ source: 'source-1', waits: 1, reads: 0, receipts: [] });
     expect(report?.error).toContain('No open wait names commit');
     expect(forge.reads).toEqual([]);
     expect(acceptReceipt).not.toHaveBeenCalled();
+  });
+
+  test('a pull request is read only when an open wait is on the item it names', async () => {
+    const observeNumber = async (prNumber: number) => {
+      const configPath = await observingFixture({ acceptances: [], prNumber });
+      const sources = await loadWebhookSourcePlugins(configPath, {
+        acceptReceipt: async () => ({ receiptId: 'unused', replay: false }),
+        isKnownUser: async () => true,
+        hasDeliveryReceipt: async () => false,
+      });
+      const forge = forgeReader();
+      const observer = createItemWaitObserver({ sources, store: waitStore([{}]), forge });
+      const [report] = (await observer?.pass(new Date())) ?? [];
+      return { report, reads: forge.reads };
+    };
+    // The wait is on item pr-7.
+    expect(await observeNumber(7)).toMatchObject({
+      report: { reads: 1 },
+      reads: [{ remote: REMOTE, number: 7 }],
+    });
+    const refused = await observeNumber(8);
+    expect(refused.reads).toEqual([]);
+    expect(refused.report?.error).toContain('No open wait is on pull request 8');
+  });
+
+  test('a read the source could not make fails the pass, and what it did read is still admitted', async () => {
+    const configPath = await observingFixture({
+      acceptances: [acceptance()],
+      failed: [
+        {
+          wait: { workflowName: 'host', event: 'checks', about: 'c'.repeat(40), itemKey: 'pr-8' },
+          reason: 'commit not found',
+        },
+      ],
+    });
+    const sources = await loadWebhookSourcePlugins(configPath, {
+      acceptReceipt: async input => ({ receiptId: input.receipt.id, replay: false }),
+      isKnownUser: async () => true,
+      hasDeliveryReceipt: async () => false,
+    });
+    const observer = createItemWaitObserver({
+      sources,
+      store: waitStore([{}]),
+      forge: forgeReader(),
+    });
+    const [report] = (await observer?.pass(new Date())) ?? [];
+    expect(report?.receipts).toHaveLength(1);
+    expect(report?.error).toContain("on item 'pr-8': commit not found");
   });
 
   test('observes a source again only once its interval has passed', async () => {

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { getPluginsPath } from '@archon/paths';
 import { getArchonConfigPath, getArchonHome } from '@archon/paths/archon-paths';
-import type { ForgeRequest, ForgeResponse } from '@archon/forge';
+import type { ForgeRequest, ForgeResponse, RepoRef } from '@archon/forge';
 import { dispatchForge } from '@archon/forge/dispatch';
 import { readForgeConfig, sourceForgePlugins } from '@archon/forge/host-plugins';
 import { forgePluginConfigSchema } from '@archon/forge/plugin-config';
@@ -51,15 +51,28 @@ export function hostSourceForgeReader(
     if (!response.ok) throw new SourceForgeReadError(response.error.kind, response.error.message);
     return response;
   };
+  const repoOf = async (remote: string): Promise<RepoRef> => {
+    const resolved = await read({ operationId: randomUUID(), op: 'resolve', remote });
+    if (resolved.result.op !== 'resolve' || resolved.result.value.kind !== 'resolved')
+      throw new SourceForgeReadError('no_plugin_for_host', 'The remote names no forge');
+    return resolved.result.value.repo;
+  };
   return {
+    async prReviews({ remote, number }) {
+      const reviews = await read({
+        operationId: randomUUID(),
+        op: 'pr.reviews',
+        ref: { repo: await repoOf(remote), number },
+      });
+      if (reviews.result.op !== 'pr.reviews')
+        throw new SourceForgeReadError('invalid_response', 'The forge answered another operation');
+      return reviews.result.value;
+    },
     async commitChecks({ remote, revision }) {
-      const resolved = await read({ operationId: randomUUID(), op: 'resolve', remote });
-      if (resolved.result.op !== 'resolve' || resolved.result.value.kind !== 'resolved')
-        throw new SourceForgeReadError('no_plugin_for_host', 'The remote names no forge');
       const checks = await read({
         operationId: randomUUID(),
         op: 'checks.commit',
-        repo: resolved.result.value.repo,
+        repo: await repoOf(remote),
         at: { kind: 'revision', revision },
       });
       if (checks.result.op !== 'checks.commit')

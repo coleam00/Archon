@@ -282,7 +282,10 @@ export async function loadWebhookSourcePlugins(
         admitted: [],
         conflicts: 0,
         unserved: observation.unserved,
-        failures: [],
+        failures: observation.failed.map(
+          ({ wait, reason }) =>
+            `wait '${wait.event}' about '${wait.about}' on item '${wait.itemKey}': ${reason}`
+        ),
       };
       for (const acceptance of observation.acceptances) {
         try {
@@ -311,7 +314,7 @@ function causeChain(error: unknown): string {
 /** The store reads an observation pass makes. */
 export type ItemWaitObserverStore = Pick<
   IWorkflowStore,
-  'listOpenItemWaits' | 'getWorkflowRun' | 'getCodebase'
+  'listOpenItemWaits' | 'getItem' | 'getWorkflowRun' | 'getCodebase'
 >;
 
 /** One source's part of an observation pass. */
@@ -319,8 +322,8 @@ export interface ObservedSourceReport {
   source: string;
   /** The open waits passed to the source. */
   waits: number;
-  /** The commits whose checks the source read. */
-  commits: number;
+  /** The forge reads the source made: a commit's checks or a pull request's reviews each. */
+  reads: number;
   /** Receipts first recorded by this pass; a replay of an earlier pass is not one. */
   receipts: string[];
   conflicts: number;
@@ -350,6 +353,8 @@ export function createItemWaitObserver(input: {
   const { sources, store, forge } = input;
   if (sources.observing.length === 0) return undefined;
   const lastObserved = new Map<string, number>();
+  // Each unserved wait is logged once per process, not on every pass.
+  const warned = new Set<string>();
   let running = false;
 
   const openWaits = async (): Promise<ObservedItemWait[]> => {
@@ -366,10 +371,13 @@ export function createItemWaitObserver(input: {
     };
     const waits = new Map<string, ObservedItemWait>();
     for (const wait of await store.listOpenItemWaits()) {
+      const item = await store.getItem(wait.itemId);
+      if (item === null) continue;
       const observed = {
         workflowName: wait.workflowName,
         event: wait.event,
         about: wait.about,
+        itemKey: item.key,
         remote: await remoteOf(wait.runId),
       };
       waits.set(JSON.stringify(observed), observed);
@@ -381,17 +389,32 @@ export function createItemWaitObserver(input: {
     source: ObservingSource,
     waits: readonly ObservedItemWait[]
   ): Promise<ObservedSourceReport> => {
-    // The forge is asked only about a commit an open wait names: the item's invariant, held
-    // here at the boundary rather than trusted to each plugin.
-    const named = new Set(waits.map(wait => JSON.stringify([wait.remote, wait.about])));
+    // The forge is asked only about what an open wait names: the item's invariant, held
+    // here at the boundary rather than trusted to each plugin. A pull request is named by
+    // the number that ends the key of an item a wait is on (`pr-7` names 7).
+    const commits = new Set(waits.map(wait => JSON.stringify([wait.remote, wait.about])));
+    const pullRequests = new Set(
+      waits.map(wait =>
+        JSON.stringify([wait.remote, /(?:^|[^0-9])([1-9][0-9]*)$/.exec(wait.itemKey)?.[1]])
+      )
+    );
     const read = new Set<string>();
     const guarded: SourceForgeReader = {
       commitChecks: async request => {
-        const key = JSON.stringify([request.remote, request.revision]);
-        if (!named.has(key))
+        const key = JSON.stringify(['commit', request.remote, request.revision]);
+        if (!commits.has(JSON.stringify([request.remote, request.revision])))
           throw new Error(`No open wait names commit '${request.revision}' of '${request.remote}'`);
         read.add(key);
         return forge.commitChecks(request);
+      },
+      prReviews: async request => {
+        const key = JSON.stringify(['pr', request.remote, String(request.number)]);
+        if (!pullRequests.has(JSON.stringify([request.remote, String(request.number)])))
+          throw new Error(
+            `No open wait is on pull request ${String(request.number)} of '${request.remote}'`
+          );
+        read.add(key);
+        return forge.prReviews(request);
       },
     };
     const report = (
@@ -400,7 +423,7 @@ export function createItemWaitObserver(input: {
     ): ObservedSourceReport => ({
       source: source.sourceInstanceId,
       waits: waits.length,
-      commits: read.size,
+      reads: read.size,
       receipts: (admitted?.admitted ?? [])
         .filter(receipt => !receipt.replay)
         .map(receipt => receipt.receiptId),
@@ -408,19 +431,27 @@ export function createItemWaitObserver(input: {
       unserved: admitted?.unserved ?? [],
       ...(error === undefined ? {} : { error }),
     });
+    let result: ObservedSourceReport;
     try {
       const admitted = await sources.observe(source.sourceInstanceId, waits, guarded);
-      return report(
+      result = report(
         admitted,
         admitted.failures.length === 0 ? undefined : admitted.failures.join('; ')
       );
     } catch (error) {
-      log.error(
-        { err: error as Error, sourceInstanceId: source.sourceInstanceId },
-        'source_observe_failed'
-      );
-      return report(undefined, causeChain(error));
+      result = report(undefined, causeChain(error));
     }
+    // Logged here so a server, which prints no report, still says why a wait is not met.
+    const { sourceInstanceId } = source;
+    if (result.error !== undefined)
+      log.error({ sourceInstanceId, error: result.error }, 'source_observe_failed');
+    for (const { wait, reason } of result.unserved) {
+      const key = JSON.stringify([sourceInstanceId, wait, reason]);
+      if (warned.has(key)) continue;
+      warned.add(key);
+      log.warn({ sourceInstanceId, ...wait, reason }, 'source_observe_unserved');
+    }
+    return result;
   };
 
   return {

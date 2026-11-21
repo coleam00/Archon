@@ -382,35 +382,25 @@ async function engineChanged(loaded: string | undefined, json: boolean): Promise
   return true;
 }
 
-/** One source's observation, as `wake` reports it, after its starts are handed on. */
+/**
+ * One source's observation, as `wake` reports it. The hosts of the starts it recorded are
+ * added to `owed`, which `drainOwed` empties.
+ */
 async function reportObserved(
   host: WorkflowHost,
-  observation: WakeObservation,
   report: ObservedSourceReport,
+  owed: Set<string>,
   json: boolean
 ): Promise<boolean> {
-  const hostIds = new Set<string>();
   let started = 0;
   for (const receiptId of report.receipts)
     for (const binding of (await host.deps.store.getStartReceipt(receiptId))?.bindings ?? []) {
+      // A binding recorded as unmatched or rejected has no host and starts nothing.
+      if (!binding.hostId) continue;
       started += 1;
-      if (binding.hostId) hostIds.add(binding.hostId);
+      owed.add(binding.hostId);
     }
-  let error = report.error;
-  for (const hostId of hostIds) {
-    try {
-      await drainResourceStartHost({
-        ...host,
-        hostId,
-        startAdmitted: requestId => observation.dispatch(requestId, hostId),
-      });
-    } catch (drainError) {
-      error = [error, `host '${hostId}' drain failed: ${errorMessage(drainError)}`]
-        .filter(Boolean)
-        .join('; ');
-    }
-  }
-  const { source, waits, commits, conflicts, unserved } = report;
+  const { source, waits, reads, conflicts, unserved, error } = report;
   const ok = error === undefined;
   if (json)
     await writeJsonLine({
@@ -418,7 +408,7 @@ async function reportObserved(
       action: 'observe',
       source,
       waits,
-      commits,
+      reads,
       started,
       conflicts,
       unserved,
@@ -426,12 +416,43 @@ async function reportObserved(
     });
   else {
     console.log(
-      `observe ${source}: ${String(waits)} wait(s), ${String(commits)} commit(s) read, ${String(started)} start(s)${conflicts ? `, ${String(conflicts)} conflicting deliveries` : ''}${ok ? '' : `; ${error}`}`
+      `observe ${source}: ${String(waits)} wait(s), ${String(reads)} read(s), ${String(started)} start(s)${conflicts ? `, ${String(conflicts)} conflicting deliveries` : ''}${ok ? '' : `; ${error}`}`
     );
     for (const { wait, reason } of unserved)
       console.log(
-        `  not observed: ${wait.event} about ${wait.about} from ${wait.workflowName}: ${reason}`
+        `  not observed: ${wait.event} about ${wait.about} on ${wait.itemKey} from ${wait.workflowName}: ${reason}`
       );
+  }
+  return ok;
+}
+
+/**
+ * Hand the starts observation recorded to their executors, host by host. A met wait is
+ * closed when its receipt is recorded, so a later pass never observes it again: a host
+ * whose drain fails stays owed and is drained again on the next pass.
+ */
+async function drainOwed(
+  host: WorkflowHost,
+  observation: WakeObservation,
+  owed: Set<string>,
+  json: boolean
+): Promise<boolean> {
+  let ok = true;
+  for (const hostId of [...owed]) {
+    try {
+      await drainResourceStartHost({
+        ...host,
+        hostId,
+        startAdmitted: requestId => observation.dispatch(requestId, hostId),
+      });
+      owed.delete(hostId);
+    } catch (drainError) {
+      ok = false;
+      const error = `host '${hostId}' drain failed: ${errorMessage(drainError)}`;
+      const hint = `Retried on the next pass, or run archon trigger drain --host ${hostId}.`;
+      if (json) await writeJsonLine({ ok, action: 'observe', drain: hostId, error, hint });
+      else console.error(`observe: ${error}. ${hint}`);
+    }
   }
   return ok;
 }
@@ -464,6 +485,8 @@ async function wake(
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
   let ok = true;
+  // Hosts whose observed starts are not yet handed on; see `drainOwed`.
+  const owed = new Set<string>();
   const loaded = await loadedEngine(values.watch === true, json);
   try {
     do {
@@ -479,9 +502,11 @@ async function wake(
         );
         const passOk = await report('wake', await Promise.all(outcomes.map(settle)), json);
         ok = passOk && ok;
-        if (observation)
+        if (observation) {
           for (const observed of await observation.observer.pass(new Date()))
-            ok = (await reportObserved(host, observation, observed, json)) && ok;
+            ok = (await reportObserved(host, observed, owed, json)) && ok;
+          ok = (await drainOwed(host, observation, owed, json)) && ok;
+        }
       } catch (error) {
         ok = false;
         if (json) await writeJsonLine({ ok: false, action: 'wake', error: errorMessage(error) });
