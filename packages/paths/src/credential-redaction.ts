@@ -41,6 +41,16 @@ export function collectCredentialValues(
  */
 const GITHUB_INSTALLATION_TOKEN = /\bghs_[A-Za-z0-9]{20,}/g;
 
+export function containsCredentialValue(
+  input: string,
+  credentialValues: readonly string[]
+): boolean {
+  return (
+    credentialValues.some(value => value.length > 0 && input.includes(value)) ||
+    input.search(GITHUB_INSTALLATION_TOKEN) !== -1
+  );
+}
+
 /** `input` with every credential value, and any GitHub App installation token, replaced by `[REDACTED]`. */
 export function redactCredentialValues(input: string, credentialValues: readonly string[]): string {
   let result = input;

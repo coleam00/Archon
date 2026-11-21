@@ -52,7 +52,7 @@ test('published prompt request enforces the same single text block as the owner'
 test('published native tool enum values enforce the same non-empty list as the owner', () => {
   expect(
     document.$defs.ProviderSessionRequest.properties.nativeTools.items.properties.inputSchema
-      .properties.properties.additionalProperties.oneOf[1]
+      .anyOf[0].properties.properties?.additionalProperties.oneOf[1]
   ).toMatchObject({ properties: { values: { minItems: 1 } } });
   const schema = publishedSchema('ProviderSessionRequest');
   for (const values of [[], ['inspect'], ['inspect', 'update']]) {

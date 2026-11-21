@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { rawJsonValueSchema } from '../json-values';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 export const PLUGIN_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 
@@ -66,9 +67,9 @@ export const rpcMessageSchema = z.union([
     ...rpcBase,
     id: idSchema,
     method: z.string().min(1),
-    params: z.json().optional(),
+    params: rawJsonValueSchema.optional(),
   }),
-  z.strictObject({ ...rpcBase, method: z.string().min(1), params: z.json().optional() }),
+  z.strictObject({ ...rpcBase, method: z.string().min(1), params: rawJsonValueSchema.optional() }),
   z.strictObject({ ...rpcBase, id: idSchema, result: z.json() }),
   z.strictObject({
     ...rpcBase,

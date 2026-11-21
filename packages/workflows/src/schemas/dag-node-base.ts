@@ -13,6 +13,7 @@ import {
   nodeMcpSchema,
   piNodeConfigSchema,
   sandboxSettingsSchema,
+  scriptToolsSchema,
 } from './provider-options';
 import { workflowNodeHooksSchema } from './hooks';
 
@@ -104,6 +105,7 @@ export const dagNodeBaseSchema = z.object({
     })
     .refine(map => Object.keys(map).length > 0, "'agents' must have at least one entry")
     .optional(),
+  tools: scriptToolsSchema.optional(),
   // Portable per-node Pi extension posture (#2133). Highest-precedence layer
   // over the install-level `assistants.pi.nodes.<id>` map. Pi-only; ignored
   // (with a warning) on other providers and on non-AI node types.

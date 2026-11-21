@@ -6,7 +6,7 @@
  * set; the rest of the subprocess tests live in subprocess.test.ts.
  */
 import { expect, test } from 'bun:test';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -75,12 +75,13 @@ test.skipIf(process.platform !== 'win32')(
 async function runAbortedWrapper(): Promise<{
   error: RawSubprocessRejection | undefined;
   leaked: boolean;
+  descendantExited: boolean;
 }> {
   const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-abort-')));
   const started = join(dir, 'started');
   const marker = join(dir, 'marker');
   const grandchild =
-    "require('fs').writeFileSync(process.env.STARTED, ''); " +
+    "require('fs').writeFileSync(process.env.STARTED, String(process.pid)); " +
     "setTimeout(() => require('fs').writeFileSync(process.env.MARKER, 'leaked'), 1500);";
   const wrapper = `await Bun.spawn([process.execPath, '-e', ${JSON.stringify(grandchild)}]).exited;`;
   const controller = new AbortController();
@@ -107,38 +108,63 @@ async function runAbortedWrapper(): Promise<{
   controller.abort();
   const error = await node;
   await new Promise<void>(resolve => setTimeout(resolve, 2000));
-  return { error, leaked: existsSync(marker) };
+  const descendant = Number(readFileSync(started, 'utf8'));
+  return { error, leaked: existsSync(marker), descendantExited: !processExists(descendant) };
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
 }
 
 test('aborting a recorded node ends the wrapper and its grandchild', async () => {
   const trees = recordNodeProcessTrees();
   try {
-    const { error, leaked } = await runAbortedWrapper();
+    const { error, leaked, descendantExited } = await runAbortedWrapper();
     expect(error?.message).toBe('Command cancelled');
     expect(error?.cancelled).toBe(true);
     expect(error && isSubprocessTimeout(error)).toBe(false);
     expect(leaked).toBe(false);
+    expect(descendantExited).toBe(true);
   } finally {
     trees.release();
   }
 }, 15_000);
 
-test('an unrecorded node ignores the abort, because its owner ends it', async () => {
-  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-abort-')));
-  const controller = new AbortController();
-  controller.abort();
-  const { stdout } = await runSubprocess(
-    { kind: 'host' },
-    process.execPath,
-    ['-e', 'await Bun.sleep(200); console.log("finished")'],
-    {
-      cwd: dir,
-      timeout: 5000,
-      env: {},
-      endTreeOnTimeout: true,
-      abortSignal: controller.signal,
-      retention: { standalone: true },
-    }
-  );
-  expect(stdout.trim()).toBe('finished');
-});
+test.skipIf(process.platform === 'win32')(
+  'an unrecorded POSIX fallback ignores abort',
+  async () => {
+    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-abort-')));
+    const controller = new AbortController();
+    controller.abort();
+    const { stdout } = await runSubprocess(
+      { kind: 'host' },
+      process.execPath,
+      ['-e', 'await Bun.sleep(200); console.log("finished")'],
+      {
+        cwd: dir,
+        timeout: 5000,
+        env: {},
+        endTreeOnTimeout: true,
+        abortSignal: controller.signal,
+        retention: { standalone: true },
+      }
+    );
+    expect(stdout.trim()).toBe('finished');
+  }
+);
+
+test.skipIf(process.platform !== 'win32')(
+  'an unrecorded Windows node abort ends the wrapper and its grandchild',
+  async () => {
+    const { error, leaked, descendantExited } = await runAbortedWrapper();
+    expect(error?.cancelled).toBe(true);
+    expect(leaked).toBe(false);
+    expect(descendantExited).toBe(true);
+  },
+  15_000
+);

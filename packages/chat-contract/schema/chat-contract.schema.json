@@ -2,6 +2,37 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$comment": "AUTO-GENERATED from packages/chat-contract/src by packages/chat-contract/src/scripts/generate-schema.ts. Do not edit.",
   "$defs": {
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        }
+      ]
+    },
     "PluginRpcMessage": {
       "anyOf": [
         {
@@ -28,7 +59,7 @@
               "minLength": 1
             },
             "params": {
-              "$ref": "#/$defs/schema0"
+              "$ref": "#/$defs/JsonValue"
             }
           },
           "required": [
@@ -50,7 +81,7 @@
               "minLength": 1
             },
             "params": {
-              "$ref": "#/$defs/schema1"
+              "$ref": "#/$defs/JsonValue"
             }
           },
           "required": [
@@ -79,7 +110,7 @@
               ]
             },
             "result": {
-              "$ref": "#/$defs/schema2"
+              "$ref": "#/$defs/schema0"
             }
           },
           "required": [
@@ -127,7 +158,7 @@
                   "type": "string"
                 },
                 "data": {
-                  "$ref": "#/$defs/schema3"
+                  "$ref": "#/$defs/schema1"
                 }
               },
               "required": [
@@ -406,7 +437,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema4"
+            "$ref": "#/$defs/schema2"
           }
         }
       },
@@ -1546,68 +1577,6 @@
           },
           "additionalProperties": {
             "$ref": "#/$defs/schema2"
-          }
-        }
-      ]
-    },
-    "schema3": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "number"
-        },
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "null"
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/schema3"
-          }
-        },
-        {
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/schema3"
-          }
-        }
-      ]
-    },
-    "schema4": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "number"
-        },
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "null"
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/schema4"
-          }
-        },
-        {
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/schema4"
           }
         }
       ]

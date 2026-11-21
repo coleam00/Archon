@@ -49,6 +49,17 @@ const STRING_FIELD_CLASSIFICATIONS = {
   },
   'allowed_tools.*': { kind: 'literal', reason: 'Allowed-tool entries are capability names' },
   'denied_tools.*': { kind: 'literal', reason: 'Denied-tool entries are capability names' },
+  'tools.*.description': {
+    kind: 'literal',
+    reason: 'Tool descriptions are static capability metadata',
+  },
+  'tools.*.script': { kind: 'literal', reason: 'Tool scripts are named resource identifiers' },
+  'tools.*.deps.*': { kind: 'literal', reason: 'Tool script dependencies are package identifiers' },
+  'tools.*.input_schema.*': { kind: 'literal', reason: 'Tool input values declare a JSON schema' },
+  'tools.*.output_schema.*': {
+    kind: 'literal',
+    reason: 'Tool output values declare a JSON schema',
+  },
   'retry.on_error': { kind: 'literal', reason: 'Retry error class is an engine policy enum' },
   ...HOOK_FIELD_CLASSIFICATIONS,
   mcp: { kind: 'literal', reason: 'MCP value is a configuration path' },

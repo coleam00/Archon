@@ -5,6 +5,30 @@ import { FIXTURES } from '../fixtures';
 import type { WireWorkflowDefinition } from '../types';
 
 describe('round-trip fidelity', () => {
+  test('script tool declarations survive open and save', () => {
+    const fixture: WireWorkflowDefinition = {
+      name: 'tools',
+      description: 'tools',
+      nodes: [
+        {
+          id: 'inspect',
+          prompt: 'Check',
+          tools: {
+            lookup: {
+              description: 'lookup',
+              script: 'lookup',
+              writes: false,
+              input_schema: { type: 'object' },
+              output_schema: { type: 'object' },
+            },
+          },
+        },
+      ],
+    };
+    const { workflow, issues } = fromWorkflowDefinition(fixture);
+    expect(issues).toEqual([]);
+    expect(toWorkflowDefinition(workflow)).toEqual(fixture);
+  });
   for (const [name, fixture] of Object.entries(FIXTURES)) {
     test(`${name} fixture round-trips exactly`, () => {
       const { workflow, issues } = fromWorkflowDefinition(fixture);

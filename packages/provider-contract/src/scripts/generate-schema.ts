@@ -33,6 +33,7 @@ const CHECK_ONLY = process.argv.includes('--check');
 
 /** Every schema a provider emits or declares, under the name its `$ref`s use. */
 const CONTRACT_SCHEMAS = {
+  JsonValue: z.json(),
   ProviderFailure: providerFailureSchema,
   TokenUsage: tokenUsageSchema,
   ResolvedModel: resolvedModelSchema,

@@ -12,7 +12,7 @@ type ProviderCapabilities = NonNullable<NodeValidation['capabilities']>;
  */
 export function validateProviderCapabilities(
   validation: ResourceValidation,
-  { node, provider, capabilities }: NodeValidation
+  { node, provider, capabilities }: Pick<NodeValidation, 'node' | 'provider' | 'capabilities'>
 ): void {
   const { issues } = validation;
   if ('plugins' in node && node.plugins?.length && capabilities?.plugins === false) {
@@ -25,6 +25,7 @@ export function validateProviderCapabilities(
     });
   }
   if (!capabilities) return;
+  validateScriptToolCapability(validation, { node, provider, capabilities });
 
   if ('hooks' in node && node.hooks && !capabilities.hooks) {
     issues.push({
@@ -130,4 +131,24 @@ function toolNameIssue(
     issue.suggestions = similar;
   }
   return issue;
+}
+
+function namesScriptTools(node: DagNode): boolean {
+  return node.kind === 'agent' && node.tools !== undefined;
+}
+
+function validateScriptToolCapability(
+  validation: ResourceValidation,
+  { node, provider, capabilities }: Pick<NodeValidation, 'node' | 'provider' | 'capabilities'>
+): void {
+  const { issues } = validation;
+  if (namesScriptTools(node) && capabilities?.nativeTools === false) {
+    issues.push({
+      level: 'error',
+      nodeId: node.id,
+      field: 'tools',
+      message: `Provider '${provider}' cannot offer declared tools`,
+      hint: 'Remove tools or use a provider with nativeTools capability',
+    });
+  }
 }

@@ -602,7 +602,7 @@ function armTimeout(group: OwnedGroup): void {
 }
 
 function armAbort(group: OwnedGroup): () => void {
-  const abortSignal = group.recorder ? group.node?.abortSignal : undefined;
+  const abortSignal = group.node?.abortSignal;
   if (!abortSignal) return () => undefined;
   const rootPid = group.child.pid;
   const abort = (): void => {

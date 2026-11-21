@@ -17,7 +17,11 @@ import { rpcMessageSchema } from '@archon/provider-contract/plugin';
 const PACKAGE_ROOT = resolve(import.meta.dir, '../..');
 const OUTPUT_PATH = join(PACKAGE_ROOT, 'schema/chat-contract.schema.json');
 const CHECK_ONLY = process.argv.includes('--check');
-const CONTRACT_SCHEMAS = { PluginRpcMessage: rpcMessageSchema, ...chatWireSchemas };
+const CONTRACT_SCHEMAS = {
+  JsonValue: z.json(),
+  PluginRpcMessage: rpcMessageSchema,
+  ...chatWireSchemas,
+};
 
 function render(): string {
   const registry = z.registry<{ id: string }>();

@@ -32,6 +32,7 @@ import { bindAgentNode, type AgentBinding } from './agent-binding';
 import { loadAgentPrompt } from './agent-prompt';
 import { createAttemptState, type AgentAttemptState, type AgentPassContext } from './agent-stream';
 import { runUntilStructuredOutputValid } from './agent-reask';
+import { createScriptTools } from './script-tools';
 
 export async function executeAgentNode(
   ctx: RunLayersContext,
@@ -87,6 +88,7 @@ export async function executeAgentNode(
   });
   const { execution, nodeMcp } = binding;
   const state = createAttemptState(ctx, node.id);
+  let tools: Awaited<ReturnType<typeof createScriptTools>> | undefined;
   const nodeKey = `${workflowRun.id}:${node.id}`;
 
   const failAgentNode = async (
@@ -102,6 +104,7 @@ export async function executeAgentNode(
           status: 'failed',
           error,
           failureKind,
+          ...(tools?.unknownWrite ? { retryable: false as const } : {}),
           ...(extras.providerFailure !== undefined
             ? { providerFailure: extras.providerFailure }
             : {}),
@@ -167,13 +170,24 @@ export async function executeAgentNode(
   };
 
   let result: WorkloadResult;
+  let workloadStarted = false;
   try {
-    result = await runWorkload(pc, state, prompt.prompt, session);
+    tools = await prepareAttemptTools(pc, execution);
+    workloadStarted = true;
+    result = await runToolWorkload(pc, state, prompt.prompt, session, tools);
   } catch (error) {
-    const cancelled = abortController.signal.aborted && !state.cutOff;
-    const failure = attemptFailure(error as Error, cancelled, nodeMcp, node.id);
+    if (tools?.recordingError) throw tools.recordingError;
+    const cancelled = wasUserCancelled(abortController, state, tools);
+    const failure = attemptFailure(
+      error as Error,
+      cancelled,
+      nodeMcp,
+      node.id,
+      tools?.unknownWrite
+    );
     return failAgentNode(failure.message, failure.kind, {
       providerFailure: failure.providerFailure,
+      providerNotCalled: !workloadStarted,
     });
   }
   if (result.state === 'failed') {
@@ -226,6 +240,51 @@ export async function executeAgentNode(
   return completed;
 }
 
+type ScriptTools = Awaited<ReturnType<typeof createScriptTools>>;
+
+async function prepareAttemptTools(pc: AgentPassContext, execution: AgentBinding['execution']) {
+  if (!pc.node.tools) return undefined;
+  if (!pc.capabilities.nativeTools)
+    throw new NodeFailure('config', 'Provider cannot offer declared tools');
+  try {
+    const tools = await createScriptTools(pc.ctx, pc.node, execution, pc.abortController);
+    pc.queryOptions.nativeTools = [...(pc.queryOptions.nativeTools ?? []), ...tools.nativeTools];
+    return tools;
+  } catch (error) {
+    throw new NodeFailure('config', (error as Error).message);
+  }
+}
+
+async function runToolWorkload(
+  pc: AgentPassContext,
+  state: AgentAttemptState,
+  prompt: string,
+  session: AttemptSession,
+  tools: ScriptTools | undefined
+): Promise<WorkloadResult> {
+  let result: WorkloadResult;
+  try {
+    result = await runWorkload(pc, state, prompt, session);
+  } finally {
+    await tools?.stop();
+  }
+  if (tools?.recordingError) throw tools.recordingError;
+  if (tools?.unknownWrite) {
+    const error = `Tool write outcome unknown: ${tools.unknownWrite}`;
+    if (result.state === 'failed') return { ...result, error, failureKind: 'unknown' };
+    throw new NodeFailure('unknown', error);
+  }
+  return result;
+}
+
+function wasUserCancelled(
+  controller: AbortController,
+  state: AgentAttemptState,
+  tools: ScriptTools | undefined
+): boolean {
+  return controller.signal.aborted && !state.cutOff && !tools?.unknownWrite;
+}
+
 /** The session the attempt resumes, and what it must prove about the session it ends on. */
 interface AttemptSession {
   resumeSessionId: string | undefined;
@@ -244,18 +303,26 @@ function attemptFailure(
   err: Error,
   cancelled: boolean,
   nodeMcp: AgentBinding['nodeMcp'],
-  nodeId: string
+  nodeId: string,
+  unknownWrite?: string
 ): { message: string; kind: NodeFailureKind; providerFailure?: ProviderFailure } {
   if (cancelled) {
     getLog().info({ nodeId }, 'dag_node_cancelled_via_abort');
     return { message: 'Cancelled by user', kind: 'cancelled' };
   }
   getLog().error({ err, nodeId }, 'dag_node_failed');
-  return {
+  const failure = {
     message: nodeMcp.kind === 'missing' ? `${err.message}\n${nodeMcp.diagnostic}` : err.message,
     kind: err instanceof NodeFailure ? err.kind : 'unknown',
     providerFailure: err instanceof NodeFailure ? err.providerFailure : undefined,
   };
+  return unknownWrite
+    ? {
+        ...failure,
+        message: `${failure.message}\nTool write outcome unknown: ${unknownWrite}`,
+        kind: 'unknown',
+      }
+    : failure;
 }
 
 function attemptQueryOptions(

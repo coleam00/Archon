@@ -156,7 +156,9 @@ export {
   snapshotConfigSchema,
 } from './config-schema';
 
-export { nativeToolInputParser } from './native-tools';
+export { nativeToolInputParser, nativeToolJsonSchema } from './native-tools';
+export { nativeToolInputSchema } from './agent-provider';
+export { rawJsonObjectSchema, rawJsonValueSchema } from './json-values';
 
 export {
   normalizeJsonSchemaForOpenAiStrict,

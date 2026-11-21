@@ -273,6 +273,8 @@ export function validateNodeOutputFormats(
 }
 
 function nodeOutputFormatCompileError(node: DagNode): string | null {
+  const toolError = scriptToolsCompileError(node);
+  if (toolError) return toolError;
   // Only a schema the engine will enforce is worth rejecting. Where the field is
   // inert (warned and ignored) a dangling `$ref` governs nothing and must not fail
   // the file; the predicate derives from the ignored-field lists, so it stays true
@@ -311,6 +313,24 @@ export function validateLoopGroupProseCompletion(
     );
     if (outputNode !== undefined) {
       return `loop_group '${node.id}': node '${outputNode.id}', which the group's output is read from, declares a non-string output_format, so the prose until signal cannot be detected in serialized structured output. Use loop_group.until_bash to read that node's structured field instead`;
+    }
+  }
+  return null;
+}
+
+export function scriptToolsCompileError(node: DagNode): string | null {
+  if (node.kind !== 'agent' || !node.tools) return null;
+  for (const [name, tool] of Object.entries(node.tools)) {
+    if (tool.input_schema.type !== 'object')
+      return `Node '${node.id}', tool '${name}': input_schema must declare type: object`;
+    for (const [field, schema] of Object.entries({
+      input_schema: tool.input_schema,
+      output_schema: tool.output_schema,
+    })) {
+      if (schema.$async === true)
+        return `Node '${node.id}', tool '${name}': ${field} must be synchronous`;
+      const error = compileOutputSchema(schema);
+      if (error) return `Node '${node.id}', tool '${name}': ${field} cannot be compiled: ${error}`;
     }
   }
   return null;

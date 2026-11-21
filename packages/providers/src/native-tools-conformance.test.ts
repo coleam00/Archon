@@ -45,6 +45,200 @@ const CASES: { label: string; input: unknown; accept: boolean }[] = [
 ];
 
 describe('native tool input schema conformance', () => {
+  test('complex JSON Schema arguments and call IDs survive all three adapters', async () => {
+    const input = { count: 2.5, items: [{ id: 7 }], metadata: { owner: 'ops' } };
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        count: { type: 'number' },
+        items: {
+          type: 'array',
+          items: { type: 'object', properties: { id: { type: 'integer' } } },
+        },
+        metadata: { type: 'object', properties: { owner: { type: 'string' } } },
+        withDefault: { type: 'string', default: 'provider-must-not-fill-this' },
+      },
+      required: ['count', 'items', 'metadata'],
+      additionalProperties: false,
+    };
+    const seen: unknown[] = [];
+    const tool: NativeTool = {
+      name: 'lookup',
+      description: 'lookup',
+      inputSchema: { jsonSchema },
+      handler: async (args, context) => {
+        seen.push(context);
+        expect(args).toEqual(input);
+        return 'ok';
+      },
+    };
+    const codex = buildCodexNativeTools([tool]);
+    expect(codex.specs[0]).toMatchObject({ inputSchema: jsonSchema });
+    expect(
+      (
+        await codex.call(
+          {
+            threadId: 't',
+            turnId: 'u',
+            callId: 'codex-7',
+            namespace: null,
+            tool: 'lookup',
+            arguments: input,
+          },
+          't',
+          'u'
+        )
+      ).success
+    ).toBe(true);
+    const pi = buildPiNativeToolDefinitions([tool])[0];
+    expect(nativeToolInputToTypeBox(tool.inputSchema)).toMatchObject(jsonSchema);
+    await Reflect.apply(pi.execute, undefined, ['pi-7', input]);
+    const server = buildArchonMcpServer([tool]);
+    type Transport = Parameters<typeof server.instance.connect>[0];
+    let response = Promise.withResolvers<unknown>();
+    const transport: Transport = {
+      start: async () => {},
+      close: async () => {},
+      send: async message => {
+        if ('id' in message) response.resolve(message);
+      },
+    };
+    try {
+      await server.instance.connect(transport);
+      transport.onmessage?.({ jsonrpc: '2.0', id: 6, method: 'tools/list' });
+      expect(await response.promise).toMatchObject({
+        result: { tools: [{ name: 'lookup', inputSchema: jsonSchema }] },
+      });
+      response = Promise.withResolvers<unknown>();
+      transport.onmessage?.({
+        jsonrpc: '2.0',
+        id: 7,
+        method: 'tools/call',
+        params: { name: 'lookup', arguments: input },
+      });
+      expect(await response.promise).toMatchObject({
+        result: { content: [{ type: 'text', text: 'ok' }] },
+      });
+      expect(seen).toEqual([
+        { providerCallId: 'codex-7' },
+        { providerCallId: 'pi-7' },
+        { providerCallId: '7', providerCallScope: expect.any(String) },
+      ]);
+      expect(z.toJSONSchema(nativeToolInputParser(tool.inputSchema))).toMatchObject(jsonSchema);
+      const invalid = { count: 'wrong', items: [], metadata: { owner: 'ops' }, extra: true };
+      expect(
+        (
+          await codex.call(
+            {
+              threadId: 't',
+              turnId: 'u',
+              callId: 'codex-8',
+              namespace: null,
+              tool: 'lookup',
+              arguments: invalid,
+            },
+            't',
+            'u'
+          )
+        ).success
+      ).toBe(false);
+      await expect(Reflect.apply(pi.execute, undefined, ['pi-8', invalid])).rejects.toThrow();
+      response = Promise.withResolvers<unknown>();
+      transport.onmessage?.({
+        jsonrpc: '2.0',
+        id: 8,
+        method: 'tools/call',
+        params: { name: 'lookup', arguments: invalid },
+      });
+      expect(await response.promise).toMatchObject({ result: { isError: true } });
+      expect(seen).toHaveLength(3);
+    } finally {
+      await server.instance.close();
+    }
+  });
+  test.each([false, true])(
+    'validates reserved JSON keys without filtering them first (open: %s)',
+    async open => {
+      const data = Object.fromEntries([['__proto__', 7]]);
+      const schema = { type: 'object', additionalProperties: open };
+      const seen: unknown[] = [];
+      const tool: NativeTool = {
+        name: 'lookup',
+        description: 'lookup',
+        inputSchema: { jsonSchema: schema },
+        handler: async args => {
+          seen.push(args);
+          return 'ok';
+        },
+      };
+      const parser = nativeToolInputParser(tool.inputSchema);
+      expect(parser.parse({})).toEqual({});
+      expect(parser.safeParse(data).success).toBe(open);
+      const codex = buildCodexNativeTools([tool]);
+      const result = await codex.call(
+        {
+          threadId: 'thread',
+          turnId: 'turn',
+          callId: 'call',
+          namespace: null,
+          tool: 'lookup',
+          arguments: data,
+        },
+        'thread',
+        'turn'
+      );
+      expect(result.success).toBe(open);
+      const server = buildArchonMcpServer([tool]);
+      const response = Promise.withResolvers<unknown>();
+      const transport: Parameters<typeof server.instance.connect>[0] = {
+        start: async () => {},
+        close: async () => {},
+        send: async message => {
+          if ('id' in message) response.resolve(message);
+        },
+      };
+      try {
+        await server.instance.connect(transport);
+        transport.onmessage?.({
+          jsonrpc: '2.0',
+          id: 7,
+          method: 'tools/call',
+          params: { name: 'lookup', arguments: data },
+        });
+        expect(await response.promise).toMatchObject({
+          result: open ? { content: [{ type: 'text', text: 'ok' }] } : { isError: true },
+        });
+        expect(seen.map(value => JSON.stringify(value))).toEqual(
+          open ? [JSON.stringify(data), JSON.stringify(data)] : []
+        );
+      } finally {
+        await server.instance.close();
+      }
+    }
+  );
+  test('standalone tool schemas preserve omitted additionalProperties', () => {
+    const jsonSchema = { type: 'object', properties: { count: { type: 'number' } } };
+    const parser = nativeToolInputParser({ jsonSchema });
+    const exported = z.toJSONSchema(parser);
+    expect(exported).toMatchObject(jsonSchema);
+    expect(exported).not.toHaveProperty('additionalProperties');
+    const validate = new Ajv2020({ strict: false }).compile(exported);
+    const args = { count: 7, extra: { values: [null, true] } };
+    expect(validate(args)).toBe(true);
+    expect(validate({ count: 'wrong' })).toBe(false);
+    expect(parser.parse(args)).toBe(args);
+  });
+  test('JSON Schema not keywords work without changing input', () => {
+    const schema = { type: 'object', not: { required: ['blocked'] } };
+    const parser = nativeToolInputParser({ jsonSchema: schema });
+    expect(parser.safeParse({}).success).toBe(true);
+    expect(parser.safeParse({ blocked: true }).success).toBe(false);
+  });
+  test('rejects asynchronous schemas before preparing a native tool', () => {
+    expect(() => nativeToolInputParser({ jsonSchema: { type: 'object', $async: true } })).toThrow(
+      'require a synchronous JSON Schema'
+    );
+  });
   test('Claude, Pi and Codex accept and reject the same inputs', async () => {
     const zodObject = nativeToolInputParser(SCHEMA);
     const validatePi = new Ajv({ strict: false }).compile(nativeToolInputToTypeBox(SCHEMA));

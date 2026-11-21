@@ -1,6 +1,10 @@
 // @archon-test-isolated
 import { describe, expect, test } from 'bun:test';
-import { compileOutputSchema, validateStructuredOutput } from './structured-output';
+import {
+  compileOutputSchema,
+  validateStructuredOutput,
+  validateJsonSchema,
+} from './structured-output';
 
 describe('validateStructuredOutput', () => {
   const schema = {
@@ -257,4 +261,10 @@ describe('compileOutputSchema registry hygiene', () => {
     expect(compileOutputSchema(fixed)).toBeNull();
     expect(validateStructuredOutput({ a: 'x' }, fixed).valid).toBe(true);
   });
+});
+
+test('input JSON Schema shares the validator without applying reserved output metrics', () => {
+  const schema = { type: 'object', properties: { metrics: { type: 'number' } } };
+  expect(validateJsonSchema({ metrics: 7 }, schema).valid).toBe(true);
+  expect(validateStructuredOutput({ metrics: 7 }, schema).valid).toBe(false);
 });

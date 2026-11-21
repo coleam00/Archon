@@ -124,6 +124,7 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 | `output_format` | object | unset | JSON Schema for structured output. SDK-enforced on Claude/Codex/OpenCode; best-effort on Pi (answered through a `structured_output` tool call, with JSON extracted from the reply as the fallback) and Copilot (schema appended to prompt, JSON extracted + repaired). The parsed output is validated against the schema (every provider); a node that declares `output_format` but returns no schema-valid output **fails** rather than degrading silently. Also valid on `bash:`/`script:` nodes, where the node's own stdout is the payload being certified. See [Result contracts](#result-contracts). |
 | `allowed_tools` | string[] | unset | Allow list for the provider's tool filter. Claude and Pi filter built-in tools; Copilot filters every session tool, MCP tools included. See [Tool Restrictions](#allowed_tools-and-denied_tools-for-tool-restrictions). Supported on Claude, Pi and Copilot |
 | `denied_tools` | string[] | unset | Tools to remove from the provider's tool filter, including any `allowed_tools` names. See [Tool Restrictions](#allowed_tools-and-denied_tools-for-tool-restrictions). Supported on Claude, Pi and Copilot |
+| `tools` | object | unset | Named script tools on agent (`prompt:`/`command:`) nodes. Requires the provider's `nativeTools` capability (Claude, Codex, Pi). See [Script-backed tools](#script-backed-tools). |
 | `hooks` | object | unset | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
 | `mcp` | string \| `{ path, optional }` | unset | Path to MCP server config JSON file: checkout first, then the declaring home workflow YAML's directory (its captured copy for captured runs). Other scopes use only the checkout. Claude/Codex/Copilot. Any other provider fails the run before it starts, unless the declaration is `{ path: ..., optional: true }`, which runs the node without the servers when the provider lacks MCP or the file is missing. See [MCP Servers](/guides/mcp-servers/#optional-servers) |
 | `skills` | string[] | unset | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name` instead; a non-empty list on Codex or OpenCode fails the run before it starts. See [Skills](/guides/skills/) |
@@ -136,6 +137,38 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 | `betas` | string[] | unset | SDK beta feature flags (e.g., `'context-1m-2025-08-07'`). Claude only. Also settable at workflow level |
 | `sandbox` | object | unset | OS-level filesystem/network restrictions for the Claude subprocess. Claude only. Also settable at workflow level |
 | `settingSources` | (`'project'`\|`'user'`)[] | inherited | Which filesystem setting sources a capable provider discovers (for Claude: CLAUDE.md, skills, commands, agents). Workflow `skills:` remains the exact active skill set. Overrides the assistant-level default; unset everywhere = `['project', 'user']`. `[]` loads none. Requires the provider's `settingSources` capability. Per-node only |
+
+### Script-backed tools
+
+An agent node can expose named scripts as callable tools:
+
+```yaml
+- id: inspect
+  prompt: Look up the item and report its check status.
+  tools:
+    lookup:
+      description: Get checks for an item
+      script: lookup
+      writes: false
+      input_schema:
+        type: object
+        properties: {item_id: {type: integer}}
+        required: [item_id]
+      output_schema:
+        type: object
+        properties: {green: {type: boolean}}
+        required: [green]
+```
+
+A tool script reads one JSON document from stdin and prints one JSON document to stdout. Archon validates input before launching it and validates stdout with the ordinary script output gate. Numbers, arrays and nested objects are supported; native tool parameters must be an object. Scripts use ordinary named-script discovery, pack ownership, execution backend, environment and cancellation. The discovered file determines Bun or Python runtime; optional `timeout` and `deps` have ordinary script semantics.
+
+Archon validates Codex and plugin arguments at ingress, Claude arguments as received by the MCP server, and Pi arguments both before and after Pi's argument normalization. This does not guarantee the original model payload survives transformations outside Archon's validation boundary.
+
+A failed script returns a tool error to the agent, which can correct its request or report a business refusal without failing the node. `writes` defaults to `false`: it is an author declaration, not an OS read-only restriction. For `writes: true`, interrupted calls with unknown outcomes stop the node **non-retryably**. A normal nonzero exit is a tool error, not an unknown outcome. Ordinary agent retries start over; completed calls are not replayed.
+
+Archon attempts to record one `script_tool_call` event per observed call, with input, output, status, provider call ID and attempt ID. The stored input and output redact protected credentials from JSON keys and values, and stored errors redact them from text. If a payload field cannot be redacted safely, Archon omits that field and sets its `*_redaction_failed` flag. This does not change stdin or the result returned to the agent. A provider without tools is refused before model invocation. Providers must await their callbacks; after a turn stops, Archon cancels tool work and waits up to one second for pending declared writes. A write still running after that stops the node non-retryably with an unknown outcome; persisting that outcome has a separate one-second grace. If persistence stalls, the node still fails, but the call event is not guaranteed durable. Process crashes before event persistence do not have exactly-once recovery guarantees.
+
+The agent receives each tool result in its own turn and puts what matters in its ordinary output. Archon leaves that output unchanged; the call event is the execution record, not an additional node-output field.
 
 ### Bash and script node timeouts
 

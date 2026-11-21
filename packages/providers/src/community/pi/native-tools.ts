@@ -1,9 +1,7 @@
-import { nativeToolInputParser } from '@archon/provider-contract';
+import { nativeToolInputParser, nativeToolInputSchema } from '@archon/provider-contract';
 import { Type, StringEnum, type TSchema } from '@earendil-works/pi-ai';
 import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { NativeTool, NativeToolInputSchema, NativeToolProperty } from '../../types';
-
-type TObject = ReturnType<typeof Type.Object>;
 
 function typeBoxFieldForProperty(prop: NativeToolProperty): TSchema {
   switch (prop.kind) {
@@ -22,12 +20,12 @@ function typeBoxFieldForProperty(prop: NativeToolProperty): TSchema {
 }
 
 /**
- * Map a native tool's typed input shape to the TypeBox object Pi's `defineTool`
- * expects. Deliberately flat: a property is a string, a string enum, or a
- * boolean, and `required` decides whether it is optional.
+ * Map a native tool's input schema to Pi's TypeBox definition. Keep the authored
+ * JSON Schema intact; legacy declarations use flat string, enum and boolean fields.
  */
-export function nativeToolInputToTypeBox(input: NativeToolInputSchema): TObject {
-  nativeToolInputParser(input);
+export function nativeToolInputToTypeBox(input: NativeToolInputSchema): TSchema {
+  nativeToolInputSchema.parse(input);
+  if ('jsonSchema' in input) return Type.Unsafe(input.jsonSchema);
   const shape: Record<string, TSchema> = {};
   for (const [key, prop] of Object.entries(input.properties)) {
     let field = typeBoxFieldForProperty(prop);
@@ -44,26 +42,30 @@ export function nativeToolInputToTypeBox(input: NativeToolInputSchema): TObject 
  * handler's text result becomes the tool's content; `details` is unused.
  */
 export function buildPiNativeToolDefinitions(nativeTools: NativeTool[]): ToolDefinition[] {
-  return nativeTools.map(spec =>
-    defineTool({
+  return nativeTools.map(spec => {
+    const parser = nativeToolInputParser(spec.inputSchema);
+    return defineTool({
       // Pi shows `label` in its UI; derive it per-tool from the name so a future
       // second native tool doesn't inherit a hardcoded "Manage runs".
       name: spec.name,
       label: spec.name,
       description: spec.description,
       parameters: nativeToolInputToTypeBox(spec.inputSchema),
-      execute: async (
-        _toolCallId,
-        params
-      ): Promise<{ content: { type: 'text'; text: string }[]; details: undefined }> => ({
-        content: [
-          {
-            type: 'text',
-            text: await spec.handler(nativeToolInputParser(spec.inputSchema).parse(params)),
-          },
-        ],
-        details: undefined,
-      }),
-    })
-  );
+      ...('jsonSchema' in spec.inputSchema
+        ? { prepareArguments: (input: unknown) => parser.parse(input) }
+        : {}),
+      execute: async (_toolCallId, params) => {
+        const parsed = parser.parse(params);
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: await spec.handler(parsed, { providerCallId: _toolCallId }),
+            },
+          ],
+          details: undefined,
+        };
+      },
+    });
+  });
 }

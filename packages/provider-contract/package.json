@@ -18,6 +18,7 @@
     "check:schema": "bun src/scripts/generate-schema.ts --check"
   },
   "dependencies": {
+    "ajv": "^8.20.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

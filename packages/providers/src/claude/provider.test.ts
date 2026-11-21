@@ -30,7 +30,10 @@ const mockQuery = mock<MockQuery>(async function* (_params) {
 // Mock the claude-agent-sdk
 const sdkToolHandlers = new Map<
   string,
-  (args: Record<string, unknown>) => Promise<{ content: { type: 'text'; text: string }[] }>
+  (
+    args: Record<string, unknown>,
+    extra: { requestId: string | number }
+  ) => Promise<{ content: { type: 'text'; text: string }[] }>
 >();
 // Exports these tests never reach fail when called instead of running the real SDK.
 const unmocked = (name: string) => () => {
@@ -45,7 +48,8 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
         name: string,
         _config: unknown,
         handler: (
-          args: Record<string, unknown>
+          args: Record<string, unknown>,
+          extra: { requestId: string | number }
         ) => Promise<{ content: { type: 'text'; text: string }[] }>
       ) => {
         sdkToolHandlers.set(name, handler);
@@ -3530,7 +3534,10 @@ describe('provider contract', () => {
     for (const provider of [createProvider(), overStreams(createProvider, descriptor)]) {
       mockQuery.mockImplementation(async function* ({ options }) {
         expect(options?.mcpServers?.archon).toBeDefined();
-        const result = await sdkToolHandlers.get('manage_run')!({ action: 'inspect' });
+        const result = await sdkToolHandlers.get('manage_run')!(
+          { action: 'inspect' },
+          { requestId: 'call-1' }
+        );
         yield {
           type: 'result',
           subtype: 'success',

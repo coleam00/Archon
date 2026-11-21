@@ -97,7 +97,9 @@ export async function runSubprocessUntilRunStops(
   try {
     return await runSubprocess(execContext, cmd, args, {
       ...options,
-      abortSignal: controller.signal,
+      abortSignal: options.abortSignal
+        ? AbortSignal.any([controller.signal, options.abortSignal])
+        : controller.signal,
     });
   } finally {
     clearInterval(poll);

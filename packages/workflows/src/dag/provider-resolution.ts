@@ -515,12 +515,14 @@ function reportedEffort(
  * the run instead of warning like the other capability axes. An `mcp:` declared
  * `optional: true` names no requirement; `resolveNodeMcp` records its absence.
  */
-export const SCOPED_CAPABILITIES = ['mcp', 'skills', 'plugins'] as const;
+export const SCOPED_CAPABILITIES = ['mcp', 'skills', 'plugins', 'nativeTools'] as const;
 
 export type ScopedCapability = (typeof SCOPED_CAPABILITIES)[number];
 
 export function namesScopedCapability(node: DagNode, capability: ScopedCapability): boolean {
   switch (capability) {
+    case 'nativeTools':
+      return node.kind === 'agent' && node.tools !== undefined;
     case 'mcp':
       return 'mcp' in node && mcpDeclaration(node.mcp)?.optional === false;
     // `skills: []` and `plugins: []` name nothing, so they need no capability.

@@ -637,6 +637,83 @@ test('concurrent native tools remain scoped to their owning session', async () =
   );
 });
 
+test('JSON Schema input and provider call identity cross the plugin wire unchanged', async () => {
+  const reserved = Object.fromEntries([['__proto__', 7]]);
+  const input = { count: 2.5, items: [reserved] };
+  const schema = {
+    type: 'object',
+    properties: {
+      count: { type: 'number' },
+      items: { type: 'array', items: { type: 'object' }, default: [reserved] },
+    },
+    required: ['count', 'items'],
+  };
+  const context = { providerCallId: 'call-7', providerCallScope: 'mcp-1' };
+  let handled = 0;
+  await withProvider(
+    fixtureProvider({
+      async *sendQuery(prompt, _c, _r, options) {
+        const tool = options?.nativeTools?.[0];
+        if (!tool) throw new Error('Missing tool');
+        if (prompt !== 'invalid')
+          expect(JSON.stringify(tool.inputSchema)).toBe(JSON.stringify({ jsonSchema: schema }));
+        yield {
+          type: 'result',
+          text: await tool.handler(
+            prompt === 'invalid' ? { count: 2.5, ...reserved } : input,
+            context
+          ),
+        };
+        yield { type: 'settled' };
+      },
+    }),
+    async client => {
+      await collect(
+        client.sendQuery('call', '/', undefined, {
+          nativeTools: [
+            {
+              name: 'lookup',
+              description: 'lookup',
+              inputSchema: { jsonSchema: schema },
+              handler: async (actual, identity) => {
+                handled++;
+                expect(JSON.stringify(actual)).toBe(JSON.stringify(input));
+                expect(identity).toEqual(context);
+                return 'ok';
+              },
+            },
+          ],
+        })
+      );
+      await expect(
+        collect(
+          client.sendQuery('invalid', '/', undefined, {
+            nativeTools: [
+              {
+                name: 'lookup',
+                description: 'lookup',
+                inputSchema: {
+                  jsonSchema: {
+                    type: 'object',
+                    properties: { count: { type: 'number' } },
+                    required: ['count'],
+                    additionalProperties: false,
+                  },
+                },
+                handler: async () => {
+                  handled++;
+                  return 'must not run';
+                },
+              },
+            ],
+          })
+        )
+      ).rejects.toThrow('invalid tool input');
+      expect(handled).toBe(1);
+    }
+  );
+});
+
 test('host env stays off the wire while container env travels as request data', async () => {
   const requests: unknown[] = [];
   await withProvider(
