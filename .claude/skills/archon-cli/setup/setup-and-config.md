@@ -14,15 +14,17 @@ want to work on unless setting up globally.
 archon --version      # CLI present?
 archon doctor         # installed providers, database, adapters
 archon doctor --full  # also probes the OpenCode runtime SDK
-archon workflow run archon-forge-check  # can the SDLC workflows reach the forge?
 ```
 
 If `doctor` is green, skip to Configuration. Only set up what is actually broken.
 
+Doctor does not check forge access.
 `archon forge check --data '{"host":"github.com","operations":["pr.view","pr.merge"]}'`
-answers a narrower question without starting a run: whether a plugin serves the host,
-supports the named operations and has a credential. It runs no forge operation and
-exits 1 with the reason.
+checks it without starting a run: whether a plugin serves the host, supports the named
+operations and has a credential. It runs no forge operation and exits 1 with the reason.
+A pack run checks forge access itself when it starts, including one read of the
+repository
+([details](https://archon.diy/reference/forge/#check-forge-access-before-a-run-spends)).
 
 The first run in a checkout Archon has not seen registers the project before it
 starts. On an install with many projects that takes a few seconds.
