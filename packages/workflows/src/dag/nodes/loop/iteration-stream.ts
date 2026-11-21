@@ -14,6 +14,7 @@ import {
   assertResultBeforeSettlement,
 } from '../../ai-turn';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '../../../schemas/run-config';
+import { createStallMessenger, type StallMessagePass } from '../../../stall-message';
 import type { NodeExecutionResult } from '../../../node-record-serialization';
 import type { NodeFailureKind } from '../../../schemas/node-execution';
 import { createProviderEventHandler, type ProviderEventHandler } from '../../../provider-events';
@@ -94,6 +95,8 @@ export interface StreamedAttempt {
   stopStatus: string | undefined;
   abort: AbortController;
   providerEvents: ProviderEventHandler;
+  /** This stream's channel for the engine's messages to a stalled session. */
+  stallMessages: StallMessagePass;
   /** Mid-stream cancel-check throttle (see the check inside the stream loop). */
   lastStatusCheckAt: number;
 }
@@ -204,6 +207,18 @@ async function runReaskAttempts(
     sessionId: thread.sessionId,
   });
 
+  // One iteration attempt's message count spans its reasks; a transient retry is a new attempt.
+  const stallMessenger = createStallMessenger({
+    store: run.ctx.deps.store,
+    logDir: run.ctx.logDir,
+    runId: run.ctx.workflowRun.id,
+    stepName: run.stepName,
+    provider: run.workflowProvider,
+    iteration: i,
+    capabilities: run.capabilities,
+    policy: run.ctx.config.workflows,
+  });
+
   while (true) {
     const listings = await writeInvocationListings(run.ctx);
     const attempt = await streamIterationAttempt(run, state, i, iterationStart, listings, {
@@ -211,6 +226,7 @@ async function runReaskAttempts(
       thread,
       retry,
       resumeSessionId: iteration.resumeSessionId,
+      stallMessenger,
     });
     if (attempt.kind !== 'streamed') return attempt;
     const streamFailure = await failedStream(run, state, i, attempt, {
@@ -250,7 +266,7 @@ function newCorrection(): Correction {
   return { thread: { sessionId: undefined }, reask: { attempt: 0, errors: [] } };
 }
 
-function newAttempt(run: LoopRun): StreamedAttempt {
+function newAttempt(run: LoopRun, stallMessages: StallMessagePass): StreamedAttempt {
   const { ctx, node, stepName } = run;
   const attempt = {
     kind: 'streamed',
@@ -264,6 +280,7 @@ function newAttempt(run: LoopRun): StreamedAttempt {
     stopStatus: undefined,
     abort: new AbortController(),
     lastStatusCheckAt: Date.now(),
+    stallMessages,
   } satisfies Omit<StreamedAttempt, 'providerEvents'>;
   const providerEvents = createProviderEventHandler({
     toolAttention: ctx.toolAttention.createStream({
@@ -287,6 +304,7 @@ function newAttempt(run: LoopRun): StreamedAttempt {
     nodeId: node.id,
     stepName,
     attempt: run.attemptEvents,
+    stallMessages,
     // A loop node takes no `mcp:` file, so no MCP failure is the workflow's own.
     configuredMcpServers: new Set(),
     onMessageText: async text => {
@@ -307,6 +325,7 @@ interface AttemptPosition {
   thread: { sessionId: string | undefined };
   retry: IterationRetry;
   resumeSessionId: string | undefined;
+  stallMessenger: ReturnType<typeof createStallMessenger>;
 }
 
 async function streamIterationAttempt(
@@ -320,7 +339,7 @@ async function streamIterationAttempt(
   const { ctx, node } = run;
   // A reask re-runs the stream, so anything the stream accumulates or aborts must start
   // clean or a prior attempt's prose would leak into this one's output and signal detection.
-  const attempt = newAttempt(run);
+  const attempt = newAttempt(run, position.stallMessenger.openPass());
   const usage: AttemptUsage = {
     cost: undefined,
     tokens: undefined,
@@ -483,6 +502,9 @@ function iterationChunks(
       ...run.resolvedOptions,
       env: run.iterationEnv,
       abortSignal: attempt.abort.signal,
+      ...(attempt.stallMessages.turnMessages
+        ? { turnMessages: attempt.stallMessages.turnMessages }
+        : {}),
       ...(pass.continuesThread ? { forkSession: false } : {}),
     });
   // A same-session correction continues the thread this iteration wrote seconds ago; a
@@ -575,6 +597,7 @@ async function consumeIterationStream(
       }
     }
   } finally {
+    attempt.stallMessages.close();
     await providerEvents.clearAttention();
   }
 }
@@ -592,6 +615,7 @@ async function stopStreamIfRunStopped(
   const { ctx, node } = run;
   await ctx.toolAttention.refresh();
   await attempt.providerEvents.refreshAttention();
+  await attempt.stallMessages.check(attempt.providerEvents.stall());
   const tickNow = Date.now();
   if (tickNow - attempt.lastStatusCheckAt <= CANCEL_CHECK_INTERVAL_MS) return false;
   attempt.lastStatusCheckAt = tickNow;

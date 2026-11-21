@@ -11,7 +11,12 @@ import type { createRunToolCallAttention, StreamStall } from './tool-call-attent
  * tracker); it never rebuilds the event.
  */
 import type { ProviderEvent } from '@archon/provider-contract';
-import { subtaskTerminalStatusSchema, toolCallDisplayName } from '@archon/provider-contract';
+import {
+  subtaskTerminalStatusSchema,
+  toolCallDisplayName,
+  TURN_MESSAGE_REFUSED_WARNING_CODE,
+} from '@archon/provider-contract';
+import type { StallMessagePass } from './stall-message';
 import { createLogger } from '@archon/paths';
 
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
@@ -69,6 +74,8 @@ export interface ProviderEventHandlerDeps {
    * (an agent node batches it; a loop node strips its completion tag).
    */
   onMessageText(text: string): Promise<void>;
+  /** The pass's channel for engine messages, told when the provider refuses one. */
+  stallMessages: Pick<StallMessagePass, 'refused'>;
   /**
    * Runs before a warning is sent. A node that holds back reply text (an agent node in
    * batch mode) sends it here, so the operator reads the reply in the order it came.
@@ -192,6 +199,8 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
           await handleToolCallUpdate(event, streaming);
           return;
         case 'warning':
+          if (event.code === TURN_MESSAGE_REFUSED_WARNING_CODE)
+            await deps.stallMessages.refused(event.message);
           // The ⚠️ is display formatting at the platform edge; nothing reads it back.
           await sendWarning(`⚠️ ${event.message}`, { code: event.code });
           return;

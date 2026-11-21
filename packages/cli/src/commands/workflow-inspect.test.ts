@@ -126,6 +126,35 @@ describe('workflowStatusCommand', () => {
   });
 
   it.each([false, true])('shows tool attention without verbose mode (json=%s)', async json => {
+    const engineMessage = (count: number): WorkflowEventRow => ({
+      id: `stall-${String(count)}`,
+      workflow_run_id: 'live',
+      event_type: 'stall_message',
+      step_name: 'implement',
+      step_index: null,
+      data: {
+        sent: true,
+        sender: 'engine',
+        provider: 'codex',
+        count,
+        limit: 2,
+        open: [],
+        text: 'check-in',
+      },
+      created_at: new Date().toISOString(),
+    });
+    const host = createTestWorkflowHost();
+    host.deps.store.listEventsForRuns = async () =>
+      new Map([
+        [
+          'live',
+          [
+            engineMessage(1),
+            engineMessage(2),
+            { ...engineMessage(2), id: 'stall-done', step_name: 'completed-build' },
+          ],
+        ],
+      ]);
     mockListDashboardRuns.mockResolvedValueOnce(
       statusRuns([
         {
@@ -154,7 +183,7 @@ describe('workflowStatusCommand', () => {
         },
       ])
     );
-    await workflowStatusCommand(createTestWorkflowHost(), '/repo', { json, all: true });
+    await workflowStatusCommand(host, '/repo', { json, all: true });
     if (json)
       expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
         runs: [{ attention: { kind: 'stalled_tool_calls', status: 'running' } }],
@@ -163,6 +192,11 @@ describe('workflowStatusCommand', () => {
       const printed = consoleSpy.mock.calls.flat().join(' ');
       expect(printed).toContain('live is still running');
       expect(printed).toContain('bun test');
+      expect(printed).toContain(
+        'Engine: [implement] engine sent the stalled session a message (2 of 2)'
+      );
+      expect(printed).not.toContain('(1 of 2)');
+      expect(printed).not.toContain('completed-build');
       expect(printed).not.toContain('resume');
     }
   });
