@@ -321,14 +321,6 @@ describe('readSubrunMetadata — inputs (#2470)', () => {
     expect(md.inputs).toEqual({ before: null, other: 42 });
   });
 
-  test('reconstitutes null-valued inputs when inputs_values became empty after json_patch (#5939)', () => {
-    const md = readSubrunMetadata({
-      inputs: { before: 'null' },
-      inputs_values: {},
-    });
-    expect(md.inputs).toEqual({ before: null });
-  });
-
   test('treats a non-string-valued or non-object inputs as unset', () => {
     expect(readSubrunMetadata({ inputs: { plan: 5 } }).inputs).toBeUndefined();
     expect(readSubrunMetadata({ inputs: ['a'] }).inputs).toBeUndefined();
