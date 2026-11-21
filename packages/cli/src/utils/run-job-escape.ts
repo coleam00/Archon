@@ -354,7 +354,10 @@ export async function relayOutsideRunJob(
         const data = Buffer.from(frame.data, 'base64');
         written = written.then(() => output[frame.stream](data));
       } else {
+        // The exit or error frame is the broker's last. Close here rather than wait for the
+        // broker's end to arrive: on a Windows named pipe under Bun that took seconds.
         result = frame;
+        socket.destroy();
       }
     });
     socket.once('error', error => {
