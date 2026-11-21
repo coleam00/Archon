@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { z } from 'zod';
 import { closeDatabase, getDatabase, resetDatabase } from './connection';
@@ -1663,6 +1663,7 @@ for (const damagedLaunch of ['{', '{}', 'mismatched-id']) {
       hostId: 'host',
       startAdmitted: async id => {
         started.push(id);
+        return null;
       },
     }).catch((error: unknown) => error);
     expect(started).toEqual([queue[0]!, queue[3]!]);
@@ -1769,6 +1770,7 @@ for (const damagedLaunch of ['{', '{}', 'mismatched-id']) {
       hostId: 'host',
       startAdmitted: async id => {
         started.push(id);
+        return null;
       },
     }).catch((error: unknown) => error);
     expect(started).toEqual([queued[1]!]);
@@ -1836,6 +1838,51 @@ async function expectAllBindingsPrepared(error: unknown): Promise<void> {
   ).toEqual([{ status: 'rejected', count: 201 }]);
 }
 
+for (const handOff of ['handed_off', 'hand_off_failed'] as const) {
+  test(`a drain records how it handed an admitted start over on the pending run: ${handOff}`, async () => {
+    const { createSqlWorkflowHost } = await import('../workflows/sql-host');
+    const { drainResourceStartHost } = await import('../workflows/resource-start-host');
+    const host = createSqlWorkflowHost();
+    const [holder, next] = [launch(crypto.randomUUID()), launch(crypto.randomUUID())];
+    for (const prepared of [holder, next])
+      await host.deps.store.admitResourceStart({
+        resource: 'resource',
+        capacity: 1,
+        hostId: 'host',
+        overlap: 'queue',
+        launch: prepared,
+      });
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
+      [holder.run.id]
+    );
+
+    const drained = await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async () => {
+        if (handOff === 'hand_off_failed') throw new Error('spawn failed');
+        return { pid: 4242 };
+      },
+    }).catch((error: unknown) => error);
+
+    const run = await getWorkflowRun(next.run.id);
+    expect(run?.status).toBe('pending');
+    if (handOff === 'handed_off') {
+      expect(drained).toBeUndefined();
+      expect(run?.metadata.start_executor).toMatchObject({
+        kind: handOff,
+        host: hostname(),
+        pid: 4242,
+      });
+    } else {
+      // The hand-off's own failure is still reported to the drain's caller.
+      expect(drained).toBeInstanceOf(Error);
+      expect(run?.metadata.start_executor).toEqual({ kind: handOff });
+    }
+  });
+}
+
 test('a run end prepares every start it caused, past one page of receipts and one page of bindings', async () => {
   const { createSqlWorkflowHost } = await import('../workflows/sql-host');
   const { startReceiptBindings } = await import('../workflows/resource-start-host');
@@ -1844,7 +1891,7 @@ test('a run end prepares every start it caused, past one page of receipts and on
 
   await expectAllBindingsPrepared(
     await startReceiptBindings(
-      { ...host, hostId: 'host', startAdmitted: async () => {} },
+      { ...host, hostId: 'host', startAdmitted: async () => null },
       new Set(receiptIds)
     ).catch((caught: unknown) => caught)
   );
@@ -1861,7 +1908,7 @@ test('a host pass prepares every pending binding of its host, past one page', as
     await drainResourceStartHost({
       ...host,
       hostId: 'host',
-      startAdmitted: async () => {},
+      startAdmitted: async () => null,
     }).catch((caught: unknown) => caught)
   );
 });

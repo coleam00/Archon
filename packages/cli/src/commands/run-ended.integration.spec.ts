@@ -642,8 +642,13 @@ describe('a run-ended binding', () => {
     await fixture.cli(['trigger', 'drain', '--host', HOST]);
     expect(stageB().map(run => run.status)).toEqual(['pending']);
 
-    // Where an operator looks, the start is shown with the command that runs it.
-    const waiting = { requestId: stranded.id, hostId: HOST };
+    // Where an operator looks, the start is shown as nobody's, with the command that runs it.
+    const waiting = {
+      requestId: stranded.id,
+      hostId: HOST,
+      state: 'unowned' as const,
+      executor: null,
+    };
     const read = itemReadSchema.parse(
       JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json']))
     );

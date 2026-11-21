@@ -135,6 +135,7 @@ async function fireAndExecute(
   await triggerCommand(host, 'fire', [], options, {
     dispatch: async id => {
       admitted.push(id);
+      return null;
     },
     env: {},
   });

@@ -359,6 +359,7 @@ describe('install hold', () => {
           hostId: 'host',
           startAdmitted: async id => {
             started.push(id);
+            return null;
           },
         });
       await pass();

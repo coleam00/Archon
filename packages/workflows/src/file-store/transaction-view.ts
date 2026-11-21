@@ -131,6 +131,17 @@ export function createTransactionView(
     return run;
   };
   let eventOrder = events.reduce((max, event) => Math.max(max, event.event_order ?? 0), 0);
+  const mergeMetadataIfStatus = (
+    id: string,
+    status: 'running' | 'pending',
+    metadata: WorkflowRun['metadata']
+  ): boolean => {
+    validateWorkflowWaitMetadata(metadata);
+    const run = runs.get(id);
+    if (run?.status !== status) return false;
+    Object.assign(run.metadata, structuredClone(mutableRunMetadata(metadata)));
+    return true;
+  };
   const record = (input: WorkflowEventInput): void => {
     row(input.workflow_run_id);
     events.push({
@@ -324,13 +335,10 @@ export function createTransactionView(
         working_path: run.working_path ?? updates.working_path ?? null,
       });
     },
-    updateWorkflowRunMetadataIfRunning: async (id, metadata) => {
-      validateWorkflowWaitMetadata(metadata);
-      const run = runs.get(id);
-      if (run?.status !== 'running') return false;
-      Object.assign(run.metadata, structuredClone(mutableRunMetadata(metadata)));
-      return true;
-    },
+    updateWorkflowRunMetadataIfRunning: async (id, metadata) =>
+      mergeMetadataIfStatus(id, 'running', metadata),
+    updateWorkflowRunMetadataIfPending: async (id, metadata) =>
+      mergeMetadataIfStatus(id, 'pending', metadata),
     updateWorkflowActivity: async (id): ReturnType<IWorkflowStore['updateWorkflowActivity']> => {
       const run = runs.get(id);
       if (run) run.last_activity_at = new Date();

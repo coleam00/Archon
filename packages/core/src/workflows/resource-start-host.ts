@@ -77,6 +77,7 @@ import type { WorkflowHost } from './host-store';
 import { registerRepository } from '../handlers/clone';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
+import { handOffAdmitted, type StartedExecutor } from './start-executor';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { executionLane, handoffIsolation } from './resource-start-lanes';
 import { selectStartedWorkflow } from './binding-workflow';
@@ -394,11 +395,8 @@ async function prepareClaimedBinding(
 export interface ResourceStartHost extends WorkflowHost {
   /** The configured host identity. A host only prepares and admits work bound to it. */
   hostId: string;
-  /**
-   * Start one admitted request. The CLI hands it to a detached process; the server
-   * calls `startAdmittedResourceStart` in-process without awaiting the run.
-   */
-  startAdmitted: (requestId: string) => Promise<void>;
+  /** Start one admitted request: the CLI detaches it, the server runs it in-process unawaited. */
+  startAdmitted: (requestId: string) => Promise<StartedExecutor | null>;
 }
 
 /**
@@ -494,7 +492,7 @@ async function startAdmittedRequest(
   receiptId: string | undefined
 ): Promise<void> {
   try {
-    await host.startAdmitted(requestId);
+    await handOffAdmitted(host, requestId);
   } catch (error) {
     failures.push({ receiptId, error });
   }

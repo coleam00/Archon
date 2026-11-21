@@ -96,6 +96,27 @@ function skippedLines(start: ItemSkippedStart): string[] {
 }
 
 /**
+ * An admitted start whose run has not begun. Only a start nobody runs gets the command that
+ * starts it; one this process cannot observe points to the inspection instead.
+ */
+function awaitingExecutionText(waiting: NonNullable<ItemRun['awaitingExecution']>): string {
+  const { executor } = waiting;
+  switch (waiting.state) {
+    case 'starting':
+      // The owner endpoint proves it; the recorded pid is only who it was handed to.
+      return 'admitted, starting';
+    case 'unowned':
+      return `admitted, not started, and no process is running it. Start it: archon trigger execute ${waiting.requestId} --host ${waiting.hostId}`;
+    case 'unknown': {
+      const where = executor
+        ? ` (handed to process ${String(executor.pid)} on ${executor.host})`
+        : '';
+      return `admitted, not started; this process cannot confirm its executor${where}. Inspect it: archon trigger inspect ${waiting.requestId}`;
+    }
+  }
+}
+
+/**
  * One run, how to read its result when it has one, and how to start it when it was admitted
  * but no process is running it.
  */
@@ -113,11 +134,8 @@ function runLines(run: ItemRun): string[] {
     );
   else if (holds) lines.push(`            result: ${holds}`);
   if (run.operatorPause) lines.push(`            ${describeOperatorPause(run.operatorPause)}`);
-  const waiting = run.awaitingExecution;
-  if (waiting)
-    lines.push(
-      `            admitted, not started. If no process is running it: archon trigger execute ${waiting.requestId} --host ${waiting.hostId}`
-    );
+  if (run.awaitingExecution)
+    lines.push(`            ${awaitingExecutionText(run.awaitingExecution)}`);
   if (run.heldBehind)
     lines.push(
       ...heldBehindLines(

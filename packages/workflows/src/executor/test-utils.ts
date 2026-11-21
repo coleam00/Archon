@@ -178,6 +178,9 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
       updateWorkflowRunMetadataIfRunning: mock<
         IWorkflowStore['updateWorkflowRunMetadataIfRunning']
       >(async () => true),
+      updateWorkflowRunMetadataIfPending: mock<
+        IWorkflowStore['updateWorkflowRunMetadataIfPending']
+      >(async () => true),
       updateWorkflowRun: mock(async () => undefined),
       failWorkflowRun: mock(async () => ({ failed: true })),
       getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),

@@ -18,7 +18,8 @@ import {
 import { stateProjectKeySchema } from '@archon/workflows/state-document-store';
 import type { Codebase } from '../schemas/codebase';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
-import { observeRunOwner } from '../services/run-attention-watch';
+import { observeRunOwner, observeStartExecutor } from '../services/run-attention-watch';
+import type { StartExecutorObserver } from '@archon/workflows/resource-start-store';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { IWorkflowHostStore } from '../workflows/host-store';
 
@@ -29,6 +30,8 @@ import type { IWorkflowHostStore } from '../workflows/host-store';
  * The items no run holds are the open asks completed runs left and their overdue waits. An item holder's owner is
  * observed by the rule `workflow wait` uses (`observeRunOwner`), so the queue lists a
  * holder whose owner is gone and an item read says so; observing never changes the run.
+ * A pending admitted start's executor is observed by `observeStartExecutor`, so an item
+ * read tells a start that is starting from one nobody runs.
  */
 export function attentionQueueSource<
   Store extends AttentionQueueSource['store'] &
@@ -38,7 +41,7 @@ export function attentionQueueSource<
 >(
   store: Store,
   isolation: Pick<IWorkflowHostStore['isolation'], 'findLatestByCodebaseAndWorkingPath'>
-): AttentionQueueSource & { store: Store } {
+): AttentionQueueSource & { store: Store; startExecutor: StartExecutorObserver } {
   return {
     store,
     itemsWithoutRun: async () => [
@@ -59,6 +62,7 @@ export function attentionQueueSource<
       holders: () => store.listWaitedItemHolders(),
       observe: run => observeRunOwner(store, run),
     },
+    startExecutor: { observe: run => observeStartExecutor(store, run) },
   };
 }
 

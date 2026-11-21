@@ -267,7 +267,10 @@ export interface ExecutionOwnerRecord {
 export function readExecutionOwner(
   metadata: Record<string, unknown> | undefined
 ): ExecutionOwnerRecord | undefined {
-  const raw = metadata?.[EXECUTION_OWNER_METADATA_KEY];
+  return readOwnerRecord(metadata?.[EXECUTION_OWNER_METADATA_KEY]);
+}
+
+function readOwnerRecord(raw: unknown): ExecutionOwnerRecord | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
   const { host, pid, uid } = raw as { host?: unknown; pid?: unknown; uid?: unknown };
   if (typeof host !== 'string' || host.length === 0) return undefined;
@@ -275,6 +278,34 @@ export function readExecutionOwner(
   return typeof uid === 'number' && Number.isInteger(uid) && uid >= 0
     ? { host, pid, uid }
     : { host, pid };
+}
+
+/**
+ * How the hand-off of an admitted start ended, written by the process that handed it over
+ * while the run is still `pending`. `handed_off` names the process the start was handed
+ * to: a detached `trigger execute`, or a server running it in-process. `hand_off_failed`
+ * records that the hand-off started nothing. It is evidence for a reader while the run
+ * waits for its executor's claim, never a liveness signal: a live pid is not proof that
+ * the process is still this executor, and only the live-owner endpoint proves that. What
+ * it can prove is absence: a failed hand-off, or a recorded process that no longer exists.
+ * Once the executor claims the run, `execution_owner` takes over and this key is inert.
+ */
+export const START_EXECUTOR_METADATA_KEY = 'start_executor';
+
+export type StartExecutorRecord =
+  | ({ kind: 'handed_off' } & ExecutionOwnerRecord)
+  | { kind: 'hand_off_failed' };
+
+/** Typed view of the start-executor record; undefined when none was written or it does not read. */
+export function readStartExecutor(
+  metadata: Record<string, unknown> | undefined
+): StartExecutorRecord | undefined {
+  const raw = metadata?.[START_EXECUTOR_METADATA_KEY];
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const { kind } = raw as { kind?: unknown };
+  if (kind === 'hand_off_failed') return { kind };
+  const owner = kind === 'handed_off' ? readOwnerRecord(raw) : undefined;
+  return owner === undefined ? undefined : { kind: 'handed_off', ...owner };
 }
 
 /** Typed view of the run-lifecycle keys on a run's metadata; undefined when unset. */
