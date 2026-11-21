@@ -161,11 +161,30 @@ test('attention list refuses a count response instead of claiming an empty queue
   await expect(listRunsNeedingAttention()).rejects.toThrow('counts instead of runs');
 });
 
-test('attention list normalizes run rows and an omitted degraded list', async () => {
-  respond({ runs: [detailFixture.run], items: [] });
-  expect(await listRunsNeedingAttention()).toEqual({
+test('attention list keeps asks no run holds apart from run items, with refusals', async () => {
+  const base = { project: null, revision: 1, labels: {}, pausedAt: null, message: 'Keep it?' };
+  const ask = {
+    ...base,
+    kind: 'attention',
+    ref: 'ask:a1',
+    item: { id: 'item-1', projectKey: 'acme', key: 'issues/7' },
+    form: 'select',
+    options: [{ id: 'keep', does: 'Keeps it.', cost: 'A flag.' }],
+  };
+  const held = {
+    ...base,
+    kind: 'awaiting_response',
+    ref: 'run-1:pause-1',
+    item: { id: 'item-2', projectKey: 'acme', key: 'issues/8' },
+    run: { id: 'run-1' },
+  };
+  respond({ runs: [detailFixture.run], items: [ask, held], answerRefusals: { 'ask:a1': 'No.' } });
+  expect<unknown>(await listRunsNeedingAttention()).toEqual({
     runs: [toRun(detailFixture.run)],
     ownerLost: [],
+    asks: [ask],
+    answerRefusals: { 'ask:a1': 'No.' },
+    itemIds: new Set(['item-1', 'item-2']),
     degraded: [],
   });
 });
@@ -190,7 +209,7 @@ test('attention list keeps a lost-owner item holder, which has no paused run row
       observedStatus: 'running',
     },
   ];
-  respond({ runs: [], items });
+  respond({ runs: [], items, answerRefusals: {} });
   expect((await listRunsNeedingAttention()).ownerLost).toEqual([
     {
       runId: 'holder-1',

@@ -10,7 +10,7 @@ import { splitAttentionRead } from '@archon/workflows/schemas/attention-degraded
 import { z } from 'zod';
 import {
   answerAttentionItem,
-  mayAnswerAttentionItem,
+  answerPermission,
   NOTHING_STARTED,
   settledWithNothingStarted,
   type AttentionItemAnswerResult,
@@ -145,7 +145,8 @@ async function listItems(ctx: AttentionToolContext, project: string): Promise<st
   const { values, degraded } = splitAttentionRead(await listAttentionQueue(ctx.queue));
   const open = selectAttentionQueue(values, { scope, labels: {}, order: { by: 'age' } });
   const items = [];
-  for (const item of open) if (await mayAnswerAttentionItem(ctx, item, ctx.actor)) items.push(item);
+  for (const item of open)
+    if ((await answerPermission(ctx, item, ctx.actor)).kind === 'allowed') items.push(item);
   const where = scope.kind === 'all' ? 'every project' : `project ${scope.project.name}`;
   log.info({ scope: scope.kind, count: items.length }, 'attention_tool.list_completed');
   const lines = [

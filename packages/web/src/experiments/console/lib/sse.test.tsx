@@ -3,7 +3,7 @@ import { Window } from 'happy-dom';
 import { act, useState, type ReactElement } from 'react';
 import { invalidate, useEntity } from '../store/cache';
 import { K } from '../store/keys';
-import { useConversationSSE } from './sse';
+import { useAttentionStreamSSE, useConversationSSE } from './sse';
 
 class TestEventSource {
   static instances: TestEventSource[] = [];
@@ -16,7 +16,11 @@ class TestEventSource {
   }
 
   lock(locked: boolean): void {
-    this.onmessage?.({ data: JSON.stringify({ type: 'conversation_lock', locked }) });
+    this.send({ type: 'conversation_lock', locked });
+  }
+
+  send(line: object): void {
+    this.onmessage?.({ data: JSON.stringify(line) });
   }
 }
 
@@ -82,4 +86,43 @@ test('unlock refetches the persisted reply and updates the subscribed chat view'
     invalidate(key);
   }
   expect(TestEventSource.instances.at(-1)?.close).toHaveBeenCalledTimes(1);
+});
+
+test('the attention stream refetches the attention list, and reopens on a bad cursor', async () => {
+  const loadAttention = mock(async () => 'list');
+  function Banner(): ReactElement {
+    useAttentionStreamSSE();
+    const { data } = useEntity(K.runsAttention, loadAttention);
+    return <div>{data}</div>;
+  }
+  const settle = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 150));
+
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<Banner />));
+    expect(loadAttention).toHaveBeenCalledTimes(1);
+    const stream = TestEventSource.instances.at(-1);
+    if (!stream) throw new Error('Attention stream was not opened');
+    expect(stream.url).toBe('/api/runs/attention/stream?level=quiet');
+
+    await act(async () => {
+      stream.send({ type: 'resolved', ref: 'ask:a1' });
+      await settle();
+    });
+    expect(loadAttention).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      stream.send({ type: 'error', error: 'cursor_invalid' });
+      await settle();
+    });
+    expect(stream.close).toHaveBeenCalledTimes(1);
+    expect(TestEventSource.instances.at(-1)).not.toBe(stream);
+    expect(loadAttention).toHaveBeenCalledTimes(3);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    invalidate(K.runsAttention);
+  }
 });

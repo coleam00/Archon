@@ -97,6 +97,11 @@ export type AttentionItemAnswerResult =
       continues: boolean;
     };
 
+/** Whether an actor may answer an item, and why not when they may not. */
+export type AnswerPermission =
+  | { kind: 'allowed'; run: WorkflowRun }
+  | { kind: 'refused'; reason: string };
+
 /**
  * A close that settled its set and wrote no start receipt: no asks-settled binding matched,
  * for example an option no binding names, so nothing was started. Every answer surface
@@ -114,35 +119,31 @@ export const NOTHING_STARTED =
   'No trigger binding starts on this settlement, so nothing was started.';
 
 /**
- * The run whose permission decides who may answer `item`, when `actor` has it. An item's
- * permission is its run's: whoever started the run, or an admin. For an ask that is the
- * run that left it; once that run is deleted, nobody may answer the ask by this rule.
+ * Whether `actor` may answer `item`. An item's permission is its run's: whoever started the
+ * run, or an admin. For an ask that is the run that left it; once that run is deleted,
+ * nobody may answer the ask by this rule.
  */
-async function answerableRun(
+export async function answerPermission(
   deps: AttentionItemDeps,
   item: AttentionQueueItem,
   actor: RunActor
-): Promise<WorkflowRun | null> {
+): Promise<AnswerPermission> {
   const runId = isHeldByRun(item) ? item.run.id : leftByRun(item)?.runId;
-  if (runId === undefined) return null;
+  if (runId === undefined)
+    return { kind: 'refused', reason: 'Nothing holds this item, so nobody can answer it.' };
   const run = await deps.queue.store.getWorkflowRun(runId);
-  if (run === null) return null;
+  if (run === null)
+    return {
+      kind: 'refused',
+      reason: 'The run that left this ask was deleted, so nobody can answer it.',
+    };
   try {
     await deps.operations.assertRunActionAllowed(run, actor, 'respond');
-    return run;
+    return { kind: 'allowed', run };
   } catch (error) {
-    if (error instanceof RunActionForbiddenError) return null;
+    if (error instanceof RunActionForbiddenError) return { kind: 'refused', reason: error.message };
     throw error;
   }
-}
-
-/** True when `actor` may answer `item`, by the rule an answer is held to. */
-export async function mayAnswerAttentionItem(
-  deps: AttentionItemDeps,
-  item: AttentionQueueItem,
-  actor: RunActor
-): Promise<boolean> {
-  return (await answerableRun(deps, item, actor)) !== null;
 }
 
 /**
@@ -162,11 +163,12 @@ export async function answerAttentionItem(
   const read = await readAttentionQueueItemByRef(deps.queue, ref);
   if (read.kind === 'unknown' || read.kind === 'none') return read;
   const { item } = read;
-  const holder = await answerableRun(deps, item, actor);
-  if (holder === null) return { kind: 'unknown' };
+  const permission = await answerPermission(deps, item, actor);
+  if (permission.kind === 'refused') return { kind: 'unknown' };
   // An overdue wait is closed by its event, a new run of its workflow, or a withdrawal.
   if (item.kind === 'overdue_wait') return { kind: 'takes_no_answer', item };
   if (!isHeldByRun(item)) return { kind: 'unknown' };
+  const holder = permission.run;
   if (read.kind === 'moved') return read;
   if (item.kind === 'usage_limit' || item.kind === 'unreadable' || item.kind === 'owner_lost')
     return { kind: 'takes_no_answer', item };
@@ -201,7 +203,8 @@ async function answerableAsk(
   const ask = await deps.queue.store.getItemAsk(askId);
   if (ask === null) return undefined;
   const item = await askQueueItem(deps.queue.store, ask);
-  return (await answerableRun(deps, item, actor)) === null ? undefined : { ask, item };
+  const permission = await answerPermission(deps, item, actor);
+  return permission.kind === 'allowed' ? { ask, item } : undefined;
 }
 
 async function answerAsk(
