@@ -615,6 +615,7 @@ test('a start cancelled before its starter holds the owner lock never prepares',
       hostId: 'host',
       startAdmitted: async id => {
         admitted.push(id);
+        return null;
       },
     });
     const [id] = admitted;
