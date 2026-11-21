@@ -409,6 +409,10 @@ export class SlackWorkflowBridge {
         await this.postStoppedCancelNote(body, runId, result);
       } else if (result.kind === 'cooperative') {
         await this.postCooperativeCancelNote(body, runId, result);
+      } else if (result.kind === 'pending') {
+        let note = `Cancelled run \`${runId}\` while it was pending, before its workflow started.`;
+        for (const warning of result.cleanupWarnings ?? []) note += `\n:warning: ${warning}`;
+        await this.postActionNote(body, runId, note);
       }
     } catch (err) {
       logFailure('action.cancel', err);
@@ -552,6 +556,7 @@ export function resolutionNote(result: RunActionResult): string | undefined {
     case 'answered':
     case 'resumed':
       return result.resumed ? 'workflow resumed' : notResumedNote(result);
+    case 'pending':
     case 'cooperative':
     case 'stopped':
       return undefined;

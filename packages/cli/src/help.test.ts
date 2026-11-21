@@ -173,8 +173,8 @@ Commands:
   workflow wake [--watch] [--json] Wake due continuations across this install
   workflow signal <full-run-id> Signal and wake an event wait; use --occurrence for an exact match
   workflow cancel <run-id> | --item <key>
-                             Stop a running workflow (stops an owning process first)
-                             With --item: the item's running run; refuses when several are
+                             Stop a running workflow (stops an owning process first), or a queued one before it starts
+                             With --item: the item's pending or running run; refuses when several are
   workflow abandon <run-id> | --item <key>
                              Mark a run cancelled, stopping a live owner first
                              With --item: the item's pending, running or paused run; refuses when several are

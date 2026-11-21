@@ -203,7 +203,7 @@ export const workflowHelp: HelpGroup = {
       subcommand: 'cancel',
       spec: 'workflow cancel <run-id> | --item <key>',
       description:
-        "Stop a running workflow (stops an owning process first)\nWith --item: the item's running run; refuses when several are",
+        "Stop a running workflow (stops an owning process first), or a queued one before it starts\nWith --item: the item's pending or running run; refuses when several are",
       scopedFlags: [ALL_RUNS_FLAG],
     },
     {
