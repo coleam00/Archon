@@ -286,10 +286,10 @@ describe('projectAddCommand', () => {
       expect(await add(dir)).toBe(1);
       expect(await add(dir, true)).toBe(0);
     });
+    // The recovery command names the absolute target, so it works from any directory.
     expect(lines[0]).toEqual({
       ok: false,
-      error:
-        'Error: Not in a git repository.\nRegister this directory as a folder project: run archon project add --folder.',
+      error: `Error: Not in a git repository.\nRegister this directory as a folder project: run archon project add '${dir}' --folder.`,
     });
     expect(lines[1]).toMatchObject({ registered: true, project: { kind: 'folder' } });
   });

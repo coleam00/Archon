@@ -100,9 +100,11 @@ export async function projectAddCommand(
     return await refuse(`Error: ${(error as Error).message}`, opts.json);
   }
   if (!result.codebase) {
+    // The absolute path keeps the recovery command on the same target from any directory.
+    const quoted = `'${opts.path.replaceAll("'", `'\\''`)}'`;
     return await refuse(
       'Error: Not in a git repository.\n' +
-        'Register this directory as a folder project: run archon project add --folder.',
+        `Register this directory as a folder project: run archon project add ${quoted} --folder.`,
       opts.json
     );
   }
