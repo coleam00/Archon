@@ -1258,6 +1258,36 @@ describe('executeDagWorkflow -- durable wait node', () => {
     );
   });
 
+  it('refuses an empty resolved question before recording or notifying a pause', async () => {
+    const store = createMockStore();
+    const platform = createMockPlatform();
+    mockSendQueryDag.mockClear();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'attention-empty-test',
+          nodes: [{ id: 'ask', kind: 'wait', wait: { attention: '$INPUTS.question' } }],
+        },
+        workflowRun: makeWorkflowRun('attention-empty', {
+          metadata: { inputs: { question: ' ' } },
+        }),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(
+      platform.sendMessage.mock.calls.map(([, text]) => String(text)).join('\n')
+    ).not.toContain('needs attention');
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    const failed = store.createWorkflowEvent.mock.calls
+      .map(call => call[0])
+      .find(event => event.event_type === 'node_failed' && event.step_name === 'ask');
+    expect(failed?.data?.error).toBe("Wait node 'ask' resolved 'attention' to an empty message");
+  });
+
   it('completes an expired event wait with typed output on resume', async () => {
     const store = createMockStore();
     const deps = createMockDeps(store);

@@ -95,6 +95,24 @@ nodes:
     output_format: { type: object, properties: { round: { type: number } }, required: [round] }
 `;
 
+// Reader with result_of that pauses at an approval gate and resumes.
+const RESUMES_NULL = `name: resumes-null
+description: Reader with result_of that pauses and resumes.
+mutates_checkout: false
+inputs:
+  prior: { result_of: fails-late }
+returns: after
+nodes:
+  - id: gate
+    approval:
+      message: please approve
+  - id: after
+    depends_on: [gate]
+    bash: |
+      printf '{"read": %s}' "$INPUTS_PRIOR"
+    output_format: { type: object, properties: { read: {} }, required: [read] }
+`;
+
 interface Fixture {
   /** The project checkout every run works in. */
   projectRoot: string;
@@ -113,6 +131,7 @@ const WORKFLOWS: Record<string, string> = {
   'reads-failed': reader('reads-failed', 'fails-late'),
   'fails-late': FAILS_LATE,
   again: AGAIN,
+  'resumes-null': RESUMES_NULL,
 };
 
 async function makeFixture(
@@ -248,6 +267,24 @@ test('a run that failed after its returns node completed has no result for a rea
   expect(runs.map(read => [read.workflow, read.status, read.hasResult])).toEqual([
     ['fails-late', 'failed', false],
     ['reads-failed', 'completed', true],
+  ]);
+  expect((await detail(fixture, runs[1]?.id)).terminal_record.returns.value).toEqual({
+    read: null,
+  });
+}, 120_000);
+
+test('a resumed run preserves a result_of input that resolved to null at start (#5939)', async () => {
+  const fixture = await makeFixture('resume-null');
+  expect((await fixture.attempt(run('fails-late'))).exitCode).not.toBe(0);
+  const started = await fixture.attempt(run('resumes-null'));
+  expect(started.stdout).toContain('waiting for approval');
+  const [, pausedRun] = await itemRuns(fixture);
+  expect(pausedRun?.status).toBe('paused');
+  await fixture.cli(['workflow', 'approve', String(pausedRun?.id)]);
+  const runs = await itemRuns(fixture);
+  expect(runs.map(read => [read.workflow, read.status, read.hasResult])).toEqual([
+    ['fails-late', 'failed', false],
+    ['resumes-null', 'completed', true],
   ]);
   expect((await detail(fixture, runs[1]?.id)).terminal_record.returns.value).toEqual({
     read: null,

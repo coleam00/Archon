@@ -91,7 +91,7 @@ nodes:
       required: [path, item, url, read_at, record, brief, rounds, at_cap, pull_request, continues, branch, related]
 
   # Routes the item and writes the brief the round starts from. The prompt names the
-  # playwright-cli skill for a bug that needs a browser. It is not a `skills:` entry:
+  # UI check policy's browser tool for a bug that needs a browser. It is not a `skills:` entry:
   # that would refuse the whole run under a provider that cannot load named skills,
   # and the provider is the user's choice.
   - id: route

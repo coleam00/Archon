@@ -186,6 +186,9 @@ Detached POSIX commands rely on
 explicit cancellation; abrupt owner death does not run their group cleanup.
 On Windows, cancellation ends the
 owner's Job Object, which also holds node processes whose parent already exited.
+A detached Windows owner's Job Object also ends when the owner exits for any reason, so
+background work a node left running, including work of completed nodes, does not outlive
+the owner.
 
 ### Addressable session ancestry
 
@@ -2857,6 +2860,7 @@ bindings:
     inputs:
       number: { input: number }       # one of the ended run's inputs; run-ended bindings only
       findings: { result: /findings } # a JSON Pointer into the ended run's result
+      decided: { item: answers }      # every answer on the item; not with linked
   fix-again:
     workflow: review-fix
     resource: fix
@@ -2868,6 +2872,7 @@ bindings:
       checkout: asking-run            # optional: continue on the asking run's branch
     inputs:
       decisions: { answers: true }    # the settled answers; asks-settled bindings only
+      decided: { item: answers }      # every answer on the item, these included
       number: { input: number }       # one of the asking run's inputs
 ```
 
@@ -2894,14 +2899,16 @@ does. `run_ended.linked: { kind: <link kind>, holder: from | to }` starts the wo
 item holding an active link of that kind to the ended run's item instead of on that item, as
 [`on.runEnded.linked`](/guides/workflow-triggers/#start-a-stage-on-an-item-when-the-items-it-links-to-end)
 does, and takes no `checkout`. A `{ item: key }` input, run-ended bindings only, passes the key
-of the item whose run ended.
+of the item whose run ended. A `{ item: answers }` input passes every answer given on the item,
+as `on.runEnded.inputs` does; a binding with `linked` cannot map it.
 
 An `asks_settled:` binding is an
 [asks-settled trigger file](/guides/workflow-triggers/#start-a-stage-again-when-its-asks-are-answered):
 it starts its workflow on an item when the asks a run of `asks_settled.workflow`, a workflow of
 this pack, left on that item are settled as `asks_settled.settled` says. `{ answers: true }`
-passes the settled answers, and `{ input: <name> }` and `{ result: <JSON Pointer> }` read the
-asking run's inputs and result, as `on.asksSettled.inputs` does. `asks_settled.checkout:
+passes the settled answers, `{ item: answers }` every answer given on the item, this set's
+included, and `{ input: <name> }` and `{ result: <JSON Pointer> }` read the asking run's inputs
+and result, as `on.asksSettled.inputs` does. `asks_settled.checkout:
 asking-run` starts it in the checkout the asking run left, as
 [`on.asksSettled.checkout`](/guides/workflow-triggers/#work-in-the-checkout-the-asking-run-left)
 does. `asks_settled.option`, an option id or a list of distinct ones, takes `settled: answered`
@@ -2938,7 +2945,8 @@ the pack, naming the file and the binding. Beyond each binding's shape, a `{ bin
 input must name a declared timer or fire-only binding, an `{ event: <field> }` input belongs to an
 event binding, a `{ wait: true }` input to an event binding with `wake:` and at most once, an
 `{ input: <name> }` or `{ result: <pointer> }` input to a run-ended or asks-settled binding, and
-an `{ answers: true }` input to an asks-settled binding. Bindings sharing a resource need not agree on its capacity. An `event:` selector
+an `{ answers: true }` input to an asks-settled binding, and an `{ item: answers }` input to an
+asks-settled or a run-ended binding without `linked`. Bindings sharing a resource need not agree on its capacity. An `event:` selector
 and its fields are checked against the source plugin when a binding is generated, not at load.
 
 `item:` names the [item](/reference/cli/#items) a start is on, from one field of its event and

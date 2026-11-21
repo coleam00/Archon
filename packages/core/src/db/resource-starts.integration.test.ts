@@ -1838,10 +1838,11 @@ async function expectAllBindingsPrepared(error: unknown): Promise<void> {
   ).toEqual([{ status: 'rejected', count: 201 }]);
 }
 
-for (const handOff of ['handed_off', 'hand_off_failed'] as const) {
+for (const handOff of ['handed_off', 'hand_off_failed', 'uncertain'] as const) {
   test(`a drain records how it handed an admitted start over on the pending run: ${handOff}`, async () => {
     const { createSqlWorkflowHost } = await import('../workflows/sql-host');
     const { drainResourceStartHost } = await import('../workflows/resource-start-host');
+    const { HandOffUncertainError } = await import('../workflows/start-executor');
     const host = createSqlWorkflowHost();
     const [holder, next] = [launch(crypto.randomUUID()), launch(crypto.randomUUID())];
     for (const prepared of [holder, next])
@@ -1862,6 +1863,7 @@ for (const handOff of ['handed_off', 'hand_off_failed'] as const) {
       hostId: 'host',
       startAdmitted: async () => {
         if (handOff === 'hand_off_failed') throw new Error('spawn failed');
+        if (handOff === 'uncertain') throw new HandOffUncertainError('relay lost');
         return { pid: 4242 };
       },
     }).catch((error: unknown) => error);
@@ -1878,7 +1880,10 @@ for (const handOff of ['handed_off', 'hand_off_failed'] as const) {
     } else {
       // The hand-off's own failure is still reported to the drain's caller.
       expect(drained).toBeInstanceOf(Error);
-      expect(run?.metadata.start_executor).toEqual({ kind: handOff });
+      // A hand-off that may have started its executor proves nothing, so nothing is recorded.
+      expect(run?.metadata.start_executor).toEqual(
+        handOff === 'uncertain' ? undefined : { kind: handOff }
+      );
     }
   });
 }

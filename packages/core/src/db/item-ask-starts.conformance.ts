@@ -14,6 +14,7 @@ import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource
 import { asksResultMetadata } from '@archon/workflows/schemas/run-metadata';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { CONFORMANCE_CODEBASE_ID } from '@archon/workflows/store-conformance';
+import { openAskItems } from '@archon/workflows/queue-items-without-run';
 import { answerAttentionItem, withdrawAttentionItem } from '../operations/attention-items';
 import {
   ask,
@@ -243,6 +244,72 @@ export function describeSqlItemAskStartConformance(makeHarness: () => Promise<Ha
           ],
         },
       });
+    } finally {
+      await removeTempTree(directory);
+      await harness.close();
+    }
+  });
+
+  test("a binding reading the item's answers gets every set settled on the item, oldest answer first, the closing one included", async () => {
+    const harness = await makeHarness();
+    const file = asksSettledFile('build-after-check', 'answered');
+    const { store, directory } = await storeWithBindings(harness, {
+      'build-after-check.json': {
+        ...file,
+        on: {
+          asksSettled: {
+            workflowName: 'check',
+            settled: 'answered',
+            inputs: { decisions: { answers: true }, decided: { item: 'answers' } },
+          },
+        },
+      },
+    });
+    try {
+      const deps = itemDeps(harness, store);
+      // plan settles first: one withdrawn, then the ask it left first is answered, so the
+      // list follows when each was closed, not the order they were left.
+      await completeWithAsks(harness, [ask('Keep the flag?'), ask('Rename it?')]);
+      const [keep, rename] = await openRefs(harness);
+      await withdrawAttentionItem(deps, rename ?? '', operator, 'cli');
+      // Close times are milliseconds; keep the two apart so the order is not a tie.
+      await Bun.sleep(5);
+      await answerAttentionItem(deps, keep ?? '', { choose: ['keep'] }, operator, 'cli');
+      // A check set replaced before it settled, and an open ask from review, are left out.
+      await completeWithAsks(harness, [ask('Replaced?')], { workflow: 'check' });
+      await completeWithAsks(harness, [ask('Still open?')], { workflow: 'review' });
+      const check = await completeWithAsks(harness, [ask('Ship it?')], { workflow: 'check' });
+      const ship = (await openAskItems(harness.store)).find(
+        item => 'message' in item && item.message === 'Ship it?'
+      );
+      await answerAttentionItem(
+        deps,
+        ship !== undefined && 'ref' in ship ? ship.ref : '',
+        { choose: ['drop'] },
+        operator,
+        'cli'
+      );
+
+      const [listed] = await receiptsFor(harness, check);
+      const receipt = await harness.store.getStartReceipt(listed?.id ?? '');
+      expect(receipt?.outcome).toBe('matched');
+      const inputs = receipt?.bindings[0]?.intent?.eventInputs;
+      // The settled set is this settlement's only, without the asking workflow.
+      expect(inputs?.decisions).toEqual([
+        expect.not.objectContaining({ workflowName: expect.anything() }),
+      ]);
+      expect(inputs?.decisions).toMatchObject([{ question: 'Ship it?', closedAs: 'answered' }]);
+      expect(inputs?.decided).toMatchObject([
+        { question: 'Rename it?', closedAs: 'withdrawn', answer: null, workflowName: 'plan' },
+        { question: 'Keep the flag?', closedAs: 'answered', workflowName: 'plan' },
+        {
+          question: 'Ship it?',
+          closedAs: 'answered',
+          answer: { decision: 'drop', text: '' },
+          workflowName: 'check',
+        },
+      ]);
+      expect(inputs?.decided).toHaveLength(3);
     } finally {
       await removeTempTree(directory);
       await harness.close();

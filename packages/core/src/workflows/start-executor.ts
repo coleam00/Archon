@@ -10,17 +10,27 @@ const log = createLogger('start-executor');
 
 /**
  * The process a host handed an admitted start to (`ResourceStartHost.startAdmitted`). A
- * host returns null when the start already ran to its end in that call, and rejects only
- * when it started nothing, so a rejection is recorded as a failed hand-off.
+ * host returns null when it cannot name that process, or the start already ran to its end
+ * in that call, so nothing is recorded. It rejects with a plain error only when it started
+ * nothing, which is recorded as a failed hand-off; with {@link HandOffUncertainError}
+ * when the start may have begun, which records nothing.
  */
 export interface StartedExecutor {
   pid: number;
 }
 
+/** The hand-off failed in a way that leaves open whether the executor started. */
+export class HandOffUncertainError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'HandOffUncertainError';
+  }
+}
+
 /**
  * Hand one admitted start to its host and record how that ended on the pending run (an
  * admitted request's id is its run's id), so a reader can prove a start nobody runs. A
- * rejection is recorded as `hand_off_failed` and then rethrown.
+ * rejection is rethrown, recorded first as `hand_off_failed` unless it is uncertain.
  */
 export async function handOffAdmitted(
   host: {
@@ -33,7 +43,8 @@ export async function handOffAdmitted(
   try {
     executor = await host.startAdmitted(requestId);
   } catch (error) {
-    await record(host.deps.store, requestId, { kind: 'hand_off_failed' });
+    if (!(error instanceof HandOffUncertainError))
+      await record(host.deps.store, requestId, { kind: 'hand_off_failed' });
     throw error;
   }
   if (executor === null) return;

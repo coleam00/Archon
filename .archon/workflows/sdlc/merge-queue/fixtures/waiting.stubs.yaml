@@ -1,0 +1,40 @@
+# Dry-run fixture, checks still running at the head: the judge waits, nothing merges, and
+# the run ends holding nothing, with a wait for a check at exactly that commit.
+facts:
+  path: judge
+  item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+  url: "https://github.com/example/repo/pull/1"
+  facts: null
+  base: null
+  record: null
+  validation: null
+  protected: []
+  lane: auto
+  ci: forge
+  answer: null
+  settled: null
+judge:
+  decision:
+    action: wait
+    class: clear
+    head: "1111111111111111111111111111111111111111"
+    reran: false
+    reason: "stub: its checks are still running"
+    brief: ""
+    ask: null
+  base: "stub: dev is green"
+settle:
+  outcome: waiting
+  summary: "stub: PR 1: wait (clear); its checks are still running"
+  number: 7
+  head: "1111111111111111111111111111111111111111"
+  brief: ""
+  asks: []
+  waits:
+    - { event: checks, about: "1111111111111111111111111111111111111111", within_minutes: 60 }
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo }
+  expect: completed
+  authored: waiting
+  reached: [facts, judge, settle]
