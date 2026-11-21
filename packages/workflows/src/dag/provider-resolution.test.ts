@@ -52,6 +52,317 @@ describe('executor capability ownership', () => {
     await removeTempTree(cwd);
   });
 
+  function protectedRun() {
+    return makeWorkflowRun('protected-run', {
+      metadata: {
+        trusted_text: {
+          schemaVersion: 1,
+          requirement: {
+            subject: {
+              kind: 'issue',
+              ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+            },
+            maintainersPath: '.archon/maintainers.json',
+            input: 'trusted_item',
+          },
+          title: 'Title',
+          body: 'Body',
+          contentDigest: 'a'.repeat(64),
+          policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+        },
+      },
+    });
+  }
+
+  it('rejects protected Codex nodes before creating a provider', async () => {
+    const deps = createMockDeps(
+      createMockStore(),
+      withProviderCapabilities(mockProviderRegistry, 'codex', {
+        ...mockCodexCapabilities(),
+        toolRestrictions: false,
+      })
+    );
+    const factory = mock<WorkflowDeps['getAgentProvider']>(() => {
+      throw new Error('A protected node must not create an unrestricted provider');
+    });
+    deps.getAgentProvider = factory;
+    await executeDagWorkflow(
+      dagOptions({
+        deps,
+        cwd,
+        workflowProvider: 'codex',
+        workflow: {
+          name: 'protected',
+          webSearchMode: 'disabled',
+          nodes: [
+            {
+              id: 'reader',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Read' },
+              allowed_tools: ['Read'],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('protected-run', {
+          metadata: {
+            trusted_text: {
+              schemaVersion: 1,
+              requirement: {
+                subject: {
+                  kind: 'issue',
+                  ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+                },
+                maintainersPath: '.archon/maintainers.json',
+                input: 'trusted_item',
+              },
+              title: 'Title',
+              body: 'Body',
+              contentDigest: 'a'.repeat(64),
+              policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+            },
+          },
+        }),
+      })
+    );
+    expect(factory).not.toHaveBeenCalled();
+    expect(
+      persistedEvents(deps.store).find(event => event.event_type === 'node_failed')?.data?.error
+    ).toContain('trusted_text_provider_cannot_restrict_tools');
+  });
+
+  it('rechecks the accepted snapshot before each protected agent starts', async () => {
+    const deps = createMockDeps();
+    let reads = 0;
+    deps.trustedText = {
+      readEvidence: async () => {
+        throw new Error('unexpected evidence read');
+      },
+      authorize: async () => {
+        throw new Error('unexpected authorization');
+      },
+      recheck: async () => {
+        if (++reads > 1) throw new Error('waiting_acceptance');
+      },
+    };
+    mockSendQueryDag.mockClear();
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'done' };
+      yield { type: 'result', sessionId: 'accepted-session' };
+    });
+    await executeDagWorkflow(
+      dagOptions({
+        deps,
+        cwd,
+        workflow: {
+          name: 'protected',
+          webSearchMode: 'disabled',
+          nodes: [
+            {
+              id: 'first',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Read' },
+              allowed_tools: ['Read'],
+            },
+            {
+              id: 'second',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Read' },
+              allowed_tools: ['Read'],
+              depends_on: ['first'],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('protected-run', {
+          metadata: {
+            trusted_text: {
+              schemaVersion: 1,
+              requirement: {
+                subject: {
+                  kind: 'issue',
+                  ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+                },
+                maintainersPath: '.archon/maintainers.json',
+                input: 'trusted_item',
+              },
+              title: 'Title',
+              body: 'Body',
+              contentDigest: 'a'.repeat(64),
+              policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+            },
+          },
+        }),
+      })
+    );
+    expect(reads).toBe(2);
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([undefined, ['project', 'user'] as ('project' | 'user')[]])(
+    'disables ambient Claude hooks for protected nodes with settingSources=%j',
+    async settingSources => {
+      const deps = createMockDeps();
+      deps.trustedText = {
+        readEvidence: async () => {
+          throw new Error('unexpected evidence read');
+        },
+        authorize: async () => {
+          throw new Error('unexpected authorization');
+        },
+        recheck: async () => undefined,
+      };
+      mockSendQueryDag.mockClear();
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd,
+          workflowProvider: 'claude',
+          workflow: {
+            name: 'protected-claude-hooks',
+            webSearchMode: 'disabled',
+            nodes: [
+              {
+                id: 'reader',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'Read' },
+                allowed_tools: ['Read'],
+                ...(settingSources ? { settingSources } : {}),
+              },
+            ],
+          },
+          workflowRun: protectedRun(),
+        })
+      );
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.settingSources).toEqual([]);
+    }
+  );
+
+  it('rechecks before a structured-output reask', async () => {
+    const store = createMockStore();
+    const deps = createMockDeps(
+      store,
+      withProviderCapabilities(mockProviderRegistry, 'claude', {
+        ...mockClaudeCapabilities(),
+        structuredOutputCorrection: 'fresh-session',
+      })
+    );
+    let rechecks = 0;
+    deps.trustedText = {
+      readEvidence: async () => {
+        throw new Error('unexpected evidence read');
+      },
+      authorize: async () => {
+        throw new Error('unexpected authorization');
+      },
+      recheck: async () => {
+        rechecks++;
+      },
+    };
+    let calls = 0;
+    const sendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
+      async function* () {
+        calls++;
+        yield {
+          type: 'result',
+          sessionId: 'owner-session',
+          structuredOutput: calls === 1 ? { invalid: true } : { done: true },
+        };
+        yield { type: 'settled' };
+      }
+    );
+    deps.getAgentProvider = () => ({
+      sendQuery,
+      checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+      getType: () => 'claude',
+      getCapabilities: () => {
+        throw new Error('instance capabilities are not the executor owner');
+      },
+    });
+    await executeDagWorkflow(
+      dagOptions({
+        deps,
+        cwd,
+        workflow: {
+          name: 'protected-reask',
+          webSearchMode: 'disabled',
+          nodes: [
+            {
+              id: 'reader',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Read' },
+              allowed_tools: ['Read'],
+              output_format: {
+                type: 'object',
+                properties: { done: { type: 'boolean' } },
+                required: ['done'],
+                additionalProperties: false,
+              },
+            },
+          ],
+        },
+        workflowRun: protectedRun(),
+      })
+    );
+    expect(sendQuery).toHaveBeenCalledTimes(2);
+    expect(rechecks).toBe(2);
+  });
+
+  it('rechecks again before replacing a stale session with a fresh attempt', async () => {
+    const deps = createMockDeps();
+    let rechecks = 0;
+    deps.trustedText = {
+      readEvidence: async () => {
+        throw new Error('unexpected evidence read');
+      },
+      authorize: async () => {
+        throw new Error('unexpected authorization');
+      },
+      recheck: async () => {
+        rechecks++;
+      },
+    };
+    let calls = 0;
+    mockSendQueryDag.mockClear();
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      if (calls === 2) {
+        yield { type: 'result', sessionNotFound: true };
+        return;
+      }
+      yield { type: 'agent_message_chunk', text: 'done' };
+      yield { type: 'result', sessionId: calls === 1 ? 'stale-session' : 'fresh-session' };
+      yield { type: 'settled' };
+    });
+    await executeDagWorkflow(
+      dagOptions({
+        deps,
+        cwd,
+        workflow: {
+          name: 'protected-stale-resume',
+          webSearchMode: 'disabled',
+          nodes: [
+            {
+              id: 'first',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'First' },
+              allowed_tools: ['Read'],
+            },
+            {
+              id: 'second',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Second' },
+              allowed_tools: ['Read'],
+              depends_on: ['first'],
+            },
+          ],
+        },
+        workflowRun: protectedRun(),
+      })
+    );
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(3);
+    expect(rechecks).toBe(3);
+  });
+
   for (const kind of ['agent', 'loop'] as const) {
     it(`rejects unsupported descriptor capabilities before creating a ${kind} provider`, async () => {
       const store = createMockStore();

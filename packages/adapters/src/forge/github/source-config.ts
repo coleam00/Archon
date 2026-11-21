@@ -17,6 +17,7 @@ import {
   itemMappingSchema,
   resourceStartBindingIntentSchema,
 } from '@archon/workflows/schemas/resource-start';
+import { trustedTextDeclarationSchema } from '@archon/workflows/schemas/trusted-text';
 
 export const githubSourceBindingSchema = resourceStartBindingIntentSchema
   .omit({
@@ -24,12 +25,14 @@ export const githubSourceBindingSchema = resourceStartBindingIntentSchema
     eventInputs: true,
     checkoutFrom: true,
     itemKey: true,
+    trustedText: true,
     wake: true,
   })
   .extend({
     selector: forgeEventSelectorSchema,
     inputMapping: z.record(z.string(), createForgeInputBindingSchema(jsonValueSchema)),
     item: itemMappingSchema.extend({ field: forgeEventFieldSchema }).optional(),
+    trustedText: trustedTextDeclarationSchema.optional(),
     /**
      * Wake the open wait `wait` a run of `workflow` left on an item of this binding's
      * project, when the event's `about` field holds exactly the value the wait names; the
@@ -47,6 +50,10 @@ export const githubSourceBindingSchema = resourceStartBindingIntentSchema
       })
       .strict()
       .optional(),
+  })
+  .refine(binding => !(binding.trustedText && binding.selector.kind === 'check.changed'), {
+    path: ['trustedText'],
+    message: 'Trusted text requires an issue or pull request event',
   });
 
 /** Why a binding's `wake` cannot be read against its selector, by path within the binding. */

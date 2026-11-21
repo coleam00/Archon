@@ -3,6 +3,7 @@
  * cross-run session scopes (the launching thread's and the item's), and the provider sessions named resumes read.
  */
 import type { WorkflowDeps } from '../deps';
+import { readTrustedTextMetadata } from '../trusted-text';
 import type {
   DagNode,
   NodeOutput,
@@ -38,13 +39,18 @@ export function restoreRunState(
   priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput> | undefined,
   priorNodeSessions: readonly WorkflowRunNodeSession[] | undefined
 ): RestoredRunState {
+  const protectedRun = readTrustedTextMetadata(workflowRun) !== undefined;
   const nodeOutputs = priorNodeOutputs(workflow, workflowRun, priorCompletedNodes);
   const namedResumeSourceIds = collectNamedResumeSources(workflow.nodes);
   const nodeSessionHandles = new Map<string, SequentialSessionCursor>();
   for (const row of priorNodeSessions ?? []) {
     // The completed-output snapshot is the authority for which nodes actually
     // survived the previous pass. Never resurrect a handle without its completion.
-    if (namedResumeSourceIds.has(row.node_id) && nodeOutputs.has(row.node_id)) {
+    if (
+      (!protectedRun || row.workflow_run_id === workflowRun.id) &&
+      namedResumeSourceIds.has(row.node_id) &&
+      nodeOutputs.has(row.node_id)
+    ) {
       nodeSessionHandles.set(row.node_id, {
         sessionId: row.provider_session_id,
         provider: row.provider,
@@ -53,8 +59,9 @@ export function restoreRunState(
   }
   return {
     nodeOutputs,
-    persistScope: openPersistScope(store, workflow, workflowRun),
-    itemScope: openItemScope(store, workflow, workflowRun),
+    // Scope rows carry no trust evidence; only this run's own session handles are safe.
+    persistScope: protectedRun ? undefined : openPersistScope(store, workflow, workflowRun),
+    itemScope: protectedRun ? undefined : openItemScope(store, workflow, workflowRun),
     namedResumeSourceIds,
     nodeSessionHandles,
   };

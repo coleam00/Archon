@@ -16,6 +16,7 @@ import {
 import { migrateColumns } from './sqlite-migrations';
 import { prepareAll, prepareGet } from './sqlite-statements';
 import { isSqliteBusy, retryWhileBusy, retryWhileBusySync } from './sqlite-busy';
+import { itemTextSchema } from '../item-text-schema';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -565,7 +566,7 @@ export class SqliteAdapter implements IDatabase {
         key TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         UNIQUE(project_key, key)
-      );
+      ); ${itemTextSchema}
 
       -- Rulings on an item, append-only; see migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_item_rulings (
@@ -584,7 +585,6 @@ export class SqliteAdapter implements IDatabase {
         CHECK ((withdraws IS NULL) = (text IS NOT NULL))
       );
       CREATE INDEX IF NOT EXISTS idx_item_rulings_item_id ON remote_agent_item_rulings(item_id);
-
       -- An item's merged fact, recorded once; see migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_item_merges (
         item_id TEXT PRIMARY KEY REFERENCES remote_agent_items(id),

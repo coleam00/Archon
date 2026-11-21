@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { checkChangedEventSchema, type CheckResult } from './events';
-import { gitObjectIdSchema, prRefSchema, repoRefSchema } from './identity';
+import { forgeSubjectRefSchema, gitObjectIdSchema, prRefSchema, repoRefSchema } from './identity';
+import { trustedTextDigest } from './trust';
 import {
   mergeConditionSchema,
   prReviewsSchema,
@@ -25,6 +26,8 @@ import {
   workItemSearchSchema,
   workItemViewRequestSchema,
   workItemViewSchema,
+  workItemTrustRequestSchema,
+  workItemAcceptRequestSchema,
   workItemCommentsRequestSchema,
   workItemCommentsSchema,
   workItemCommentSchema,
@@ -301,6 +304,15 @@ const auditResponseSchema = z.discriminatedUnion('ok', [
           .omit({ title: true, body: true })
           .extend({ content: contentAuditSchema }),
       }),
+      ...[workItemTrustRequestSchema, workItemAcceptRequestSchema].map(request =>
+        z.object({
+          op: z.literal(request.shape.op.value),
+          value: z.object({
+            subject: forgeSubjectRefSchema,
+            content: contentAuditSchema,
+          }),
+        })
+      ),
       z.object({
         op: prViewRequestSchema.shape.op,
         value: prViewSchema
@@ -403,6 +415,21 @@ function logAudit(result: Extract<ForgeResult, { op: 'checks.logs' }>): ForgeAud
 export function forgeAuditResponse(response: ForgeResponse): ForgeAuditResponse {
   if (!response.ok) return response;
   const result = response.result;
+  if (result.op === 'workitem.trust' || result.op === 'workitem.accept') {
+    return auditResponseSchema.parse({
+      ...response,
+      result: {
+        op: result.op,
+        value: {
+          subject: result.value.subject,
+          content: {
+            digest: trustedTextDigest(result.value.title, result.value.body),
+            bytes: Buffer.byteLength(result.value.title) + Buffer.byteLength(result.value.body),
+          },
+        },
+      },
+    });
+  }
   if (result.op === 'workitem.search') return { ...response, result: searchAudit(result) };
   if (result.op === 'checks.logs') return { ...response, result: logAudit(result) };
   if (result.op === 'pr.reviews')

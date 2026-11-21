@@ -31,7 +31,12 @@ import type {
   WorkflowWithSource,
 } from './schemas';
 import { findWorkflowLoadError } from './schemas/workflow';
-import { SUBRUN_METADATA_KEYS, runInputsMetadata } from './schemas';
+import { SUBRUN_METADATA_KEYS, runInputsMetadata, readSubrunMetadata } from './schemas';
+import {
+  inheritedTrustedTextMetadata,
+  readTrustedTextMetadata,
+  trustedTextInputs,
+} from './trusted-text';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
@@ -342,12 +347,18 @@ async function guardChildAncestry(
 // child run row exists: a contract violation must never leave an orphan worktree
 // or a doomed child row behind.
 function resolveChildInputs(
-  { nodeId, inputs }: RunChildWorkflowArgs,
+  { nodeId, inputs, parentRun, resumeChild }: RunChildWorkflowArgs,
   childWorkflow: ResolvedWorkflow
 ): ChildPhase<Record<string, JsonValue> | undefined> {
   try {
+    const snapshot = readTrustedTextMetadata(parentRun);
+    if (snapshot && resumeChild) {
+      const inherited = readTrustedTextMetadata(resumeChild.run);
+      if (!inherited) return refuse('trusted_text_unprotected_continuation');
+      trustedTextInputs(readSubrunMetadata(resumeChild.run.metadata).inputs, inherited);
+    }
     const resolved = resolveCallerInputs(
-      inputs ?? {},
+      snapshot ? trustedTextInputs(inputs, snapshot) : (inputs ?? {}),
       childWorkflow,
       `Node '${nodeId}'`,
       `sub-run workflow '${childWorkflow.name}'`
@@ -587,7 +598,7 @@ async function createChildRun(launch: ChildLaunch, plan: ChildRunPlan): Promise<
     user_message: args.input,
     working_path: plan.placement.cwd,
     parent_run_id: args.parentRun.id,
-    metadata: childRunMetadata(args, plan),
+    metadata: childRunMetadata(args, plan, args.parentRun.metadata),
   });
   return {
     opts: {
@@ -605,7 +616,8 @@ async function createChildRun(launch: ChildLaunch, plan: ChildRunPlan): Promise<
 
 function childRunMetadata(
   { nodeId, childIndex, itemHash }: RunChildWorkflowArgs,
-  { prepared, inputs, placement }: ChildRunPlan
+  { prepared, inputs, placement }: ChildRunPlan,
+  parentMetadata: Record<string, unknown>
 ): Record<string, unknown> {
   return {
     [RUN_AI_CONFIGURATION_METADATA_KEY]: prepared.aiConfigurationSnapshot,
@@ -621,6 +633,7 @@ function childRunMetadata(
     // applied), stamped at spawn. The child's own run start layers its pack's settings
     // under it and rewrites the row's inputs with the result, which a cold resume reads.
     ...(inputs !== undefined ? runInputsMetadata(inputs) : {}),
+    ...inheritedTrustedTextMetadata(parentMetadata),
     ...(placement.isolationEnv ? childIsolationMetadata(placement.isolationEnv) : {}),
   };
 }

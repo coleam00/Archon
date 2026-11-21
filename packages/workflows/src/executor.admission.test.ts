@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import {
   containerBackend,
+  dagCall,
   makeCliPlatform,
   makeDeps,
   makePlatform,
@@ -21,16 +22,19 @@ import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:te
 import { mkdtemp } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'path';
+import { isDeepStrictEqual } from 'node:util';
 import type { IWorkflowPlatform } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
 import type { WorkflowRun } from './schemas';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { IWorkflowStore } from './store';
-import { InstallHeldError } from './store/errors';
+import { InstallHeldError, WorkflowItemHeldError } from './store/errors';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { WorkflowStatusReadError } from './workflow-status-read';
 import { keepAwake } from './utils/keep-awake';
 import { createFileWorkflowStore, commit } from './file-store';
+import type { TrustedTextRunMetadata } from './trusted-text';
+import { SUBRUN_METADATA_KEYS, runInputsMetadata } from './schemas';
 
 /** How a run claims its row and its checkout: the path lock, row stamps and the checkout baseline. */
 
@@ -51,6 +55,570 @@ async function blockedBy(
 }
 
 describe('concurrent-run guard', () => {
+  it.each(['missing', 'matching', 'conflicting', 'resume-conflicting'] as const)(
+    'an inherited pre-created snapshot owns its stored input: %s',
+    async mode => {
+      const trustedText: TrustedTextRunMetadata = {
+        schemaVersion: 1,
+        requirement: {
+          subject: {
+            kind: 'issue',
+            ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+          },
+          maintainersPath: '.archon/maintainers.json',
+          input: 'trusted_item',
+        },
+        title: 'Accepted',
+        body: 'Snapshot',
+        contentDigest: 'a'.repeat(64),
+        policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+      };
+      const accepted = { title: 'Accepted', body: 'Snapshot' };
+      const conflict = mode === 'conflicting' || mode === 'resume-conflicting';
+      const run = makeRun({
+        status: mode === 'resume-conflicting' ? 'running' : 'pending',
+        metadata: {
+          trusted_text: trustedText,
+          ...(mode === 'missing'
+            ? {}
+            : {
+                inputs_values: {
+                  trusted_item: conflict ? { title: 'Caller', body: 'Unaccepted' } : accepted,
+                },
+              }),
+        },
+      });
+      const store = makeStore();
+      const deps = makeDeps(store);
+      deps.trustedText = {
+        readEvidence: async () => {
+          throw new Error('unexpected evidence read');
+        },
+        authorize: async () => {
+          throw new Error('unexpected authorization');
+        },
+        recheck: async () => undefined,
+      };
+      const input = {
+        deps,
+        options: { preCreatedRun: run },
+        workflow: makeWorkflow({
+          webSearchMode: 'disabled',
+          inputs: { trusted_item: { required: true } },
+          nodes: [
+            {
+              id: 'reader',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Read' },
+              allowed_tools: ['Read'],
+            },
+          ],
+        }),
+      };
+      if (conflict) {
+        await expect(startWorkflow(input)).rejects.toThrow('trusted_text_input_mismatch');
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+        expect(store.claimPendingWorkflowRun).not.toHaveBeenCalled();
+      } else {
+        await startWorkflow(input);
+        expect(dagCall(0)?.workflowRun.metadata.inputs_values).toMatchObject({
+          trusted_item: accepted,
+        });
+        expect(
+          mocked(store.updateWorkflowRun).mock.calls.some(([, update]) =>
+            isDeepStrictEqual(update.metadata?.inputs_values, { trusted_item: accepted })
+          )
+        ).toBe(true);
+      }
+    }
+  );
+
+  it('refuses a manual start that bypasses prepared trusted-text authorization', async () => {
+    const store = makeStore();
+    const deps = makeDeps(store);
+    deps.trustedText = {
+      requirementForStart: async () => ({
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        maintainersPath: '.archon/maintainers.json',
+        input: 'trusted_item',
+      }),
+      readEvidence: async () => {
+        throw new Error('unexpected evidence read');
+      },
+      authorize: async () => {
+        throw new Error('unexpected authorization');
+      },
+      recheck: async () => undefined,
+    };
+    await expect(
+      startWorkflow({
+        deps,
+        options: { item: 'issue-7', codebaseId: 'codebase-1' },
+      })
+    ).rejects.toThrow('trusted_text_prepared_start_required');
+    expect(store.createWorkflowRun).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('does not mistake a supplied trusted input for an authorized snapshot', async () => {
+    const trustedText: TrustedTextRunMetadata = {
+      schemaVersion: 1,
+      requirement: {
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        maintainersPath: '.archon/maintainers.json',
+        input: 'trusted_item',
+      },
+      title: 'Title',
+      body: 'Body',
+      contentDigest: 'a'.repeat(64),
+      policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+    };
+    const run = makeRun({
+      status: 'pending',
+      item_id: 'item-7',
+      metadata: {
+        [SUBRUN_METADATA_KEYS.inputsValues]: {
+          trusted_item: { title: 'Caller', body: 'Supplied' },
+        },
+      },
+    });
+    const deps = makeDeps(makeStore());
+    deps.trustedText = {
+      requirementForItem: async () => trustedText.requirement,
+      authorizeItem: async () => trustedText,
+      readEvidence: async () => {
+        throw new Error('unexpected evidence read');
+      },
+      authorize: async () => {
+        throw new Error('unexpected authorization');
+      },
+      recheck: async () => undefined,
+    };
+    await expect(
+      startWorkflow({
+        deps,
+        workflow: makeWorkflow({ webSearchMode: 'disabled' }),
+        options: { preCreatedRun: run },
+      })
+    ).rejects.toThrow('trusted_text_input_already_supplied');
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('persists an item-authorized snapshot on a fresh run for cold resume', async () => {
+    const trustedText: TrustedTextRunMetadata = {
+      schemaVersion: 1,
+      requirement: {
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        maintainersPath: '.archon/maintainers.json',
+        input: 'trusted_item',
+      },
+      title: 'Title',
+      body: 'Body',
+      contentDigest: 'a'.repeat(64),
+      policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+    };
+    const run = makeRun({ status: 'pending', item_id: 'item-7' });
+    const store = makeStore();
+    const deps = makeDeps(store);
+    deps.trustedText = {
+      requirementForItem: async () => trustedText.requirement,
+      authorizeItem: async () => trustedText,
+      readEvidence: async () => {
+        throw new Error('unexpected evidence read');
+      },
+      authorize: async () => {
+        throw new Error('unexpected authorization');
+      },
+      recheck: async () => undefined,
+    };
+    await startWorkflow({
+      deps,
+      workflow: makeWorkflow({
+        webSearchMode: 'disabled',
+        inputs: { trusted_item: { required: true } },
+        nodes: [
+          {
+            id: 'reader',
+            kind: 'agent',
+            source: { kind: 'inline', prompt: 'Read' },
+            allowed_tools: ['Read'],
+          },
+        ],
+      }),
+      options: { preCreatedRun: run },
+    });
+    const updates = mocked(store.updateWorkflowRun).mock.calls.map(([, update]) => update.metadata);
+    expect(updates.find(metadata => metadata?.trusted_text)).toMatchObject({
+      trusted_text: trustedText,
+      [SUBRUN_METADATA_KEYS.inputsValues]: {
+        trusted_item: { title: 'Title', body: 'Body' },
+      },
+    });
+  });
+  it('reuses the persisted snapshot on resume without re-authorizing it as caller input', async () => {
+    const trustedText: TrustedTextRunMetadata = {
+      schemaVersion: 1,
+      requirement: {
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        maintainersPath: '.archon/maintainers.json',
+        input: 'trusted_item',
+      },
+      title: 'Accepted',
+      body: 'Snapshot',
+      contentDigest: 'a'.repeat(64),
+      policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+    };
+    const run = makeRun({
+      status: 'failed',
+      item_id: 'item-7',
+      metadata: {
+        trusted_text: trustedText,
+        [SUBRUN_METADATA_KEYS.inputsValues]: {
+          trusted_item: { title: 'Accepted', body: 'Snapshot' },
+        },
+      },
+    });
+    const store = makeStore();
+    const deps = makeDeps(store);
+    const recheck = mock(async () => undefined);
+    deps.trustedText = {
+      requirementForItem: async () => {
+        throw new Error('A persisted snapshot must not be authorized again');
+      },
+      authorizeItem: async () => {
+        throw new Error('A persisted snapshot must not be authorized again');
+      },
+      readEvidence: async () => {
+        throw new Error('unexpected evidence read');
+      },
+      authorize: async () => {
+        throw new Error('unexpected authorization');
+      },
+      recheck,
+    };
+    await startWorkflow({
+      deps,
+      workflow: makeWorkflow({
+        webSearchMode: 'disabled',
+        nodes: [
+          {
+            id: 'reader',
+            kind: 'agent',
+            source: { kind: 'inline', prompt: 'Read' },
+            allowed_tools: ['Read'],
+          },
+        ],
+      }),
+      options: resumeOf(run),
+    });
+    expect(recheck).toHaveBeenCalledTimes(1);
+    expect(dagCall(0)?.workflowRun.metadata.trusted_text).toEqual(trustedText);
+    expect(dagCall(0)?.workflowRun.metadata.inputs_values).toMatchObject({
+      trusted_item: { title: 'Accepted', body: 'Snapshot' },
+    });
+  });
+
+  it('ends a pending protected run when admission finds edited text', async () => {
+    const trustedText: TrustedTextRunMetadata = {
+      schemaVersion: 1,
+      requirement: {
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        maintainersPath: '.archon/maintainers.json',
+        input: 'trusted_item',
+      },
+      title: 'Title',
+      body: 'Body',
+      contentDigest: 'a'.repeat(64),
+      policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+    };
+    const run = makeRun({ status: 'pending', metadata: { trusted_text: trustedText } });
+    const store = makeStore({
+      getWorkflowRun: mock(async () => ({ ...run, status: 'failed' as const })),
+    });
+    const deps = makeDeps(store);
+    const release = mock(async () => undefined);
+    deps.releaseRunResources = release;
+    deps.trustedText = {
+      readEvidence: async () => {
+        throw new Error('unexpected evidence read');
+      },
+      authorize: async () => {
+        throw new Error('unexpected authorization');
+      },
+      recheck: async () => {
+        throw new Error('waiting_acceptance');
+      },
+    };
+    await expect(
+      startWorkflow({
+        deps,
+        workflow: makeWorkflow({
+          webSearchMode: 'disabled',
+          nodes: [
+            {
+              id: 'reader',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Read' },
+              allowed_tools: ['Read'],
+            },
+          ],
+        }),
+        options: { preCreatedRun: run },
+      })
+    ).rejects.toThrow('waiting_acceptance');
+    expect(store.failWorkflowRun).toHaveBeenCalledWith(run.id, 'waiting_acceptance', {
+      exitReason: 'launch_failed',
+      pendingOnly: true,
+    });
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledWith(run.id);
+  });
+
+  it('refuses unprotected continuation history but persists an already protected continuation before DAG entry', async () => {
+    const trustedText: TrustedTextRunMetadata = {
+      schemaVersion: 1,
+      requirement: {
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        maintainersPath: '.archon/maintainers.json',
+        input: 'trusted_item',
+      },
+      title: 'Accepted',
+      body: 'Snapshot',
+      contentDigest: 'a'.repeat(64),
+      policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+    };
+    const run = makeRun({ status: 'running', item_id: 'item-7', metadata: {} });
+    const store = makeStore();
+    const deps = makeDeps(store);
+    deps.trustedText = {
+      requirementForItem: async () => trustedText.requirement,
+      authorizeItem: async () => trustedText,
+      readEvidence: async () => {
+        throw new Error('unexpected evidence read');
+      },
+      authorize: async () => {
+        throw new Error('unexpected authorization');
+      },
+      recheck: async () => undefined,
+    };
+    await expect(startWorkflow({ deps, options: resumeOf(run) })).rejects.toThrow(
+      'trusted_text_unprotected_continuation'
+    );
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    run.metadata = {
+      trusted_text: trustedText,
+      ...runInputsMetadata({ trusted_item: { title: 'Accepted', body: 'Snapshot' } }, true),
+    };
+    let persistedBeforeDag = false;
+    mockExecuteDagWorkflow.mockImplementationOnce(async () => {
+      persistedBeforeDag = mocked(store.updateWorkflowRun).mock.calls.some(([, update]) => {
+        const inputs = update.metadata?.[SUBRUN_METADATA_KEYS.inputsValues] as
+          | Record<string, unknown>
+          | undefined;
+        return (
+          isDeepStrictEqual(update.metadata?.trusted_text, trustedText) &&
+          isDeepStrictEqual(inputs?.trusted_item, { title: 'Accepted', body: 'Snapshot' })
+        );
+      });
+      return undefined;
+    });
+    await startWorkflow({
+      deps,
+      workflow: makeWorkflow({
+        webSearchMode: 'disabled',
+        nodes: [
+          {
+            id: 'reader',
+            kind: 'agent',
+            source: { kind: 'inline', prompt: 'Read' },
+            allowed_tools: ['Read'],
+          },
+        ],
+      }),
+      options: resumeOf(run),
+    });
+    expect(persistedBeforeDag).toBe(true);
+    expect(
+      mocked(store.updateWorkflowRun).mock.calls.some(([, update]) =>
+        isDeepStrictEqual(update.metadata?.trusted_text, trustedText)
+      )
+    ).toBe(true);
+    expect(dagCall(0)?.workflowRun.metadata.inputs_values).toMatchObject({
+      trusted_item: { title: 'Accepted', body: 'Snapshot' },
+    });
+  });
+
+  it('persists a pending trusted snapshot before claiming execution ownership', async () => {
+    const trustedText: TrustedTextRunMetadata = {
+      schemaVersion: 1,
+      requirement: {
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        maintainersPath: '.archon/maintainers.json',
+        input: 'trusted_item',
+      },
+      title: 'Accepted',
+      body: 'Snapshot',
+      contentDigest: 'a'.repeat(64),
+      policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+    };
+    const run = makeRun({
+      status: 'pending',
+      item_id: 'item-7',
+      metadata: { execution_owner: { ownerId: 'stale-owner' } },
+    });
+    const transitions: string[] = [];
+    const store = makeStore({
+      updateWorkflowRun: mock(async (_id, update) => {
+        const inputs = update.metadata?.[SUBRUN_METADATA_KEYS.inputsValues] as
+          | Record<string, unknown>
+          | undefined;
+        if (
+          isDeepStrictEqual(update.metadata?.trusted_text, trustedText) &&
+          isDeepStrictEqual(inputs?.trusted_item, { title: 'Accepted', body: 'Snapshot' })
+        ) {
+          expect(update.metadata).not.toHaveProperty('execution_owner');
+          transitions.push('metadata');
+        }
+      }),
+      claimPendingWorkflowRun: mock(async () => {
+        transitions.push('claim');
+        return { ...run, status: 'running' as const };
+      }),
+    });
+    const deps = makeDeps(store);
+    deps.trustedText = {
+      requirementForItem: async () => trustedText.requirement,
+      authorizeItem: async () => trustedText,
+      readEvidence: async () => {
+        throw new Error('unexpected evidence read');
+      },
+      authorize: async () => {
+        throw new Error('unexpected authorization');
+      },
+      recheck: async () => undefined,
+    };
+    await startWorkflow({
+      deps,
+      workflow: makeWorkflow({
+        webSearchMode: 'disabled',
+        nodes: [
+          {
+            id: 'reader',
+            kind: 'agent',
+            source: { kind: 'inline', prompt: 'Read' },
+            allowed_tools: ['Read'],
+          },
+        ],
+      }),
+      options: { preCreatedRun: run },
+    });
+    expect(transitions[0]).toBe('metadata');
+    expect(transitions).toContain('claim');
+  });
+
+  it.each(['resource', 'item'])(
+    'refuses edited text after a %s wait without reporting an ambiguous claim',
+    async heldAt => {
+      const trustedText: TrustedTextRunMetadata = {
+        schemaVersion: 1,
+        requirement: {
+          subject: {
+            kind: 'issue',
+            ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+          },
+          maintainersPath: '.archon/maintainers.json',
+          input: 'trusted_item',
+        },
+        title: 'Accepted',
+        body: 'Snapshot',
+        contentDigest: 'a'.repeat(64),
+        policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+      };
+      const run = makeRun({
+        status: 'pending',
+        item_id: 'item-7',
+        codebase_id: 'codebase',
+        metadata: { trusted_text: trustedText },
+      });
+      const store = makeStore();
+      const deps = makeDeps(store);
+      let edited = false;
+      if (heldAt === 'resource') {
+        store.admitPendingRun = mock(async () => {
+          if (!edited) {
+            edited = true;
+            throw new InstallHeldError({
+              setAt: '2026-11-19T00:00:00Z',
+              setBy: 'maintainer',
+            });
+          }
+          return null;
+        });
+      } else {
+        store.claimPendingWorkflowRun = mock(async () => {
+          if (edited) return { ...run, status: 'running' as const };
+          edited = true;
+          throw new WorkflowItemHeldError(run.id, 'holder', 'protected', 'issue-7');
+        });
+      }
+      deps.trustedText = {
+        readEvidence: async () => {
+          throw new Error('unexpected evidence read');
+        },
+        authorize: async () => {
+          throw new Error('unexpected authorization');
+        },
+        recheck: async () => {
+          if (edited) throw new Error('waiting_acceptance');
+        },
+      };
+      await expect(
+        startWorkflow({
+          deps,
+          workflow: makeWorkflow({
+            webSearchMode: 'disabled',
+            ...(heldAt === 'resource' ? { resource: { name: 'pool' } } : {}),
+            nodes: [
+              {
+                id: 'reader',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'Read' },
+                allowed_tools: ['Read'],
+              },
+            ],
+          }),
+          options: { preCreatedRun: run },
+        })
+      ).rejects.toThrow('waiting_acceptance');
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      expect(store.claimPendingWorkflowRun).toHaveBeenCalledTimes(heldAt === 'resource' ? 0 : 1);
+      expect(store.failWorkflowRun).toHaveBeenCalledWith(run.id, 'waiting_acceptance', {
+        exitReason: 'launch_failed',
+        pendingOnly: true,
+      });
+    }
+  );
   it('blocks and cancels its own row when the active-workflow check fails', async () => {
     const cancelSpy = mock(async () => ({ cancelled: true }));
     const store = makeStore({

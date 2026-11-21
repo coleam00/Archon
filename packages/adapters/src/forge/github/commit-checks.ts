@@ -227,7 +227,7 @@ export async function handleGithubChecksState(
   };
 }
 
-async function defaultBranchHead(
+export async function defaultBranchHead(
   fetchImpl: Fetch,
   token: string,
   repo: RepoRef

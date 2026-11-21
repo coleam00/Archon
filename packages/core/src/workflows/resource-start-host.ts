@@ -81,6 +81,12 @@ import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { executionLane, handoffIsolation } from './resource-start-lanes';
 import { selectStartedWorkflow } from './binding-workflow';
 import { refuseInPlaceLanding, resolveRunLanding } from './item-landing';
+import { TrustedTextRefusedError } from './trusted-text';
+import {
+  assertTrustedTextWorkflowSupported,
+  TRUSTED_TEXT_METADATA_KEY,
+  type TrustedTextRunMetadata,
+} from '@archon/workflows/trusted-text';
 
 const log = createLogger('resource-start-host');
 
@@ -146,8 +152,10 @@ export function resolveBindingInputs(
   intent: Pick<ResourceStartBindingIntent, 'eventInputs'> & {
     launch: Pick<ResourceStartBindingIntent['launch'], 'inputs'>;
   },
-  workflow: Pick<ResolvedWorkflow, 'name' | 'inputs' | 'pack'>
+  workflow: Pick<ResolvedWorkflow, 'name' | 'inputs' | 'pack'>,
+  trustedText?: TrustedTextRunMetadata
 ): Record<string, JsonValue> {
+  if (trustedText) assertTrustedInputDeclared(workflow, trustedText.requirement.input);
   // The declared-input contract passes inputs through to a workflow without `inputs:`, which
   // operator-written literals rely on. Event inputs carry untrusted source content, so
   // they reach only a workflow that declares them.
@@ -167,7 +175,13 @@ export function resolveBindingInputs(
   try {
     // The same contract `--input` meets: the workflow's own inputs, or its pack's settings
     // checked against their declared types.
-    return resolveInvocationInputs(workflow, { ...intent.launch.inputs, ...intent.eventInputs });
+    return resolveInvocationInputs(workflow, {
+      ...intent.launch.inputs,
+      ...intent.eventInputs,
+      ...(trustedText
+        ? { [trustedText.requirement.input]: { title: trustedText.title, body: trustedText.body } }
+        : {}),
+    });
   } catch (error) {
     if (error instanceof WorkflowInputContractError && error.missingRequired.length > 0) {
       throw new Error(
@@ -178,6 +192,14 @@ export function resolveBindingInputs(
     }
     throw error;
   }
+}
+
+function assertTrustedInputDeclared(
+  workflow: Pick<ResolvedWorkflow, 'name' | 'inputs'>,
+  input: string
+): void {
+  if (!Object.hasOwn(workflow.inputs ?? {}, input))
+    throw new Error(`Workflow '${workflow.name}' does not declare input '${input}'.`);
 }
 
 /** Reconcile the requested isolation with the workflow's pin and the project kind. */
@@ -224,12 +246,14 @@ function bindingRunMetadata(
   origin: ResourceStartRunMetadata,
   inputs: Record<string, JsonValue>,
   preparedAi: PreparedRunAiConfiguration,
-  handoff: CheckoutHandoffRunMetadata | undefined
+  handoff: CheckoutHandoffRunMetadata | undefined,
+  trustedText?: TrustedTextRunMetadata
 ): Record<string, JsonValue> {
   return {
     [RUN_AI_CONFIGURATION_METADATA_KEY]: preparedAi.aiConfigurationSnapshot,
     [WORKFLOW_SOURCE_METADATA_KEY]: sourceRecord,
     [RESOURCE_START_METADATA_KEY]: { ...origin },
+    ...(trustedText ? { [TRUSTED_TEXT_METADATA_KEY]: trustedText } : {}),
     [ADMISSION_CHECKOUT_GUARD_METADATA_KEY]: workflow.mutates_checkout !== false,
     ...(handoff ? { [CHECKOUT_HANDOFF_METADATA_KEY]: { ...handoff } } : {}),
     ...authoredInputsMetadata(inputs),
@@ -241,11 +265,30 @@ function bindingRunMetadata(
 
 type PreparationResult = ResourceStartDisposition | HeldPreparation;
 
-/**
- * Freeze one binding's workflow source, inputs and run configuration, then commit it to
- * admission. The capture is kept only when admission keeps a promise to run it: a start
- * the install hold turned back is prepared again, from a fresh capture, after the lift.
- */
+async function authorizeTrustedBinding(
+  host: WorkflowHost,
+  intent: ResourceStartBindingIntent,
+  workflow: ResolvedWorkflow,
+  codebase: Codebase,
+  receiptId: string
+): Promise<TrustedTextRunMetadata | undefined> {
+  if (!intent.trustedText) return undefined;
+  if (!host.deps.trustedText) throw new Error('trusted_text_host_unavailable');
+  assertTrustedTextWorkflowSupported(workflow);
+  assertTrustedInputDeclared(workflow, intent.trustedText.input);
+  if (
+    Object.hasOwn(intent.launch.inputs, intent.trustedText.input) ||
+    Object.hasOwn(intent.eventInputs ?? {}, intent.trustedText.input)
+  )
+    throw new Error('trusted_text_input_already_supplied');
+  const receipt = await host.deps.store.getStartReceipt(receiptId);
+  const itemKey = intent.itemKey ?? receipt?.itemKey ?? undefined;
+  if (!itemKey) throw new Error('trusted_text_item_required');
+  await host.deps.trustedText.declare?.(intent.trustedText, { codebaseId: codebase.id, itemKey });
+  return await host.deps.trustedText.authorize(intent.trustedText, { codebase, itemKey });
+}
+
+/** Freeze a binding's launch for admission; a held start is prepared again after the lift. */
 async function prepareBinding(
   host: WorkflowHost,
   intent: ResourceStartBindingIntent,
@@ -262,9 +305,33 @@ async function prepareBinding(
     const workflow = await selectBindingWorkflow(host, intent.launch, cwd, source.roots);
     await recordSelectedWorkflow(source.anchor.root, workflow.name);
     await assertBindingRequirements(host, intent, workflow);
-    const bindingInputs = resolveBindingInputs(intent, workflow);
-
+    // Ordinary input errors must not register a checkout as a side effect.
+    const ordinaryInputs = intent.trustedText ? undefined : resolveBindingInputs(intent, workflow);
     const codebase = await findOrRegisterCodebase(host, cwd);
+    const preparedAi = await prepareRunAiConfiguration(host.deps, workflow, cwd, {
+      codebaseId: codebase.id,
+      userId: intent.runAsUserId,
+      runConfig,
+    });
+    // Check declared forge access before trusted-text preparation performs its own forge read.
+    const checkedInputs = await assertRunForgeAccess(host.deps, workflow, preparedAi, {
+      cwd,
+      settingsCwd: cwd,
+      codebaseId: codebase.id,
+      supplied: ordinaryInputs ?? { ...intent.launch.inputs, ...intent.eventInputs },
+    });
+    const trustedText = await authorizeTrustedBinding(
+      host,
+      intent,
+      workflow,
+      codebase,
+      identity.receiptId
+    );
+    const inputs = resolveBindingInputs(
+      { ...intent, launch: { ...intent.launch, inputs: checkedInputs } },
+      workflow,
+      trustedText
+    );
     let isolation: PreparedWorkflowLaunch['execution']['isolation'];
     let handoff: CheckoutHandoffRunMetadata | undefined;
     if (intent.checkoutFrom) {
@@ -281,14 +348,6 @@ async function prepareBinding(
       receiptId: identity.receiptId,
       bindingId: identity.bindingId,
     };
-    const preparedAi = await prepareRunAiConfiguration(host.deps, workflow, cwd, {
-      codebaseId: codebase.id,
-      userId: intent.runAsUserId,
-      runConfig,
-    });
-    // Before admission, so a binding its forge cannot serve never takes a slot.
-    const site = { cwd, settingsCwd: cwd, codebaseId: codebase.id, supplied: bindingInputs };
-    const inputs = await assertRunForgeAccess(host.deps, workflow, preparedAi, site);
     const launch: PreparedWorkflowLaunch = {
       version: 2,
       run: {
@@ -304,7 +363,8 @@ async function prepareBinding(
           origin,
           inputs,
           preparedAi,
-          handoff
+          handoff,
+          trustedText
         ),
         ...(isolation.kind === 'in-place' ? { working_path: cwd } : {}),
       },
@@ -375,8 +435,8 @@ async function prepareClaimedBinding(
     try {
       await host.deps.store.failStartBindingPreparation({
         ...identity,
-        retryable: false,
-        error: `${stage}_failed`,
+        retryable: error instanceof TrustedTextRefusedError && error.retryable,
+        error: error instanceof TrustedTextRefusedError ? error.reason : `${stage}_failed`,
         ...(error instanceof ForgeRequirementError
           ? { forgeRefusal: { pack: error.packKey, failures: error.failures } }
           : {}),

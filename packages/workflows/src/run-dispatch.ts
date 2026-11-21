@@ -27,6 +27,7 @@ import {
   readContinuationMode,
   readRunDispatchMetadata,
   readSubrunMetadata,
+  runInputsMetadata,
   type RunDispatchMetadata,
 } from './schemas';
 import type { JsonValue } from './output-ref';
@@ -34,6 +35,13 @@ import { resolveRunStartInputs } from './pack-settings';
 import { isContainerRun, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { executionClaim } from './store';
+import {
+  readTrustedTextMetadata,
+  TRUSTED_TEXT_METADATA_KEY,
+  TrustedTextAdmissionError,
+  type TrustedTextRunMetadata,
+  trustedTextInputs,
+} from './trusted-text';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -81,6 +89,7 @@ export async function resolveRunDispatch(
     preCreatedRun !== undefined &&
     (opts.priorCompletedNodes !== undefined || preCreatedRun.status !== 'pending');
   refuseInvalidDispatch(workflow, opts, isContinuation);
+  await authorizePreCreatedTrustedText(deps, preCreatedRun, isContinuation);
   const containerRefusal = await refuseContainerResumeWithoutBackend(
     deps,
     platform,
@@ -161,6 +170,68 @@ export async function resolveRunDispatch(
       startInputs: packs.startInputs,
       docsDir,
     },
+  };
+}
+
+async function authorizeDeclaredItem(
+  deps: WorkflowDeps,
+  run: NonNullable<ExecuteWorkflowOptions['preCreatedRun']>
+): Promise<TrustedTextRunMetadata | undefined> {
+  if (!run.item_id || !deps.trustedText?.requirementForItem) return undefined;
+  const requirement = await deps.trustedText.requirementForItem(run.item_id);
+  if (!requirement) return undefined;
+  if (!deps.trustedText.authorizeItem) throw new Error('trusted_text_authorization_unavailable');
+  return await deps.trustedText.authorizeItem(requirement, run.item_id);
+}
+
+async function authorizePreCreatedTrustedText(
+  deps: WorkflowDeps,
+  run: ExecuteWorkflowOptions['preCreatedRun'],
+  isContinuation: boolean
+): Promise<void> {
+  if (!run) return;
+  try {
+    const snapshot = readTrustedTextMetadata(run);
+    if (snapshot) {
+      run.metadata = {
+        ...run.metadata,
+        ...runInputsMetadata(
+          trustedTextInputs(readSubrunMetadata(run.metadata).inputs, snapshot),
+          true
+        ),
+      };
+      return;
+    }
+    const trustedText = await authorizeDeclaredItem(deps, run);
+    if (trustedText) {
+      if (isContinuation) throw new Error('trusted_text_unprotected_continuation');
+      stampTrustedText(run, trustedText);
+    }
+  } catch (error) {
+    throw new TrustedTextAdmissionError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function stampTrustedText(
+  run: NonNullable<ExecuteWorkflowOptions['preCreatedRun']>,
+  trustedText: TrustedTextRunMetadata
+): void {
+  const inputs = readSubrunMetadata(run.metadata).inputs ?? {};
+  if (Object.hasOwn(inputs, trustedText.requirement.input))
+    throw new Error('trusted_text_input_already_supplied');
+  run.metadata = {
+    ...run.metadata,
+    ...runInputsMetadata(
+      {
+        ...inputs,
+        [trustedText.requirement.input]: {
+          title: trustedText.title,
+          body: trustedText.body,
+        },
+      },
+      true
+    ),
+    [TRUSTED_TEXT_METADATA_KEY]: trustedText,
   };
 }
 

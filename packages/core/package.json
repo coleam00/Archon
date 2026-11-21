@@ -43,6 +43,7 @@
   "testConcurrency": 2,
   "dependencies": {
     "@archon/plugin-manifest": "workspace:*",
+    "@archon/forge": "workspace:*",
     "@archon/git": "workspace:*",
     "@archon/isolation": "workspace:*",
     "@archon/paths": "workspace:*",

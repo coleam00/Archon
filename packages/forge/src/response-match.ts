@@ -16,6 +16,7 @@ import {
 } from './operations';
 import type { ForgeSubjectRef, PrRef, RepoRef } from './identity';
 import { normalizeHost } from './plugin-config';
+import { trustedTextDigest } from './trust';
 import { parseRemoteUrl } from './remote-url';
 
 type ForgeOp = ForgeRequest['op'];
@@ -341,6 +342,19 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
     value.revision === request.revision,
   'workitem.comments': (request, value) => sameSubject(value.workitem, request.subject),
   'workitem.view': byRef,
+  'workitem.trust': (request, value) =>
+    sameSubject(value.subject, request.subject) &&
+    value.policy.maintainersPath === request.maintainersPath &&
+    value.contentDigest === trustedTextDigest(value.title, value.body),
+  'workitem.accept': (request, value) =>
+    sameSubject(value.subject, request.subject) &&
+    value.policy.maintainersPath === request.maintainersPath &&
+    value.contentDigest === request.expectedContentDigest &&
+    value.contentDigest === trustedTextDigest(value.title, value.body) &&
+    value.acceptedBy.host === request.subject.ref.repo.host &&
+    value.scope.codebaseId === request.scope.codebaseId &&
+    value.scope.itemKey === request.scope.itemKey &&
+    value.scope.input === request.scope.input,
   'pr.view': matchesPrView,
   'repo.labels.list': (request, value) => sameRepo(value.repo, request.repo),
   'workitem.list': (request, value) =>

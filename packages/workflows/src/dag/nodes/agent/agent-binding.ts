@@ -17,6 +17,7 @@ import {
 } from '../../run-context';
 import { isInsideAny } from '../../checkout-guard';
 import { resolveNodeMcp, type NodeMcpResolution } from '../../provider-resolution';
+import { assertTrustedTextProviderSupported, readTrustedTextMetadata } from '../../../trusted-text';
 
 /** The provider, model and session an agent attempt was dispatched with. */
 export interface AgentBindingRequest {
@@ -82,6 +83,9 @@ export async function bindAgentNode(
     throw nodeMcp.error;
   }
   await request.reserveBudget();
+  if (readTrustedTextMetadata(ctx.workflowRun)) {
+    assertTrustedTextProviderSupported(capabilities, provider);
+  }
   const aiClient = deps.getAgentProvider(provider);
   const execution: NodeExecutionRecord = {
     ...beginExecution(ctx, node, {

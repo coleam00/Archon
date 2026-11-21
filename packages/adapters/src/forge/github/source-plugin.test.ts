@@ -111,6 +111,52 @@ async function adapter(triggerConfig: GitHubTriggerConfig, intake: Intake) {
 }
 
 describe('GitHub source plugin', () => {
+  test('rejects trusted-text declarations on check events before receiving a delivery', () => {
+    expect(() =>
+      config([
+        binding({
+          trustedText: { maintainersPath: '.archon/maintainers.json', input: 'trusted_item' },
+        }),
+      ])
+    ).toThrow('Trusted text requires an issue or pull request event');
+  });
+  test('binds a trusted-text requirement without copying unaccepted event text', async () => {
+    const recorded = recorder();
+    const github = await adapter(
+      config([
+        binding({
+          bindingId: 'protected',
+          selector: {
+            kind: 'issue.lifecycle',
+            actions: ['opened'],
+            repository: { host: 'github.com', path: 'owner/repo' },
+          },
+          inputMapping: {},
+          item: { field: 'subject.number', prefix: 'issue-' },
+          trustedText: { maintainersPath: '.archon/maintainers.json', input: 'trusted_item' },
+        }),
+      ]),
+      recorded.intake
+    );
+    const secret = 'unaccepted instruction';
+    const payload = JSON.stringify({
+      action: 'opened',
+      repository: { full_name: 'owner/repo' },
+      sender: { id: 9, login: 'outside' },
+      issue: { number: 7, state: 'open', title: secret, body: secret },
+    });
+    await github.receiveWebhook(payload, sign(payload), 'trusted-text', 'issues');
+    expect(recorded.calls[0]?.bindings[0]?.trustedText).toEqual({
+      subject: {
+        kind: 'issue',
+        ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+      },
+      maintainersPath: '.archon/maintainers.json',
+      input: 'trusted_item',
+    });
+    expect(JSON.stringify(recorded.calls[0])).not.toContain(secret);
+  });
+
   test('starts every matching binding in configuration order with its own mapped inputs', async () => {
     const recorded = recorder();
     const github = await adapter(
@@ -372,7 +418,7 @@ describe('GitHub source plugin', () => {
     });
   });
 
-  test('a binding with wake hands the engine the value its wait is matched on', async () => {
+  test('a protected binding carries both its exact-text requirement and its wake match', async () => {
     const recorded = recorder();
     const github = await adapter(
       config([
@@ -385,6 +431,7 @@ describe('GitHub source plugin', () => {
           },
           inputMapping: { state: { source: 'field', field: 'review.state' } },
           item: { field: 'subject.number', prefix: 'pr-' },
+          trustedText: { maintainersPath: '.archon/maintainers.json', input: 'trusted_item' },
           wake: {
             workflow: 'host',
             wait: 'review',
@@ -419,6 +466,14 @@ describe('GitHub source plugin', () => {
           bindingId: 'reviewed',
           eventInputs: { state: 'approved' },
           itemKey: 'pr-7',
+          trustedText: {
+            subject: {
+              kind: 'pr',
+              ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+            },
+            maintainersPath: '.archon/maintainers.json',
+            input: 'trusted_item',
+          },
           wake: { workflowName: 'host', wait: 'review', about: 'c0ffee', input: 'waited' },
         },
       ],

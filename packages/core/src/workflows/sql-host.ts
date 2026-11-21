@@ -10,6 +10,7 @@ import * as codebases from '../db/codebases';
 import * as users from '../db/users';
 import * as conversations from '../db/conversations';
 import * as messages from '../db/messages';
+import { createTrustedTextRecords } from './trusted-text';
 import { createWorkflowStore, createWorkflowDeps } from './store-adapter';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
@@ -24,6 +25,7 @@ import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-li
 
 export function createWorkflowHostStore(): IWorkflowHostStore {
   return {
+    trustedText: createTrustedTextRecords(),
     codebases,
     users,
     conversations,

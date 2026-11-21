@@ -232,6 +232,179 @@ declare module 'archon:script' {
         } | null;
       };
     };
+    'workitem.trust': {
+      readonly request: {
+        readonly subject: {
+          readonly kind: 'issue';
+          readonly ref: {
+            readonly repo: {
+              readonly host: string;
+              readonly path: string;
+              readonly hostClaim?: true;
+            };
+            readonly number: number;
+          };
+        } | {
+          readonly kind: 'pr';
+          readonly ref: {
+            readonly repo: {
+              readonly host: string;
+              readonly path: string;
+              readonly hostClaim?: true;
+            };
+            readonly number: number;
+          };
+        };
+        readonly maintainersPath: string;
+      };
+      readonly result: {
+        readonly subject: {
+          readonly kind: 'issue';
+          readonly ref: {
+            readonly repo: {
+              readonly host: string;
+              readonly path: string;
+              readonly hostClaim?: true;
+            };
+            readonly number: number;
+          };
+        } | {
+          readonly kind: 'pr';
+          readonly ref: {
+            readonly repo: {
+              readonly host: string;
+              readonly path: string;
+              readonly hostClaim?: true;
+            };
+            readonly number: number;
+          };
+        };
+        readonly title: string;
+        readonly body: string;
+        readonly contentDigest: string;
+        readonly author?: {
+          readonly host: string;
+          readonly id: string;
+          readonly login: string | null;
+          readonly type?: 'user' | 'bot' | 'organization' | null;
+        } | null;
+        readonly editor?: {
+          readonly host: string;
+          readonly id: string;
+          readonly login: string | null;
+          readonly type?: 'user' | 'bot' | 'organization' | null;
+        } | null;
+        readonly lastEditedAt?: string | null;
+        readonly titleEditor?: {
+          readonly host: string;
+          readonly id: string;
+          readonly login: string | null;
+          readonly type?: 'user' | 'bot' | 'organization' | null;
+        } | null;
+        readonly titleEditedAt?: string | null;
+        readonly policy: {
+          readonly maintainersPath: string;
+          readonly head: string;
+          readonly digest: string;
+          readonly maintainers: ReadonlyArray<string>;
+        };
+      };
+    };
+    'workitem.accept': {
+      readonly request: {
+        readonly subject: {
+          readonly kind: 'issue';
+          readonly ref: {
+            readonly repo: {
+              readonly host: string;
+              readonly path: string;
+              readonly hostClaim?: true;
+            };
+            readonly number: number;
+          };
+        } | {
+          readonly kind: 'pr';
+          readonly ref: {
+            readonly repo: {
+              readonly host: string;
+              readonly path: string;
+              readonly hostClaim?: true;
+            };
+            readonly number: number;
+          };
+        };
+        readonly maintainersPath: string;
+        readonly expectedContentDigest: string;
+        readonly scope: {
+          readonly codebaseId: string;
+          readonly itemKey: string;
+          readonly input?: string;
+        };
+      };
+      readonly result: {
+        readonly subject: {
+          readonly kind: 'issue';
+          readonly ref: {
+            readonly repo: {
+              readonly host: string;
+              readonly path: string;
+              readonly hostClaim?: true;
+            };
+            readonly number: number;
+          };
+        } | {
+          readonly kind: 'pr';
+          readonly ref: {
+            readonly repo: {
+              readonly host: string;
+              readonly path: string;
+              readonly hostClaim?: true;
+            };
+            readonly number: number;
+          };
+        };
+        readonly title: string;
+        readonly body: string;
+        readonly contentDigest: string;
+        readonly author?: {
+          readonly host: string;
+          readonly id: string;
+          readonly login: string | null;
+          readonly type?: 'user' | 'bot' | 'organization' | null;
+        } | null;
+        readonly editor?: {
+          readonly host: string;
+          readonly id: string;
+          readonly login: string | null;
+          readonly type?: 'user' | 'bot' | 'organization' | null;
+        } | null;
+        readonly lastEditedAt?: string | null;
+        readonly titleEditor?: {
+          readonly host: string;
+          readonly id: string;
+          readonly login: string | null;
+          readonly type?: 'user' | 'bot' | 'organization' | null;
+        } | null;
+        readonly titleEditedAt?: string | null;
+        readonly policy: {
+          readonly maintainersPath: string;
+          readonly head: string;
+          readonly digest: string;
+          readonly maintainers: ReadonlyArray<string>;
+        };
+        readonly acceptedBy: {
+          readonly host: string;
+          readonly id: string;
+          readonly login: string | null;
+          readonly type?: 'user' | 'bot' | 'organization' | null;
+        };
+        readonly scope: {
+          readonly codebaseId: string;
+          readonly itemKey: string;
+          readonly input?: string;
+        };
+      };
+    };
     'pr.view': {
       readonly request: {
         readonly selector: {

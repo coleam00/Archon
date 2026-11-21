@@ -21,6 +21,7 @@ import {
   resourceStartOverlapSchema,
   runEndedTriggerSchema,
 } from './resource-start';
+import { trustedTextDeclarationSchema } from './trusted-text';
 
 /** A binding id and a resource name both end up in a file name and a resource key. */
 const BINDING_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
@@ -83,6 +84,7 @@ export const packEventBindingSchema = z
       }),
     /** `field` is one of the source plugin's event fields, checked there like `event`. */
     item: itemMappingSchema.optional(),
+    trustedText: trustedTextDeclarationSchema.optional(),
     /**
      * Wake the open wait `wait` that a run of `workflow`, a workflow of this pack, left on an
      * item, when the event's field `about` holds exactly the value the wait names. When the

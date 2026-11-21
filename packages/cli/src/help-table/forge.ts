@@ -7,6 +7,8 @@ const forgeOperationDescriptions = {
   'checks.commit': 'Observe checks on a commit or on the default branch head',
   'checks.logs': "Read the end of one check unit's log",
   'workitem.view': 'Read a qualified work item',
+  'workitem.trust': 'Read exact work-item text and its current trust-policy evidence',
+  'workitem.accept': 'Accept exact work-item text as the authenticated current maintainer',
   'workitem.create': 'Create an issue or recover its canonical marker',
   'workitem.labels.set': 'Set and verify the complete issue label set',
   'workitem.label.add': 'Add one label to an issue or pull request, keeping the rest',

@@ -8,12 +8,14 @@ import {
 } from './child-runs/test-utils';
 import { InMemoryStore } from './child-runs/test-store';
 import { providerRegistry } from '@archon/providers';
-import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
 import { mkdir, writeFile, rm, cp } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { executeWorkflow } from './executor';
+import { runChildWorkflow } from './child-runs';
+import type { TrustedTextRunMetadata } from './trusted-text';
 import * as forgeAccess from './run-forge-access';
 import type { ForgeCheckRequest } from './run-forge-access';
 import { hydrateResumableRun } from './run-resume';
@@ -59,6 +61,213 @@ describe('workflow: sub-run isolation (#2121 slice 2)', () => {
   });
 
   // --- slice 2, PR-A: per-child worktree isolation ------------------------------
+
+  it.each([
+    'omitted',
+    'matching',
+    'conflicting',
+    'resumed-conflict',
+    'resumed-matching',
+    'default',
+    'fan-out',
+    'custom-input',
+  ] as const)('a protected child receives only the accepted requirement input: %s', async mode => {
+    const inputName = mode === 'custom-input' ? 'accepted_item' : 'trusted_item';
+    await writeWorkflow(
+      'accepted-child',
+      `name: accepted-child
+description: accepted child input
+webSearchMode: disabled
+inputs:
+  ${inputName}: ${mode === 'default' ? '{ default: { title: Caller, body: Unaccepted } }' : '{ required: true }'}
+nodes:
+  - id: read
+    prompt: "$INPUTS.${inputName}"
+    allowed_tools: [Read]
+`
+    );
+    const trustedText: TrustedTextRunMetadata = {
+      schemaVersion: 1,
+      requirement: {
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        maintainersPath: '.archon/maintainers.json',
+        input: inputName,
+      },
+      title: 'Accepted',
+      body: 'Snapshot',
+      contentDigest: 'a'.repeat(64),
+      editProvenance: {
+        editor: null,
+        lastEditedAt: null,
+        titleEditor: null,
+        titleEditedAt: null,
+      },
+      policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+    };
+    const acceptedInput = { title: trustedText.title, body: trustedText.body };
+    const wrongInput = { title: 'Caller', body: 'Unaccepted' };
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const prompts: string[] = [];
+    const provider = deps.getAgentProvider('claude');
+    const sendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
+      async function* (prompt) {
+        prompts.push(prompt);
+        yield { type: 'agent_message_chunk', text: 'accepted-output' };
+        yield { type: 'result', sessionId: 'accepted-session' };
+        yield { type: 'settled' };
+      }
+    );
+    deps.getAgentProvider = () => ({ ...provider, sendQuery });
+    deps.trustedText = {
+      readEvidence: async () => {
+        throw new Error('unexpected evidence read');
+      },
+      authorize: async () => {
+        throw new Error('unexpected authorization');
+      },
+      recheck: async () => undefined,
+    };
+    const parent = await store.createWorkflowRun({
+      workflow_name: 'parent',
+      user_message: 'accepted',
+      working_path: cwd,
+      metadata: { trusted_text: trustedText },
+    });
+    const existing =
+      mode === 'resumed-conflict' || mode === 'resumed-matching'
+        ? await store.createWorkflowRun({
+            workflow_name: 'accepted-child',
+            user_message: 'accepted',
+            working_path: cwd,
+            parent_run_id: parent.id,
+            metadata: {
+              trusted_text: trustedText,
+              inputs_values: {
+                [inputName]: mode === 'resumed-conflict' ? wrongInput : acceptedInput,
+              },
+            },
+          })
+        : undefined;
+    if (existing) await store.failWorkflowRun(existing.id, 'retry child');
+    const result = await runChildWorkflow(
+      deps,
+      makePlatform(),
+      {
+        parentRun: parent,
+        nodeId: 'child',
+        childWorkflowName: 'accepted-child',
+        input: 'accepted',
+        cwd,
+        conversationId: 'conversation',
+        ...(mode === 'matching' ? { inputs: { [inputName]: acceptedInput } } : {}),
+        ...(mode === 'conflicting' ? { inputs: { [inputName]: wrongInput } } : {}),
+        ...(mode === 'fan-out' ? { childIndex: 0, itemHash: 'accepted-hash' } : {}),
+        ...(existing ? { resumeChild: { kind: 'failed', run: existing } } : {}),
+      },
+      {},
+      undefined,
+      'main'
+    );
+    if (mode === 'conflicting' || mode === 'resumed-conflict') {
+      expect(result.status).toBe('failed');
+      expect(result.error).toContain('trusted_text_input_mismatch');
+      expect(sendQuery).not.toHaveBeenCalled();
+    } else {
+      expect(result.status).toBe('completed');
+      const child = [...store.runs.values()].find(run => run.parent_run_id === parent.id);
+      expect(child?.metadata.inputs_values).toMatchObject({ [inputName]: acceptedInput });
+      expect(child?.metadata.trusted_text).toEqual(trustedText);
+      expect(sendQuery).toHaveBeenCalledTimes(1);
+      expect(prompts[0]).toContain('Accepted');
+      expect(prompts[0]).toContain('Snapshot');
+      expect(prompts[0]).not.toContain('Unaccepted');
+    }
+  });
+
+  it('a child inherits its protected snapshot and refuses before an agent if it drifts', async () => {
+    await writeWorkflow(
+      'trusted-child',
+      `name: trusted-child
+description: protected child
+webSearchMode: disabled
+inputs:
+  trusted_item: { required: true }
+nodes:
+  - id: read
+    prompt: Read
+    allowed_tools: [Read]
+`
+    );
+    const trustedText: TrustedTextRunMetadata = {
+      schemaVersion: 1,
+      requirement: {
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        maintainersPath: '.archon/maintainers.json',
+        input: 'trusted_item',
+      },
+      title: 'Accepted',
+      body: 'Snapshot',
+      contentDigest: 'a'.repeat(64),
+      editProvenance: { editor: null, lastEditedAt: null, titleEditor: null, titleEditedAt: null },
+      policy: { head: 'b'.repeat(40), digest: 'c'.repeat(64), maintainers: ['alice'] },
+    };
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const sendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
+      async function* () {
+        throw new Error('Unaccepted text must not reach an agent');
+      }
+    );
+    const createProvider = deps.getAgentProvider;
+    deps.getAgentProvider = name => ({ ...createProvider(name), sendQuery });
+    let observed: TrustedTextRunMetadata | undefined;
+    deps.trustedText = {
+      readEvidence: async () => {
+        throw new Error('unexpected evidence read');
+      },
+      authorize: async () => {
+        throw new Error('unexpected authorization');
+      },
+      recheck: async snapshot => {
+        observed = snapshot;
+        throw new Error('waiting_acceptance');
+      },
+    };
+    const parent = await store.createWorkflowRun({
+      workflow_name: 'parent',
+      user_message: 'accepted',
+      working_path: cwd,
+      metadata: { trusted_text: trustedText },
+    });
+    const result = await runChildWorkflow(
+      deps,
+      makePlatform(),
+      {
+        parentRun: parent,
+        nodeId: 'child',
+        childWorkflowName: 'trusted-child',
+        input: 'accepted',
+        cwd,
+        conversationId: 'conversation',
+      },
+      {},
+      undefined,
+      'main'
+    );
+    const child = [...store.runs.values()].find(run => run.parent_run_id === parent.id);
+    expect(child?.metadata.trusted_text).toEqual(trustedText);
+    expect(observed).toEqual(trustedText);
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('waiting_acceptance');
+    expect(sendQuery).not.toHaveBeenCalled();
+  });
 
   it("isolation: 'worktree' runs the child in the resolver's cwd (distinct from the parent)", async () => {
     await writeWorkflow(

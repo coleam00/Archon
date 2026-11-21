@@ -54,6 +54,7 @@ export const PACKAGE_LAYERING: Layering = {
   core: {
     runtime: [
       'chat-contract',
+      'forge',
       'git',
       'isolation',
       'paths',

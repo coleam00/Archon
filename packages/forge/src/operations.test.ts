@@ -1,5 +1,37 @@
 import { expect, test } from 'bun:test';
 import { checksObservationSchema, summarizeChecks, type CheckObservation } from './operations';
+import { forgeAuditResponse } from './operations';
+import { trustedTextDigest } from './trust';
+
+test('trusted-text audits preserve the accepted digest and actual text byte count', () => {
+  const title = 'Title';
+  const body = 'Body';
+  const digest = trustedTextDigest(title, body);
+  const audited = forgeAuditResponse({
+    operationId: 'trust',
+    ok: true,
+    result: {
+      op: 'workitem.trust',
+      value: {
+        subject: {
+          kind: 'issue',
+          ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+        },
+        title,
+        body,
+        contentDigest: digest,
+        policy: {
+          head: 'a'.repeat(40),
+          digest: 'b'.repeat(64),
+          maintainersPath: '.archon/maintainers.json',
+          maintainers: ['alice'],
+        },
+      },
+    },
+  });
+  expect(audited).toMatchObject({ result: { value: { content: { digest, bytes: 9 } } } });
+  expect(JSON.stringify(audited)).not.toContain('Body');
+});
 
 const failed: CheckObservation = {
   unit: { kind: 'commit_status', id: '42', name: 'external-ci' },

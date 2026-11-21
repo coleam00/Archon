@@ -760,6 +760,21 @@ CREATE TABLE IF NOT EXISTS remote_agent_items (
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   UNIQUE(project_key, key)
 );
+
+-- Exact external text accepted by a maintainer. The snapshot is private engine state;
+-- event and API audit projections retain only its digest and actor identity.
+CREATE TABLE IF NOT EXISTS remote_agent_item_text_acceptances (
+  project_key TEXT NOT NULL,
+  item_key TEXT NOT NULL,
+  snapshot JSONB NOT NULL,
+  accepted_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (project_key, item_key)
+);
+
+CREATE TABLE IF NOT EXISTS remote_agent_item_text_requirements (
+  item_id UUID PRIMARY KEY REFERENCES remote_agent_items(id) ON DELETE CASCADE,
+  requirement JSONB NOT NULL
+);
 -- A receipt records the key a start named, before any item exists. Preparation resolves
 -- the project, writes the item and points the start request at it; the run takes the
 -- request's item at admission.

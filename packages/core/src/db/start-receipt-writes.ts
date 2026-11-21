@@ -131,9 +131,11 @@ async function insertReceiptBindings(
  * always did) and their names go to `event_input_names`. A checkout hand-off goes to
  * `checkout_from`; `launch.isolation` already names its branch, so an older binary starts
  * the stage on that branch without the commit pin or a read-only copy. The binding's item
- * key goes to its own `item_key` column. `readStoredIntent` reverses it.
+ * key goes to its own `item_key` column. `readStoredIntent` reverses it. The
+ * trusted-text declaration intentionally remains in `intent`: older binaries must
+ * reject it because they cannot enforce its security boundary.
  */
-function storableIntent(
+export function storableIntent(
   binding: ResourceStartBindingIntent
 ): [string, string | null, string | null] {
   // A wake is resolved before a binding is written (`resolveWakes`); none is ever stored.

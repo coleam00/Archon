@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getPluginsPath } from '@archon/paths';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
+import { mkdtemp } from 'node:fs/promises';
 import { sourceForgePlugins } from '@archon/forge/host-plugins';
 import { forgeCommand } from './forge';
 import {
@@ -32,6 +33,178 @@ test('local resolve does not discover plugins and emits no-forge JSON', async ()
     ok: true,
     result: { op: 'resolve', value: { forge: 'none' } },
   });
+});
+
+test('acceptance is persisted from the original digest request, not a caller snapshot', async () => {
+  const repo = { host: 'github.com', path: 'owner/repo' };
+  const subject = { kind: 'issue' as const, ref: { repo, number: 7 } };
+  const scope = { codebaseId: 'codebase', itemKey: 'issue-7', input: 'trusted_item' };
+  const expectedContentDigest = 'a'.repeat(64);
+  const accepted: ForgeRequest[] = [];
+  const response: ForgeResponse = {
+    operationId: 'accept',
+    ok: true,
+    result: {
+      op: 'workitem.accept',
+      value: {
+        subject,
+        title: 'accepted title',
+        body: 'accepted body',
+        contentDigest: expectedContentDigest,
+        author: { host: repo.host, id: '2', login: 'outside' },
+        policy: {
+          maintainersPath: '.archon/maintainers.json',
+          head: 'b'.repeat(40),
+          digest: 'c'.repeat(64),
+          maintainers: ['alice'],
+        },
+        acceptedBy: { host: repo.host, id: '1', login: 'alice' },
+        scope,
+      },
+    },
+  };
+  const code = await forgeCommand(
+    'workitem.accept',
+    {
+      data: JSON.stringify({
+        subject,
+        maintainersPath: '.archon/maintainers.json',
+        expectedContentDigest,
+        scope,
+      }),
+    },
+    {
+      readConfig: async () => ({}),
+      dispatch: async request => ({
+        response: { ...response, operationId: request.operationId },
+        plugin: { name: 'github', version: '1' },
+        audit: {
+          operationId: request.operationId,
+          operation: request.op,
+          target: subject.ref,
+          plugin: { name: 'github', version: '1' },
+          result: forgeAuditResponse({ ...response, operationId: request.operationId }),
+          retries: 0,
+          durationMs: 1,
+        },
+      }),
+      accept: async request => {
+        accepted.push(request);
+      },
+      write: async () => undefined,
+    }
+  );
+  expect(code).toBe(0);
+  expect(accepted[0]).toMatchObject({
+    op: 'workitem.accept',
+    expectedContentDigest,
+    scope,
+  });
+  expect(accepted[0]).not.toHaveProperty('title');
+  expect(accepted[0]).not.toHaveProperty('policy');
+});
+
+test('acceptance persists and returns the single validated dispatch evidence', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'forge-trust-context-'));
+  const priorHome = process.env.ARCHON_HOME;
+  const priorDatabase = process.env.DATABASE_URL;
+  process.env.ARCHON_HOME = root;
+  process.env.DATABASE_URL = '';
+  const { getDatabase, closeDatabase, resetDatabase } = await import('@archon/core/db/connection');
+  try {
+    await getDatabase().query(
+      "INSERT INTO remote_agent_codebases (id, name, default_cwd, kind) VALUES ('codebase', 'repo', $1, 'repo')",
+      [join(root, 'repo')]
+    );
+    const subject = {
+      kind: 'issue' as const,
+      ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 7 },
+    };
+    const { trustedTextDigest } = await import('@archon/forge');
+    const contentDigest = trustedTextDigest('Title', 'Body');
+    const observed: unknown[] = [];
+    const operations: string[] = [];
+    const env = { ARCHON_HOME: root, GH_TOKEN: 'credential' };
+    const trustedEnv = { ARCHON_HOME: root };
+    const code = await forgeCommand(
+      'workitem.accept',
+      {
+        trustedEnv,
+        data: JSON.stringify({
+          subject,
+          maintainersPath: '.archon/maintainers.json',
+          expectedContentDigest: contentDigest,
+          scope: { codebaseId: 'codebase', itemKey: 'issue-7', input: 'trusted_item' },
+        }),
+      },
+      {
+        env,
+        readConfig: async () => ({
+          hosts: { 'github.com': { plugin: 'github', token_env: 'GH_TOKEN' } },
+        }),
+        sourcePlugins: [],
+        dispatch: async (request, options) => {
+          observed.push(options);
+          operations.push(request.op);
+          if (request.op !== 'workitem.accept') throw new Error('Unexpected operation');
+          const response: ForgeResponse = {
+            operationId: request.operationId,
+            ok: true,
+            result: {
+              op: 'workitem.accept',
+              value: {
+                subject,
+                title: 'Title',
+                body: 'Body',
+                contentDigest,
+                editor: null,
+                lastEditedAt: null,
+                titleEditor: null,
+                titleEditedAt: null,
+                policy: {
+                  maintainersPath: '.archon/maintainers.json',
+                  head: 'a'.repeat(40),
+                  digest: 'b'.repeat(64),
+                  maintainers: ['alice'],
+                },
+                acceptedBy: { host: 'github.com', id: '1', login: 'alice' },
+                scope: request.scope,
+              },
+            },
+          };
+          return {
+            response,
+            plugin: null,
+            audit: {
+              operationId: request.operationId,
+              operation: request.op,
+              target: subject.ref,
+              result: forgeAuditResponse(response),
+              retries: 0,
+              durationMs: 0,
+              plugin: null,
+            },
+          };
+        },
+        write: async () => undefined,
+      }
+    );
+    expect(code).toBe(0);
+    expect(observed).toHaveLength(1);
+    expect(operations).toEqual(['workitem.accept']);
+    const accepted = await getDatabase().query<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM remote_agent_item_text_acceptances'
+    );
+    expect(accepted.rows[0]?.count).toBe(1);
+  } finally {
+    await closeDatabase();
+    resetDatabase();
+    if (priorHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = priorHome;
+    if (priorDatabase === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = priorDatabase;
+    await removeTempTree(root);
+  }
 });
 
 test('records qualified target and evaluated revision through the host audit', async () => {

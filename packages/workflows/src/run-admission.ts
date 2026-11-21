@@ -35,6 +35,12 @@ import {
 } from './run-result';
 import { InstallHeldError, WorkflowItemHeldError } from './store/errors';
 import { workflowPathPriorityTime } from './workflow-path-lock';
+import {
+  persistTrustedTextAdmission,
+  TRUSTED_TEXT_METADATA_KEY,
+  recheckTrustedTextAdmission,
+  requirePreparedTrustedStart,
+} from './trusted-text';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -90,6 +96,9 @@ export async function admitWorkflowRun(
     if (created.stopped) return created;
     workflowRun = created.value;
   }
+
+  await recheckTrustedTextAdmission(deps, workflow, workflowRun);
+  await persistTrustedTextAdmission(deps, workflowRun);
 
   // A continuation's row already says everything this process adds: the store's resume
   // recorded this process as its owner.
@@ -213,6 +222,7 @@ async function createWorkflowRunRow(
 ): Promise<RunPhase<WorkflowRun>> {
   const { preparedSource, codebaseId, issueContext, adoptedFromRunId, continuationMode } = opts;
   const { prepared, runSource } = dispatch;
+  await requirePreparedTrustedStart(deps, opts);
   try {
     const workflowRun = await deps.store.createWorkflowRun({
       // Reserved by `prepareWorkflowSource` so the row and its already-written source
@@ -333,6 +343,8 @@ async function claimPendingRun(
     workflowRun,
     noWait: noWait === true,
     attempt: async () => {
+      // A hold may outlive the first evidence read; refusal is not a failed claim.
+      await recheckTrustedTextAdmission(deps, workflow, workflowRun);
       try {
         claim.run = await deps.store.claimPendingWorkflowRun(workflowRun.id, cwd);
       } catch (error) {
@@ -459,6 +471,9 @@ function runStartMetadata(
 ): Record<string, unknown> {
   return {
     [RUN_DISPATCH_METADATA_KEY]: dispatchMetadata,
+    ...(existingMetadata[TRUSTED_TEXT_METADATA_KEY] !== undefined
+      ? { [TRUSTED_TEXT_METADATA_KEY]: existingMetadata[TRUSTED_TEXT_METADATA_KEY] }
+      : {}),
     ...(startInputs !== undefined
       ? runInputsMetadata(
           startInputs,

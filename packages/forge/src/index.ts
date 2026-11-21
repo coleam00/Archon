@@ -1,4 +1,5 @@
 export * from './identity';
+export * from './trust';
 export * from './events';
 export * from './capabilities';
 export * from './bindings';

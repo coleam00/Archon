@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { isJsonPointer } from '../json-pointer';
 import { jsonValueSchema } from '../output-ref';
 import { itemLinkKindSchema } from './item-link';
+import { trustedTextBindingSchema } from './trusted-text';
 import { attentionOptionSchema } from './wait-node';
 import { ITEM_KEY_MAX_LENGTH, itemKeySchema, workflowRunOriginSchema } from './workflow-run';
 import {
@@ -480,6 +481,7 @@ export const resourceStartBindingIntentSchema = z
      * `intent` column.
      */
     itemKey: itemKeySchema.optional(),
+    trustedText: trustedTextBindingSchema.optional(), // Older strict readers must not drop the gate.
     /**
      * The checkout a run-ended binding with `checkout: "ended-run"` or an asks-settled
      * binding with `checkout: "asking-run"` hands the started run, recorded when the ended

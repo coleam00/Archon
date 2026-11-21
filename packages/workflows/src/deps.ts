@@ -48,6 +48,7 @@ import type {
   WorkflowRunConfigMetadata,
   WorkflowRunConfigSource,
 } from './schemas/run-config';
+import type { WorkflowTrustedTextHost } from './trusted-text';
 
 // Older builds delivered a ChatGPT subscription here; resume still removes it.
 const LEGACY_CODEX_AUTH_JSON_RELATIVE_PATH = 'codex-home/auth.json';
@@ -303,6 +304,8 @@ export interface RunEndedStarts {
 }
 
 export interface WorkflowDeps {
+  /** Required whenever a run carries trusted-text metadata; absence fails closed. */
+  trustedText?: WorkflowTrustedTextHost;
   /**
    * Releases a terminal run's recorded verification images; retains live writers and returns
    * non-fatal warnings. Container cleanup requires a supplied effect or a bound resource owner.

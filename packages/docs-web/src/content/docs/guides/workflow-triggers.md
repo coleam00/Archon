@@ -289,6 +289,31 @@ Two events about the same issue start runs on the same item. An event whose fiel
 
 A timer file refuses `item`, since a tick is about no item, and so does a run-ended file, whose start is on the ended run's item. Items need the database store and a [registered project](/reference/cli/#items): on the file store, a start whose binding maps an item is refused before a run starts.
 
+### Require acceptance of exact untrusted text
+
+A GitHub event binding with `trustedText` protects the issue or pull request named by its event. `maintainersPath` is a JSON array of maintainer logins read at the repository's default-branch HEAD; `input` names the workflow input that receives the accepted `{title, body}` snapshot. A missing or invalid policy fails closed. Without this declaration, existing behavior is unchanged.
+
+```json
+"item": { "field": "subject.number", "prefix": "issue-" },
+"trustedText": {
+  "maintainersPath": ".archon/policy/maintainers.json",
+  "input": "trusted_item"
+}
+```
+
+The workflow declares `trusted_item` in `inputs:`, sets `webSearchMode: disabled`, and uses only prompt/wait nodes whose `allowed_tools` are limited to `Read`, `Grep` and `Glob`. Shell/script nodes, MCP, plugins, hooks, inline agents and live web access are refused because they could read the current item directly and bypass the accepted snapshot. Protected runs do not read or write cross-run session scopes, including `context: same`, `persist_session` and the workflow's `persist_sessions` default: older sessions carry no trust evidence. Continuation within an already protected run remains available; an unprotected run cannot resume under a newly declared requirement. Child runs inherit the same snapshot and recheck. The engine supplies the snapshot's named input before checking required child inputs. A matching caller value is allowed; a different value is refused before the child starts. Existing protected runs are checked the same way on resume, and every agent pass refuses an input that differs from its snapshot. A pack needs no script for this gate.
+
+An item from a maintainer runs without an acceptance step. Otherwise preparation records `waiting_acceptance` and starts no provider. A normal label is not proof that a person accepted the current text. The maintainer first reads the exact text and digest, then accepts that digest through the authenticated CLI identity:
+
+```bash
+archon forge workitem.trust --data-file ./trusted-item.json
+archon forge workitem.accept --data-file ./accept-item.json
+```
+
+`trusted-item.json` contains `subject` and `maintainersPath`. `accept-item.json` adds the returned `contentDigest` as `expectedContentDigest`, plus `scope: {codebaseId, itemKey, input}` matching the binding. The accept command verifies the authenticated `/user` identity against the current default-branch policy and stores the accepted snapshot in Core. An installation token that cannot prove a human identity is refused. Acceptance can be reused by later runs only while both exact text and its title/body edit provenance remain unchanged. An edit invalidates acceptance even if the original text is restored. Older acceptance records without edit provenance remain readable but require a fresh acceptance; unavailable edit provenance refuses acceptance. Every admission rechecks current text and policy; a drift returns the item to `waiting_acceptance` without exposing the new text to the run. Unaccepted text is not copied into binding inputs, receipts, events or refusal messages.
+
+A temporary Forge outage or rate limit during preparation starts no run and leaves the same binding eligible for the next drain. When Forge recovers, the binding still requires current trust evidence and, if the text is untrusted, exact acceptance. An invalid or missing maintainer policy is rejected rather than retried.
+
 ## Land an item's runs on its own branch
 
 A chain of stages on one item (order, plan, build, land) is cut from the project's base branch unless the item says otherwise. Record the branch the item's change lands on, and every stage a trigger file starts on the item works in a worktree cut from that branch, with `$BASE_BRANCH` set to it, so the change it proposes targets that branch:
