@@ -315,6 +315,7 @@ function formatDryRunTraceEntry(entry: DryRunTraceEntry): string[] {
     lines.push(`  diagnostic: ${entry.diagnostic}`);
   if (entry.resolution) lines.push(...formatDryRunResolution(entry.resolution));
   if (entry.resolvedText) lines.push(`  resolved: ${entry.resolvedText}`);
+  if (entry.attentionAsk) lines.push(`  ask: ${JSON.stringify(entry.attentionAsk)}`);
   if (entry.output !== undefined) lines.push(`  output: ${entry.output}`);
   return lines;
 }

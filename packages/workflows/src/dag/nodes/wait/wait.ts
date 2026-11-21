@@ -34,6 +34,7 @@ import {
 import { getLog } from '../../log';
 import { getStaleCachedDependencies } from '../../stale-dependencies';
 import { beginExecution, type RunLayersContext } from '../../run-context';
+import { resolveAttentionAsk } from '../../attention-ask';
 import {
   resolveRunInputs,
   substituteNodeOutputRefs,
@@ -261,21 +262,12 @@ function renderUntil(pass: WaitPass, timestamp: string): string {
 
 function armAttention(pass: WaitPass, condition: Extract<WaitCondition, { kind: 'attention' }>) {
   const { node, render, discarded } = pass;
-  const message = render(condition.message).trim();
-  if (message === '') {
-    throw new Error(`Wait node '${node.id}' resolved 'attention' to an empty message`);
-  }
-  const { options, recommendation } = resolveAttentionDeclaration(
+  const { message, options, recommendation, labels } = resolveAttentionAsk(
     node.id,
     condition,
-    pass.ctx.nodeOutputs
+    pass.ctx.nodeOutputs,
+    render
   );
-  const labels =
-    condition.labels === undefined
-      ? undefined
-      : Object.fromEntries(
-          Object.entries(condition.labels).map(([key, value]) => [key, render(value)])
-        );
   return {
     kind: 'attention',
     waitingSince: pass.now.toISOString(),
