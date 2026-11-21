@@ -93,6 +93,13 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     explicitOnly: true,
   },
   {
+    id: 'windows-tests',
+    label:
+      'Test files marked // @archon-test-windows, the set CI runs on Windows for a push to dev',
+    commands: [['bun', 'run', 'test', '--windows']],
+    explicitOnly: true,
+  },
+  {
     id: 'workflow-fixtures',
     label: 'Workflow fixtures reach their expected dry-run outcomes',
     commands: [['bun', 'run', 'cli', 'workflow', 'test']],

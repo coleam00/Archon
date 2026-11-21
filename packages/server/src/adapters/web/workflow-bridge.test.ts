@@ -156,6 +156,35 @@ test('persisted typed node rows retain public execution metadata through dashboa
   }
 });
 
+test('an included node frame names where it was written, live and on dashboard replay', () => {
+  const composed = { nodeId: 'review', workflow: 'review-block', includes: ['rounds', 'review'] };
+  const execution: NodeExecutionMetadata = {
+    ...completedExecution,
+    path: 'rounds__review__review',
+    node: { id: 'rounds__review__review', kind: 'workflow', composed },
+  };
+  const live = mapWorkflowEvent({
+    type: 'node_skipped_prior_success',
+    runId: 'run-1',
+    nodeId: 'rounds__review__review',
+    nodeName: 'rounds__review__review',
+    composed,
+  });
+  expect(JSON.parse(live ?? '{}')).toMatchObject({ name: 'rounds__review__review', composed });
+
+  const { runId: _runId, path: _path, lifecycle: _lifecycle, ...data } = execution;
+  const replay = mapWorkflowEventRow({
+    id: 'event-1',
+    workflow_run_id: 'run-1',
+    event_type: 'node_completed',
+    step_index: null,
+    step_name: 'rounds__review__review',
+    created_at: '2026-09-22T10:00:25Z',
+    data,
+  });
+  expect(JSON.parse(replay ?? '{}')).toMatchObject({ composed });
+});
+
 test.each(['conv-1', null])(
   'workflow start projection accepts optional provenance and hides the host transcript path',
   conversationId => {

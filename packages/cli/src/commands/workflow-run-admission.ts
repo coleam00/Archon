@@ -1,9 +1,10 @@
 import { rmSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
+import { checkoutRootAbove } from '@archon/core/workflows/binding-workflow';
 import {
   parseRunModelAssignments,
   type RunModelOverrides,
@@ -114,13 +115,13 @@ export interface RunSelection extends RunSourceSlot {
 export interface OwnedRunAdmission extends RunSelection {
   readonly cliUserId: string | undefined;
   /**
-   * Per-dispatch --base override, normalized once. Wins over repo config + the
-   * codebase default for both the worktree cut-from (the provider request's
-   * `baseOverride`) and the PR target / $BASE_BRANCH (executeWorkflow's
-   * `baseOverride` opt). Both halves need their own channel: the `baseBranch`
-   * field on either side is the codebase-default FALLBACK and ranks below repo
-   * config, so routing the flag through it would silently lose to a repo that
-   * sets `worktree.baseBranch`.
+   * Per-dispatch --base override, normalized once. `resolveLaunchBase` ranks it above the
+   * item's landing branch; the result wins over repo config + the codebase default for
+   * both the worktree cut-from (the provider request's `baseOverride`) and the PR target /
+   * $BASE_BRANCH (executeWorkflow's `baseOverride` opt). Both halves need their own
+   * channel: the `baseBranch` field on either side is the codebase-default FALLBACK and
+   * ranks below repo config, so routing the override through it would silently lose to a
+   * repo that sets `worktree.baseBranch`.
    */
   readonly flagBase: string | undefined;
   readonly pinnedEnabled: boolean | undefined;
@@ -436,16 +437,6 @@ function checkoutRootHint(root: string): string[] {
     : [`--workflow-source takes the checkout root; did you mean ${checkout}?`];
 }
 
-/** The checkout whose `.archon/workflows` contains `path`, when the path sits inside one. */
-function checkoutRootAbove(path: string): string | undefined {
-  for (let dir = path; dirname(dir) !== dir; dir = dirname(dir)) {
-    if (basename(dir) === 'workflows' && basename(dirname(dir)) === '.archon') {
-      return dirname(dirname(dir));
-    }
-  }
-  return undefined;
-}
-
 function unknownWorkflowError(
   workflowName: string,
   workflowEntries: readonly WorkflowWithSource[]
@@ -634,31 +625,10 @@ export type LaneConfigSource =
 
 /**
  * Prepare and preflight the run's AI configuration from the checkout its lane executes,
- * then, for a fresh run, its pack's forge needs against the repository's remotes.
+ * then, for a fresh run, its pack's forge needs from the same checkout's settings.
  * Without an explicit source, an adopted lane's own `.archon` is recaptured first.
  */
 export async function prepareLaneAiConfiguration(
-  request: OwnedRunRequest,
-  admission: OwnedRunAdmission,
-  lane: LaneConfigSource,
-  executesInContainer: boolean
-): Promise<PreparedRunAiConfiguration> {
-  const prepared = await prepareLaneCredentials(request, admission, lane, executesInContainer);
-  if (!admission.isContinuation) {
-    // A branch lane's config is read from an archive of the branch, which has no remotes.
-    const repository =
-      lane.kind === 'branch'
-        ? { cwd: lane.codebase.default_cwd, codebaseId: lane.codebase.id }
-        : { cwd: lane.cwd, codebaseId: lane.codebaseId };
-    await assertRunForgeAccess(request.host.deps, admission.workflow, prepared, {
-      ...repository,
-      inContainer: executesInContainer,
-    });
-  }
-  return prepared;
-}
-
-async function prepareLaneCredentials(
   request: OwnedRunRequest,
   admission: OwnedRunAdmission,
   lane: LaneConfigSource,
@@ -668,31 +638,39 @@ async function prepareLaneCredentials(
   if (lane.kind === 'branch') {
     return withBranchLaunchSource(lane.codebase.default_cwd, lane.branch, async snapshot => {
       if (recaptures) await recaptureForLane(request, admission, snapshot);
-      return prepareCredentialPreflight(
-        request,
-        admission,
-        snapshot,
-        lane.codebase.id,
-        executesInContainer
-      );
+      // The snapshot is an archive of the branch, which has no remotes.
+      return prepareCredentialPreflight(request, admission, {
+        configCwd: snapshot,
+        repositoryCwd: lane.codebase.default_cwd,
+        codebaseId: lane.codebase.id,
+        executesInContainer,
+      });
     });
   }
   if (lane.recapture && recaptures) await recaptureForLane(request, admission, lane.cwd);
-  return prepareCredentialPreflight(
-    request,
-    admission,
-    lane.cwd,
-    lane.codebaseId,
-    executesInContainer
-  );
+  return prepareCredentialPreflight(request, admission, {
+    configCwd: lane.cwd,
+    repositoryCwd: lane.cwd,
+    codebaseId: lane.codebaseId,
+    executesInContainer,
+  });
 }
 
 async function prepareCredentialPreflight(
   request: OwnedRunRequest,
   admission: OwnedRunAdmission,
-  configCwd: string,
-  codebaseId: string | undefined,
-  executesInContainer: boolean
+  {
+    configCwd,
+    repositoryCwd,
+    codebaseId,
+    executesInContainer,
+  }: {
+    configCwd: string;
+    /** A checkout with the project's remotes, for the forge check. */
+    repositoryCwd: string;
+    codebaseId: string | undefined;
+    executesInContainer: boolean;
+  }
 ): Promise<PreparedRunAiConfiguration> {
   const { host } = request;
   const { preCreatedRun, continuationRun, modelOverrides } = admission;
@@ -715,5 +693,14 @@ async function prepareCredentialPreflight(
     prepared,
     executesInContainer ? 'pending-container' : { cwd: configCwd }
   );
+  if (!admission.isContinuation) {
+    admission.resolvedInputs = await assertRunForgeAccess(host.deps, admission.workflow, prepared, {
+      cwd: repositoryCwd,
+      settingsCwd: configCwd,
+      codebaseId,
+      inContainer: executesInContainer,
+      supplied: admission.resolvedInputs,
+    });
+  }
   return prepared;
 }

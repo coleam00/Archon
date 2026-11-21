@@ -202,6 +202,53 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     });
   });
 
+  test.each([
+    [
+      'worktree',
+      {
+        kind: 'reuse-worktree' as const,
+        environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
+      },
+      '/wt/adopted',
+    ],
+    [
+      'branch',
+      {
+        kind: 'checkout-branch' as const,
+        taskBranch: { kind: 'existing' as const, branch: toBranchName('feature/adopted') },
+      },
+      '/adopted/snapshot',
+    ],
+  ])(
+    "foreground adoption checks the forge against the adopted %s's pack settings",
+    async (_estate, lane, settingsCwd) => {
+      const forgeAccess = await import('@archon/workflows/run-forge-access');
+      const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue(undefined);
+      mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+      mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+      mockHandleCommand.mockResolvedValueOnce(fixture.makeWorkflowResult());
+      mockResolveWorkflowAdoption.mockResolvedValueOnce({
+        adoptedRun: makeResumableRun({
+          id: '11111111-1111-4111-8111-111111111111',
+          status: 'completed',
+        }),
+        lane,
+      });
+      try {
+        await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+          actor: operator,
+          workflowAdoptRunId: '11111111-1111-4111-8111-111111111111',
+        });
+        expect(assertForge.mock.calls[0]?.[3]).toMatchObject({
+          cwd: '/repos/test-repo',
+          settingsCwd,
+        });
+      } finally {
+        assertForge.mockRestore();
+      }
+    }
+  );
+
   test('background adoption leaves recording to dispatch', async () => {
     mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
     mockGetCodebase.mockResolvedValueOnce(makeCodebase());

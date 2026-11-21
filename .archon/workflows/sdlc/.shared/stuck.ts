@@ -3,33 +3,17 @@
  *
  * Pickup skips a document that does not parse, and holds a claim whose run holds no
  * engine lease on it (a claim written before claims took one), because it never releases
- * a claim it cannot prove ended. And the build queue never picks up an item it recorded
- * `asking` once the run that asked is gone without an answer, as after the wait refused
- * the ask and the failed run was abandoned: only a re-triage starts it over.
- * All three leave the item stuck on every pass. A queue whose pickup claimed nothing names
- * each of them once and ends that run as a failed outcome, so a person looks, instead of
- * reporting an empty queue.
+ * a claim it cannot prove ended. Both leave the item stuck on every pass. A queue whose
+ * pickup claimed nothing names each of them once and ends that run as a failed outcome,
+ * so a person looks, instead of reporting an empty queue.
  */
 
 import { state, type StateLease } from 'archon:script';
-import { buildWaits } from './build.ts';
-import { claimEnded, type HistoryEntry, newest, parseWorkItem, type WorkItem } from './workitem.ts';
+import { type HistoryEntry, newest, parseWorkItem, type WorkItem } from './workitem.ts';
 
 export interface Stuck {
   readonly name: string;
   readonly reason: string;
-}
-
-/**
- * Why an item the build queue recorded `asking` is stuck, or null: no live run holds it,
- * so nothing waits on the question, and no re-triage has started it over since.
- */
-function unansweredAsk(doc: WorkItem, unowned: boolean): string | null {
-  const build = doc.facts.build;
-  if (build?.status !== 'asking' || !unowned || buildWaits(doc)) return null;
-  const ask = build.decisions.at(-1);
-  const by = ask === undefined ? '' : ` (run ${ask.run_id}, ${ask.decision}: ${ask.reason})`;
-  return `issue ${String(doc.subject.number)} is recorded asking${by}, but no run waits on that question; re-triage it to start it over`;
 }
 
 const REPORTED = 'stuck';
@@ -40,7 +24,7 @@ function stuckReason(doc: WorkItem, lease: StateLease | null, runId: string): st
   if (claim !== null && claim.run_id !== runId && lease?.runId !== claim.run_id) {
     return `claimed by run ${claim.run_id}, which holds no engine lease on it; clear the claim with a conditional \`archon state put\``;
   }
-  return unansweredAsk(doc, claim === null || claimEnded(claim.run_id, { lease }));
+  return null;
 }
 
 /** Record the report on the item; false when it already is the item's newest entry, or another run changed the item first. */

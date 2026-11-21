@@ -182,7 +182,7 @@ const HELP_OVERVIEW = [
   '  list     — recent runs in this project (id, workflow, status, authored outcome, active nodes). No params.',
   '  get      — one run’s detail. Params: runId.',
   '  resume   — check a failed/paused run can resume from completed nodes. Params: runId.',
-  '  cancel   — stop a running run. Params: runId, confirm=true.',
+  '  cancel   — stop a running run, or withdraw a pending one. Params: runId, confirm=true.',
   '  abandon  — discard a paused/failed run. Params: runId, confirm=true.',
   '  approve  — approve a paused gate or attention wait. Params: runId, confirm=true, optional accept/message.',
   '  reject   — reject a paused gate or attention wait. Params: runId, message=reason, confirm=true.',
@@ -199,7 +199,7 @@ const HELP_BY_ACTION: Record<Exclude<Action, 'help'>, string> = {
   resume:
     'resume — validate that a failed/paused run can resume from its completed nodes. Required: runId. Does NOT re-run it — it stays in its current status; continue it from the run’s controls or by re-invoking the workflow.',
   cancel:
-    'cancel — stop a running run. Required: runId, confirm=true. Irreversible. A run this server executes stops at its next status check; a run another process owns has that process stopped first. When no owner answers, cancel refuses and leaves the run unchanged; abandon is the way to release it once the user confirms its process is gone.',
+    'cancel — stop a running run, or withdraw a pending run before it starts. Required: runId, confirm=true. Irreversible. A pending run that no process is starting is cancelled and never runs. A running run this server executes stops at its next status check; a run another process owns has that process stopped first. When no owner answers for a running run, cancel refuses and leaves the run unchanged; abandon is the way to release it once the user confirms its process is gone.',
   abandon:
     'abandon — discard a paused/failed (non-terminal) run. Required: runId, confirm=true. Irreversible: the run becomes cancelled.',
   approve:
@@ -536,6 +536,9 @@ async function cancelRun({ ctx, run }: ScopedWrite): Promise<string> {
   const id = run.id;
   try {
     const result = await ctx.operations.cancelWorkflow(id, ctx.actor);
+    if (result.kind === 'pending') {
+      return `Cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}) while it was pending, before its workflow started.${cancelCleanupWarnings(result.cleanupWarnings)}`;
+    }
     if (result.kind === 'cooperative') {
       return result.cancelled
         ? `Cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}). Its executor stops at its next status check.${cancelCleanupWarnings(result.cleanupWarnings)}`

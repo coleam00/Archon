@@ -138,6 +138,7 @@ Commands:
   forge checks               Observe checks for an explicit qualified pull request
   user <list|role|link>      List users, link identities and manage roles as the operator
   project list               List registered projects (id, kind, name, key, path)
+  project add [path]         Register a project (this checkout, or path) before its first run; --folder for a non-git directory
   project config <id|name>   Show a project's merged config with secrets removed (env key names only)
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
@@ -172,8 +173,8 @@ Commands:
   workflow wake [--watch] [--json] Wake due continuations across this install
   workflow signal <full-run-id> Signal and wake an event wait; use --occurrence for an exact match
   workflow cancel <run-id> | --item <key>
-                             Stop a running workflow (stops an owning process first)
-                             With --item: the item's running run; refuses when several are
+                             Stop a running workflow (stops an owning process first), or a queued one before it starts
+                             With --item: the item's pending or running run; refuses when several are
   workflow abandon <run-id> | --item <key>
                              Mark a run cancelled, stopping a live owner first
                              With --item: the item's pending, running or paused run; refuses when several are
@@ -196,6 +197,10 @@ Commands:
   workflow merged --item <key> --change <ref> --at <ISO>
                              Record that an item's change merged, as the forge reported it. Recorded once:
                              a second report keeps the first
+  workflow landing --item <key> --branch <name>
+                             Record the branch an item's change lands on. Every fresh run on the item, and on
+                             an item part_of it that records none, is cut from it and proposes against it.
+                             Recording again replaces it
   workflow notice <text>     Inside a workflow node: say what the run did, for whoever watches attention
                              with --notices. Never pauses the run and cannot be answered
   workflow event emit        Emit a workflow event into a run
@@ -265,7 +270,7 @@ Options:
   --workflow-source <path>   Read the workflow, its commands and scripts from this checkout root
                              (<path>/.archon/workflows) instead of --cwd (which stays the workspace the run acts on)
   --no-worktree              Run on branch directly without worktree isolation
-  --folder                   Register the current directory (with or without git) as a folder project and run in place
+  --folder                   Register the target directory (the project add path, else the current directory), with or without git, as a folder project; workflow run runs in place
   --container                Run a folder project in container isolation
   --input <name>=<value>     Supply a declared workflow input; repeat per input
   --input-file <name>=<path> Supply a declared workflow input from a file's contents; repeat per input
@@ -288,7 +293,7 @@ Options:
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Log warnings and errors only (the default except for serve)
   --verbose, -v              Show debug-level logs (on stderr; on stdout for serve)
-  --json                     Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/pause/abandon/resume, project list/config)
+  --json                     Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/pause/abandon/resume, project list/add/config)
   --events                   For verbose JSON status/get: output raw event rows instead of node summaries
   --occurrence <id>          For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still
                              paused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer
@@ -301,7 +306,7 @@ Options:
                              is not terminal (with or without a resource:), or who set the install hold while it is set
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
-  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow merged': the item whose change merged; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on
+  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on
   --no-item                  For 'trigger fire': start the run on no item instead of inheriting the firing run's item
   --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded
   --limit <n>                For 'workflow runs': max rows (default 20); for 'workflow items': items a page (default 20, at most 100)
@@ -330,6 +335,7 @@ Examples:
   archon workflow get <run-id> --json
   archon workflow artifacts <run-id> plan.md
   archon project list --json
+  archon project add --json
   archon project config <id|name> --json
   archon workflow logs <run-id> --follow
   archon workflow logs <run-id> --follow --format text

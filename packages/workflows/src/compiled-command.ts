@@ -116,6 +116,24 @@ export function attachHomeMcpDirectory(node: object, directory: string): void {
   (node as NodeWithHomeMcpDirectory)[HOME_MCP_DIRECTORY] = directory;
 }
 
+// A composed fan-out node's `with:` names that a same-pack include forwarded implicitly
+// as the run's own pack setting (`<name>: $INPUTS.<name>`). See ComposedNodeMeta.forwarded.
+const FORWARDED_FAN_OUT_WITH = Symbol('archon.forwarded-fan-out-with');
+
+interface NodeWithForwardedFanOutWith {
+  [FORWARDED_FAN_OUT_WITH]?: string[];
+}
+
+export function readForwardedFanOutWith(node: object): readonly string[] {
+  return (node as NodeWithForwardedFanOutWith)[FORWARDED_FAN_OUT_WITH] ?? [];
+}
+
+export function attachForwardedFanOutWith(node: object, names: readonly string[]): void {
+  const target = node as NodeWithForwardedFanOutWith;
+  if (names.length > 0) target[FORWARDED_FAN_OUT_WITH] = [...names];
+  else delete target[FORWARDED_FAN_OUT_WITH];
+}
+
 /** @see ComposedNodeMeta */
 export const COMPOSED_NODE = Symbol('archon.composed-node');
 
@@ -153,6 +171,11 @@ export type ComposedBlockBoundary = ComposedBlockBoundaryBase &
  *
  *  - `origin` — the authoring workflow's name. Write-once (innermost wins), so a
  *    node nested three files deep still names the file that declared it.
+ *  - `nodeId` — the node's id as written in `origin`, before any include prefixed it.
+ *    Write-once like `origin`. A loop_group body node records its own id.
+ *  - `includes` — the include node ids that brought this node in, as each includer
+ *    wrote them, outermost first. Cumulative like `boundaries`: each outer level
+ *    prepends its own.
  *  - `inputs` — that workflow's contract-resolved `inputs:` (defaults applied),
  *    delivered to its `bash:`/`script:` nodes as `INPUTS_<UPPER_SNAKE>` env vars.
  *    Write-once for the same reason, and because input names carry no namespace:
@@ -166,13 +189,22 @@ export type ComposedBlockBoundary = ComposedBlockBoundaryBase &
  *  - `pack` — the pack the authoring workflow was loaded from, which `$PACK_DIR` names.
  *    Write-once like `origin`, and absent when that workflow is not in a pack: the
  *    includer's pack is never this node's.
+ *  - `forwarded` — names in `inputs` whose `$INPUTS.<name>` value is the run's own pack
+ *    setting, forwarded implicitly by same-pack includes all the way out. Each outer
+ *    level keeps a name only when it forwards it too; one it passes explicitly is no
+ *    longer the run's setting. A forwarded setting the run has no value for is left
+ *    unset, as it is for a node of the run reading it directly. An explicit binding of
+ *    an absent input still fails.
  */
 export interface ComposedNodeMeta {
   origin: string;
+  nodeId: string;
+  includes: string[];
   pack?: Pick<WorkflowPack, 'source' | 'key'>;
   inputs?: Record<string, JsonValue>;
   blockSessionStart?: true;
   boundaries?: ComposedBlockBoundary[];
+  forwarded?: string[];
 }
 
 export interface NodeWithComposedMeta {
@@ -221,6 +253,7 @@ function preserveEngineMetadata(
   const bindings = readComposedBindings(source);
   if (bindings !== undefined) attachComposedBindings(target, structuredClone(bindings));
   setIncludeOutputAliases(target, readIncludeOutputAliases(source));
+  attachForwardedFanOutWith(target, readForwardedFanOutWith(source));
   preserveCompiledLoopCommand(source, target);
   if (isLoopGroupNode(source) && isLoopGroupNode(target)) {
     for (const [index, sourceChild] of source.loop_group.nodes.entries()) {

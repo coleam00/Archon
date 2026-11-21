@@ -14,6 +14,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readlinkSync,
   realpathSync,
   statSync,
@@ -32,6 +33,7 @@ import { captureWorkflowCommand } from '../test-support/command';
 import * as workflowScope from '../workflow-scope';
 import { workflowLinkCommand } from './workflow-link';
 import { workflowItemsCommand } from './workflow-items';
+import { workflowLandingCommand } from './workflow-landing';
 import { workflowMergedCommand } from './workflow-merged';
 import { workflowRunsCommand } from './workflow-query';
 import { workflowRuleCommand } from './workflow-rule';
@@ -229,7 +231,7 @@ const runsWithItems = () =>
   );
 
 // The commands write to process-wide stdout, environment and registries, so each test is
-// `test.serial`: it must not run beside another, even under `--concurrent`. (In Bun 1.4.2
+// `test.serial`: it must not run beside another, even under `--concurrent`. (In Bun 1.4.5
 // `describe.serial` does not hold its tests back under `--concurrent`; `test.serial` does.)
 test.serial(
   'workflow run --item puts a run on the item, and the item read lists its runs',
@@ -453,6 +455,110 @@ test.serial(
     expect(badCursor.exitCode).toBe(1);
     expect(JSON.parse(badCursor.stdout)).toMatchObject({ ok: false });
   }
+);
+
+test.serial(
+  'a hand start on an item is cut from its landing branch unless --base names another',
+  async () => {
+    const out = join(root, 'base.out');
+    const git = (args: string[]) => {
+      const done = Bun.spawnSync(['git', '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
+        cwd: projectRoot,
+      });
+      expect(done.exitCode, done.stderr.toString()).toBe(0);
+    };
+    // A remote with `main` and `feat/order`, which holds a file `main` does not.
+    const remote = join(root, 'remote.git');
+    expect(
+      Bun.spawnSync(['git', 'init', '-q', '--bare', '--initial-branch=main', remote]).exitCode
+    ).toBe(0);
+    writeFileSync(
+      join(projectRoot, '.archon', 'workflows', 'base-proof.yaml'),
+      `name: base-proof\ndescription: base proof.\nmutates_checkout: false\nnodes:\n  - id: base\n    bash: echo "$BASE_BRANCH $([ -f on-feat ] && echo from-feat || echo from-base)" > '${out}'\n`
+    );
+    git(['add', '-A']);
+    git(['commit', '-q', '-m', 'base']);
+    git(['branch', '-M', 'main']);
+    git(['remote', 'add', 'origin', remote]);
+    git(['push', '-q', 'origin', 'main']);
+    git(['checkout', '-q', '-b', 'feat/order']);
+    writeFileSync(join(projectRoot, 'on-feat'), '');
+    git(['add', 'on-feat']);
+    git(['commit', '-q', '-m', 'feat']);
+    git(['push', '-q', 'origin', 'feat/order']);
+    git(['checkout', '-q', 'main']);
+
+    const landing = (item: string, branch: string) =>
+      invoke(host => workflowLandingCommand(host, projectRoot, { item, branch }, true, callerEnv));
+    expect(succeeded(await landing('WO-1', 'feat/order'))).toMatchObject({ branch: 'feat/order' });
+    succeeded(
+      await invoke(host =>
+        workflowLinkCommand(
+          host,
+          projectRoot,
+          { item: 'member', kind: 'part_of', to: 'WO-1' },
+          true,
+          callerEnv
+        )
+      )
+    );
+    const start = (
+      options: Parameters<typeof workflowRunCommand>[4] & { item: string },
+      cwd = projectRoot
+    ) => invoke(host => workflowRunCommand(host, cwd, 'base-proof', 'go', options));
+    const started = await start({ item: 'member' });
+    expect(started.exitCode, started.stderr).toBe(0);
+    expect(readFileSync(out, 'utf8').trim()).toBe('feat/order from-feat');
+    const flagged = await start({ item: 'member', baseBranch: 'main' });
+    expect(flagged.exitCode, flagged.stderr).toBe(0);
+    expect(readFileSync(out, 'utf8').trim()).toBe('main from-base');
+
+    // A start that supersedes a run on the item names no item and still takes its branch.
+    const [memberRun] = rows<{ id: string }>(
+      `SELECT r.id FROM remote_agent_workflow_runs r JOIN remote_agent_items i
+         ON i.id = r.item_id WHERE i.key = 'member' ORDER BY r.rowid DESC LIMIT 1`
+    );
+    const superseding = await invoke(host =>
+      workflowRunCommand(host, projectRoot, 'base-proof', 'go', {
+        supersedesRunId: memberRun?.id,
+      })
+    );
+    expect(superseding.exitCode, superseding.stderr).toBe(0);
+    expect(readFileSync(out, 'utf8').trim()).toBe('feat/order from-feat');
+
+    // `--project` selects the project apart from the directory: its item's branch applies.
+    const elsewhere = join(root, 'elsewhere');
+    mkdirSync(elsewhere);
+    expect(Bun.spawnSync(['git', 'init', '-q'], { cwd: elsewhere }).exitCode).toBe(0);
+    const [selected] = rows<{ id: string }>('SELECT id FROM remote_agent_codebases');
+    const projected = await start(
+      { item: 'member', codebaseId: selected?.id, discoveryCwd: projectRoot },
+      elsewhere
+    );
+    expect(projected.exitCode, projected.stderr).toBe(0);
+    expect(readFileSync(out, 'utf8').trim()).toBe('feat/order from-feat');
+
+    // An in-place run cannot be cut from the landing branch, so it is refused before it runs.
+    writeFileSync(out, 'untouched');
+    const inPlace = await start({ item: 'member', noWorktree: true });
+    expect(inPlace.exitCode).not.toBe(0);
+    expect(inPlace.stderr).toContain('would work in place');
+    expect(readFileSync(out, 'utf8')).toBe('untouched');
+
+    // A branch the remote does not have refuses the start before a worktree is cut.
+    writeFileSync(out, 'untouched');
+    succeeded(await landing('lonely', 'feat/missing'));
+    const worktrees = () =>
+      Bun.spawnSync(['git', 'worktree', 'list'], { cwd: projectRoot }).stdout.toString();
+    const before = worktrees();
+    const refused = await start({ item: 'lonely' });
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain("'feat/missing' is not on remote 'origin'");
+    expect(worktrees()).toBe(before);
+    expect(readFileSync(out, 'utf8')).toBe('untouched');
+  },
+  // Five real runs, each cutting a worktree.
+  60_000
 );
 
 test.serial(

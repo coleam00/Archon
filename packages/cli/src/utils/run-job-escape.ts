@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { open } from 'node:fs/promises';
 import { createConnection, createServer, type Socket } from 'node:net';
 import type { Readable, Writable } from 'node:stream';
 import { resolve } from 'node:path';
@@ -22,8 +23,14 @@ import { writeStderr, writeStdout } from './stdout';
  * running it. The broker runs it outside the job and relays its output and exit status, so
  * the detached owner it launches starts outside the launching run's job and claims its own.
  *
- * Only the CLI's own `--detach` launches go through the broker. Any other process in the
- * run that asks Windows for breakaway is still refused by the job.
+ * A trigger executor (`trigger execute`) is the other detached owner a run starts: the
+ * owner starts one for each follow-up its end admits, and a node can fire a trigger. The
+ * job is kill-on-close, so an executor started inside it would die when its launcher's
+ * owner exits. {@link startTriggerExecutor} hands it to the broker, which starts it
+ * detached outside the job and answers once it has started.
+ *
+ * Only these two launches go through the broker. Any other process in the run that asks
+ * Windows for breakaway is still refused by the job.
  */
 
 /** In a Windows run owner and its descendants: the pipe of the owner's broker. */
@@ -45,6 +52,11 @@ export interface EscapedInvocation {
   readonly argv: readonly [string, ...string[]];
   readonly cwd: string;
   readonly env: Readonly<Record<string, string | undefined>>;
+  /**
+   * For a trigger executor only: the log its output appends to. The broker starts it
+   * detached and answers once it has started, rather than relaying its output and exit.
+   */
+  readonly log?: string;
 }
 
 type BrokerFrame =
@@ -85,16 +97,102 @@ function parseInvocation(line: string, program: readonly [string, ...string[]]):
     !('env' in parsed) ||
     typeof parsed.env !== 'object' ||
     parsed.env === null ||
-    !Object.values(parsed.env).every(value => typeof value === 'string')
+    !Object.values(parsed.env).every(value => typeof value === 'string') ||
+    ('log' in parsed && typeof parsed.log !== 'string')
   ) {
     throw new Error('invalid invocation');
   }
   const argv = parsed.argv;
   const args = argv.slice(program.length);
-  if (program.some((part, index) => argv[index] !== part) || !isDetachedLaunch(args)) {
+  const executor = 'log' in parsed;
+  if (
+    program.some((part, index) => argv[index] !== part) ||
+    !(executor ? isTriggerExecutor(args) : isDetachedLaunch(args))
+  ) {
     throw new Error("Only this CLI's detached workflow launches may leave the run job");
   }
   return parsed as EscapedInvocation;
+}
+
+/** Whether `args` are exactly `trigger execute <request-id> --host <host-id>`. */
+export function isTriggerExecutor(args: readonly string[]): boolean {
+  return (
+    args.length === 5 &&
+    args[0] === 'trigger' &&
+    args[1] === 'execute' &&
+    args[3] === '--host' &&
+    [args[2], args[4]].every(value => value !== undefined && value !== '' && !value.startsWith('-'))
+  );
+}
+
+/**
+ * Start a detached trigger executor appending its output to `log`, and resolve once it has
+ * started. It does not wait for the executor, which runs a whole workflow.
+ */
+async function spawnTriggerExecutor(
+  [command, ...args]: readonly [string, ...string[]],
+  cwd: string,
+  env: Readonly<Record<string, string | undefined>>,
+  log: string
+): Promise<void> {
+  const file = await open(log, 'a', 0o600);
+  try {
+    const child = spawn(command, args, {
+      cwd,
+      detached: true,
+      stdio: ['ignore', file.fd, file.fd],
+      windowsHide: true,
+      env,
+    });
+    await new Promise<void>((resolveSpawn, reject) => {
+      child.once('error', reject);
+      child.once('spawn', resolveSpawn);
+    });
+    child.unref();
+  } finally {
+    await file.close();
+  }
+}
+
+/** A trigger executor to start: its CLI arguments, where it runs, and its log. */
+export interface TriggerExecutorLaunch {
+  readonly args: readonly string[];
+  readonly cwd: string;
+  readonly env: Readonly<Record<string, string | undefined>>;
+  readonly log: string;
+}
+
+/**
+ * Start a detached trigger executor. Inside a Windows run it starts through that run's
+ * broker, so it is outside the run's job and outlives the run; elsewhere it starts here.
+ */
+export async function startTriggerExecutor(
+  launch: TriggerExecutorLaunch,
+  localProgram: readonly [string, ...string[]]
+): Promise<void> {
+  const pipe = process.env[RUN_JOB_ESCAPE_ENV];
+  if (pipe === undefined) {
+    await spawnTriggerExecutor(
+      [...localProgram, ...launch.args],
+      launch.cwd,
+      launch.env,
+      launch.log
+    );
+    return;
+  }
+  const discard = async (): Promise<void> => undefined;
+  const code = await relayOutsideRunJob(
+    pipe,
+    {
+      argv: [...brokerProgram(), ...launch.args],
+      cwd: launch.cwd,
+      env: launch.env,
+      log: launch.log,
+    },
+    { stdout: discard, stderr: discard }
+  );
+  if (code !== 0)
+    throw new Error(`The run job broker could not start the trigger executor (${String(code)})`);
 }
 
 /** Run one relayed invocation and stream its output and exit status back. */
@@ -118,16 +216,29 @@ function runInvocation(
   env.BUN_OPTIONS = '';
   const [command, ...args] = invocation.argv;
   // Release binaries disable bunfig autoload at build time; source Bun needs it here.
-  const child = spawn(
+  const argv: [string, ...string[]] = [
     command,
-    BUNDLED_IS_BINARY ? args : [RUN_JOB_ESCAPE_BUN_CONFIG_ARG, ...args],
-    {
-      cwd: invocation.cwd,
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    }
-  );
+    ...(BUNDLED_IS_BINARY ? args : [RUN_JOB_ESCAPE_BUN_CONFIG_ARG, ...args]),
+  ];
+  if (invocation.log !== undefined) {
+    spawnTriggerExecutor(argv, invocation.cwd, env, invocation.log).then(
+      () => {
+        sendFrame(socket, { exit: 0 });
+        socket.end();
+      },
+      (error: unknown) => {
+        sendFrame(socket, { error: error instanceof Error ? error.message : String(error) });
+        socket.end();
+      }
+    );
+    return;
+  }
+  const child = spawn(argv[0], argv.slice(1), {
+    cwd: invocation.cwd,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
   child.stdout.on('data', (chunk: Buffer) => {
     sendFrame(socket, { stream: 'stdout', data: chunk.toString('base64') });
   });
@@ -343,7 +454,7 @@ export async function relayOutsideRunJob(
     let result: { exit: number } | { error: string } | undefined;
     const unrelayed = (detail: string): Error =>
       new Error(
-        `Could not run this --detach launch outside the run's Windows job object: ${detail}`
+        `Could not run this detached launch outside the run's Windows job object: ${detail}`
       );
     socket.once('connect', () => {
       socket.write(`${JSON.stringify(invocation)}\n`);
@@ -354,7 +465,10 @@ export async function relayOutsideRunJob(
         const data = Buffer.from(frame.data, 'base64');
         written = written.then(() => output[frame.stream](data));
       } else {
+        // The exit or error frame is the broker's last. Close here rather than wait for the
+        // broker's end to arrive: on a Windows named pipe under Bun that took seconds.
         result = frame;
+        socket.destroy();
       }
     });
     socket.once('error', error => {

@@ -13,6 +13,7 @@ import {
 import { RunActionForbiddenError } from '@archon/core/operations/run-authorization';
 import {
   answerAttentionItem,
+  settledWithNothingStarted,
   withdrawAttentionItem,
   type AttentionItemAnswerResult,
 } from '@archon/core/operations/attention-items';
@@ -31,6 +32,7 @@ import {
   readAttentionQueueItem,
   selectAttentionQueue,
   type AttentionQueueScope,
+  heldRunOf,
 } from '@archon/workflows/attention-queue';
 import { attentionWatchReader } from '@archon/workflows/attention-needs';
 import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
@@ -143,7 +145,7 @@ const withdrawAttentionItemRoute = createRoute({
   method: 'post',
   path: '/api/attention/withdraw',
   tags: ['Workflows'],
-  summary: 'Withdraw an ask a completed run left, by its ref',
+  summary: 'Withdraw an ask, or the open waits, a completed run left, by its ref',
   request: {
     body: { content: { 'application/json': { schema: withdrawAttentionItemBodySchema } } },
   },
@@ -154,7 +156,7 @@ const withdrawAttentionItemRoute = createRoute({
     },
     400: jsonError('The ref names an item a paused run holds, which is answered, not withdrawn'),
     404: jsonError('Nothing the caller may withdraw has this ref'),
-    409: jsonError('The ask was already answered or replaced'),
+    409: jsonError('The ask was already answered or replaced, or the waits met or replaced'),
     500: jsonError('Server error'),
   },
 });
@@ -307,12 +309,22 @@ type AttentionItemReply =
   | { body: z.infer<typeof attentionItemActionResponseSchema> }
   | { status: 400 | 404 | 409; error: string };
 
+/** `settled`, and `nothingStarted` when the settlement started no binding. */
+function settlement(result: Parameters<typeof settledWithNothingStarted>[0]): {
+  settled: boolean;
+  nothingStarted?: true;
+} {
+  return settledWithNothingStarted(result)
+    ? { settled: true, nothingStarted: true }
+    : { settled: result.settled };
+}
+
 /** The HTTP reply to an answer by ref. */
 function answerReply(ref: string, result: AttentionItemAnswerResult): AttentionItemReply {
   const base = { ref, action: 'answer' as const };
   switch (result.kind) {
     case 'ask_answered':
-      return { body: { ...base, unchanged: false, settled: result.settled } };
+      return { body: { ...base, unchanged: false, ...settlement(result) } };
     case 'unchanged':
       return { body: { ...base, unchanged: true } };
     case 'answered':
@@ -390,7 +402,7 @@ export function registerRunAttentionRoutes(
           ...reports,
         });
       const selected = selectAttentionQueue(items, { scope, labels, order });
-      const ids = new Set(selected.map(item => item.run?.id));
+      const ids = new Set(selected.map(item => heldRunOf(item)?.id));
       const runs = splitAttentionRead(rows).values.filter(run => ids.has(run.id));
       // A row is a paused run, and only a running run has an owner to observe.
       return c.json({
@@ -430,7 +442,7 @@ export function registerRunAttentionRoutes(
     }
   });
 
-  // POST /api/attention/withdraw - Withdraw an ask a completed run left; it closes unanswered.
+  // POST /api/attention/withdraw - Withdraw an ask or the open waits a completed run left.
   registerOpenApiRoute(withdrawAttentionItemRoute, async c => {
     const body = getValidatedBody(c, withdrawAttentionItemBodySchema);
     try {
@@ -439,7 +451,7 @@ export function registerRunAttentionRoutes(
       const base = { ref: body.ref, action: 'withdraw' as const };
       switch (result.kind) {
         case 'withdrawn':
-          return c.json({ ...base, unchanged: false, settled: result.settled }, 200);
+          return c.json({ ...base, unchanged: false, ...settlement(result) }, 200);
         case 'unchanged':
           return c.json({ ...base, unchanged: true }, 200);
         case 'unknown':

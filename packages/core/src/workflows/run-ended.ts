@@ -1,9 +1,11 @@
 /**
  * Run-ended bindings: a trigger file in `ARCHON_HOME/triggers/` with `on.runEnded` starts
  * its binding when a run of the named workflow completes with the named outcome on an
- * item. The receipts built here are written by the write that completes the run, so a
- * start exists exactly when the end does, and then go through the one start path:
- * preparation, admission, capacity and the item.
+ * item, on that item or, with `linked`, on the items linked to it. The receipts built
+ * here are written by the write that completes the run, so a start exists exactly when
+ * the end does, and then go through the one start path: preparation, admission, capacity
+ * and the item. A linked start is matched here and resolved by that write, which alone
+ * can read the links as they are when the run completes.
  *
  * The deployment owns these files. They are read from the install's home only, never
  * from a repository, and fresh at every completion, so removing a file turns it off.
@@ -14,15 +16,15 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
-import type { RunEndedFacts } from '@archon/workflows/deps';
+import type { RunEndedFacts, RunEndedStarts } from '@archon/workflows/deps';
 import { resolveJsonPointer } from '@archon/workflows/json-pointer';
 import type { JsonValue } from '@archon/workflows/output-ref';
 import {
   RUN_ENDED_SOURCE_ACTOR,
   sourceReceiptAcceptanceSchema,
   triggerConfigSchema,
-  type AsksSettledInputSource,
   type AsksSettledTrigger,
+  type LinkedRunEndedStart,
   type ResourceStartBindingIntent,
   type RunEndedTrigger,
   type SourceReceiptAcceptance,
@@ -32,11 +34,19 @@ import {
 import type { WorkflowItem, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowDeps } from '@archon/workflows/deps';
 import { declaredOutcome, outcomeValues } from '@archon/workflows/completed-outcome';
-import { resolveWorkflowName } from '@archon/workflows/router';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
 import { getArchonHome } from '@archon/paths';
+import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
+import {
+  readsItemAnswers,
+  type AsksSettledInputSource,
+  type RunEndedInputSource,
+} from '@archon/workflows/schemas/binding-input-source';
+import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
+import { selectStartedWorkflow, type StartedWorkflow } from './binding-workflow';
+import { itemAnswers, type ItemAnswers } from './item-answers';
 
 /** `ARCHON_HOME/triggers`: where run-ended trigger files are read from. */
 export function getTriggersPath(): string {
@@ -92,8 +102,9 @@ export async function readOnBindings(directory: string): Promise<OnBinding[]> {
   for (const name of names) {
     const binding = await readOnFile(join(directory, name));
     if (!binding) continue;
-    // Both forms take the run's id as every receipt's delivery id, so two files with one
-    // source would collide on it and the second start would replay as the first.
+    // Both forms make every receipt's delivery id from the run (and a linked start's from
+    // its holder) without the file, so two files with one source would collide on it and
+    // the second start would replay as the first.
     const other = bySource.get(binding.sourceInstanceId);
     if (other)
       throw new TriggerFileError(
@@ -172,21 +183,27 @@ export function runEndedBindingProblems(
 }
 
 /**
- * What a binding's inputs read from: the run's own inputs and result, and for an
- * asks-settled binding the settled answers. `gone` names why the run's inputs and result
- * cannot be read (its row was deleted), so a binding that reads them starts nothing.
+ * What a binding's inputs read from: the run's own inputs and result, for a run-ended
+ * binding the key of the run's item, for an asks-settled binding the settled answers, and
+ * the item's answers when a binding reads them. `gone` names why the run's inputs and
+ * result cannot be read (its row was deleted), so a binding that reads them starts
+ * nothing; the answers belong to the item and outlive the run.
  */
 export type MappedSources =
   | {
       inputs: Readonly<Record<string, JsonValue>>;
       result: JsonValue | undefined;
+      itemKey?: string;
       answers?: JsonValue;
+      itemAnswers?: ItemAnswers;
     }
-  | { gone: string; answers?: JsonValue };
+  | { gone: string; answers?: JsonValue; itemAnswers?: ItemAnswers };
+
+type BindingInputSource = RunEndedInputSource | AsksSettledInputSource;
 
 /** The target inputs a binding maps, or the first that did not resolve. */
 export function mappedInputs(
-  sources: Readonly<Record<string, AsksSettledInputSource>> | undefined,
+  sources: Readonly<Record<string, BindingInputSource>> | undefined,
   from: MappedSources
 ): { inputs: Record<string, JsonValue> } | { missing: string } {
   const inputs: Record<string, JsonValue> = {};
@@ -202,13 +219,22 @@ export function mappedInputs(
 
 /** One source's value, possibly nothing, or why it cannot be read. */
 function mappedValue(
-  source: AsksSettledInputSource,
+  source: BindingInputSource,
   from: MappedSources
 ): { value: JsonValue | undefined } | string {
   // `{answers}` parses only in an asks-settled binding, which always passes them.
   if ('answers' in source)
     return from.answers === undefined ? 'there are no answers to read' : { value: from.answers };
+  if (readsItemAnswers(source)) {
+    if (from.itemAnswers === undefined) return 'there are no item answers to read';
+    return 'unreadable' in from.itemAnswers
+      ? from.itemAnswers.unreadable
+      : { value: from.itemAnswers.entries };
+  }
   if ('gone' in from) return from.gone;
+  // `{item: 'key'}` parses only in a run-ended binding, which always passes the key.
+  if ('item' in source)
+    return from.itemKey === undefined ? 'there is no item key to read' : { value: from.itemKey };
   if ('input' in source) return { value: from.inputs[source.input] };
   const value =
     from.result === undefined ? undefined : resolveJsonPointer(from.result, source.result);
@@ -230,51 +256,91 @@ export interface RunEndedStartsDependencies {
    * completion, and only when such a binding matches.
    */
   endedCheckout: (run: WorkflowRun) => Promise<EndedCheckout>;
+  /**
+   * Every ask on an item, in the order they were left, for a binding that reads `{item: 'answers'}`. Read
+   * at most once per completion, and only when such a binding matches.
+   */
+  listItemAsks: (itemId: string) => Promise<AttentionRead<StoredItemAsk>[]>;
   now?: () => Date;
 }
 
 /**
- * The receipts the completion of `ended` causes. Only a run on an item causes starts (a
- * `workflow:` child is created with no item). A binding matches when it names
- * the run's workflow and outcome and launches in the item's project. Each match gets its
- * own receipt, keyed by the binding's source and the ended run, so a replayed completion
- * could never start it twice even if it reached the store.
+ * The starts the completion of `ended` causes. Only a run on an item causes starts (a
+ * `workflow:` child is created with no item). A binding matches when it names the run's
+ * workflow and outcome and launches in the item's project. Each match on the same item
+ * gets its own receipt, keyed by the binding's source and the ended run, so a replayed
+ * completion could never start it twice even if it reached the store. A match with
+ * `linked` becomes a linked start, which the completing write turns into a receipt on
+ * each item linked to this one.
  */
 export function createRunEndedStarts(
   dependencies: RunEndedStartsDependencies
-): (ended: RunEndedFacts) => Promise<SourceReceiptAcceptance[]> {
+): (ended: RunEndedFacts) => Promise<RunEndedStarts> {
   return async ended => {
     const { run } = ended;
-    if (!run.item_id) return [];
+    const none = { receipts: [], linked: [] };
+    if (!run.item_id) return none;
     const candidates = (await readRunEndedBindings(dependencies.triggersDirectory())).filter(
       candidate => candidate.runEnded.workflowName === run.workflow_name
     );
-    if (candidates.length === 0) return [];
+    if (candidates.length === 0) return none;
     const item = await dependencies.getItem(run.item_id);
     if (!item) throw new Error(`Run '${run.id}' names item '${run.item_id}', which is missing`);
     const receipts: SourceReceiptAcceptance[] = [];
+    const linked: LinkedRunEndedStart[] = [];
     let checkout: Promise<EndedCheckout> | undefined;
+    const endedCheckout = (): Promise<EndedCheckout> =>
+      (checkout ??= dependencies.endedCheckout(run));
+    let answers: Promise<ItemAnswers> | undefined;
+    const answersOnItem = (): Promise<ItemAnswers> =>
+      (answers ??= dependencies.listItemAsks(item.id).then(itemAnswers));
     for (const candidate of candidates) {
-      // A binding that launches in another project is not about this item, even when a
-      // workflow there has the same name.
-      if ((await bindingProjectKey(candidate, dependencies)) !== item.projectKey) continue;
-      const problems = runEndedBindingProblems(candidate.runEnded, ended);
-      if (problems.length > 0)
-        throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
-      if (candidate.runEnded.outcome !== ended.outcome.value) continue;
-      if (candidate.runEnded.checkout !== undefined) checkout ??= dependencies.endedCheckout(run);
-      receipts.push(
-        bindingReceipt(
-          candidate,
-          { deliveryId: run.id, sourceActor: runEndedActor(ended), itemKey: item.key },
-          mappedInputs(candidate.runEnded.inputs, ended),
-          candidate.runEnded.checkout === undefined ? undefined : await checkout,
-          dependencies.now?.() ?? new Date()
-        )
-      );
+      const acceptance = await matchedReceipt(candidate, ended, item, dependencies, {
+        endedCheckout,
+        answersOnItem,
+      });
+      if (!acceptance) continue;
+      const link = candidate.runEnded.linked;
+      if (link) linked.push({ link, endedRunId: run.id, endedItemId: item.id, acceptance });
+      else receipts.push(acceptance);
     }
-    return receipts;
+    return { receipts, linked };
   };
+}
+
+/**
+ * The receipt one binding writes for the end of `ended` on `item`, or undefined when the
+ * binding is not about this end. Its problems throw naming the file.
+ */
+async function matchedReceipt(
+  candidate: RunEndedBinding,
+  ended: RunEndedFacts,
+  item: WorkflowItem,
+  dependencies: RunEndedStartsDependencies,
+  read: {
+    endedCheckout: () => Promise<EndedCheckout>;
+    answersOnItem: () => Promise<ItemAnswers>;
+  }
+): Promise<SourceReceiptAcceptance | undefined> {
+  // A binding that launches in another project is not about this item, even when a
+  // workflow there has the same name.
+  if ((await bindingProjectKey(candidate, dependencies)) !== item.projectKey) return undefined;
+  const problems = runEndedBindingProblems(candidate.runEnded, ended);
+  if (problems.length > 0)
+    throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
+  if (candidate.runEnded.outcome !== ended.outcome.value) return undefined;
+  const readsAnswers = Object.values(candidate.runEnded.inputs ?? {}).some(readsItemAnswers);
+  return bindingReceipt(
+    candidate,
+    { deliveryId: ended.run.id, sourceActor: runEndedActor(ended), itemKey: item.key },
+    mappedInputs(candidate.runEnded.inputs, {
+      ...ended,
+      itemKey: item.key,
+      ...(readsAnswers ? { itemAnswers: await read.answersOnItem() } : {}),
+    }),
+    candidate.runEnded.checkout === undefined ? undefined : await read.endedCheckout(),
+    dependencies.now?.() ?? new Date()
+  );
 }
 
 /** The source actor of a start a run's end caused: the run, and its outcome when it has one. */
@@ -433,25 +499,26 @@ export async function runEndedBindingCheck(
     problems.push(
       `workflow '${ended.name}' runs in place (worktree.enabled: false), so it leaves no checkout for checkout: ended-run`
     );
-  const target = resolveWorkflowName(binding.launch.workflowName, workflows);
-  if (runEnded.checkout !== undefined && target?.worktree?.enabled === false)
+  const started = selectStartedWorkflow(binding.launch, discovered);
+  if (
+    runEnded.checkout !== undefined &&
+    'workflow' in started &&
+    started.workflow.worktree?.enabled === false
+  )
     problems.push(
-      `workflow '${target.name}' runs in place (worktree.enabled: false), so it cannot take the ended run's checkout`
+      `workflow '${started.workflow.name}' runs in place (worktree.enabled: false), so it cannot take the ended run's checkout`
     );
-  problems.push(
-    ...startedWorkflowProblems(binding.launch.workflowName, runEnded.inputs, workflows)
-  );
+  problems.push(...startedWorkflowProblems(started, runEnded.inputs));
   return problems;
 }
 
-/** The started workflow exists and declares every input a binding maps into it. */
+/** The started workflow is the one a fire would start, and declares every input it maps. */
 export function startedWorkflowProblems(
-  workflowName: string,
-  inputs: Readonly<Record<string, unknown>> | undefined,
-  workflows: readonly ResolvedWorkflow[]
+  started: StartedWorkflow,
+  inputs: Readonly<Record<string, unknown>> | undefined
 ): string[] {
-  const target = resolveWorkflowName(workflowName, workflows);
-  if (!target) return [`workflow '${workflowName}' is not in this project`];
+  if ('refused' in started) return [started.refused];
+  const target = started.workflow;
   const declared = declaredInputNames(target);
   return Object.keys(inputs ?? {})
     .filter(name => !declared.includes(name))
@@ -482,15 +549,18 @@ export async function runEndedTriggerCheck(
     // Starts match an item by project, so two checkouts of one project start the stage
     // twice; a path not registered yet is a project of its own.
     const project = (await bindingProjectKey(candidate, deps)) ?? binding.launch.cwd;
+    // A linked binding starts the stage on other items, so it never collides with a
+    // same-item one, nor with a linked one of another kind or end.
     const stage = JSON.stringify([
       project,
       runEnded.workflowName,
       runEnded.outcome,
       binding.launch.workflowName,
+      runEnded.linked ?? null,
     ]);
     stages.set(stage, [...(stages.get(stage) ?? []), index]);
     const found = await runEndedBindingCheck(candidate, deps);
-    if (binding.launch.workflowName === runEnded.workflowName)
+    if (!runEnded.linked && binding.launch.workflowName === runEnded.workflowName)
       found.push(
         `binding starts '${runEnded.workflowName}', the workflow whose end fires it: each run that completes with '${runEnded.outcome}' starts another on the same item`
       );
@@ -514,7 +584,7 @@ export async function runEndedTriggerCheck(
  * stage or an undeclared input is refused before the run does any work.
  */
 export function createRunEndedPreflight(
-  dependencies: Omit<RunEndedStartsDependencies, 'now' | 'endedCheckout'> &
+  dependencies: Omit<RunEndedStartsDependencies, 'now' | 'endedCheckout' | 'listItemAsks'> &
     Pick<WorkflowDeps, 'loadConfig' | 'providers'>
 ): (run: WorkflowRun) => Promise<void> {
   return async run => {

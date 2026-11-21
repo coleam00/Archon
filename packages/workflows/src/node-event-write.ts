@@ -1,10 +1,12 @@
-import type { NodeStateRecord } from './schemas/node-execution';
+import type { NodeDescriptor, NodeStateRecord } from './schemas/node-execution';
+import { describeExecutionNode } from './node-execution';
 import {
   serializeNodeStateRecord,
   serializeNodeTranscript,
   serializeNodeEmitter,
   serializeNodeOutput,
   nodeDisplayName,
+  withComposedOrigin,
   type NodeExecutionResult,
 } from './node-record-serialization';
 import type { WorkflowDeps } from './deps';
@@ -133,7 +135,7 @@ export function deriveEmitterEvent(
 ): WorkflowEmitterEvent | undefined {
   const record = readNodeRecordEvent(event);
   if (!record) return undefined;
-  return emitterEventFromRecord(record, { id: node.id, name: nodeDisplayName(node) });
+  return emitterEventFromRecord(record, describeExecutionNode(node));
 }
 
 /**
@@ -145,33 +147,30 @@ export function readNodeEmitterEvent(
 ): WorkflowEmitterEvent | undefined {
   const record = readNodeRecordEvent(row);
   if (!record) return undefined;
-  const node = record.data.node;
-  return emitterEventFromRecord(
-    record,
-    node ? { id: node.id, name: nodeDisplayName(node) } : { id: record.path, name: record.path }
-  );
+  return emitterEventFromRecord(record, record.data.node);
+}
+
+function emitterNodeFields(record: ReadNodeRecordEvent, node: NodeDescriptor | undefined) {
+  if (node === undefined) return { nodeId: record.path, nodeName: record.path };
+  return { nodeId: node.id, nodeName: nodeDisplayName(node), ...withComposedOrigin(node) };
 }
 
 function emitterEventFromRecord(
   record: ReadNodeRecordEvent,
-  node: { id: string; name: string }
+  node: NodeDescriptor | undefined
 ): WorkflowEmitterEvent | undefined {
   if (record.metadata) return serializeNodeEmitter(record.metadata);
-  const nodeName = node.name;
+  const base = { runId: record.workflowRunId, ...emitterNodeFields(record, node) };
   switch (record.eventType) {
     case 'node_started':
       return {
         type: 'node_started',
-        runId: record.workflowRunId,
-        nodeId: node.id,
-        nodeName,
+        ...base,
       };
     case 'node_completed':
       return {
         type: 'node_completed',
-        runId: record.workflowRunId,
-        nodeId: node.id,
-        nodeName,
+        ...base,
         ...(record.data.duration_ms !== undefined ? { duration: record.data.duration_ms } : {}),
         ...(record.data.cost_usd !== undefined ? { costUsd: record.data.cost_usd } : {}),
         ...(record.data.stop_reason !== undefined ? { stopReason: record.data.stop_reason } : {}),
@@ -180,9 +179,7 @@ function emitterEventFromRecord(
     case 'node_failed':
       return {
         type: 'node_failed',
-        runId: record.workflowRunId,
-        nodeId: node.id,
-        nodeName,
+        ...base,
         error: record.data.error ?? '',
       };
     case 'node_skipped':
@@ -195,18 +192,14 @@ function emitterEventFromRecord(
         return undefined;
       return {
         type: 'node_skipped',
-        runId: record.workflowRunId,
-        nodeId: node.id,
-        nodeName,
+        ...base,
         reason: record.data.reason,
         cause: record.data.cause,
       };
     case 'node_skipped_prior_success':
       return {
         type: 'node_skipped_prior_success',
-        runId: record.workflowRunId,
-        nodeId: node.id,
-        nodeName,
+        ...base,
       };
     case 'node_prior_cache_invalidated':
     case 'node_always_run_reset':

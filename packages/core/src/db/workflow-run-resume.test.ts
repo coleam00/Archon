@@ -81,7 +81,7 @@ describe('workflow run resume', () => {
       const [updateQuery, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(updateQuery).toContain("status = 'running'");
       expect(updateQuery).toContain('completed_at = NULL');
-      expect(updateQuery).toContain('metadata = metadata || $2::jsonb');
+      expect(updateQuery).toContain('metadata = (metadata || $2::jsonb');
       expect(updateParams).toEqual(['workflow-run-123', expect.any(String)]);
       expect(JSON.parse(String(updateParams[1]))).toEqual({
         tool_call_attention: null,

@@ -237,10 +237,13 @@ async function runParsedCommand({ values, positionals }: ParsedCliArgs): Promise
   const command = positionals[0];
   const subcommand = positionals[1];
   const json = values.json as boolean | undefined;
-  if (values['base-branch'] !== undefined && (command !== 'workflow' || subcommand !== 'run')) {
+  const registers =
+    (command === 'workflow' && subcommand === 'run') ||
+    (command === 'project' && subcommand === 'add');
+  if (values['base-branch'] !== undefined && !registers) {
     await fail(
       values.json === true,
-      '--base-branch is only supported by workflow run for initial project registration.'
+      '--base-branch is only supported by workflow run and project add for initial project registration.'
     );
     await shutdownTelemetry();
     return 1;
@@ -551,6 +554,8 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
           return await workflowRoutes.runWorkflowItems(route);
         case 'merged':
           return await workflowRoutes.runWorkflowMerged(route);
+        case 'landing':
+          return await workflowRoutes.runWorkflowLanding(route);
         case 'link':
           return await workflowRoutes.runWorkflowLink(route);
         default:

@@ -607,10 +607,51 @@ describe('dispatchBackgroundWorkflow', () => {
           makeTestResolvedWorkflow({ name: 'forge-run', nodes: [{ id: 'one', prompt: 'work' }] })
         )
       ).rejects.toBe(refusal);
-      expect(assertForge.mock.calls[0]?.[3]).toMatchObject({ cwd: '/workspace/test-repo' });
+      expect(assertForge.mock.calls[0]?.[3]).toMatchObject({
+        cwd: '/workspace/test-repo',
+        settingsCwd: '/workspace/test-repo',
+      });
       expect(mockResolve).not.toHaveBeenCalled();
       expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
       expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    } finally {
+      assertForge.mockRestore();
+    }
+  });
+
+  test("an adopted worktree's pack settings decide the repository the forge check judges", async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue(undefined);
+    const env = makeEnvRow();
+    mockAdoptedEnv.mockResolvedValueOnce(env);
+    try {
+      await dispatchBackgroundWorkflow(
+        makeRoutingCtx({ adoptionLane: { kind: 'reuse-worktree', environment: env } }),
+        makeWorkflow()
+      );
+      expect(assertForge.mock.calls[0]?.[3]).toMatchObject({
+        cwd: '/workspace/test-repo',
+        settingsCwd: env.working_path,
+      });
+    } finally {
+      assertForge.mockRestore();
+    }
+  });
+
+  test('the run is created with the inputs the forge check returns', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue({
+      goal: 'x',
+      repo_host: 'github.com',
+      repo_path: 'o/project',
+    });
+    try {
+      await dispatchBackgroundWorkflow(makeRoutingCtx({ inputs: { goal: 'x' } }), makeWorkflow());
+      expect(mockCreateWorkflowRun.mock.calls[0]?.[0].metadata?.inputs).toEqual({
+        goal: 'x',
+        repo_host: 'github.com',
+        repo_path: 'o/project',
+      });
     } finally {
       assertForge.mockRestore();
     }

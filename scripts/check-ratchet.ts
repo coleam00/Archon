@@ -471,9 +471,17 @@ function mockBaselineGrowth(
   return [...after].filter(entry => !before.has(entry));
 }
 
+/** `--base <ref>` names the base; without it, `origin/$GITHUB_BASE_REF` as CI sets it, or `origin/dev`. */
+function baseRefFrom(argv: readonly string[]): string {
+  if (argv.length === 0) return `origin/${process.env.GITHUB_BASE_REF || 'dev'}`;
+  if (argv.length === 2 && argv[0] === '--base' && argv[1].length > 0) return argv[1];
+  throw new Error(
+    `unsupported arguments: ${argv.join(' ')}\nUsage: bun run check:ratchet [--base <ref>]`
+  );
+}
+
 if (import.meta.main) {
-  const baseBranch = process.env.GITHUB_BASE_REF || 'dev';
-  const { failures, allowed, remedies } = checkRatchet(REPO_ROOT, `origin/${baseBranch}`);
+  const { failures, allowed, remedies } = checkRatchet(REPO_ROOT, baseRefFrom(Bun.argv.slice(2)));
   for (const line of allowed) console.log(line);
   if (failures.length > 0) {
     console.error(

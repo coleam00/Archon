@@ -10,7 +10,7 @@ Authored selectors match exact event actions, repository and subject identity, p
 const bindingSchema = createForgeBindingSchema(jsonValueSchema);
 ```
 
-A missing direct field rejects that binding. Source actors record forge provenance only; the trigger host separately resolves and authorizes the binding's Archon run-as identity. A label event's `actor` and a comment event's `author` are event facts a binding may map into inputs (`label.actor.id`, `label.actor.login`, `comment.author.id`, `comment.author.login`), so a workflow can check who acted against its own list; they never select an Archon identity.
+A missing direct field rejects that binding. Source actors record forge provenance only; the trigger host separately resolves and authorizes the binding's Archon run-as identity. A label event's `actor` and a comment or review event's `author` are event facts a binding may map into inputs (`label.actor.id`, `label.actor.login`, `comment.author.id`, `comment.author.login`, `review.author.id`, `review.author.login`), so a workflow can check who acted against its own list; they never select an Archon identity.
 
 ## Outbound operations
 

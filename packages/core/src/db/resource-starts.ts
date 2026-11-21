@@ -32,7 +32,6 @@ import type {
   ResourceStartBindingIntent,
   ResourceStartDisposition,
   ResourceStartIntent,
-  SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import {
   sourceReceiptInputSchema,
@@ -63,7 +62,6 @@ import { holdsItem, itemHolder, itemHolders } from '@archon/workflows/item-hold'
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { ensureItem } from './items';
 import { WorkflowStatusReadError } from './workflow-run-reads';
-import { insertStartReceipt } from './start-receipt-writes';
 import { toHydratedTimestamp } from './timestamps';
 import { InstallHeldError } from '@archon/workflows/store';
 
@@ -295,12 +293,6 @@ export async function hasStartReceiptForDelivery(
   return found.rows.length > 0;
 }
 
-export async function acceptStartReceipt(
-  input: SourceReceiptAcceptance
-): Promise<{ receiptId: string; replay: boolean }> {
-  return getDatabase().withTransaction(query => insertStartReceipt(query, input));
-}
-
 export function parseStoredJson(value: unknown): unknown {
   return typeof value === 'string' ? JSON.parse(value) : value;
 }
@@ -393,21 +385,20 @@ function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
   };
 }
 
+export const receiptBindingsSql = `SELECT b.*, r.id AS request_id, r.status AS request_status,
+            r.blocker_run_id AS request_blocker_id, r.blocker_kind AS request_blocker_kind
+       FROM remote_agent_start_receipt_bindings b
+       LEFT JOIN remote_agent_resource_start_requests r
+         ON r.receipt_id = b.receipt_id AND r.binding_id = b.binding_id
+      WHERE b.receipt_id = $1 ORDER BY b.binding_id`;
+
 export async function getStartReceipt(id: string): Promise<StartReceiptInspection | null> {
   const receipt = await getDatabase().query<Record<string, unknown>>(
     'SELECT * FROM remote_agent_start_receipts WHERE id = $1',
     [id]
   );
   if (!receipt.rows[0]) return null;
-  const bindings = await getDatabase().query<Record<string, unknown>>(
-    `SELECT b.*, r.id AS request_id, r.status AS request_status,
-            r.blocker_run_id AS request_blocker_id, r.blocker_kind AS request_blocker_kind
-       FROM remote_agent_start_receipt_bindings b
-       LEFT JOIN remote_agent_resource_start_requests r
-         ON r.receipt_id = b.receipt_id AND r.binding_id = b.binding_id
-      WHERE b.receipt_id = $1 ORDER BY b.binding_id`,
-    [id]
-  );
+  const bindings = await getDatabase().query<Record<string, unknown>>(receiptBindingsSql, [id]);
   const row = receipt.rows[0];
   return {
     id: String(row.id),
@@ -537,6 +528,11 @@ export async function getResourceStartRequest(
   return result.rows[0] ? inspectRequest(result.rows[0]) : null;
 }
 
+export const skippedItemStartsSql = `SELECT id, resource_key, blocker_kind, blocker_run_id, launch
+       FROM remote_agent_resource_start_requests
+      WHERE item_id = $1 AND status = 'skipped'
+      ORDER BY queue_position`;
+
 export async function listSkippedItemStarts(itemId: string): Promise<SkippedItemStart[]> {
   const result = await getDatabase().query<{
     id: string;
@@ -544,13 +540,7 @@ export async function listSkippedItemStarts(itemId: string): Promise<SkippedItem
     blocker_kind: string | null;
     blocker_run_id: string | null;
     launch: unknown;
-  }>(
-    `SELECT id, resource_key, blocker_kind, blocker_run_id, launch
-       FROM remote_agent_resource_start_requests
-      WHERE item_id = $1 AND status = 'skipped'
-      ORDER BY queue_position`,
-    [itemId]
-  );
+  }>(skippedItemStartsSql, [itemId]);
   return result.rows.map(row => ({
     requestId: row.id,
     workflow: storedWorkflowName(row.launch),
@@ -647,6 +637,14 @@ export function storedWorkflowName(launch: unknown): string | null {
   }
 }
 
+export const queuedItemStartsSql = `SELECT r.id, r.resource_key, r.host_id, r.launch, r.created_at,
+       (SELECT COUNT(*) FROM remote_agent_resource_start_requests q
+         WHERE q.resource_key = r.resource_key AND q.host_id = r.host_id
+           AND q.status = 'queued' AND q.queue_position < r.queue_position) AS ahead
+       FROM remote_agent_resource_start_requests r
+      WHERE r.item_id = $1 AND r.status = 'queued'
+      ORDER BY r.queue_position`;
+
 export async function listQueuedItemStarts(itemId: string): Promise<QueuedItemStart[]> {
   const result = await getDatabase().query<{
     id: string;
@@ -655,16 +653,7 @@ export async function listQueuedItemStarts(itemId: string): Promise<QueuedItemSt
     launch: unknown;
     created_at: string | Date;
     ahead: number | string;
-  }>(
-    `SELECT r.id, r.resource_key, r.host_id, r.launch, r.created_at,
-       (SELECT COUNT(*) FROM remote_agent_resource_start_requests q
-         WHERE q.resource_key = r.resource_key AND q.host_id = r.host_id
-           AND q.status = 'queued' AND q.queue_position < r.queue_position) AS ahead
-       FROM remote_agent_resource_start_requests r
-      WHERE r.item_id = $1 AND r.status = 'queued'
-      ORDER BY r.queue_position`,
-    [itemId]
-  );
+  }>(queuedItemStartsSql, [itemId]);
   return result.rows.map(row => ({
     requestId: row.id,
     workflow: storedWorkflowName(row.launch),

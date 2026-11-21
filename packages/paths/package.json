@@ -27,7 +27,8 @@
     "./server-discovery": "./src/server-discovery.ts",
     "./duration": "./src/duration.ts",
     "./regexp": "./src/regexp.ts",
-    "./github-token-env": "./src/github-token-env.ts"
+    "./github-token-env": "./src/github-token-env.ts",
+    "./source-commit": "./src/source-commit.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",

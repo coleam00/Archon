@@ -169,6 +169,9 @@ export const WORKFLOW_EVENT_TYPES = [
   // nobody has to act on. `data` is `workflowNoticeDataSchema`: `text`, `labels` and the
   // emitting `node`; the row's timestamp is when. Never pauses the run.
   'workflow_notice',
+  // The engine sent a stalled session a message, or found its provider cannot take one.
+  // `data` is `stallMessageEventDataSchema` (`schemas/workflow-event.ts`).
+  'stall_message',
   // #2512 — audit snapshot of a composed fan-out's ordered instance set (identity +
   // item per ordinal), written before the first instance schedules.
   'fan_out_instances',

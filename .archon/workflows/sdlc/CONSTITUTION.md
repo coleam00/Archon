@@ -27,18 +27,17 @@ Agents discover a project's commands, branches and CI and record them as typed o
 
 ## CI is the validation
 
-An implementer checks only what it changed; CI is the full validation. The merge queue judges it at the head before it merges: pending waits, red from the change goes back to the build queue, and red outside the change gets one re-run. Nothing merges without what the project's CI setting trusts at its head: green CI, or, in a project that sets `ci: none` because it has no CI, a passing full validation delivery recorded at that same head. Delivery never waits for CI: once review passes, one agent node hands the pull request off ready, and sends a check already red because of the change back to the implementer. Under `ci: none`, that agent runs the full validation once and records it.
+An implementer checks only what it changed; CI is the full validation. The merge queue judges it at the head before it merges: pending ends the run waiting for a check at that head, red from the change goes back to the build queue, and red outside the change gets one re-run. Nothing merges without what the project's CI setting trusts at its head: green CI, or, in a project that sets `ci: none` because it has no CI, a passing full validation delivery recorded at that same head. Delivery never waits for CI: once review passes, one agent node hands the pull request off ready, and sends a check already red because of the change back to the implementer. Under `ci: none`, that agent runs the full validation once and records it.
 
 ## Stages hand off through queues
 
-The implement-review-fix loop is one composed run; queues sit between stages, never inside it. A run claims a work item with a conditional write. Labels are declared once, in [`.shared/labels.ts`](.shared/labels.ts).
+The implement-review-fix loop is one composed run; queues sit between stages, never inside it. Intake and the split queue claim a work item with a conditional write; a build run and a merge run are on their issue's item, where the engine admits one of each at a time. Labels are declared once, in [`.shared/labels.ts`](.shared/labels.ts).
 
-- Today: issue events start intake, which records triage on the work item and mirrors it as labels. The build queue claims triaged items; the merge queue claims items whose work-item build record is ready.
-- Direction: a ready pull request gets a label, and that label starts the merge queue.
+- Today: issue events start intake, which records triage on the work item and mirrors it as labels. A pick starts one build run per triaged item, and a build run that ends ready starts the item's merge run.
 
 ## Stops the pack can't answer pause
 
-An unanswerable stop pauses as an attention item. The deciding agent writes the question, its options and its recommendation, and they reach the person as written. Every item carries four labels: `stage` (the queue that asks), `kind` (the decision, such as `scope` or `approve`), `item` (the issue number) and `pr` (the pull request number, or empty).
+An unanswerable stop pauses as an attention item. The deciding agent writes the question, its options and its recommendation, and they reach the person as written. Every item carries four labels: `stage` (the queue that asks), `kind` (the decision, such as `scope` or `approve`), `item` (the issue number) and `pr` (the pull request number, or empty). The merge stage holds no run open: its run ends and leaves the question as an ask on the issue's item, which takes no labels.
 
 - Today: a person or an orchestrating agent answers it; `archon workflow attention --count-by label:kind --since 30d` shows which decisions recur and how often the answer followed the recommendation.
 - Direction: a recurring class gets a small handler workflow that answers its items through the normal answer channel, without changing the main path or the engine.

@@ -195,7 +195,7 @@ interface ItemRunAction<Result> {
 
 const CANCEL_ITEM_RUN: ItemRunAction<CancelWorkflowResult> = {
   verb: 'cancel',
-  statePhrase: 'running',
+  statePhrase: 'pending or running',
   applies: isCancellableRun,
   act: cancelOneRun,
   payload: cancelResultPayload,
@@ -219,7 +219,7 @@ export interface ItemControlOptions {
   allRuns?: boolean;
 }
 
-/** `workflow cancel --item <key>`: cancel the item's running run, or each with `allRuns`. */
+/** `workflow cancel --item <key>`: cancel the item's pending or running run, or each with `allRuns`. */
 export function workflowCancelItemCommand(
   host: WorkflowHost,
   key: string,

@@ -29,8 +29,9 @@ if (command === 'metadata') {
                 'resolve',
                 'checks.state',
                 ...(mode === 'normalized-resolve' ? ['repo.labels.list'] : []),
+                ...(mode === 'access' ? ['pr.view'] : []),
               ],
-        token_env: mode === 'token' ? ['TEST_FORGE_TOKEN'] : [],
+        token_env: mode === 'token' || mode === 'access' ? ['TEST_FORGE_TOKEN'] : [],
       })
     );
   process.exit(0);
@@ -63,7 +64,40 @@ if (mode === 'environment') {
     op: string;
     remote?: string;
     repo?: { host: string; path: string };
+    selector?: { repo: { host: string; path: string } };
   };
+  if (mode === 'access') {
+    // A forge that accepts only the token `accepted`, and has no repository `missing/repo`.
+    // It answers the check's reads and nothing else.
+    const answer = (body: object) =>
+      process.stdout.write(JSON.stringify({ operationId: input.operationId, ...body }));
+    if (input.op === 'resolve') {
+      answer({
+        ok: true,
+        result: {
+          op: 'resolve',
+          value: {
+            kind: 'resolved',
+            forge: 'test',
+            repo: { host: 'forge.example', path: 'a/b' },
+            plugin: { name, version: '1.0.0' },
+          },
+        },
+      });
+      process.exit(0);
+    }
+    if (input.op !== 'pr.view') process.exit(9);
+    if (input.selector?.repo.path === 'missing/repo') {
+      answer({ ok: false, error: { kind: 'not_found', message: 'Not Found' } });
+      process.exit(1);
+    }
+    if (process.env.ARCHON_FORGE_TOKEN !== 'accepted') {
+      answer({ ok: false, error: { kind: 'authorization', message: 'Bad credentials' } });
+      process.exit(1);
+    }
+    answer({ ok: true, result: { op: 'pr.view', value: null } });
+    process.exit(0);
+  }
   if (mode === 'normalized-resolve') {
     // Released GitHub resolvers use URL.host, which removes HTTPS's default port.
     const url = input.remote ? new URL(input.remote) : undefined;

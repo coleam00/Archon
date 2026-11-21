@@ -20,7 +20,7 @@ import {
   type WorkflowRun,
 } from '../schemas/workflow-run';
 import { PAUSE_CAUSE_METADATA_KEY } from '../schemas/pause-cause';
-import { listAttentionQueue } from '../attention-queue';
+import { heldRunOf, listAttentionQueue } from '../attention-queue';
 import type { WorkflowStoreHarness } from '../store-conformance';
 import {
   approval,
@@ -202,7 +202,7 @@ export function describePausesAndWaitsConformance(getHarness: () => WorkflowStor
       expect(
         splitAttentionRead(
           await listAttentionQueue({ store, branchOf: async () => null })
-        ).values.map(item => item.run?.id)
+        ).values.map(item => heldRunOf(item)?.id)
       ).toContain(run.id);
       const labeled = await store.labelAttentionWait(run.id, {
         pauseId: 'ask-1',

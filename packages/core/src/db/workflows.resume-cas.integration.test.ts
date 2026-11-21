@@ -141,8 +141,8 @@ describe('resumeWorkflowRun — real SQLite (CAS + orphan recovery)', () => {
     // Left behind, the reason would outlive the stop it describes: the run resumes,
     // completes, and still reports that the operator interrupted it — the #2329 defect
     // that metadata.error already had, through the same key. Real SQLite matters here:
-    // json_patch is RFC 7396, so the null in the patch REMOVES the key rather than
-    // storing a JSON null, and only an actual database proves which one happened.
+    // the null in the patch must REMOVE the key rather than store a JSON null, and only
+    // an actual database proves which one happened.
     await seed('failed-interrupted', 'failed', "datetime('now')", {
       error: 'Process terminated (SIGINT)',
       stop_reason: { reason: 'process_terminated', signal: 'SIGINT' },
@@ -698,7 +698,7 @@ describe('terminal workflow transitions — real SQLite', () => {
   });
 
   test('records a signal stop on the row while the event keeps its bare exit reason', async () => {
-    // Real SQLite so the json_patch merge actually runs: the row keeps `error` and gains
+    // Real SQLite so the metadata merge actually runs: the row keeps `error` and gains
     // the structured stop reason the operator surfaces read, and the terminal event's
     // `exit_reason` stays the bare enum string the telemetry reader parses.
     await seed('terminal-interrupted', 'running', "datetime('now')", { unrelated: 'keep me' });
@@ -752,9 +752,8 @@ describe('terminal workflow transitions — real SQLite', () => {
   });
 
   test('a new failure replaces a prior stop reason instead of merging into it', async () => {
-    // SQLite's json_patch is RFC 7396 and RECURSES into a nested object, so merging a
-    // reason-only record over a signalled one would leave the old signal attached to the
-    // new reason — the #2673 defect through the same mechanism. A row can reach 'running'
+    // Merging a reason-only record into a signalled one would leave the old signal
+    // attached to the new reason, the #2673 defect. A row can reach 'running'
     // again still carrying a stop reason: recoverCancelledFanOutRun puts a 'cancelled' run
     // back without touching metadata, and cancelWorkflowRun accepts a 'failed' run.
     await seed('terminal-restopped', 'running', "datetime('now')", {

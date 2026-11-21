@@ -596,6 +596,14 @@ export class SqliteAdapter implements IDatabase {
         from_node_path TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
+      -- The branch an item's change lands on; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_landings (
+        item_id TEXT PRIMARY KEY REFERENCES remote_agent_items(id),
+        branch TEXT NOT NULL,
+        from_run_id TEXT,
+        from_node_path TEXT,
+        recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
       -- An item tracker destination's activation and pass holder; see migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_item_tracker_destinations (
         destination TEXT PRIMARY KEY,
@@ -654,6 +662,25 @@ export class SqliteAdapter implements IDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_item_asks_open ON remote_agent_item_asks(item_id, workflow_name) WHERE closed_as IS NULL;
       CREATE INDEX IF NOT EXISTS idx_item_asks_run_id ON remote_agent_item_asks(run_id);
+      -- Waits a completed run left on its item; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_waits (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        item_id TEXT NOT NULL REFERENCES remote_agent_items(id),
+        run_id TEXT NOT NULL,
+        workflow_name TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        event TEXT NOT NULL,
+        about TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        deadline_at TEXT NOT NULL,
+        closed_as TEXT,
+        closed_at TEXT,
+        met_by_receipt_id TEXT,
+        met_by_binding_id TEXT,
+        replaced_by_run_id TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_item_waits_open ON remote_agent_item_waits(workflow_name, event, about) WHERE closed_as IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_item_waits_run_id ON remote_agent_item_waits(run_id);
 
       CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
         project_key TEXT NOT NULL,
@@ -881,8 +908,14 @@ export const sqliteDialect: SqlDialect = {
   },
 
   jsonMerge(column: string, paramIndex: number): string {
-    // Use $N placeholder (not raw ?) so convertPlaceholders can reorder params correctly
-    return `json_patch(${column}, $${String(paramIndex)})`;
+    // Top-level, as Postgres `||`: json_patch is RFC 7396, which recurses and deletes a
+    // null at any depth, so a stored input that resolved to null was lost (#5939).
+    // `->` copies each kept value whole; $N (not ?) lets convertPlaceholders bind each use.
+    const patch = `$${String(paramIndex)}`;
+    return `(SELECT json_group_object(key, json(v)) FROM (
+      SELECT key, ${column} -> fullkey AS v FROM json_each(${column})
+        WHERE key NOT IN (SELECT key FROM json_each(${patch}))
+      UNION ALL SELECT key, ${patch} -> fullkey FROM json_each(${patch}) WHERE type <> 'null'))`;
   },
 
   nowMinusDays(paramIndex: number): string {

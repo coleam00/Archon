@@ -57,6 +57,34 @@ describe('workflowRunCommand — --input declared inputs (#2554)', () => {
     expect(opts.inputs).toEqual({ diff: 'D1' });
   });
 
+  it('starts the run with the inputs the forge check returns', async () => {
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue({
+      diff: 'D1',
+      repo_host: 'github.com',
+      repo_path: 'o/project',
+    });
+    await stubInputWorkflow();
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-ok',
+    });
+    try {
+      await workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'review-block', 'go', {
+        noWorktree: true,
+        inputs: ['diff=D1'],
+      });
+    } finally {
+      assertForge.mockRestore();
+    }
+
+    const opts = (executeWorkflow as ReturnType<typeof mock>).mock.calls[0][7] as {
+      inputs?: Record<string, string>;
+    };
+    expect(opts.inputs).toEqual({ diff: 'D1', repo_host: 'github.com', repo_path: 'o/project' });
+  });
+
   it('still refuses a required-input workflow when nothing is supplied, before any cost', async () => {
     const { executeWorkflow } = await import('@archon/workflows/executor');
     await stubInputWorkflow();

@@ -65,24 +65,49 @@ export const executionSpendSchema = z.object({
   numTurns: reportedMeasurementSchema(z.number()),
 });
 
+/**
+ * Where a node that came in through an include was written: its own id there, the
+ * workflow that declared it, and the include node ids that brought it in, outermost
+ * first. A node id `rounds__review__review` reads `{ nodeId: 'review', includes:
+ * ['rounds', 'review'] }`. Absent on a node of the run's own workflow.
+ */
+export const composedNodeOriginSchema = z.object({
+  nodeId: z.string(),
+  workflow: z.string(),
+  includes: z.array(z.string()),
+});
+export type ComposedNodeOrigin = z.infer<typeof composedNodeOriginSchema>;
+
+const composedField = { composed: composedNodeOriginSchema.optional() };
+
 export const nodeDescriptorSchema = z.discriminatedUnion('kind', [
   agentNodeSchema.pick({ id: true, kind: true }).extend({
+    ...composedField,
     source: z.discriminatedUnion('kind', [
       z.object({ kind: z.literal('inline') }),
       z.object({ kind: z.literal('command'), name: z.string() }),
     ]),
   }),
-  execNodeSchema.pick({ id: true, kind: true, runtime: true }),
-  loopNodeSchema.pick({ id: true, kind: true }).extend({ command: z.string().optional() }),
-  loopGroupNodeSchema.pick({ id: true, kind: true }),
-  gateNodeSchema.pick({ id: true, kind: true }),
-  haltNodeSchema.pick({ id: true, kind: true }),
-  waitNodeSchema.pick({ id: true, kind: true }),
-  workflowNodeSchema.pick({ id: true, kind: true }).extend({ fanOut: z.literal(true).optional() }),
-  composeFanOutNodeSchema.pick({ id: true, kind: true }),
+  execNodeSchema.pick({ id: true, kind: true, runtime: true }).extend(composedField),
+  loopNodeSchema
+    .pick({ id: true, kind: true })
+    .extend({ ...composedField, command: z.string().optional() }),
+  loopGroupNodeSchema.pick({ id: true, kind: true }).extend(composedField),
+  gateNodeSchema.pick({ id: true, kind: true }).extend(composedField),
+  haltNodeSchema.pick({ id: true, kind: true }).extend(composedField),
+  waitNodeSchema.pick({ id: true, kind: true }).extend(composedField),
+  workflowNodeSchema
+    .pick({ id: true, kind: true })
+    .extend({ ...composedField, fanOut: z.literal(true).optional() }),
+  composeFanOutNodeSchema.pick({ id: true, kind: true }).extend(composedField),
   z.object({ kind: z.literal('compose_fan_out_instance'), id: z.string() }),
 ]);
 export type NodeDescriptor = z.infer<typeof nodeDescriptorSchema>;
+
+/** A descriptor's include origin, for the readers that put it next to the node's name. */
+export function composedOrigin(node: NodeDescriptor): ComposedNodeOrigin | undefined {
+  return 'composed' in node ? node.composed : undefined;
+}
 
 export const nodeInvocationSchema = z.object({
   id: z.string(),

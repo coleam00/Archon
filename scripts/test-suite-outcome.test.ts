@@ -24,6 +24,7 @@ function needs(
         'run-tests': runTests,
         'run-workspace-tests': runWorkspaceTests,
         'run-full-matrix': runPushOnly,
+        'run-windows-full-suite': runPushOnly,
         'run-docker-build': runPushOnly,
         'run-serve-binary': runPushOnly,
       },
@@ -35,7 +36,12 @@ function needs(
 /** Every gated job skipped, as on a prose-only pull request or a push a pull request run proved. */
 const decisionSkips = Object.fromEntries([...GATED.keys()].map(job => [job, 'skipped']));
 const ALWAYS = ['static'];
-const PUSH_ONLY_OUTPUTS = ['run-full-matrix', 'run-docker-build', 'run-serve-binary'];
+const PUSH_ONLY_OUTPUTS = [
+  'run-full-matrix',
+  'run-windows-full-suite',
+  'run-docker-build',
+  'run-serve-binary',
+];
 const alwaysSuccess = Object.fromEntries(ALWAYS.map(job => [job, 'success']));
 const allSuccess = {
   ...Object.fromEntries([...GATED.keys()].map(job => [job, 'success'])),
@@ -84,6 +90,17 @@ describe('Test Suite aggregate outcome', () => {
       ...Object.fromEntries(pushOnly.map(job => [job, 'skipped'])),
     };
     expect(testSuiteFailures(needs('true', results, 'true', 'false'), GATED)).toEqual([]);
+  });
+
+  test('passes a push to dev, which runs the Windows set and skips the whole Windows suite', () => {
+    const decided = needs('true', allSuccess);
+    decided.changes.outputs = { ...decided.changes.outputs, 'run-windows-full-suite': 'false' };
+    const fullSuite = [...GATED].flatMap(([job, output]) =>
+      output === 'run-windows-full-suite' ? [job] : []
+    );
+    expect(fullSuite.sort()).toEqual(['test-pack-windows', 'test-scripts-windows', 'test-windows']);
+    for (const job of fullSuite) decided[job] = { result: 'skipped' };
+    expect(testSuiteFailures(decided, GATED)).toEqual([]);
   });
 
   test('fails the workspace shards skipped when their decision said to run them', () => {
@@ -185,11 +202,18 @@ describe('CI wiring', () => {
       'test-pack-windows',
       'test-scripts-windows',
       'test-windows',
+      'windows-set',
     ]);
-    for (const id of offLinux.filter(id => id !== 'serve-binary')) {
+    for (const id of ['file-store-primitives-macos', 'windows-set']) {
       expect({ id, if: gate(id) }).toEqual({
         id,
         if: "needs.changes.outputs.run-full-matrix == 'true'",
+      });
+    }
+    for (const id of ['test-pack-windows', 'test-scripts-windows', 'test-windows']) {
+      expect({ id, if: gate(id) }).toEqual({
+        id,
+        if: "needs.changes.outputs.run-windows-full-suite == 'true'",
       });
     }
     expect(gate('serve-binary')).toBe("needs.changes.outputs.run-serve-binary == 'true'");
@@ -201,6 +225,7 @@ describe('CI wiring', () => {
     'pack-tests',
     'pack-fixtures',
     'full-matrix',
+    'windows-full-suite',
     'docker-build',
     'serve-binary',
   ])('publishes the %s decision from the deciding step', mode => {

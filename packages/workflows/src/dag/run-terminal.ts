@@ -2,7 +2,7 @@
  * How a DAG pass ends once its layers have run: the node-outcome tally, the failure and
  * usage-limit dispositions, the write-back gate, and the completion write.
  */
-import type { RunEndedFacts, WorkflowDeps } from '../deps';
+import type { RunEndedFacts, RunEndedStarts, WorkflowDeps } from '../deps';
 import type {
   NodeOutput,
   ResolvedWorkflow,
@@ -18,13 +18,12 @@ import {
   WORKTREE_DISPOSITION_METADATA_KEY,
   type WorktreeDisposition,
 } from '../schemas/terminal-record';
-import { sampleResultCommit } from '../run-result';
+import { readCompletingResult, sampleResultCommit } from '../run-result';
 import { getWorkflowEventEmitter } from '../event-emitter';
 import { requireTerminalStatusWrite } from '../terminal-status-write';
 import { rootOutputFields, type DeclaredOutputPaths, type JsonValue } from '../output-ref';
 import { declaredOutcome, readCompletedOutcome } from '../completed-outcome';
-import { readCompletedAsks } from '../completed-asks';
-import type { ItemAsk } from '../schemas/item-ask';
+import { readCompletedItemFacts, type CompletedItemFacts } from '../completed-asks';
 import {
   asksCheckoutMetadata,
   type AsksCheckout,
@@ -133,59 +132,61 @@ export async function finishRun(
 
   const handOffs = await readHandOffs(ctx, returned, runTranscriptUsage);
   if (handOffs === undefined) return;
-  const { startReceipts, asksCheckout } = handOffs;
+  const { starts, asksCheckout, result } = handOffs;
 
   const terminal = selectTerminalOutput(workflow, workflowRun, nodeOutputs);
-  await completeRun(
+  const written = await completeRun(
     ctx,
     nodeCounts,
     terminal,
     runTranscriptUsage,
-    completionResult(returned, startReceipts),
-    asksCheckout
+    completionResult(returned, starts),
+    asksCheckout,
+    result
   );
   await reportNoOutcome(ctx, outcome);
-  await reportUnstartedStages(ctx, startReceipts);
+  // The receipts the write wrote, which include those it resolved for linked starts.
+  await reportUnstartedStages(ctx, written.startReceipts);
   return terminal.output;
 }
 
 /** What the completing write records beside the status, or nothing when there is none. */
 function completionResult(
-  returned: { outcome?: RunCompletedOutcome; asks?: readonly ItemAsk[] },
-  startReceipts: readonly SourceReceiptAcceptance[]
+  returned: ReturnedResult,
+  starts: RunEndedStarts
 ): Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3] {
   const result = {
     ...returned,
-    ...(startReceipts.length > 0 ? { startReceipts } : {}),
+    ...(starts.receipts.length > 0 ? { startReceipts: starts.receipts } : {}),
+    ...(starts.linked.length > 0 ? { linkedStarts: starts.linked } : {}),
   };
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+/** What the run's returns node said the engine records with the completion. */
+type ReturnedResult = CompletedItemFacts & { outcome?: RunCompletedOutcome };
+
 /**
- * The outcome and asks the run completes with, or undefined when either is not of its
+ * The outcome, asks and waits the run completes with, or undefined when one is not of its
  * declared form and the run was failed naming the field: no outcome is written and no
- * ask is opened.
+ * ask or wait is opened.
  */
 async function readReturnedResult(
   ctx: RunTerminalContext,
   runTranscriptUsage: WorkflowUsage
-): Promise<{ outcome?: RunCompletedOutcome; asks?: readonly ItemAsk[] } | undefined> {
+): Promise<ReturnedResult | undefined> {
   const { workflow, workflowRun, nodeOutputs } = ctx;
   const outcome = readCompletedOutcome(workflow, nodeOutputs);
   if (outcome.kind === 'invalid') {
     await failAtCompletion(ctx, outcome.error, runTranscriptUsage, 'dag.outcome_invalid_fail');
     return undefined;
   }
-  const asks = readCompletedAsks(workflow, workflowRun, nodeOutputs);
-  if (asks.kind === 'invalid') {
-    await failAtCompletion(ctx, asks.error, runTranscriptUsage, 'dag.asks_invalid_fail');
+  const left = readCompletedItemFacts(workflow, workflowRun, nodeOutputs);
+  if (left.kind === 'invalid') {
+    await failAtCompletion(ctx, left.error, runTranscriptUsage, left.site);
     return undefined;
   }
-  return {
-    ...(outcome.kind === 'outcome' ? { outcome: outcome.outcome } : {}),
-    // Present, even empty, whenever the run declares asks: the write replaces the open set.
-    ...(asks.kind === 'asks' ? { asks: asks.asks } : {}),
-  };
+  return { ...(outcome.kind === 'outcome' ? { outcome: outcome.outcome } : {}), ...left.facts };
 }
 
 /**
@@ -232,30 +233,40 @@ async function reportUnstartedStages(
 
 /**
  * What this end hands on, read before the write that ends the run so it commits with it:
- * the starts its outcome causes, and the checkout its asks hand an asks-settled binding
- * with `checkout` (read now, so a start gets the commit this run ended on). Undefined when
- * a trigger could not be read and the run was failed naming why.
+ * the run's result, the starts its outcome causes, and the checkout its asks hand an
+ * asks-settled binding with `checkout` (read now, so a start gets the commit this run
+ * ended on). Undefined when the result or a trigger could not be read and the run was
+ * failed naming why.
  */
 async function readHandOffs(
   ctx: RunTerminalContext,
-  { outcome, asks }: { outcome?: RunCompletedOutcome; asks?: readonly ItemAsk[] },
+  { outcome, asks }: ReturnedResult,
   runTranscriptUsage: WorkflowUsage
 ): Promise<
-  | { startReceipts: readonly SourceReceiptAcceptance[]; asksCheckout: AsksCheckout | undefined }
+  | {
+      starts: RunEndedStarts;
+      asksCheckout: AsksCheckout | undefined;
+      result: JsonValue | undefined;
+    }
   | undefined
 > {
-  const { deps, workflow, workflowRun, nodeOutputs } = ctx;
+  const { deps, workflow, workflowRun } = ctx;
+  const startsOnEnd = outcome !== undefined && deps.runEndedStarts !== undefined;
   try {
-    const startReceipts =
+    const result =
+      startsOnEnd || asks !== undefined
+        ? await readCompletingResult(deps.store, workflowRun, workflow.returns)
+        : undefined;
+    const starts =
       outcome === undefined || !deps.runEndedStarts
-        ? []
-        : await deps.runEndedStarts(runEndedFacts(workflow, workflowRun, nodeOutputs, outcome));
+        ? { receipts: [], linked: [] }
+        : await deps.runEndedStarts(runEndedFacts(workflow, workflowRun, outcome, result));
     const asksCheckout = asks?.length ? await deps.asksCheckout?.(workflowRun) : undefined;
-    return { startReceipts, asksCheckout };
+    return { starts, asksCheckout, result };
   } catch (error) {
     await failAtCompletion(
       ctx,
-      `Workflow '${workflow.name}' completed, but its triggers could not be read: ${(error as Error).message}. Fix the trigger, then resume the run.`,
+      `Workflow '${workflow.name}' completed, but its result or triggers could not be read: ${(error as Error).message}. Fix what it names, then resume the run.`,
       runTranscriptUsage,
       'dag.completion_triggers_fail'
     );
@@ -267,13 +278,12 @@ async function readHandOffs(
 function runEndedFacts(
   workflow: ResolvedWorkflow,
   workflowRun: WorkflowRun,
-  nodeOutputs: ReadonlyMap<string, NodeOutput>,
-  outcome: RunCompletedOutcome
+  outcome: RunCompletedOutcome,
+  result: JsonValue | undefined
 ): RunEndedFacts {
   const declared = declaredOutcome(workflow);
   // Unreachable: a run completes with an outcome only when its workflow declares one.
   if (declared === undefined) throw new Error(`Workflow '${workflow.name}' declares no outcome`);
-  const returned = workflow.returns === undefined ? undefined : nodeOutputs.get(workflow.returns);
   return {
     run: workflowRun,
     declaredInputs: [
@@ -282,34 +292,17 @@ function runEndedFacts(
     ],
     outcomeForm: declared.form,
     outcome,
-    result: returned?.state === 'completed' ? returnedValue(returned) : undefined,
+    result,
     inputs: resolveRunInputs(workflowRun) ?? {},
   };
 }
 
 /** The asking run's result, kept on its row for the bindings its settled asks start. */
 function keptAsksResult(
-  ctx: RunTerminalContext,
-  result: Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3]
+  completion: Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3],
+  value: JsonValue | undefined
 ): Record<string, string> {
-  const { workflow, nodeOutputs } = ctx;
-  if (result?.asks === undefined || workflow.returns === undefined) return {};
-  const returned = nodeOutputs.get(workflow.returns);
-  const value = returned?.state === 'completed' ? returnedValue(returned) : undefined;
-  return value === undefined ? {} : asksResultMetadata(value);
-}
-
-function returnedValue(
-  node: Extract<NodeOutput, { state: 'completed' | 'running' }>
-): JsonValue | undefined {
-  if (node.structuredOutput !== undefined) return node.structuredOutput as JsonValue;
-  // Output that is not JSON has no value to point into: a binding that reads it is
-  // recorded as rejected on its receipt, naming the pointer.
-  try {
-    return JSON.parse(node.output) as JsonValue;
-  } catch {
-    return undefined;
-  }
+  return completion?.asks === undefined || value === undefined ? {} : asksResultMetadata(value);
 }
 
 /**
@@ -472,8 +465,9 @@ async function completeRun(
   terminal: TerminalOutput,
   runTranscriptUsage: WorkflowUsage,
   result: Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3],
-  asksCheckout: AsksCheckout | undefined
-): Promise<void> {
+  asksCheckout: AsksCheckout | undefined,
+  returnedValue: JsonValue | undefined
+): ReturnType<WorkflowDeps['store']['completeWorkflowRun']> {
   const { deps, workflow, workflowRun, logDir } = ctx;
   const duration = Date.now() - ctx.startedAt;
 
@@ -493,8 +487,9 @@ async function completeRun(
   );
   const resultCommit = await sampleResultCommit(ctx, workflowRun.id);
 
+  let written: Awaited<ReturnType<WorkflowDeps['store']['completeWorkflowRun']>>;
   try {
-    await requireTerminalStatusWrite(
+    written = await requireTerminalStatusWrite(
       deps.store.completeWorkflowRun(
         workflowRun.id,
         { duration_ms: duration },
@@ -534,7 +529,7 @@ async function completeRun(
           [RESULT_COMMIT_METADATA_KEY]: resultCommit,
           // An asks-settled binding reads the result when the asks settle, by then from
           // the row alone. Gated on the asks a top-level run declares, like the asks.
-          ...keptAsksResult(ctx, result),
+          ...keptAsksResult(result, returnedValue),
           ...(asksCheckout === undefined ? {} : asksCheckoutMetadata(asksCheckout)),
         },
         // The one write of the run's outcome (#5660): it lands with the completed status,
@@ -574,6 +569,7 @@ async function completeRun(
     const lost = wouldBeLost(worktreeDisposition);
     if (lost) await sendRetentionWarning(ctx, keptPath, lost);
   }
+  return written;
 }
 
 /** What removing a kept checkout would lose, or undefined when keeping it needs no warning. */

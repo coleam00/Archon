@@ -17,6 +17,7 @@ import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/w
 import { deadlineWaitCursor, type WorkflowResumeCursor } from '@archon/workflows/store';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
+import { engineFingerprint } from '../utils/engine-fingerprint';
 import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
 
@@ -329,6 +330,44 @@ async function signalEvent(
   return (await report('signal', [await settle(outcome)], json, true)) ? 0 : 1;
 }
 
+/**
+ * `wake --watch` exits with this when the installed engine changed under it,
+ * so its supervisor restarts it on current code (EX_TEMPFAIL). Nonzero on
+ * purpose: systemd `Restart=on-failure` and Task Scheduler's restart act only
+ * on a failure, and launchd's StartInterval restarts any exit.
+ */
+const WAKE_ENGINE_CHANGED_EXIT = 75;
+
+/**
+ * A resident watcher runs every resume, and each run's terminal trigger read,
+ * on the engine it loaded; record which one so it can stop once the install
+ * moves on. An unreadable engine turns the check off, and says so.
+ */
+async function loadedEngine(watch: boolean, json: boolean): Promise<string | undefined> {
+  if (!watch) return undefined;
+  const loaded = engineFingerprint();
+  if (loaded !== undefined) return loaded;
+  if (json) await writeJsonLine({ ok: true, action: 'wake', engine: 'unknown' });
+  else console.error('wake: engine unknown; restart the watcher after updating Archon');
+  return undefined;
+}
+
+async function engineChanged(loaded: string | undefined, json: boolean): Promise<boolean> {
+  if (loaded === undefined) return false;
+  const current = engineFingerprint();
+  if (current === loaded) return false;
+  if (json) {
+    await writeJsonLine({
+      ok: true,
+      action: 'wake',
+      restart: 'engine changed',
+      loaded,
+      current: current ?? null,
+    });
+  } else console.log(`wake: engine changed (${loaded} -> ${current}), exiting to restart`);
+  return true;
+}
+
 async function wake(
   host: WorkflowHost,
   args: string[],
@@ -346,8 +385,12 @@ async function wake(
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
   let ok = true;
+  const loaded = await loadedEngine(values.watch === true, json);
   try {
     do {
+      // Checked before every pass, so an update during the sleep never gets
+      // another pass on the old engine.
+      if (await engineChanged(loaded, json)) return WAKE_ENGINE_CHANGED_EXIT;
       const cleanups: (() => Promise<void>)[] = [];
       try {
         const outcomes = await wakeDueWorkflowContinuations(

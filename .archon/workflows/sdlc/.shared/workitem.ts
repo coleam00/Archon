@@ -11,14 +11,15 @@
  * next pickup; any other answer leaves it held, because a live owner and an orphan
  * cannot be told apart here.
  *
- * The build, merge and split queues claim the same documents through the same claim,
- * so an item has one owner at a time across the queues; their records are
- * `facts.build` (./build.ts), `facts.merge` (./merge.ts) and `facts.split`
- * (./split.ts).
+ * The split queue claims the same documents through the same claim, so an item has one
+ * owner at a time across intake and that queue. The build queue and the merge stage claim
+ * nothing: the engine admits one build run and one merge run per item, and each run
+ * writes its record with `updateWorkItem`. The records are `facts.build` (./build.ts), `facts.merge`
+ * (./merge.ts) and `facts.split` (./split.ts).
  */
 
 import { createHash } from 'node:crypto';
-import { type BuildRecord, withReleasedRound } from './build.ts';
+import type { BuildRecord } from './build.ts';
 import type { Closure } from './close.ts';
 import { state, type StateLease, type StateWrite } from 'archon:script';
 import { type QualifiedPr } from './identity.ts';
@@ -63,11 +64,6 @@ export interface Claim {
   readonly run_id: string;
   readonly at: string;
   readonly requests: readonly IntakeRequest[];
-  /**
-   * The branch a build round opens its pull request from, recorded once the round
-   * names it, so a release can find a pull request its run opened. No other claim has one.
-   */
-  readonly branch?: string;
 }
 
 export interface Promotion {
@@ -639,8 +635,7 @@ export function readWorkItem(number: number): WorkItem | null {
 /**
  * Release a claim whose run's lease the engine reports ended; any other claim holds. A
  * run that finishes clears its own claim, so an ended run still holding one stopped
- * before its labels were written, and its requests wait again. A build round that
- * opened a pull request before it stopped is recorded as a round.
+ * before its labels were written, and its requests wait again.
  */
 export function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
   const claim = item.doc.claim;
@@ -653,7 +648,7 @@ export function releaseIfTerminal(item: Read, at: string, runId: string, pickup:
     return item;
   }
   const doc: WorkItem = {
-    ...withReleasedRound(item.doc, claim, at),
+    ...item.doc,
     claim: null,
     requests: queued([...claim.requests, ...item.doc.requests]),
     history: newest([
@@ -779,6 +774,21 @@ export function updateClaimed(
     const changed = change(doc);
     const next = { ...changed, requests: queued(changed.requests) };
     if (putClaimed(name, next, stored.revision).ok) return next;
+  }
+  throw new Error(`${name} kept changing: three conditional writes conflicted`);
+}
+
+/**
+ * Replace the item's document with no claim, re-reading on a conflict. The build queue
+ * writes its record this way, and must leave `claim` as it found it: another queue may
+ * hold the item.
+ */
+export function updateWorkItem(subject: QualifiedPr, change: (doc: WorkItem) => WorkItem): WorkItem {
+  const name = workItemName(subject.number);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const stored = state.get(name);
+    const next = change(parseWorkItem(stored.value));
+    if (state.put(name, next, { ifRevision: stored.revision }).ok) return next;
   }
   throw new Error(`${name} kept changing: three conditional writes conflicted`);
 }

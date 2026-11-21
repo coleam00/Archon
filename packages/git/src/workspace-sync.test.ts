@@ -144,7 +144,7 @@ describe('git utilities', () => {
 
       expect(execSpy).toHaveBeenCalledWith(
         'git',
-        ['-C', '/workspace/repo', 'fetch', 'origin', 'main'],
+        ['-C', '/workspace/repo', 'fetch', 'origin', '+refs/heads/main:refs/remotes/origin/main'],
         expect.any(Object)
       );
     });
@@ -394,7 +394,7 @@ describe('git utilities', () => {
 
       expect(execSpy).toHaveBeenCalledWith(
         'git',
-        ['-C', '/workspace/repo', 'fetch', 'mar', 'main'],
+        ['-C', '/workspace/repo', 'fetch', 'mar', '+refs/heads/main:refs/remotes/mar/main'],
         expect.any(Object)
       );
 

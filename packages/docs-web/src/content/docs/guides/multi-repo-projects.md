@@ -22,7 +22,7 @@ archon workflow run archon-investigate --folder "How do these services call each
 # → Folder project — running in place (no worktree isolation).
 ```
 
-You can also register from chat (`/register-project --folder platform ~/platform`) or the web console's **Add Project** (choose **Local path**, paste the path and select **Register as a folder project**). These choices work for git roots too. Without an explicit choice, web and chat auto-detect non-git paths as folders and git paths as repos. An existing repo registration is not converted.
+You can also register before the first run from the CLI (`archon project add ~/platform --folder`), from chat (`/register-project --folder platform ~/platform`) or the web console's **Add Project** (choose **Local path**, paste the path and select **Register as a folder project**). These choices work for git roots too. Without an explicit choice, web and chat auto-detect non-git paths as folders and git paths as repos. An existing repo registration is not converted.
 
 ## How work happens across repos
 

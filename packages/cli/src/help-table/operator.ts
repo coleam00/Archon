@@ -16,6 +16,13 @@ export const operatorHelp: HelpGroup = {
     },
     {
       command: 'project',
+      subcommand: 'add',
+      spec: 'project add [path]',
+      description:
+        'Register a project (this checkout, or path) before its first run; --folder for a non-git directory',
+    },
+    {
+      command: 'project',
       subcommand: 'config',
       spec: 'project config <id|name>',
       description: "Show a project's merged config with secrets removed (env key names only)",
@@ -64,7 +71,8 @@ export const operatorHelp: HelpGroup = {
         },
         {
           spec: '--config <file>',
-          description: 'A run config every written binding launches with (model aliases)',
+          description:
+            "Default run config for the bindings' starts (model aliases); an item keeps its own",
         },
         {
           spec: '--workflow-source <dir>',

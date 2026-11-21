@@ -122,7 +122,7 @@ nodes:
         item: { type: [integer, 'null'] }
         outcome:
           type: string
-          enum: [new, needs_maintainer, investigate, plan, deliver, continue, split, needs_contract, blocked, close, idle]
+          enum: [new, needs_maintainer, investigate, plan, deliver, continue, unchanged, split, needs_contract, blocked, close, idle]
         trust: { type: [string, 'null'] }
         promoted: { type: boolean }
         labels: { type: array, items: { type: string } }

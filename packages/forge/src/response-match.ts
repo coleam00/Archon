@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   CHECKS_LOGS_DEFAULT_BYTES,
   WORKITEM_SEARCH_DEFAULT_LIMIT,
@@ -421,6 +422,15 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
       (comment, index) =>
         value.comments[index]?.path === comment.path && value.comments[index].line === comment.line
     ),
+  'attachment.put': (request, value) => {
+    const bytes = Buffer.from(request.content, 'base64');
+    return (
+      sameTarget(value.target, request.repo) &&
+      value.attachment.contentType === request.contentType &&
+      value.attachment.bytes === bytes.byteLength &&
+      value.attachment.digest === createHash('sha256').update(bytes).digest('hex')
+    );
+  },
   'workitem.edit-body': (request, value) =>
     sameTarget(value.target, request.ref) &&
     sameRef(value.workitem.ref, request.ref) &&

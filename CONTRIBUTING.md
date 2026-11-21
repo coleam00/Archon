@@ -55,9 +55,16 @@ zero-file runs. An absent report after exit 0 emits a diagnostic and contributes
 results, preserving Bun's exit code; absence after a nonzero exit remains a runner error.
 The wrapper cannot distinguish successful zero-file execution from report loss after exit 0.
 
-CI is the full validation gate. While working, choose checks for the files and packages
-you changed: package `type-check` and `test` scripts, `bun run lint`,
-or `bun run test <path>` for root scripts. Keep package tests isolated through their runners.
+CI is the full validation gate. While working and before you push, run
+`bun run check:changed`. It finds the packages your change touches against the merge base
+with `origin/dev` (`--base <ref>` for another), adds every package that depends on them
+through the manifests, and runs those packages' own `type-check` and `test` scripts, the root
+script and pack projects when the change reaches them, then `bun run lint` and the ratchet.
+It prints the packages it checked and skipped, and `--list` prints only that. A change to
+the root manifest, the lockfile, CI, shared config or a file it cannot place runs the full
+local set and says why. It leaves to CI the generated files, package boundaries, format, the
+installer, Windows and macOS, and couplings the manifests do not declare. For one test file,
+`bun run test <path>` is enough. Keep package tests isolated through their runners.
 The isolation PR lookup conformance test requires `jq` on PATH to execute the production `gh --jq` projection.
 
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
@@ -79,7 +86,7 @@ excluded from formatting while its TypeScript scripts remain linted. Markdown an
 are hand-formatted. After resolving conflicts in an in-flight PR, run `bun run format`.
 
 The ratchet (`bun run check:ratchet`) lets code grow up to a ceiling and holds what is above
-it, compared with the merge base with `origin/dev` (fetch it locally). A touched function is
+it, compared with the merge base with `origin/dev` (fetch it locally; `--base <ref>` names another). A touched function is
 refused when it ends above cognitive complexity 15 and scores higher than at the merge base. A
 touched source file is refused when it ends above 800 lines and has more lines than at the
 merge base. Test files have no line ceiling. It scores the TS/JS files
@@ -101,6 +108,8 @@ not accepted. Removed collisions must lose their ledger entries; stale entries f
 is excluded with the provider package; `generate:codex-protocol` owns it.
 
 ```bash
+bun run check:changed                       # changed packages and their dependents
+bun run check:changed --list                # print that scope without running it
 bun run validate                            # optional local checks
 bun run validate --only generated-files     # generated artifacts
 bun run validate --only format              # formatting, also run by the staged-file hook
@@ -113,12 +122,14 @@ bun run test --plan pack                    # when changing .archon/workflows or
 A ready pull request runs the Linux jobs its change can affect: `static` (type-check, lint,
 format, generated files, the ratchet), the Linux test jobs (`test`, `test-scripts`,
 `test-pack`), `schema-upgrade` and `postgres-parity`. A push to `dev` or `main` runs every
-job on every platform, and that run is the complete verification of a merge. These jobs wait
-for the push:
+job on every platform, and that run is the complete verification of a merge. On Windows a push
+to `dev` runs only the Windows set (`windows-set`, see "How a test joins the Windows set"
+below); a push to `main` also runs the whole suite there. These jobs wait for the push:
 
 | Job | Also runs on a pull request that changes |
 | --- | --- |
-| `test-windows`, `test-scripts-windows`, `test-pack-windows`, `file-store-primitives-macos` | nothing narrower than the list below |
+| `windows-set`, `file-store-primitives-macos` | nothing narrower than the list below |
+| `test-windows`, `test-scripts-windows`, `test-pack-windows` (the whole suite on Windows) | nothing narrower than the list below; a push runs them only on `main` |
 | `docker-build` | `Dockerfile`, `.dockerignore`, `docker-entrypoint.sh`, or a script the image build or its upgrade test runs |
 | `serve-binary` | `scripts/build-binaries.sh` or a smoke test the job runs |
 
@@ -131,10 +142,11 @@ authoritative lists.
 To run every job on a branch before it merges, for example when a change touches path
 handling, process spawning or anything else that differs on Windows or macOS, dispatch the
 workflow on the branch: `gh workflow run test.yml --ref <branch>`. The results appear in the
-pull request's checks. Dispatching needs write access, and the branch must be in this
+pull request's checks. A dispatch runs the Windows set; add `-f windows-full-suite=true` for
+the whole suite on Windows, as a push to `main` runs it. Dispatching needs write access, and the branch must be in this
 repository, so on a pull request from a fork a maintainer decides whether to push the branch
 here and dispatch it. A break that only another platform shows otherwise appears in the push
-run on `dev`.
+run on `dev`, or, when no test in the Windows set reaches it, in the push run on `main`.
 
 A change touching only prose or files no check reads skips the test, service and binary jobs.
 `scripts/should-run-test-suite.ts` decides which files those are: Markdown and the docs site
@@ -153,7 +165,8 @@ a pull request run already passed every job on the same tree, the ones that wait
 included, and otherwise runs them, so a prose change's test-visible effects are checked on `dev`.
 
 The tests under `.archon/scripts/` (the SDLC pack's script tests) and the workflow fixtures
-run in the `test-pack` job (and `test-pack-windows` when it runs) when a pull request or an unproven push changes the pack or a
+run in the `test-pack` job (and `test-pack-windows` when it runs, which a push does only on
+`main`) when a pull request or an unproven push changes the pack or a
 contract it is written against: `PACK_INPUTS` in `scripts/should-run-test-suite.ts` lists
 those paths. Run them locally with `bun run test --plan pack` and
 `bun run validate --only workflow-fixtures`; a single test file runs with
@@ -168,6 +181,37 @@ estimated the previous total at about 25 minutes under load, including fixtures 
 formatting. Workflow fixtures require explicit selection; formatting runs by default.
 Each validate run prints its actual elapsed time per check. A local success does not predict service, build,
 or other-platform CI results.
+
+#### How a test joins the Windows set
+
+On a push to `dev`, Windows runs only the Windows set: the test files whose leading `//`
+lines include `// @archon-test-windows`. Those lines must start the file and follow one
+another: a blank line, a block comment or an import before the marker hides it. When a file
+has both, `// @archon-test-isolated` stays on line 1 and the Windows marker follows it;
+discovery refuses the isolation directive anywhere else in those leading lines. Every other test
+runs on Windows only on a push to `main`, on a pull request whose change runs every job (see
+`EVERY_JOB_INPUTS` above), or on a dispatch with `windows-full-suite=true`. Most of those
+prove nothing Linux does not, but not all: a Windows branch in an unmarked file, such as an
+assertion whose expected value differs on Windows, is not checked on `dev`. When that branch
+is what the test is about, move the case into a marked file.
+
+Mark a file when its subject behaves differently on Windows and the test exercises the real
+platform, not an injected `win32` path API or a mocked `process.platform`, which Linux proves
+equally well:
+
+- path spelling and separators that reach the file system or an operator's screen;
+- starting and stopping process trees;
+- file locks, renames and removal;
+- shell resolution and quoting;
+- or the file has caught a fault that only Windows showed.
+
+A marked file runs every one of its tests on Windows. A case that cannot run there (a chmod
+denial, a symlink Git-Bash cannot make) goes in an unmarked sibling file, not behind a
+`win32` skip. A Windows-only case in a large mixed file goes the other way, into a small
+marked sibling. `skipIf(process.platform !== 'win32')` for a Windows-only case is fine.
+
+Run the set with `bun run test --windows` or `bun run validate --only windows-tests`; the
+runner prints the files it selected. `scripts/package-test-groups.ts` reads the marker.
 
 **Important:** Use `bun run test` (not `bun test` from the repo root) to avoid mock pollution across packages.
 

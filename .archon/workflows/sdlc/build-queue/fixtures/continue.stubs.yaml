@@ -2,14 +2,12 @@
 # repository, and route declares `deliver`, not `continue`. The pull request facts
 # resolved still reaches delivery through the round's real `continues` script, and the
 # round's real report names it to the answer node. No triage runs in the round.
-start:
-  repo: { host: github.com, path: example/repo }
-  message: false
 facts:
   path: route
   item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
   url: "https://github.com/example/repo/issues/7"
-  record: null
+  read_at: "2026-11-18T00:00:00.000Z"
+  record: {}
   brief: "continue: fix the open review finding"
   rounds: []
   at_cap: false
@@ -17,9 +15,6 @@ facts:
   continues: 1
   branch: "build/7-stub-fixture"
   related: []
-blocked:
-  blocked: []
-  blocked_count: 0
 route:
   decision: launch
   route: deliver
@@ -77,11 +72,10 @@ apply:
   item: "7"
   pr: "1"
   asked: null
-  healthy: true
 fixture:
-  inputs: { repo_host: github.com, repo_path: example/repo }
+  inputs: { repo_host: github.com, repo_path: example/repo, number: "7" }
   expect: completed
-  reached: [facts, route, ship__continues, ship__report, answer, apply]
+  reached: [facts, route, ship__continues, ship__report, answer, apply, ruling]
   resolved-text-contains:
     answer: '"pr_url":"https://github.com/example/repo/pull/1"'
 exec-code: true

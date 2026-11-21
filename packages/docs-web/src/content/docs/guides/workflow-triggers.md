@@ -291,6 +291,28 @@ Two events about the same issue start runs on the same item. An event whose fiel
 
 A timer file refuses `item`, since a tick is about no item, and so does a run-ended file, whose start is on the ended run's item. Items need the database store and a [registered project](/reference/cli/#items): on the file store, a start whose binding maps an item is refused before a run starts.
 
+## Land an item's runs on its own branch
+
+A chain of stages on one item (order, plan, build, land) is cut from the project's base branch unless the item says otherwise. Record the branch the item's change lands on, and every stage a trigger file starts on the item works in a worktree cut from that branch, with `$BASE_BRANCH` set to it, so the change it proposes targets that branch:
+
+```bash
+archon workflow landing --item WO-12 --branch feat/checkout-redesign
+archon workflow link --item issue-42 --kind part_of --to WO-12
+archon workflow link --item issue-43 --kind part_of --to WO-12
+```
+
+`issue-42` and `issue-43` record no branch of their own, so their stages take the branch of the item they are part of. Their changes land together on `feat/checkout-redesign`, can be tested there as a whole, and the work order lands once on the base. A stage run on `WO-12` itself also targets `feat/checkout-redesign`; start the final landing onto the base with `--base <base>`, or on another item.
+
+A start takes its base in this order, highest first:
+
+1. `--base` on a `workflow run`.
+2. The item's own landing branch.
+3. The landing branch of an item it is `part_of` through an active link, nearest first. Two items at the same distance with different branches refuse the start, naming both.
+4. The binding's `launch.isolation.baseOverride`. A trigger file's value is the same for every item the file starts, so the item's branch outranks it.
+5. `worktree.baseBranch`, the project's stored default branch, then the remote's HEAD, as in [base branch precedence](/reference/cli/#base-branch-precedence).
+
+The branch is read when the start runs, not when it is prepared, so a start that waited in the queue takes the branch the item records then. A run already started keeps the base it recorded. A stage that takes another run's checkout (`checkout: "ended-run"` or `"asking-run"`) keeps that checkout and reports the branch as `$BASE_BRANCH`. A stage whose binding sets `launch.isolation` to `in-place` cannot be cut from the branch, so on an item with a landing branch it fails as `launch_failed` before its first node; use `default` or `worktree` isolation. A branch the project's remote does not have fails the start as `launch_failed` before its first node, with a message naming the branch, the remote and the item it came from: push the branch, or record another. Nothing falls back to the base branch. `archon workflow runs --item <key>` shows the branch and where it came from. Recording again replaces the branch.
+
 ## Start a stage when a run on an item ends
 
 A trigger file with `on.runEnded` starts its binding when a run of a named workflow completes with a named outcome on an [item](/reference/cli/#items). It is how one stage hands an item to the next with no node that fires anything: the hand-off is a file the deployment owns, the engine reads it at the moment a run completes, and the start goes through the same receipt, preparation, admission, capacity, overlap and queue order as any binding start.
@@ -349,8 +371,9 @@ Two files that bind the same outcome of the same workflow to the same stage in o
 
 The started run is on the same item. `inputs` maps each input of the started workflow to data from the ended run, and nothing else:
 
-- `{ "result": "<JSON Pointer>" }` reads the ended run's result, the output of its `returns:` node, with an RFC 6901 pointer. `""` passes the whole result. It pins the result of the run whose end started the stage; a stage that declares a [`result_of` input](/reference/workflow-language/#reading-an-earlier-runs-result) instead reads the latest completed run's result when it starts, with no mapping.
+- `{ "result": "<JSON Pointer>" }` reads the ended run's result with an RFC 6901 pointer. The result is the value `archon workflow get <run-id> --json` shows at `terminal_record.returns.value`, the same value a `result_of` input reads: the `output_format` value of its `returns:` node, or an untyped node's text as a string, and nothing when that text passed the output cap. `""` passes the whole result. It pins the result of the run whose end started the stage; a stage that declares a [`result_of` input](/reference/workflow-language/#reading-an-earlier-runs-result) instead reads the latest completed run's result when it starts, with no mapping.
 - `{ "input": "<name>" }` passes one of the ended run's own inputs, so a stage can hand on what it was given, such as the item's text or a policy path. An input the run was not given passes nothing.
+- `{ "item": "answers" }` passes every answer given on the item, from every stage that left asks there, as [an asks-settled binding passes them](#start-a-stage-again-when-its-asks-are-answered). Use it when a stage started after the answers must know everything decided on the item, not only what the run that ended was given.
 
 The values are resolved when the run completes and frozen into the start's receipt, where `archon trigger inspect` shows them. As with other event inputs, they reach only a workflow that declares them under `inputs:`.
 
@@ -377,7 +400,7 @@ If the process dies after the commit, what is left depends on how far it got:
 
 While a start waits it has no run yet. `archon workflow runs --item <key>` lists it under the item's starts waiting to start (`queued` in `--json`), with its request id, resource and how many queued starts of that resource and host are ahead of it, or, with none ahead, that it is next for a free slot, and the host that drains it; `archon trigger withdraw <request-id>` withdraws it. A queued start that waits behind another run of its workflow on the item names that run ([below](#one-run-of-a-workflow-per-item)). A start its binding's `overlap: skip` refused is listed under the item's refused starts (`skipped` in `--json`).
 
-`archon workflow runs --item <key> --json` lists the item's runs in the order they started, each with an `awaitingExecution` (above, `null` unless its start is admitted and not yet running), a `heldBehind` (`null` unless it is a start waiting behind another run of its workflow on the item) and a `cause`: `{"kind": "run_ended", "runId", "sourceInstanceId"}` for a start a run's end caused, where `sourceInstanceId` is the trigger file's, `{"kind": "asks_settled", "runId"}` for one the settling of a run's asks caused ([below](#start-a-stage-again-when-its-asks-are-answered)), `{"kind": "run_fired", "runId", "node"}` for one a node fired, `{"kind": "receipt", "receiptId", "sourceInstanceId"}` for any other trigger, or `null` for a start by hand. The receipt records the ended run as its `sourceActor` (`{"source": "archon-run-ended", "id": <run id>, "display": <outcome>}`) and uses the ended run's ID as its delivery ID. Start times on SQLite have one-second resolution; runs that start in the same second are listed in the order they were written.
+`archon workflow runs --item <key> --json` lists the item's runs in the order they started, each with an `awaitingExecution` (above, `null` unless its start is admitted and not yet running), a `heldBehind` (`null` unless it is a start waiting behind another run of its workflow on the item) and a `cause`: `{"kind": "run_ended", "runId", "sourceInstanceId"}` for a start a run's end caused, where `sourceInstanceId` is the trigger file's, `{"kind": "asks_settled", "runId"}` for one the settling of a run's asks caused ([below](#start-a-stage-again-when-its-asks-are-answered)), `{"kind": "run_fired", "runId", "node"}` for one a node fired, `{"kind": "receipt", "receiptId", "sourceInstanceId"}` for any other trigger, or `null` for a start by hand. The receipt records the ended run as its `sourceActor` (`{"source": "archon-run-ended", "id": <run id>, "display": <outcome>}`) and, for a binding without [`linked`](#start-a-stage-on-an-item-when-the-items-it-links-to-end), uses the ended run's ID as its delivery ID. Start times on SQLite have one-second resolution; runs that start in the same second are listed in the order they were written.
 
 Run-ended bindings need the database store, as items do. With `store: files`, `archon trigger check` refuses any run-ended file, and such a file never fires: the file store refuses every run on an item, and a run with no item causes nothing.
 
@@ -463,7 +486,7 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
 - `nodes` are the stage's nodes after includes are expanded, under the ids its runs record (`<include>__<id>`); `blocks` names the include each came from, outermost first. A `loop_group` is a node, and its body follows it: each body node has `loopGroup` set to the group's id, and its `id` and `dependsOn` are the step names its runs are recorded under (`<group>.<id>`, composing across nested groups, as in `rounds.review__check`). A body's included blocks are named the same way (`rounds.review`). An `include:` with `fan_out:` is one `compose_fan_out` node, because its width is known only at run time; its `fanOut.workflow` names its body in `fanOutBlocks`, which lists each such body's nodes once, including bodies a body fans out to.
 - An arrow is `active` when a trigger file launches it in this project. A declared arrow with no file is reported with `active: false`, not left out. `to` may be a workflow outside the pack. An active arrow's `installed.problems` is what `archon trigger check` reports as the check a run gets before it starts: when it is not empty, every run of `from.stage` on an item is refused before it starts, so the arrow starts nothing until the file is fixed. A file whose `launch.cwd` no longer exists is in no project, so the end of a run never starts it; it is shown with that problem because which project it was meant for cannot be known.
 - A declared binding that names a workflow which is not a stage as the pack loaded keeps the name as written, and its `declared.problems` says so. When that stage failed to load, its load error is in `discoveryErrors`; the rest of the graph is still read.
-- An arrow from an [asks-settled binding](#start-a-stage-again-when-its-asks-are-answered) has `from: { "stage", "settled" }` in place of `outcome`, where `settled` is the binding's `answered`, `withdrawn` or `any`. It starts nothing for an outcome, so it does not change `startsNothing`.
+- An arrow from an [asks-settled binding](#start-a-stage-again-when-its-asks-are-answered) has `from: { "stage", "settled" }` in place of `outcome`, where `settled` is the binding's `answered`, `withdrawn` or `any`, and `option` when the binding names one ([options](#start-a-different-stage-for-each-option)); a pack binding that lists several options is one arrow per option. It starts nothing for an outcome, so it does not change `startsNothing`.
 - `startsNothing` marks an outcome no active arrow without problems leaves. With `asks: false` such an outcome ends in silence; whether that is right is the pack's call.
 - `discoveryErrors` lists every workflow that failed to load from the source the pack was read from. A stage that failed is missing from `stages`, so a non-empty list means the graph may be incomplete.
 - When the pack's workflows are not in the checkout, pass `--workflow-source <dir>` (`workflowSource=` on the API), the directory a binding's `launch.discoveryCwd` names. The arrows are still those of the checkout's project.
@@ -524,6 +547,37 @@ A worktree separates checkouts; it is not a sandbox. A check with `mutates_check
 
 An older Archon binary that prepares one of these starts reads only the branch in `launch.isolation`: it runs the stage on that branch with no commit check and no read-only copy, or fails when it cannot check the branch out. It never uses the base branch.
 
+## Start a stage on an item when the items it links to end
+
+A run-ended binding with `linked` starts its stage on the items the ended run's item is [linked](/reference/cli/#workflow-link) to, instead of on that item. With it, a work order can start its own stage as its members finish, and an item that depends on another can start when that one finishes, with no operator watching. It is the same binding as above, read at the same moment, through the same receipt, preparation, admission, capacity, overlap and queue order, and written in the same transaction that completes the run.
+
+```json
+"on": {
+  "runEnded": {
+    "workflowName": "review",
+    "outcome": "approved",
+    "linked": { "kind": "part_of", "holder": "to" },
+    "inputs": {
+      "member": { "item": "key" },
+      "verdict": { "result": "/verdict" }
+    }
+  }
+}
+```
+
+- `kind` is the link kind to follow: `depends_on`, `part_of` or `duplicate_of`. The engine gives the kind no meaning; the file says which kind matters.
+- `holder` is the end of the link the started item is on. The ended run's item is on the other end. A link reads from `from` to `to`, so members that are `part_of` an order (`archon workflow link --item m1 --kind part_of --to order-3`) start the order with `holder: "to"`, and an item that `depends_on` another (`--item issue-42 --kind depends_on --to issue-17`) starts when `issue-17` ends with `holder: "from"`.
+
+The stage starts on every holder each time one of its linked items ends `workflowName` with `outcome`: an order of three members starts its stage three times. The engine does not count: the stage judges whether its item is ready, for example by reading the item's links and their runs with [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to) or `archon workflow runs --item`, and ends early when it is not. That is also what lets an order proceed when one member was declined, or weigh what each member returned. `inputs` maps from the run that ended as above, plus `{ "item": "key" }`, the key of the item whose run ended. A linked file cannot map `{ "item": "answers" }`: those answers belong to the item whose run ended, not to the holder the stage starts on, so the file is refused. The started stage reads its own item's answers with `archon workflow runs --item`.
+
+Only links active when the run completes count: a link ended before then causes nothing, and an item with no active link of the kind never starts by this binding. A failed or cancelled run, or a run that completes with another outcome, starts nothing. A linked binding takes no `checkout`, because the ended run left its checkout for its own item.
+
+`archon workflow runs --item <holder> --json` shows each started run with `cause` `{"kind": "run_ended", "runId": <the run whose end caused it>, "sourceInstanceId"}`. The receipt's delivery ID is `<ended run ID>:<holder item ID>`. `archon trigger check` checks a linked binding as it checks any run-ended binding, does not report it as a duplicate of a same-item binding to the same stage, and does not report one that starts the workflow whose end fires it, since that start is on another item.
+
+A workflow pack can declare this binding as a [`run_ended:` binding](/reference/workflow-language/#pack-bindings) with `linked`; [`archon pack bindings`](/reference/cli/#pack-bindings) writes it, checked, and `archon trigger add` registers it.
+
+A form that starts the stage once, when every linked item has ended the workflow with the outcome, is not built yet ([issue 5867](https://github.com/coleam00/Archon/issues/5867)).
+
 ## Start a stage again when its asks are answered
 
 A stage can end with [asks](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) instead of guessing: the run completes, its questions open on the item, and an operator answers them. A trigger file with `on.asksSettled` starts its binding on the same item once every ask that run left is answered or withdrawn, with the answers as an input. Nothing is held open while the questions wait. The start belongs to the host the trigger file names, as a run-ended start does. It is prepared at once when the last answer is recorded by `archon workflow answer` or by a server that serves that host, and otherwise at that host's next drain ([below](#who-prepares-the-start)). Preparing a start is not running it: admission then runs it, queues it, or under `overlap: skip` skips it, as for any binding start ([capacity and overlap](#choose-a-resource-capacity-and-overlap-policy), [one run of a workflow per item](#one-run-of-a-workflow-per-item)).
@@ -571,14 +625,16 @@ A binding starts once for a set of asks that meets all of these:
 - The run that left the asks is a run of `workflowName`.
 - `settled` matches how the set settled: `answered` when at least one ask was answered, so a set with some asks withdrawn counts as answered; `withdrawn` when every ask was withdrawn; `any` for either.
 - The binding's `launch.cwd` is in the item's project, as for a run-ended binding.
+- With `option`, every answered ask of the set chose that option ([below](#start-a-different-stage-for-each-option)).
 
 `inputs` maps each input of the started workflow to data from the set and the run that left it, and nothing else:
 
 - `{ "answers": true }` passes the settled set as a list, in the order the run left the asks. Each entry is `{ question, closedAs, answer, option, by, via, at }`: `closedAs` is `answered` or `withdrawn`; `answer` is the stored answer (`decision` and `text`), or `null` for a withdrawn ask; `option` is the chosen option's `id` and what it `does`, or `null`; `by`, `via` and `at` say who closed it, through which surface and when.
-- `{ "result": "<JSON Pointer>" }` reads the result the run completed with, the output of its `returns:` node, which the run keeps on its record for this.
+- `{ "item": "answers" }` passes every answer given on the item, this settled set's included: each ask any run left there that was answered or withdrawn, in the order they were answered or withdrawn (`at`), oldest first, so an answer that changes an earlier one comes later in the list. Each entry is the `{ "answers": true }` entry plus `workflowName`, the workflow whose run left the ask. Open asks are left out, and so are asks replaced by a later run of their workflow before they settled, whose question that later run asked again. Map both when a stage needs to know what was just decided and everything decided before it: a build started by its second set of answers then still has the first.
+- `{ "result": "<JSON Pointer>" }` reads the result the run completed with, which the run keeps on its record for this. It is the same value a run-ended binding's `result` reads.
 - `{ "input": "<name>" }` passes one of that run's own inputs.
 
-The values are resolved when the set settles and frozen into the start's receipt. A pointer that names nothing, or a run whose record is gone when a binding reads its result or inputs, writes the receipt as `unmatched` with the reason and starts nothing. The command that recorded the answer prints it with the `archon trigger inspect` command for the receipt, and so it does for a binding whose preparation failed, for example because the stage it names is gone. The receipt is the settlement's one hand-off, so fixing the file does not start the owed stage, and `trigger fire` does not rebuild the settlement's inputs. Fix the file, then start the stage by hand with the inputs the binding should have passed, written to a JSON file: the answers as `archon workflow runs --item <key> --json` lists them, and the asking run's inputs and result.
+The values are resolved when the set settles and frozen into the start's receipt, so an answer given on the item later is not in them. A pointer that names nothing, a run whose record is gone when a binding reads its result or inputs, or an ask on the item this binary cannot read when a binding reads `{ "item": "answers" }`, writes the receipt as `unmatched` with the reason and starts nothing. The command that recorded the answer prints it with the `archon trigger inspect` command for the receipt, and so it does for a binding whose preparation failed, for example because the stage it names is gone. The receipt is the settlement's one hand-off, so fixing the file does not start the owed stage, and `trigger fire` does not rebuild the settlement's inputs. Fix the file, then start the stage by hand with the inputs the binding should have passed, written to a JSON file: the answers as `archon workflow runs --item <key> --json` lists them (for `{ "item": "answers" }`, all its `answers` entries of kind `ask`), and the asking run's inputs and result.
 
 ```bash
 archon trigger fire --config ~/.archon/triggers/build-after-answers.json --item <key> --inputs inputs.json
@@ -595,6 +651,29 @@ Answering is not starting. Who may answer or withdraw an ask is unchanged: the r
 Asks-settled bindings need the database store, as asks do. A [`wait: attention`](/reference/workflow-language/) node is unchanged: it pauses its own run and resumes it with the answer, and starts nothing.
 
 A workflow pack can declare this binding as an [`asks_settled:` binding](/reference/workflow-language/#pack-bindings); [`archon pack bindings`](/reference/cli/#pack-bindings) writes it, checked, and `archon trigger add` registers it.
+
+### Start a different stage for each option
+
+An ask's options can lead to different stages. `"option": "<id>"` in `on.asksSettled` narrows a binding to answers that chose that option, so one ask offering `send-back`, `replan` and `hold` can start `deliver` again on `send-back`, start `plan` on `replan`, and start nothing on `hold`. Two files on the same asking workflow do it:
+
+```json
+"on": { "asksSettled": { "workflowName": "deliver", "settled": "answered", "option": "send-back", "checkout": "asking-run" } }
+```
+
+```json
+"on": { "asksSettled": { "workflowName": "deliver", "settled": "answered", "option": "replan" } }
+```
+
+The rules:
+
+- `option` is one option `id`, as the ask declared it, and takes `"settled": "answered"`: a withdrawn ask chose nothing.
+- The binding starts when the set has at least one answered ask and every answered ask chose that option. Withdrawn asks are not counted. The engine compares the chosen option's `id` and never reads answer text.
+- A set whose answered asks chose different options matches no binding with `option`. Neither does an answer that chose no option the ask offers, such as a text-only answer. The reserved `other` is an option, so a binding may name it.
+- A binding without `option` starts as before, whatever was chosen.
+
+`archon trigger check` reports two files in one project, on the same asking workflow, that would both start when one option is chosen: two files naming the same option, or one naming an option beside one that names none and takes answers. Two files that name no option and start different stages are not reported; several stages may start on one settlement on purpose.
+
+When a settled set starts nothing, because no binding names the option chosen or no binding matches at all, the answer says so on every surface: `archon workflow answer` and the chat attention tool end their reply with "No trigger binding starts on this settlement, so nothing was started.", and the `--json` output and `POST /api/attention/answer` or `/withdraw` reply have `"nothingStarted": true`. A choice like `hold` reads as a stop, not as a lost start.
 
 ### Work in the checkout the asking run left
 
@@ -623,7 +702,7 @@ The start is refused, naming why:
 
 To start a refused stage by hand, adopt the run that holds the checkout, not necessarily the asking run. It is `metadata.asks_checkout.handoff.runId` in `archon workflow get <asking-run-id> --json`: the asking run itself, or, for an asking stage with `mutates_checkout: false`, the run whose checkout it was given. The read-only stage's own copy is throwaway, and adopting it is refused once it is cleaned up, as for [a read-only check](#work-in-the-checkout-the-ended-run-left). When the answer that settled the set prints the stage as not started, it names that run in the command it prints.
 
-Pass what the binding would have passed, too. `--adopt` carries the checkout, not the answers or inputs, and a stage started without its answers runs without the decisions. Read the answers from `archon workflow runs --item <key> --json` (the `answers` entries of kind `ask` whose `runId` is the asking run) and the asking run's inputs from `archon workflow get <asking-run-id> --json`, then give each input the binding maps with `--input`, or `--input-file` for one held in a file:
+Pass what the binding would have passed, too. `--adopt` carries the checkout, not the answers or inputs, and a stage started without its answers runs without the decisions. Read the answers from `archon workflow runs --item <key> --json` (the `answers` entries of kind `ask` whose `runId` is the asking run, or all of them for an input mapped from `{ "item": "answers" }`) and the asking run's inputs from `archon workflow get <asking-run-id> --json`, then give each input the binding maps with `--input`, or `--input-file` for one held in a file:
 
 ```bash
 archon workflow run build --adopt <holder-run-id> --item <key> \
@@ -707,7 +786,7 @@ If an older released holder also loses its request document, the stored data can
 
 An owned launch that records a preparation error, such as failing to create isolation, ends its still-pending run as `failed`. The full error remains in `trigger inspect` (by receipt or request ID) and `workflow get`. Attention watchers show the run ID and `launch failed before the first node`, without error text. Terminal runs no longer hold resource capacity, so the next drain can admit queued work.
 
-If a request was admitted but its run remains `pending`, for example because its host stopped or was killed without recording a preparation error, inspection supplies an explicit `trigger execute` retry. `archon trigger list` names such requests under each receipt's `awaitingExecution`, and `archon workflow runs --item <key>` shows them on the item. The engine admits only one execution claimant. A drain does not retry it automatically, and the run keeps holding its resource until it runs or is abandoned. Archon does not infer failure from process death. Server launch errors log `resource_start.start_failed` with the run ID and the `archon trigger inspect` command for its recorded status and recovery options.
+If a request was admitted but its run remains `pending`, for example because its host stopped or was killed without recording a preparation error, inspection supplies an explicit `trigger execute` retry. `archon trigger list` names such requests under each receipt's `awaitingExecution`, and `archon workflow runs --item <key>` shows them on the item. The engine admits only one execution claimant. A drain does not retry it automatically, and the run keeps holding its resource until it runs, is cancelled, or is abandoned. `archon workflow cancel <run-id>` withdraws it when no process on this machine holds it, so it never starts. Cancel cannot see a starter on another machine that shares the database, so when the request's host runs elsewhere, cancel it only once that host is stopped ([`workflow cancel`](/reference/cli/#workflow-cancel)). Archon does not infer failure from process death. Server launch errors log `resource_start.start_failed` with the run ID and the `archon trigger inspect` command for its recorded status and recovery options.
 
 To stop a running run that a `trigger execute` process owns, use `archon workflow cancel <runId>`. Cancel stops its safely targetable process groups, then records the run as `cancelled`, which releases the resource. If node output pipes remain held, cancel warns that an unsignalled process still holds them. POSIX host commands that started or completed also produce a warning about possible untracked background work, including after continuation. Neither a survivor nor cleanup is confirmed. These owner-stop warnings retain owned checkouts; inspect processes with `lsof`, verify ownership, and stop leftovers before checkout reuse or removal. The next drain admits queued work for it. A run the server executes has no detached owner process, so `archon workflow cancel` refuses it and leaves it unchanged; cancel it from that server instead (Web UI, API, or chat).
 
@@ -830,13 +909,94 @@ The following configuration starts `review-pull-request` when a pull request is 
 }
 ```
 
-The maintained GitHub source plugin supports issue and pull-request lifecycle events, issue or pull-request label changes, comments created on an issue or pull request (`comment.changed` with action `created`, from GitHub's `issue_comment` event), check-run changes, and commit-status changes. A label change carries who made it, as the `label.actor.id` and `label.actor.login` fields, and a comment carries `comment.id`, `comment.author.id` and `comment.author.login`; the comment's text is not part of the event. Selectors match an exact event kind and one of the configured actions. They can also restrict the repository, issue or pull-request number, and the predicates supported for that event kind. Input mappings copy a supported event field or supply a typed JSON literal. A required field that is unavailable rejects that binding instead of inventing a value.
+The maintained GitHub source plugin supports issue and pull-request lifecycle events, issue or pull-request label changes, comments created on an issue or pull request (`comment.changed` with action `created`, from GitHub's `issue_comment` event), pull-request reviews submitted or dismissed (`review.changed` with action `submitted` or `dismissed`, from GitHub's `pull_request_review` event), check-run changes, and commit-status changes. A label change carries who made it, as the `label.actor.id` and `label.actor.login` fields, and a comment carries `comment.id`, `comment.author.id` and `comment.author.login`; the comment's text is not part of the event. A review carries `review.id`, `review.state` (`approved`, `changes_requested`, `commented`, `dismissed`, or `unknown` for a state the event vocabulary does not name), GitHub's own `review.nativeState`, the commit it was made on as `review.commit`, and `review.author.id` and `review.author.login`; its text is not part of the event. A selector can restrict a review event with a `review.state` predicate. Subscribe the GitHub webhook to **Pull request reviews** to receive them. Selectors match an exact event kind and one of the configured actions. They can also restrict the repository, issue or pull-request number, and the predicates supported for that event kind. Input mappings copy a supported event field or supply a typed JSON literal. A required field that is unavailable rejects that binding instead of inventing a value.
 
 The plugin authenticates the raw payload using the configured shared secret. The server validates its resolved receipt, verifies for a new delivery that the configured run-as users exist, and commits the receipt before returning success. Preparing and starting the run happen after the response, so a slow workflow never delays GitHub's delivery. An invalid signature creates no trusted receipt. A signed source event does not select the Archon user who runs the workflow. Every binding must name an authorized `runAsUserId`. The optional GitHub event actor remains provenance and never becomes an Archon credential selector.
 
 On the first verified delivery, Archon records the source instance, delivery ID, verified-content digest, selected binding ID and revision, resolved inputs, and launch intent. Replaying the same `(sourceInstanceId, deliveryId)` reuses the original receipt and binding snapshot; changed or newly added bindings do not create starts for that delivery. Editing a binding does not turn an old delivery into a new start. Reusing a delivery ID with different verified content returns HTTP 409. When GitHub supplies no delivery ID, Archon cannot provide source-level replay deduplication.
 
 GitHub does not automatically redeliver every failed webhook. Check delivery status in GitHub and use GitHub's explicit redelivery or your reconciliation process after a transport or processing failure. Archon retains safe receipt and disposition data for inspection; it does not retain the raw webhook body as a trigger archive.
+
+## Start a stage when what an item waits for happens
+
+A stage that has to wait for something outside Archon, such as a change's checks finishing or a review arriving, ends instead of sleeping. It says what its item now waits for as [waits](/reference/workflow-language/#waits-what-an-item-waits-for-outside-archon) in its result. The run completes and holds no agent session, checkout or capacity slot, and nothing polls the forge. When the event arrives, a GitHub source plugin binding with `wake` starts the next stage on the item.
+
+A host stage that reads a change's checks and reviews, and ends waiting when they are not in yet:
+
+```yaml
+name: host
+description: Read the change's checks and reviews; wait for the ones still coming
+inputs:
+  head: {}
+  waited: {}
+returns: { node: read, outcome: verdict, waits: waits }
+nodes:
+  - id: read
+    prompt: |
+      Read the checks and reviews on the change at commit $INPUTS.head. If any is still
+      running or expected, leave verdict 'waiting' and say what you wait for.
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string, enum: [clear, blocked, waiting] }
+      required: [verdict]
+```
+
+The engine adds `waits` to the node's output schema. A run that ends with checks still running at the head leaves:
+
+```json
+{
+  "verdict": "waiting",
+  "waits": [
+    { "event": "checks", "about": "<full head commit id>", "within_minutes": 60 },
+    { "event": "review", "about": "<full head commit id>", "within_minutes": 240 }
+  ]
+}
+```
+
+Two bindings in the pack wake it, one for a check and one for a review, each naming the field of the event that must equal the wait's `about`:
+
+```yaml
+bindings:
+  checks-done:
+    workflow: host
+    resource: host
+    overlap: queue
+    event:
+      kind: check.changed
+      actions: [changed]
+      predicates: [{ field: check.phase, equals: completed }]
+    wake: { workflow: host, wait: checks, about: check.revision }
+    inputs:
+      head: { event: check.revision }
+      waited: { wait: true }
+  reviewed:
+    workflow: host
+    resource: host
+    overlap: queue
+    event:
+      kind: review.changed
+      actions: [submitted, dismissed]
+    item: { field: subject.number, prefix: pr- }
+    wake: { workflow: host, wait: review, about: review.commit }
+    inputs:
+      head: { event: review.commit }
+      waited: { wait: true }
+```
+
+Here the next stage is `host` again: it reads the change once more, and either ends with a verdict or waits again. A stage can as well start another workflow. `{ wait: true }` carries the met wait, and its `runId` names the run that left it: `archon workflow get <runId> --json` shows what that run returned, at `terminal_record.returns.value`. A [`result_of: host`](/reference/workflow-language/#reading-an-earlier-runs-result) input is not the same read: it takes the latest completed `host` run on the item when the stage starts, which is a newer run than the waiting one when `host` completed again while the start waited for its slot. [`archon pack bindings`](/reference/cli/#pack-bindings) writes each as a binding for the GitHub source plugin's `bindings` array, with `wake` as `{ "workflow", "wait", "about": { "field" }, "input" }`. The start is on the item of the wait it meets. A review names its pull request, so its binding also maps that `item` (here the items are keyed `pr-<number>`) and only a wait on that item can be woken: another pull request with the same commit wakes nothing here. The GitHub plugin refuses a `wake` binding without `item` for any event kind that names its subject. A check names no single pull request, so `checks-done` maps no item and matches on the commit alone, which also lets a pull request's checks wake an item keyed by its issue. `{ wait: true }` passes the met wait to the stage as `{ event, about, workflow, runId, waitingSince, deadline }`; the started workflow declares that input.
+
+What the engine holds to when the event arrives:
+
+- **The wake is decided when the event is recorded.** The plugin reads the `about` field and hands it on; it compares nothing. In the transaction that records the delivery, the engine looks for an open wait of `wait.workflow` named `wait` whose `about` is exactly that value, on an item of the project the binding's `launch.cwd` is in, and on the binding's mapped item when it maps one. A match closes the set as met and writes the start on its item. A binding whose field is missing or empty is recorded as `rejected`.
+- **Once.** A redelivery of the same delivery is a replay and starts nothing. Another delivery for the same set finds it met and is recorded `unmatched` with `no open wait 'checks' about '<commit>' from 'host'`. Two deliveries that arrive together start one stage.
+- **A commit the waits no longer name starts nothing.** A later completed run of `host` on the item replaces its open waits with its own. After that, a check or review of the older commit, however late or however GitHub marked it, finds no open wait about that commit and is recorded `unmatched`, naming the wait it looked for. The engine compares the event with the open waits only; it does not read the forge's current head. A push to the pull request alone replaces nothing: until a run of `host` ends with waits about the new commit, an event about the old commit still meets the old waits. Bind a stage on the pull request's `pr.lifecycle` event with action `head_updated` (the GitHub source plugin's name for GitHub's `synchronize` action) when a push should end what the item waited for.
+- **No event by the deadline raises attention.** An open set past any of its waits' `within_minutes` is listed by `archon workflow attention` as an `overdue_wait` item with ref `wait:<run-id>`, naming what the item waits for and since when. It stays open, and a late event still meets it. Withdraw it with `archon workflow answer --withdraw wait:<run-id>`, or run `host` on the item again. `archon workflow runs --item <key>` lists the item's open waits under `Waiting for` before and after the deadline.
+- **An event without an item cannot choose between items.** When a binding maps no item (a check) and open waits on two items of the project match its event, nothing starts and the receipt is `rejected`, naming both items. A binding that maps an item only ever reaches the wait on that item.
+
+Each completed check is its own event. A host stage waiting for `checks` is woken by the first completed check at its commit, reads the change, and may end waiting again; narrow the binding's selector with predicates when it should wake for fewer. An event that arrives while the waiting stage is still running finds no open wait, because the waits open only when the run completes, and is recorded `unmatched`. If no later event follows, the set goes overdue and appears in attention.
+
+Wake bindings need the database store and a registered project, as items do.
 
 ## Start workflows from any signed webhook
 
@@ -1025,7 +1185,7 @@ The server drains accepted and queued work. Re-polling sends a fresh timestamp b
 
 ## Preparation and retained records
 
-The receipt freezes the evaluated bindings and resolved inputs. The execution host later captures the workflow source and reads any `configSource` run configuration. Queue admission freezes that prepared source and configuration; editing live files afterward does not change queued work.
+The receipt freezes the evaluated bindings and resolved inputs. The execution host later captures the workflow source and resolves the run configuration: on an item, the config the item's most recent run was started with, else any `configSource` file (see [Items](/reference/cli/#items)). Queue admission freezes that prepared source and configuration; editing live files afterward does not change queued work.
 
 An input mapped from the event, by CLI `--inputs`, a Standard Webhooks JSON Pointer, or a GitHub `field` mapping, reaches only a workflow that declares it under `inputs:`. Preparation rejects a binding that maps event values into a workflow without that declaration. Literal inputs you write into `launch.inputs` or a GitHub `literal` mapping pass through to a workflow without `inputs:`, as they do for a direct run. A workflow that declares `inputs:` rejects any undeclared name, literal or mapped.
 
