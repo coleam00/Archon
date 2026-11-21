@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { PackageManifest } from './check-package-edges';
 import {
   packRunnerInputs,
   shouldRunEveryJob,
@@ -47,32 +48,33 @@ export interface ClassifierInputs {
   workspaceTest: ReadonlySet<string>;
 }
 
-export type ChangeScope =
-  | { kind: 'everything'; because: string[] }
-  | {
-      kind: 'scoped';
-      /** Package name to why it is checked: `changed` or `depends on <name>`. */
-      packages: Map<string, string>;
-      rootScripts: boolean;
-      pack: boolean;
-      /** Files CI's classifier treats as prose or inert: nothing checks them. */
-      unchecked: string[];
-    };
+export interface ScopedChange {
+  kind: 'scoped';
+  /** Package name to why it is checked: `changed` or `depends on <name>`. */
+  packages: Map<string, string>;
+  rootScripts: boolean;
+  pack: boolean;
+  /** Files CI's classifier treats as prose or inert: nothing checks them. */
+  unchecked: string[];
+}
+
+export type ChangeScope = { kind: 'everything'; because: string[] } | ScopedChange;
 
 const SECTIONS = ['dependencies', 'devDependencies', 'peerDependencies'] as const;
 
-function workspaceDependencies(manifest: Partial<Record<string, unknown>>): string[] {
-  return SECTIONS.flatMap(section => {
-    const entries = (manifest[section] ?? {}) as Record<string, string>;
-    return Object.keys(entries).filter(name => entries[name].startsWith('workspace:'));
-  });
+function workspaceDependencies(manifest: Omit<PackageManifest, 'path'>): string[] {
+  return SECTIONS.flatMap(section =>
+    Object.entries(manifest[section] ?? {})
+      .filter(([, version]) => version.startsWith('workspace:'))
+      .map(([name]) => name)
+  );
 }
 
 export function loadGraph(root = REPO_ROOT): WorkspaceGraph {
   const packages = workspacePackages(root);
-  const rootManifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as Record<
-    string,
-    unknown
+  const rootManifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as Omit<
+    PackageManifest,
+    'path'
   >;
   return {
     directories: new Map(packages.map(manifest => [manifest.name, manifest.path])),
@@ -92,9 +94,7 @@ const SHARED_CONFIG = ['tsconfig.json', 'biome.jsonc'];
 type FileScope =
   | { kind: 'unchecked' }
   | { kind: 'everything'; because: string }
-  | { kind: 'package'; name: string }
-  | { kind: 'root-scripts'; allPackages: boolean; pack: boolean }
-  | { kind: 'pack' };
+  | { kind: 'checked'; packages: string[]; reason: string; rootScripts: boolean; pack: boolean };
 
 function classify(file: string, graph: WorkspaceGraph, inputs: ClassifierInputs): FileScope {
   if (!shouldRunTestSuite([file])) return { kind: 'unchecked' };
@@ -109,17 +109,28 @@ function classify(file: string, graph: WorkspaceGraph, inputs: ClassifierInputs)
     const name = [...graph.directories].find(([, directory]) => directory === packageDirectory);
     return name === undefined
       ? { kind: 'everything', because: `${file} is in ${packageDirectory}, which has no manifest` }
-      : { kind: 'package', name: name[0] };
+      : {
+          kind: 'checked',
+          packages: [name[0]],
+          reason: 'changed',
+          rootScripts: false,
+          pack: false,
+        };
   }
   if (file.startsWith('scripts/')) {
     return {
-      kind: 'root-scripts',
-      allPackages: inputs.workspaceTest.has(file),
+      kind: 'checked',
+      packages: inputs.workspaceTest.has(file) ? [...graph.directories.keys()] : [],
+      reason: `reads ${file}`,
+      rootScripts: true,
       // The pack's tsc projects extend this one.
       pack: file === 'scripts/tsconfig.json',
     };
   }
-  if (file.startsWith('.archon/')) return { kind: 'pack' };
+  if (file.startsWith('.archon/')) {
+    // Root script tests import pack modules, so a pack change runs them too.
+    return { kind: 'checked', packages: [], reason: '', rootScripts: true, pack: true };
+  }
   return { kind: 'everything', because: `${file} maps to no package or root project` };
 }
 
@@ -151,37 +162,36 @@ export function changeScope(
   inputs: ClassifierInputs
 ): ChangeScope {
   const because: string[] = [];
-  const packages = new Map<string, string>();
-  const unchecked: string[] = [];
-  let rootScripts = false;
-  let pack = false;
+  const scope: ScopedChange = {
+    kind: 'scoped',
+    packages: new Map(),
+    rootScripts: false,
+    pack: shouldRunPackTests(files, inputs.packRunner),
+    unchecked: [],
+  };
   for (const file of files) {
-    const scope = classify(file, graph, inputs);
-    if (scope.kind === 'unchecked') unchecked.push(file);
-    else if (scope.kind === 'everything') because.push(scope.because);
-    else if (scope.kind === 'package') packages.set(scope.name, 'changed');
-    else if (scope.kind === 'pack') {
-      // Root script tests import pack modules, so a pack change runs them too.
-      pack = true;
-      rootScripts = true;
-    } else {
-      rootScripts = true;
-      pack ||= scope.pack;
-      if (scope.allPackages) {
-        for (const name of graph.directories.keys()) {
-          if (!packages.has(name)) packages.set(name, `reads ${file}`);
-        }
+    const fileScope = classify(file, graph, inputs);
+    if (fileScope.kind === 'unchecked') scope.unchecked.push(file);
+    else if (fileScope.kind === 'everything') because.push(fileScope.because);
+    else {
+      for (const name of fileScope.packages) {
+        if (!scope.packages.has(name)) scope.packages.set(name, fileScope.reason);
       }
+      scope.rootScripts ||= fileScope.rootScripts;
+      scope.pack ||= fileScope.pack;
     }
   }
   if (because.length > 0) return { kind: 'everything', because };
+  return withDependents(scope, graph);
+}
 
-  for (const [name, reason] of dependents(graph, packages.keys())) {
-    if (name === ROOT) rootScripts = true;
-    else if (!packages.has(name)) packages.set(name, reason);
+/** Adds every package that depends on a scoped one; the root manifest brings the root scripts. */
+function withDependents(scope: ScopedChange, graph: WorkspaceGraph): ScopedChange {
+  for (const [name, reason] of dependents(graph, scope.packages.keys())) {
+    if (name === ROOT) scope.rootScripts = true;
+    else if (!scope.packages.has(name)) scope.packages.set(name, reason);
   }
-  pack ||= shouldRunPackTests(files, inputs.packRunner);
-  return { kind: 'scoped', packages, rootScripts, pack, unchecked };
+  return scope;
 }
 
 function git(args: string[]): string {

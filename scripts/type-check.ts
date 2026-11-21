@@ -6,11 +6,13 @@ import type { PackageManifest } from './check-package-edges';
  * The repository's type-check: every workspace package's own `type-check` script, plus the
  * root TypeScript projects, run through a fixed-size pool.
  *
- * `bun --filter '*' type-check` started a `tsc` for every package at once, about 1.3 GB each.
- * `tsc` is single-threaded, so running more of them than the machine has cores buys no wall
- * time and only adds memory. CI's `static` job runs on a 4-vCPU runner.
+ * Peak memory is the sum of the `tsc` processes alive at once, and the large packages each take
+ * 2 to 3 GB (`cli`, `server`, `adapters`, `workflows`, `core`; measured 2026-11-21). Two at a
+ * time keeps the peak near the two largest; four can reach about 10 GB. `bun --filter` had no
+ * limit beyond dependency order. On CI's 4-vCPU `static` runner two at a time is still faster
+ * than `bun --filter` was, because it no longer waits on dependency order.
  */
-export const TYPE_CHECK_CONCURRENCY = 4;
+export const TYPE_CHECK_CONCURRENCY = 2;
 
 /** The TypeScript projects outside the workspace packages, checked from the repository root. */
 export const ROOT_TSC_PROJECTS = [
