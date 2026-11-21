@@ -15,6 +15,8 @@
  *       branch: "task-123"
  *     resolved-text-contains:    # fragments that must appear in a reached node's resolved text
  *       implement: "task-123"
+ *     wait-labels:               # exact resolved labels of an attention wait
+ *       review: { area: delivery }
  *   exec-code: false             # execute script/bash nodes instead of stubbing
  *
  * Every remaining key is a node-id → stub-output entry, exactly what
@@ -58,9 +60,8 @@ import {
 } from './workflow-source';
 import { FIXTURE_SUFFIX, FIXTURES_DIR } from './fixture-layout';
 import { parseYaml } from './loader';
-
-/** Compares text the checkout may have converted to CRLF against a fixture's LF expectation. */
-const withLfEndings = (text: string): string => text.replaceAll('\r\n', '\n');
+import { attentionLabelsSchema } from './schemas/wait-node';
+import { fixtureResolvedTextFailure, fixtureWaitLabelsFailure } from './fixture-expectations';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -82,6 +83,7 @@ export const fixtureDeclarationSchema = z
     reached: z.array(z.string()).optional(),
     inputs: z.record(z.string(), z.string()).optional(),
     'resolved-text-contains': z.record(z.string(), z.string()).optional(),
+    'wait-labels': z.record(z.string(), attentionLabelsSchema).optional(),
   })
   .strict()
   .refine(decl => decl.expect !== 'failed' || decl['fail-node'] !== undefined, {
@@ -657,39 +659,6 @@ function fixtureReachedFailure(
   return undefined;
 }
 
-function fixtureResolvedTextFailure(
-  result: DryRunResult,
-  declaration: FixtureDeclaration
-): string | undefined {
-  if (declaration['resolved-text-contains'] === undefined) return undefined;
-  for (const [nodeId, expectedText] of Object.entries(declaration['resolved-text-contains'])) {
-    const traceEntries = result.trace.filter(
-      entry =>
-        entry.nodeId === nodeId &&
-        (entry.state === 'completed' || entry.state === 'stubbed' || entry.state === 'paused')
-    );
-    if (traceEntries.length === 0) {
-      return `expected resolved text for node '${nodeId}', but it was not reached`;
-    }
-    // Line endings belong to the checkout, not to the workflow. A command file is read as
-    // raw text, so `* text=auto` gives a Windows clone CRLF inside it, while a fixture
-    // spells its expectation with `\n` escapes that stay LF everywhere. This declaration is
-    // about interpolated content, so it compares on LF alone rather than passing on Linux
-    // and failing on Windows for the same workflow. (Workflow YAML is immune: the parser
-    // normalizes line breaks in its own scalars.)
-    const expected = withLfEndings(expectedText);
-    if (
-      !traceEntries.some(
-        entry =>
-          entry.resolvedText !== undefined && withLfEndings(entry.resolvedText).includes(expected)
-      )
-    ) {
-      return `expected node '${nodeId}' resolved text to contain ${JSON.stringify(expectedText)}`;
-    }
-  }
-  return undefined;
-}
-
 async function checkFixture(
   workflowName: string,
   ws: WorkflowWithSource,
@@ -725,7 +694,8 @@ async function checkFixture(
     let failureReason =
       fixtureOutcomeFailure(result, parsed.declaration) ??
       fixtureReachedFailure(result, parsed.declaration) ??
-      fixtureResolvedTextFailure(result, parsed.declaration);
+      fixtureResolvedTextFailure(result, parsed.declaration) ??
+      fixtureWaitLabelsFailure(result, parsed.declaration);
     // A `trigger_rule: all_done` join tolerates its own missing stub (#2869) — it never
     // blocked this simulated outcome, so it must not block the fixture either. Only the
     // untolerated remainder still means "this fixture never verified a reached node."

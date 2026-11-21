@@ -191,6 +191,7 @@ describe('parseFixtureFile', () => {
       reached: ['node-a'],
       inputs: { branch: 'task-123' },
       'resolved-text-contains': { 'node-a': 'task-123' },
+      'wait-labels': { 'node-a': { stage: 'deliver' } },
     };
     expect(parseFixtureFile(Bun.YAML.stringify({ fixture: declaration }), 'x').declaration).toEqual(
       declaration
@@ -788,6 +789,97 @@ describe('runFixtures', () => {
     });
 
     expect(report.passed).toBe(1);
+  });
+
+  it.each([
+    { expected: 'deliver', passes: true },
+    { expected: 'wrong', passes: false },
+  ])('asserts exact resolved wait labels ($passes)', async ({ expected, passes }) => {
+    const { cwd } = writeTempProject({
+      workflowYaml: [
+        'name: test-wf',
+        'description: test',
+        'nodes:',
+        '  - id: decide',
+        '    bash: unused',
+        '  - id: ask',
+        '    depends_on: [decide]',
+        '    wait:',
+        '      attention: Merge it?',
+        '      form: select',
+        '      options: [{ id: merge }]',
+        '      labels:',
+        '        stage: $decide.output.stage',
+        '        area: delivery',
+      ].join('\n'),
+      body: [
+        'fixture:',
+        '  expect: paused',
+        '  wait-labels:',
+        '    ask:',
+        `      stage: ${expected}`,
+        '      area: delivery',
+        'decide:',
+        '  stage: deliver',
+      ].join('\n'),
+    });
+
+    const report = await runFixtures({
+      workflows: workflowsOnDisk(cwd, ['test-wf']),
+      cwd,
+    });
+
+    expect(report.results[0]?.pass).toBe(passes);
+    if (!passes) {
+      expect(report.results[0]?.failureReason).toBe(
+        'expected wait \'ask\' labels to equal {"stage":"wrong","area":"delivery"}'
+      );
+      expect(report.results[0]?.trace).toEqual([
+        expect.objectContaining({ nodeId: 'decide', state: 'stubbed' }),
+        expect.objectContaining({ nodeId: 'ask', state: 'paused' }),
+      ]);
+      expect(JSON.stringify(report.results[0]?.trace)).not.toContain('attentionAsk');
+    }
+  });
+
+  it('checks wait labels on every reached loop occurrence, not only a matching earlier ask', async () => {
+    const { cwd } = writeTempProject({
+      workflowYaml: [
+        'name: test-wf',
+        'description: test',
+        'nodes:',
+        '  - id: group',
+        '    loop_group:',
+        '      until: DONE',
+        '      max_iterations: 2',
+        '      on_exhausted: complete',
+        '      nodes:',
+        '        - id: ask',
+        '          wait:',
+        '            attention: Merge it?',
+        '            form: select',
+        '            options: [{ id: merge }]',
+        '            labels:',
+        '              stage: $LOOP_PREV.ask.output.decision',
+      ].join('\n'),
+      body: [
+        'fixture:',
+        '  wait-labels:',
+        '    ask: { stage: "" }',
+        'ask: { decision: merge, text: "" }',
+      ].join('\n'),
+    });
+
+    const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
+
+    expect(report.results[0]).toMatchObject({
+      pass: false,
+      outcome: 'completed',
+      failureReason: 'expected wait \'ask\' labels to equal {"stage":""}',
+    });
+    expect(
+      report.results[0].trace?.filter(entry => entry.nodeId === 'ask').map(entry => entry.iteration)
+    ).toEqual([1, 2]);
   });
 
   it('matches a multi-line fragment against a command file checked out with CRLF', async () => {

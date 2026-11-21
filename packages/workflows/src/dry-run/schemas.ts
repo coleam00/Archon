@@ -1,5 +1,11 @@
 import { z } from 'zod';
 import { effortLevelSchema, skipCauseSchema, workflowRunOutcomeSchema } from '../schemas';
+import {
+  attentionFormSchema,
+  attentionLabelsSchema,
+  attentionOptionSchema,
+  attentionRecommendationSchema,
+} from '../schemas/wait-node';
 
 const dryRunNodeTypeSchema = z.enum([
   'command',
@@ -54,6 +60,16 @@ const dryRunTraceBaseSchema = z.object({
   iteration: z.number().int().positive().optional(),
   /** Present for nodes that take an AI turn; absent for bash/script/approval/cancel. */
   resolution: dryRunResolutionSchema.optional(),
+  /** The fully resolved operator ask; excluded from narrow fixture summaries. */
+  attentionAsk: z
+    .object({
+      form: attentionFormSchema,
+      options: z.array(attentionOptionSchema.omit({ value: true })).optional(),
+      recommendation: attentionRecommendationSchema.optional(),
+      labels: attentionLabelsSchema.optional(),
+      other: z.literal(true).optional(),
+    })
+    .optional(),
 });
 
 export const dryRunTraceEntrySchema = z.discriminatedUnion('state', [
