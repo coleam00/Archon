@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { itemReadSchema } from '../item-read';
 import { itemWindowSchema } from '../item-window';
+import { itemLandingSchema } from '../schemas/item-landing';
+import { itemLinkSchema } from '../schemas/item-link';
+import { itemMergeSchema } from '../schemas/item-merge';
 import { nodeOutcomesListingSchema } from '../schemas/node-outcomes';
 import { resourceStartDispositionSchema } from '../schemas/resource-start';
 import {
@@ -69,6 +72,19 @@ const types: readonly (readonly [string, string, z.ZodType, 'input' | 'output'])
     itemWindowSchema,
     'output',
   ],
+  [
+    'ItemLink',
+    'A link between two items, as the engine records it; `ended` is null while it is active.',
+    itemLinkSchema,
+    'output',
+  ],
+  [
+    'ItemMerge',
+    'The merge recorded on an item, as the forge reported it.',
+    itemMergeSchema,
+    'output',
+  ],
+  ['ItemLanding', "The branch an item's change lands on.", itemLandingSchema, 'output'],
   [
     'StartDisposition',
     'The admission a fired trigger binding got.',

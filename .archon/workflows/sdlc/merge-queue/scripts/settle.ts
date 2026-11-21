@@ -30,9 +30,8 @@
  * the pack setting INPUTS_PROTECTED_PATHS.
  */
 
-import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { emit, input, recordMerge, refuse, runId as workflowRunId } from 'archon:script';
 import { withBuild } from '../../.shared/build.ts';
-import { recordItemMerge } from '../../.shared/host.ts';
 import type { QualifiedPr } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
 import { appendSection, viewIssue } from '../../.shared/issue.ts';
@@ -59,7 +58,7 @@ import {
 } from '../../.shared/merge.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { announce, rulingHeading } from '../../.shared/queue.ts';
-import { enqueue, itemKey, updateWorkItem } from '../../.shared/workitem.ts';
+import { enqueue, updateWorkItem } from '../../.shared/workitem.ts';
 
 type Judged = NodeOutput<'archon-merge-queue', 'judge'>['decision'];
 
@@ -229,9 +228,13 @@ function record(start: MergeStart, settled: Settled, brief: string, runId: strin
 
 /** Put the merge on the engine item, and say whether the still-open issue asks intake for a re-triage. */
 function afterMerge(start: MergeStart, settled: Settled, runId: string, at: string, lines: string[]): 'merged' | 'merged_retriage' {
-  // The engine's item metrics read the merge from the item, never from the work item.
-  const missed = recordItemMerge(itemKey(start.item.number), start.url, settled.merge_commit, at);
-  if (missed !== null) lines.push(`its merge is not on the engine item (${missed})`);
+  // The engine's item metrics read the merge from the item, never from the work item. The
+  // run is on the issue's item, so its own item is the one to record on.
+  try {
+    recordMerge({ change: start.url, at, commit: settled.merge_commit });
+  } catch (error) {
+    lines.push(`its merge is not on the engine item (${message(error)})`);
+  }
   try {
     return retriageOpen(start.item, runId, at) ? 'merged_retriage' : 'merged';
   } catch (error) {
