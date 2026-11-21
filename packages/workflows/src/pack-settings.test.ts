@@ -183,7 +183,7 @@ describe('parsePackDeclaration bindings', () => {
 
   it('reads a run-ended binding with its outcomes and the ended run inputs it maps', () => {
     const declared = parsePackDeclaration(
-      `bindings:\n${timer()}  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: [build, narrow] }\n    inputs:\n      issue: { input: issue }\n      verdict: { result: /verdict }\n      policy: docs/policy.md\n      next: { binding: sweep }\n`,
+      `bindings:\n${timer()}  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: [build, narrow] }\n    inputs:\n      issue: { input: issue }\n      verdict: { result: /verdict }\n      policy: docs/policy.md\n      next: { binding: sweep }\n      decided: { item: answers }\n`,
       'p/.pack/pack.yaml'
     );
     expect(declared.bindings?.plan).toEqual({
@@ -198,13 +198,14 @@ describe('parsePackDeclaration bindings', () => {
         verdict: { result: '/verdict' },
         policy: 'docs/policy.md',
         next: { binding: 'sweep' },
+        decided: { item: 'answers' },
       },
     });
   });
 
   it("reads an asks-settled binding that takes the asking run's checkout and its answers", () => {
     const declared = parsePackDeclaration(
-      `bindings:\n  build-again:\n    workflow: build\n    resource: build\n    overlap: queue\n    asks_settled: { workflow: build, settled: answered, checkout: asking-run }\n    inputs:\n      decisions: { answers: true }\n      issue: { input: issue }\n`,
+      `bindings:\n  build-again:\n    workflow: build\n    resource: build\n    overlap: queue\n    asks_settled: { workflow: build, settled: answered, checkout: asking-run }\n    inputs:\n      decisions: { answers: true }\n      issue: { input: issue }\n      decided: { item: answers }\n`,
       'p/.pack/pack.yaml'
     );
     expect(declared.bindings?.['build-again']).toEqual({
@@ -214,7 +215,11 @@ describe('parsePackDeclaration bindings', () => {
       overlap: 'queue',
       isolation: { kind: 'default' },
       asks_settled: { workflow: 'build', settled: 'answered', checkout: 'asking-run' },
-      inputs: { decisions: { answers: true }, issue: { input: 'issue' } },
+      inputs: {
+        decisions: { answers: true },
+        issue: { input: 'issue' },
+        decided: { item: 'answers' },
+      },
     });
   });
 
@@ -252,6 +257,11 @@ describe('parsePackDeclaration bindings', () => {
       '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done, checkout: ended-run, linked: { kind: part_of, holder: to } }\n',
       "binding 'plan' is invalid at 'run_ended.checkout': A linked start takes no checkout",
     ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done, linked: { kind: part_of, holder: to } }\n    inputs:\n      d: { item: answers }\n',
+      "binding 'plan' input 'd' reads the item's answers, but a linked start is on a holder item",
+    ],
+    [timer('    inputs:\n      d: { item: answers }\n'), "reads the item's answers, but only"],
     [
       '  build:\n    workflow: build\n    resource: build\n    overlap: queue\n    asks_settled: { workflow: build, settled: answered }\n    inputs:\n      m: { item: key }\n',
       "binding 'build' input 'm' reads the ended run's item key, but only a run-ended binding has one",

@@ -54,11 +54,11 @@ import {
   packWorkflows,
 } from '@archon/workflows/pack-graph';
 import { writeJsonLine } from '../utils/stdout';
-import {
-  triggerConfigSchema,
-  type AsksSettledInputSource,
-  type RunEndedInputSource,
-} from '@archon/workflows/schemas/resource-start';
+import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
+import type {
+  AsksSettledInputSource,
+  RunEndedInputSource,
+} from '@archon/workflows/schemas/binding-input-source';
 import { loadWorkflows } from './workflow-list';
 
 export interface PackBindingsOptions {

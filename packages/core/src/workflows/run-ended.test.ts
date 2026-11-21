@@ -7,6 +7,8 @@ import type { RunEndedFacts } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { providerRegistry } from '@archon/providers';
 import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
+import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
+import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import { createRunEndedPreflight, createRunEndedStarts, launchProjectKey } from './run-ended';
 
 const track = trackTempRoots();
@@ -85,10 +87,14 @@ function trigger(fields: { cwd?: string; on?: unknown; sourceInstanceId?: string
 // A binding without `checkout` never reads the ended run's checkout.
 const noCheckout = (): Promise<EndedCheckout> =>
   Promise.reject(new Error('no binding here reads the checkout'));
+// A binding without `{item: 'answers'}` never reads the item's asks.
+const noItemAnswers = (): Promise<never> =>
+  Promise.reject(new Error("no binding here reads the item's answers"));
 
 async function triggersWith(
   files: Record<string, unknown>,
-  endedCheckout: (run: WorkflowRun) => Promise<EndedCheckout> = noCheckout
+  endedCheckout: (run: WorkflowRun) => Promise<EndedCheckout> = noCheckout,
+  listItemAsks: (itemId: string) => Promise<AttentionRead<StoredItemAsk>[]> = noItemAnswers
 ) {
   const directory = track(await mkdtemp(join(tmpdir(), 'archon-run-ended-')));
   for (const [name, value] of Object.entries(files))
@@ -101,6 +107,7 @@ async function triggersWith(
     getItem: async id => (id === ITEM.id ? ITEM : null),
     projectKeyOf: async cwd => (cwd === PROJECT_CWD ? ITEM.projectKey : 'acme/other'),
     endedCheckout,
+    listItemAsks,
     now: () => new Date('2026-11-16T10:00:00.000Z'),
   });
 }
@@ -160,6 +167,7 @@ describe('run-ended starts', () => {
       getItem: async () => ITEM,
       projectKeyOf: async () => ITEM.projectKey,
       endedCheckout: noCheckout,
+      listItemAsks: noItemAnswers,
     };
     const noItem = endedRun({ item_id: null });
     expect(await createRunEndedStarts(dependencies)(facts({ run: noItem }))).toEqual({
@@ -190,6 +198,7 @@ describe('run-ended starts', () => {
       getItem: async () => ITEM,
       projectKeyOf: async () => ITEM.projectKey,
       endedCheckout: noCheckout,
+      listItemAsks: noItemAnswers,
     });
     expect(await starts(facts())).toEqual({ receipts: [], linked: [] });
   });
@@ -318,6 +327,7 @@ describe('run-ended starts', () => {
       getItem: async () => ITEM,
       projectKeyOf: () => Promise.reject(new Error('Failed to find repo root for /srv/widgets')),
       endedCheckout: noCheckout,
+      listItemAsks: noItemAnswers,
     };
     for (const read of [
       () => createRunEndedStarts(dependencies)(facts()),
@@ -391,6 +401,138 @@ describe('run-ended starts', () => {
     file.binding.launch.isolation = { kind: 'in-place' };
     const starts = await triggersWith({ 'build.json': file });
     await expect(starts(facts())).rejects.toThrow('binding.launch.isolation');
+  });
+
+  test("a binding reading the item's answers gets every settled set on the item, oldest answer first", async () => {
+    const act = (at: string) => ({ at, via: 'cli' as const, by: null, fromRun: null });
+    const stored = (
+      runId: string,
+      workflowName: string,
+      position: number,
+      closed: StoredItemAsk['closed']
+    ): StoredItemAsk => ({
+      id: `${runId}-${String(position)}`,
+      itemId: ITEM.id,
+      runId,
+      workflowName,
+      position,
+      ask: {
+        question: `${workflowName} ${String(position)}?`,
+        context: 'Two readings.',
+        options: [{ id: 'keep', does: 'Keep it.', cost: 'More to maintain.' }],
+        recommendation: { option: 'keep', why: 'Nothing needs it gone.' },
+        artifacts: [],
+      },
+      openedAt: '2026-11-16T09:00:00.000Z',
+      closed,
+    });
+    const keep = { decision: 'keep', text: '' };
+    // The rows come in the order the asks were left; plan's first ask was answered last.
+    const rows: StoredItemAsk[] = [
+      stored('plan-run', 'plan', 0, {
+        as: 'answered',
+        answer: keep,
+        act: act('2026-11-16T09:40:00.000Z'),
+      }),
+      stored('plan-run', 'plan', 1, { as: 'withdrawn', act: act('2026-11-16T09:11:00.000Z') }),
+      stored('old-check', 'check', 0, {
+        as: 'replaced',
+        at: '2026-11-16T09:20:00.000Z',
+        byRunId: 'check-run',
+      }),
+      stored('check-run', 'check', 0, {
+        as: 'answered',
+        answer: keep,
+        act: act('2026-11-16T09:30:00.000Z'),
+      }),
+      stored('review-run', 'review', 0, null),
+    ];
+    const reads: string[] = [];
+    const answersTrigger = (sourceInstanceId: string) =>
+      trigger({
+        sourceInstanceId,
+        on: {
+          runEnded: {
+            workflowName: 'plan',
+            outcome: 'planned',
+            inputs: { decisions: { item: 'answers' }, issue: { item: 'key' } },
+          },
+        },
+      });
+    const starts = await triggersWith(
+      { 'build.json': answersTrigger('build'), 'check.json': answersTrigger('check') },
+      noCheckout,
+      async itemId => {
+        reads.push(itemId);
+        return rows;
+      }
+    );
+    const { receipts } = await starts(facts());
+    // Read once per completion, however many bindings read them.
+    expect(reads).toEqual([ITEM.id]);
+    expect(receipts).toHaveLength(2);
+    for (const receipt of receipts)
+      expect(receipt.bindings[0]?.eventInputs).toEqual({
+        issue: ITEM.key,
+        decisions: [
+          {
+            question: 'plan 1?',
+            closedAs: 'withdrawn',
+            answer: null,
+            option: null,
+            by: null,
+            via: 'cli',
+            at: '2026-11-16T09:11:00.000Z',
+            workflowName: 'plan',
+          },
+          {
+            question: 'check 0?',
+            closedAs: 'answered',
+            answer: keep,
+            option: { id: 'keep', does: 'Keep it.' },
+            by: null,
+            via: 'cli',
+            at: '2026-11-16T09:30:00.000Z',
+            workflowName: 'check',
+          },
+          {
+            question: 'plan 0?',
+            closedAs: 'answered',
+            answer: keep,
+            option: { id: 'keep', does: 'Keep it.' },
+            by: null,
+            via: 'cli',
+            at: '2026-11-16T09:40:00.000Z',
+            workflowName: 'plan',
+          },
+        ],
+      });
+  });
+
+  test("an unreadable ask on the item rejects only the binding that reads the item's answers", async () => {
+    const starts = await triggersWith(
+      {
+        'build.json': trigger({
+          on: {
+            runEnded: {
+              workflowName: 'plan',
+              outcome: 'planned',
+              inputs: { decisions: { item: 'answers' } },
+            },
+          },
+        }),
+        'check.json': trigger({ sourceInstanceId: 'check' }),
+      },
+      noCheckout,
+      async () => [{ type: 'degraded', reason: 'run_unreadable', runId: 'old-run' }]
+    );
+    const receipts = (await starts(facts())).receipts;
+    const build = receipts.find(receipt => receipt.receipt.sourceInstanceId === 'build-after-plan');
+    expect(build).toMatchObject({ outcome: 'unmatched', bindings: [] });
+    expect(build?.reason).toContain("run 'old-run'");
+    expect(receipts.find(receipt => receipt.receipt.sourceInstanceId === 'check')).toMatchObject({
+      outcome: 'matched',
+    });
   });
 
   // A stale file for another project must not fail item runs of its workflow here.
