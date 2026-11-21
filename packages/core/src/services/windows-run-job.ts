@@ -15,6 +15,12 @@ import { WINDOWS_RUN_JOB_STOP_MAX_MS } from './run-stop-bounds';
  * breakaway, and a process breaking away climbs the job chain until a job that forbids it,
  * which is this one.
  *
+ * The job is also kill-on-close. The owner holds its only lasting handle (job handles are not
+ * inherited), so when the owner process exits for any reason, by finishing, failing, pausing
+ * at an approval or being killed, Windows ends every process still in the job. That is how
+ * a process a node left running, orphan or not, ends with its run. A stopper's open handle
+ * keeps the members alive only until its own terminate.
+ *
  * The name is random rather than derived from the PID or run id: a handle a stopper still
  * holds keeps an old job's name alive, and creating a job under an existing name opens that
  * old job. A random name cannot collide, so it is the owner's identity on its own. It lives
@@ -25,6 +31,14 @@ import { WINDOWS_RUN_JOB_STOP_MAX_MS } from './run-stop-bounds';
 const JOB_OBJECT_QUERY = 0x0004;
 const JOB_OBJECT_TERMINATE = 0x0008;
 const JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1;
+const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9;
+const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
+/**
+ * `sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION)` on 64-bit Windows; `BasicLimitInformation.LimitFlags`
+ * is the `DWORD` at 16, after two `LARGE_INTEGER` time limits.
+ */
+const EXTENDED_LIMIT_INFO_BYTES = 144;
+const LIMIT_FLAGS_OFFSET = 16;
 /** `sizeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION)`; `ActiveProcesses` is the `DWORD` at 40. */
 const ACCOUNTING_INFO_BYTES = 48;
 const ACTIVE_PROCESSES_OFFSET = 40;
@@ -41,6 +55,10 @@ function openKernel32() {
     OpenJobObjectW: { args: [FFIType.u32, FFIType.i32, FFIType.ptr], returns: FFIType.u64 },
     GetCurrentProcess: { args: [], returns: FFIType.u64 },
     AssignProcessToJobObject: { args: [FFIType.u64, FFIType.u64], returns: FFIType.i32 },
+    SetInformationJobObject: {
+      args: [FFIType.u64, FFIType.i32, FFIType.ptr, FFIType.u32],
+      returns: FFIType.i32,
+    },
     TerminateJobObject: { args: [FFIType.u64, FFIType.u32], returns: FFIType.i32 },
     QueryInformationJobObject: {
       args: [FFIType.u64, FFIType.i32, FFIType.ptr, FFIType.u32, FFIType.ptr],
@@ -64,7 +82,10 @@ function wideString(value: string): Buffer {
   return Buffer.from(`${value}\0`, 'utf16le');
 }
 
-/** The job this process claimed. Its handle is never closed: the name lives only while a handle is open. */
+/**
+ * The job this process claimed. Its handle is never closed by hand: the name lives only while
+ * a handle is open, and Windows closing it at process exit is what ends leftover members.
+ */
 let claimed: { readonly name: string; readonly handle: bigint } | undefined;
 
 /**
@@ -81,6 +102,20 @@ export function claimWindowsRunJob(): string {
     );
   const handle = k.CreateJobObjectW(null, wideString(name));
   if (handle === 0n) throw fail('CreateJobObjectW');
+  // Set before assignment, so this process is never in the job without the limit.
+  const limits = Buffer.alloc(EXTENDED_LIMIT_INFO_BYTES);
+  limits.writeUInt32LE(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, LIMIT_FLAGS_OFFSET);
+  if (
+    k.SetInformationJobObject(
+      handle,
+      JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+      limits,
+      EXTENDED_LIMIT_INFO_BYTES
+    ) === 0
+  ) {
+    k.CloseHandle(handle);
+    throw fail('SetInformationJobObject');
+  }
   if (k.AssignProcessToJobObject(handle, k.GetCurrentProcess()) === 0) {
     k.CloseHandle(handle);
     throw fail('AssignProcessToJobObject');

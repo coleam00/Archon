@@ -20,7 +20,7 @@ import {
   isRunOwnerAnswering,
 } from '@archon/core/services/run-live-owner';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
-import { createFileWorkflowStore } from '@archon/workflows/file-store';
+import { commit, createFileWorkflowStore } from '@archon/workflows/file-store';
 import { createInMemoryWorkflowHostStore } from '../test-support/workflow-store';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
 
@@ -179,12 +179,13 @@ function stubOwner(pid: number, windowsJob?: string): Server {
  * ready. Its fixture directory's name is on the command line of every process in its tree.
  */
 async function startWindowsRunOwner(
-  mode: 'orphan' | 'spawner' | 'nested' | 'nested-approve'
+  mode: 'orphan' | 'orphan-exit' | 'trigger-exit' | 'spawner' | 'nested' | 'nested-approve'
 ): Promise<{
   runId: string;
   dir: string;
   marker: string;
   store: Awaited<ReturnType<typeof createFileWorkflowStore>>;
+  exited: Promise<number | null>;
 }> {
   const runId = `windows-${mode}-${crypto.randomUUID()}`;
   const dir = trackTempRoot(mkdtempSync(join(tmpdir(), `archon-windows-${mode}-`)));
@@ -197,6 +198,9 @@ async function startWindowsRunOwner(
     stdio: 'ignore',
   });
   if (owner.pid === undefined) throw new Error('Failed to spawn the Windows run owner fixture');
+  const exited = new Promise<number | null>(resolve => {
+    owner.once('exit', resolve);
+  });
   owner.unref();
   const marker = basename(dir);
   try {
@@ -215,7 +219,7 @@ async function startWindowsRunOwner(
     if (leftovers.length > 0) console.error(`Fixture cleanup: ${leftovers.join('; ')}`);
     throw error;
   }
-  return { runId, dir, marker, store };
+  return { runId, dir, marker, store, exited };
 }
 
 function cancellationOperations(
@@ -426,6 +430,90 @@ describe('detached run tree stop', () => {
 
           const survivors = await windowsProcessesNaming(marker);
           expect(survivors).toEqual([]);
+        },
+        () => killWindowsProcessesNaming(marker)
+      );
+    },
+    RACING_STOP_TEST_TIMEOUT_MS
+  );
+
+  windowsOnly(
+    'ends a Windows orphan grandchild when its owner exits by itself, with no stop',
+    async () => {
+      // #5988: a run that ends by itself gets no stop. The owner holds the only handle to its
+      // kill-on-close job, so its exit is what ends a process a node left running. How the
+      // owner exits does not matter to the job, so one exit stands for finishing, failing
+      // and pausing.
+
+      const { dir, marker, exited } = await startWindowsRunOwner('orphan-exit');
+      await withFixtureCleanup(
+        async () => {
+          const grandchild = Number(readFileSync(join(dir, 'grandchild'), 'utf8'));
+          // The premise, asserted rather than assumed: the orphan is alive before the exit.
+          expect(await windowsProcessesNaming(marker)).toContain(grandchild);
+
+          writeFileSync(join(dir, 'exit'), '');
+          expect(await exited).toBe(0);
+          // Windows ends the job's members as the owner's handle closes; give the
+          // terminations a few listings to land rather than assume they are synchronous.
+          let survivors = await windowsProcessesNaming(marker);
+          const deadline = Date.now() + FIXTURE_STATE_DEADLINE_MS;
+          while (survivors.length > 0 && Date.now() < deadline) {
+            await new Promise<void>(resolve => setTimeout(resolve, 250));
+            survivors = await windowsProcessesNaming(marker);
+          }
+          expect(survivors).toEqual([]);
+        },
+        () => killWindowsProcessesNaming(marker)
+      );
+    },
+    RACING_STOP_TEST_TIMEOUT_MS
+  );
+
+  windowsOnly(
+    'keeps a trigger executor its Windows owner started alive after that owner exits',
+    async () => {
+      // A run's end starts its follow-ups as trigger executors, which are other runs' owners.
+      // The job is kill-on-close, so one started inside it would die with the owner that
+      // started it; it must start outside the job and finish its own work. The fixture's
+      // executor names no admitted request, so its work is to read the store and log that.
+      // The test holds the store's lock until the owner has exited, so the executor cannot
+      // log anything before then: a logged result shows it was alive after the owner died.
+
+      const { dir, marker, exited } = await startWindowsRunOwner('trigger-exit');
+      const log = join(dir, 'home', 'logs', `trigger-run-${marker}.log`);
+      const executorDone = (): boolean =>
+        existsSync(log) &&
+        readFileSync(log, 'utf8').includes('Execution requires an admitted request');
+      const storeRoot = join(dir, 'home', 'store');
+      await createFileWorkflowStore({ root: storeRoot });
+      await withFixtureCleanup(
+        async () => {
+          const grandchild = Number(readFileSync(join(dir, 'grandchild'), 'utf8'));
+          expect(await windowsProcessesNaming(marker)).toContain(grandchild);
+
+          let release!: () => void;
+          const released = new Promise<void>(resolve => (release = resolve));
+          let held!: () => void;
+          const holding = new Promise<void>(resolve => (held = resolve));
+          const lock = commit(storeRoot, [], async () => {
+            held();
+            await released;
+            return { result: undefined, changes: {} };
+          });
+          try {
+            await holding;
+            writeFileSync(join(dir, 'exit'), '');
+            expect(await exited).toBe(0);
+            // Kept short: the executor gives up waiting for the lock after 10 seconds.
+            expect(executorDone()).toBe(false);
+          } finally {
+            release();
+            await lock;
+          }
+          await waitFor(executorDone, NESTED_LAUNCH_DEADLINE_MS);
+          // The owner's own leftovers still ended with it.
+          expect(await windowsProcessesNaming(marker)).not.toContain(grandchild);
         },
         () => killWindowsProcessesNaming(marker)
       );
