@@ -186,6 +186,9 @@ Detached POSIX commands rely on
 explicit cancellation; abrupt owner death does not run their group cleanup.
 On Windows, cancellation ends the
 owner's Job Object, which also holds node processes whose parent already exited.
+A detached Windows owner's Job Object also ends when the owner exits for any reason, so
+background work a node left running, including work of completed nodes, does not outlive
+the owner.
 
 ### Addressable session ancestry
 

@@ -1877,21 +1877,24 @@ and can report the same cascade failures or blocked parent described below.
 
 On Windows a detached owner runs in a Job Object that every process it starts inherits, so
 cancel and abandon stop and confirm the whole tree even when an intermediate process has
-already exited. An owner started by an Archon version without this reports no job, and its
+already exited. The job ends with its owner: when the owner process exits for any reason,
+including a normal finish, a failure or a pause at an approval, Windows ends every process
+still in it, so background work a node left running does not outlive the owner. An owner
+started by an Archon version without this reports no job, and its
 tree cannot be confirmed, so cancel and abandon refuse it while it runs: stop the owner
 process and its descendants yourself, then use `workflow abandon`.
 
 A detached run that a node launches with `workflow run`, `resume`, `approve`, `reject`,
-or `respond` and `--detach` starts outside the launching run's job and owns its own.
-Cancelling the launching run leaves it running; stop it with its own `cancel`.
+or `respond` and `--detach` starts outside the launching run's job and owns its own. So
+does a run started through a trigger, whether a node fires it or the launching run's end
+starts it as a follow-up. Cancelling or ending the launching run leaves it running; stop
+it with its own `cancel`.
 The broker and relayed CLI ignore
 `BUN_OPTIONS` and `bunfig.toml` startup hooks, which would execute outside the owner's job.
 On POSIX a detached run starts its own process group, so the same holds.
 
 The job grants no other way out: a tool in the run that asks Windows to start a process
-outside its job fails to start it. A run that a node starts through `archon trigger` stays
-in the launching run's job. Cancelling the launching run kills that run's processes, and
-its row stays `running` with no owner until you `workflow abandon` it.
+outside its job fails to start it.
 
 For a detached container run, cancel must also confirm container teardown after stopping
 the owner and before recording cancellation. If that teardown fails, cancel fails and

@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import { isRunOwnerAnswering, startRunLiveOwner } from '@archon/core/services/run-live-owner';
+import type { ResourceStartRequestInspection } from '@archon/workflows/resource-start-store';
 import { claimDetachedRunProcessOwner } from '../detached-run-control';
+import { spawnAdmitted } from '../spawn-admitted';
 
 /*
  * A real detached run owner for the Windows stop tests. Every process it starts carries
@@ -11,6 +13,12 @@ import { claimDetachedRunProcessOwner } from '../detached-run-control';
  *
  * - `orphan`: start an intermediate that starts a detached grandchild and exits, so the
  *   grandchild's parent is gone before any stop begins.
+ * - `orphan-exit`: start the same orphan, then, once `<dir>/exit` exists, exit by itself, as
+ *   an owner does when its run ends, with no stop.
+ * - `trigger-exit`: as `orphan-exit`, but on `<dir>/exit` first start a trigger executor
+ *   through `spawnAdmitted`, as a run's end does for a follow-up, and exit the moment it has
+ *   started. The executor reads the file store under `<dir>/home`, finds no admitted
+ *   request and logs that.
  * - `spawner`: start a detached child every few milliseconds, so a stop races a spawn.
  * - `nested`: start a process, as a node would, that launches a real CLI workflow with
  *   `--detach` through the job broker. Its run id is saved in `<dir>/child-run-id`.
@@ -18,7 +26,16 @@ import { claimDetachedRunProcessOwner } from '../detached-run-control';
  */
 
 const [runId, dir, mode] = process.argv.slice(2);
-const modes = ['orphan', 'spawner', 'nested', 'nested-approve', 'relay', 'relay-approve'];
+const modes = [
+  'orphan',
+  'orphan-exit',
+  'trigger-exit',
+  'spawner',
+  'nested',
+  'nested-approve',
+  'relay',
+  'relay-approve',
+];
 if (!runId || !dir || !mode || !modes.includes(mode)) {
   throw new Error(`Usage: windows-run-owner.ts <run-id> <dir> <${modes.join('|')}>`);
 }
@@ -87,10 +104,21 @@ if (mode === 'relay' || mode === 'relay-approve') {
   writeFileSync(join(dir, 'child-run-id'), childRunId);
   process.exit(0);
 } else {
+  if (mode === 'trigger-exit') {
+    // The executor this owner starts reads this home; it must not reach the operator's.
+    const home = join(dir, 'home');
+    mkdirSync(home);
+    writeFileSync(join(home, 'config.yaml'), 'store: files\n');
+    Object.assign(process.env, {
+      ARCHON_HOME: home,
+      ARCHON_TELEMETRY_DISABLED: '1',
+      DATABASE_URL: '',
+    });
+  }
   await claimDetachedRunProcessOwner();
   await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
 
-  if (mode === 'orphan') {
+  if (mode === 'orphan' || mode === 'orphan-exit' || mode === 'trigger-exit') {
     const intermediate = spawn(
       process.execPath,
       [
@@ -111,7 +139,26 @@ if (mode === 'relay' || mode === 'relay-approve') {
     intermediate.on('error', error => {
       throw error;
     });
-    intermediate.once('exit', writeReady);
+    intermediate.once('exit', () => {
+      writeReady();
+      if (mode === 'orphan') return;
+      const timer = setInterval(() => {
+        if (!existsSync(join(dir, 'exit'))) return;
+        clearInterval(timer);
+        if (mode === 'orphan-exit') process.exit(0);
+        // `spawnAdmitted` reads only the request's status and checkout.
+        const admitted = {
+          status: 'admitted',
+          launch: { execution: { cwd: dir } },
+        } as unknown as ResourceStartRequestInspection;
+        // The request id carries `<dir>`'s name so the spec's cleanup can find the executor.
+        void spawnAdmitted(
+          { deps: { store: { getResourceStartRequest: async () => admitted } } },
+          basename(dir),
+          'fixture-host'
+        ).then(() => process.exit(0));
+      }, 25);
+    });
   } else if (mode === 'spawner') {
     const kidsDir = join(dir, 'kids');
     const loop = (): void => {
