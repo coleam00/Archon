@@ -476,3 +476,179 @@ describe('GitHub source plugin', () => {
     expect(config([binding({ wake })]).bindings[0]?.wake).toEqual(wake);
   });
 });
+
+describe('GitHub source plugin observing open waits', () => {
+  const revision = 'opaque-revision-id';
+  const remote = 'https://github.com/owner/repo.git';
+  const wait = { workflowName: 'host', event: 'checks', about: revision, remote };
+  const checksWake = binding({
+    bindingId: 'checks-done',
+    selector: {
+      kind: 'check.changed',
+      actions: ['changed'],
+      predicates: [{ field: 'check.phase', equals: 'completed' }],
+    },
+    wake: { workflow: 'host', wait: 'checks', about: { field: 'check.revision' } },
+  });
+  const unit = (id: string, status: 'in_progress' | 'completed') => ({
+    unit: { kind: 'check' as const, id, name: 'build' },
+    nativeState: status,
+    phase: status === 'completed' ? ('completed' as const) : ('running' as const),
+    nativeResult: status === 'completed' ? 'success' : null,
+    result: status === 'completed' ? ('success' as const) : null,
+    state: status === 'completed' ? ('green' as const) : ('pending' as const),
+  });
+  function reader(units: ReturnType<typeof unit>[]) {
+    const reads: { remote: string; revision: string }[] = [];
+    return {
+      reads,
+      forge: {
+        async commitChecks(input: { remote: string; revision: string }) {
+          reads.push(input);
+          const green = units.filter(candidate => candidate.state === 'green').length;
+          return {
+            repo: { host: 'github.com', path: 'owner/repo' },
+            branch: null,
+            revision: input.revision,
+            units,
+            summary: {
+              state: green === units.length ? ('green' as const) : ('pending' as const),
+              counts: {
+                total: units.length,
+                green,
+                red: 0,
+                pending: units.length - green,
+                gated: 0,
+                unknown: 0,
+              },
+            },
+          };
+        },
+      },
+    };
+  }
+  async function observer(bindings: unknown[], withSecret = false) {
+    const plugin = await createGitHubWebhookSource({
+      sourceInstanceId: 'github-primary',
+      config: githubWebhookSourceConfigSchema.parse({
+        version: 1,
+        host: 'github.com',
+        bindings,
+        ...(withSecret ? { webhookSecretEnv: 'ARCHON_SOURCE_PLUGIN_TEST_SECRET' } : {}),
+      }),
+    });
+    if (!plugin.observe) throw new Error('The GitHub source plugin observes waits');
+    return { plugin, observe: plugin.observe.bind(plugin) };
+  }
+
+  test('a completed check at the waited commit is the acceptance its webhook would make', async () => {
+    const { observe } = await observer([checksWake], true);
+    const { forge, reads } = reader([unit('77', 'completed'), unit('78', 'in_progress')]);
+    const observed = await observe({ waits: [wait], forge });
+    expect(reads).toEqual([{ remote, revision }]);
+    // The check still running starts nothing, so it is not recorded.
+    expect(observed.acceptances).toHaveLength(1);
+
+    // The same check, delivered by webhook, starts the same binding with the same inputs.
+    const recorded = recorder();
+    const github = await adapter(config([checksWake]), recorded.intake);
+    const payload = JSON.stringify(
+      checkRunPayload({
+        action: 'completed',
+        check_run: {
+          id: 77,
+          name: 'build',
+          head_sha: revision,
+          status: 'completed',
+          conclusion: 'success',
+          started_at: '2026-09-22T10:00:00Z',
+          completed_at: '2026-09-22T10:05:00Z',
+          pull_requests: [],
+        },
+      })
+    );
+    await github.receiveWebhook(payload, sign(payload), 'delivery-77', 'check_run');
+    expect(observed.acceptances[0]?.bindings).toEqual(recorded.calls[0]?.bindings ?? []);
+    expect(observed.acceptances[0]?.receipt).toMatchObject({
+      sourceInstanceId: 'github-primary',
+      deliveryId: `observe:check:github.com/owner/repo@${revision}:check:77:completed:success`,
+    });
+  });
+
+  test('observing the same check state again is the same delivery with the same content', async () => {
+    const { observe } = await observer([checksWake]);
+    const { forge } = reader([unit('77', 'completed')]);
+    const [first] = (await observe({ waits: [wait], forge })).acceptances;
+    const [second] = (await observe({ waits: [wait], forge })).acceptances;
+    expect(second?.receipt.deliveryId).toBe(first?.receipt.deliveryId ?? '');
+    expect(second?.receipt.contentDigest).toBe(first?.receipt.contentDigest ?? '');
+  });
+
+  test('reads only for waits a check wake serves, and names the ones it cannot', async () => {
+    const reviewWake = binding({
+      bindingId: 'reviewed',
+      selector: { kind: 'review.changed', actions: ['submitted'] },
+      inputMapping: {},
+      item: { field: 'subject.number', prefix: 'pr-' },
+      wake: { workflow: 'host', wait: 'review', about: { field: 'review.commit' } },
+    });
+    // A binding nobody waits on is never evaluated for an observed check.
+    const unwaited = binding({ bindingId: 'any-check' });
+    const { observe } = await observer([checksWake, reviewWake, unwaited]);
+    const { forge, reads } = reader([unit('77', 'completed')]);
+    const observed = await observe({
+      waits: [
+        { ...wait, event: 'review' },
+        { ...wait, about: 'other-revision', remote: null },
+        { ...wait, workflowName: 'unbound' },
+      ],
+      forge,
+    });
+    expect(reads).toEqual([]);
+    expect(observed).toEqual({
+      acceptances: [],
+      unserved: [
+        {
+          wait: { workflowName: 'host', event: 'review', about: revision },
+          reason: 'only check.changed wakes about check.revision are observed',
+        },
+        {
+          wait: { workflowName: 'host', event: 'checks', about: 'other-revision' },
+          reason: "the wait's project has no repository URL",
+        },
+      ],
+    });
+  });
+
+  test('a waited commit on another forge host is named as not observed', async () => {
+    const { observe } = await observer([checksWake]);
+    const { forge } = reader([unit('77', 'completed')]);
+    const elsewhere = {
+      commitChecks: async (input: { remote: string; revision: string }) => ({
+        ...(await forge.commitChecks(input)),
+        repo: { host: 'gitlab.example.com', path: 'owner/repo' },
+      }),
+    };
+    expect(await observe({ waits: [wait], forge: elsewhere })).toEqual({
+      acceptances: [],
+      unserved: [
+        {
+          wait: { workflowName: 'host', event: 'checks', about: revision },
+          reason: "the wait's repository is not on github.com",
+        },
+      ],
+    });
+  });
+
+  test('a source with no webhook secret refuses every delivery', async () => {
+    const { plugin } = await observer([checksWake]);
+    const payload = JSON.stringify(checkRunPayload());
+    expect(
+      await plugin.receive({
+        body: payload,
+        headers: { 'x-hub-signature-256': sign(payload), 'x-github-event': 'check_run' },
+        receivedAt: '2026-09-22T10:00:00.000Z',
+      })
+    ).toEqual({ status: 'rejected', reason: 'unauthenticated' });
+  });
+});

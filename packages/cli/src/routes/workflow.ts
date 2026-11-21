@@ -3,6 +3,7 @@
  * mapping parsed argv onto the workflow command module.
  */
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import type { WakeObservation } from '../commands/workflow-continuations';
 import { isContinueSubcommand, rejectRunFlagsOnContinue } from '../dispatch-guards';
 import { writeJsonLine } from '../utils/stdout';
 import { type CliRouteContext, fail } from './context';
@@ -26,12 +27,42 @@ export async function runWorkflowContinuation(
   );
   if (wakeSchedule) return await workflowWakeScheduleCommand(positionals.slice(2), values);
   const { createCliWorkflowHost } = await import('../utils/workflow-host');
-  return await workflowContinuationCommand(
-    await createCliWorkflowHost({ forgeTrustedEnv }),
-    subcommand,
-    positionals.slice(2),
-    values
+  const host = await createCliWorkflowHost({ forgeTrustedEnv });
+  return await workflowContinuationCommand(host, subcommand, positionals.slice(2), values, () =>
+    wakeObservation(host, forgeTrustedEnv)
   );
+}
+
+/**
+ * What `workflow wake` observes for an install that receives no webhooks: the sources in
+ * `ARCHON_WEBHOOK_SOURCES` that declare `observe`, or nothing when none does.
+ */
+async function wakeObservation(
+  host: WorkflowHost,
+  forgeTrustedEnv: NodeJS.ProcessEnv
+): Promise<WakeObservation | undefined> {
+  const configPath = process.env.ARCHON_WEBHOOK_SOURCES;
+  if (!configPath) return undefined;
+  const [{ createItemWaitObserver, loadWebhookSourcePlugins }, { hostSourceForgeReader }] =
+    await Promise.all([
+      import('@archon/core/workflows/source-plugins'),
+      import('@archon/adapters/forge/source-forge-reader'),
+    ]);
+  const { store } = host.deps;
+  const sources = await loadWebhookSourcePlugins(configPath, {
+    acceptReceipt: input => store.acceptStartReceipt(input),
+    isKnownUser: async id => (await host.records.users.getUserById(id)) !== null,
+    hasDeliveryReceipt: (sourceInstanceId, deliveryId) =>
+      store.hasStartReceiptForDelivery(sourceInstanceId, deliveryId),
+  });
+  const observer = createItemWaitObserver({
+    sources,
+    store,
+    forge: hostSourceForgeReader(forgeTrustedEnv, process.env),
+  });
+  if (!observer) return undefined;
+  const { spawnAdmitted } = await import('../utils/spawn-admitted');
+  return { observer, dispatch: (requestId, hostId) => spawnAdmitted(host, requestId, hostId) };
 }
 
 /** `workflow test`: fixture testing reads workflow files only, so it runs before the gate. */

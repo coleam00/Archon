@@ -49,8 +49,19 @@ mock.module('@archon/core/workflows/continuation-host', () => ({
 mock.module('@archon/core/workflows/continuation-resume', () => ({
   wakeDueWorkflowContinuations: scan,
 }));
+const drain = mock<
+  typeof import('@archon/core/workflows/resource-start-host').drainResourceStartHost
+>(async () => undefined);
+const realResourceStartHost = await import('@archon/core/workflows/resource-start-host');
+mock.module('@archon/core/workflows/resource-start-host', () => ({
+  ...realResourceStartHost,
+  drainResourceStartHost: drain,
+}));
+const getStartReceipt = mock(async (id: string) => ({
+  bindings: id === 'woken' ? [{ hostId: 'build-host' }] : [],
+}));
 const host = {
-  deps: { store: { getWorkflowRun: getRun } },
+  deps: { store: { getWorkflowRun: getRun, getStartReceipt } },
   operations: { signalWorkflowWait: signal },
 } as unknown as import('@archon/core/workflows/host-store').WorkflowHost;
 const writeStdout = mock(async (value: string) => {
@@ -91,6 +102,8 @@ beforeEach(() => {
   signal.mockClear();
   install.mockClear();
   remove.mockClear();
+  drain.mockReset();
+  drain.mockResolvedValue(undefined);
 });
 
 test('empty wake succeeds and rejects fresh execution flags before scanning', async () => {
@@ -542,4 +555,77 @@ test('a failed accepted report still drains cleanup and fails the wake', async (
   expect(await workflowContinuationCommand(host, 'wake', [], { json: true })).toBe(1);
   expect(cleanup).toHaveBeenCalledTimes(1);
   expect(output).toEqual([{ ok: false, action: 'wake', error: 'stdout closed' }]);
+});
+
+function observation(receipts: string[]) {
+  const dispatch = mock(async () => null);
+  const unserved = [
+    {
+      wait: { workflowName: 'host', event: 'review', about: 'abc' },
+      reason: 'only check.changed wakes about check.revision are observed',
+    },
+  ];
+  const pass = mock(async () => [
+    { source: 'github', waits: 2, commits: 1, receipts, conflicts: 0, unserved },
+  ]);
+  return {
+    dispatch,
+    pass,
+    unserved,
+    value: {
+      observer: { observing: [{ sourceInstanceId: 'github', everySeconds: 60 }], pass },
+      dispatch,
+    },
+  };
+}
+
+test('watch says what it observes, and starts what an observed wait admitted on its host', async () => {
+  const observed = observation(['woken', 'unmatched']);
+  drain.mockImplementation(async drained => {
+    await drained.startAdmitted('request-1');
+  });
+  scan.mockImplementationOnce(async () => {
+    process.emit('SIGTERM');
+    return [];
+  });
+  expect(
+    await workflowContinuationCommand(
+      host,
+      'wake',
+      [],
+      { json: true, watch: true },
+      async () => observed.value
+    )
+  ).toBe(0);
+  expect(output[0]).toEqual({
+    ok: true,
+    action: 'wake',
+    observe: [{ source: 'github', everySeconds: 60 }],
+  });
+  expect(output[2]).toEqual({
+    ok: true,
+    action: 'observe',
+    source: 'github',
+    waits: 2,
+    commits: 1,
+    started: 1,
+    conflicts: 0,
+    unserved: observed.unserved,
+  });
+  expect(drain.mock.calls.map(([drained]) => drained.hostId)).toEqual(['build-host']);
+  expect(observed.dispatch).toHaveBeenCalledWith('request-1', 'build-host');
+});
+
+test('an observed start whose host drain fails fails the wake', async () => {
+  const observed = observation(['woken']);
+  drain.mockRejectedValue(new Error('executor unavailable'));
+  expect(
+    await workflowContinuationCommand(host, 'wake', [], { json: true }, async () => observed.value)
+  ).toBe(1);
+  expect(output[1]).toMatchObject({
+    ok: false,
+    action: 'observe',
+    started: 1,
+    error: "host 'build-host' drain failed: executor unavailable",
+  });
 });

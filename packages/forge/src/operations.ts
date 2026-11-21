@@ -123,6 +123,7 @@ export const commitChecksObservationSchema = checkSetSchema.safeExtend({
   revision: gitObjectIdSchema,
   approvalPending: z.boolean().nullable().optional(),
 });
+export type CommitChecksObservation = z.infer<typeof commitChecksObservationSchema>;
 /** The `forge check` refusals a plugin can state its own remedy for. */
 const pluginRemedyKinds = ['unsupported_op', 'no_credential'] as const;
 type PluginRemedyKind = (typeof pluginRemedyKinds)[number];

@@ -12,6 +12,9 @@ import {
   type ContinuationAdmission,
 } from '@archon/core/workflows/continuation-resume';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
+import { drainResourceStartHost } from '@archon/core/workflows/resource-start-host';
+import type { ItemWaitObserver, ObservedSourceReport } from '@archon/core/workflows/source-plugins';
+import type { StartedExecutor } from '@archon/core/workflows/start-executor';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import { deadlineWaitCursor, type WorkflowResumeCursor } from '@archon/workflows/store';
@@ -209,16 +212,27 @@ async function report(
   return ok;
 }
 
+/**
+ * Observes open item waits for an install that receives no webhooks (the sources in
+ * `ARCHON_WEBHOOK_SOURCES` that declare `observe`), and hands each start it admits to its
+ * executor.
+ */
+export interface WakeObservation {
+  observer: ItemWaitObserver;
+  dispatch: (requestId: string, hostId: string) => Promise<StartedExecutor | null>;
+}
+
 export async function workflowContinuationCommand(
   host: WorkflowHost,
   action: 'wake' | 'signal',
   args: string[],
-  values: Values
+  values: Values,
+  observation?: () => Promise<WakeObservation | undefined>
 ): Promise<number> {
   const json = values.json === true;
   try {
     if (action === 'signal') return await signalEvent(host, args, values, json);
-    return await wake(host, args, values, json);
+    return await wake(host, args, values, json, await observation?.());
   } catch (error) {
     if (json)
       await writeJsonLine({ ok: false, action, signaled: false, error: errorMessage(error) });
@@ -368,14 +382,79 @@ async function engineChanged(loaded: string | undefined, json: boolean): Promise
   return true;
 }
 
+/** One source's observation, as `wake` reports it, after its starts are handed on. */
+async function reportObserved(
+  host: WorkflowHost,
+  observation: WakeObservation,
+  report: ObservedSourceReport,
+  json: boolean
+): Promise<boolean> {
+  const hostIds = new Set<string>();
+  let started = 0;
+  for (const receiptId of report.receipts)
+    for (const binding of (await host.deps.store.getStartReceipt(receiptId))?.bindings ?? []) {
+      started += 1;
+      if (binding.hostId) hostIds.add(binding.hostId);
+    }
+  let error = report.error;
+  for (const hostId of hostIds) {
+    try {
+      await drainResourceStartHost({
+        ...host,
+        hostId,
+        startAdmitted: requestId => observation.dispatch(requestId, hostId),
+      });
+    } catch (drainError) {
+      error = [error, `host '${hostId}' drain failed: ${errorMessage(drainError)}`]
+        .filter(Boolean)
+        .join('; ');
+    }
+  }
+  const { source, waits, commits, conflicts, unserved } = report;
+  const ok = error === undefined;
+  if (json)
+    await writeJsonLine({
+      ok,
+      action: 'observe',
+      source,
+      waits,
+      commits,
+      started,
+      conflicts,
+      unserved,
+      ...(ok ? {} : { error }),
+    });
+  else {
+    console.log(
+      `observe ${source}: ${String(waits)} wait(s), ${String(commits)} commit(s) read, ${String(started)} start(s)${conflicts ? `, ${String(conflicts)} conflicting deliveries` : ''}${ok ? '' : `; ${error}`}`
+    );
+    for (const { wait, reason } of unserved)
+      console.log(
+        `  not observed: ${wait.event} about ${wait.about} from ${wait.workflowName}: ${reason}`
+      );
+  }
+  return ok;
+}
+
 async function wake(
   host: WorkflowHost,
   args: string[],
   values: Values,
-  json: boolean
+  json: boolean,
+  observation?: WakeObservation
 ): Promise<number> {
   validateFlags(values, ['watch']);
   if (args.length) throw new Error('Usage: archon workflow wake [--watch] [--json]');
+  if (values.watch === true && observation) {
+    const observe = observation.observer.observing.map(({ sourceInstanceId, everySeconds }) => ({
+      source: sourceInstanceId,
+      everySeconds,
+    }));
+    if (json) await writeJsonLine({ ok: true, action: 'wake', observe });
+    else
+      for (const { source, everySeconds } of observe)
+        console.log(`wake: observing source ${source} every ${String(everySeconds)}s`);
+  }
   let stopped = false;
   let wakeSleep: (() => void) | undefined;
   const stop = (): void => {
@@ -400,6 +479,9 @@ async function wake(
         );
         const passOk = await report('wake', await Promise.all(outcomes.map(settle)), json);
         ok = passOk && ok;
+        if (observation)
+          for (const observed of await observation.observer.pass(new Date()))
+            ok = (await reportObserved(host, observation, observed, json)) && ok;
       } catch (error) {
         ok = false;
         if (json) await writeJsonLine({ ok: false, action: 'wake', error: errorMessage(error) });
