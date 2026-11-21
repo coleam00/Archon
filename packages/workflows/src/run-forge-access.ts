@@ -2,13 +2,15 @@
  * The start-time refusal for a run whose pack declares `forge:` in its `.pack/pack.yaml`.
  *
  * Every fresh start path calls {@link assertRunForgeAccess} beside its credential
- * preflight, before a worktree, a slot or a node: the CLI, chat and Web dispatch, a
- * trigger binding before admission, and a `workflow:` sub-run. Continuations are not
+ * preflight, before a worktree, a slot or a node: the CLI, chat and Web dispatch, the
+ * resume menu's fresh run, a trigger binding before admission, and a `workflow:` sub-run. Continuations are not
  * checked; a paused run's forge calls still refuse on their own.
  *
  * The check asks `archon forge check` through `ARCHON_CLI_COMMAND`, the same executable,
  * plugin discovery and credential reading the run's own forge calls use, so the check and
- * the run cannot disagree about which plugin serves a remote. No forge operation runs.
+ * the run cannot disagree about which plugin serves a remote. Each check makes one read of
+ * the repository with the run's credential and no write, when the plugin advertises
+ * `pr.view`.
  */
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -22,9 +24,11 @@ import { execFileAsync, GitFailure } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { RUN_GITHUB_IDENTITY_HANDOFF_ENV } from '@archon/paths/github-token-env';
 import type { WorkflowEnvironment } from './deps';
+import type { JsonValue } from './output-ref';
+import { resolveRunStartInputs } from './pack-settings';
 import { resolveWorkflowGithubEnvironment, type WorkflowGithubDeps } from './run-credential-env';
-import type { WorkflowPack } from './schemas/pack-settings';
 import type { ForgeRefusalFailure } from './schemas/resource-start';
+import type { ResolvedWorkflow } from './schemas/workflow';
 
 const log = createLogger('workflow.run-forge-access');
 
@@ -32,12 +36,14 @@ const CHECK_TIMEOUT_MS = 30_000;
 
 /**
  * Why a run cannot reach the forge its pack needs. The forge's own refusals pass through;
- * `no_forge_path` and `no_forge_remote` are the run's; `check_failed` is a check that could
- * not answer, which refuses too, because the run's forge calls would fail alike.
+ * `no_forge_path`, `no_forge_remote` and `no_forge_repository` are the run's;
+ * `check_failed` is a check that could not answer, which refuses too, because the run's
+ * forge calls would fail alike.
  */
 export type ForgeRequirementReason =
   | 'no_forge_path'
   | 'no_forge_remote'
+  | 'no_forge_repository'
   | ForgeAccessRefusalKind
   | 'check_failed';
 
@@ -50,10 +56,15 @@ export class ForgeRequirementError extends Error {
   constructor(
     workflowName: string,
     readonly packKey: string,
-    readonly failures: readonly ForgeRequirementFailure[]
+    readonly failures: readonly ForgeRequirementFailure[],
+    /** The repository the run names, when it was checked instead of the remotes. */
+    repository?: ForgeRepository
   ) {
+    const where =
+      repository === undefined ? '' : `Repository '${repository.host}/${repository.path}': `;
     super(
       `Workflow '${workflowName}' cannot start: pack '${packKey}' needs a forge this run cannot reach. ` +
+        where +
         failures.map(describeFailure).join(' ') +
         ' No worktree was created and no AI cost was incurred.'
     );
@@ -67,41 +78,79 @@ function describeFailure(failure: ForgeRequirementFailure): string {
   return `${where}${failure.message} (${failure.reason}).${remedy}`;
 }
 
-/** One `forge check` answer for one remote: `undefined` when the forge can serve the run. */
+export interface ForgeRepository {
+  readonly host: string;
+  readonly path: string;
+}
+
+/** The start inputs, by name, whose values name the repository a run acts on. */
+export type ForgeRepositoryInputs = Readonly<Record<string, string>>;
+
+/** What one `forge check` asks about: a remote of the checkout, or the repository the run names. */
+export type ForgeCheckRequest = ({ remote: string } | { repo: ForgeRepository }) & {
+  operations: readonly string[];
+};
+
+/** One `forge check` answer: `undefined` when the forge can serve the run. */
 export type ForgeCheck = (
-  request: { remote: string; operations: readonly string[] },
+  request: ForgeCheckRequest,
   context: { cliCommand: readonly string[]; env: NodeJS.ProcessEnv; cwd: string }
 ) => Promise<Omit<ForgeRequirementFailure, 'remote'> | undefined>;
 
 /** Where the run starts: its checkout, and whether it executes in a container. */
-export interface RunForgeAccessSite {
+export interface RunForgeAccessSite<
+  Supplied extends Readonly<Record<string, JsonValue>> | undefined =
+    | Readonly<Record<string, JsonValue>>
+    | undefined,
+> {
   /** The project checkout the run is cut from; a worktree of it has the same remotes. */
   readonly cwd: string;
+  /**
+   * The checkout whose `.archon/packs/` settings the run starts with: the one its other
+   * start preflights read configuration from, such as an adopted worktree. It may hold
+   * settings that name a different repository than the project checkout's.
+   */
+  readonly settingsCwd: string;
   readonly codebaseId: string | undefined;
   readonly inContainer?: boolean;
+  /**
+   * The values the run is started with (`--input`, a binding's inputs, a parent's `with:`).
+   * The check merges the pack's settings and the workflow's defaults under them, as the run
+   * does at start, before reading the inputs that name its repository (`forge.repository`).
+   */
+  readonly supplied: Supplied;
 }
 
 /**
- * Refuse a fresh run whose pack declares forge needs this run cannot meet: some remote of
- * the checkout must name a forge whose plugin advertises every declared capability and
- * whose credential resolves. A run whose pack declares nothing returns at once.
+ * Refuse a fresh run whose pack declares forge needs this run cannot meet: the forge must
+ * have a plugin that advertises every declared capability, a credential that resolves, and,
+ * when the plugin advertises `pr.view`, accept that credential in one read of the
+ * repository. The repository is the one the run's start inputs name through the pack's
+ * `forge.repository`; when they name none, some remote of the checkout must pass. A run
+ * whose pack declares nothing returns at once.
  *
- * @throws ForgeRequirementError naming each remote's typed reason and its remedy.
+ * @returns the inputs the run starts with: `supplied`, plus the inputs that name the
+ *   repository the check judged. A run that executes in a worktree cut after this check
+ *   reads its settings again from that worktree, which can name another repository, so
+ *   the judged values must reach the run as supplied inputs.
+ * @throws ForgeRequirementError naming each typed reason and its remedy.
  */
-export async function assertRunForgeAccess(
+export async function assertRunForgeAccess<
+  Supplied extends Readonly<Record<string, JsonValue>> | undefined,
+>(
   deps: WorkflowGithubDeps,
-  workflow: { readonly name: string; readonly pack?: WorkflowPack },
+  workflow: Pick<ResolvedWorkflow, 'name' | 'pack' | 'inputs'>,
   /** The run's prepared configuration, before its GitHub credential is layered. */
   prepared: { readonly config: WorkflowEnvironment; readonly executionUserId?: string },
-  site: RunForgeAccessSite,
+  site: RunForgeAccessSite<Supplied>,
   check: ForgeCheck = checkThroughCli
-): Promise<void> {
+): Promise<Supplied | ForgeRepositoryInputs> {
   const { name: workflowName, pack } = workflow;
   const needs = pack?.forge;
-  if (pack === undefined || needs === undefined) return;
+  if (pack === undefined || needs === undefined) return site.supplied;
   const packKey = pack.key;
-  function refuse(failures: ForgeRequirementFailure[]): never {
-    throw new ForgeRequirementError(workflowName, packKey, failures);
+  function refuse(failures: ForgeRequirementFailure[], repository?: ForgeRepository): never {
+    throw new ForgeRequirementError(workflowName, packKey, failures, repository);
   }
   if (site.inContainer === true) {
     refuse([
@@ -112,22 +161,8 @@ export async function assertRunForgeAccess(
       },
     ]);
   }
-  const remotes = await checkoutRemotes(site.cwd);
-  if (remotes === undefined || remotes.length === 0) {
-    refuse([
-      {
-        reason: 'no_forge_remote',
-        message:
-          remotes === undefined
-            ? 'the project is not a git repository'
-            : 'the checkout has no git remote',
-        remedy:
-          remotes === undefined
-            ? 'Run the workflow in a git checkout whose remote names the forge repository.'
-            : 'Add a remote that names the forge repository, e.g. `git remote add origin <url>`.',
-      },
-    ]);
-  }
+  const target = await forgeTarget(workflow, needs.repository, site);
+  if ('reason' in target) refuse([target]);
   const cliCommand = hostCliCommand();
   if (cliCommand === undefined) {
     refuse([
@@ -149,21 +184,103 @@ export async function assertRunForgeAccess(
     prepared.config
   );
   const env = { ...process.env, ...layered.envVars, [RUN_GITHUB_IDENTITY_HANDOFF_ENV]: '1' };
+  const context = { cliCommand, env, cwd: site.cwd };
+  if ('repo' in target) {
+    // The run acts on this repository, so no other remote of the checkout can stand in.
+    const failure = await check({ repo: target.repo, operations: needs.operations }, context);
+    if (failure !== undefined) refuse([failure], target.repo);
+    return { ...site.supplied, ...target.inputs };
+  }
   const failures: ForgeRequirementFailure[] = [];
-  const checked = new Set<string>();
-  for (const { name, url } of remotes) {
-    if (checked.has(url)) continue;
-    checked.add(url);
-    const failure = await check(
-      { remote: url, operations: needs.operations },
-      { cliCommand, env, cwd: site.cwd }
-    );
-    // One remote that serves the run is enough: a mirror on a host no plugin claims must
-    // not refuse a run its canonical remote can serve.
-    if (failure === undefined) return;
+  for (const { name, url } of target.remotes) {
+    const failure = await check({ remote: url, operations: needs.operations }, context);
+    // One remote that serves the run is enough: a mirror on a host no plugin claims, or one
+    // the credential cannot read, must not refuse a run its canonical remote can serve.
+    if (failure === undefined) return site.supplied;
     failures.push({ remote: name, ...failure });
   }
   refuse(failures);
+}
+
+/**
+ * What the check judges: the repository the run's inputs name, or else the checkout's
+ * remotes, each URL once. A run that cannot name either is refused with the reason.
+ */
+async function forgeTarget(
+  workflow: Pick<ResolvedWorkflow, 'pack' | 'inputs'>,
+  names: { host: string; path: string } | undefined,
+  site: RunForgeAccessSite
+): Promise<
+  | { repo: ForgeRepository; inputs: ForgeRepositoryInputs }
+  | { remotes: { name: string; url: string }[] }
+  | ForgeRequirementFailure
+> {
+  const inputs =
+    names === undefined
+      ? undefined
+      : (await resolveRunStartInputs(site.settingsCwd, workflow, site.supplied)).inputs;
+  const named = namedRepository(names, inputs);
+  if (named !== undefined && 'missing' in named) {
+    return {
+      reason: 'no_forge_repository',
+      message: `the run sets input '${named.set}' but not '${named.missing}', which together name its repository`,
+      remedy: `Set both ${named.set} and ${named.missing}, or neither to use the checkout's remotes.`,
+    };
+  }
+  if (named !== undefined) return named;
+  const remotes = await checkoutRemotes(site.cwd);
+  if (remotes === undefined) {
+    return {
+      reason: 'no_forge_remote',
+      message: 'the project is not a git repository',
+      remedy: 'Run the workflow in a git checkout whose remote names the forge repository.',
+    };
+  }
+  if (remotes.length === 0) {
+    return {
+      reason: 'no_forge_remote',
+      message: 'the checkout has no git remote',
+      remedy: 'Add a remote that names the forge repository, e.g. `git remote add origin <url>`.',
+    };
+  }
+  const seen = new Set<string>();
+  const distinct = remotes.filter(({ url }) => {
+    if (seen.has(url)) return false;
+    seen.add(url);
+    return true;
+  });
+  return { remotes: distinct };
+}
+
+/**
+ * The repository the run's inputs name through the pack's `forge.repository`: both inputs
+ * set, neither (the checkout's remotes decide), or only one, which names nothing and is
+ * refused rather than read as neither.
+ */
+function namedRepository(
+  names: { host: string; path: string } | undefined,
+  inputs: Readonly<Record<string, JsonValue>> | undefined
+):
+  | { repo: ForgeRepository; inputs: ForgeRepositoryInputs }
+  | { set: string; missing: string }
+  | undefined {
+  if (names === undefined) return undefined;
+  const raw = (name: string): string => {
+    const value = inputs?.[name];
+    return typeof value === 'string' ? value : '';
+  };
+  const host = raw(names.host).trim();
+  const path = raw(names.path).trim();
+  if (host !== '' && path !== '') {
+    return {
+      repo: { host, path },
+      inputs: { [names.host]: raw(names.host), [names.path]: raw(names.path) },
+    };
+  }
+  if (host === '' && path === '') return undefined;
+  return host === ''
+    ? { set: names.path, missing: names.host }
+    : { set: names.host, missing: names.path };
 }
 
 /**
@@ -207,9 +324,9 @@ function hostCliCommand(): readonly string[] | undefined {
 }
 
 /**
- * Ask `archon forge check` for one remote. The request goes through a private file, not
- * argv: a remote URL can carry a credential in its userinfo, and argv is visible to other
- * processes.
+ * Ask `archon forge check` about one remote or repository. The request goes through a
+ * private file, not argv: a remote URL can carry a credential in its userinfo, and argv is
+ * visible to other processes.
  */
 const checkThroughCli: ForgeCheck = async (request, { cliCommand, env, cwd }) => {
   const dir = await mkdtemp(join(tmpdir(), 'archon-forge-check-'));
@@ -240,7 +357,7 @@ const checkThroughCli: ForgeCheck = async (request, { cliCommand, env, cwd }) =>
     return forgeCheckFailure(
       stdout,
       { exitCode: child.exitCode, signalCode: child.signalCode },
-      request.operations
+      request
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -251,7 +368,7 @@ const checkThroughCli: ForgeCheck = async (request, { cliCommand, env, cwd }) =>
 export function forgeCheckFailure(
   stdout: string,
   ended: { exitCode: number | null; signalCode: string | null },
-  operations: readonly string[]
+  request: ForgeCheckRequest
 ): Omit<ForgeRequirementFailure, 'remote'> | undefined {
   let raw: unknown;
   try {
@@ -265,9 +382,12 @@ export function forgeCheckFailure(
     return {
       reason: 'check_failed',
       message: unansweredCheck(stdout, ended),
-      // The remote stays a placeholder and goes in a file, not argv: its URL can carry a
+      // A remote stays a placeholder and goes in a file, not argv: its URL can carry a
       // credential, and this remedy is stored.
-      remedy: `Write \`${JSON.stringify({ remote: '<url>', operations })}\` to a private file, with the remote's URL for <url>, and run \`archon forge check --json --data-file <file>\` in the project to see what it reports.`,
+      remedy:
+        'repo' in request
+          ? `Write \`${JSON.stringify(request)}\` to a file and run \`archon forge check --json --data-file <file>\` in the project to see what it reports.`
+          : `Write \`${JSON.stringify({ remote: '<url>', operations: request.operations })}\` to a private file, with the remote's URL for <url>, and run \`archon forge check --json --data-file <file>\` in the project to see what it reports.`,
     };
   }
   if (answer.data.ok) return undefined;

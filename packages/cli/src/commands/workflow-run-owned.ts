@@ -104,6 +104,19 @@ async function runWorkflowWithOwnedSource(
   const launch = await prepareForegroundLaunch(request, admission);
   const lease = new OwnedRunLease(request.detachedProcessOwner);
   try {
+    // A detached launcher's row is pending with no owner until this lease starts. Read it
+    // again under the lease: `workflow cancel` holds the same lock while it records a
+    // pending run cancelled, so a run cancelled before this point gets no checkout.
+    if (admission.preCreatedRun) {
+      await lease.start(admission.preCreatedRun.id);
+      const row = await host.deps.store.getWorkflowRun(admission.preCreatedRun.id);
+      if (row?.status !== 'pending') {
+        throw new Error(
+          `Cannot execute run '${admission.preCreatedRun.id}': it is ${row?.status ?? 'missing'}, ` +
+            'not a run awaiting its first execution.'
+        );
+      }
+    }
     if (!defersContainerResume(launch)) {
       await provisionWorkspace(launch, lease);
       await recordConversationLaunch(launch);

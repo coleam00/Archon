@@ -486,6 +486,7 @@ describe('server resource-start host', () => {
         hostId: HOST_ID,
         startAdmitted: async id => {
           admitted.push(id);
+          return null;
         },
       });
       const runId = admitted[0];
@@ -805,6 +806,7 @@ describe('server resource-start host', () => {
       hostId: HOST_ID,
       startAdmitted: async id => {
         admitted.push(id);
+        return null;
       },
     });
     const result = await startAdmittedResourceStart({
@@ -830,6 +832,7 @@ describe('server resource-start host', () => {
       hostId: HOST_ID,
       startAdmitted: async id => {
         admitted.push(id);
+        return null;
       },
     });
     expect(admitted).toHaveLength(2);
@@ -845,6 +848,7 @@ describe('server resource-start host', () => {
       hostId: HOST_ID,
       startAdmitted: async requestId => {
         admitted.push(requestId);
+        return null;
       },
     });
     const [requestId] = admitted;
@@ -1144,6 +1148,7 @@ async function admitWithoutStarting(): Promise<string> {
     hostId: HOST_ID,
     startAdmitted: async requestId => {
       admitted.push(requestId);
+      return null;
     },
   });
   const [requestId] = admitted;

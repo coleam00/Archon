@@ -316,7 +316,7 @@ export interface RunStartInputs {
  */
 export async function resolveRunStartInputs(
   cwd: string,
-  workflow: ResolvedWorkflow,
+  workflow: Pick<ResolvedWorkflow, 'pack' | 'inputs'>,
   supplied: Readonly<Record<string, JsonValue>> | undefined
 ): Promise<RunStartInputs> {
   const pack = workflow.pack;

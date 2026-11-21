@@ -297,6 +297,8 @@ export function createInMemoryWorkflowStore(
     updateWorkflowRun: (id, updates) => write(view => view.updateWorkflowRun(id, updates)),
     updateWorkflowRunMetadataIfRunning: (id, metadata) =>
       write(view => view.updateWorkflowRunMetadataIfRunning(id, metadata)),
+    updateWorkflowRunMetadataIfPending: (id, metadata) =>
+      write(view => view.updateWorkflowRunMetadataIfPending(id, metadata)),
     updateWorkflowActivity: id => write(view => view.updateWorkflowActivity(id)),
     recordWorkflowRunCheckoutBaseline: (id, baseline) =>
       write(view => view.recordWorkflowRunCheckoutBaseline(id, baseline)),

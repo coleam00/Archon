@@ -11,6 +11,7 @@ import {
   ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
+import type { StartedExecutor } from '@archon/core/workflows/start-executor';
 import {
   getTriggersPath,
   readOnBindings,
@@ -27,6 +28,7 @@ import {
   collectCredentialValues,
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
+import { observeStartExecutor } from '@archon/core/services/run-attention-watch';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import {
   awaitingExecution,
@@ -54,7 +56,11 @@ import {
 } from '../utils/detached-run-control';
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
 import { addTriggerFile } from '../triggers/add-trigger-file';
-import { installMacosNativeSchedule, removeMacosNativeSchedule } from '../triggers/native-schedule';
+import {
+  inspectNativeSchedule,
+  installNativeSchedule,
+  removeNativeSchedule,
+} from '../triggers/native-schedule';
 import { resolveCliUserId } from './auth';
 import { readCallingNode } from '../utils/calling-node';
 import { requestedBy } from '../utils/requested-by';
@@ -112,7 +118,7 @@ export function drainFailureReasons(errors: readonly unknown[]): string {
 export function drainHost(
   host: WorkflowHost,
   hostId: string,
-  dispatch: (requestId: string, hostId: string) => Promise<void>
+  dispatch: TriggerDispatch
 ): Promise<void> {
   return drainResourceStartHost({
     ...host,
@@ -133,7 +139,14 @@ type TriggerOptions = {
   noItem?: boolean;
 };
 
-export type TriggerDispatch = (requestId: string, hostId: string) => Promise<void>;
+/**
+ * Hands an admitted request to its executor and names the process running it, or null when
+ * the request already ran to its end in this call.
+ */
+export type TriggerDispatch = (
+  requestId: string,
+  hostId: string
+) => Promise<StartedExecutor | null>;
 
 async function triggerWhoami(host: WorkflowHost): Promise<void> {
   const cliId = resolveCliUserId();
@@ -146,8 +159,10 @@ async function triggerWhoami(host: WorkflowHost): Promise<void> {
 
 /**
  * Each receipt, with `awaitingExecution`: its starts that are admitted but whose run no
- * executor has claimed. One stays there when the process that admitted it died before it
- * spawned the executor; `archon trigger execute <requestId> --host <hostId>` runs it once.
+ * executor has claimed, each with what this process observes of its executor (`state`).
+ * One reads `unowned` only when nothing can be running it: its hand-off recorded that it
+ * started nothing, or the process it was handed to is gone from this host;
+ * `archon trigger execute <requestId> --host <hostId>` runs it once.
  * And `refusedBindings`: its bindings whose preparation failed or was refused, each with
  * the failed boundary and, for a refusal of the pack's forge needs, the reasons and remedies.
  * `hold` is the install hold when the receipt has a start it keeps (a binding not yet
@@ -196,7 +211,12 @@ async function receiptAwaitingExecution(
   for (const binding of bindings) {
     if (binding.requestStatus !== 'admitted' || !binding.disposition) continue;
     const request = await host.deps.store.getResourceStartRequest(binding.disposition.requestId);
-    const waiting = awaitingExecution(request);
+    const run = await host.deps.store.getWorkflowRun(binding.disposition.requestId);
+    const waiting =
+      run &&
+      (await awaitingExecution(request, run, {
+        observe: pending => observeStartExecutor(host.deps.store, pending),
+      }));
     if (waiting) awaiting.push(waiting);
   }
   return awaiting;
@@ -321,7 +341,7 @@ async function triggerFire(
     );
   if (config.on?.asksSettled?.checkout !== undefined)
     throw new Error(
-      `${options.config} takes its checkout from the run that left the asks (on.asksSettled.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on that checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <holder-run-id> --item <key>, naming the run that holds the checkout: metadata.asks_checkout.handoff.runId in archon workflow get <asking-run-id> --json, which after a read-only asking stage is the run it was given, not the asking run. When asks_checkout records a refusal, or none, no checkout is left: run the asking workflow again on the item. Pass an --input <name>=<value> for each input the file maps (${mappedNames(config.on.asksSettled.inputs)}): --adopt carries the checkout, not the answers. Read the answers from archon workflow runs --item <key> --json (its answers of kind 'ask' for the asking run) and the asking run's inputs from archon workflow get <asking-run-id> --json.`
+      `${options.config} takes its checkout from the run that left the asks (on.asksSettled.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on that checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <holder-run-id> --item <key>, naming the run that holds the checkout: metadata.asks_checkout.handoff.runId in archon workflow get <asking-run-id> --json, which after a read-only asking stage is the run it was given, not the asking run. When asks_checkout records a refusal, or none, no checkout is left: run the asking workflow again on the item. Pass an --input <name>=<value> for each input the file maps (${mappedNames(config.on.asksSettled.inputs)}): --adopt carries the checkout, not the answers. Read the answers from archon workflow runs --item <key> --json (its answers of kind 'ask': the asking run's for an input read from { answers: true }, all of them for { item: answers }) and the asking run's inputs from archon workflow get <asking-run-id> --json.`
     );
   const sourceActor = await requestingSourceActor(host, env);
   // A redelivery keeps the binding snapshot of its first acceptance, so today's users
@@ -600,26 +620,43 @@ async function scheduleTrigger(
   args: string[],
   options: TriggerOptions
 ): Promise<void> {
-  if (!options.config || !['install', 'remove'].includes(args[0] ?? ''))
+  const operation = args[0];
+  if (
+    !options.config ||
+    (operation !== 'install' && operation !== 'remove' && operation !== 'status')
+  )
     throw new Error(
-      'Usage: archon trigger schedule <install|remove> --config <timer-binding.json>'
+      'Usage: archon trigger schedule <install|remove|status> --config <timer-binding.json>'
     );
   const config = await loadFireConfig(options.config);
-  const scheduleId = createHash('sha256')
-    .update(JSON.stringify([getArchonHome(), config.sourceInstanceId, config.binding.bindingId]))
-    .digest('hex');
-  // Remove needs no schedule, so a timer installed before the file lost its `schedule`
-  // can still be removed.
-  if (args[0] === 'remove') await removeMacosNativeSchedule(scheduleId);
+  const bindingId = config.binding.bindingId;
+  const target = {
+    id: createHash('sha256')
+      .update(JSON.stringify([getArchonHome(), config.sourceInstanceId, bindingId]))
+      .digest('hex'),
+    archonHome: getArchonHome(),
+  };
+  // Remove and status need no schedule, so a timer installed before the file lost its
+  // `schedule` can still be inspected and removed.
+  if (operation === 'status') {
+    const installed = await inspectNativeSchedule(target);
+    await writeJsonLine({
+      bindingId,
+      schedule: operation,
+      ...(installed ? { installed: true, ...installed } : { installed: false }),
+    });
+    return;
+  }
+  if (operation === 'remove') await removeNativeSchedule(target);
   else {
     if (!isTimerConfig(config))
       throw new Error(
-        `Binding '${config.binding.bindingId}' is fire-only: its configuration has no schedule, so there is no timer to install. Start it with: archon trigger fire --config ${options.config}`
+        `Binding '${bindingId}' is fire-only: its configuration has no schedule, so there is no timer to install. Start it with: archon trigger fire --config ${options.config}`
       );
     await assertKnownRunAsUser(host, config);
-    await installTimer(config, scheduleId, resolve(options.config));
+    await installTimer(config, target.id, resolve(options.config));
   }
-  await writeJsonLine({ bindingId: config.binding.bindingId, schedule: args[0] });
+  await writeJsonLine({ bindingId, schedule: operation });
 }
 
 /** Only a timer configuration can be installed; the type refuses a fire-only one. */
@@ -629,13 +666,14 @@ async function installTimer(
   configPath: string
 ): Promise<void> {
   const [executable, ...prefix] = cliProgramArguments();
-  await installMacosNativeSchedule({
+  await installNativeSchedule({
     id: scheduleId,
     programArguments: [executable, ...prefix, 'trigger', 'fire', '--config', configPath],
     workingDirectory: config.binding.launch.cwd,
     archonHome: getArchonHome(),
     path: process.env.PATH ?? '',
     schedule: config.schedule,
+    output: 'log',
     removeCommand: `archon trigger schedule remove --config ${configPath}`,
   });
 }
@@ -717,7 +755,11 @@ export async function triggerCommand(
 ): Promise<void> {
   const dispatch: TriggerDispatch =
     dependencies.dispatch ??
-    ((requestId, hostId) => triggerCommand(host, 'execute', [requestId], { host: hostId }));
+    (async (requestId, hostId) => {
+      // Runs in the foreground to its end, so nothing is left to record as starting.
+      await triggerCommand(host, 'execute', [requestId], { host: hostId });
+      return null;
+    });
   switch (action) {
     case 'whoami':
       return triggerWhoami(host);

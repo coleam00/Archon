@@ -4999,6 +4999,11 @@ export interface components {
       runId: string;
       nodeId: string;
       name: string;
+      composed?: {
+        nodeId: string;
+        workflow: string;
+        includes: string[];
+      };
       /** @enum {string} */
       status: 'running' | 'completed' | 'failed' | 'skipped';
       duration?: number;
@@ -5013,6 +5018,11 @@ export interface components {
               id: string;
               /** @enum {string} */
               kind: 'agent';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
               source:
                 | {
                     /** @enum {string} */
@@ -5030,37 +5040,72 @@ export interface components {
               kind: 'exec';
               /** @enum {string} */
               runtime: 'sh' | 'bun' | 'uv';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'loop';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
               command?: string;
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'loop_group';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'gate';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'halt';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'wait';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'workflow';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
               /** @enum {boolean} */
               fanOut?: true;
             }
@@ -5068,6 +5113,11 @@ export interface components {
               id: string;
               /** @enum {string} */
               kind: 'compose_fan_out';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               /** @enum {string} */
@@ -6457,6 +6507,9 @@ export interface components {
     RunsNeedingAttentionResponse: {
       runs: components['schemas']['DashboardWorkflowRun'][];
       items: components['schemas']['AttentionQueueItem'][];
+      answerRefusals: {
+        [key: string]: string;
+      };
       degraded?: {
         /** @enum {string} */
         type: 'degraded';
@@ -6671,6 +6724,11 @@ export interface components {
                 id: string;
                 /** @enum {string} */
                 kind: 'agent';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
                 source:
                   | {
                       /** @enum {string} */
@@ -6688,37 +6746,72 @@ export interface components {
                 kind: 'exec';
                 /** @enum {string} */
                 runtime: 'sh' | 'bun' | 'uv';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'loop';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
                 command?: string;
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'loop_group';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'gate';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'halt';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'wait';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'workflow';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
                 /** @enum {boolean} */
                 fanOut?: true;
               }
@@ -6726,6 +6819,11 @@ export interface components {
                 id: string;
                 /** @enum {string} */
                 kind: 'compose_fan_out';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 /** @enum {string} */
@@ -8038,6 +8136,13 @@ export interface components {
         awaitingExecution: {
           requestId: string;
           hostId: string;
+          /** @enum {string} */
+          state: 'starting' | 'unowned' | 'unknown';
+          executor: {
+            host: string;
+            pid: number;
+            uid?: number;
+          } | null;
         } | null;
         spend: {
           usd: number | null;
@@ -8697,6 +8802,13 @@ export interface components {
           awaitingExecution: {
             requestId: string;
             hostId: string;
+            /** @enum {string} */
+            state: 'starting' | 'unowned' | 'unknown';
+            executor: {
+              host: string;
+              pid: number;
+              uid?: number;
+            } | null;
           } | null;
           spend: {
             usd: number | null;
@@ -11282,6 +11394,7 @@ export interface components {
       backgroundWork: 'reported' | 'none' | 'unobserved';
       sessionResume: boolean;
       sessionFork?: boolean;
+      turnMessages?: boolean;
       mcp: boolean;
       hooks: boolean;
       skills: boolean;

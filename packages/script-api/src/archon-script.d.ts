@@ -1536,10 +1536,21 @@ declare module 'archon:script' {
         readonly operations: ReadonlyArray<string>;
         readonly host: string;
         readonly remote?: never;
+        readonly repo?: never;
       } | {
         readonly operations: ReadonlyArray<string>;
         readonly remote: string;
         readonly host?: never;
+        readonly repo?: never;
+      } | {
+        readonly operations: ReadonlyArray<string>;
+        readonly repo: {
+          readonly host: string;
+          readonly path: string;
+          readonly hostClaim?: true;
+        };
+        readonly host?: never;
+        readonly remote?: never;
       };
       readonly result: {
         readonly host: string;
@@ -1558,7 +1569,7 @@ declare module 'archon:script' {
     readonly operationId: string;
     readonly ok: false;
     readonly error: {
-      readonly kind: 'unavailable' | 'rate_limited' | 'no_plugin_for_host' | 'unsupported_op' | 'no_credential' | 'conflict' | 'authorization' | 'not_found' | 'forge_error' | 'invalid_request' | 'invalid_response' | 'duplicate_host' | 'process_failed' | 'timeout';
+      readonly kind: 'unavailable' | 'rate_limited' | 'no_plugin_for_host' | 'unsupported_op' | 'no_credential' | 'authorization' | 'not_found' | 'conflict' | 'forge_error' | 'invalid_request' | 'invalid_response' | 'duplicate_host' | 'process_failed' | 'timeout';
       readonly message: string;
       readonly status?: number;
       readonly exitCode?: number | null;
@@ -2092,6 +2103,12 @@ declare module 'archon:script' {
       readonly awaitingExecution: {
         readonly requestId: string;
         readonly hostId: string;
+        readonly state: 'starting' | 'unowned' | 'unknown';
+        readonly executor: {
+          readonly host: string;
+          readonly pid: number;
+          readonly uid?: number;
+        } | null;
       } | null;
       readonly spend: {
         readonly usd: number | null;
@@ -2612,6 +2629,12 @@ declare module 'archon:script' {
         readonly awaitingExecution: {
           readonly requestId: string;
           readonly hostId: string;
+          readonly state: 'starting' | 'unowned' | 'unknown';
+          readonly executor: {
+            readonly host: string;
+            readonly pid: number;
+            readonly uid?: number;
+          } | null;
         } | null;
         readonly spend: {
           readonly usd: number | null;

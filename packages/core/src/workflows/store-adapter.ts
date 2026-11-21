@@ -28,6 +28,7 @@ import * as itemWaitsDb from '../db/item-waits';
 import * as workflowDb from '../db/workflows';
 import * as resourceStarts from '../db/resource-starts';
 import { acceptStartReceipt } from '../db/start-receipt-writes';
+import { updateWorkflowRunMetadataIfPending } from '../db/workflow-run-writes';
 import * as installHold from '../db/install-hold';
 import { toHydratedTimestamp } from '../db/timestamps';
 import * as workflowEventDb from '../db/workflow-events';
@@ -163,7 +164,7 @@ async function listHeldItemStarts(itemId: string): Promise<HeldItemStart[]> {
 /** Where trigger files with `on` are read from and how a binding is placed in a project. */
 function onBindingDeps(
   getItem: IWorkflowStore['getItem']
-): Omit<RunEndedStartsDependencies, 'endedCheckout' | 'now'> {
+): Omit<RunEndedStartsDependencies, 'endedCheckout' | 'listItemAsks' | 'now'> {
   return {
     triggersDirectory: getTriggersPath,
     getItem,
@@ -292,6 +293,7 @@ export function createWorkflowStore(): IWorkflowStore {
     recoverCancelledFanOutRun: workflowDb.recoverCancelledFanOutRun,
     updateWorkflowRun: workflowDb.updateWorkflowRun,
     updateWorkflowRunMetadataIfRunning: workflowDb.updateWorkflowRunMetadataIfRunning,
+    updateWorkflowRunMetadataIfPending,
     updateWorkflowActivity: workflowDb.updateWorkflowActivity,
     getWorkflowRunStatus: workflowDb.getWorkflowRunStatus,
     completeWorkflowRun: workflowDb.completeWorkflowRun,
@@ -421,7 +423,11 @@ export function createWorkflowDeps(
   return {
     store,
     credentialStore,
-    runEndedStarts: createRunEndedStarts({ ...onBindings, endedCheckout }),
+    runEndedStarts: createRunEndedStarts({
+      ...onBindings,
+      endedCheckout,
+      listItemAsks: id => store.listItemAsks(id),
+    }),
     asksCheckout: createAsksCheckout({
       ...onBindings,
       endedCheckout,

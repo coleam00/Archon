@@ -16,6 +16,13 @@ export const operatorHelp: HelpGroup = {
     },
     {
       command: 'project',
+      subcommand: 'add',
+      spec: 'project add [path]',
+      description:
+        'Register a project (this checkout, or path) before its first run; --folder for a non-git directory',
+    },
+    {
+      command: 'project',
       subcommand: 'config',
       spec: 'project config <id|name>',
       description: "Show a project's merged config with secrets removed (env key names only)",
@@ -172,8 +179,8 @@ export const operatorHelp: HelpGroup = {
     {
       command: 'trigger',
       subcommand: 'schedule',
-      spec: 'trigger schedule <install|remove> --config <file>',
-      description: 'Manage the configured native macOS LaunchAgent',
+      spec: 'trigger schedule <install|remove|status> --config <file>',
+      description: "Manage the binding's OS timer (launchd, systemd user timer, Task Scheduler)",
     },
     {
       command: 'trigger',

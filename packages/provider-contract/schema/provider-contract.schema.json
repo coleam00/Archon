@@ -208,6 +208,9 @@
         "sessionFork": {
           "type": "boolean"
         },
+        "turnMessages": {
+          "type": "boolean"
+        },
         "mcp": {
           "type": "boolean"
         },
@@ -1650,6 +1653,23 @@
       },
       "required": [
         "sessionId"
+      ]
+    },
+    "ProviderTurnMessageNotification": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId",
+        "text"
       ]
     },
     "ProviderChunkNotification": {

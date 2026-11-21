@@ -57,11 +57,11 @@ import {
   packWorkflows,
 } from '@archon/workflows/pack-graph';
 import { writeJsonLine } from '../utils/stdout';
-import {
-  triggerConfigSchema,
-  type AsksSettledInputSource,
-  type RunEndedInputSource,
-} from '@archon/workflows/schemas/resource-start';
+import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
+import type {
+  AsksSettledInputSource,
+  RunEndedInputSource,
+} from '@archon/workflows/schemas/binding-input-source';
 import { loadWorkflows } from './workflow-list';
 
 export interface PackBindingsOptions {
@@ -441,7 +441,7 @@ function nextSteps(generated: readonly Generated[], target: Target): string[] {
   if (timers.length > 0) {
     lines.push(
       '',
-      'Timer bindings. Fire each once to check it, then schedule it. `schedule install` is macOS launchd; elsewhere run the same `trigger fire` command from cron, systemd or Task Scheduler:'
+      'Timer bindings. Fire each once to check it, then schedule it. `schedule install` uses launchd on macOS, a systemd user timer on Linux and Task Scheduler on Windows; on another host it prints the command to schedule by hand:'
     );
     for (const timer of timers) {
       lines.push(

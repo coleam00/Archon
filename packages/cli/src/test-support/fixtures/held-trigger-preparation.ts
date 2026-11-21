@@ -13,8 +13,9 @@ registerBuiltinProviders();
 registerCommunityProviders();
 const host = createSqlWorkflowHost();
 const admitted: string[] = [];
-const dispatch = async (id: string): Promise<void> => {
+const dispatch = async (id: string): Promise<null> => {
   admitted.push(id);
+  return null;
 };
 await triggerCommand(host, 'fire', [], { config }, { dispatch });
 await triggerCommand(host, 'fire', [], { config }, { dispatch });

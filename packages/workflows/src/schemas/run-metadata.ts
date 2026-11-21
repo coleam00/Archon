@@ -124,6 +124,10 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
   // Prefer the logical map (#2637); fall back to the legacy text map, accepting only a
   // plain object of string values there — the legacy writer always stored strings, so a
   // non-conforming value is corrupt/foreign metadata, not a shape to coerce.
+  // SQLite's dialect merge (json_patch, RFC 7396) deletes any null-valued interior key,
+  // so a logical map that held nulls loses them when merged (#5939). The text map keeps
+  // them (as "null"), so keys in the text map that are absent from the logical map are
+  // restored as null rather than dropped.
   // Metadata is DB-round-tripped JSON, so a plain object here can only hold JSON
   // values — the casts assert what the storage layer already guarantees.
   const rawValues = asPlainObject(metadata?.[SUBRUN_METADATA_KEYS.inputsValues]) as
@@ -134,6 +138,19 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
     rawLegacy !== undefined && Object.values(rawLegacy).every(v => typeof v === 'string')
       ? (rawLegacy as Record<string, string>)
       : undefined;
+  const inputs =
+    rawValues !== undefined
+      ? legacyInputs !== undefined
+        ? {
+            ...Object.fromEntries(
+              Object.keys(legacyInputs)
+                .filter(k => !Object.hasOwn(rawValues, k))
+                .map(k => [k, null])
+            ),
+            ...rawValues,
+          }
+        : rawValues
+      : legacyInputs;
   // A path contract this binary wrote must parse; a malformed one fails rather than
   // authorizing nothing. A legacy field projection is only usable as a contract when it
   // is exactly an array of strings; anything else degrades to "no contract".
@@ -148,7 +165,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
     parentNodeId: typeof parentNodeId === 'string' ? parentNodeId : undefined,
     childIndex: typeof childIndex === 'number' ? childIndex : undefined,
     fanOutItemHash: typeof fanOutItemHash === 'string' ? fanOutItemHash : undefined,
-    inputs: rawValues ?? legacyInputs,
+    inputs,
     // Presence-keyed rather than truthiness: `false`/`0`/`null` are legitimate values.
     summaryValue:
       metadata !== undefined && Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryValue)
@@ -267,7 +284,10 @@ export interface ExecutionOwnerRecord {
 export function readExecutionOwner(
   metadata: Record<string, unknown> | undefined
 ): ExecutionOwnerRecord | undefined {
-  const raw = metadata?.[EXECUTION_OWNER_METADATA_KEY];
+  return readOwnerRecord(metadata?.[EXECUTION_OWNER_METADATA_KEY]);
+}
+
+function readOwnerRecord(raw: unknown): ExecutionOwnerRecord | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
   const { host, pid, uid } = raw as { host?: unknown; pid?: unknown; uid?: unknown };
   if (typeof host !== 'string' || host.length === 0) return undefined;
@@ -275,6 +295,34 @@ export function readExecutionOwner(
   return typeof uid === 'number' && Number.isInteger(uid) && uid >= 0
     ? { host, pid, uid }
     : { host, pid };
+}
+
+/**
+ * How the hand-off of an admitted start ended, written by the process that handed it over
+ * while the run is still `pending`. `handed_off` names the process the start was handed
+ * to: a detached `trigger execute`, or a server running it in-process. `hand_off_failed`
+ * records that the hand-off started nothing. It is evidence for a reader while the run
+ * waits for its executor's claim, never a liveness signal: a live pid is not proof that
+ * the process is still this executor, and only the live-owner endpoint proves that. What
+ * it can prove is absence: a failed hand-off, or a recorded process that no longer exists.
+ * Once the executor claims the run, `execution_owner` takes over and this key is inert.
+ */
+export const START_EXECUTOR_METADATA_KEY = 'start_executor';
+
+export type StartExecutorRecord =
+  | ({ kind: 'handed_off' } & ExecutionOwnerRecord)
+  | { kind: 'hand_off_failed' };
+
+/** Typed view of the start-executor record; undefined when none was written or it does not read. */
+export function readStartExecutor(
+  metadata: Record<string, unknown> | undefined
+): StartExecutorRecord | undefined {
+  const raw = metadata?.[START_EXECUTOR_METADATA_KEY];
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const { kind } = raw as { kind?: unknown };
+  if (kind === 'hand_off_failed') return { kind };
+  const owner = kind === 'handed_off' ? readOwnerRecord(raw) : undefined;
+  return owner === undefined ? undefined : { kind: 'handed_off', ...owner };
 }
 
 /** Typed view of the run-lifecycle keys on a run's metadata; undefined when unset. */

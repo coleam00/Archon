@@ -335,14 +335,24 @@ export async function runSetup({
   });
 }
 
-export async function runProject({ positionals, json }: CliRouteContext): Promise<number> {
+export async function runProject({
+  positionals,
+  values,
+  cwd,
+  json,
+}: CliRouteContext): Promise<number> {
   const { projectCommand } = await loadRoute(() => import('../commands/project'), {
     // `project config` validates assistant settings and resolves tier defaults
     // against the provider registry, as the server does.
     ...(positionals[1] === 'config' ? {} : { providers: false as const }),
     database: await usesDatabaseStore(),
   });
-  return await projectCommand(positionals.slice(1), json);
+  return await projectCommand(positionals.slice(1), {
+    json,
+    cwd,
+    folder: values.folder === true,
+    baseBranch: typeof values['base-branch'] === 'string' ? values['base-branch'] : undefined,
+  });
 }
 
 export async function runUser({

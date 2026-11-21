@@ -298,7 +298,13 @@ if (process.argv[3] === 'metadata') {
     writeFileSync(join(home, '.env'), 'GH_TOKEN=home-test-token\n');
     writeFileSync(
       plugin,
-      `console.log(JSON.stringify({ protocol: 1, name: 'marker', version: '1', forge: 'test', hosts: ['forge.example'], capabilities: ['pr.view'], token_env: ['GH_TOKEN'] }));\n`
+      // Metadata, then the check's read: a resolve of the remote and a pr.view by head.
+      `const metadata = { protocol: 1, name: 'marker', version: '1', forge: 'test', hosts: ['forge.example'], capabilities: ['resolve', 'pr.view'], token_env: ['GH_TOKEN'] };
+if (process.argv[2] !== 'op') { console.log(JSON.stringify(metadata)); process.exit(0); }
+const input = await Bun.stdin.json();
+const repo = { host: 'forge.example', path: 'owner/repo' };
+const value = input.op === 'resolve' ? { kind: 'resolved', forge: 'test', repo, plugin: { name: 'marker', version: '1' } } : null;
+console.log(JSON.stringify({ operationId: input.operationId, ok: true, result: { op: input.op, value } }));\n`
     );
     writeFileSync(
       join(home, 'config.yaml'),
@@ -329,7 +335,7 @@ if (process.argv[3] === 'metadata') {
           },
           executionUserId: 'user-1',
         },
-        { cwd: repo, codebaseId: undefined }
+        { cwd: repo, settingsCwd: repo, codebaseId: undefined, supplied: undefined }
       );
     try {
       const refused = await start(undefined).then(
@@ -2312,7 +2318,7 @@ it('CLI complete returns failure after reporting an ambiguous branch', async () 
 });
 
 describe('registration base branch parsing', () => {
-  it('rejects the registration flag outside workflow run', () => {
+  it('rejects the registration flag outside workflow run and project add', () => {
     const result = spawnSync(
       process.execPath,
       [CLI_ENTRY, 'version', '--base-branch', 'release', '--json'],

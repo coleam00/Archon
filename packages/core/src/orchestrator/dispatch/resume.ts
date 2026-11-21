@@ -2,6 +2,7 @@ import type { WorkflowResumeAdmission } from '@archon/workflows/engine-port';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { inspectResumableRun } from '@archon/workflows/run-resume';
 import { assertRunCredentials } from '@archon/workflows/run-preflight';
+import { assertRunForgeAccess } from '@archon/workflows/run-forge-access';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
@@ -271,7 +272,14 @@ async function startFreshInResumedWorktree(
   if (!captured) return; // capture failed, message already sent
   const workflow = captured.workflow;
   const freshAiConfiguration = await input.prepareLaunchAiConfiguration(workflow);
-  await assertRunCredentials(createWorkflowDeps(), freshAiConfiguration, { cwd: scope.runCwd });
+  const workflowDeps = createWorkflowDeps();
+  await assertRunCredentials(workflowDeps, freshAiConfiguration, { cwd: scope.runCwd });
+  const inputs = await assertRunForgeAccess(workflowDeps, workflow, freshAiConfiguration, {
+    cwd: codebase.default_cwd,
+    settingsCwd: scope.runCwd,
+    codebaseId: codebase.id,
+    supplied: input.resolvedInputs,
+  });
   await platform.sendMessage(
     conversationId,
     `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`
@@ -303,7 +311,7 @@ async function startFreshInResumedWorktree(
         capturedSourceOwner: owner,
         // This branch creates a FRESH run row (the prior run had nothing to resume),
         // so the supplied inputs still need stamping.
-        inputs: input.resolvedInputs,
+        inputs,
         ...(options?.modelOverrides
           ? {
               modelOverrideLayer: {

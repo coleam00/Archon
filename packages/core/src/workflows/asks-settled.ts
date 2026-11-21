@@ -19,7 +19,7 @@
  * run-ended hand-off, which refuses a branch that moved off the recorded commit.
  */
 import { existsSync } from 'node:fs';
-import type { JsonValue } from '@archon/workflows/output-ref';
+import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import { chosenAskOption, type StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import {
   ASKS_SETTLED_SOURCE_ACTOR,
@@ -44,9 +44,10 @@ import {
   type RunEndedStartsDependencies,
 } from './run-ended';
 import { selectStartedWorkflow, type StartedWorkflow } from './binding-workflow';
+import { itemAnswers, settledAnswer } from './item-answers';
 
 export interface AsksSettledStartsDependencies
-  extends Omit<RunEndedStartsDependencies, 'endedCheckout'> {
+  extends Omit<RunEndedStartsDependencies, 'endedCheckout' | 'listItemAsks'> {
   getItemAsk: (id: string) => Promise<StoredItemAsk | null>;
 }
 
@@ -57,13 +58,14 @@ export interface AskingRunRow {
 
 /**
  * Builds the receipts a settled set causes, inside the transaction that settles it: the
- * set's rows as they read after this close, and the run that left them. Synchronous, so
- * nothing slow runs while the set is locked. Throws when a binding could not be read,
- * which rolls the close back.
+ * set's rows as they read after this close, the run that left them, and every ask on the
+ * item, this close included. Synchronous, so nothing slow runs while the set is locked.
+ * Throws when a binding could not be read, which rolls the close back.
  */
 export type AsksSettledReceipts = (
   rows: readonly StoredItemAsk[],
-  run: AskingRunRow | null
+  run: AskingRunRow | null,
+  itemAsks: readonly AttentionRead<StoredItemAsk>[]
 ) => SourceReceiptAcceptance[];
 
 /**
@@ -101,18 +103,24 @@ export function createAsksSettledStarts(
     }
     if (candidates.length === 0) return undefined;
     const now = dependencies.now?.() ?? new Date();
-    return (rows, run) => {
+    return (rows, run, itemAsks) => {
       const runId = rows[0]?.runId;
       if (runId === undefined) return [];
       const settledAs = rows.some(row => row.closed?.as === 'answered') ? 'answered' : 'withdrawn';
       const answers = rows.map(settledAnswer);
+      const onItem = itemAnswers(itemAsks);
       const from =
         run === null
-          ? { gone: `run '${runId}', which left the asks, no longer exists`, answers }
+          ? {
+              gone: `run '${runId}', which left the asks, no longer exists`,
+              answers,
+              itemAnswers: onItem,
+            }
           : {
               inputs: readSubrunMetadata(run.metadata).inputs ?? {},
               result: readAsksResult(run.metadata),
               answers,
+              itemAnswers: onItem,
             };
       return candidates
         .filter(({ asksSettled: { settled, option } }) =>
@@ -189,7 +197,7 @@ export function askingWorktreeGone(
  * else undefined. Read once however many bindings match.
  */
 export function createAsksCheckout(
-  dependencies: Omit<RunEndedStartsDependencies, 'now'> & {
+  dependencies: Omit<RunEndedStartsDependencies, 'now' | 'listItemAsks'> & {
     getRun: (id: string) => Promise<WorkflowRun | null>;
   }
 ): (run: WorkflowRun) => Promise<AsksCheckout | undefined> {
@@ -231,27 +239,6 @@ async function withWorktree(
   const recorded = { handoff, worktree };
   const gone = askingWorktreeGone(run.id, recorded);
   return gone === undefined ? recorded : { refused: gone };
-}
-
-/**
- * One ask of a settled set as `{answers: true}` passes it: the question, how it closed, the
- * answer and the option it chose, and who closed it, through which surface and when.
- */
-function settledAnswer(row: StoredItemAsk): JsonValue {
-  const { closed } = row;
-  // Unreachable: a replaced set can never settle, because a replaced ask cannot be closed.
-  if (closed === null || closed.as === 'replaced')
-    throw new Error(`Ask '${row.id}' is not answered or withdrawn in a settled set`);
-  const option = closed.as === 'answered' ? chosenAskOption(row.ask, closed.answer) : undefined;
-  return {
-    question: row.ask.question,
-    closedAs: closed.as,
-    answer: closed.as === 'answered' ? closed.answer : null,
-    option: option ?? null,
-    by: closed.act.by,
-    via: closed.act.via,
-    at: closed.act.at,
-  };
 }
 
 /**
@@ -421,7 +408,8 @@ function sharingFiles(
  * are answered.
  */
 export function createAsksSettledPreflight(
-  dependencies: Omit<RunEndedStartsDependencies, 'now' | 'endedCheckout'> & BindingDefinitionsDeps
+  dependencies: Omit<RunEndedStartsDependencies, 'now' | 'endedCheckout' | 'listItemAsks'> &
+    BindingDefinitionsDeps
 ): (run: WorkflowRun) => Promise<void> {
   return async run => {
     if (!run.item_id) return;

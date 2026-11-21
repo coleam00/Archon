@@ -211,6 +211,35 @@ test('a start held behind a run whose owner is gone prints both actions on that 
   expect(text).toContain(`archon workflow abandon ${holder}`);
 });
 
+test('an admitted start shows the execute command only when nobody runs it', () => {
+  const requestId = 'c7d8e9f0-0000-4000-8000-000000000001';
+  const textFor = (
+    state: 'starting' | 'unowned' | 'unknown',
+    executor: { host: string; pid: number } | null
+  ) =>
+    itemReadLines({
+      ...read,
+      runs: [
+        {
+          ...read.runs[0]!,
+          id: requestId,
+          status: 'pending',
+          outcome: null,
+          completedAt: null,
+          hasResult: false,
+          resultCommit: null,
+          awaitingExecution: { requestId, hostId: 'host', state, executor },
+        },
+      ],
+    }).join('\n');
+  const execute = `archon trigger execute ${requestId} --host host`;
+  expect(textFor('starting', { host: 'here', pid: 4242 })).not.toContain('archon trigger');
+  expect(textFor('unowned', null)).toContain(execute);
+  const unknown = textFor('unknown', { host: 'elsewhere', pid: 4242 });
+  expect(unknown).toContain(`archon trigger inspect ${requestId}`);
+  expect(unknown).not.toContain(execute);
+});
+
 test('a start refused for a held item keeps naming the run that held it', () => {
   const holder = 'a1b2c3d4-0000-4000-8000-000000000001';
   const text = itemReadLines({

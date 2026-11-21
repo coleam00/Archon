@@ -3,7 +3,7 @@
 # Multi-stage build: workspace layout → deps → image plugins + web build → production image
 # =============================================================================
 
-ARG BUN_VERSION=1.4.2
+ARG BUN_VERSION=1.4.5
 
 # ---------------------------------------------------------------------------
 # Workspace layout, derived from packages/ so a new package needs no edit here
@@ -73,7 +73,7 @@ RUN bun run build:web && \
 # ---------------------------------------------------------------------------
 # Stage 3: Production image
 # ---------------------------------------------------------------------------
-ARG BUN_VERSION=1.4.2
+ARG BUN_VERSION=1.4.5
 FROM oven/bun:${BUN_VERSION}-slim AS production
 
 # OCI Labels for GHCR

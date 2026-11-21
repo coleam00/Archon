@@ -171,6 +171,11 @@ export type ComposedBlockBoundary = ComposedBlockBoundaryBase &
  *
  *  - `origin` — the authoring workflow's name. Write-once (innermost wins), so a
  *    node nested three files deep still names the file that declared it.
+ *  - `nodeId` — the node's id as written in `origin`, before any include prefixed it.
+ *    Write-once like `origin`. A loop_group body node records its own id.
+ *  - `includes` — the include node ids that brought this node in, as each includer
+ *    wrote them, outermost first. Cumulative like `boundaries`: each outer level
+ *    prepends its own.
  *  - `inputs` — that workflow's contract-resolved `inputs:` (defaults applied),
  *    delivered to its `bash:`/`script:` nodes as `INPUTS_<UPPER_SNAKE>` env vars.
  *    Write-once for the same reason, and because input names carry no namespace:
@@ -193,6 +198,8 @@ export type ComposedBlockBoundary = ComposedBlockBoundaryBase &
  */
 export interface ComposedNodeMeta {
   origin: string;
+  nodeId: string;
+  includes: string[];
   pack?: Pick<WorkflowPack, 'source' | 'key'>;
   inputs?: Record<string, JsonValue>;
   blockSessionStart?: true;

@@ -231,7 +231,7 @@ const runsWithItems = () =>
   );
 
 // The commands write to process-wide stdout, environment and registries, so each test is
-// `test.serial`: it must not run beside another, even under `--concurrent`. (In Bun 1.4.2
+// `test.serial`: it must not run beside another, even under `--concurrent`. (In Bun 1.4.5
 // `describe.serial` does not hold its tests back under `--concurrent`; `test.serial` does.)
 test.serial(
   'workflow run --item puts a run on the item, and the item read lists its runs',

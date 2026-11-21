@@ -1087,10 +1087,13 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
       buildAiProfile('codex'),
       {}
     );
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    const launchedRow = {
       ...preCreatedRow,
       metadata: { ...preCreatedRow.metadata, ai_configuration: snapshot },
-    });
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(launchedRow)
+      .mockResolvedValueOnce(launchedRow);
     (prepareWorkflowSource as ReturnType<typeof mock>).mockClear();
     (executeWorkflow as ReturnType<typeof mock>).mockClear();
 
@@ -1134,7 +1137,10 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
       workflows: [makeTestWorkflowWithSource({ name: 'plan', description: 'Plan work' })],
       errors: [],
     });
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(preCreatedRow);
+    // Admission reads the row, then the child reads it again under its lease.
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(preCreatedRow)
+      .mockResolvedValueOnce(preCreatedRow);
     // No project resolves, so the isolation gate throws after the row was handed over.
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
     (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
@@ -1161,7 +1167,10 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
       workflows: [makeTestWorkflowWithSource({ name: 'plan', description: 'Plan work' })],
       errors: [],
     });
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(preCreatedRow);
+    // Admission reads the row, then the child reads it again under its lease.
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(preCreatedRow)
+      .mockResolvedValueOnce(preCreatedRow);
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
     (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       failed: false,
@@ -1194,7 +1203,10 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
       workflows: [makeTestWorkflowWithSource({ name: 'plan', description: 'Plan work' })],
       errors: [],
     });
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(preCreatedRow);
+    // Admission reads the row, then the child reads it again under its lease.
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(preCreatedRow)
+      .mockResolvedValueOnce(preCreatedRow);
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'cb-1',
       name: 'test/repo',
@@ -1234,6 +1246,42 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
 
   // #2872 R3 — the flag names a row this process will execute AS. Both halves are
   // checked: that this really is a detached child, and that the row is claimable.
+  // `workflow cancel` can record the row cancelled after admission read it pending but
+  // before this child took its lease; the read under the lease stops it before setup.
+  it('stops before setup when the row was cancelled before its lease started', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'plan', description: 'Plan work' })],
+      errors: [],
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-1',
+      name: 'test/repo',
+      default_cwd: '/test/path',
+      kind: 'repo',
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(preCreatedRow)
+      .mockResolvedValueOnce({ ...preCreatedRow, status: 'cancelled' });
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {
+        detachedRunId: 'run-precreated',
+        conversationId: 'cli-123',
+        noWorktree: true,
+      })
+    ).rejects.toThrow("Cannot execute run 'run-precreated': it is cancelled");
+
+    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('run-precreated', {
+      detachedProcessPid: process.pid,
+    });
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
   it('refuses the flag outside a detached child', async () => {
     delete process.env.ARCHON_DETACHED_RUN_OWNER;
 

@@ -38,8 +38,11 @@ const resume = mock<
 >(async () => ({ kind: 'not-accepted' }));
 const getRun = mock(async () => makeTestWorkflowRun());
 const signal = mock(async () => ({ signaled: true }));
-const install = mock(async (_config: NativeScheduleConfig) => 'installed');
-const remove = mock(async (_id: string) => true);
+const install = mock(async (_config: NativeScheduleConfig) => ({
+  path: 'installed',
+  log: 'log',
+}));
+const remove = mock(async (_target: { id: string }) => true);
 mock.module('@archon/core/workflows/continuation-host', () => ({
   resumeWorkflowContinuation: resume,
 }));
@@ -54,15 +57,31 @@ const writeStdout = mock(async (value: string) => {
   output.push(JSON.parse(value));
 });
 mock.module('../utils/stdout', () => ({ writeStdout }));
+const realNativeSchedule = await import('../triggers/native-schedule');
+let fingerprint: string | undefined = 'engine';
+mock.module('../utils/engine-fingerprint', () => ({ engineFingerprint: () => fingerprint }));
 mock.module('../triggers/native-schedule', () => ({
-  installMacosNativeSchedule: install,
-  removeMacosNativeSchedule: remove,
-  inspectMacosNativeSchedule: mock(async () => undefined),
+  ...realNativeSchedule,
+  installNativeSchedule: install,
+  removeNativeSchedule: remove,
+  inspectNativeSchedule: mock(async () => undefined),
 }));
+
+/** The command reads the host platform; wake scheduling is macOS-only. */
+async function onPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T>): Promise<T> {
+  const original = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  try {
+    return await run();
+  } finally {
+    if (original) Object.defineProperty(process, 'platform', original);
+  }
+}
 import { workflowContinuationCommand, workflowWakeScheduleCommand } from './workflow-continuations';
 
 beforeEach(() => {
   output.length = 0;
+  fingerprint = 'engine';
   scan.mockReset();
   scan.mockResolvedValue([]);
   resume.mockReset();
@@ -221,37 +240,47 @@ test('watch drains accepted segments on shutdown', async () => {
   expect(output[0]).toMatchObject({ outcomes: [{ status: 'completed' }] });
 });
 
-test('schedule validates intervals and removes the exact installed identity', async () => {
-  for (const interval of ['0', '-1', '1.5', 'no']) {
+test('schedule validates intervals and removes the exact installed identity', () =>
+  onPlatform('darwin', async () => {
+    for (const interval of ['0', '-1', '1.5', 'no']) {
+      expect(
+        await workflowWakeScheduleCommand(['schedule', 'install'], {
+          json: true,
+          interval,
+        })
+      ).toBe(1);
+    }
+    expect(install).not.toHaveBeenCalled();
     expect(
       await workflowWakeScheduleCommand(['schedule', 'install'], {
         json: true,
-        interval,
+        interval: '10',
       })
-    ).toBe(1);
-  }
-  expect(install).not.toHaveBeenCalled();
-  expect(
-    await workflowWakeScheduleCommand(['schedule', 'install'], {
-      json: true,
-      interval: '10',
-    })
-  ).toBe(0);
-  expect(await workflowWakeScheduleCommand(['schedule', 'remove'], { json: true })).toBe(0);
-  const config = install.mock.calls[0]?.[0];
-  expect(remove.mock.calls[0]?.[0]).toBe(config?.id);
-  expect(config).toMatchObject({
-    id: expect.stringContaining('workflow-wake-'),
-    schedule: { intervalSeconds: 10, runAtLoad: true },
-    programArguments: expect.arrayContaining(['workflow', 'wake', '--watch', '--json']),
-  });
-});
+    ).toBe(0);
+    expect(await workflowWakeScheduleCommand(['schedule', 'remove'], { json: true })).toBe(0);
+    const config = install.mock.calls[0]?.[0];
+    expect(remove.mock.calls[0]?.[0].id).toBe(config?.id);
+    expect(config).toMatchObject({
+      id: expect.stringContaining('workflow-wake-'),
+      schedule: { intervalSeconds: 10, runAtLoad: true },
+      output: 'discard',
+      programArguments: expect.arrayContaining(['workflow', 'wake', '--watch', '--json']),
+    });
+  }));
 
-test('schedule installation failure is reported with a nonzero exit', async () => {
-  install.mockRejectedValueOnce(new Error('service not registered'));
-  expect(await workflowWakeScheduleCommand(['schedule', 'install'], { json: true })).toBe(1);
-  expect(output[0]).toMatchObject({ ok: false, error: 'service not registered' });
-});
+test('schedule installation failure is reported with a nonzero exit', () =>
+  onPlatform('darwin', async () => {
+    install.mockRejectedValueOnce(new Error('service not registered'));
+    expect(await workflowWakeScheduleCommand(['schedule', 'install'], { json: true })).toBe(1);
+    expect(output[0]).toMatchObject({ ok: false, error: 'service not registered' });
+  }));
+
+test('schedule refuses to install a wake timer off macOS', () =>
+  onPlatform('linux', async () => {
+    expect(await workflowWakeScheduleCommand(['schedule', 'install'], { json: true })).toBe(1);
+    expect(install).not.toHaveBeenCalled();
+    expect(output[0]).toMatchObject({ ok: false });
+  }));
 
 test('watch continues after a failed pass and returns failure on shutdown', async () => {
   const { spyOn } = await import('bun:test');
@@ -276,6 +305,41 @@ test('watch continues after a failed pass and returns failure on shutdown', asyn
       { ok: false, action: 'wake', error: 'database unavailable' },
       { ok: true, action: 'wake', accepted: 0, outcomes: [] },
     ]);
+  } finally {
+    timer.mockRestore();
+  }
+});
+
+test('watch exits 75 before its next pass when the installed engine changed', async () => {
+  const originalTimeout = globalThis.setTimeout;
+  const timers: {
+    setTimeout(callback: () => void, delay?: number): ReturnType<typeof setTimeout>;
+  } = globalThis;
+  const timer = spyOn(timers, 'setTimeout').mockImplementation((callback: () => void) =>
+    originalTimeout(callback, 0)
+  );
+  fingerprint = 'a';
+  scan.mockImplementationOnce(async () => {
+    fingerprint = 'b';
+    return [];
+  });
+  // Ends the loop if the check misses the change, so the failure is an assertion, not a hang.
+  scan.mockImplementationOnce(async () => {
+    process.emit('SIGTERM');
+    return [];
+  });
+  try {
+    expect(await workflowContinuationCommand(host, 'wake', [], { json: true, watch: true })).toBe(
+      75
+    );
+    expect(scan).toHaveBeenCalledTimes(1);
+    expect(output.at(-1)).toEqual({
+      ok: true,
+      action: 'wake',
+      restart: 'engine changed',
+      loaded: 'a',
+      current: 'b',
+    });
   } finally {
     timer.mockRestore();
   }

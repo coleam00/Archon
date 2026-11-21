@@ -1,6 +1,10 @@
 import { formatDuration } from '@archon/paths/duration';
 import { toolCallDisplayName } from '@archon/provider-contract';
-import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
+import {
+  describeStallMessage,
+  stallMessageEventDataSchema,
+  type WorkflowEventRow,
+} from '@archon/workflows/schemas/workflow-event';
 import { providerEventEnvelopeSchema } from '@archon/workflows/schemas/provider-event';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
@@ -63,6 +67,14 @@ function nodeEventLine(event: WorkflowEmitterEvent): string | undefined {
     default:
       return undefined;
   }
+}
+
+/** What a `stall_message` row says: the engine's message to a stalled session, or why there was none. */
+export function stallMessageLine(row: WorkflowEventRow): string | undefined {
+  // A row another build wrote and this one cannot read is skipped, as provider rows are.
+  const parsed = stallMessageEventDataSchema.safeParse(row.data);
+  if (!parsed.success) return undefined;
+  return describeStallMessage(row.step_name ?? '?', row.workflow_run_id, parsed.data);
 }
 
 function containerLine(phase: string, data: Record<string, unknown>): string {
@@ -130,6 +142,8 @@ export function workflowEventLine(
       return containerLine(row.event_type, row.data);
     case 'provider_event':
       return verbose ? toolLine(row, openToolCalls) : undefined;
+    case 'stall_message':
+      return stallMessageLine(row);
     default:
       // Workflow-level, loop, artifact, and cancelled events are intentionally not rendered.
       return undefined;

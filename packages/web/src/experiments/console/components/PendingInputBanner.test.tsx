@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
+import { NO_ITEM_ASKS } from './ItemAsksSection';
 import { PendingInputBanner } from './PendingInputBanner';
 
 test('the attention banner shows a run holding its item after its owner is gone, with resume and abandon', () => {
@@ -20,6 +21,7 @@ test('the attention banner shows a run holding its item after its owner is gone,
         ]}
         showProject={false}
         onDismiss={() => undefined}
+        itemAsks={NO_ITEM_ASKS}
       />
     </MemoryRouter>
   );

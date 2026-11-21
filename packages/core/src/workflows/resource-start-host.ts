@@ -76,6 +76,7 @@ import type { WorkflowHost } from './host-store';
 import { registerRepository } from '../handlers/clone';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
+import { handOffAdmitted, type StartedExecutor } from './start-executor';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { executionLane, handoffIsolation } from './resource-start-lanes';
 import { selectStartedWorkflow } from './binding-workflow';
@@ -209,8 +210,8 @@ function resolveBindingIsolation(
     : { kind: 'in-place' };
 }
 
-// The row is created with only the authored inputs. The run fixes its pack settings and
-// declared defaults on the row when it starts (resolveRunDispatch), and a resume reads that.
+// The row holds the authored inputs and those naming the judged repository. The run fixes
+// its settings and defaults on the row at start (resolveRunDispatch); a resume reads that.
 function authoredInputsMetadata(inputs: Record<string, JsonValue>): Record<string, JsonValue> {
   if (Object.keys(inputs).length === 0) return {};
   return {
@@ -272,7 +273,7 @@ async function prepareBinding(
     }
     await recordSelectedWorkflow(source.anchor.root, workflow.name);
     await assertBindingRequirements(host, intent, workflow);
-    const inputs = resolveBindingInputs(intent, workflow);
+    const bindingInputs = resolveBindingInputs(intent, workflow);
 
     let isolation: PreparedWorkflowLaunch['execution']['isolation'];
     let handoff: CheckoutHandoffRunMetadata | undefined;
@@ -297,7 +298,8 @@ async function prepareBinding(
       runConfig,
     });
     // Before admission, so a binding its forge cannot serve never takes a slot.
-    await assertRunForgeAccess(host.deps, workflow, preparedAi, { cwd, codebaseId: codebase.id });
+    const site = { cwd, settingsCwd: cwd, codebaseId: codebase.id, supplied: bindingInputs };
+    const inputs = await assertRunForgeAccess(host.deps, workflow, preparedAi, site);
     const launch: PreparedWorkflowLaunch = {
       version: 2,
       run: {
@@ -381,11 +383,8 @@ async function prepareClaimedBinding(
 export interface ResourceStartHost extends WorkflowHost {
   /** The configured host identity. A host only prepares and admits work bound to it. */
   hostId: string;
-  /**
-   * Start one admitted request. The CLI hands it to a detached process; the server
-   * calls `startAdmittedResourceStart` in-process without awaiting the run.
-   */
-  startAdmitted: (requestId: string) => Promise<void>;
+  /** Start one admitted request: the CLI detaches it, the server runs it in-process unawaited. */
+  startAdmitted: (requestId: string) => Promise<StartedExecutor | null>;
 }
 
 /**
@@ -481,7 +480,7 @@ async function startAdmittedRequest(
   receiptId: string | undefined
 ): Promise<void> {
   try {
-    await host.startAdmitted(requestId);
+    await handOffAdmitted(host, requestId);
   } catch (error) {
     failures.push({ receiptId, error });
   }
@@ -611,9 +610,8 @@ export interface StartAdmittedResourceStartInput {
 }
 
 /**
- * Start one admitted pending run through the engine port. The engine's pending claim
- * is the execution fence: if another starter already claimed the run, or its request
- * was withdrawn from the slot, the engine refuses before any node runs.
+ * Start one admitted pending run through the engine port. It is read again under its owner
+ * lock, which cancel holds for a pending run; the engine's pending claim fences execution.
  *
  * Owned preparation errors fail only a still-pending run. Submission belongs to the
  * engine: a rejection there does not establish that execution never started.
@@ -622,13 +620,14 @@ export async function startAdmittedResourceStart(
   input: StartAdmittedResourceStartInput
 ): Promise<WorkflowExecutionResult> {
   const { host } = input;
-  const { launch, run } = await loadAdmittedResourceStart(input);
-  const liveOwner = await startRunLiveOwner(run.id, {
+  const runId = (await loadAdmittedResourceStart(input)).run.id;
+  const liveOwner = await startRunLiveOwner(runId, {
     detachedProcessPid: input.detachedProcessPid,
   });
   let ownedExecutionClaim: string | null | undefined;
   let releaseGuard: (() => void) | undefined;
   try {
+    const { launch, run } = await loadAdmittedResourceStart(input);
     releaseGuard = input.guardOwnedRun?.({
       runId: run.id,
       liveOwner,
@@ -657,7 +656,7 @@ export async function startAdmittedResourceStart(
   } finally {
     releaseGuard?.();
     await liveOwner.close().catch((error: unknown) => {
-      log.error({ err: error as Error, runId: run.id }, 'resource_start.live_owner_close_failed');
+      log.error({ err: error as Error, runId }, 'resource_start.live_owner_close_failed');
     });
   }
 }

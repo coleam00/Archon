@@ -23,11 +23,9 @@ import {
   RUN_ENDED_SOURCE_ACTOR,
   sourceReceiptAcceptanceSchema,
   triggerConfigSchema,
-  type AsksSettledInputSource,
   type AsksSettledTrigger,
   type LinkedRunEndedStart,
   type ResourceStartBindingIntent,
-  type RunEndedInputSource,
   type RunEndedTrigger,
   type SourceReceiptAcceptance,
   type SourceReceiptInput,
@@ -39,7 +37,15 @@ import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverBindingWorkflows, type BindingDefinitionsDeps } from './definition-source';
 import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
 import { getArchonHome } from '@archon/paths';
+import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
+import {
+  readsItemAnswers,
+  type AsksSettledInputSource,
+  type RunEndedInputSource,
+} from '@archon/workflows/schemas/binding-input-source';
+import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import { selectStartedWorkflow, type StartedWorkflow } from './binding-workflow';
+import { itemAnswers, type ItemAnswers } from './item-answers';
 
 /** `ARCHON_HOME/triggers`: where run-ended trigger files are read from. */
 export function getTriggersPath(): string {
@@ -177,9 +183,10 @@ export function runEndedBindingProblems(
 
 /**
  * What a binding's inputs read from: the run's own inputs and result, for a run-ended
- * binding the key of the run's item, and for an asks-settled binding the settled answers.
- * `gone` names why the run's inputs and result cannot be read (its row was deleted), so a
- * binding that reads them starts nothing.
+ * binding the key of the run's item, for an asks-settled binding the settled answers, and
+ * the item's answers when a binding reads them. `gone` names why the run's inputs and
+ * result cannot be read (its row was deleted), so a binding that reads them starts
+ * nothing; the answers belong to the item and outlive the run.
  */
 export type MappedSources =
   | {
@@ -187,8 +194,9 @@ export type MappedSources =
       result: JsonValue | undefined;
       itemKey?: string;
       answers?: JsonValue;
+      itemAnswers?: ItemAnswers;
     }
-  | { gone: string; answers?: JsonValue };
+  | { gone: string; answers?: JsonValue; itemAnswers?: ItemAnswers };
 
 type BindingInputSource = RunEndedInputSource | AsksSettledInputSource;
 
@@ -216,8 +224,14 @@ function mappedValue(
   // `{answers}` parses only in an asks-settled binding, which always passes them.
   if ('answers' in source)
     return from.answers === undefined ? 'there are no answers to read' : { value: from.answers };
+  if (readsItemAnswers(source)) {
+    if (from.itemAnswers === undefined) return 'there are no item answers to read';
+    return 'unreadable' in from.itemAnswers
+      ? from.itemAnswers.unreadable
+      : { value: from.itemAnswers.entries };
+  }
   if ('gone' in from) return from.gone;
-  // `{item}` parses only in a run-ended binding, which always passes the key.
+  // `{item: 'key'}` parses only in a run-ended binding, which always passes the key.
   if ('item' in source)
     return from.itemKey === undefined ? 'there is no item key to read' : { value: from.itemKey };
   if ('input' in source) return { value: from.inputs[source.input] };
@@ -241,6 +255,11 @@ export interface RunEndedStartsDependencies {
    * completion, and only when such a binding matches.
    */
   endedCheckout: (run: WorkflowRun) => Promise<EndedCheckout>;
+  /**
+   * Every ask on an item, in the order they were left, for a binding that reads `{item: 'answers'}`. Read
+   * at most once per completion, and only when such a binding matches.
+   */
+  listItemAsks: (itemId: string) => Promise<AttentionRead<StoredItemAsk>[]>;
   now?: () => Date;
 }
 
@@ -271,8 +290,14 @@ export function createRunEndedStarts(
     let checkout: Promise<EndedCheckout> | undefined;
     const endedCheckout = (): Promise<EndedCheckout> =>
       (checkout ??= dependencies.endedCheckout(run));
+    let answers: Promise<ItemAnswers> | undefined;
+    const answersOnItem = (): Promise<ItemAnswers> =>
+      (answers ??= dependencies.listItemAsks(item.id).then(itemAnswers));
     for (const candidate of candidates) {
-      const acceptance = await matchedReceipt(candidate, ended, item, dependencies, endedCheckout);
+      const acceptance = await matchedReceipt(candidate, ended, item, dependencies, {
+        endedCheckout,
+        answersOnItem,
+      });
       if (!acceptance) continue;
       const link = candidate.runEnded.linked;
       if (link) linked.push({ link, endedRunId: run.id, endedItemId: item.id, acceptance });
@@ -291,7 +316,10 @@ async function matchedReceipt(
   ended: RunEndedFacts,
   item: WorkflowItem,
   dependencies: RunEndedStartsDependencies,
-  endedCheckout: () => Promise<EndedCheckout>
+  read: {
+    endedCheckout: () => Promise<EndedCheckout>;
+    answersOnItem: () => Promise<ItemAnswers>;
+  }
 ): Promise<SourceReceiptAcceptance | undefined> {
   // A binding that launches in another project is not about this item, even when a
   // workflow there has the same name.
@@ -300,11 +328,16 @@ async function matchedReceipt(
   if (problems.length > 0)
     throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
   if (candidate.runEnded.outcome !== ended.outcome.value) return undefined;
+  const readsAnswers = Object.values(candidate.runEnded.inputs ?? {}).some(readsItemAnswers);
   return bindingReceipt(
     candidate,
     { deliveryId: ended.run.id, sourceActor: runEndedActor(ended), itemKey: item.key },
-    mappedInputs(candidate.runEnded.inputs, { ...ended, itemKey: item.key }),
-    candidate.runEnded.checkout === undefined ? undefined : await endedCheckout(),
+    mappedInputs(candidate.runEnded.inputs, {
+      ...ended,
+      itemKey: item.key,
+      ...(readsAnswers ? { itemAnswers: await read.answersOnItem() } : {}),
+    }),
+    candidate.runEnded.checkout === undefined ? undefined : await read.endedCheckout(),
     dependencies.now?.() ?? new Date()
   );
 }
@@ -549,7 +582,8 @@ export async function runEndedTriggerCheck(
  * stage or an undeclared input is refused before the run does any work.
  */
 export function createRunEndedPreflight(
-  dependencies: Omit<RunEndedStartsDependencies, 'now' | 'endedCheckout'> & BindingDefinitionsDeps
+  dependencies: Omit<RunEndedStartsDependencies, 'now' | 'endedCheckout' | 'listItemAsks'> &
+    BindingDefinitionsDeps
 ): (run: WorkflowRun) => Promise<void> {
   return async run => {
     if (!run.item_id) return;

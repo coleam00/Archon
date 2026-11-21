@@ -474,6 +474,10 @@ describe('tool call attention', () => {
         streamId: published.streamId,
         toolCallId: published.toolCallId,
         raisedAt: published.raisedAt,
+        name: published.name,
+        ...(published.title !== undefined ? { title: published.title } : {}),
+        startedAt: published.startedAt,
+        lastProgressAt: published.lastProgressAt,
       },
     ]);
     const plan = planEndTurn({ ...h.run, metadata: { tool_call_attention: h.snapshots[0] } });

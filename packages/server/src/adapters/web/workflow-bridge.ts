@@ -16,6 +16,7 @@ import {
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
 import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
+import { composedOrigin } from '@archon/workflows/schemas/node-execution';
 import { DASHBOARD_STREAM, type SSETransport } from './transport';
 import type { DagNodeSseEvent } from './workflow-event.schemas';
 
@@ -110,6 +111,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         runId: event.runId,
         nodeId: event.nodeId,
         name: event.nodeName,
+        composed: event.composed,
         status: 'completed',
         timestamp: Date.now(),
       } satisfies DagNodeSseEvent);
@@ -194,6 +196,7 @@ function mapDagNodeEvent(
     runId: event.runId,
     nodeId: event.nodeId,
     name: event.nodeName,
+    composed: event.composed,
     status:
       event.type === 'node_started' || event.type === 'node_suspended'
         ? 'running'
@@ -364,6 +367,7 @@ function mapNodeRow(row: WorkflowEventRow, nodeStatus: RowNodeStatus, timestamp:
     runId,
     nodeId: row.step_name ?? '',
     name: row.step_name ?? '',
+    composed: record?.data.node ? composedOrigin(record.data.node) : undefined,
     status: nodeStatus,
     error:
       row.event_type === 'node_failed' || row.event_type === 'loop_iteration_failed'

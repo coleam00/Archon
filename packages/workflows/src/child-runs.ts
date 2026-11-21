@@ -193,22 +193,27 @@ export async function runChildWorkflow(
     if (guard.stopped) return guard.outcome;
     const inputs = resolveChildInputs(args, workflow);
     if (inputs.stopped) return inputs.outcome;
-    const prepared = await prepareChildAiConfiguration(launch, workflow, source.value);
+    const prepared = await prepareChildAiConfiguration(
+      launch,
+      workflow,
+      inputs.value,
+      source.value
+    );
     if (prepared.stopped) return prepared.outcome;
-    const placement = await resolveChildPlacement(launch, prepared.value);
+    const placement = await resolveChildPlacement(launch, prepared.value.config);
     if (placement.stopped) return placement.outcome;
     const start = await startChildRun(launch, {
       source: source.value,
       workflow,
-      inputs: inputs.value,
-      prepared: prepared.value,
+      inputs: prepared.value.inputs,
+      prepared: prepared.value.config,
       placement: placement.value,
     });
     if (start.stopped) return start.outcome;
     return executeChildRun(launch, owner, {
       workflow,
       source: workflowSource,
-      prepared: prepared.value,
+      prepared: prepared.value.config,
       cwd: placement.value.cwd,
       start: start.value,
     });
@@ -410,8 +415,14 @@ function resolveChildInputs(
 async function prepareChildAiConfiguration(
   { deps, args, resolvedModelOverrides, runConfig }: ChildLaunch,
   childWorkflow: ResolvedWorkflow,
+  inputs: Record<string, JsonValue> | undefined,
   childSource: PreparedWorkflowSource
-): Promise<ChildPhase<PreparedRunAiConfiguration>> {
+): Promise<
+  ChildPhase<{
+    config: PreparedRunAiConfiguration;
+    inputs: Record<string, JsonValue> | undefined;
+  }>
+> {
   const { resumeChild } = args;
   const configCwd = resumeChild?.run.working_path ?? args.cwd;
   try {
@@ -428,14 +439,15 @@ async function prepareChildAiConfiguration(
       ...(runConfig ? { runConfig } : {}),
     });
     await assertRunCredentials(deps, childPrepared, { cwd: configCwd });
-    if (!resumeChild) {
-      // A child run executes on the host; it does not inherit a parent's container.
-      await assertRunForgeAccess(deps, childWorkflow, childPrepared, {
-        cwd: configCwd,
-        codebaseId: args.codebaseId,
-      });
-    }
-    return proceed(childPrepared);
+    if (resumeChild) return proceed({ config: childPrepared, inputs });
+    // A child run executes on the host; it does not inherit a parent's container.
+    const checkedInputs = await assertRunForgeAccess(deps, childWorkflow, childPrepared, {
+      cwd: configCwd,
+      settingsCwd: configCwd,
+      codebaseId: args.codebaseId,
+      supplied: inputs,
+    });
+    return proceed({ config: childPrepared, inputs: checkedInputs });
   } catch (error) {
     return refuse((error as Error).message, resumeChild?.run.id);
   }

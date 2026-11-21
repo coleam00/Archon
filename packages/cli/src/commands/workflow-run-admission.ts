@@ -701,7 +701,7 @@ export type LaneConfigSource =
 
 /**
  * Prepare and preflight the run's AI configuration from the checkout its lane executes,
- * then, for a fresh run, its pack's forge needs against the repository's remotes.
+ * then, for a fresh run, its pack's forge needs from the same checkout's settings.
  * Without an explicit source, an adopted lane's own `.archon` is recaptured first.
  */
 export async function prepareLaneAiConfiguration(
@@ -712,57 +712,44 @@ export async function prepareLaneAiConfiguration(
   base: { branch: string } | undefined
 ): Promise<PreparedRunAiConfiguration> {
   await settleRunDefinitions(request, admission, base);
-  const prepared = await prepareLaneCredentials(request, admission, lane, executesInContainer);
-  if (!admission.isContinuation) {
-    // A branch lane's config is read from an archive of the branch, which has no remotes.
-    const repository =
-      lane.kind === 'branch'
-        ? { cwd: lane.codebase.default_cwd, codebaseId: lane.codebase.id }
-        : { cwd: lane.cwd, codebaseId: lane.codebaseId };
-    await assertRunForgeAccess(request.host.deps, admission.workflow, prepared, {
-      ...repository,
-      inContainer: executesInContainer,
-    });
-  }
-  return prepared;
-}
-
-async function prepareLaneCredentials(
-  request: OwnedRunRequest,
-  admission: OwnedRunAdmission,
-  lane: LaneConfigSource,
-  executesInContainer: boolean
-): Promise<PreparedRunAiConfiguration> {
   const recaptures = request.options.discoveryCwd === undefined;
   if (lane.kind === 'branch') {
     return withBranchLaunchSource(lane.codebase.default_cwd, lane.branch, async snapshot => {
       if (recaptures) await recaptureForLane(request, admission, directoryPlan(snapshot));
-      return prepareCredentialPreflight(
-        request,
-        admission,
-        snapshot,
-        lane.codebase.id,
-        executesInContainer
-      );
+      // The snapshot is an archive of the branch, which has no remotes.
+      return prepareCredentialPreflight(request, admission, {
+        configCwd: snapshot,
+        repositoryCwd: lane.codebase.default_cwd,
+        codebaseId: lane.codebase.id,
+        executesInContainer,
+      });
     });
   }
   if (lane.recapture && recaptures)
     await recaptureForLane(request, admission, directoryPlan(lane.cwd));
-  return prepareCredentialPreflight(
-    request,
-    admission,
-    lane.cwd,
-    lane.codebaseId,
-    executesInContainer
-  );
+  return prepareCredentialPreflight(request, admission, {
+    configCwd: lane.cwd,
+    repositoryCwd: lane.cwd,
+    codebaseId: lane.codebaseId,
+    executesInContainer,
+  });
 }
 
 async function prepareCredentialPreflight(
   request: OwnedRunRequest,
   admission: OwnedRunAdmission,
-  configCwd: string,
-  codebaseId: string | undefined,
-  executesInContainer: boolean
+  {
+    configCwd,
+    repositoryCwd,
+    codebaseId,
+    executesInContainer,
+  }: {
+    configCwd: string;
+    /** A checkout with the project's remotes, for the forge check. */
+    repositoryCwd: string;
+    codebaseId: string | undefined;
+    executesInContainer: boolean;
+  }
 ): Promise<PreparedRunAiConfiguration> {
   const { host } = request;
   const { preCreatedRun, continuationRun, modelOverrides } = admission;
@@ -786,5 +773,14 @@ async function prepareCredentialPreflight(
     prepared,
     executesInContainer ? 'pending-container' : { cwd: configCwd }
   );
+  if (!admission.isContinuation) {
+    admission.resolvedInputs = await assertRunForgeAccess(host.deps, admission.workflow, prepared, {
+      cwd: repositoryCwd,
+      settingsCwd: configCwd,
+      codebaseId,
+      inContainer: executesInContainer,
+      supplied: admission.resolvedInputs,
+    });
+  }
   return prepared;
 }

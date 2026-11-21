@@ -135,6 +135,7 @@ async function fireAndExecute(
   await triggerCommand(host, 'fire', [], options, {
     dispatch: async id => {
       admitted.push(id);
+      return null;
     },
     env: {},
   });
@@ -150,7 +151,7 @@ async function fireAndExecute(
 }
 
 /** `fire` awaits the write callback of the receipt it prints. */
-function silenceStdout(): { mockRestore: () => void } {
+function silenceStdout() {
   return spyOn(process.stdout, 'write').mockImplementation(((
     _chunk: unknown,
     encodingOrCallback?: unknown,
@@ -283,6 +284,15 @@ test('a fire-only binding starts a run on fire and has no timer to install', asy
     await expect(
       triggerCommand(host, 'schedule', ['install'], { config: configPath })
     ).rejects.toThrow("Binding 'fired' is fire-only");
+    // Status needs no schedule, so it still answers for a fire-only file.
+    const written = stdout.mock.calls.length;
+    await triggerCommand(host, 'schedule', ['status'], { config: configPath });
+    const lines = stdout.mock.calls.slice(written).map(([chunk]) => String(chunk));
+    expect(JSON.parse(lines.join(''))).toEqual({
+      bindingId: 'fired',
+      schedule: 'status',
+      installed: false,
+    });
 
     // A schedule that is present but incomplete is a broken timer, not a fire-only binding.
     await writeFile(configPath, JSON.stringify({ ...fireOnly, schedule: {} }));

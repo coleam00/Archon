@@ -66,6 +66,21 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
       });
     });
 
+    test('pending metadata write merges only into a pending run', async () => {
+      const pending = await create(store, { metadata: { preserved: true } });
+      expect(await store.updateWorkflowRunMetadataIfPending(pending.id, { request: true })).toBe(
+        true
+      );
+      expect((await store.getWorkflowRun(pending.id))?.metadata).toMatchObject({
+        preserved: true,
+        request: true,
+      });
+      const run = await running(store);
+      const before = await store.getWorkflowRun(run.id);
+      expect(await store.updateWorkflowRunMetadataIfPending(run.id, { request: true })).toBe(false);
+      expect(await store.getWorkflowRun(run.id)).toEqual(before);
+    });
+
     test('a metadata write merges top-level keys and keeps the nulls inside a value', async () => {
       // A run's `$INPUTS` live in metadata, and an input can resolve to null, alone or
       // inside an object: a resume must read the same null back (#5939).
