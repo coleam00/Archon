@@ -403,7 +403,7 @@ describe('run-ended starts', () => {
     await expect(starts(facts())).rejects.toThrow('binding.launch.isolation');
   });
 
-  test("a binding reading the item's answers gets every settled set on the item, oldest first", async () => {
+  test("a binding reading the item's answers gets every settled set on the item, oldest answer first", async () => {
     const act = (at: string) => ({ at, via: 'cli' as const, by: null, fromRun: null });
     const stored = (
       runId: string,
@@ -427,11 +427,12 @@ describe('run-ended starts', () => {
       closed,
     });
     const keep = { decision: 'keep', text: '' };
+    // The rows come in the order the asks were left; plan's first ask was answered last.
     const rows: StoredItemAsk[] = [
       stored('plan-run', 'plan', 0, {
         as: 'answered',
         answer: keep,
-        act: act('2026-11-16T09:10:00.000Z'),
+        act: act('2026-11-16T09:40:00.000Z'),
       }),
       stored('plan-run', 'plan', 1, { as: 'withdrawn', act: act('2026-11-16T09:11:00.000Z') }),
       stored('old-check', 'check', 0, {
@@ -475,16 +476,6 @@ describe('run-ended starts', () => {
         issue: ITEM.key,
         decisions: [
           {
-            question: 'plan 0?',
-            closedAs: 'answered',
-            answer: keep,
-            option: { id: 'keep', does: 'Keep it.' },
-            by: null,
-            via: 'cli',
-            at: '2026-11-16T09:10:00.000Z',
-            workflowName: 'plan',
-          },
-          {
             question: 'plan 1?',
             closedAs: 'withdrawn',
             answer: null,
@@ -503,6 +494,16 @@ describe('run-ended starts', () => {
             via: 'cli',
             at: '2026-11-16T09:30:00.000Z',
             workflowName: 'check',
+          },
+          {
+            question: 'plan 0?',
+            closedAs: 'answered',
+            answer: keep,
+            option: { id: 'keep', does: 'Keep it.' },
+            by: null,
+            via: 'cli',
+            at: '2026-11-16T09:40:00.000Z',
+            workflowName: 'plan',
           },
         ],
       });

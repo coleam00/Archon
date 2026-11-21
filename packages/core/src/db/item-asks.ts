@@ -289,7 +289,7 @@ function priorClose(ask: StoredItemAsk, write: CloseWrite): ItemAskCloseResult |
 /**
  * Builds the starts a settled set causes, inside the settling transaction: the set's rows
  * after this close, the metadata of the run that left them, null when it was deleted, and
- * every ask on the set's item after this close, oldest first. See `createAsksSettledStarts`
+ * every ask on the set's item after this close, in the order they were left. See `createAsksSettledStarts`
  * in core's workflows.
  */
 export type StartsOnSettle = (

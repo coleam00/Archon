@@ -250,7 +250,7 @@ export function describeSqlItemAskStartConformance(makeHarness: () => Promise<Ha
     }
   });
 
-  test("a binding reading the item's answers gets every set settled on the item, the closing one included", async () => {
+  test("a binding reading the item's answers gets every set settled on the item, oldest answer first, the closing one included", async () => {
     const harness = await makeHarness();
     const file = asksSettledFile('build-after-check', 'answered');
     const { store, directory } = await storeWithBindings(harness, {
@@ -267,11 +267,14 @@ export function describeSqlItemAskStartConformance(makeHarness: () => Promise<Ha
     });
     try {
       const deps = itemDeps(harness, store);
-      // plan settles first: one answered, one withdrawn.
+      // plan settles first: one withdrawn, then the ask it left first is answered, so the
+      // list follows when each was closed, not the order they were left.
       await completeWithAsks(harness, [ask('Keep the flag?'), ask('Rename it?')]);
       const [keep, rename] = await openRefs(harness);
-      await answerAttentionItem(deps, keep ?? '', { choose: ['keep'] }, operator, 'cli');
       await withdrawAttentionItem(deps, rename ?? '', operator, 'cli');
+      // Close times are milliseconds; keep the two apart so the order is not a tie.
+      await Bun.sleep(5);
+      await answerAttentionItem(deps, keep ?? '', { choose: ['keep'] }, operator, 'cli');
       // A check set replaced before it settled, and an open ask from review, are left out.
       await completeWithAsks(harness, [ask('Replaced?')], { workflow: 'check' });
       await completeWithAsks(harness, [ask('Still open?')], { workflow: 'review' });
@@ -297,8 +300,8 @@ export function describeSqlItemAskStartConformance(makeHarness: () => Promise<Ha
       ]);
       expect(inputs?.decisions).toMatchObject([{ question: 'Ship it?', closedAs: 'answered' }]);
       expect(inputs?.decided).toMatchObject([
-        { question: 'Keep the flag?', closedAs: 'answered', workflowName: 'plan' },
         { question: 'Rename it?', closedAs: 'withdrawn', answer: null, workflowName: 'plan' },
+        { question: 'Keep the flag?', closedAs: 'answered', workflowName: 'plan' },
         {
           question: 'Ship it?',
           closedAs: 'answered',

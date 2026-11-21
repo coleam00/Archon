@@ -35,21 +35,26 @@ export function settledAnswer(row: StoredItemAsk): Record<string, JsonValue> {
 export type ItemAnswers = { entries: JsonValue[] } | { unreadable: string };
 
 /**
- * Every answered or withdrawn ask on an item, in the order given (the item's: oldest ask
- * first), each as `settledAnswer` builds it plus the workflow that asked it. Open asks and
- * replaced ones are left out: a replaced ask was never answered, and the set that replaced
- * it carries the question again. One unreadable row makes the whole list unreadable,
- * rather than passing the stage a list with a decision missing.
+ * Every answered or withdrawn ask on an item, oldest answer first, each as `settledAnswer`
+ * builds it plus the workflow that asked it, so an answer that changes an earlier one is
+ * read last. The sort is stable, so asks closed at the same instant keep the order given
+ * (the item's: the order they were left). Open asks and replaced ones are left out: a
+ * replaced ask was never answered, and the set that replaced it carries the question
+ * again. One unreadable row makes the whole list unreadable, rather than passing the
+ * stage a list with a decision missing.
  */
 export function itemAnswers(rows: readonly AttentionRead<StoredItemAsk>[]): ItemAnswers {
-  const entries: JsonValue[] = [];
+  const closed: { at: number; entry: JsonValue }[] = [];
   for (const row of rows) {
     if (isAttentionDegraded(row))
       return {
         unreadable: `an ask run '${row.runId}' left on the item cannot be read by this binary`,
       };
     if (row.closed?.as !== 'answered' && row.closed?.as !== 'withdrawn') continue;
-    entries.push({ ...settledAnswer(row), workflowName: row.workflowName });
+    closed.push({
+      at: Date.parse(row.closed.act.at),
+      entry: { ...settledAnswer(row), workflowName: row.workflowName },
+    });
   }
-  return { entries };
+  return { entries: closed.sort((a, b) => a.at - b.at).map(({ entry }) => entry) };
 }

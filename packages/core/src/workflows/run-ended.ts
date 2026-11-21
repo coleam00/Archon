@@ -257,7 +257,7 @@ export interface RunEndedStartsDependencies {
    */
   endedCheckout: (run: WorkflowRun) => Promise<EndedCheckout>;
   /**
-   * Every ask on an item, oldest first, for a binding that reads `{item: 'answers'}`. Read
+   * Every ask on an item, in the order they were left, for a binding that reads `{item: 'answers'}`. Read
    * at most once per completion, and only when such a binding matches.
    */
   listItemAsks: (itemId: string) => Promise<AttentionRead<StoredItemAsk>[]>;

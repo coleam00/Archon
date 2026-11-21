@@ -19,7 +19,7 @@ const runInputSources = [
 /** The key of the ended run's item; a pack's run-ended binding reads it as the file does. */
 export const endedItemKeySourceSchema = z.object({ item: z.literal('key') }).strict();
 /**
- * Every answered or withdrawn ask on the item the stage starts on, oldest first, so no
+ * Every answered or withdrawn ask on the item the stage starts on, oldest answer first, so no
  * later stage asks again what was decided. Read by asks-settled and non-linked run-ended
  * bindings; a linked start is on a holder item, which is not the item whose run ended.
  */
