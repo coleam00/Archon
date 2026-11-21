@@ -35,7 +35,7 @@ When execution is practical, run the smallest command that can falsify a finding
 
 ## Use a user-facing change
 
-When the change is something a person sees or does in a browser, find out whether it works for that person. Reading the code is not enough: start the app from your scratch worktree and use it, driving it with playwright-cli (`$playwright-cli` where skills are invoked that way, otherwise the `playwright-cli` command and its `SKILL.md` in the project's or your skills directory). A flow that is broken, stuck, wrong or misleading for its user is a finding, with a screenshot or snapshot under `$ARTIFACTS_DIR/review/ui/` as evidence.
+When the change is something a person sees or does in a browser, find out whether it works for that person. Reading the code is not enough: start the app from your scratch worktree and use it, driving it with the browser tool `ui-check.md` names, found before you start anything. A flow that is broken, stuck, wrong or misleading for its user is a finding, with a screenshot or snapshot under `$ARTIFACTS_DIR/review/ui/` as evidence.
 
 - Never run it on the user's real data or a live database. `ui-check.md` (`.archon/sdlc/policy/`, over the default in `$PACK_DIR/.shared/policy/`) says how this project starts safely.
 - Stop exactly what you started.
