@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { Pool } from 'pg';
 import { PostgresAdapter } from './adapters/postgres';
 import { APP_VERSION } from './schema-version';
+import { endPgPool } from '../test/end-pg-pool';
 
 const baseUrl = process.env.ARCHON_TEST_PG_URL;
 
@@ -44,7 +45,7 @@ describe.skipIf(!baseUrl)('PostgreSQL schema convergence and conflict retry', ()
   });
 
   afterAll(async () => {
-    await scratch?.end();
+    if (scratch) await endPgPool(scratch);
     if (created) await admin.query(`DROP DATABASE IF EXISTS "${scratchName}" WITH (FORCE)`);
     await admin?.end();
   });

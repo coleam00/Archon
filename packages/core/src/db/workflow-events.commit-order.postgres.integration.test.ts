@@ -17,6 +17,7 @@
 import { describe, test, expect, beforeAll, afterAll, afterEach } from 'bun:test';
 import { Pool, type PoolClient } from 'pg';
 import { getSchemaSQL } from './bundled-schema';
+import { endPgPool } from '../test/end-pg-pool';
 
 const baseUrl = process.env.ARCHON_TEST_PG_URL;
 const SCRATCH_DB = 'archon_pg_event_commit_order_test';
@@ -55,21 +56,7 @@ describe.skipIf(!baseUrl)('workflow event order — real Postgres', () => {
   });
 
   afterAll(async () => {
-    if (pool) {
-      // `pool.end()` resolves before its clients' sockets close. Wait for every client's
-      // `remove`, which fires once its socket has closed: a client still connected when the
-      // forced DROP below terminates its backend raises the error on the pool, which has no
-      // listener, and fails the file.
-      let open = pool.totalCount;
-      const closed = new Promise<void>(resolveClosed => {
-        if (open === 0) resolveClosed();
-        pool.on('remove', () => {
-          if (--open === 0) resolveClosed();
-        });
-      });
-      await pool.end();
-      await closed;
-    }
+    if (pool) await endPgPool(pool);
     if (admin) {
       await admin.query(`DROP DATABASE IF EXISTS "${SCRATCH_DB}" WITH (FORCE)`);
       await admin.end();
