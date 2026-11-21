@@ -2307,7 +2307,7 @@ it('CLI complete returns failure after reporting an ambiguous branch', async () 
 });
 
 describe('registration base branch parsing', () => {
-  it('rejects the registration flag outside workflow run', () => {
+  it('rejects the registration flag outside workflow run and project add', () => {
     const result = spawnSync(
       process.execPath,
       [CLI_ENTRY, 'version', '--base-branch', 'release', '--json'],

@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { spawnSync } from 'child_process';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { projectKeyForCodebase } from '@archon/paths';
@@ -8,7 +17,13 @@ import { clearConfigCache } from '@archon/core/config/config-loader';
 import { clearPlatformPolicies, setPlatformPolicies } from '@archon/core/platforms/registry';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
-import { projectCommand, projectConfigCommand, projectListCommand } from './project';
+import { captureWorkflowCommand } from '../test-support/command';
+import {
+  projectAddCommand,
+  projectCommand,
+  projectConfigCommand,
+  projectListCommand,
+} from './project';
 
 function codebase(overrides: Partial<Codebase> & Pick<Codebase, 'id' | 'name' | 'kind'>): Codebase {
   return {
@@ -77,12 +92,13 @@ describe('projectListCommand', () => {
   });
 
   it('refuses an unknown subcommand or a config without a project before opening the store', async () => {
-    for (const args of [['show'], ['config'], ['config', 'a', 'b']]) {
+    for (const args of [['show'], ['config'], ['config', 'a', 'b'], ['add', 'a', 'b']]) {
       stdout = [];
-      expect(await projectCommand(args, true)).toBe(1);
+      expect(await projectCommand(args, { json: true, cwd: tmpdir() })).toBe(1);
       expect(JSON.parse(stdout.join(''))).toEqual({
         ok: false,
-        error: 'Usage: archon project list|config <id|name> [--json]',
+        error:
+          'Usage: archon project list|add [path] [--folder] [--base-branch <name>]|config <id|name> [--json]',
       });
     }
   });
@@ -197,5 +213,84 @@ describe('projectConfigCommand', () => {
     stdout = [];
     expect(await projectConfigCommand(store(), 'nope', { json: true })).toBe(1);
     expect(JSON.parse(stdout.join('')).error).toContain('archon project list');
+  });
+});
+
+describe('projectAddCommand', () => {
+  const trackTempRoot = trackTempRoots();
+
+  function git(cwd: string, args: string[]): void {
+    const result = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: 10_000 });
+    if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`);
+  }
+
+  /** Runs `body` against a real store in a scratch home, returning each JSON line written. */
+  async function withStore(
+    body: (
+      add: (path: string, folder?: boolean) => Promise<number>,
+      host: Parameters<typeof projectAddCommand>[0]
+    ) => Promise<void>
+  ): Promise<Record<string, unknown>[]> {
+    const lines: Record<string, unknown>[] = [];
+    const home = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-home-')));
+    const result = await captureWorkflowCommand(home, async host => {
+      const write = spyOn(process.stdout, 'write').mockImplementation(((
+        chunk: string,
+        callback?: () => void
+      ) => {
+        lines.push(JSON.parse(chunk) as Record<string, unknown>);
+        callback?.();
+        return true;
+      }) as typeof process.stdout.write);
+      try {
+        await body((path, folder) => projectAddCommand(host, { path, folder, json: true }), host);
+      } finally {
+        write.mockRestore();
+      }
+    });
+    expect(result.status, result.output).toBe(0);
+    return lines;
+  }
+
+  it('registers a checkout once, lists it before any run, and reports a repeat as unchanged', async () => {
+    const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-add-repo-')));
+    mkdirSync(join(repo, 'sub'));
+    writeFileSync(join(repo, 'file.txt'), 'x\n');
+    git(repo, ['init', '-qb', 'main']);
+    git(repo, ['add', '.']);
+    git(repo, ['-c', 'user.name=F', '-c', 'user.email=f@example.test', 'commit', '-qm', 'init']);
+
+    const lines = await withStore(async (add, host) => {
+      expect(await add(join(repo, 'sub'))).toBe(0);
+      expect(await add(repo)).toBe(0);
+      expect(await projectListCommand(host.records.codebases, { json: true })).toBe(0);
+    });
+
+    const [first, second, list] = lines as [
+      { project: Codebase & { key: string }; registered: boolean },
+      { project: Codebase & { key: string }; registered: boolean },
+      { projects: (Codebase & { key: string })[] },
+    ];
+    expect(first.registered).toBe(true);
+    expect(first.project.kind).toBe('repo');
+    // A subdirectory registers the repository root.
+    expect(realpathSync(first.project.default_cwd)).toBe(realpathSync(repo));
+    expect(second.registered).toBe(false);
+    expect(second.project.id).toBe(first.project.id);
+    expect(list.projects.map(p => [p.id, p.key])).toEqual([[first.project.id, first.project.key]]);
+  });
+
+  it('refuses a non-git directory without --folder and registers it as a folder with it', async () => {
+    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-add-folder-')));
+    const lines = await withStore(async add => {
+      expect(await add(dir)).toBe(1);
+      expect(await add(dir, true)).toBe(0);
+    });
+    expect(lines[0]).toEqual({
+      ok: false,
+      error:
+        'Error: Not in a git repository.\nRegister this directory as a folder project: run archon project add --folder.',
+    });
+    expect(lines[1]).toMatchObject({ registered: true, project: { kind: 'folder' } });
   });
 });

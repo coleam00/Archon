@@ -237,9 +237,10 @@ export function assertWorkflowNotWorktreePinnedForFolder(
  * Registered folders own descendants unless a nested repository starts inside
  * them. Repository checkouts resolve through Git identity.
  *
- * One implementation because two callers need the same answer: the `--detach`
+ * One implementation because three callers need the same answer: the `--detach`
  * pre-flight, which must resolve the project before it can create the run row or
- * refuse an adoption (#2872), and the run path itself. Registration is idempotent,
+ * refuse an adoption (#2872), the run path itself, and `archon project add`, which
+ * performs this registration ahead of the first run. Registration is idempotent,
  * so the detached child's own call finds what the parent registered.
  *
  * Explicit folder selection fails on unknown or conflicting registration. Any lookup
@@ -252,6 +253,8 @@ export async function resolveRunCodebase(
   options: RunCodebaseOptions
 ): Promise<{
   codebase: Codebase | null;
+  /** True only when THIS call created the project row. */
+  registered: boolean;
   /** Set only when THIS call registered a new folder project. */
   registeredFolder?: RegisteredFolder;
 }> {
@@ -262,7 +265,7 @@ export async function resolveRunCodebase(
   await assertInheritedWorkflowCodebase(host, codebase?.id);
   assertRegistrationOptions(options, codebase, repoRoot);
 
-  if (codebase || !(options.folder || repoRoot)) return { codebase };
+  if (codebase || !(options.folder || repoRoot)) return { codebase, registered: false };
   return registerRunCodebase(host, projectCwd, options, repoRoot);
 }
 
@@ -356,7 +359,7 @@ async function registerRunCodebase(
   cwd: string,
   options: RunCodebaseOptions,
   repoRoot: string | null
-): Promise<{ codebase: Codebase; registeredFolder?: RegisteredFolder }> {
+): Promise<{ codebase: Codebase; registered: boolean; registeredFolder?: RegisteredFolder }> {
   try {
     const result = options.folder
       ? await registerFolder(host.records.codebases, cwd)
@@ -366,11 +369,15 @@ async function registerRunCodebase(
     const codebase = await host.records.codebases.getCodebase(result.codebaseId);
     if (!codebase)
       throw new Error(`Registered project "${result.codebaseId}" could not be read back.`);
-    if (result.alreadyExisted) return { codebase };
+    if (result.alreadyExisted) return { codebase, registered: false };
     getLog().info({ name: result.name }, 'cli.codebase_auto_registered');
     return options.folder
-      ? { codebase, registeredFolder: { name: result.name, defaultCwd: result.defaultCwd } }
-      : { codebase };
+      ? {
+          codebase,
+          registered: true,
+          registeredFolder: { name: result.name, defaultCwd: result.defaultCwd },
+        }
+      : { codebase, registered: true };
   } catch (error) {
     if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
     const err = error as Error;

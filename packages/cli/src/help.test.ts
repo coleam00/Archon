@@ -138,6 +138,7 @@ Commands:
   forge checks               Observe checks for an explicit qualified pull request
   user <list|role|link>      List users, link identities and manage roles as the operator
   project list               List registered projects (id, kind, name, key, path)
+  project add [path]         Register a project (this checkout, or path) before its first run; --folder for a non-git directory
   project config <id|name>   Show a project's merged config with secrets removed (env key names only)
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
@@ -269,7 +270,7 @@ Options:
   --workflow-source <path>   Read the workflow, its commands and scripts from this checkout root
                              (<path>/.archon/workflows) instead of --cwd (which stays the workspace the run acts on)
   --no-worktree              Run on branch directly without worktree isolation
-  --folder                   Register the current directory (with or without git) as a folder project and run in place
+  --folder                   Register the current directory (with or without git) as a folder project; workflow run runs in place
   --container                Run a folder project in container isolation
   --input <name>=<value>     Supply a declared workflow input; repeat per input
   --input-file <name>=<path> Supply a declared workflow input from a file's contents; repeat per input
@@ -292,7 +293,7 @@ Options:
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Log warnings and errors only (the default except for serve)
   --verbose, -v              Show debug-level logs (on stderr; on stdout for serve)
-  --json                     Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/pause/abandon/resume, project list/config)
+  --json                     Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/pause/abandon/resume, project list/add/config)
   --events                   For verbose JSON status/get: output raw event rows instead of node summaries
   --occurrence <id>          For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still
                              paused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer
@@ -334,6 +335,7 @@ Examples:
   archon workflow get <run-id> --json
   archon workflow artifacts <run-id> plan.md
   archon project list --json
+  archon project add --json
   archon project config <id|name> --json
   archon workflow logs <run-id> --follow
   archon workflow logs <run-id> --follow --format text
