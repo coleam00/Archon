@@ -675,7 +675,10 @@ describe('a run-ended binding', () => {
   test('a result pointer that does not resolve is reported where the run ends and in trigger list', async () => {
     const fixture = await makeFixture('pointer');
     fixture.bind('build-after-plan', {
-      runEnded: { ...RUN_ENDED.runEnded, inputs: { plan: { result: '/missing' } } },
+      runEnded: {
+        ...RUN_ENDED.runEnded,
+        inputs: { plan: { result: '/missing' }, issue: { input: 'issue' } },
+      },
     });
     const ended = await fixture.cli([
       'workflow',
@@ -917,10 +920,22 @@ await closeDatabase();
 
   test('trigger check reports a binding on a workflow with no asks, not one that starts its own', async () => {
     const fixture = await makeFixture('asks-check');
-    fixture.bind('no-asks', { asksSettled: { workflowName: 'stage-a', settled: 'any' } });
+    fixture.bind('no-asks', {
+      asksSettled: {
+        workflowName: 'stage-a',
+        settled: 'any',
+        inputs: { plan: { input: 'plan' }, issue: { input: 'issue' } },
+      },
+    });
     fixture.bind(
       'again',
-      { asksSettled: { workflowName: 'ask-plan', settled: 'answered' } },
+      {
+        asksSettled: {
+          workflowName: 'ask-plan',
+          settled: 'answered',
+          inputs: { issue: { input: 'issue' } },
+        },
+      },
       {
         workflowName: 'ask-plan',
       }
@@ -949,9 +964,11 @@ describe('trigger check', () => {
     // A linked binding starts the stage on other items: no duplicate of a same-item one.
     fixture.bind('order-after-plan', { runEnded: { ...RUN_ENDED.runEnded, linked } });
     fixture.bind('order-typo', {
-      runEnded: { workflowName: 'stage-a', outcome: 'plannned', linked },
+      runEnded: { ...RUN_ENDED.runEnded, outcome: 'plannned', linked },
     });
-    fixture.bind('order-missing', { runEnded: { workflowName: 'stage-z', outcome: 'x', linked } });
+    fixture.bind('order-missing', {
+      runEnded: { ...RUN_ENDED.runEnded, workflowName: 'stage-z', outcome: 'x', linked },
+    });
 
     const checked = await fixture.attempt(['trigger', 'check']);
     expect(checked.exitCode).not.toBe(0);

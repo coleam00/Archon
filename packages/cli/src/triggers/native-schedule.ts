@@ -2,10 +2,11 @@
  * Native schedules: a timer the operating system owns that runs one Archon command at an
  * interval, as the installing user, with exactly `ARCHON_HOME` and the installing shell's
  * `PATH`. Ownership, idempotency, rollback and status are decided here once; each backend
- * only renders its scheduler's files and drives its scheduler's CLI.
+ * only renders its scheduler's files, reads them back for `trigger check`, and drives its
+ * scheduler's CLI.
  */
 import { execFile } from 'node:child_process';
-import { link, mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { link, mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, posix, win32 } from 'node:path';
 import { promisify } from 'node:util';
 import { launchdBackend } from './native-schedule-launchd';
@@ -69,6 +70,21 @@ export interface OwnedFile {
   contents: string | Buffer;
 }
 
+/** What a job's command is, read back from the file a backend rendered it into. */
+export interface InstalledJob {
+  archonHome: string;
+  programArguments: string[];
+}
+
+/** One installed job, as its files on disk say; `unreadable` when the file is not one a backend wrote. */
+export type InstalledSchedule = {
+  label: string;
+  /** The file the job's command was read from. */
+  definition: string;
+  /** How to take the job off the scheduler and delete its files by hand. */
+  removeByHand: string;
+} & (InstalledJob | { unreadable: string });
+
 export interface ScheduleBackend {
   /** The scheduler's name in the unsupported-host answer. */
   scheduler: string;
@@ -84,6 +100,11 @@ export interface ScheduleBackend {
   unregister(label: string): Promise<void>;
   /** Remove only, after the files are deleted. */
   afterRemove?(): Promise<void>;
+  /**
+   * Every job under the Archon prefix whose files are on disk, read back from what `render`
+   * wrote. Reads files only; it never asks the scheduler.
+   */
+  installed(): Promise<InstalledSchedule[]>;
 }
 
 /** No backend can install a timer here; the message says what to schedule by hand when it can. */
@@ -180,6 +201,45 @@ function scheduleByHand(job: ScheduledJob, reason: string): NativeScheduleUnsupp
     `This host has no scheduler Archon can install a timer with (${reason}). ` +
       `Schedule this command to run every ${String(job.schedule.intervalSeconds)} seconds as this user, by hand:\n  ${command}`
   );
+}
+
+/** The labels of the Archon jobs in `directory` whose file ends in `suffix`; none when it is missing. */
+export async function installedLabels(directory: string, suffix: string): Promise<string[]> {
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return [];
+    throw error;
+  }
+  return names
+    .filter(name => name.startsWith(LABEL_PREFIX) && name.endsWith(suffix))
+    .map(name => name.slice(0, -suffix.length))
+    .sort();
+}
+
+/** Reads each job's definition with `read`; a file `read` cannot parse is kept, as unreadable. */
+export async function readInstalled(
+  labels: readonly string[],
+  definition: (label: string) => string,
+  read: (contents: string) => InstalledJob | undefined,
+  removeByHand: (label: string) => string
+): Promise<InstalledSchedule[]> {
+  const installed: InstalledSchedule[] = [];
+  for (const label of labels) {
+    const path = definition(label);
+    const contents = await readExisting(path);
+    // Deleted between the listing and the read: nothing is installed under it any more.
+    if (contents === undefined) continue;
+    const job = read(contents.toString('utf8'));
+    installed.push({
+      label,
+      definition: path,
+      removeByHand: removeByHand(label),
+      ...(job ?? { unreadable: `${path} is not a job definition Archon wrote` }),
+    });
+  }
+  return installed;
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -333,4 +393,20 @@ export async function removeNativeSchedule(
   for (const path of existing) await unlink(path);
   await backend.afterRemove?.();
   return true;
+}
+
+/**
+ * The jobs installed for `archonHome`, read from their files, plus any Archon job file that
+ * cannot be read, whose home is unknown. None on a platform Archon has no scheduler for:
+ * nothing can be installed there.
+ */
+export async function listNativeSchedules(
+  archonHome: string,
+  options: NativeScheduleOptions = {}
+): Promise<InstalledSchedule[]> {
+  const backend = backendFor(options.platform ?? process.platform, archonHome, options);
+  if (!backend) return [];
+  return (await backend.installed()).filter(
+    entry => !('archonHome' in entry) || entry.archonHome === archonHome
+  );
 }

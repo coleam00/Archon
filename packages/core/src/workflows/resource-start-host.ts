@@ -59,12 +59,8 @@ import {
   SUBRUN_METADATA_KEYS,
   WORKFLOW_SOURCE_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
-import {
-  assertWorkflowRequirementsMet,
-  resolveInvocationInputs,
-} from '@archon/workflows/utils/workflow-requirements';
+import { assertWorkflowRequirementsMet } from '@archon/workflows/utils/workflow-requirements';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { WorkflowInputContractError } from '@archon/workflows/workflow-inputs';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import {
@@ -80,7 +76,7 @@ import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner
 import { handOffAdmitted, type StartedExecutor } from './start-executor';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { executionLane, handoffIsolation } from './resource-start-lanes';
-import { selectStartedWorkflow } from './binding-workflow';
+import { resolveBindingInputs, selectStartedWorkflow } from './binding-workflow';
 import { refuseInPlaceLanding, resolveRunLanding } from './item-landing';
 
 const log = createLogger('resource-start-host');
@@ -133,52 +129,6 @@ async function assertBindingRequirements(
   assertWorkflowRequirementsMet(workflow, {
     githubConnected: Boolean(await host.deps.getUserGithubToken?.(intent.runAsUserId)),
   });
-}
-
-function quotedList(names: readonly string[]): string {
-  return names.map(name => `'${name}'`).join(', ');
-}
-
-/**
- * The binding's authored and event inputs, checked against the workflow's declared inputs
- * and its pack's settings. Exported for its tests.
- */
-export function resolveBindingInputs(
-  intent: Pick<ResourceStartBindingIntent, 'eventInputs'> & {
-    launch: Pick<ResourceStartBindingIntent['launch'], 'inputs'>;
-  },
-  workflow: Pick<ResolvedWorkflow, 'name' | 'inputs' | 'pack'>
-): Record<string, JsonValue> {
-  // The declared-input contract passes inputs through to a workflow without `inputs:`, which
-  // operator-written literals rely on. Event inputs carry untrusted source content, so
-  // they reach only a workflow that declares them.
-  // A pack setting is declared, by the pack, and checked against its type below.
-  const settings = workflow.pack?.settings ?? {};
-  const eventInputNames = Object.keys(intent.eventInputs ?? {}).filter(
-    name => !Object.hasOwn(settings, name)
-  );
-  if (workflow.inputs === undefined && eventInputNames.length > 0) {
-    throw new Error(
-      `Workflow '${workflow.name}' declares no inputs; a trigger cannot pass event-mapped ` +
-        `input${eventInputNames.length === 1 ? '' : 's'} ` +
-        quotedList(eventInputNames.sort()) +
-        ". Declare them under 'inputs:' in the workflow."
-    );
-  }
-  try {
-    // The same contract `--input` meets: the workflow's own inputs, or its pack's settings
-    // checked against their declared types.
-    return resolveInvocationInputs(workflow, { ...intent.launch.inputs, ...intent.eventInputs });
-  } catch (error) {
-    if (error instanceof WorkflowInputContractError && error.missingRequired.length > 0) {
-      throw new Error(
-        `Workflow '${workflow.name}' requires input${error.missingRequired.length === 1 ? '' : 's'} ` +
-          quotedList(error.missingRequired) +
-          '.'
-      );
-    }
-    throw error;
-  }
 }
 
 /** Reconcile the requested isolation with the workflow's pin and the project kind. */

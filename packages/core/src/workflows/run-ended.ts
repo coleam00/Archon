@@ -45,7 +45,7 @@ import {
   type RunEndedInputSource,
 } from '@archon/workflows/schemas/binding-input-source';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
-import { selectStartedWorkflow, type StartedWorkflow } from './binding-workflow';
+import { selectStartedWorkflow, startedWorkflowInputProblems } from './binding-workflow';
 import { itemAnswers, type ItemAnswers } from './item-answers';
 
 /** `ARCHON_HOME/triggers`: where run-ended trigger files are read from. */
@@ -465,7 +465,8 @@ export function declaredInputNames(workflow: Pick<ResolvedWorkflow, 'inputs' | '
 /**
  * Every problem with a run-ended binding, read against the workflows of the project it
  * launches in: the ended workflow exists and declares the outcome and every input the
- * binding reads, and the started workflow exists and declares every input it maps. With
+ * binding reads, and the started workflow exists and accepts its inputs as a start would:
+ * `launch.inputs` and the mapped names, none undeclared and no required one missing. With
  * `checkout: "ended-run"`, neither workflow may be pinned in place. The
  * check a run gets before it starts; `runEndedTriggerCheck` reports it with the rest.
  */
@@ -508,21 +509,12 @@ export async function runEndedBindingCheck(
     problems.push(
       `workflow '${started.workflow.name}' runs in place (worktree.enabled: false), so it cannot take the ended run's checkout`
     );
-  problems.push(...startedWorkflowProblems(started, runEnded.inputs));
+  problems.push(
+    ...startedWorkflowInputProblems(started, binding.launch.inputs, {
+      mapped: Object.keys(runEnded.inputs ?? {}),
+    })
+  );
   return problems;
-}
-
-/** The started workflow is the one a fire would start, and declares every input it maps. */
-export function startedWorkflowProblems(
-  started: StartedWorkflow,
-  inputs: Readonly<Record<string, unknown>> | undefined
-): string[] {
-  if ('refused' in started) return [started.refused];
-  const target = started.workflow;
-  const declared = declaredInputNames(target);
-  return Object.keys(inputs ?? {})
-    .filter(name => !declared.includes(name))
-    .map(name => `workflow '${target.name}' does not declare input '${name}'`);
 }
 
 /**

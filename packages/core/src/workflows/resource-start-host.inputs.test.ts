@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { WorkflowPack } from '@archon/workflows/schemas/pack-settings';
-import { resolveBindingInputs } from './resource-start-host';
+import { resolveBindingInputs } from './binding-workflow';
 
 const pack: WorkflowPack = {
   key: 'alpha',

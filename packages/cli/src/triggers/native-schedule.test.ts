@@ -8,6 +8,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import {
   inspectNativeSchedule,
   installNativeSchedule,
+  listNativeSchedules,
   NativeScheduleUnsupportedError,
   removeNativeSchedule,
   scheduledJob,
@@ -523,6 +524,97 @@ describe('Task Scheduler', () => {
     ).rejects.toThrow('whole number of minutes');
     expect(commands).toEqual([]);
     expect(await readdir(archonHome)).toEqual([]);
+  });
+});
+
+// Check reads a job's command back from the file install rendered, so each reader must
+// return exactly what its renderer was given, including the characters it escapes.
+describe('reading installed jobs back', () => {
+  const posixConfig = `/tmp/a&b <c> "q" 'x' 100% $HOME\\.json`;
+
+  itOnPosixHost.each([
+    [
+      'launchd',
+      (directory: string) => ({
+        platform: 'darwin' as const,
+        uid: 501,
+        launchAgentsDirectory: directory,
+      }),
+    ],
+    [
+      'systemd',
+      (directory: string) => ({ platform: 'linux' as const, systemdUserDirectory: directory }),
+    ],
+  ] as const)(
+    '%s returns the argv and ARCHON_HOME it wrote, and only for that home',
+    async (_, options) => {
+      const root = await scratchDirectory();
+      const archonHome = join(root, 'home 100% $x');
+      const scheduler = { ...options(join(root, 'jobs')), runCommand: recorder().runCommand };
+      const programArguments = [
+        '/opt/archon/bin/archon',
+        'trigger',
+        'fire',
+        '--config',
+        posixConfig,
+      ] as const;
+      await installNativeSchedule(config({ archonHome, programArguments }), scheduler);
+      await installNativeSchedule(
+        config({ id: 'other-home', archonHome: join(root, 'other') }),
+        scheduler
+      );
+
+      expect(await listNativeSchedules(archonHome, scheduler)).toEqual([
+        expect.objectContaining({ label: LABEL, archonHome, programArguments }),
+      ]);
+    }
+  );
+
+  it('Task Scheduler returns the argv and ARCHON_HOME it wrote', async () => {
+    const archonHome = await scratchDirectory();
+    const programArguments = [
+      'C:\\Program Files\\archon\\archon.exe',
+      'trigger',
+      'fire',
+      '--config',
+      'C:\\packs\\a&b <c> 100% $x.json',
+      'C:\\trailing\\',
+    ] as const;
+    const win32 = {
+      platform: 'win32' as const,
+      windowsUserId: 'me',
+      runCommand: recorder().runCommand,
+    };
+    await installNativeSchedule(
+      config({
+        archonHome,
+        programArguments,
+        workingDirectory: 'C:\\Users\\me\\Project (one)',
+        path: 'C:\\Windows\\System32',
+        schedule: { intervalSeconds: 300, runAtLoad: false },
+      }),
+      win32
+    );
+
+    expect(await listNativeSchedules(archonHome, win32)).toEqual([
+      expect.objectContaining({
+        label: LABEL,
+        archonHome,
+        programArguments: [...programArguments],
+      }),
+    ]);
+  });
+
+  itOnPosixHost('keeps a job file it cannot read, as unreadable', async () => {
+    const directory = await scratchDirectory();
+    await writeFile(join(directory, `${LABEL}.plist`), '<plist/>');
+    expect(
+      await listNativeSchedules('/home', {
+        platform: 'darwin',
+        uid: 501,
+        launchAgentsDirectory: directory,
+      })
+    ).toEqual([expect.objectContaining({ label: LABEL, unreadable: expect.any(String) })]);
   });
 });
 

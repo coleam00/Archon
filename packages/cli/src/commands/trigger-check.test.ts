@@ -1,0 +1,213 @@
+// @archon-test-isolated
+/**
+ * `archon trigger check` reads the bindings this install can start, wherever a timer's
+ * config lives, and reports a start that would be refused for its inputs, reading only.
+ */
+import { afterEach, expect, spyOn, test } from 'bun:test';
+import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { providerRegistry } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
+import { loadConfig } from '@archon/core/config/config-loader';
+import { setPlatformPolicies } from '@archon/core/platforms/registry';
+import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
+import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
+import {
+  createInMemoryWorkflowHostStore,
+  createInMemoryWorkflowStore,
+} from '../test-support/workflow-store';
+import { installNativeSchedule, type NativeScheduleOptions } from '../triggers/native-schedule';
+import { triggerCommand } from './trigger';
+
+const tempRoots = trackTempRoots();
+const previousHome = process.env.ARCHON_HOME;
+
+afterEach(() => {
+  if (previousHome === undefined) delete process.env.ARCHON_HOME;
+  else process.env.ARCHON_HOME = previousHome;
+});
+
+function hostForTest(): WorkflowHost {
+  const records = createInMemoryWorkflowHostStore();
+  const store = createInMemoryWorkflowStore(records);
+  const deps = {
+    store,
+    providers: providerRegistry,
+    loadConfig,
+    getAgentProvider: (): never => {
+      throw new Error('No AI provider');
+    },
+  };
+  const unsupported = async (): Promise<never> => {
+    throw new Error('Unexpected host effect');
+  };
+  return {
+    deps,
+    records,
+    engine: new InProcessWorkflowEngine(deps),
+    operations: createWorkflowOperations({
+      store: { ...store, deleteWorkflowRun: unsupported },
+      hostStore: records,
+      getUserRole: async id => (await records.users.getUserById(id))?.role,
+      requestDetachedRunStop: unsupported,
+      isRunOwnedByThisProcess: () => false,
+      isRunOwnerAnswering: async () => false,
+      reclaimRunWorktree: unsupported,
+      reclaimContainerEnv: unsupported,
+    }),
+  };
+}
+
+// `a` is required, `b` is not declared.
+const WORKFLOW =
+  'name: stage\ndescription: A stage\ninputs:\n  a: { required: true }\nnodes:\n  - id: one\n    bash: echo one\n';
+
+interface CheckedBinding {
+  file: string;
+  workflowName: string | null;
+  timer: string | null;
+  problems: string[];
+}
+
+async function fixture() {
+  const root = tempRoots(await realpath(await mkdtemp(join(tmpdir(), 'archon-trigger-check-'))));
+  const project = join(root, 'project');
+  const archonHome = join(root, 'home');
+  await mkdir(join(project, '.archon', 'workflows'), { recursive: true });
+  await writeFile(join(project, '.archon', 'workflows', 'stage.yaml'), WORKFLOW);
+  await mkdir(join(archonHome, 'triggers'), { recursive: true });
+  process.env.ARCHON_HOME = archonHome;
+  registerBuiltinProviders();
+  setPlatformPolicies([]);
+  const scheduled: string[][] = [];
+  const schedules: NativeScheduleOptions = {
+    platform: 'darwin',
+    uid: 501,
+    launchAgentsDirectory: join(root, 'LaunchAgents'),
+    runCommand: async (executable, args) => {
+      scheduled.push([executable, ...args]);
+    },
+  };
+  const config = (inputs: Record<string, unknown>, schedule = true) => ({
+    version: 1,
+    sourceInstanceId: 'timer',
+    binding: {
+      bindingId: 'timer',
+      bindingRevision: null,
+      hostId: 'host',
+      runAsUserId: 'user',
+      resource: 'stage',
+      overlap: 'queue',
+      launch: { cwd: project, workflowName: 'stage', inputs, isolation: { kind: 'in-place' } },
+    },
+    ...(schedule ? { schedule: { intervalSeconds: 1800, runAtLoad: false } } : {}),
+  });
+  /** A timer whose config file is outside the triggers directory, as `schedule install` leaves it. */
+  const installTimer = async (path: string): Promise<void> => {
+    await installNativeSchedule(
+      {
+        id: 'timer',
+        programArguments: ['/opt/archon/bin/archon', 'trigger', 'fire', '--config', path],
+        workingDirectory: project,
+        archonHome,
+        path: '/usr/bin:/bin',
+        schedule: { intervalSeconds: 1800, runAtLoad: false },
+        output: 'log',
+        removeCommand: `archon trigger schedule remove --config ${path}`,
+      },
+      schedules
+    );
+  };
+  const check = async (): Promise<{ bindings: CheckedBinding[]; error: unknown }> => {
+    let printed = '';
+    const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+      chunk: unknown,
+      encodingOrCallback?: unknown,
+      callback?: () => void
+    ) => {
+      // The check prints one pretty JSON document; log lines are single-line.
+      if (String(chunk).startsWith('{\n')) printed = String(chunk);
+      (typeof encodingOrCallback === 'function'
+        ? (encodingOrCallback as () => void)
+        : callback)?.();
+      return true;
+    }) as typeof process.stdout.write);
+    let error: unknown;
+    try {
+      await triggerCommand(hostForTest(), 'check', [], {}, { schedules });
+    } catch (caught) {
+      error = caught;
+    } finally {
+      stdout.mockRestore();
+    }
+    if (printed === '') throw error;
+    return { ...(JSON.parse(printed) as { bindings: CheckedBinding[] }), error };
+  };
+  return { root, archonHome, config, installTimer, check, scheduled };
+}
+
+test('reports an installed timer outside the triggers directory that passes an undeclared input', async () => {
+  const { root, archonHome, config, installTimer, check, scheduled } = await fixture();
+  const path = join(root, 'bindings', 'merge-queue.json');
+  await mkdir(join(root, 'bindings'));
+  await writeFile(path, JSON.stringify(config({ a: 1, b: 1 })));
+  await installTimer(path);
+  scheduled.length = 0;
+  const before = [await readdir(join(archonHome, 'triggers')), await readdir(root)];
+
+  const { bindings, error } = await check();
+
+  expect(bindings).toEqual([
+    expect.objectContaining({
+      file: path,
+      workflowName: 'stage',
+      timer: expect.stringContaining(join(root, 'LaunchAgents', 'com.archon.trigger.')),
+      problems: [
+        expect.stringContaining("Cannot run workflow 'stage': it does not declare input 'b'"),
+      ],
+    }),
+  ]);
+  expect(error).toBeInstanceOf(Error);
+  // Reading only: no scheduler command, no file written.
+  expect(scheduled).toEqual([]);
+  expect([await readdir(join(archonHome, 'triggers')), await readdir(root)]).toEqual(before);
+});
+
+test('reports a timer that omits a required input, naming it', async () => {
+  const { root, config, installTimer, check } = await fixture();
+  const path = join(root, 'timer.json');
+  await writeFile(path, JSON.stringify(config({})));
+  await installTimer(path);
+
+  expect((await check()).bindings[0]?.problems).toEqual(["Workflow 'stage' requires input 'a'."]);
+});
+
+test('reports a timer whose config file is gone, with how to remove it by hand', async () => {
+  const { root, config, installTimer, check } = await fixture();
+  const path = join(root, 'timer.json');
+  await writeFile(path, JSON.stringify(config({ a: 1 })));
+  await installTimer(path);
+  await rm(path);
+
+  const [broken] = (await check()).bindings;
+  expect(broken).toMatchObject({ file: path, workflowName: null });
+  expect(broken?.problems[0]).toContain('is missing; every tick fails');
+  expect(broken?.problems[0]).toContain('launchctl bootout gui/501/com.archon.trigger.');
+});
+
+test('a fire-only file may leave a required input to --inputs, but not pass an undeclared one', async () => {
+  const { archonHome, config, check } = await fixture();
+  const path = join(archonHome, 'triggers', 'fire-only.json');
+  await writeFile(path, JSON.stringify(config({}, false)));
+  const clean = await check();
+  expect(clean.bindings).toEqual([expect.objectContaining({ file: path, problems: [] })]);
+  expect(clean.error).toBeUndefined();
+
+  await writeFile(path, JSON.stringify(config({ b: 1 }, false)));
+  expect((await check()).bindings[0]?.problems).toEqual([
+    expect.stringContaining("does not declare input 'b'"),
+  ]);
+});
