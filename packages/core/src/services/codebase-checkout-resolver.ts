@@ -138,6 +138,14 @@ export async function resolveCodebaseForPath(
   };
 }
 
+/** The project registered at `cwd`, or null when none is registered there yet. */
+export async function registeredProjectForPath(
+  cwd: string,
+  deps: Parameters<typeof resolveCodebaseForPath>[1]
+): Promise<Codebase | null> {
+  return (await resolveCodebaseForPath(cwd, deps)).codebase;
+}
+
 /**
  * The key of the project registered at `cwd`, or null when none is registered there yet.
  * Resource-start preparation resolves `cwd` the same way and registers an unknown checkout

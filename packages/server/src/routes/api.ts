@@ -8,7 +8,10 @@ import {
 } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import * as codebaseDb from '@archon/core/db/codebases';
-import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
+import {
+  registeredProjectForPath,
+  registeredProjectKeyForPath,
+} from '@archon/core/services/codebase-checkout-resolver';
 import { readPackGraph } from '@archon/core/workflows/pack-graph';
 import { getTriggersPath, launchProjectKey } from '@archon/core/workflows/run-ended';
 import { providerRegistry } from '@archon/providers';
@@ -144,6 +147,7 @@ export function registerApiRoutes(
           providers: providerRegistry,
           triggersDirectory: getTriggersPath,
           projectKeyOf: launchProjectKey(path => registeredProjectKeyForPath(path, codebaseDb)),
+          projectOf: path => registeredProjectForPath(path, codebaseDb),
         },
         workflowSource === undefined ? {} : { workflowSource }
       ),

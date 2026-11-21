@@ -308,10 +308,24 @@ describe('trigger CLI durable execution', () => {
     }
   }, 30_000);
 
-  test('a no-remote launch exposes its full error in both inspect forms and workflow get', async () => {
+  test('a launch failure exposes its full error in both inspect forms and workflow get', async () => {
     const fixture = await heldTriggerRun('launch-failure');
     fixture.writeWorkflow('echo unreachable');
-    const configPath = join(fixture.projectRoot, '..', 'trigger.json');
+    const root = join(fixture.projectRoot, '..');
+    const git = async (args: string[], cwd = fixture.projectRoot) =>
+      expect(await Bun.spawn(['git', ...args], { cwd, stdout: 'ignore' }).exited).toBe(0);
+    // A project with a base to read its definitions from, whose worktree setup fails.
+    writeFileSync(
+      join(fixture.projectRoot, '.archon', 'config.yaml'),
+      'worktree:\n  postCreate:\n    - exit 3\n'
+    );
+    await git(['init', '-q', '--bare', '--initial-branch=main', join(root, 'remote.git')], root);
+    await git(['add', '-A']);
+    await git(['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'base']);
+    await git(['branch', '-M', 'main']);
+    await git(['remote', 'add', 'origin', join(root, 'remote.git')]);
+    await git(['push', '-q', 'origin', 'main']);
+    const configPath = join(root, 'trigger.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.binding.launch.isolation = { kind: 'default' };
     writeFileSync(configPath, JSON.stringify(config));
@@ -321,7 +335,7 @@ describe('trigger CLI durable execution', () => {
       return run?.status === 'failed' ? run : undefined;
     }, 'launch failure');
     const metadata = JSON.parse(failed.metadata);
-    expect(metadata.error).toContain('no git remote');
+    expect(metadata.error).toContain('exit code 3');
     const invoke = (args: string[]) =>
       runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, args);
     const request = JSON.parse((await invoke(['trigger', 'inspect', failed.id])).stdout);

@@ -18,7 +18,10 @@ import {
   type OnBinding,
 } from '@archon/core/workflows/run-ended';
 import { asksSettledTriggerCheck } from '@archon/core/workflows/asks-settled';
-import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
+import {
+  registeredProjectForPath,
+  registeredProjectKeyForPath,
+} from '@archon/core/services/codebase-checkout-resolver';
 import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
 import {
   collectCredentialValues,
@@ -658,6 +661,7 @@ async function checkTriggers(host: WorkflowHost): Promise<void> {
   const deps = {
     ...host.deps,
     projectKeyOf: (cwd: string) => registeredProjectKeyForPath(cwd, host.records.codebases),
+    projectOf: (cwd: string) => registeredProjectForPath(cwd, host.records.codebases),
   };
   const runEnded = bindings.filter(entry => 'runEnded' in entry);
   const asksSettled = bindings.filter(entry => 'asksSettled' in entry);
@@ -677,7 +681,13 @@ async function checkTriggers(host: WorkflowHost): Promise<void> {
     runEnded: runEnded.map((entry, index) => listed(entry, runEndedProblems[index])),
     asksSettled: asksSettled.map((entry, index) => listed(entry, asksSettledProblems[index])),
   };
-  await writeJsonLine({ directory: getTriggersPath(), ...checked });
+  await writeJsonLine({
+    directory: getTriggersPath(),
+    // A standalone check has no item, so it cannot know an item's landing branch.
+    definitions:
+      "Each binding is checked against the definitions a start without an item reads: the binding's base, else its project's default branch, as fetched now, with the launch checkout's uncommitted changes on top. A run on an item checks the bindings it may fire against the definitions it captured, before it starts.",
+    ...checked,
+  });
   const broken = [...checked.runEnded, ...checked.asksSettled].filter(
     entry => entry.problems.length > 0
   ).length;

@@ -262,6 +262,9 @@
     [
       "src/commands/state.test.ts",
       "src/test-support/state-document-store.conformance.test.ts"
+    ],
+    [
+      "src/commands/workflow-run-definitions.test.ts"
     ]
   ]
 }

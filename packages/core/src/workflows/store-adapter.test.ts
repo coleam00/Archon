@@ -137,6 +137,7 @@ mock.module('@archon/providers', () => ({
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mock(() => Promise.resolve({ assistant: 'claude' })),
+  loadRepoConfig: mock(() => Promise.resolve({})),
 }));
 
 // Per-user provider credentials mocks

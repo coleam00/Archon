@@ -42,6 +42,9 @@ const {
 export { realReleaseRunVerificationImages };
 mock.module('@archon/isolation', () => ({
   generatedTaskBranch,
+  resolveWorktreeBase: mock(async () => {
+    throw new Error('resolveWorktreeBase is not mocked here');
+  }),
   getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({
     state: 'NONE',
   })),
