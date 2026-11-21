@@ -369,7 +369,7 @@ A start is refused, naming the files or the ref, when:
 
 These runs read their definitions as they are instead:
 
-- **An in-place run** (`--no-worktree`, a workflow with `worktree.enabled: false`, a binding with `isolation: in-place`, a folder project) reads its checkout, which is also its one commit.
+- **An in-place run** (`--no-worktree`, a workflow with `worktree.enabled: false`, a binding with `isolation: in-place`, a folder project) reads its checkout, which is also its one commit. When the base branch's copy of a workflow and the checkout's copy disagree on whether it runs in place, the start is refused rather than run in a lane the other copy chose.
 - **An explicit source** (`--workflow-source`, a binding's `launch.discoveryCwd`) reads its workflows, commands and scripts from that directory, and `.archon/config.yaml` from the launch checkout. Name the checkout itself this way to run its committed branch changes.
 - **Adopting a run's worktree or branch** reads that worktree or branch.
 
