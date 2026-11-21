@@ -1,0 +1,29 @@
+{
+  "metrics": [
+    {
+      "name": "sdlc.item_merge_rate",
+      "op": "share",
+      "items": { "has_run": { "workflow": ["archon-build-queue"] } },
+      "where": { "merged": true }
+    },
+    {
+      "name": "sdlc.item_build_rounds",
+      "op": "count",
+      "of": "runs",
+      "runs": { "workflow": ["archon-build-queue"] },
+      "items": { "merged": true }
+    },
+    {
+      "name": "sdlc.item_lead_time",
+      "op": "duration",
+      "from": { "run": "first", "at": "started", "of": { "workflow": ["archon-intake"] } },
+      "to": "merged"
+    },
+    {
+      "name": "sdlc.item_answers",
+      "op": "count",
+      "of": "answers",
+      "items": { "merged": true }
+    }
+  ]
+}

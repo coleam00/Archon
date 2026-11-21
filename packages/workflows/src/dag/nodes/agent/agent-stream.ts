@@ -20,6 +20,7 @@ import { createWatchdogResetRecorder, type WatchdogResetRecorder } from '../../.
 import { withIdleTimeout } from '../../../utils/idle-timeout';
 import { withStaleResumeRetry } from '../../../stale-resume';
 import { isEndTurnRequested } from '../../../end-turn-request';
+import type { createStallMessenger, StallMessagePass } from '../../../stall-message';
 import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { sumTokenUsage } from '../../usage';
@@ -35,7 +36,7 @@ import type { NodeMcpResolution } from '../../provider-resolution';
 import {
   type TurnCutOff,
   type WatchdogReset,
-  type structuredOutputPass,
+  type StructuredOutputPass,
   providerReportedFailure,
   assertResultBeforeSettlement,
 } from '../../ai-turn';
@@ -64,6 +65,8 @@ export interface AgentPassContext {
   nodeStartTime: number;
   /** False for a named resume, which never falls back to a fresh session. */
   staleResumeRetry: boolean;
+  /** The attempt's messages to a stalled session; each pass opens its own channel. */
+  stallMessenger: ReturnType<typeof createStallMessenger>;
 }
 
 /**
@@ -128,12 +131,25 @@ export function createAttemptState(ctx: RunLayersContext, nodeId: string): Agent
 function passChunks(
   pc: AgentPassContext,
   prompt: string,
-  resumeSessionId: string | undefined
+  pass: StructuredOutputPass,
+  stallMessages: StallMessagePass
 ): AsyncGenerator<MessageChunk> {
+  const queryOptions: SendQueryOptions = stallMessages.turnMessages
+    ? { ...pc.queryOptions, turnMessages: stallMessages.turnMessages }
+    : pc.queryOptions;
+  // A same-session correction continues the thread this attempt wrote seconds ago, never a
+  // fork of it. A stale-resume fallback would start a fresh session holding only the
+  // correction text, so a failed resume here surfaces as the error it is.
+  if (pass.continuesThread) {
+    return pc.aiClient.sendQuery(prompt, pc.ctx.cwd, pass.resumeSessionId, {
+      ...queryOptions,
+      forkSession: false,
+    });
+  }
   const send = (id: string | undefined): AsyncGenerator<MessageChunk> =>
-    pc.aiClient.sendQuery(prompt, pc.ctx.cwd, id, pc.queryOptions);
-  if (!pc.staleResumeRetry) return send(resumeSessionId);
-  return withStaleResumeRetry(send, resumeSessionId, {
+    pc.aiClient.sendQuery(prompt, pc.ctx.cwd, id, queryOptions);
+  if (!pc.staleResumeRetry) return send(pass.resumeSessionId);
+  return withStaleResumeRetry(send, pass.resumeSessionId, {
     logContext: { workflowRunId: pc.ctx.workflowRun.id, nodeId: pc.node.id },
   });
 }
@@ -147,14 +163,15 @@ export async function runStreamPass(
   pc: AgentPassContext,
   state: AgentAttemptState,
   prompt: string,
-  pass: ReturnType<typeof structuredOutputPass>
+  pass: StructuredOutputPass
 ): Promise<void> {
   resetPass(pc, state, pass);
-  const providerEvents = createPassEventHandler(pc, state);
-  const shouldStopStream = stopCheck(pc, state, providerEvents);
+  const stallMessages = pc.stallMessenger.openPass();
+  const providerEvents = createPassEventHandler(pc, state, stallMessages);
+  const shouldStopStream = stopCheck(pc, state, providerEvents, stallMessages);
   try {
     for await (const msg of withIdleTimeout(
-      passChunks(pc, prompt, pass.resumeSessionId),
+      passChunks(pc, prompt, pass, stallMessages),
       pc.idleTimeoutMs,
       () => onIdleTimeout(pc, state),
       (msg, resetAt) => {
@@ -189,6 +206,7 @@ export async function runStreamPass(
       }
     }
   } finally {
+    stallMessages.close();
     await providerEvents.clearAttention();
   }
 
@@ -214,11 +232,12 @@ export async function runStreamPass(
 function resetPass(
   pc: AgentPassContext,
   state: AgentAttemptState,
-  pass: ReturnType<typeof structuredOutputPass>
+  pass: StructuredOutputPass
 ): void {
   state.outputText = '';
   state.structuredOutput = undefined;
-  if (pass.threadsSession) {
+  // A same-session correction stays in the thread: its id and the node's resumed origin carry over.
+  if (pass.threadsSession && !pass.continuesThread) {
     state.sessionId = undefined;
     state.resumed = undefined;
   }
@@ -240,7 +259,8 @@ function resetPass(
 
 function createPassEventHandler(
   pc: AgentPassContext,
-  state: AgentAttemptState
+  state: AgentAttemptState,
+  stallMessages: StallMessagePass
 ): ProviderEventHandler {
   const { ctx, nodeContext } = pc;
   const { platform, conversationId } = ctx;
@@ -266,6 +286,7 @@ function createPassEventHandler(
     nodeId: pc.node.id,
     stepName: pc.stepName,
     attempt: pc.attemptEvents,
+    stallMessages,
     configuredMcpServers: pc.nodeMcp.kind === 'load' ? pc.nodeMcp.servers : new Set(),
     onMessageText: async text => {
       state.outputText += text; // ALWAYS capture for $node_id.output
@@ -292,18 +313,20 @@ function createPassEventHandler(
 }
 
 /**
- * Refreshes tool attention and, throttled, aborts the stream once the run is no longer
- * streaming or the operator ended this stream's stalled turn.
+ * Refreshes tool attention, messages a stalled session, and, throttled, aborts the stream
+ * once the run is no longer streaming or the operator ended this stream's stalled turn.
  */
 function stopCheck(
   pc: AgentPassContext,
   state: AgentAttemptState,
-  providerEvents: ProviderEventHandler
+  providerEvents: ProviderEventHandler,
+  stallMessages: StallMessagePass
 ): () => Promise<boolean> {
   const { ctx, node, nodeKey } = pc;
   return async () => {
     await ctx.toolAttention.refresh();
     await providerEvents.refreshAttention();
+    await stallMessages.check(providerEvents.stall());
     const tickNow = Date.now();
     if (tickNow - (lastNodeCancelCheck.get(nodeKey) ?? 0) > CANCEL_CHECK_INTERVAL_MS) {
       lastNodeCancelCheck.set(nodeKey, tickNow);
@@ -388,12 +411,13 @@ async function heartbeat(pc: AgentPassContext, tickNow: number): Promise<void> {
 function recordResult(
   pc: AgentPassContext,
   state: AgentAttemptState,
-  pass: ReturnType<typeof structuredOutputPass>,
+  pass: StructuredOutputPass,
   msg: ResultChunk
 ): void {
   if (pass.threadsSession) {
     state.sessionId = msg.sessionId;
-    if (msg.resumed !== undefined) state.resumed = msg.resumed;
+    // A correction's resume is Archon's, not the node's: it must not record a fresh node as resumed.
+    if (msg.resumed !== undefined && !pass.continuesThread) state.resumed = msg.resumed;
   }
   recordResultUsage(pc.node.id, state, msg);
   if (msg.stopReason !== undefined) state.stopReason = msg.stopReason;

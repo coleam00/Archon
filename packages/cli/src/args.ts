@@ -78,12 +78,13 @@ export const cliArgOptions: CliArgOptions = {
   'if-revision': { type: 'string' },
   prefix: { type: 'string' },
   project: { type: 'string' },
-  // `archon metrics` window, subject filter, cohort cut and model split.
+  // `archon metrics` window, subject filter, cohort cut, model and dimension split.
   since: { type: 'string' },
   until: { type: 'string' },
   subject: { type: 'string' },
   compare: { type: 'string' },
   'by-model': { type: 'string' },
+  'by-dimension': { type: 'string' },
   install: { type: 'boolean' },
   raw: { type: 'boolean' },
   values: { type: 'boolean' },
@@ -107,6 +108,9 @@ export const cliArgOptions: CliArgOptions = {
   'pause-at-gates': { type: 'boolean' },
   // Repeatable: `--input a=1 --input b=2` yields ['a=1', 'b=2'] (#2554).
   input: { type: 'string', multiple: true },
+  // Repeatable `name=path`: the input's value is the file's contents, read once at the
+  // invocation gate.
+  'input-file': { type: 'string', multiple: true },
   // Repeatable sparse tier/@alias rebinding for one workflow invocation (#2481).
   model: { type: 'string', multiple: true },
   config: { type: 'string' },
@@ -114,10 +118,16 @@ export const cliArgOptions: CliArgOptions = {
   host: { type: 'string' },
   'delivery-id': { type: 'string' },
   item: { type: 'string' },
+  // `workflow cancel|abandon --item <key> --all-runs`: act on every matching run of the item.
+  'all-runs': { type: 'boolean' },
   // `workflow runs --item-of <run-id>`: read the item a run belongs to.
   'item-of': { type: 'string' },
   // `workflow rule --withdraw <ruling-id>` and `workflow answer --withdraw <ref>`.
   withdraw: { type: 'string' },
+  // `workflow merged --change <ref> --at <ISO> --commit <sha>`: the merge the forge reported.
+  change: { type: 'string' },
+  at: { type: 'string' },
+  commit: { type: 'string' },
   // `workflow link --item <key> --kind <kind> --to <key>`, or `workflow link --end <link-id>`.
   kind: { type: 'string' },
   to: { type: 'string' },
@@ -126,7 +136,8 @@ export const cliArgOptions: CliArgOptions = {
   ref: { type: 'string' },
   inputs: { type: 'string' },
   owner: { type: 'string' },
-  // `archon pack bindings`: the operator's choices a pack's binding declaration lacks.
+  // `archon pack bindings`: the operator's choices a pack's binding declaration lacks. It
+  // also reads `--out`, `--config` and `--workflow-source`, declared above.
   repo: { type: 'string' },
   'run-as': { type: 'string' },
   only: { type: 'string' },

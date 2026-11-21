@@ -21,6 +21,7 @@ mock.module('./connection', () => ({
 }));
 
 import { currentExecutionOwner, WorkflowNotResumableError } from '@archon/workflows/store';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 import { listResumableRunsByParentConversation, resumeWorkflowRun } from './workflow-run-resume';
 
 describe('workflow run resume', () => {
@@ -80,7 +81,7 @@ describe('workflow run resume', () => {
       const [updateQuery, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(updateQuery).toContain("status = 'running'");
       expect(updateQuery).toContain('completed_at = NULL');
-      expect(updateQuery).toContain('metadata = metadata || $2::jsonb');
+      expect(updateQuery).toContain('metadata = (metadata || $2::jsonb');
       expect(updateParams).toEqual(['workflow-run-123', expect.any(String)]);
       expect(JSON.parse(String(updateParams[1]))).toEqual({
         tool_call_attention: null,
@@ -89,6 +90,7 @@ describe('workflow run resume', () => {
         continuation_retry_at: null,
         capacity_wait: null,
         source_release: null,
+        operator_pause: null,
         execution_claim: expect.any(String),
         execution_owner: currentExecutionOwner(),
       });
@@ -141,6 +143,7 @@ describe('workflow run resume', () => {
       await resumeWorkflowRun('workflow-run-123', {
         kind: 'ownerless',
         executionClaim: 'claim-1',
+        lease: testRunOwnerLease('workflow-run-123'),
       });
 
       const [updateQuery, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];

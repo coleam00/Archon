@@ -184,13 +184,17 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     process.env.ARCHON_DETACHED_LAUNCH_TOKEN = 'launch-token';
     // A detached child learns its run from the row its launcher handed over (#2872) —
     // the only shape the CLI produces for a fresh detached run.
-    (workflowsDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    const handedOverRow = {
       id: 'test-run-id',
       workflow_name: 'plan',
       status: 'pending',
       working_path: null,
       metadata: { cli_detached_launch_token: 'launch-token' },
-    });
+    };
+    // Admission reads the row, then the child reads it again under its lease.
+    (workflowsDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(handedOverRow)
+      .mockResolvedValueOnce(handedOverRow);
 
     const sigtermBefore = process.listeners('SIGTERM');
     const { executeWorkflow } = require('@archon/workflows/executor');

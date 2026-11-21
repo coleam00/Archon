@@ -8,6 +8,7 @@ import {
   isGateResolved,
   isRecognizedSuspendReason,
 } from './approval-context';
+import { pauseContextsAreHistory, readPauseCause } from './pause-cause';
 import { attentionOccurrence, gateOccurrence } from './pause-occurrence';
 import { isContainerRun, readSourceRelease } from './run-metadata';
 import {
@@ -161,7 +162,8 @@ export const runAttentionSchema = createRunAttentionSchema(z.date());
  * Terminal and gate attention, or advisory attention for overdue live tools.
  *
  * `runAttention` returns null for ordinary progress without an advisory, including
- * a resolved gate awaiting auto-resume and a `wait:` node whose timer or event has not fired.
+ * a resolved gate awaiting auto-resume, a `wait:` node whose timer or event has not fired,
+ * and a run an operator paused.
  * `usage_limit` is a run paused on a provider usage limit, or on a rate limit that
  * outlasted its retries: it needs no answer and tries again by itself at `resumeAt`, but an operator may still resume it sooner, cancel it or abandon it.
  *
@@ -269,7 +271,7 @@ function runningAttention(run: RunAttentionInput, now: number): RunAttention | n
       };
 }
 
-/** A paused run is released, waiting, or at a gate, checked in that order. */
+/** A paused run is released, paused by an operator, waiting, or at a gate, checked in that order. */
 function pausedAttention(run: RunAttentionInput): RunAttention | null {
   // A release is written only by the running -> paused transition and cleared on resume,
   // so while it is present it is why the run is paused; any gate or wait beside it is
@@ -284,6 +286,8 @@ function pausedAttention(run: RunAttentionInput): RunAttention | null {
         )
       : null;
   }
+  // An operator pause asks nothing; it ends on an explicit resume.
+  if (readPauseCause(run.metadata) === 'operator') return null;
 
   const wait = run.metadata?.wait;
   if (isWorkflowWaitContext(wait) && wait.kind === 'quota') {
@@ -444,7 +448,8 @@ export interface PauseContinuation {
  *
  * Excluded: a parent blocked on a child (it continues through the child), a container
  * write-back (only a CLI holding the container can apply it), any container run (the
- * host cannot resume one), and a gate or attention wait from before `pauseId` existed
+ * host cannot resume one), a run released for its source or paused by an operator (its
+ * gate or wait is history, `pauseContextsAreHistory`), and a gate or attention wait from before `pauseId` existed
  * (no identity to claim against). A gate beside a `wait:` is a leftover the wait
  * replaced; that also covers file-store rows written before a wait pause began removing
  * the previous gate's answer. Time and event waits continue on their deadline instead
@@ -453,7 +458,7 @@ export interface PauseContinuation {
 export function continuablePause(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): (PauseContinuation & { answered: boolean }) | undefined {
-  if (run.status !== 'paused' || isContainerRun(run) || readSourceRelease(run.metadata))
+  if (run.status !== 'paused' || isContainerRun(run) || pauseContextsAreHistory(run))
     return undefined;
   const wait = run.metadata.wait;
   if (wait !== undefined) {

@@ -6,7 +6,8 @@
  */
 import { expect, test } from 'bun:test';
 import type { ItemAsk } from '@archon/workflows/schemas/item-ask';
-import { openAskItems } from '@archon/workflows/attention-queue';
+import type { IWorkflowStore } from '@archon/workflows/store';
+import { openAskItems } from '@archon/workflows/queue-items-without-run';
 import { readItemOfRun } from '@archon/workflows/item-read';
 import { watchAttentionQueue, type AttentionStreamLine } from '@archon/workflows/attention-watch';
 import type { WorkflowStoreHarness } from '@archon/workflows/store-conformance';
@@ -16,9 +17,9 @@ import { attentionQueueSource, watchSource } from '../operations/attention-queue
 import type { RunActor } from '../operations/run-authorization';
 import type { IDatabase } from './adapters/types';
 
-type Harness = WorkflowStoreHarness & { db: IDatabase };
+export type Harness = WorkflowStoreHarness & { db: IDatabase };
 
-function ask(question: string): ItemAsk {
+export function ask(question: string): ItemAsk {
   return {
     question,
     context: 'The plan can go two ways.',
@@ -31,14 +32,14 @@ function ask(question: string): ItemAsk {
   };
 }
 
-const operator = { kind: 'operator', declared: 'maintainer' } satisfies RunActor;
+export const operator = { kind: 'operator', declared: 'maintainer' } satisfies RunActor;
 const notUsed = async (): Promise<never> => {
   throw new Error('not used for an ask');
 };
 
-function itemDeps(harness: Harness) {
+export function itemDeps(harness: Harness, store: IWorkflowStore = harness.store) {
   return {
-    queue: attentionQueueSource(harness.store, {
+    queue: attentionQueueSource(store, {
       findLatestByCodebaseAndWorkingPath: async () => null,
     }),
     operations: {
@@ -50,7 +51,7 @@ function itemDeps(harness: Harness) {
 }
 
 /** Complete a run of `workflow` on `item` that leaves `asks`. */
-async function completeWithAsks(
+export async function completeWithAsks(
   harness: Harness,
   asks: readonly ItemAsk[],
   options: { item?: string; workflow?: string } = {}
@@ -66,12 +67,12 @@ async function completeWithAsks(
   return run.id;
 }
 
-async function openRefs(harness: Harness): Promise<string[]> {
+export async function openRefs(harness: Harness): Promise<string[]> {
   const items = await openAskItems(harness.store);
   return items.flatMap(item => ('ref' in item ? [item.ref] : []));
 }
 
-async function settledEvents(harness: Harness, runId: string) {
+export async function settledEvents(harness: Harness, runId: string) {
   const events = await harness.store.listWorkflowEvents(runId);
   return events.filter(event => event.event_type === 'asks_settled').map(event => event.data);
 }
@@ -427,22 +428,21 @@ export function describeSqlItemAskConformance(makeHarness: () => Promise<Harness
       },
       { scope: { kind: 'all' }, pollIntervalMs: 20 }
     );
-    const resolved = async (count: number) => {
+    const linesOf = async (type: AttentionStreamLine['type'], count: number) => {
       for (let i = 0; i < 200; i++) {
-        const found = lines.filter(line => line.type === 'resolved');
+        const found = lines.filter(line => line.type === type);
         if (found.length >= count) return found;
         await Bun.sleep(10);
       }
-      throw new Error(`Expected ${String(count)} resolved line(s), saw ${JSON.stringify(lines)}`);
+      throw new Error(`Expected ${String(count)} ${type} line(s), saw ${JSON.stringify(lines)}`);
     };
     try {
       await completeWithAsks(harness, [ask('A?'), ask('B?')]);
-      for (let i = 0; i < 200 && lines.filter(line => line.type === 'attention').length < 2; i++)
-        await Bun.sleep(10);
+      await linesOf('attention', 2);
       const [a, b] = await openRefs(harness);
       // Nothing else happens: the answer's own event wakes the watch.
       await answerAttentionItem(deps, a ?? '', { choose: ['keep'] }, operator, 'cli');
-      expect((await resolved(1))[0]).toMatchObject({
+      expect((await linesOf('resolved', 1))[0]).toMatchObject({
         ref: a,
         reason: 'answered',
         answeredVia: 'cli',
@@ -451,14 +451,20 @@ export function describeSqlItemAskConformance(makeHarness: () => Promise<Harness
         workflow: 'plan',
       });
       await withdrawAttentionItem(deps, b ?? '', operator, 'cli');
-      expect((await resolved(2))[1]).toMatchObject({ ref: b, reason: 'withdrawn' });
+      expect((await linesOf('resolved', 2))[1]).toMatchObject({ ref: b, reason: 'withdrawn' });
 
       await completeWithAsks(harness, [ask('C?')]);
-      for (let i = 0; i < 200 && lines.filter(line => line.type === 'attention').length < 3; i++)
-        await Bun.sleep(10);
+      await linesOf('attention', 3);
       const next = await completeWithAsks(harness, [ask('D?')]);
-      expect((await resolved(3))[2]).toMatchObject({ reason: 'replaced', replacedByRunId: next });
-      // An ask's own events on its completed run repeat no terminal line.
+      expect((await linesOf('resolved', 3))[2]).toMatchObject({
+        reason: 'replaced',
+        replacedByRunId: next,
+      });
+      // An ask's own events on its completed run repeat no terminal line. D's terminal line
+      // can arrive a poll after C's `replaced` line: the item scan and the feed page are
+      // separate reads. Wait for it, then give a repeat a few polls to show up.
+      await linesOf('terminal', 3);
+      await Bun.sleep(60);
       expect(lines.filter(line => line.type === 'terminal')).toHaveLength(3);
     } finally {
       await watch.close();

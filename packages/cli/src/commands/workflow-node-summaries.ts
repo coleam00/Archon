@@ -7,7 +7,10 @@ import {
   readNodeRecordEvent,
   type ReadNodeRecordEvent,
 } from '@archon/workflows/node-record-reader';
-import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
+import type {
+  NodeExecutionMetadata,
+  NodeFailureKind,
+} from '@archon/workflows/schemas/node-execution';
 import {
   describeUnfinishedFanOut,
   fanOutSlotOutcomeLabel,
@@ -24,6 +27,8 @@ import { skipCauseSchema, runAttention } from '@archon/workflows/schemas/workflo
 import type { WorkflowRun, RunAttention, SkipCause } from '@archon/workflows/schemas/workflow-run';
 import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from '@archon/workflows/schemas/terminal-record';
 import { spellWorkflowCommand } from '@archon/workflows/deps';
+import { buildLoopRounds } from '@archon/workflows/terminal-record';
+import type { LoopRoundNode } from '@archon/workflows/schemas/loop-rounds';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { getLog } from './workflow-shared';
 
@@ -36,6 +41,8 @@ export interface NodeSummary {
   output?: string;
   outputTruncated?: boolean;
   error?: string;
+  /** Why the node failed, as recorded: the name a `retry.on_error` policy targets. */
+  failureKind?: NodeFailureKind;
   exitCode?: number;
   /** Set when the failure is "a live child run blocks this node"; abandoning it unblocks. */
   blockedOnChildRunId?: string;
@@ -94,8 +101,12 @@ function outputFields(
   return {
     output,
     outputTruncated: data.node_output_truncated ?? false,
-    outputPreview: output.slice(0, 200) + (output.length > 200 ? '...' : ''),
+    outputPreview: previewOutput(output),
   };
+}
+
+function previewOutput(output: string): string {
+  return output.slice(0, 200) + (output.length > 200 ? '...' : '');
 }
 
 /**
@@ -257,6 +268,7 @@ function failedNodeSummary(
     startedAt: existing?.startedAt,
     durationMs: nodeDurationMs(record, createdAt, startTime),
     error: data.error ?? 'Unknown error',
+    ...(data.failure_kind === undefined ? {} : { failureKind: data.failure_kind }),
     ...(isExecNodeRecord(record) ? execFailureFields(data) : {}),
     ...(data.blocked_on_child_run_id === undefined
       ? {}
@@ -395,6 +407,42 @@ export function printVerboseNodes(events: WorkflowEventRow[]): void {
   }
 }
 
+/**
+ * Render a run's loop rounds as an indented "Rounds:" block, one header per round and
+ * its body nodes in the Nodes block's style. Prints nothing when the run ran no loop.
+ */
+export function printLoopRounds(
+  run: Pick<WorkflowRun, 'id' | 'metadata'>,
+  events: WorkflowEventRow[]
+): void {
+  const rounds = buildLoopRounds(run, events);
+  if (rounds.length === 0) return;
+  console.log('  Rounds:');
+  for (const round of rounds) {
+    const path = round.loop_group_path
+      .map(frame => `${frame.groupId} round ${String(frame.iteration)}`)
+      .join(' › ');
+    console.log(`    ${path}`);
+    for (const node of round.nodes) {
+      const summary = roundNodeSummary(node);
+      console.log(`  ${formatNodeHeading(summary)}`);
+      for (const line of formatNodeDetails(summary)) console.log(`          ${line}`);
+    }
+  }
+}
+
+/** A round's node in the Nodes block's terms, so both blocks render one way. */
+function roundNodeSummary(node: LoopRoundNode): NodeSummary {
+  const summary: NodeSummary = { nodeId: node.node_id, state: node.state };
+  if (node.duration_ms !== undefined) summary.durationMs = node.duration_ms;
+  if (node.output !== undefined) summary.outputPreview = previewOutput(node.output);
+  if (node.error !== undefined) summary.error = node.error;
+  if (node.failure_kind !== undefined) summary.failureKind = node.failure_kind;
+  if (node.cause !== undefined) summary.cause = node.cause;
+  if (node.fan_out_outcome !== undefined) summary.fanOutOutcome = node.fan_out_outcome;
+  return summary;
+}
+
 function formatNodeHeading(node: NodeSummary): string {
   const iconMap: Record<NodeSummary['state'], string> = {
     completed: '✓',
@@ -417,7 +465,9 @@ function formatNodeDetails(node: NodeSummary): string[] {
     lines.push(`Output: ${node.outputPreview}`);
   }
   if (node.error !== undefined) {
-    lines.push(`Error:  ${node.error}`);
+    // The recorded kind is the name a `retry.on_error` policy targets, so it is shown.
+    const kind = node.failureKind === undefined ? '' : `(${node.failureKind}) `;
+    lines.push(`Error:  ${kind}${node.error}`);
   }
   lines.push(...formatFanOutOutcome(node.fanOutOutcome));
   if (node.sessionIds !== undefined) {

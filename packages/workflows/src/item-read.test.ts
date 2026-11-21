@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
+import { heldRunOf } from './attention-queue';
+import type { ItemMerge } from './schemas/item-merge';
+import type { ItemLanding } from './schemas/item-landing';
+import type { StoredItemAsk } from './schemas/item-ask';
 import type { ItemLink } from './schemas/item-link';
 import type { ItemRuling } from './schemas/item-ruling';
 import type { WorkflowEventRow } from './schemas/workflow-event';
@@ -77,6 +81,7 @@ const first = run('first', {
   completed_outcome: 'built',
   started_at: new Date('2026-11-01T09:00:00.000Z'),
   completed_at: new Date('2026-11-01T09:30:00.000Z'),
+  metadata: { total_cost_usd: 0.42, total_tokens_in: 1200, total_tokens_out: 300 },
 });
 // The second run was started by the end of the first; its receipt holds that cause.
 const SECOND_RECEIPT = '5a4f7f9e-2b0e-4a4c-9d36-1c1f1f6f3a10';
@@ -145,6 +150,19 @@ const rulings: ItemRuling[] = [
   },
 ];
 
+const merge: ItemMerge = {
+  change: 'https://github.com/acme/web/pull/12',
+  commit: null,
+  at: '2026-11-01T12:30:00.000Z',
+  recordedAt: '2026-11-01T12:31:00.000Z',
+  via: 'cli',
+  fromRun: null,
+};
+const landing: ItemLanding = {
+  branch: 'feat/order-1',
+  recordedAt: '2026-11-01T08:00:00.000Z',
+  fromRun: null,
+};
 const other: WorkflowItem = { id: 'other-row', projectKey: 'acme/web', key: 'issue-3' };
 const whole: WorkflowItem = { id: 'whole-row', projectKey: 'acme/web', key: 'order-1' };
 const linkAct = { at: '2026-11-01T09:00:00.000Z', via: 'cli', by: null, fromRun: null } as const;
@@ -176,9 +194,16 @@ const source: ItemReadSource = {
     getCodebase: async () => null,
     getItem: async id => (id === item.id ? item : null),
     listItemAsks: async () => [],
+    listOpenItemWaits: async () => [],
     listItemRulings: async id => (id === item.id ? rulings : []),
+    getItemMerge: async id => (id === item.id ? merge : null),
+    getItemLanding: async id => (id === item.id ? landing : null),
     listItemLinks: async id => (id === item.id ? links : []),
     getResourceStartRequest: async () => null,
+    listSkippedItemStarts: async () => [],
+    listQueuedItemStarts: async () => [],
+    getInstallHold: async () => null,
+    listHeldItemStarts: async () => [],
     getStartReceipt: async id =>
       id === SECOND_RECEIPT
         ? {
@@ -199,6 +224,67 @@ const source: ItemReadSource = {
 };
 
 describe('reading an item', () => {
+  test('a set with an unreadable ask row does not read as settled; a readable set does, with its run gone', async () => {
+    const act = { via: 'cli', by: null, fromRun: null } as const;
+    const stored = (
+      id: string,
+      runId: string,
+      at: string,
+      closed: 'answered' | 'withdrawn'
+    ): StoredItemAsk => ({
+      id,
+      itemId: item.id,
+      runId,
+      workflowName: 'deliver',
+      position: 0,
+      ask: {
+        question: `Ask ${id}?`,
+        context: 'Context.',
+        options: [
+          { id: 'keep', does: 'Keep it.', cost: 'None.' },
+          { id: 'drop', does: 'Drop it.', cost: 'None.' },
+        ],
+        recommendation: { option: 'keep', why: 'Cheaper.' },
+        artifacts: [],
+      },
+      openedAt: '2026-11-01T12:00:00.000Z',
+      closed:
+        closed === 'answered'
+          ? { as: 'answered', answer: { decision: 'keep', text: '' }, act: { ...act, at } }
+          : { as: 'withdrawn', act: { ...act, at } },
+    });
+    const unreadable = { type: 'degraded', reason: 'run_unreadable', runId: 'open-set' } as const;
+    const withAsks: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        // 'settled-set' has no run row: its run was deleted, and its asks stay on the item.
+        listItemAsks: async () => [
+          stored('a1', 'open-set', '2026-11-01T12:10:00.000Z', 'answered'),
+          unreadable,
+          stored('b1', 'settled-set', '2026-11-01T12:20:00.000Z', 'answered'),
+          stored('b2', 'settled-set', '2026-11-01T12:30:00.000Z', 'withdrawn'),
+        ],
+      },
+    };
+    const read = await readItem(withAsks, item.projectKey, item.key);
+    const asks = read?.answers.filter(
+      answer => answer.kind === 'ask' || answer.kind === 'asks_settled'
+    );
+    expect(asks?.map(answer => [answer.kind, answer.runId])).toEqual([
+      ['ask', 'open-set'],
+      ['ask', 'settled-set'],
+      ['ask', 'settled-set'],
+      ['asks_settled', 'settled-set'],
+    ]);
+    expect(asks?.at(-1)).toMatchObject({
+      at: '2026-11-01T12:30:00.000Z',
+      answered: 1,
+      withdrawn: 1,
+    });
+    expect(read?.degraded).toEqual([unreadable]);
+  });
+
   test('lists its own runs, and the questions and answers of their whole tree, oldest first', async () => {
     const read = await readItem(source, item.projectKey, item.key);
     expect(read?.item).toEqual(item);
@@ -212,6 +298,11 @@ describe('reading an item', () => {
         completedAt: '2026-11-01T09:30:00.000Z',
         cause: null,
         awaitingExecution: null,
+        spend: { usd: 0.42, inputTokens: 1200, outputTokens: 300 },
+        heldBehind: null,
+        operatorPause: null,
+        hasResult: false,
+        resultCommit: null,
       },
       {
         id: 'second',
@@ -220,13 +311,18 @@ describe('reading an item', () => {
         outcome: null,
         startedAt: '2026-11-01T11:00:00.000Z',
         completedAt: null,
-        cause: { kind: 'run_ended', runId: 'first' },
+        cause: { kind: 'run_ended', runId: 'first', sourceInstanceId: 'review-after-deliver' },
         awaitingExecution: null,
+        spend: { usd: null, inputTokens: null, outputTokens: null },
+        heldBehind: null,
+        operatorPause: null,
+        hasResult: false,
+        resultCommit: null,
       },
     ]);
     // The children's questions are the item's, under their own run ids, oldest first; the
     // unrelated one is not.
-    expect(read?.questions.map(question => [question.kind, question.run?.id])).toEqual([
+    expect(read?.questions.map(question => [question.kind, heldRunOf(question)?.id])).toEqual([
       ['attention', 'sibling'],
       ['attention', 'child'],
     ]);
@@ -275,7 +371,29 @@ describe('reading an item', () => {
         text: 'ship it',
       },
     ]);
+    expect(read?.merged).toEqual(merge);
+    expect(read?.landing).toEqual({ branch: 'feat/order-1', from: { kind: 'own' } });
     expect(read?.degraded).toEqual([]);
+  });
+
+  test('a landing that cannot be resolved is reported, and the rest of the item still reads', async () => {
+    const unreadable: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        getItemLanding: async id => ({
+          type: 'degraded',
+          reason: 'landing_unreadable',
+          itemId: id,
+        }),
+      },
+    };
+    const read = await readItem(unreadable, item.projectKey, item.key);
+    expect(read?.landing).toBeNull();
+    expect(read?.merged).toEqual(merge);
+    expect(read?.degraded).toEqual([
+      expect.objectContaining({ reason: 'landing_unresolved', message: expect.any(String) }),
+    ]);
   });
 
   test('an unknown key reads as null, an item with no runs as empty but for its rulings', async () => {
@@ -291,11 +409,59 @@ describe('reading an item', () => {
     expect(await readItem(empty, item.projectKey, item.key)).toEqual({
       item,
       runs: [],
+      queued: [],
+      skipped: [],
+      hold: null,
+      held: [],
+      waits: [],
       questions: [],
       answers: rulings,
+      merged: merge,
+      landing: { branch: 'feat/order-1', from: { kind: 'own' } },
       links: [],
       degraded: [],
     });
+  });
+
+  test('a start admitted while the item is read is listed once, as a run', async () => {
+    const admitted: WorkflowRun = { ...first, id: 'admitted', status: 'pending', metadata: {} };
+    // One start, either queued or admitted, never both. Admission lands right after the
+    // second store read (the first resolves the item), whichever read that is, so a read
+    // that takes the runs before the queue sees the start in neither.
+    let reads = 0;
+    let isAdmitted = false;
+    const read = async <T>(value: () => T): Promise<T> => {
+      const result = value();
+      if (++reads === 2) isAdmitted = true;
+      return result;
+    };
+    const racing: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        getItemRuns: () =>
+          read(() => ({ item, runs: isAdmitted ? [admitted] : [], descendantIds: [] })),
+        listQueuedItemStarts: () =>
+          read(() =>
+            isAdmitted
+              ? []
+              : [
+                  {
+                    requestId: 'admitted',
+                    workflow: 'deliver',
+                    resource: 'build',
+                    hostId: 'host',
+                    queuedAt: '2026-11-01T11:05:00.000Z',
+                    ahead: 0,
+                  },
+                ]
+          ),
+      },
+    };
+    const result = await readItem(racing, item.projectKey, item.key);
+    expect(isAdmitted).toBe(true);
+    expect(result?.runs.map(run => run.id)).toEqual(['admitted']);
+    expect(result?.queued).toEqual([]);
   });
 
   test('links read from this item: outgoing to what it points at, incoming from what points at it', async () => {
@@ -355,6 +521,11 @@ describe('reading an item', () => {
         listItemRulings: async () => [
           { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'lost-ruling' },
         ],
+        getItemMerge: async () => ({
+          type: 'degraded',
+          reason: 'merge_unreadable',
+          itemId: item.id,
+        }),
         listItemLinks: async () => [
           { type: 'degraded', reason: 'link_unreadable', linkId: 'lost-link' },
         ],
@@ -362,7 +533,7 @@ describe('reading an item', () => {
     };
     const read = await readItem(broken, item.projectKey, item.key);
     expect(read?.runs.map(row => row.id)).toEqual(['first', 'second']);
-    expect(read?.questions.map(question => question.run?.id)).toEqual(['child']);
+    expect(read?.questions.map(question => heldRunOf(question)?.id)).toEqual(['child']);
     expect(read?.answers.map(answer => answer.kind !== 'ruling' && answer.runId)).toEqual([
       'first',
       'first',
@@ -373,7 +544,77 @@ describe('reading an item', () => {
       { ...unreadable, runId: 'lost-root' },
       { ...unreadable, runId: 'lost-child' },
       { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'lost-ruling' },
+      { type: 'degraded', reason: 'merge_unreadable', itemId: item.id },
       { type: 'degraded', reason: 'link_unreadable', linkId: 'lost-link' },
     ]);
+    expect(read?.merged).toBeNull();
+  });
+
+  test('a start held behind the run of its workflow on the item names that run and its owner', async () => {
+    // `second` runs `deliver` on the item and its owner is gone. A hand start of `deliver`
+    // waits behind it; a `review` run on the same item is held by nothing.
+    const waiting = run('waiting', {
+      status: 'pending',
+      started_at: new Date('2026-11-01T12:00:00Z'),
+    });
+    const review = run('review', {
+      workflow_name: 'review',
+      status: 'pending',
+      started_at: new Date('2026-11-01T12:01:00Z'),
+    });
+    const queued = (requestId: string, workflow: string) => ({
+      requestId,
+      workflow,
+      resource: 'build',
+      hostId: 'host',
+      queuedAt: '2026-11-01T12:02:00.000Z',
+      ahead: 0,
+    });
+    const held: ItemReadSource = {
+      ...source,
+      ownerLost: { holders: async () => [second], observe: async () => 'unreachable' },
+      store: {
+        ...source.store,
+        getItemRuns: async () => ({
+          item,
+          runs: [first, second, waiting, review],
+          descendantIds: [],
+        }),
+        listQueuedItemStarts: async () => [
+          queued('queued-deliver', 'deliver'),
+          queued('queued-review', 'review'),
+        ],
+        listSkippedItemStarts: async () => [
+          {
+            requestId: 'skipped-deliver',
+            workflow: 'deliver',
+            resource: 'build',
+            blockerRunId: 'second',
+          },
+        ],
+      },
+    };
+    const read = await readItem(held, item.projectKey, item.key);
+    const behindSecond = {
+      runId: 'second',
+      workflow: 'deliver',
+      status: 'running',
+      owner: 'unreachable',
+    } as const;
+    expect(read?.runs.map(row => [row.id, row.heldBehind])).toEqual([
+      ['first', null],
+      ['second', null],
+      ['waiting', behindSecond],
+      ['review', null],
+    ]);
+    expect(read?.queued.map(start => [start.requestId, start.heldBehind])).toEqual([
+      ['queued-deliver', behindSecond],
+      ['queued-review', null],
+    ]);
+    expect(read?.skipped.map(start => [start.requestId, start.heldBehind])).toEqual([
+      ['skipped-deliver', behindSecond],
+    ]);
+    // The lost owner is reported on the starts held behind it, not as an open question.
+    expect(read?.questions).toEqual([]);
   });
 });

@@ -6,6 +6,7 @@ import {
   mockFindLatestEnvironment,
   mockLabelAttentionWait,
   mockGetItemRuns,
+  mockListItemsInWindow,
   mockListEventsForRuns,
   mockListCodebases,
   mockListItemRulings,
@@ -15,6 +16,7 @@ import {
   mockGetItem,
   mockListOpenItemAsks,
   mockAnswerItemAsk,
+  mockAnswerAttentionWait,
   mockWithdrawItemAsk,
   mockGetUserById,
   makeUser,
@@ -24,7 +26,9 @@ import {
   makeApp,
 } from '../test/api-workflow-runs-harness';
 import { describe, test, expect } from 'bun:test';
+import { heldRunOf } from '@archon/workflows/attention-queue';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import { itemWindowSchema } from '@archon/workflows/item-window';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import {
   ItemRulingNotFoundError,
@@ -111,7 +115,7 @@ describe('the attention queue over HTTP', () => {
       const list = await app.request('/api/runs/attention?label=ci%3Dother');
       expect(list.status).toBe(200);
       const body = runsNeedingAttentionResponseSchema.parse(await list.json());
-      expect(body.items.map(item => item.run?.id)).toEqual(['run-other']);
+      expect(body.items.map(item => heldRunOf(item)?.id)).toEqual(['run-other']);
       expect(body.runs.map(run => run.id)).toEqual(['run-other']);
       expect(body.items[0]).toMatchObject({
         kind: 'attention',
@@ -175,7 +179,9 @@ describe('the attention queue over HTTP', () => {
       const list = await app.request('/api/runs/attention');
       expect(list.status).toBe(200);
       const { items } = runsNeedingAttentionResponseSchema.parse(await list.json());
-      expect(items.map(item => ({ runId: item.run?.id, fanOut: item.run?.fanOut }))).toEqual(
+      expect(
+        items.map(item => ({ runId: heldRunOf(item)?.id, fanOut: heldRunOf(item)?.fanOut }))
+      ).toEqual(
         children.map((run, index) => ({
           runId: run.id,
           fanOut: { parentRunId: 'questions-parent', nodeId: 'answers', index },
@@ -183,7 +189,7 @@ describe('the attention queue over HTTP', () => {
       );
       for (const item of items) {
         expect(item.kind).toBe('attention');
-        const read = await app.request(`/api/runs/${item.run?.id}/attention`);
+        const read = await app.request(`/api/runs/${heldRunOf(item)?.id}/attention`);
         expect(read.status).toBe(200);
         expect(await read.json()).toEqual({ item });
       }
@@ -263,7 +269,7 @@ test('batch list and counts preserve degraded reports even when scope or labels 
       const body = runsNeedingAttentionResponseSchema.parse(await list.json());
       expect(body.degraded).toEqual(warnings);
       expect(body.runs.map(run => run.id)).toEqual(project ? [] : [run.id]);
-      expect(body.items.map(item => item.run?.id)).toEqual(project ? [] : [run.id]);
+      expect(body.items.map(item => heldRunOf(item)?.id)).toEqual(project ? [] : [run.id]);
       for (const countBy of ['', '&countBy=project']) {
         const response = await app.request(
           `/api/runs/attention?label=missing%3Dyes${project}${countBy}`
@@ -301,7 +307,8 @@ describe('reading an item over HTTP', () => {
   };
 
   test('reads a known item by project and key, with its question and answers', async () => {
-    mockGetItemRuns.mockImplementationOnce(async (projectKey, key) =>
+    // The read resolves the item twice: once for its queued starts, then for its runs.
+    mockGetItemRuns.mockImplementation(async (projectKey, key) =>
       projectKey === item.projectKey && key === item.key
         ? { item, runs: [asking], descendantIds: [] }
         : null
@@ -328,16 +335,23 @@ describe('reading an item over HTTP', () => {
           ])
         )
     );
-    const { app } = makeApp();
-    const response = await app.request(
-      `/api/items?project=${encodeURIComponent(item.projectKey)}&key=${encodeURIComponent(item.key)}`
-    );
-    expect(response.status).toBe(200);
-    const read = itemReadSchema.parse(await response.json());
-    expect(read.item).toEqual(item);
-    expect(read.runs.map(run => [run.id, run.status])).toEqual([['run-item', 'paused']]);
-    expect(read.questions.map(question => question.run?.id)).toEqual(['run-item']);
-    expect(read.answers).toMatchObject([{ kind: 'gate', runId: 'run-item', decision: 'approved' }]);
+    try {
+      const { app } = makeApp();
+      const response = await app.request(
+        `/api/items?project=${encodeURIComponent(item.projectKey)}&key=${encodeURIComponent(item.key)}`
+      );
+      expect(response.status).toBe(200);
+      const read = itemReadSchema.parse(await response.json());
+      expect(read.item).toEqual(item);
+      expect(read.runs.map(run => [run.id, run.status])).toEqual([['run-item', 'paused']]);
+      expect(read.questions.map(question => heldRunOf(question)?.id)).toEqual(['run-item']);
+      expect(read.answers).toMatchObject([
+        { kind: 'gate', runId: 'run-item', decision: 'approved' },
+      ]);
+      expect(read.queued).toEqual([]);
+    } finally {
+      mockGetItemRuns.mockImplementation(async () => null);
+    }
   });
 
   test('an unknown key is 404 and a missing parameter is 400', async () => {
@@ -347,6 +361,27 @@ describe('reading an item over HTTP', () => {
     );
     expect(unknown.status).toBe(404);
     expect((await app.request('/api/items?key=nope')).status).toBe(400);
+  });
+
+  test('a window read returns the page of items readItemWindow builds, and refuses a bad cursor', async () => {
+    mockListItemsInWindow.mockImplementationOnce(async () => [item]);
+    mockListAttentionQueueRows.mockImplementationOnce(async () => []);
+    mockGetItemRuns.mockImplementationOnce(async () => ({
+      item,
+      runs: [asking],
+      descendantIds: [],
+    }));
+    const { app } = makeApp();
+    const project = encodeURIComponent(item.projectKey);
+    const response = await app.request(`/api/items/window?project=${project}&since=7d`);
+    expect(response.status).toBe(200);
+    const page = itemWindowSchema.parse(await response.json());
+    expect(page.items.map(read => [read.item.key, read.runs.map(run => run.id)])).toEqual([
+      [item.key, ['run-item']],
+    ]);
+    expect(page.next).toBeNull();
+    expect((await app.request(`/api/items/window?project=${project}&after=nope`)).status).toBe(400);
+    expect((await app.request('/api/items/window?project=no-such')).status).toBe(400);
   });
 
   test('a database failure while resolving the project is an opaque 500, not a 400', async () => {
@@ -475,13 +510,17 @@ describe('rulings on an item over HTTP', () => {
 
   test('reading the item shows its rulings', async () => {
     const item = { id: 'item-row', projectKey: project, key: 'issues/8' };
-    mockGetItemRuns.mockImplementationOnce(async () => ({ item, runs: [], descendantIds: [] }));
+    mockGetItemRuns.mockImplementation(async () => ({ item, runs: [], descendantIds: [] }));
     mockListItemRulings.mockImplementationOnce(async () => [ruling()]);
     mockListAttentionQueueRows.mockImplementationOnce(async () => []);
-    const response = await makeApp().app.request(
-      `/api/items?project=${encodeURIComponent(project)}&key=issues%2F8`
-    );
-    expect(itemReadSchema.parse(await response.json()).answers).toEqual([ruling()]);
+    try {
+      const response = await makeApp().app.request(
+        `/api/items?project=${encodeURIComponent(project)}&key=issues%2F8`
+      );
+      expect(itemReadSchema.parse(await response.json()).answers).toEqual([ruling()]);
+    } finally {
+      mockGetItemRuns.mockImplementation(async () => null);
+    }
   });
 });
 
@@ -571,12 +610,13 @@ describe('asks answered and withdrawn by ref over HTTP', () => {
     }
   });
 
-  test('an answer is recorded through the API surface and says when it settled the set', async () => {
+  test('an answer that settles the set says so, and that nothing was started when no binding matched', async () => {
     withAsk(open);
     mockAnswerItemAsk.mockImplementationOnce(async () => ({
       kind: 'closed',
       ask: answered,
       settled: true,
+      startReceipts: [],
     }));
     const response = await post('/api/attention/answer', { ref: 'ask:a1', recommended: true });
     expect(response.status).toBe(200);
@@ -585,6 +625,7 @@ describe('asks answered and withdrawn by ref over HTTP', () => {
       action: 'answer',
       unchanged: false,
       settled: true,
+      nothingStarted: true,
     });
     expect(mockAnswerItemAsk.mock.calls.at(-1)?.[0]).toMatchObject({
       askId: 'a1',
@@ -624,6 +665,7 @@ describe('asks answered and withdrawn by ref over HTTP', () => {
         },
       },
       settled: false,
+      startReceipts: [],
     }));
     const withdrawn = await post('/api/attention/withdraw', { ref: 'ask:a1' });
     expect(withdrawn.status).toBe(200);
@@ -637,5 +679,64 @@ describe('asks answered and withdrawn by ref over HTTP', () => {
     withAsk(null);
     expect((await post('/api/attention/withdraw', { ref: 'ask:missing' })).status).toBe(404);
     expect((await post('/api/attention/withdraw', { ref: `${left.id}:pause-1` })).status).toBe(400);
+  });
+});
+
+describe("answers to a paused run's attention wait by ref over HTTP", () => {
+  const pausedAt = (fields: Partial<WorkflowAttentionWaitContext>): WorkflowRun => ({
+    ...MOCK_RUNNING_RUN,
+    status: 'paused',
+    metadata: {
+      wait: {
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: '2026-11-16T10:00:00.000Z',
+        message: 'Merge it?',
+        pauseId: 'pause-1',
+        form: 'select',
+        options: [{ id: 'merge' }],
+        ...fields,
+      },
+    },
+  });
+  const answer = async (run: WorkflowRun, body: object) => {
+    mockGetWorkflowRun.mockImplementation(async id => (id === run.id ? run : null));
+    const response = await makeApp().app.request('/api/attention/answer', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ref: `${run.id}:pause-1`, ...body }),
+    });
+    return { status: response.status, body: await response.text() };
+  };
+
+  test('an answer the wait does not declare is 400 and is not recorded', async () => {
+    const calls = mockAnswerAttentionWait.mock.calls.length;
+    try {
+      const undeclared = await answer(pausedAt({}), { choose: ['nope'] });
+      expect(undeclared.status).toBe(400);
+      expect(undeclared.body).toContain('nope');
+      expect((await answer(pausedAt({ other: true }), { choose: ['other'] })).status).toBe(400);
+      expect(
+        (await answer(pausedAt({ form: 'message', options: [] }), { choose: ['merge'] })).status
+      ).toBe(400);
+      expect((await answer(pausedAt({}), { recommended: true })).status).toBe(400);
+      expect(mockAnswerAttentionWait.mock.calls.length).toBe(calls);
+    } finally {
+      mockGetWorkflowRun.mockReset();
+    }
+  });
+
+  test("a store failure while recording a valid answer is the server's 500", async () => {
+    mockAnswerAttentionWait.mockImplementationOnce(async () => {
+      throw new Error('db down');
+    });
+    try {
+      const failed = await answer(pausedAt({}), { choose: ['merge'] });
+      expect(failed.status).toBe(500);
+      expect(failed.body).not.toContain('db down');
+    } finally {
+      mockGetWorkflowRun.mockReset();
+    }
   });
 });

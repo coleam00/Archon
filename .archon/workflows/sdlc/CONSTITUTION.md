@@ -31,9 +31,9 @@ An implementer checks only what it changed; CI is the full validation. The merge
 
 ## Stages hand off through queues
 
-The implement-review-fix loop is one composed run; queues sit between stages, never inside it. A run claims a work item with a conditional write. Labels are declared once, in [`.shared/labels.ts`](.shared/labels.ts).
+The implement-review-fix loop is one composed run; queues sit between stages, never inside it. Intake, the split queue and the merge queue claim a work item with a conditional write; a build run is on its issue's item, where the engine admits one at a time. Labels are declared once, in [`.shared/labels.ts`](.shared/labels.ts).
 
-- Today: issue events start intake, which records triage on the work item and mirrors it as labels. The build queue claims triaged items; the merge queue claims items whose work-item build record is ready.
+- Today: issue events start intake, which records triage on the work item and mirrors it as labels. A pick starts one build run per triaged item; the merge queue claims items whose work-item build record is ready.
 - Direction: a ready pull request gets a label, and that label starts the merge queue.
 
 ## Stops the pack can't answer pause

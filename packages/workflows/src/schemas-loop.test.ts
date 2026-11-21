@@ -17,6 +17,7 @@ describe('loop iteration retry policy', () => {
   test.each([
     { max_attempts: 1, delay_ms: 0 },
     { max_attempts: 5, delay_ms: 60000, on_error: 'transient' },
+    { max_attempts: 1, delay_ms: 0, on_error: 'schema_unmet' },
     { max_attempts: 2, delay_ms: 17 },
     { max_attempts: 3 },
   ] as const)('preserves valid retry %j in authored and typed loops', retry => {

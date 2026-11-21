@@ -4,7 +4,7 @@ import type { DagResumeSnapshot } from '../store';
 import type { RunUsageFigures } from './usage';
 
 const tokenAxes = tokenUsageSchema
-  .omit({ cachePartial: true, total: true, cost: true })
+  .omit({ cachePartial: true, total: true, cost: true, calls: true, callsPartial: true })
   .keyof().options;
 
 export function reportedChildUsage(usage: RunUsageFigures & { childRunId: string }) {

@@ -54,6 +54,8 @@ const writeStdout = mock(async (value: string) => {
   output.push(JSON.parse(value));
 });
 mock.module('../utils/stdout', () => ({ writeStdout }));
+let fingerprint: string | undefined = 'engine';
+mock.module('../utils/engine-fingerprint', () => ({ engineFingerprint: () => fingerprint }));
 mock.module('../triggers/native-schedule', () => ({
   installMacosNativeSchedule: install,
   removeMacosNativeSchedule: remove,
@@ -63,6 +65,7 @@ import { workflowContinuationCommand, workflowWakeScheduleCommand } from './work
 
 beforeEach(() => {
   output.length = 0;
+  fingerprint = 'engine';
   scan.mockReset();
   scan.mockResolvedValue([]);
   resume.mockReset();
@@ -276,6 +279,41 @@ test('watch continues after a failed pass and returns failure on shutdown', asyn
       { ok: false, action: 'wake', error: 'database unavailable' },
       { ok: true, action: 'wake', accepted: 0, outcomes: [] },
     ]);
+  } finally {
+    timer.mockRestore();
+  }
+});
+
+test('watch exits 75 before its next pass when the installed engine changed', async () => {
+  const originalTimeout = globalThis.setTimeout;
+  const timers: {
+    setTimeout(callback: () => void, delay?: number): ReturnType<typeof setTimeout>;
+  } = globalThis;
+  const timer = spyOn(timers, 'setTimeout').mockImplementation((callback: () => void) =>
+    originalTimeout(callback, 0)
+  );
+  fingerprint = 'a';
+  scan.mockImplementationOnce(async () => {
+    fingerprint = 'b';
+    return [];
+  });
+  // Ends the loop if the check misses the change, so the failure is an assertion, not a hang.
+  scan.mockImplementationOnce(async () => {
+    process.emit('SIGTERM');
+    return [];
+  });
+  try {
+    expect(await workflowContinuationCommand(host, 'wake', [], { json: true, watch: true })).toBe(
+      75
+    );
+    expect(scan).toHaveBeenCalledTimes(1);
+    expect(output.at(-1)).toEqual({
+      ok: true,
+      action: 'wake',
+      restart: 'engine changed',
+      loaded: 'a',
+      current: 'b',
+    });
   } finally {
     timer.mockRestore();
   }

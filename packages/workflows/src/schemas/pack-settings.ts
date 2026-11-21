@@ -63,10 +63,30 @@ export type PackSettingSpec =
  * stored, because a run's capture moves after discovery reads it.
  * `settings` is the pack's declaration, absent when the pack declares none.
  * `bindings` is the trigger bindings the pack recommends, by id; no run reads them.
+ * `forge` is what the pack's workflows need from the forge; a fresh run of any of them is
+ * refused at start when the run's repository cannot serve it.
  */
 export interface WorkflowPack {
   readonly key: string;
   readonly source: WorkflowSource;
   readonly settings?: Readonly<Record<string, PackSettingSpec>>;
   readonly bindings?: Readonly<Record<string, PackBinding>>;
+  readonly forge?: PackForgeNeeds;
 }
+
+/**
+ * The authored `forge:` block: the capability tokens the pack calls, each an operation
+ * name or a finer token a plugin advertises, such as `resolve:subject`. `repository`
+ * names the two workflow inputs that carry the repository a run acts on; a run that sets
+ * both is checked against that repository instead of its checkout's remotes.
+ */
+export const packForgeNeedsSchema = z
+  .object({
+    operations: z.array(z.string().min(1)).min(1),
+    repository: z
+      .object({ host: z.string().min(1), path: z.string().min(1) })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type PackForgeNeeds = z.infer<typeof packForgeNeedsSchema>;

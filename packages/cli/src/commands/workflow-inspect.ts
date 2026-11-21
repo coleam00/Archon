@@ -19,6 +19,7 @@ import {
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
+import { describeOperatorPause, operatorPause } from '@archon/workflows/schemas/operator-pause';
 import { terminalReason, type getTerminalRecord } from '@archon/workflows/terminal-record';
 import type {
   WorkflowRun,
@@ -33,10 +34,12 @@ import { writeJsonLine, writeStderr } from '../utils/stdout';
 import { formatAge, getLog } from './workflow-shared';
 import type { LatestWorkflowNotice } from '@archon/workflows/workflow-notice';
 import { formatRunUsage } from './workflow-usage';
+import { stallMessageLine } from './workflow-run-output';
 import { printRequestedBy, type RequestedBy } from '../utils/requested-by';
 import {
   formatFanOutOutcome,
   fetchVerboseEvents,
+  printLoopRounds,
   printVerboseNodes,
 } from './workflow-node-summaries';
 
@@ -51,10 +54,9 @@ export async function printStatusRun(
   console.log(`  Name:   ${run.workflow_name}`);
   console.log(`  Path:   ${run.working_path ?? '(none)'}`);
   console.log(`  Status: ${run.status}`);
-  const attention = runAttention(run);
-  if (attention?.kind === 'stalled_tool_calls') console.log(formatToolAttention(attention));
-  if (attention?.kind === 'usage_limit')
-    console.log(usageLimitWaitLine(attention.nodeId, attention.resumeAt));
+  const pauseLine = operatorPauseLine(run);
+  if (pauseLine !== undefined) console.log(pauseLine);
+  await printRunAttention(host, run);
   const outcome = displayedRunOutcome(run);
   if (outcome !== null) console.log(`  Authored outcome: ${outcome}`);
   console.log(`  Age:    ${age}`);
@@ -82,6 +84,16 @@ export async function printStatusRun(
   console.log('');
 }
 
+/** The operator pause a run is in or has requested, with how to resume it once paused. */
+export function operatorPauseLine(
+  run: Pick<WorkflowRun, 'id' | 'status' | 'metadata'>
+): string | undefined {
+  const pause = operatorPause(run);
+  if (pause === null) return undefined;
+  const resume = pause.state === 'paused' ? `; resume: archon workflow resume ${run.id}` : '';
+  return `  Pause:  ${describeOperatorPause(pause)}${resume}`;
+}
+
 export function usageLimitWaitLine(nodeId: string, resumeAt: string): string {
   return `  Wait:   provider usage or rate limit at '${nodeId}' — tries again at ${resumeAt}`;
 }
@@ -101,35 +113,64 @@ export function formatToolAttention(
   );
 }
 
+/** What a running run needs: stalled tool calls with the engine's messages, or a usage-limit wait. */
+async function printRunAttention(host: WorkflowHost, run: DashboardWorkflowRun): Promise<void> {
+  const attention = runAttention(run);
+  if (attention?.kind === 'stalled_tool_calls') {
+    console.log(formatToolAttention(attention));
+    const stalledSteps = new Set(attention.calls.map(call => call.nodeId));
+    for (const line of await stallMessageStatusLines(host, run.id, stalledSteps)) console.log(line);
+  }
+  if (attention?.kind === 'usage_limit')
+    console.log(usageLimitWaitLine(attention.nodeId, attention.resumeAt));
+}
+
+/** The engine's latest message to each step that has stalled calls now; other steps' history is left out. */
+async function stallMessageStatusLines(
+  host: WorkflowHost,
+  runId: string,
+  stalledSteps: ReadonlySet<string>
+): Promise<string[]> {
+  let rows: WorkflowEventRow[];
+  try {
+    rows = (await host.deps.store.listEventsForRuns([runId], ['stall_message'])).get(runId) ?? [];
+  } catch (error) {
+    getLog().warn({ err: error as Error, runId }, 'cli.stall_messages_fetch_failed');
+    return ['  Engine: messages to stalled sessions unavailable — see logs'];
+  }
+  const latest = new Map<string, WorkflowEventRow>();
+  for (const row of rows)
+    if (row.step_name !== null && stalledSteps.has(row.step_name)) latest.set(row.step_name, row);
+  return [...latest.values()].flatMap(row => {
+    const line = stallMessageLine(row);
+    return line === undefined ? [] : [`  Engine: ${line} (${formatAge(row.created_at)} ago)`];
+  });
+}
+
 export async function writeWaitOutcome(
   runId: string,
   resolvedId: string,
   result: RunWaitResult,
   json: boolean | undefined
 ): Promise<void> {
-  if (result.kind === 'not_found') {
-    if (json) {
-      await writeJsonLine({ ok: false, runId, action: 'wait', error: 'not_found' });
-    } else {
-      console.log(formatWaitOutcome(resolvedId, result));
-    }
-    return;
-  }
+  if (json) await writeJsonLine(waitOutcomePayload(runId, resolvedId, result));
+  else console.log(formatWaitOutcome(resolvedId, result));
+}
 
-  if (json) {
-    await writeJsonLine({
-      ok: true,
-      action: 'wait',
-      runId: resolvedId,
-      result: result.kind,
-      ...(result.kind === 'attention' ? { attention: result.attention } : {}),
-      ...(result.kind === 'deadline' || result.kind === 'owner_lost'
-        ? { observedStatus: result.observedStatus }
-        : {}),
-    });
-  } else {
-    console.log(formatWaitOutcome(resolvedId, result));
-  }
+/** The `--json` value `workflow wait` prints for one run: `runId` is the id as the caller gave it. */
+export function waitOutcomePayload(runId: string, resolvedId: string, result: RunWaitResult) {
+  if (result.kind === 'not_found')
+    return { ok: false, runId, action: 'wait', error: 'not_found' } as const;
+  return {
+    ok: true,
+    action: 'wait',
+    runId: resolvedId,
+    result: result.kind,
+    ...(result.kind === 'attention' ? { attention: result.attention } : {}),
+    ...(result.kind === 'deadline' || result.kind === 'owner_lost'
+      ? { observedStatus: result.observedStatus }
+      : {}),
+  } as const;
 }
 
 /**
@@ -488,6 +529,7 @@ export function printRunDetail(
       for (const w of parseWarnings) console.log(`    - ${w}`);
     }
     printVerboseNodes(events);
+    printLoopRounds(run, events);
   }
 }
 
@@ -498,6 +540,12 @@ function printReason(terminalRecord: TerminalRecord | null): void {
 
 /** The gate, choices, wait and scheduled-resume lines of a paused or failed run. */
 function printRunPauseLines(run: WorkflowRun): void {
+  const pauseLine = operatorPauseLine(run);
+  if (pauseLine !== undefined) {
+    // Any gate or wait beside an operator pause is history.
+    console.log(pauseLine);
+    return;
+  }
   printApprovalGateLines(run);
   printWaitLines(run);
   const scheduledResume = run.metadata.scheduled_resume;

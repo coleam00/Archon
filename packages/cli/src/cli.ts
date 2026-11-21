@@ -52,8 +52,9 @@ import { installPipeSafeConsole } from './utils/safe-console';
 import { withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
 import { escapeRunJobIfRequested } from './utils/run-job-escape';
-import { rejectConfigOutsideRun } from './dispatch-guards';
+import { rejectRunFlagsOutsideRun } from './dispatch-guards';
 import { resolveCliExitCode } from './utils/workflow-exit-code';
+import { trackerExit } from './utils/tracker-exit';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 installPipeSafeConsole();
 
@@ -236,10 +237,13 @@ async function runParsedCommand({ values, positionals }: ParsedCliArgs): Promise
   const command = positionals[0];
   const subcommand = positionals[1];
   const json = values.json as boolean | undefined;
-  if (values['base-branch'] !== undefined && (command !== 'workflow' || subcommand !== 'run')) {
+  const registers =
+    (command === 'workflow' && subcommand === 'run') ||
+    (command === 'project' && subcommand === 'add');
+  if (values['base-branch'] !== undefined && !registers) {
     await fail(
       values.json === true,
-      '--base-branch is only supported by workflow run for initial project registration.'
+      '--base-branch is only supported by workflow run and project add for initial project registration.'
     );
     await shutdownTelemetry();
     return 1;
@@ -285,6 +289,8 @@ async function runParsedCommand({ values, positionals }: ParsedCliArgs): Promise
     return await reportCommandError(error as Error, json);
   } finally {
     if (showUpdateNotice) printUpdateNotice();
+    // Before the database closes: a run this process changed may owe its item's tracker.
+    await trackerExit.syncIfOwed(forgeTrustedEnv);
     // Flush queued telemetry events before the CLI process exits.
     // Short-lived CLI commands lose buffered events if shutdown() is skipped.
     await shutdownTelemetry();
@@ -351,13 +357,8 @@ async function decodeDetachedRunConfig({
 /** Routes the commands that run before the project gate, then gates and routes the rest. */
 async function dispatchCommand(base: CliRouteContext): Promise<number> {
   const { command, subcommand, values } = base;
-  const configOutsideRun = rejectConfigOutsideRun(
-    command,
-    subcommand,
-    values.config,
-    values['config-from-run']
-  );
-  if (configOutsideRun) return await fail(base.json, configOutsideRun);
+  const flagOutsideRun = rejectRunFlagsOutsideRun(command, subcommand, values);
+  if (flagOutsideRun) return await fail(base.json, flagOutsideRun);
   await assertFileStoreIfNeeded(base);
   const ctx = { ...base, detachedRunConfig: await decodeDetachedRunConfig(base) };
 
@@ -391,7 +392,9 @@ async function dispatchCommand(base: CliRouteContext): Promise<number> {
 const NO_GIT_COMMANDS = [
   'state',
   'metrics',
+  'tracker',
   'trigger',
+  'hold',
   'version',
   'help',
   'setup',
@@ -483,8 +486,12 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
       return await routes.runState(ctx);
     case 'metrics':
       return await routes.runMetrics(ctx);
+    case 'tracker':
+      return await routes.runTracker(ctx);
     case 'trigger':
       return await routes.runTrigger(ctx);
+    case 'hold':
+      return await routes.runHold(ctx);
     case 'version':
       return await routes.runVersion();
     case 'help':
@@ -515,6 +522,8 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
           return await workflowRoutes.runWorkflowRuns(route);
         case 'resume':
           return await workflowRoutes.runWorkflowResume(route);
+        case 'pause':
+          return await workflowRoutes.runWorkflowPause(route);
         case 'abandon':
           return await workflowRoutes.runWorkflowAbandon(route);
         case 'end-turn':
@@ -541,6 +550,12 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
           return await workflowRoutes.runWorkflowNotice(route);
         case 'rule':
           return await workflowRoutes.runWorkflowRule(route);
+        case 'items':
+          return await workflowRoutes.runWorkflowItems(route);
+        case 'merged':
+          return await workflowRoutes.runWorkflowMerged(route);
+        case 'landing':
+          return await workflowRoutes.runWorkflowLanding(route);
         case 'link':
           return await workflowRoutes.runWorkflowLink(route);
         default:

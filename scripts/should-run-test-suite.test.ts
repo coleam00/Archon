@@ -273,6 +273,17 @@ describe('test-suite change decision', () => {
     expect(result.stderr).toContain('GITHUB_TOKEN');
   });
 
+  test('only a push to main runs the whole Windows suite; a push to dev runs the Windows set', () => {
+    const decide = (ref: string, mode: string): string =>
+      runDecision(trackTempRoot, 'push', { ref, before: 'HEAD~1', after: 'HEAD' }, process.cwd(), [
+        mode,
+      ]).stdout;
+
+    expect(decide('refs/heads/dev', '--windows-full-suite')).toBe('false');
+    expect(decide('refs/heads/dev', '--full-matrix')).toBe('true');
+    expect(decide('refs/heads/main', '--windows-full-suite')).toBe('true');
+  });
+
   test('a bad event stays fatal, so the step cannot publish an empty decision', () => {
     const result = runDecision(trackTempRoot, 'not-a-github-event', {});
 
@@ -621,6 +632,8 @@ describe('pack test selection', () => {
     [undefined, { 'pack-tests': 'false' }, 'true'],
     ['--workspace-tests', { 'pack-tests': 'false' }, 'true'],
     ['--full-matrix', {}, 'true'],
+    ['--windows-full-suite', {}, 'false'],
+    ['--windows-full-suite', { 'windows-full-suite': 'true' }, 'true'],
     ['--docker-build', {}, 'true'],
     ['--serve-binary', {}, 'true'],
   ])('a dispatch with %s and inputs %j decides %s', (mode, inputs, expected) => {
@@ -642,11 +655,11 @@ describe('pack test selection', () => {
     expect(dispatchDecision('pack-tests', { inputs: { 'pack-tests': true } })).toBe(true);
   });
 
-  test('every pack mode has the boolean dispatch input of its name in test.yml', () => {
+  test('every opt-in mode has the boolean dispatch input of its name in test.yml', () => {
     const workflow = Bun.YAML.parse(
       readFileSync(resolve(REPO_ROOT, '.github/workflows/test.yml'), 'utf8')
     ) as { on: { workflow_dispatch: { inputs: Record<string, unknown> } } };
-    for (const mode of ['pack-tests', 'pack-fixtures']) {
+    for (const mode of ['pack-tests', 'pack-fixtures', 'windows-full-suite']) {
       expect(workflow.on.workflow_dispatch.inputs[mode]).toMatchObject({
         type: 'boolean',
         default: false,
@@ -658,7 +671,12 @@ describe('pack test selection', () => {
 describe('what a pull request leaves to the push', () => {
   const track = trackTempRoots();
   const runner = packRunnerInputs(resolve(import.meta.dir, '..'));
-  const MODES = ['--full-matrix', '--docker-build', '--serve-binary'] as const;
+  const MODES = [
+    '--full-matrix',
+    '--windows-full-suite',
+    '--docker-build',
+    '--serve-binary',
+  ] as const;
 
   test.each([
     '.github/workflows/test.yml',
@@ -733,18 +751,21 @@ describe('what a pull request leaves to the push', () => {
 
     expect(decide('packages/core/db.ts')).toEqual({
       '--full-matrix': 'false',
+      '--windows-full-suite': 'false',
       '--docker-build': 'false',
       '--serve-binary': 'false',
       '--pack-fixtures': 'false',
     });
     expect(decide('Dockerfile')).toEqual({
       '--full-matrix': 'false',
+      '--windows-full-suite': 'false',
       '--docker-build': 'true',
       '--serve-binary': 'false',
       '--pack-fixtures': 'false',
     });
     expect(decide('.github/workflows/test.yml')).toEqual({
       '--full-matrix': 'true',
+      '--windows-full-suite': 'true',
       '--docker-build': 'true',
       '--serve-binary': 'true',
       '--pack-fixtures': 'true',

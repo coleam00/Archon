@@ -43,9 +43,14 @@ reporting declarations; absence means unknown, not unsupported.
 Background work: `reported` waits for runtime-reported task endings; `none` means verified absent;
 `unobserved` means background work may exist without an observable lifecycle. A process
 backgrounded inside a foreground shell command (`cmd &`) is invisible to every provider.
-Codex observes subagents through `subAgentActivity` notifications and unified-exec processes
+Codex observes subagents through `subAgentActivity` notifications (v2 multi-agent tools) or,
+for its v1 `spawn_agent`, the turns of the spawned thread, and unified-exec processes
 through `commandExecution` items with source `unifiedExecStartup`. Idle thread status is
-not evidence that this work has ended. See [Streaming event mapping](/contributing/adding-a-community-provider/#streaming-event-mapping)
+not evidence that this work has ended. A v1 `send_input` that starts a turn on an idle
+subagent holds nothing: Codex reports no delivered-input signal, so that turn counts only
+if it starts before observation ends, which is when the parent turn has completed and no
+other subagent work holds the node open.
+See [Streaming event mapping](/contributing/adding-a-community-provider/#streaming-event-mapping)
 for the background-start admission and observation cutoff rules.
 
 ## Providers
@@ -63,6 +68,7 @@ for the background-start admission and observation cutoff rules.
 | Background work observation | reported | reported | unobserved | none | unobserved |
 | Session resume | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Immutable session fork (`context.resume`, cross-run `persist_session` and `context: same`) | ✅ | ✅ | ❌ | ✅ | ❌ |
+| Engine message to a stalled session | ✅ | ✅ | ❌ | ❌ | ❌ |
 | MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ❌ | ✅ |
 | Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Skills (`skills:`) | ✅ | ❌ | ❌ | ✅ | ✅ |
@@ -70,6 +76,7 @@ for the background-start admission and observation cutoff rules.
 | Inline sub-agents (`agents:`) | ✅ | ❌ | ✅¹ | ❌ | ✅ |
 | Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort |
+| Structured-output correction (Archon asks again on a schema miss) | — | same session | — | fresh session | fresh session |
 | Env injection (`env:`) | ✅ | ✅ | ❌ | ✅ | ✅ |
 | Spend limit (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Cost reporting (`costUsd`) | ✅ | ❌ | ✅ | ✅ | ❌ |
@@ -96,8 +103,12 @@ for the background-start admission and observation cutoff rules.
 - **✅¹ (superscript)** — supported, but with semantics that differ from the headline
   meaning of the axis — see [Caveats](#caveats).
 - **Structured output** — `enforced` (the SDK/backend grammar-constrains decoding),
-  `best-effort` (the model is asked for the schema, then validated + re-asked up to 3×),
-  or ❌ (unsupported). See [AI Assistants → Structured output guarantees](/getting-started/ai-assistants/#structured-output-guarantees).
+  `best-effort` (the model is asked for the schema, then validated), or ❌ (unsupported).
+- **Structured-output correction** — whether Archon asks again, up to 3×, when an answer
+  is missing or fails its schema: `same session` continues the thread the answer ended in,
+  so the agent keeps its work; `fresh session` re-runs the prompt plus the errors in a
+  throwaway session; — means Archon does not ask again (Claude retries inside its SDK).
+  See [AI Assistants → Structured output guarantees](/getting-started/ai-assistants/#structured-output-guarantees).
 - **In-process native tools** — the provider can register Archon `NativeTool`s for a
   turn. It gates auto-injection of Archon's `invoke_workflow`, `register_project` and
   `attention` tools into every chat, and of `manage_run` into project-scoped chat. Providers without it

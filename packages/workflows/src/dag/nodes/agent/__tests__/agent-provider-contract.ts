@@ -262,6 +262,7 @@ export function registerCostTests() {
       expect(completeCalls.length).toBe(1);
       expect(completeCalls[0][2]).toEqual({
         node_counts: { completed: 1, failed: 0, skipped: 0, total: 1 },
+        result_commit: expect.anything(),
       });
     });
 

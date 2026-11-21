@@ -135,7 +135,11 @@ export function AttentionAnswerForm({
             {fields.form === 'message' || fields.form === 'multi_select' ? (
               <button
                 type="button"
-                disabled={busy || (fields.form === 'multi_select' && chosen.length === 0)}
+                disabled={
+                  busy ||
+                  (fields.form === 'multi_select' && chosen.length === 0) ||
+                  (fields.form === 'message' && text.trim() === '')
+                }
                 onClick={() => void answer(chosen)}
                 className={button}
               >

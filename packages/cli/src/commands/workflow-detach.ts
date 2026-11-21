@@ -18,7 +18,7 @@ import { sealWorkflowRunConfig } from '@archon/core/config';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import type { PreparedRunAiConfiguration } from '@archon/workflows/run-preflight';
-import { refuseBrokenRunEndedBindings } from '@archon/workflows/run-ended-refusal';
+import { refusePendingStart } from '@archon/workflows/start-refusal';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import {
@@ -119,12 +119,19 @@ async function waitForDetachedStartup(
   );
 }
 
+/** Flags the detached child never receives, each with its value (separate or `=`-joined). */
+const DROPPED_VALUE_FLAGS = ['--base-branch', '--input', '--input-file'];
+
 /**
  * Build the argv for the detached re-invoke. Pure (no spawn / no process reads)
  * so both the dev (bun + entry script) and compiled-binary (execPath only)
  * branches are unit-testable — the binary branch is otherwise unreachable in
  * tests because `BUNDLED_IS_BINARY` is a module-level const. Drops `--detach`
  * and `--json` and appends `--cwd <cwd>` (last-wins) plus any extra flags.
+ *
+ * Drops `--input` and `--input-file` with their values: the child gates on the inputs
+ * this process recorded on the pre-created row, so the files are read once, before the
+ * run starts, and a value never travels on the child's command line (#5678).
  */
 export function buildDetachedRunCmd(
   isBinary: boolean,
@@ -152,11 +159,16 @@ export function buildDetachedRunCmd(
     const arg = supplied[index];
     if (arg === '--')
       return [...baseCmd, ...userArgs, '--cwd', cwd, ...extraArgs, ...supplied.slice(index)];
-    if (arg === '--base-branch') {
+    if (DROPPED_VALUE_FLAGS.includes(arg)) {
       index++;
       continue;
     }
-    if (arg.startsWith('--base-branch=') || arg === '--detach' || arg === '--json') continue;
+    if (
+      DROPPED_VALUE_FLAGS.some(flag => arg.startsWith(`${flag}=`)) ||
+      arg === '--detach' ||
+      arg === '--json'
+    )
+      continue;
     userArgs.push(arg);
   }
   // --cwd is appended last (parseArgs last-wins) so the child resolves the same
@@ -575,9 +587,11 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
       `Failed to create the workflow run: ${(withItemHint(error) as Error).message}\nNothing was started.`
     );
   }
-  // Read on the created row, which carries the item the store resolved; the child's
-  // admission checks again before its claim (#5783).
-  const refusal = await refuseBrokenRunEndedBindings(host.deps, created);
+  // Every refusal admission would make on this row (a broken run-ended binding, asks
+  // with no item) is made here, before the fork, so the caller hears it instead of an
+  // acknowledgement. Read on the created row, which carries the item the store resolved
+  // from --item; the child's admission checks again before its claim (#5783).
+  const refusal = await refusePendingStart(host.deps, workflow, created);
   if (refusal) throw new Error(`${refusal}\nNothing was started.`);
   return { detachedRunId: created.id, launchedRunId: created.id, launchToken };
 }

@@ -1,3 +1,4 @@
+// @archon-test-windows
 /** Branch names and worktree paths the provider derives from a request and repo config. */
 import { TEST_ARCHON_HOME } from './worktree-test-fixture';
 import { describe, test, expect } from 'bun:test';

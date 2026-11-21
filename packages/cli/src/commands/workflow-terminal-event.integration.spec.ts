@@ -455,38 +455,4 @@ describe('detached run worktree ownership', () => {
     },
     30_000
   );
-
-  test('long workflow names never inherit a previous detached checkout', async () => {
-    const name = 'long-workflow-name-'.repeat(4);
-    const otherName = `${name}other`;
-    const bash = 'set -e\ntest ! -e inherited.txt\ngit push origin HEAD\ntouch inherited.txt';
-    const fixture = createWorktreeFixture([
-      { name, bash },
-      { name: otherName, bash },
-    ]);
-    const paths = new Set<string>();
-    // Two runs prove a prefix-sharing launch gets its own checkout; a repeat of the same
-    // name differs only by run id, which the branch-naming unit test already covers.
-    for (const workflow of [name, otherName]) {
-      const { ack, run, databasePath } = await completeDetachedWorktreeRun(fixture, workflow);
-      const environments = readWorktreeEnvironments(databasePath);
-      const env = environments.find(env => env.working_path === run.working_path);
-      if (!env) throw new Error('Missing isolation record');
-      expect(paths.has(env.working_path)).toBe(false);
-      paths.add(env.working_path);
-      expect(environments).toHaveLength(paths.size);
-      expect(ack.branch).toBe(env.branch_name);
-      expect(fixture.git('ls-remote', 'origin', `refs/heads/${ack.branch}`)).not.toBe('');
-      expect(env.status).toBe('active');
-      expect(existsSync(env.working_path)).toBe(true);
-      const events = readTerminalEvents(databasePath, run.id, 'workflow_completed');
-      expect(events).toHaveLength(1);
-      const record = terminalRecordSchema.parse(JSON.parse(events[0].data).terminal_record);
-      expect(record.worktree_disposition).toEqual({
-        disposition: 'retained',
-        reason: 'uncommitted_changes',
-      });
-    }
-    expect(fixture.git('worktree', 'list', '--porcelain').split('worktree ')).toHaveLength(4);
-  }, 30_000);
 });

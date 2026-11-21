@@ -19,6 +19,8 @@ import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { toBranchName } from '@archon/git';
 import { createFileWorkflowHost, isolationSchema } from './file-host';
+import { setPlatformPolicies } from '../platforms/registry';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { FileStoreUnsupportedError, commit } from '@archon/workflows/file-store';
 const roots = trackTempRoots();
 // Restore the keys in place: assigning a new object to process.env drops
@@ -997,3 +999,113 @@ for (const [damage, owner] of [
     ]);
   });
 }
+
+/** A project whose `factory` pack declares forge needs, with one pending binding to `deliver`. */
+async function pendingForgeBinding() {
+  const root = roots(await mkdtemp(join(tmpdir(), 'host-forge-')));
+  process.env.ARCHON_HOME = join(root, 'home');
+  // Preparing a binding loads the project's config, which needs the host's policies and providers.
+  setPlatformPolicies([]);
+  registerBuiltinProviders();
+  const project = join(root, 'project');
+  const pack = join(project, '.archon', 'workflows', 'factory');
+  await mkdir(join(pack, '.pack'), { recursive: true });
+  await mkdir(join(pack, 'deliver'), { recursive: true });
+  await writeFile(join(pack, '.pack', 'pack.yaml'), 'forge:\n  operations: [pr.view]\n');
+  await writeFile(
+    join(pack, 'deliver', 'deliver.yaml'),
+    'name: deliver\ndescription: d\nnodes:\n  - id: work\n    bash: echo SHOULD_NOT_RUN\n'
+  );
+  // A checkout with no remote names no forge.
+  execFileSync('git', ['init', '-q', project]);
+  const host = await createFileWorkflowHost(join(root, 'host'));
+  const store = host.deps.store;
+  const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
+  if (!user) throw new Error('expected the operator user');
+  const receiptId = crypto.randomUUID();
+  await store.acceptStartReceipt({
+    receipt: {
+      id: receiptId,
+      sourceInstanceId: 'source',
+      deliveryId: null,
+      contentDigest: 'digest',
+      receivedAt: '2026-01-01T00:00:00.000Z',
+      occurredAt: null,
+      sourceActor: null,
+    },
+    outcome: 'matched',
+    bindings: [
+      {
+        bindingId: 'binding',
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: user.id,
+        resource: 'deliver',
+        capacity: 1,
+        overlap: 'queue',
+        launch: {
+          cwd: project,
+          workflowName: 'deliver',
+          inputs: {},
+          isolation: { kind: 'in-place' },
+        },
+      },
+    ],
+  });
+
+  const started: string[] = [];
+  const drain = () =>
+    drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async id => {
+        started.push(id);
+      },
+    });
+  return { store, receiptId, started, drain };
+}
+
+test('a binding whose pack forge this checkout cannot reach is refused before admission', async () => {
+  const { store, receiptId, started, drain } = await pendingForgeBinding();
+  const error = await drain().catch((caught: unknown) => caught);
+
+  if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
+  expect(error.failures).toMatchObject([
+    {
+      receiptId,
+      error: { name: 'ForgeRequirementError', failures: [{ reason: 'no_forge_remote' }] },
+    },
+  ]);
+  expect(started).toEqual([]);
+  expect(await store.listQueuedResourceStartsForHost('host')).toEqual([]);
+  expect(await store.listPendingStartBindings({ hostId: 'host' })).toEqual([]);
+  // The receipt alone tells the operator why and what to do.
+  expect((await store.getStartReceipt(receiptId))?.bindings).toMatchObject([
+    {
+      status: 'rejected',
+      error: 'launch_preparation_failed',
+      forgeRefusal: {
+        pack: 'factory',
+        failures: [{ reason: 'no_forge_remote', remedy: expect.any(String) }],
+      },
+    },
+  ]);
+});
+
+test('a binding starts with the inputs naming the repository the forge check judged', async () => {
+  const forgeAccess = await import('@archon/workflows/run-forge-access');
+  const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue({
+    repo_host: 'github.com',
+    repo_path: 'o/project',
+  });
+  try {
+    const { store, started, drain } = await pendingForgeBinding();
+    await drain();
+    expect(started).toHaveLength(1);
+    expect((await store.getWorkflowRun(started[0]!))?.metadata).toMatchObject({
+      inputs: { repo_host: 'github.com', repo_path: 'o/project' },
+    });
+  } finally {
+    assertForge.mockRestore();
+  }
+});

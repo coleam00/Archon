@@ -140,6 +140,15 @@ describe('workflow run config', () => {
       )
     ).toThrow("Invalid run config at 'workflows'");
 
+    // Install and repository config only: a sealed run layer is read by older binaries,
+    // whose strict schema refuses keys they do not know.
+    expect(() =>
+      parseWorkflowRunConfig(
+        { workflows: { stallMessageLimit: 0 } },
+        { kind: 'http', label: 'inline' }
+      )
+    ).toThrow("Invalid run config at 'workflows'");
+
     for (const key of [
       'commands',
       'defaults',

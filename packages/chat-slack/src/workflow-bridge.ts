@@ -149,6 +149,7 @@ export class SlackWorkflowBridge {
       outcome: shownOutcome(event),
       totalCostUsd: event.totalCostUsd,
       failureReason: event.error,
+      failureKind: event.failureKind,
     });
     await closing;
     this.adapter.clearTriggeringMessage(state.conversationId);
@@ -225,7 +226,7 @@ export class SlackWorkflowBridge {
     nodeId: string,
     nodeName: string,
     state: NodeState,
-    extra: { durationMs?: number; error?: string } = {}
+    extra: { durationMs?: number; error?: string; failureKind?: string } = {}
   ): void {
     const run = this.runs.get(runId);
     if (!run) return;
@@ -238,6 +239,7 @@ export class SlackWorkflowBridge {
           ? (extra.durationMs ?? run.nodes.get(nodeId)?.durationMs)
           : extra.durationMs,
       error: extra.error,
+      failureKind: extra.failureKind,
     });
   }
 
@@ -259,7 +261,7 @@ export class SlackWorkflowBridge {
   private async updateStatusMessage(
     state: RunState,
     overlay: Partial<
-      Pick<RunSnapshot, 'status' | 'outcome' | 'totalCostUsd' | 'failureReason'>
+      Pick<RunSnapshot, 'status' | 'outcome' | 'totalCostUsd' | 'failureReason' | 'failureKind'>
     > = {}
   ): Promise<boolean> {
     if (!state.statusMessageTs) return false;
@@ -407,6 +409,10 @@ export class SlackWorkflowBridge {
         await this.postStoppedCancelNote(body, runId, result);
       } else if (result.kind === 'cooperative') {
         await this.postCooperativeCancelNote(body, runId, result);
+      } else if (result.kind === 'pending') {
+        let note = `Cancelled run \`${runId}\` while it was pending, before its workflow started.`;
+        for (const warning of result.cleanupWarnings ?? []) note += `\n:warning: ${warning}`;
+        await this.postActionNote(body, runId, note);
       }
     } catch (err) {
       logFailure('action.cancel', err);
@@ -550,6 +556,7 @@ export function resolutionNote(result: RunActionResult): string | undefined {
     case 'answered':
     case 'resumed':
       return result.resumed ? 'workflow resumed' : notResumedNote(result);
+    case 'pending':
     case 'cooperative':
     case 'stopped':
       return undefined;

@@ -384,6 +384,177 @@ nodes:
     expect(dispatchOf(run)).toMatchObject({ pack: 'alpha', inputs_resolved: true });
   });
 
+  it('a block included from its own pack reads the run setting, as it does run directly', async () => {
+    const block = `
+name: beta-block
+description: reads its pack's tone and declares nothing
+nodes:
+  - id: speak
+    prompt: "beta says $INPUTS.tone"
+  - id: shell
+    bash: echo "beta-env=$INPUTS_TONE"
+    depends_on: [speak]
+`;
+    await writePackWorkflow('beta', 'beta-block', block);
+    await writePackWorkflow(
+      'beta',
+      'beta-item',
+      `
+name: beta-item
+description: a fan-out body that declares only its item
+inputs:
+  item: {}
+nodes:
+  - id: shell
+    bash: echo "item-env=$INPUTS_ITEM-$INPUTS_TONE"
+  - id: gated
+    bash: echo "item-gated"
+    when: "$INPUTS.tone == 'beta-project'"
+`
+    );
+    await writePackWorkflow(
+      'beta',
+      'beta-host',
+      `
+name: beta-host
+description: includes two blocks of its own pack and passes nothing
+nodes:
+  - id: blk
+    include: beta-block
+  - id: fan
+    include: beta-item
+    fan_out:
+      items: '["a"]'
+      as: item
+`
+    );
+
+    for (const name of ['beta-host', 'beta-block']) {
+      const store = new InMemoryStore();
+      const { deps, prompts } = recordingDeps(store);
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        await discover(name),
+        'goal',
+        { conversationId: 'conv-db' },
+        { baseBranch: 'main' }
+      );
+      expect(result.success).toBe(true);
+      expect(prompts.some(p => p.includes('beta says beta-project'))).toBe(true);
+      const runId = runNamed(store, name)?.id;
+      const shell = name === 'beta-host' ? 'blk__shell' : 'shell';
+      expect(nodeOutput(store, runId, shell)).toContain('beta-env=beta-project');
+      if (name === 'beta-host') {
+        const outputs = store.events
+          .filter(e => e.workflow_run_id === runId && e.event_type === 'node_completed')
+          .map(e => String(e.data?.node_output));
+        expect(outputs.some(o => o.includes('item-env=a-beta-project'))).toBe(true);
+        expect(outputs.some(o => o.includes('item-gated'))).toBe(true);
+      }
+    }
+  });
+
+  it('an optional setting with no value stays unset in a same-pack block, as run directly', async () => {
+    await writePackDeclaration('gamma', 'inputs:\n  mood: {}\n');
+    await writePackWorkflow(
+      'gamma',
+      'gamma-block',
+      'name: gamma-block\ndescription: raw read\nnodes:\n  - id: shell\n    bash: echo "mood=[$INPUTS_MOOD]"\n'
+    );
+    await writePackWorkflow(
+      'gamma',
+      'gamma-item',
+      'name: gamma-item\ndescription: body\ninputs:\n  item: {}\nnodes:\n  - id: shell\n    bash: echo "item-mood=[$INPUTS_MOOD]"\n'
+    );
+    await writePackWorkflow(
+      'gamma',
+      'gamma-host',
+      `
+name: gamma-host
+description: includes and fans out blocks of its own pack
+nodes:
+  - id: blk
+    include: gamma-block
+  - id: fan
+    include: gamma-item
+    fan_out:
+      items: '["a"]'
+      as: item
+`
+    );
+
+    for (const name of ['gamma-host', 'gamma-block']) {
+      const store = new InMemoryStore();
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        await discover(name),
+        'goal',
+        { conversationId: 'conv-db' },
+        { baseBranch: 'main' }
+      );
+      expect(result.success).toBe(true);
+      const runId = runNamed(store, name)?.id;
+      const outputs = store.events
+        .filter(e => e.workflow_run_id === runId && e.event_type === 'node_completed')
+        .map(e => String(e.data?.node_output));
+      expect(outputs.some(o => o.startsWith('mood=[]'))).toBe(true);
+      if (name === 'gamma-host') expect(outputs.some(o => o.includes('item-mood=[]'))).toBe(true);
+    }
+  });
+
+  it('an explicit with: of an input the run lacks still fails the block', async () => {
+    const reads = (name: string, inputs: string): string =>
+      `name: ${name}\ndescription: reads x\n${inputs}nodes:\n  - id: shell\n    bash: echo "x=[$INPUTS_X]"\n`;
+    await writePackWorkflow('beta', 'beta-x', reads('beta-x', ''));
+    await writePackWorkflow(
+      'beta',
+      'beta-x-default',
+      reads('beta-x-default', 'inputs:\n  x:\n    default: fallback\n')
+    );
+    await writePackWorkflow(
+      'beta',
+      'beta-x-item',
+      reads('beta-x-item', 'inputs:\n  item: {}\n  x:\n    default: fallback\n')
+    );
+    const hosts: Record<string, string> = {
+      'alpha-x': '  - id: blk\n    include: beta-x\n    with:\n      x: $INPUTS.x\n',
+      'alpha-x-default':
+        '  - id: blk\n    include: beta-x-default\n    with:\n      x: $INPUTS.x\n',
+      'alpha-x-fan':
+        '  - id: fan\n    include: beta-x-item\n    with:\n      x: $INPUTS.x\n    fan_out:\n      items: \'["a"]\'\n      as: item\n',
+    };
+    for (const [name, nodes] of Object.entries(hosts)) {
+      await writePackWorkflow(
+        'alpha',
+        name,
+        `name: ${name}\ndescription: passes x\nnodes:\n${nodes}`
+      );
+    }
+
+    for (const name of Object.keys(hosts)) {
+      const store = new InMemoryStore();
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        await discover(name),
+        'goal',
+        { conversationId: 'conv-db' },
+        { baseBranch: 'main' }
+      );
+      expect(result.success).toBe(false);
+      const failed = store.events.find(e => e.event_type === 'node_failed');
+      expect(String(failed?.data?.error)).toContain("Unknown input '$INPUTS.x'");
+    }
+  });
+
   it("refuses an included block's raw $INPUTS_<setting> read its includer does not pass", async () => {
     await writePackWorkflow(
       'beta',

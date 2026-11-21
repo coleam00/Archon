@@ -71,6 +71,7 @@ mock.module('@archon/core/workflows/sql-host', () => ({
         findChildRuns: (...args) => operationWorkflowDb.findChildRuns(...args),
         getRunAncestry: (...args) => operationWorkflowDb.getRunAncestry(...args),
         cancelWorkflowRun: (...args) => operationWorkflowDb.cancelWorkflowRun(...args),
+        requestOperatorPause: (...args) => operationWorkflowDb.requestOperatorPause(...args),
         resolveApprovalGate: (...args) => operationWorkflowDb.resolveApprovalGate(...args),
         resolveAndCancelApprovalGate: (...args) =>
           operationWorkflowDb.resolveAndCancelApprovalGate(...args),
@@ -102,6 +103,7 @@ const { createSqlWorkflowOperations } = await import('@archon/core/workflows/sql
 export function createTestWorkflowHost(): import('@archon/core/workflows/host-store').WorkflowHost {
   const host = createSqlWorkflowHost();
   host.deps.store.pruneStateRevisions = mock(async () => ({ count: 0 }));
+  host.deps.store.getInstallHold = async () => null;
   host.deps.store.createWorkflowEvent = mockCreateWorkflowEvent;
   host.deps.store.persistWorkflowEvent = mockPersistWorkflowEvent;
   host.deps.store.getWorkflowEventHead = async () => testFeedCursor(committedTestEvents.length);

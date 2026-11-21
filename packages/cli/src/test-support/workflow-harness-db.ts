@@ -2,6 +2,22 @@
 import { PROVIDER_EVENT_ROW_TYPES } from '@archon/workflows/store';
 import { mock } from 'bun:test';
 
+/**
+ * No command test opens a live SQLite handle (#2240): a store call the harness does not
+ * fake reaches this connection and throws, instead of querying a database under a home
+ * the test removes.
+ */
+function unfakedDatabase(): never {
+  throw new Error('workflow command harness: a store call reached the real database; fake it');
+}
+const connection = await import('@archon/core/db/connection');
+mock.module('@archon/core/db/connection', () => ({
+  ...connection,
+  getDatabase: unfakedDatabase,
+  getDialect: unfakedDatabase,
+  pool: { query: unfakedDatabase, connect: unfakedDatabase },
+}));
+
 mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mock(() => Promise.resolve({ id: 'user-cli-1' })),
 }));
@@ -34,9 +50,8 @@ mock.module('@archon/core/db/isolation-environments', () => ({
   findActiveByWorkflow: mock(() => Promise.resolve(null)),
   create: mock(() => Promise.resolve({ id: 'iso-123' })),
   listActive: mock(() => Promise.resolve([])),
-  // Reached only by the resume path. mock.module() MERGES over the real
-  // module, so omitting this would leave the REAL implementation in place and
-  // open a live SQLite handle rather than failing loudly (#2240).
+  // Reached only by the resume path. mock.module() merges over the real module,
+  // so omitting this would leave the real implementation to hit the connection trap.
   listByCodebase: mock(() => Promise.resolve([])),
 }));
 
@@ -94,6 +109,9 @@ export const mockCancelWorkflowRunCommand = mock<
 >(async () => ({ cancelled: true }));
 
 mock.module('@archon/core/db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
+  updateWorkflowRunMetadataIfRunning: mock(async () => true),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   insertWorkflowRun: async (): Promise<never> => {

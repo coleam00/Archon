@@ -1,0 +1,3 @@
+What this product is for and who uses it is written in `.archon/direction.md`. Its users are operators: a person, or more often that person's agent, working through the CLI, the console, chat and the documentation under `packages/docs-web/src/content/docs/`. Hold what a user meets to `direction.md`, to the Fail clearly and Write for the next maintainer sections of `AGENTS.md`, and to how the surrounding commands, messages and pages already read.
+
+Anything that runs Archon itself (the CLI, a server, a test that opens a database) uses a scratch home: set `ARCHON_HOME` to a new empty directory first, and remove it afterwards. Archon migrates a database when it opens one, so running this checkout against the real home changes the operator's live database.

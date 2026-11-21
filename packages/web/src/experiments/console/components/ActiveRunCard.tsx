@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router';
 import { StatusStrip } from './StatusStrip';
 import { RunningDot } from './LiveDot';
 import { OwnerObservationHint } from './OwnerObservationHint';
+import { OperatorPauseHint } from './OperatorPauseHint';
 import { OriginBadge } from './OriginBadge';
 import { RelativeRunStart } from './RelativeRunStart';
 import { ApprovalPanel } from './ApprovalPanel';
@@ -448,6 +449,7 @@ export function ActiveRunCard({
       <div className="pl-4 pr-4 py-3">
         <RunCardHeader run={run} showProject={showProject} isLive={isLive} />
         <OwnerObservationHint run={run} className="mt-1" />
+        <OperatorPauseHint run={run} className="mt-1" />
         <ToolCallAttentionSection run={run} />
         <RunDetailGrid run={run} isLive={isLive} />
         <PausedRunSection run={run} inputPromoted={inputPromoted} actions={attentionActions} />

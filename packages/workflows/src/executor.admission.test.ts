@@ -26,6 +26,7 @@ import type { ExecuteWorkflowOptions } from './executor';
 import type { WorkflowRun } from './schemas';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { IWorkflowStore } from './store';
+import { InstallHeldError } from './store/errors';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { WorkflowStatusReadError } from './workflow-status-read';
 import { keepAwake } from './utils/keep-awake';
@@ -431,6 +432,27 @@ describe('checkout-in-use message', () => {
     expect(message).not.toContain('Wait for it to finish');
   });
 
+  it('offers resume, not approve or reject, for an operator-paused run with a stale gate', async () => {
+    const message = await blockedBy(
+      blocker({
+        status: 'paused',
+        metadata: {
+          pause_cause: 'operator',
+          operator_pause: {
+            requested: { by: null, via: 'cli', at: '2026-10-05T12:00:00.000Z' },
+            pausedAt: '2026-10-05T12:01:00.000Z',
+          },
+          approval: { type: 'approval', nodeId: 'review', message: 'Approve?', resolved: true },
+        },
+      })
+    );
+    expect(message).toContain('paused by an operator');
+    expect(message).toContain('/workflow resume abc12345');
+    expect(message).toContain('/workflow abandon abc12345');
+    for (const absent of ['user input', '/workflow approve', '/workflow reject'])
+      expect(message).not.toContain(absent);
+  });
+
   it.each([
     [
       'child_workflow',
@@ -779,5 +801,34 @@ describe('asks without an item', () => {
     });
     expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
     expect(store.claimPendingWorkflowRun).toHaveBeenCalled();
+  });
+});
+
+describe('install hold', () => {
+  it('a resource start waits for the lift instead of being refused', async () => {
+    const hold = { setBy: 'operator', setAt: '2026-11-17T10:00:00.000Z' };
+    let held = true;
+    const cancelWorkflowRun = mock(async () => ({ cancelled: true }));
+    const platform = makePlatform();
+    const started = startWorkflow({
+      platform,
+      store: makeStore({
+        createWorkflowRun: mock(async () => makeRun({ codebase_id: 'codebase-1' })),
+        admitPendingRun: mock(async () => {
+          if (held) throw new InstallHeldError(hold);
+          return null;
+        }),
+        cancelWorkflowRun,
+      }),
+      workflow: makeWorkflow({ resource: { name: 'pool' } }),
+    });
+    for (let tries = 0; !sentMessages(platform).some(m => m.includes('install hold')); tries++) {
+      if (tries > 100) throw new Error('the start did not wait for the hold');
+      await Bun.sleep(10);
+    }
+    held = false;
+    await started;
+    expect(cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
   });
 });

@@ -18,7 +18,8 @@ export const COPILOT_CAPABILITIES: ProviderCapabilities = {
   plugins: false,
   agents: true,
   toolRestrictions: true,
-  structuredOutput: 'best-effort', // prompt-augment + repair + validate + reask×3 (no SDK grammar)
+  structuredOutput: 'best-effort', // prompt-augment + repair + validate (no SDK grammar)
+  structuredOutputCorrection: 'fresh-session',
   requiresAllPropertiesRequired: false, // best-effort providers never reject schemas at API level
   envInjection: true,
   costControl: false,

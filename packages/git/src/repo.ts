@@ -241,9 +241,13 @@ async function fetchWorkspaceBranch(
   baseBranch: BranchName | undefined
 ): Promise<void> {
   try {
-    await fetchWithRetry(workspacePath, [remote, branchToSync], {
-      timeout: 60000,
-    });
+    // Name the destination: a bare branch updates `<remote>/<branch>` only when the remote's
+    // fetch refspec covers it, which a single-branch clone's does not for any other branch.
+    await fetchWithRetry(
+      workspacePath,
+      [remote, `+refs/heads/${branchToSync}:refs/remotes/${remote}/${branchToSync}`],
+      { timeout: 60000 }
+    );
   } catch (error) {
     const err = error as Error;
     if (baseBranch) {

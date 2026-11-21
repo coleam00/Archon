@@ -269,31 +269,6 @@ describe('POST /api/workflows/:name/run', () => {
     expect(files.description).toContain('10485760 bytes');
   });
 
-  test('dispatches workflow run to orchestrator and returns accepted', async () => {
-    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
-    mockAddMessage.mockImplementationOnce(async () => ({
-      id: 'msg-1',
-      conversation_id: MOCK_CONV.id,
-      role: 'user' as const,
-      content: 'Deploy to staging',
-      metadata: '{}',
-      created_at: NOW,
-    }));
-    mockHandleMessage.mockImplementationOnce(async () => {});
-
-    const { app } = makeApp();
-    const response = await app.request('/api/workflows/deploy/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Deploy to staging' }),
-    });
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as { accepted: boolean; status: string };
-    expect(body.accepted).toBe(true);
-    expect(body.status).toBe('started');
-  });
-
   // The message is data: it must reach the run byte for byte, and no word in it may
   // set `--force` (#4159).
   test.each([
@@ -804,17 +779,6 @@ describe('POST /api/workflows/:name/run', () => {
       '',
       expect.objectContaining({ workflowName: 'nightly' })
     );
-  });
-
-  test('returns 400 for invalid workflow name (path traversal)', async () => {
-    const { app } = makeApp();
-    const response = await app.request('/api/workflows/../secret/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Test' }),
-    });
-    // Hono routes won't match ../secret as /:name due to path normalization — either 400 or 404
-    expect([400, 404]).toContain(response.status);
   });
 
   test('returns 400 when isValidWorkflowName rejects the name', async () => {

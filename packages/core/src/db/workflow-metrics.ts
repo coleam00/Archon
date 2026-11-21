@@ -33,10 +33,18 @@ function readData(data: MetricCompletionRow['data']): Record<string, unknown> | 
 }
 
 /** Unreadable data yields `undefined`, which `queryMetrics` reports as an invalid record. */
-function readMetrics(data: Record<string, unknown> | undefined): unknown {
+function readMetrics(
+  data: Record<string, unknown> | undefined
+): Pick<MetricRecordRow, 'metrics' | 'metricDimensions'> {
   const structured = data?.structured_output;
-  if (typeof structured !== 'object' || structured === null) return undefined;
-  return (structured as { metrics?: unknown }).metrics;
+  if (typeof structured !== 'object' || structured === null) return { metrics: undefined };
+  const { metrics, metric_dimensions } = structured as {
+    metrics?: unknown;
+    metric_dimensions?: unknown;
+  };
+  return metric_dimensions === undefined
+    ? { metrics }
+    : { metrics, metricDimensions: metric_dimensions };
 }
 
 /**
@@ -64,7 +72,7 @@ export async function listMetricRecords(): Promise<MetricRecordRow[]> {
       nodeId: row.step_name,
       nodeType: typeof data?.type === 'string' ? data.type : null,
       completedAt: toHydratedTimestamp(row.created_at).toISOString(),
-      metrics: readMetrics(data),
+      ...readMetrics(data),
     };
   });
 }

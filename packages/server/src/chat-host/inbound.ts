@@ -32,7 +32,7 @@ import {
 } from '@archon/core/workflows/sql-host';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import { createLogger } from '@archon/paths';
-import { checkedResumeCursor, type ResumeClaimCursor } from '@archon/workflows/store';
+import { checkedResumeCursor, type ResumeRequestCursor } from '@archon/workflows/store';
 import {
   workflowResumeTargetForRun,
   resumeWorkflowRunFromServer,
@@ -118,7 +118,7 @@ export function registerChatInbound(
     runId: string,
     actor: ChatActor,
     action: ChatRunAction['action'],
-    cursor?: ResumeClaimCursor
+    cursor?: ResumeRequestCursor
   ): Promise<{ resumed: boolean; waitingForCapacity?: true }> => {
     try {
       const run = await workflowDb.getWorkflowRun(runId);
@@ -170,23 +170,33 @@ export function registerChatInbound(
     actor: ChatActor
   ): Promise<ChatRunActionResponse> => {
     const result = await operations.cancelWorkflow(action.runId, actor);
-    return {
-      status: 'done',
-      result:
-        result.kind === 'cooperative'
-          ? {
-              kind: 'cooperative',
-              cancelled: result.cancelled,
-              cleanupWarnings: result.cleanupWarnings,
-            }
-          : {
-              kind: 'stopped',
-              pid: result.pid,
-              cleanupWarnings: result.cleanupWarnings,
-              cascadeFailures: result.cascadeFailures,
-              blockedParentRunId: result.blockedParentRunId,
-            },
-    };
+    switch (result.kind) {
+      case 'pending':
+        return {
+          status: 'done',
+          result: { kind: 'pending', cleanupWarnings: result.cleanupWarnings },
+        };
+      case 'cooperative':
+        return {
+          status: 'done',
+          result: {
+            kind: 'cooperative',
+            cancelled: result.cancelled,
+            cleanupWarnings: result.cleanupWarnings,
+          },
+        };
+      case 'stopped':
+        return {
+          status: 'done',
+          result: {
+            kind: 'stopped',
+            pid: result.pid,
+            cleanupWarnings: result.cleanupWarnings,
+            cascadeFailures: result.cascadeFailures,
+            blockedParentRunId: result.blockedParentRunId,
+          },
+        };
+    }
   };
   const respondToRun = async (
     operations: Operations,

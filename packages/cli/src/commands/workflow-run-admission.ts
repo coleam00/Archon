@@ -1,7 +1,10 @@
 import { rmSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
+import { checkoutRootAbove } from '@archon/core/workflows/binding-workflow';
 import {
   parseRunModelAssignments,
   type RunModelOverrides,
@@ -11,6 +14,7 @@ import {
   assertRunCredentials,
   type PreparedRunAiConfiguration,
 } from '@archon/workflows/run-preflight';
+import { assertRunForgeAccess } from '@archon/workflows/run-forge-access';
 import {
   prepareWorkflowSource,
   recordSelectedWorkflow,
@@ -22,15 +26,20 @@ import {
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName, suggestWorkflowNames } from '@archon/workflows/router';
 import { resolveTopLevelInputs } from '@archon/workflows/utils/workflow-requirements';
-import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
+import {
+  parseInputAssignments,
+  WorkflowInputContractError,
+} from '@archon/workflows/workflow-inputs';
 import {
   findWorkflowLoadError,
   type ResolvedWorkflow,
   type WorkflowLoadError,
+  type WorkflowSource,
   type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { readSubrunMetadata } from '@archon/workflows/schemas/run-metadata';
 import { DETACHED_LAUNCH_METADATA_KEY } from '@archon/workflows/store';
 import { loadWorkflows } from './workflow-list';
 import { resolveLaunchRunConfig } from './workflow-run-config';
@@ -106,18 +115,23 @@ export interface RunSelection extends RunSourceSlot {
 export interface OwnedRunAdmission extends RunSelection {
   readonly cliUserId: string | undefined;
   /**
-   * Per-dispatch --base override, normalized once. Wins over repo config + the
-   * codebase default for both the worktree cut-from (the provider request's
-   * `baseOverride`) and the PR target / $BASE_BRANCH (executeWorkflow's
-   * `baseOverride` opt). Both halves need their own channel: the `baseBranch`
-   * field on either side is the codebase-default FALLBACK and ranks below repo
-   * config, so routing the flag through it would silently lose to a repo that
-   * sets `worktree.baseBranch`.
+   * Per-dispatch --base override, normalized once. `resolveLaunchBase` ranks it above the
+   * item's landing branch; the result wins over repo config + the codebase default for
+   * both the worktree cut-from (the provider request's `baseOverride`) and the PR target /
+   * $BASE_BRANCH (executeWorkflow's `baseOverride` opt). Both halves need their own
+   * channel: the `baseBranch` field on either side is the codebase-default FALLBACK and
+   * ranks below repo config, so routing the override through it would silently lose to a
+   * repo that sets `worktree.baseBranch`.
    */
   readonly flagBase: string | undefined;
   readonly pinnedEnabled: boolean | undefined;
   /** Reassigned by adoption resolution (#2747), which picks the lane. */
   wantsIsolation: boolean;
+  /**
+   * The inputs this invocation supplied, read once: an adopt lane re-gates this same map
+   * against its branch's YAML rather than reading `--input-file` again.
+   */
+  readonly suppliedInputs: Record<string, string> | undefined;
   resolvedInputs: Record<string, string> | undefined;
   aiConfigurationRun: WorkflowRun | undefined;
 }
@@ -160,14 +174,27 @@ export async function selectRunWorkflow(request: OwnedRunRequest): Promise<RunSe
       workflowName,
       workflowEntries.map(ws => ws.workflow)
     );
-  if (!workflow) throw workflowNotFoundError(workflowName, workflowEntries, errors);
+  if (!workflow) {
+    const error = workflowNotFoundError(workflowName, workflowEntries, errors);
+    throw isContinuation ? error : withSourceContext(error, options.discoveryCwd);
+  }
+  const workflowEntry = workflowEntries.find(ws => ws.workflow === workflow);
+  // An explicit --workflow-source that lacks the named workflow would otherwise run another
+  // scope's copy while recording the source as its origin (#5826). Commands, scripts and
+  // composed workflows may still resolve from other scopes; the named workflow may not.
+  if (
+    !isContinuation &&
+    options.discoveryCwd !== undefined &&
+    workflowEntry?.source !== 'project'
+  ) {
+    throw workflowNotInSourceError(workflowName, options.discoveryCwd, workflowEntry?.source);
+  }
   // Name the selection in the capture's manifest, now that it is known. The manifest is
   // outside the digest, so this records provenance without disturbing what was frozen.
   if (source.preparedSource) {
     await recordSelectedWorkflow(source.preparedSource.anchor.root, workflow.name);
   }
   assertDetachedRowWorkflow(preCreatedRun, workflow);
-  const workflowEntry = workflowEntries.find(ws => ws.workflow === workflow);
 
   // Keys this workflow's YAML declares that the engine drops (#2213). Written to
   // stderr, never stdout: in --json mode Pino is silenced and stdout must stay
@@ -350,7 +377,10 @@ async function discoverRunWorkflows(
   if (workflowEntries.length === 0 && errors.length === 0) {
     // No manual cleanup here or anywhere else in this run: the owner reclaims
     // anything unadopted on the way out, which is the point of having one.
-    throw new Error('No workflows found in .archon/workflows/');
+    throw withSourceContext(
+      new Error('No workflows found in .archon/workflows/'),
+      options.discoveryCwd
+    );
   }
   return { workflowEntries, errors };
 }
@@ -367,6 +397,44 @@ function workflowNotFoundError(
     );
   }
   return unknownWorkflowError(workflowName, workflowEntries);
+}
+
+function workflowNotInSourceError(
+  workflowName: string,
+  sourceRoot: string,
+  resolvedScope: WorkflowSource | undefined
+): Error {
+  const root = resolve(sourceRoot);
+  const lines = [
+    `Workflow '${workflowName}' is not in --workflow-source ${root}: Archon looked in ` +
+      `${join(root, '.archon', 'workflows')} and found it only in the ${resolvedScope ?? 'another'} scope. ` +
+      'Nothing was started.',
+    ...checkoutRootHint(root),
+  ];
+  return new Error(lines.join('\n'));
+}
+
+/**
+ * Every refusal under an explicit --workflow-source names the directory searched, so a wrong
+ * path is visible whether or not the name exists in another scope.
+ */
+function withSourceContext(error: Error, sourceRoot: string | undefined): Error {
+  if (sourceRoot === undefined) return error;
+  const root = resolve(sourceRoot);
+  const lines = [
+    error.message,
+    '',
+    `--workflow-source ${root}: Archon looked in ${join(root, '.archon', 'workflows')}.`,
+    ...checkoutRootHint(root),
+  ];
+  return new Error(lines.join('\n'));
+}
+
+function checkoutRootHint(root: string): string[] {
+  const checkout = checkoutRootAbove(root);
+  return checkout === undefined
+    ? []
+    : [`--workflow-source takes the checkout root; did you mean ${checkout}?`];
 }
 
 function unknownWorkflowError(
@@ -418,14 +486,24 @@ export async function admitRunExecution(
   assertWorkflowNotWorktreePinnedForFolder(options.folder === true, pinnedEnabled, workflow.name);
 
   // Signature gate (#2470, #2554): resolve this invocation's declared inputs from the
-  // `--input name=value` flags against the workflow's `inputs:` block, here — before the
-  // --detach fork and any worktree/clone/AI cost — so a bad name, a missing required
-  // input, or a malformed assignment costs nothing.
+  // `--input` and `--input-file` flags against the workflow's `inputs:` block, here —
+  // before the --detach fork and any worktree/clone/AI cost — so a bad name, a missing
+  // required input, a malformed assignment, or an unreadable file costs nothing.
+  //
+  // A detached child gates on the inputs its launcher recorded on the row, not on argv:
+  // the launcher read any input file, and the child never gets the flags (#5678).
   //
   // Skipped on a resume: the resumed run is not bound until the launch, and its inputs
   // were validated when its row was created. Re-gating with nothing supplied would make
   // every resume of a required-input run impossible.
-  const resolvedInputs = options.resume ? undefined : resolveDeclaredInputs(workflow, options);
+  const suppliedInputs = options.resume
+    ? undefined
+    : selection.preCreatedRun
+      ? recordedLaunchInputs(selection.preCreatedRun)
+      : await readSuppliedInputs(options);
+  const resolvedInputs = options.resume
+    ? undefined
+    : resolveTopLevelInputs(workflow, suppliedInputs);
 
   // Capability gate: hard-fail before the --detach fork and any worktree/clone/
   // AI cost if the workflow declares `requires: [github]` and the acting CLI
@@ -441,19 +519,59 @@ export async function admitRunExecution(
     flagBase,
     pinnedEnabled,
     wantsIsolation,
+    suppliedInputs,
     resolvedInputs,
     aiConfigurationRun: undefined,
   };
 }
 
-function resolveDeclaredInputs(
-  workflow: ResolvedWorkflow,
-  options: WorkflowRunOptions
-): Record<string, string> | undefined {
-  return resolveTopLevelInputs(
-    workflow,
-    options.inputs ? parseInputAssignments(options.inputs) : undefined
-  );
+/**
+ * The inputs an invocation supplies: `--input name=value` as typed, and `--input-file
+ * name=path` as the file's exact contents (no trimming, unlike `$(cat file)`). Only the
+ * explicit flag reads a file; a `--input` value that looks like a path stays a string.
+ * The CLI route has already resolved each path from `--cwd`.
+ *
+ * @throws WorkflowInputContractError on a grammar error, a name given by both flags, or a
+ *   file that cannot be read. Messages name the input and path, never the contents.
+ */
+export async function readSuppliedInputs(
+  options: Pick<WorkflowRunOptions, 'inputs' | 'inputFiles'>
+): Promise<Record<string, string> | undefined> {
+  const supplied = options.inputs ? parseInputAssignments(options.inputs) : {};
+  for (const [name, path] of Object.entries(options.inputFiles ?? {})) {
+    if (Object.hasOwn(supplied, name)) {
+      throw new WorkflowInputContractError(
+        `Input '${name}' is given by both --input and --input-file: supply it once.`
+      );
+    }
+    try {
+      supplied[name] = await readFile(path, 'utf8');
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      throw new WorkflowInputContractError(
+        `Cannot read --input-file for input '${name}' at '${path}': ${err.code ?? err.message}`
+      );
+    }
+  }
+  return Object.keys(supplied).length > 0 ? supplied : undefined;
+}
+
+/**
+ * The inputs a detached launcher recorded on the row it handed its child. The launcher
+ * writes the supplied map as text (`workflow-detach.ts`), so a non-string value means the
+ * row was not written by a CLI launch.
+ */
+function recordedLaunchInputs(row: WorkflowRun): Record<string, string> | undefined {
+  const recorded = readSubrunMetadata(row.metadata).inputs;
+  if (recorded === undefined) return undefined;
+  const inputs: Record<string, string> = {};
+  for (const [name, value] of Object.entries(recorded)) {
+    if (typeof value !== 'string') {
+      throw new Error(`Cannot execute run '${row.id}': its recorded input '${name}' is not text.`);
+    }
+    inputs[name] = value;
+  }
+  return inputs;
 }
 
 /**
@@ -493,7 +611,9 @@ export async function recaptureForLane(
   // The gates above ran against the parent checkout's YAML; this lane executes the
   // branch's graph, so judge the same signature gates against the branch vintage
   // (mirrors the orchestrator's deferred runSignatureGates).
-  if (!options.resume) admission.resolvedInputs = resolveDeclaredInputs(workflow, options);
+  if (!options.resume) {
+    admission.resolvedInputs = resolveTopLevelInputs(workflow, admission.suppliedInputs);
+  }
   await assertCliWorkflowRequirementsMet(host, workflow);
 }
 
@@ -504,7 +624,8 @@ export type LaneConfigSource =
   | { kind: 'checkout'; cwd: string; recapture: boolean; codebaseId: string | undefined };
 
 /**
- * Prepare and preflight the run's AI configuration from the checkout its lane executes.
+ * Prepare and preflight the run's AI configuration from the checkout its lane executes,
+ * then, for a fresh run, its pack's forge needs from the same checkout's settings.
  * Without an explicit source, an adopted lane's own `.archon` is recaptured first.
  */
 export async function prepareLaneAiConfiguration(
@@ -517,31 +638,39 @@ export async function prepareLaneAiConfiguration(
   if (lane.kind === 'branch') {
     return withBranchLaunchSource(lane.codebase.default_cwd, lane.branch, async snapshot => {
       if (recaptures) await recaptureForLane(request, admission, snapshot);
-      return prepareCredentialPreflight(
-        request,
-        admission,
-        snapshot,
-        lane.codebase.id,
-        executesInContainer
-      );
+      // The snapshot is an archive of the branch, which has no remotes.
+      return prepareCredentialPreflight(request, admission, {
+        configCwd: snapshot,
+        repositoryCwd: lane.codebase.default_cwd,
+        codebaseId: lane.codebase.id,
+        executesInContainer,
+      });
     });
   }
   if (lane.recapture && recaptures) await recaptureForLane(request, admission, lane.cwd);
-  return prepareCredentialPreflight(
-    request,
-    admission,
-    lane.cwd,
-    lane.codebaseId,
-    executesInContainer
-  );
+  return prepareCredentialPreflight(request, admission, {
+    configCwd: lane.cwd,
+    repositoryCwd: lane.cwd,
+    codebaseId: lane.codebaseId,
+    executesInContainer,
+  });
 }
 
 async function prepareCredentialPreflight(
   request: OwnedRunRequest,
   admission: OwnedRunAdmission,
-  configCwd: string,
-  codebaseId: string | undefined,
-  executesInContainer: boolean
+  {
+    configCwd,
+    repositoryCwd,
+    codebaseId,
+    executesInContainer,
+  }: {
+    configCwd: string;
+    /** A checkout with the project's remotes, for the forge check. */
+    repositoryCwd: string;
+    codebaseId: string | undefined;
+    executesInContainer: boolean;
+  }
 ): Promise<PreparedRunAiConfiguration> {
   const { host } = request;
   const { preCreatedRun, continuationRun, modelOverrides } = admission;
@@ -564,5 +693,14 @@ async function prepareCredentialPreflight(
     prepared,
     executesInContainer ? 'pending-container' : { cwd: configCwd }
   );
+  if (!admission.isContinuation) {
+    admission.resolvedInputs = await assertRunForgeAccess(host.deps, admission.workflow, prepared, {
+      cwd: repositoryCwd,
+      settingsCwd: configCwd,
+      codebaseId,
+      inContainer: executesInContainer,
+      supplied: admission.resolvedInputs,
+    });
+  }
   return prepared;
 }

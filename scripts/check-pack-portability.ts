@@ -19,11 +19,10 @@ const LEAKS: readonly { readonly pattern: RegExp; readonly what: string }[] = [
 
 /**
  * The one exception: the maintained GitHub forge plugin's install id names the
- * repository that publishes it, which is the same for every project. It may appear
- * where the pack defines it, and as the whole install command in the setup guide.
+ * repository that publishes it, which is the same for every project. It may appear as
+ * the whole install command in the setup guide.
  */
 const ALLOWED: readonly { readonly file: string; readonly line: RegExp }[] = [
-  { file: `${PACK_ROOT}/.shared/forge-check.ts`, line: /^const GITHUB_FORGE_PLUGIN = / },
   {
     file: `${PACK_ROOT}/README.md`,
     line: /^archon plugin add coleam00\/Archon\/plugins\/forge-github$/,

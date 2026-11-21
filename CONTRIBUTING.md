@@ -113,12 +113,14 @@ bun run test --plan pack                    # when changing .archon/workflows or
 A ready pull request runs the Linux jobs its change can affect: `static` (type-check, lint,
 format, generated files, the ratchet), the Linux test jobs (`test`, `test-scripts`,
 `test-pack`), `schema-upgrade` and `postgres-parity`. A push to `dev` or `main` runs every
-job on every platform, and that run is the complete verification of a merge. These jobs wait
-for the push:
+job on every platform, and that run is the complete verification of a merge. On Windows a push
+to `dev` runs only the Windows set (`windows-set`, see "How a test joins the Windows set"
+below); a push to `main` also runs the whole suite there. These jobs wait for the push:
 
 | Job | Also runs on a pull request that changes |
 | --- | --- |
-| `test-windows`, `test-scripts-windows`, `test-pack-windows`, `file-store-primitives-macos` | nothing narrower than the list below |
+| `windows-set`, `file-store-primitives-macos` | nothing narrower than the list below |
+| `test-windows`, `test-scripts-windows`, `test-pack-windows` (the whole suite on Windows) | nothing narrower than the list below; a push runs them only on `main` |
 | `docker-build` | `Dockerfile`, `.dockerignore`, `docker-entrypoint.sh`, or a script the image build or its upgrade test runs |
 | `serve-binary` | `scripts/build-binaries.sh` or a smoke test the job runs |
 
@@ -131,10 +133,11 @@ authoritative lists.
 To run every job on a branch before it merges, for example when a change touches path
 handling, process spawning or anything else that differs on Windows or macOS, dispatch the
 workflow on the branch: `gh workflow run test.yml --ref <branch>`. The results appear in the
-pull request's checks. Dispatching needs write access, and the branch must be in this
+pull request's checks. A dispatch runs the Windows set; add `-f windows-full-suite=true` for
+the whole suite on Windows, as a push to `main` runs it. Dispatching needs write access, and the branch must be in this
 repository, so on a pull request from a fork a maintainer decides whether to push the branch
 here and dispatch it. A break that only another platform shows otherwise appears in the push
-run on `dev`.
+run on `dev`, or, when no test in the Windows set reaches it, in the push run on `main`.
 
 A change touching only prose or files no check reads skips the test, service and binary jobs.
 `scripts/should-run-test-suite.ts` decides which files those are: Markdown and the docs site
@@ -153,7 +156,8 @@ a pull request run already passed every job on the same tree, the ones that wait
 included, and otherwise runs them, so a prose change's test-visible effects are checked on `dev`.
 
 The tests under `.archon/scripts/` (the SDLC pack's script tests) and the workflow fixtures
-run in the `test-pack` job (and `test-pack-windows` when it runs) when a pull request or an unproven push changes the pack or a
+run in the `test-pack` job (and `test-pack-windows` when it runs, which a push does only on
+`main`) when a pull request or an unproven push changes the pack or a
 contract it is written against: `PACK_INPUTS` in `scripts/should-run-test-suite.ts` lists
 those paths. Run them locally with `bun run test --plan pack` and
 `bun run validate --only workflow-fixtures`; a single test file runs with
@@ -169,6 +173,37 @@ formatting. Workflow fixtures require explicit selection; formatting runs by def
 Each validate run prints its actual elapsed time per check. A local success does not predict service, build,
 or other-platform CI results.
 
+#### How a test joins the Windows set
+
+On a push to `dev`, Windows runs only the Windows set: the test files whose leading `//`
+lines include `// @archon-test-windows`. Those lines must start the file and follow one
+another: a blank line, a block comment or an import before the marker hides it. When a file
+has both, `// @archon-test-isolated` stays on line 1 and the Windows marker follows it;
+discovery refuses the isolation directive anywhere else in those leading lines. Every other test
+runs on Windows only on a push to `main`, on a pull request whose change runs every job (see
+`EVERY_JOB_INPUTS` above), or on a dispatch with `windows-full-suite=true`. Most of those
+prove nothing Linux does not, but not all: a Windows branch in an unmarked file, such as an
+assertion whose expected value differs on Windows, is not checked on `dev`. When that branch
+is what the test is about, move the case into a marked file.
+
+Mark a file when its subject behaves differently on Windows and the test exercises the real
+platform, not an injected `win32` path API or a mocked `process.platform`, which Linux proves
+equally well:
+
+- path spelling and separators that reach the file system or an operator's screen;
+- starting and stopping process trees;
+- file locks, renames and removal;
+- shell resolution and quoting;
+- or the file has caught a fault that only Windows showed.
+
+A marked file runs every one of its tests on Windows. A case that cannot run there (a chmod
+denial, a symlink Git-Bash cannot make) goes in an unmarked sibling file, not behind a
+`win32` skip. A Windows-only case in a large mixed file goes the other way, into a small
+marked sibling. `skipIf(process.platform !== 'win32')` for a Windows-only case is fine.
+
+Run the set with `bun run test --windows` or `bun run validate --only windows-tests`; the
+runner prints the files it selected. `scripts/package-test-groups.ts` reads the marker.
+
 **Important:** Use `bun run test` (not `bun test` from the repo root) to avoid mock pollution across packages.
 
 **macOS:** tests that compile a fresh binary with `bun build --compile` skip on macOS and print a line saying so. Running them locally has preceded a stuck `syspolicyd` that stalls every new process on the machine until a reboot. CI runs them on Linux and Windows. Do not compile binaries locally on macOS. A new test that compiles a binary gates itself on `skipCompiledBinaryTests()` from `@archon/paths/test-utils`. One exception: the file-store lock tests compile their probe only under GitHub Actions, on every OS, and skip it everywhere else whatever `ARCHON_TEST_COMPILED_BINARIES` says. The `file-store-primitives-macos` job runs POSIX plugin cleanup, provider and chat inspection diagnostics, process-provider and Codex cleanup, the file-store group, and database-free CLI lifecycle on a disposable Mac so these behaviors and the compiled probe are also proved on macOS.
@@ -181,7 +216,7 @@ drop; never run destructive verification against a configured live database.
 
 | CI job | Needs | Run it yourself |
 | --- | --- | --- |
-| `schema-upgrade` | a live PostgreSQL; the SQLite half also reads every release tag | `bun run check:schema-upgrades` (`PGHOST`/`PGUSER`/… or `DATABASE_URL`) and `bun run check:sqlite-vintages` |
+| `schema-upgrade` | a scratch PostgreSQL you start; the SQLite half also reads every release tag | `PGHOST=<scratch host or socket dir> PGUSER=<user> bun run check:schema-upgrades` (or a `DATABASE_URL` with a host); with no server named it refuses. Then `bun run check:sqlite-vintages` |
 | `postgres-parity` | a PostgreSQL service; conformance creates and drops scratch databases and requires `CREATE DATABASE` permission | `ARCHON_TEST_PG_URL=postgres://… bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts`, then the same for `packages/core/src/db/resource-slots.postgres.integration.test.ts`, `packages/core/src/db/provider-attempts.postgres.integration.test.ts`, `packages/core/src/db/workflows.postgres.integration.test.ts`, `packages/core/src/db/workflow-events.provider-events.postgres.integration.test.ts`, `packages/core/src/db/workflow-store.conformance.postgres.integration.test.ts`, `packages/core/src/db/state-documents.postgres.integration.test.ts`, `packages/core/src/db/codebase-rename.postgres.integration.test.ts`, and `packages/core/src/db/schema-convergence.postgres.integration.test.ts`; then `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/users.postgres.integration.test.ts`, `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/codebase-delete.postgres.integration.test.ts`, and `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/user-provider-key-store.postgres.integration.test.ts` |
 | `docker-build` | a Docker daemon, and ~14GB of free disk for the image | `docker build .` |
 | Linux `test` Slack conformance and smoke | compiled Slack plugin with a stubbed client for conformance, and the unmodified release binary for initialization and missing-token smoke | CI only; source conformance runs in `cd packages/chat-slack && bun run test` |
@@ -196,8 +231,11 @@ checks, and the server-free bundle assertion (including a restored-import
 negative proof), run in CI. Local `check:cli-import-boundary` still checks startup
 and policy import boundaries. Do not compile these binaries locally on macOS.
 
-**Schema changes**: run `bun run check:schema-upgrades` and `bun run check:sqlite-vintages`
-yourself if you touched `migrations/000_combined.sql`. A statement that applies cleanly to a fresh install can
+**Schema changes**: if you touched `migrations/000_combined.sql`, run
+`PGHOST=<scratch host or socket dir> PGUSER=<user> bun run check:schema-upgrades` and
+`bun run check:sqlite-vintages` yourself. The upgrade check creates and drops databases, so name a
+scratch PostgreSQL you started for it. With no server named it exits before connecting, and it does
+not read `DATABASE_URL` from `.env`. A statement that applies cleanly to a fresh install can
 abort the whole apply on an upgrade, and nothing before that job catches it.
 
 **SDLC workflows**: We do not accept pull requests from outside contributors

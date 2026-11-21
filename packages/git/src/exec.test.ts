@@ -1,3 +1,4 @@
+// @archon-test-windows
 import { afterEach, describe, expect, it } from 'bun:test';
 import { execFileAsync, resolveBashPath } from './exec';
 

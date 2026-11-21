@@ -74,7 +74,13 @@ export function createReceiptOperations(
     acceptStartReceipt: input =>
       write(async tx => {
         sourceReceiptAcceptanceSchema.parse(input);
-        if (input.receipt.itemKey !== undefined) throw new FileStoreUnsupportedError('items');
+        if (
+          input.receipt.itemKey !== undefined ||
+          input.bindings.some(
+            binding => binding.itemKey !== undefined || binding.wake !== undefined
+          )
+        )
+          throw new FileStoreUnsupportedError('items');
         const deliveryPath =
           input.receipt.deliveryId === null
             ? null
@@ -104,6 +110,7 @@ export function createReceiptOperations(
               status: 'pending' as const,
               ownerId: null,
               error: null,
+              forgeRefusal: null,
               intent,
               requestIds: [],
             })),
@@ -115,6 +122,7 @@ export function createReceiptOperations(
               status: item.status,
               ownerId: null,
               error: item.reason,
+              forgeRefusal: null,
               intent: null,
               requestIds: [],
             })),
@@ -160,6 +168,8 @@ export function createReceiptOperations(
             id,
             sourceInstanceId,
             deliveryId,
+            // The file store refuses a receipt that names an item.
+            itemKey: null,
             outcome,
             reason,
             receivedAt,
@@ -220,6 +230,7 @@ export function createReceiptOperations(
         const result = await tx.admit(preparedBindingStart(item.intent, input), runs);
         item.status = 'complete';
         item.error = null;
+        item.forgeRefusal = null;
         return result;
       }),
     failStartBindingPreparation: input =>
@@ -228,6 +239,7 @@ export function createReceiptOperations(
         if (!item) return false;
         item.status = input.retryable ? 'failed' : 'rejected';
         item.error = input.error;
+        item.forgeRefusal = input.forgeRefusal ?? null;
         return true;
       }),
     resetStartBindingPreparation: input =>

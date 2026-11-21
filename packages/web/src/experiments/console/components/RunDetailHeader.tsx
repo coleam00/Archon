@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactElement } from 'react';
 import { Link } from 'react-router';
 import { RunningDot } from './LiveDot';
 import { OwnerObservationHint } from './OwnerObservationHint';
+import { OperatorPauseHint } from './OperatorPauseHint';
 import { OriginBadge } from './OriginBadge';
 import { runPhaseStart, type Run } from '../primitives/run';
 import {
@@ -157,6 +158,7 @@ export function RunDetailHeader({
       </div>
 
       <OwnerObservationHint run={run} className="w-full" />
+      <OperatorPauseHint run={run} className="w-full" />
 
       {/* Provenance sub-row: the input that started this run. `w-full` forces its
           own line in the flex-wrap header.

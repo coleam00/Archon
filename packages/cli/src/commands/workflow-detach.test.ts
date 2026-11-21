@@ -1091,10 +1091,13 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
       buildAiProfile('codex'),
       {}
     );
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    const launchedRow = {
       ...preCreatedRow,
       metadata: { ...preCreatedRow.metadata, ai_configuration: snapshot },
-    });
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(launchedRow)
+      .mockResolvedValueOnce(launchedRow);
     (prepareWorkflowSource as ReturnType<typeof mock>).mockClear();
     (executeWorkflow as ReturnType<typeof mock>).mockClear();
 
@@ -1138,7 +1141,10 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
       workflows: [makeTestWorkflowWithSource({ name: 'plan', description: 'Plan work' })],
       errors: [],
     });
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(preCreatedRow);
+    // Admission reads the row, then the child reads it again under its lease.
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(preCreatedRow)
+      .mockResolvedValueOnce(preCreatedRow);
     // No project resolves, so the isolation gate throws after the row was handed over.
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
     (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
@@ -1165,7 +1171,10 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
       workflows: [makeTestWorkflowWithSource({ name: 'plan', description: 'Plan work' })],
       errors: [],
     });
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(preCreatedRow);
+    // Admission reads the row, then the child reads it again under its lease.
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(preCreatedRow)
+      .mockResolvedValueOnce(preCreatedRow);
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
     (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       failed: false,
@@ -1198,7 +1207,10 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
       workflows: [makeTestWorkflowWithSource({ name: 'plan', description: 'Plan work' })],
       errors: [],
     });
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(preCreatedRow);
+    // Admission reads the row, then the child reads it again under its lease.
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(preCreatedRow)
+      .mockResolvedValueOnce(preCreatedRow);
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'cb-1',
       name: 'test/repo',
@@ -1238,6 +1250,42 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
 
   // #2872 R3 — the flag names a row this process will execute AS. Both halves are
   // checked: that this really is a detached child, and that the row is claimable.
+  // `workflow cancel` can record the row cancelled after admission read it pending but
+  // before this child took its lease; the read under the lease stops it before setup.
+  it('stops before setup when the row was cancelled before its lease started', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'plan', description: 'Plan work' })],
+      errors: [],
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-1',
+      name: 'test/repo',
+      default_cwd: '/test/path',
+      kind: 'repo',
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(preCreatedRow)
+      .mockResolvedValueOnce({ ...preCreatedRow, status: 'cancelled' });
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {
+        detachedRunId: 'run-precreated',
+        conversationId: 'cli-123',
+        noWorktree: true,
+      })
+    ).rejects.toThrow("Cannot execute run 'run-precreated': it is cancelled");
+
+    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('run-precreated', {
+      detachedProcessPid: process.pid,
+    });
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
   it('refuses the flag outside a detached child', async () => {
     delete process.env.ARCHON_DETACHED_RUN_OWNER;
 
@@ -2069,11 +2117,9 @@ describe('buildDetachedRunCmd', () => {
   // fixture modelled a compiled argv with no argv[1] at all, which is why
   // #2248 (detached child dies with `Unknown command: B:/~BUN/root/...`)
   // shipped green.
-  // `--input` is the first repeatable flag in the tree (#2554). Nothing here handles
-  // repetition specially — argv is forwarded verbatim — so this pins the property a
-  // future change to the argv rebuild could silently break, turning a detached run into
-  // one that starts with its inputs missing instead of failing.
-  it('forwards every repeated --input to the detached child', () => {
+  // The child gates on the inputs its launcher recorded on the row (#5678): an input
+  // file is read once, before the run starts, and no input value rides the child's argv.
+  it('drops --input and --input-file, with their values, from the detached child', () => {
     const cmd = buildDetachedRunCmd(
       false,
       '/path/to/bun',
@@ -2085,18 +2131,25 @@ describe('buildDetachedRunCmd', () => {
         'review-block',
         '--input',
         'diff=D1',
-        '--input',
-        'style=terse',
+        '--input=style=terse',
+        '--input-file',
+        'notes=notes.md',
+        '--input-file=plan=plan.json',
         '--detach',
       ],
       '/abs/cwd',
       []
     );
 
-    expect(cmd.filter(arg => arg === '--input')).toHaveLength(2);
-    expect(cmd).toContain('diff=D1');
-    expect(cmd).toContain('style=terse');
-    expect(cmd).not.toContain('--detach');
+    expect(cmd).toEqual([
+      '/path/to/bun',
+      '/abs/cli.ts',
+      'workflow',
+      'run',
+      'review-block',
+      '--cwd',
+      '/abs/cwd',
+    ]);
   });
 
   it('binary mode: uses [execPath] only (no duplicated entry arg), drops the Bun SFE virtual argv[1]', () => {

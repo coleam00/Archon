@@ -1,18 +1,29 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import { resolveAttentionProject } from '@archon/core/operations/attention-queue';
+import {
+  attentionQueueSource,
+  resolveAttentionProject,
+} from '@archon/core/operations/attention-queue';
+import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
+import { reportItemMetrics } from '@archon/workflows/item-metrics';
+import type { ItemMetricFigures, ItemMetricsReport } from '@archon/workflows/schemas/item-metric';
+import { liveSourceRoots, workflowSourceConfigFrom } from '@archon/workflows/workflow-source';
+import type { LiveWorkflowSourceRoots } from '@archon/workflows/workflow-source/roots';
 import {
   MetricsByModelNodeError,
+  MetricsDimensionKeyError,
   MetricsQueryError,
   queryMetrics,
   resolveMetricsSplit,
   resolveMetricsWindow,
 } from '@archon/workflows/metrics';
 import type {
+  MetricByDimension,
   MetricByModel,
   MetricCohort,
   MetricCompare,
   MetricCost,
   MetricDefinition,
+  MetricDimensionGroup,
   MetricInstrumentReport,
   MetricModelGroup,
   MetricRefusal,
@@ -29,24 +40,37 @@ export interface MetricsCommandOptions {
   compare?: string;
   /** Split each metric by the model label that ran this node; exclusive with `compare`. */
   byModel?: string;
+  /** Split each metric by the value its records carry for this dimension key. */
+  byDimension?: string;
   /** A codebase id, name or project key, resolved as `workflow attention --project` does. */
   project?: string;
   json?: boolean;
 }
 
 // Scripts branch on these, never on message text.
-const EXIT = { ok: 0, usage: 1, unknownNode: 2, refused: 4 } as const;
+const EXIT = { ok: 0, usage: 1, unknownSplit: 2, refused: 4 } as const;
 
 type MetricsHost = Pick<WorkflowHost, 'deps' | 'records'>;
 
 class MetricsUsageError extends Error {}
 
-async function resolveCodebaseId(host: MetricsHost, spec: string): Promise<string> {
+interface MetricsProject {
+  key: string;
+  codebaseId: string;
+  /** The codebase's checkout, whose config and `.archon/workflows` packs declare item metrics. */
+  cwd: string;
+}
+
+async function resolveProject(host: MetricsHost, spec: string): Promise<MetricsProject> {
   const project = await resolveAttentionProject(host.records.codebases, spec);
-  if (project.codebaseId === null) {
+  const codebase =
+    project.codebaseId === null
+      ? null
+      : await host.records.codebases.getCodebase(project.codebaseId);
+  if (codebase === null) {
     throw new MetricsUsageError(`Project '${spec}' is not a registered codebase.`);
   }
-  return project.codebaseId;
+  return { key: project.key, codebaseId: codebase.id, cwd: codebase.default_cwd };
 }
 
 function latestText(latest: MetricInstrumentReport['latest']): string {
@@ -94,15 +118,17 @@ function compareLines(compare: MetricCompare): string[] {
   ];
 }
 
+function vsRestText(group: MetricModelGroup | MetricDimensionGroup): string {
+  return group.delta_vs_rest === null
+    ? ''
+    : `  vs rest ${figure(group.delta_vs_rest)}${intervalText(group.delta_interval_vs_rest)}  separated: ${group.separated ? 'yes' : 'no'}`;
+}
+
 function modelGroupLine(group: MetricModelGroup): string {
   const name = group.split === 'model' ? group.label : `(${group.split})`;
   const models =
     group.requested_models.length === 0 ? '' : `  requested ${group.requested_models.join(', ')}`;
-  const delta =
-    group.delta_vs_rest === null
-      ? ''
-      : `  vs rest ${figure(group.delta_vs_rest)}${intervalText(group.delta_interval_vs_rest)}  separated: ${group.separated ? 'yes' : 'no'}`;
-  return `  ${name}: ${cohortText('value', group)}${delta}${models}; ${costText(group.cost)}`;
+  return `  ${name}: ${cohortText('value', group)}${vsRestText(group)}${models}; ${costText(group.cost)}`;
 }
 
 function byModelLines(byModel: MetricByModel): string[] {
@@ -112,11 +138,24 @@ function byModelLines(byModel: MetricByModel): string[] {
   ];
 }
 
+function dimensionGroupLines(group: MetricDimensionGroup): string[] {
+  const name = group.split === 'value' ? group.label : '(none)';
+  return [
+    `  ${name}: ${cohortText('value', group)}${vsRestText(group)}; ${costText(group.cost)}`,
+    ...(group.compare ? compareLines(group.compare).map(line => `    ${line}`) : []),
+  ];
+}
+
+function byDimensionLines(byDimension: MetricByDimension): string[] {
+  return [`by ${byDimension.key}:`, ...byDimension.groups.flatMap(dimensionGroupLines)];
+}
+
 function detailLines(entry: MetricInstrumentReport, indent: string): string[] {
   return [
     costText(entry.cost),
     ...(entry.compare ? compareLines(entry.compare) : []),
     ...(entry.by_model ? byModelLines(entry.by_model) : []),
+    ...(entry.by_dimension ? byDimensionLines(entry.by_dimension) : []),
   ].map(line => `${indent}${line}`);
 }
 
@@ -155,6 +194,8 @@ const OBSERVATIONAL = {
     'The comparison is observational: the cohorts also differ in the work they ran and in anything else that changed around the cut.',
   byModel:
     'The split is observational: each model ran the work it was routed, so a difference mixes the model with the work.',
+  byDimension:
+    'The split is observational: each value covers different work, so a difference mixes the dimension with the work.',
 } as const;
 
 function definitionText(definition: MetricDefinition): string {
@@ -171,11 +212,48 @@ function refusalLine(refusal: MetricRefusal): string {
   return `error: metric ${refusal.name} is ${definitionText(definition)}; ${where} offered ${definitionText(offered)}`;
 }
 
-/** The note a split report ends with; a report carries at most one kind of split. */
+/** The notes a split report ends with: one per kind of split it carries. */
 function observationalNote(report: MetricsReport): string[] {
   const entries = report.metrics.flatMap(metric => metric.instruments);
-  if (entries.some(entry => entry.compare !== undefined)) return [OBSERVATIONAL.compare];
-  return entries.some(entry => entry.by_model !== undefined) ? [OBSERVATIONAL.byModel] : [];
+  const groups = entries.flatMap(entry => entry.by_dimension?.groups ?? []);
+  const compared =
+    entries.some(entry => entry.compare !== undefined) ||
+    groups.some(group => group.compare !== undefined);
+  return [
+    ...(entries.some(entry => entry.by_dimension !== undefined) ? [OBSERVATIONAL.byDimension] : []),
+    ...(entries.some(entry => entry.by_model !== undefined) ? [OBSERVATIONAL.byModel] : []),
+    ...(compared ? [OBSERVATIONAL.compare] : []),
+  ];
+}
+
+function itemFiguresText(figures: ItemMetricFigures): string {
+  const value = figures.value === null ? 'none' : figure(figures.value);
+  if (figures.op === 'share')
+    return `share ${value} (${String(figures.numerator)} of ${String(figures.denominator)})`;
+  if (figures.op === 'count')
+    return `${value} per item (${String(figures.total)} over ${String(figures.n)} items)`;
+  return `${value} hours mean (n ${String(figures.n)}, ${String(figures.missing)} missing a time)`;
+}
+
+function itemMetricsText(report: ItemMetricsReport): string {
+  const lines = [
+    `Item metrics for ${report.project} over ${String(report.items)} items with a run from ${report.window.since} to ${report.window.until}:`,
+  ];
+  if (report.degraded_items.length > 0)
+    lines.push(
+      `  ${String(report.degraded_items.length)} item(s) could not be read whole: ${report.degraded_items.join(', ')}`
+    );
+  const declared = report.packs.filter(pack => pack.metrics.length > 0);
+  if (declared.length === 0) lines.push('  none declared');
+  for (const pack of declared) {
+    lines.push(`  ${pack.pack} (${pack.source}):`);
+    for (const { name, groups, ...figures } of pack.metrics) {
+      lines.push(`    ${name}  ${itemFiguresText(figures)}`);
+      for (const { group, ...each } of groups ?? [])
+        lines.push(`      ${group ?? '(none)'}: ${itemFiguresText(each)}`);
+    }
+  }
+  return `${lines.join('\n')}\n`;
 }
 
 function reportText(report: MetricsReport): string {
@@ -188,35 +266,108 @@ function reportText(report: MetricsReport): string {
 /**
  * `archon metrics [name]`: aggregate stored metric records over a window. Exits 4 when
  * any record was refused, so a script can tell a clean report from one with conflicts,
- * and 2 when no producing run ran the `--by-model` node.
+ * and 2 when no producing run ran the `--by-model` node or no record carries the
+ * `--by-dimension` key.
  */
 export async function metricsCommand(
   host: MetricsHost,
   name: string | undefined,
   options: MetricsCommandOptions,
-  io: { now?: Date; stdout?: typeof writeStdout; stderr?: typeof writeStderr } = {}
+  io: {
+    now?: Date;
+    stdout?: typeof writeStdout;
+    stderr?: typeof writeStderr;
+    /** Where packs declare item metrics; the project's checkout and config when absent. */
+    sourceRoots?: LiveWorkflowSourceRoots;
+  } = {}
 ): Promise<number> {
   const stdout = io.stdout ?? writeStdout;
   const stderr = io.stderr ?? writeStderr;
-  let report: MetricsReport;
+  let queried: { report: MetricsReport; project: MetricsProject | null };
   try {
-    report = await queryMetrics(host.deps.store, {
-      ...resolveMetricsWindow(options, io.now),
-      ...(name === undefined ? {} : { name }),
-      ...(options.subject === undefined ? {} : { subject: options.subject }),
-      ...resolveMetricsSplit(options),
-      ...(options.project === undefined
-        ? {}
-        : { codebaseId: await resolveCodebaseId(host, options.project) }),
-    });
+    queried = await queryReport(host, name, options, io.now);
   } catch (error) {
     if (!(error instanceof MetricsQueryError || error instanceof MetricsUsageError)) throw error;
     await stderr(`Error: ${error.message}\n`);
-    return error instanceof MetricsByModelNodeError ? EXIT.unknownNode : EXIT.usage;
+    return error instanceof MetricsByModelNodeError || error instanceof MetricsDimensionKeyError
+      ? EXIT.unknownSplit
+      : EXIT.usage;
   }
+  const { report, project } = queried;
+  // Item metrics are per project and have no subject or split, so those filters leave them out.
+  const split =
+    options.subject !== undefined ||
+    options.compare !== undefined ||
+    options.byModel !== undefined ||
+    options.byDimension !== undefined;
+  const itemMetrics =
+    project === null || split
+      ? null
+      : await projectItemMetrics(host, project, name, report.window, io, stderr);
+  return writeReport(report, itemMetrics, options.json === true, stdout, stderr);
+}
 
+async function writeReport(
+  report: MetricsReport,
+  itemMetrics: ItemMetricsReport | null,
+  json: boolean,
+  stdout: typeof writeStdout,
+  stderr: typeof writeStderr
+): Promise<number> {
   // Same document form as writeJsonLine, through the injectable stdout.
-  await stdout(options.json ? `${JSON.stringify(report, null, 2)}\n` : reportText(report));
+  await stdout(
+    json
+      ? `${JSON.stringify({ ...report, item_metrics: itemMetrics }, null, 2)}\n`
+      : `${reportText(report)}${itemMetrics === null ? '' : itemMetricsText(itemMetrics)}`
+  );
   for (const refusal of report.refused) await stderr(`${refusalLine(refusal)}\n`);
+  for (const failure of itemMetrics?.errors ?? [])
+    await stderr(`error: item metrics of ${failure.pack} (${failure.source}): ${failure.error}\n`);
   return report.refused.length > 0 ? EXIT.refused : EXIT.ok;
+}
+
+async function queryReport(
+  host: MetricsHost,
+  name: string | undefined,
+  options: MetricsCommandOptions,
+  now: Date | undefined
+): Promise<{ report: MetricsReport; project: MetricsProject | null }> {
+  const window = resolveMetricsWindow(options, now);
+  const project =
+    options.project === undefined ? null : await resolveProject(host, options.project);
+  const report = await queryMetrics(host.deps.store, {
+    ...window,
+    ...(name === undefined ? {} : { name }),
+    ...(options.subject === undefined ? {} : { subject: options.subject }),
+    ...resolveMetricsSplit(options),
+    ...(project === null ? {} : { codebaseId: project.codebaseId }),
+  });
+  return { report, project };
+}
+
+/** Null on the file store, which keeps no items; that is said on stderr, not left silent. */
+async function projectItemMetrics(
+  host: MetricsHost,
+  project: MetricsProject,
+  name: string | undefined,
+  window: MetricsReport['window'],
+  io: { sourceRoots?: LiveWorkflowSourceRoots },
+  stderr: typeof writeStderr
+): Promise<ItemMetricsReport | null> {
+  const roots =
+    io.sourceRoots ??
+    liveSourceRoots(project.cwd, workflowSourceConfigFrom(await host.deps.loadConfig(project.cwd)));
+  try {
+    return await reportItemMetrics(
+      attentionQueueSource(host.deps.store, host.records.isolation),
+      roots,
+      project.key,
+      window,
+      name === undefined ? {} : { name }
+    );
+  } catch (error) {
+    if (!(error instanceof FileStoreUnsupportedError)) throw error;
+    await stderr(`note: item metrics left out: ${error.message}\n`);
+    return null;
+  }
 }

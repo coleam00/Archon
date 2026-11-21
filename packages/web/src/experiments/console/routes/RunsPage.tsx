@@ -17,7 +17,7 @@ import { useEntity } from '../store/cache';
 import { K, type Scope } from '../store/keys';
 import { useKeymap, type Binding } from '../lib/keymap';
 import * as skill from '../skills';
-import { runDetailPath, type ItemAsk, type Run } from '../primitives/run';
+import { runDetailPath, type ItemAsk, type OwnerLostHolder, type Run } from '../primitives/run';
 import { ensureUtc } from '../lib/format';
 import type { RunCounts } from '../skills/runs';
 import type { Project } from '../primitives/project';
@@ -401,6 +401,7 @@ export function RunsPage(): ReactElement {
       ))}
       <PendingInputBanner
         runs={pending.visible}
+        ownerLost={pending.ownerLost}
         showProject={scope === 'all'}
         onDismiss={pending.dismiss}
         itemAsks={pending.itemAsks}
@@ -464,6 +465,8 @@ interface PendingInput {
   degraded: skill.RunsAttention['degraded'];
   /** Pending-input runs the banner shows: in scope and not dismissed. */
   visible: Run[];
+  /** In-scope runs holding their item while their owner is gone. */
+  ownerLost: OwnerLostHolder[];
   promotedRunIds: ReadonlySet<string>;
   error: Error | undefined;
   dismiss: (runId: string) => void;
@@ -526,8 +529,16 @@ function usePendingInput(demoRuns: Run[], scope: Scope): PendingInput {
     scope === 'all' ? report : { type: report.type, reason: report.reason }
   );
   const inScope = (ask: ItemAsk): boolean => scope === 'all' || ask.project?.codebaseId === scope;
+  const ownerLost = useMemo(
+    () =>
+      (attentionRuns?.ownerLost ?? []).filter(
+        holder => scope === 'all' || holder.projectId === scope
+      ),
+    [attentionRuns, scope]
+  );
   return {
     visible,
+    ownerLost,
     promotedRunIds,
     degraded,
     error,

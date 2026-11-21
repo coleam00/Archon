@@ -290,6 +290,7 @@ export type WorkflowErrorClass =
   | 'timeout'
   | 'exec_failed'
   | 'output_contract'
+  | 'schema_unmet'
   | 'max_iterations'
   | 'child_failed'
   | 'cancelled'

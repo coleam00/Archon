@@ -121,6 +121,10 @@ export const WORKFLOW_EVENT_TYPES = [
   // paused instead of failed. `data` carries `node_id`, `path` (when known), `error` and
   // `retry_at`; any host that can read the source continues it.
   'source_released',
+  // An operator's pause request took effect at a node boundary: the run moved from running
+  // to paused in the same transaction. `data` carries `requested` (who asked, through
+  // which surface, when) and `paused_at`.
+  'operator_paused',
   'workflow_artifact',
   'integration_operation',
   'node_session_resumed',
@@ -165,6 +169,9 @@ export const WORKFLOW_EVENT_TYPES = [
   // nobody has to act on. `data` is `workflowNoticeDataSchema`: `text`, `labels` and the
   // emitting `node`; the row's timestamp is when. Never pauses the run.
   'workflow_notice',
+  // The engine sent a stalled session a message, or found its provider cannot take one.
+  // `data` is `stallMessageEventDataSchema` (`schemas/workflow-event.ts`).
+  'stall_message',
   // #2512 — audit snapshot of a composed fan-out's ordered instance set (identity +
   // item per ordinal), written before the first instance schedules.
   'fan_out_instances',

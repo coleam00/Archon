@@ -14,7 +14,7 @@ export interface WorkflowOutputs {
       readonly summary: string;
     };
   };
-  'archon-build-queue': {
+  'archon-build-pick': {
     start: {
       readonly repo: {
         readonly host: string;
@@ -52,17 +52,50 @@ export interface WorkflowOutputs {
       } | null;
       readonly reason: string;
     };
+    handoff: {
+      readonly summary: string;
+    };
+    order: {
+      readonly summary: string;
+    };
+    fire: {
+      readonly fired: ReadonlyArray<number>;
+      readonly summary: string;
+    };
+    blocked: {
+      readonly blocked: ReadonlyArray<{
+        readonly number: number;
+        readonly summary: string;
+        readonly blocked_at: string;
+        readonly blocked_reason: string;
+        readonly blocked_by: ReadonlyArray<string>;
+      }>;
+      readonly blocked_count: number;
+    };
+    revisit: {
+      readonly retriage: ReadonlyArray<{
+        readonly number: number;
+        readonly reason: string;
+      }>;
+    };
+    retriage: {
+      readonly retriaged: ReadonlyArray<number>;
+      readonly summary: string;
+    };
+  };
+  'archon-build-queue': {
     facts: {
-      readonly path: 'idle' | 'closed' | 'route' | 'order' | 'handoff';
+      readonly path: 'closed' | 'route';
       readonly item: {
         readonly repo: {
           readonly host: string;
           readonly path: string;
         };
         readonly number: number;
-      } | null;
+      };
       readonly url: string;
-      readonly record: Readonly<Record<string, unknown>> | null;
+      readonly read_at: string;
+      readonly record: Readonly<Record<string, unknown>>;
       readonly brief: string;
       readonly rounds: ReadonlyArray<Readonly<Record<string, unknown>>>;
       readonly at_cap: boolean;
@@ -132,14 +165,8 @@ export interface WorkflowOutputs {
         };
       } | null;
     };
-    handoff: {
-      readonly summary: string;
-    };
-    order: {
-      readonly summary: string;
-    };
     apply: {
-      readonly decision: 'idle' | 'order' | 'handoff' | 'parked' | 'ready' | 'continue' | 'asked' | 'launch';
+      readonly decision: 'parked' | 'ready' | 'continue' | 'asked';
       readonly summary: string;
       readonly question: string;
       readonly options: ReadonlyArray<{
@@ -153,31 +180,10 @@ export interface WorkflowOutputs {
       readonly item: string;
       readonly pr: string;
       readonly asked: Readonly<Record<string, unknown>> | null;
-      readonly healthy: boolean;
     };
     ruling: {
-      readonly decision: 'continue' | 'ready' | 'park';
+      readonly decision: 'continue' | 'ready' | 'parked';
       readonly section: string;
-      readonly summary: string;
-    };
-    blocked: {
-      readonly blocked: ReadonlyArray<{
-        readonly number: number;
-        readonly summary: string;
-        readonly blocked_at: string;
-        readonly blocked_reason: string;
-        readonly blocked_by: ReadonlyArray<string>;
-      }>;
-      readonly blocked_count: number;
-    };
-    revisit: {
-      readonly retriage: ReadonlyArray<{
-        readonly number: number;
-        readonly reason: string;
-      }>;
-    };
-    retriage: {
-      readonly retriaged: ReadonlyArray<number>;
       readonly summary: string;
     };
   };
@@ -336,7 +342,7 @@ export interface WorkflowOutputs {
     outcome: {
       readonly path: 'idle' | 'quiet' | 'closed' | 'outside' | 'triage';
       readonly item: number | null;
-      readonly outcome: 'new' | 'needs_maintainer' | 'investigate' | 'plan' | 'deliver' | 'continue' | 'split' | 'needs_contract' | 'blocked' | 'close' | 'idle';
+      readonly outcome: 'new' | 'needs_maintainer' | 'investigate' | 'plan' | 'deliver' | 'continue' | 'unchanged' | 'split' | 'needs_contract' | 'blocked' | 'close' | 'idle';
       readonly trust: string | null;
       readonly promoted: boolean;
       readonly labels: ReadonlyArray<string>;
@@ -840,13 +846,15 @@ export type NodeOutput<
  * is the schema itself.
  */
 export const OUTPUT_ENUMS = {
-  'archon-build-queue': {
+  'archon-build-pick': {
     interpret: {
       decision: ['build', 'choose', 'order', 'intake', 'none'],
       'recommendation.confidence': ['low', 'medium', 'high'],
     },
+  },
+  'archon-build-queue': {
     facts: {
-      path: ['idle', 'closed', 'route', 'order', 'handoff'],
+      path: ['closed', 'route'],
     },
     route: {
       decision: ['launch', 'ask', 'ready'],
@@ -861,11 +869,11 @@ export const OUTPUT_ENUMS = {
       'ask.recommendation.confidence': ['low', 'medium', 'high'],
     },
     apply: {
-      decision: ['idle', 'order', 'handoff', 'parked', 'ready', 'continue', 'asked', 'launch'],
+      decision: ['parked', 'ready', 'continue', 'asked'],
       class: ['', 'route', 'stop', 'scope'],
     },
     ruling: {
-      decision: ['continue', 'ready', 'park'],
+      decision: ['continue', 'ready', 'parked'],
     },
   },
   'archon-deliver': {
@@ -901,7 +909,7 @@ export const OUTPUT_ENUMS = {
     },
     outcome: {
       path: ['idle', 'quiet', 'closed', 'outside', 'triage'],
-      outcome: ['new', 'needs_maintainer', 'investigate', 'plan', 'deliver', 'continue', 'split', 'needs_contract', 'blocked', 'close', 'idle'],
+      outcome: ['new', 'needs_maintainer', 'investigate', 'plan', 'deliver', 'continue', 'unchanged', 'split', 'needs_contract', 'blocked', 'close', 'idle'],
     },
   },
   'archon-investigate': {

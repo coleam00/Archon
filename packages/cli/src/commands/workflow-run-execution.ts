@@ -5,7 +5,11 @@ import {
   type IWorkflowEngine,
   type WorkflowRunSubscription,
 } from '@archon/workflows/engine-port';
-import { WorkflowResourceBusyError } from '@archon/workflows/store';
+import {
+  leasedResumeCursor,
+  WorkflowItemHeldError,
+  WorkflowResourceBusyError,
+} from '@archon/workflows/store';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import { isTerminalRunStatus, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
@@ -269,7 +273,7 @@ async function driveRun(
 ): Promise<RunResult> {
   const { resumable } = launch;
   if (launch.request.options.resume && resumable) {
-    return resumeRun(launch, resumable, onExecutionClaimed, prepareExecution);
+    return resumeRun(launch, lease, resumable, onExecutionClaimed, prepareExecution);
   }
   return submitRun(launch, lease, commonRunOptions(launch, onExecutionClaimed));
 }
@@ -309,7 +313,7 @@ function commonRunOptions(
     source: admission.workflowEntry?.source,
     parseWarnings: admission.workflowEntry?.parseWarnings,
     baseBranch: codebaseDefaultBranch,
-    baseOverride: admission.flagBase,
+    baseOverride: launch.base?.branch,
     execContext: workspace.execContext,
     container: containerRunCtx,
     resolveChildIsolation,
@@ -320,6 +324,7 @@ function commonRunOptions(
 
 async function resumeRun(
   launch: ForegroundLaunch,
+  lease: OwnedRunLease,
   resumable: WorkflowRun,
   onExecutionClaimed: OnExecutionClaimed,
   prepareExecution: Parameters<IWorkflowEngine['resume']>[0]['prepareExecution']
@@ -344,13 +349,13 @@ async function resumeRun(
       legacyWorkflow: admission.workflow,
       userMessage: request.userMessage,
       run: resumable,
-      cursor: request.options.continuationCursor,
+      cursor: leasedResumeCursor(request.options.continuationCursor, lease.ownerLease()),
       options: prepareAdmitted ? undefined : commonRunOptions(launch, onExecutionClaimed),
       ...(prepareAdmitted ? { prepareExecution: prepareAdmitted } : {}),
     });
   } catch (error) {
-    // The run is intact; only its resource is busy, so say that and nothing else.
-    if (error instanceof WorkflowResourceBusyError)
+    // The run is intact; only its resource or its item is busy, so say that and nothing else.
+    if (error instanceof WorkflowResourceBusyError || error instanceof WorkflowItemHeldError)
       throw new Error(`Cannot resume workflow '${workflowName}' now: ${error.message}`, {
         cause: error,
       });

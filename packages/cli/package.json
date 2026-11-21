@@ -46,6 +46,9 @@
       "src/routes/workflow-run.test.ts"
     ],
     [
+      "src/routes/workflow.test.ts"
+    ],
+    [
       "src/commands/image-chat-plugin.test.ts"
     ],
     [
@@ -128,6 +131,9 @@
       "src/commands/workflow-wait.test.ts"
     ],
     [
+      "src/commands/workflow-item-runs.test.ts"
+    ],
+    [
       "src/commands/workflow-detach.test.ts"
     ],
     [
@@ -186,6 +192,9 @@
       "src/commands/metrics.test.ts"
     ],
     [
+      "src/commands/tracker.test.ts"
+    ],
+    [
       "src/cli.test.ts",
       "src/workflow-scope-boot.test.ts",
       "src/help.test.ts",
@@ -195,7 +204,8 @@
       "src/utils/safe-console.test.ts",
       "src/utils/cli-start-telemetry.test.ts",
       "src/utils/cli-program-arguments.test.ts",
-      "src/utils/run-job-escape.test.ts"
+      "src/utils/run-job-escape.test.ts",
+      "src/utils/tracker-exit.test.ts"
     ],
     [
       "src/utils/detached-resume-receipt.test.ts"
@@ -226,6 +236,9 @@
     ],
     [
       "src/triggers/native-schedule.test.ts"
+    ],
+    [
+      "src/triggers/add-trigger-file.test.ts"
     ],
     [
       "src/commands/workflow-continuations.test.ts"

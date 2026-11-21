@@ -46,7 +46,7 @@ describe('persisted run usage', () => {
   });
 });
 
-it('persists the provider-owned aggregate axes and excludes provider-only totals', () => {
+it('persists aggregate axes without duplicating request evidence or provider-only totals', () => {
   const tokens = {
     input: 0,
     output: 0,
@@ -55,8 +55,10 @@ it('persists the provider-owned aggregate axes and excludes provider-only totals
     cachePartial: true as const,
     total: 99,
     cost: 5,
+    calls: [{ input: 0, output: 0 }],
+    callsPartial: true as const,
   };
-  const owner = tokenUsageSchema.omit({ total: true, cost: true });
+  const owner = tokenUsageSchema.omit({ total: true, cost: true, calls: true, callsPartial: true });
   const metadata = serializeRunUsage({ tokens });
   expect(Object.keys(metadata)).toHaveLength(owner.keyof().options.length);
   expect(parseRunUsage(metadata).tokens).toEqual(owner.parse(tokens));
