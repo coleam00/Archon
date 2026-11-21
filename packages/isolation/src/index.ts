@@ -81,7 +81,7 @@ export {
 } from './errors';
 
 // --- Factory ---
-export { getIsolationProvider, configureIsolation } from './factory';
+export { getIsolationProvider, configureIsolation, checkWorktreeStartable } from './factory';
 
 // --- Resolver ---
 export { IsolationResolver } from './resolver';

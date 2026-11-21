@@ -91,6 +91,7 @@ export type IsolationFailureKind =
   | 'permission_denied'
   | 'no_space'
   | 'configured_branch_missing'
+  | 'no_local_base'
   | 'submodule_failed'
   | 'branch_checked_out'
   | 'branch_exists'
@@ -118,6 +119,7 @@ const FAILURE_MESSAGES = {
   no_space: '**Error:** No disk space available for new workspace.',
   not_repository: '**Error:** Target path is not a valid git repository.',
   configured_branch_missing: undefined,
+  no_local_base: undefined,
   default_branch_missing:
     '**Error:** No base branch could be detected. Set `worktree.baseBranch` in ' +
     '`.archon/config.yaml` or update the registered codebase default branch.',

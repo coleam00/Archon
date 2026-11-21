@@ -47,6 +47,7 @@ import {
   getLog,
   setupLockReasonFor,
 } from './shared';
+import type { WorktreeRemote } from './shared';
 
 type BranchCheckout =
   | ({ kind: 'checked_out' } & Awaited<ReturnType<typeof createNewBranch>>)
@@ -256,24 +257,34 @@ async function checkOutBranch(
     return { kind: 'checked_out', branchCreated: false };
   }
 
-  // Resolve git remote name: explicit config > auto-detect > actionable error
-  const remote = await resolveRemote(repoPath, worktreeConfig?.remote);
+  const remote = await checkWorktreeStart(repoPath, worktreeConfig);
 
   // Base precedence: a per-dispatch --base override (request.baseOverride) wins,
   // then explicit repo config, then the registered codebase's default branch
-  // (request.baseBranch), then auto-detect via getDefaultBranch.
+  // (request.baseBranch), then auto-detect: the remote's default branch, or with no
+  // remote the checkout's current branch.
   const preferredBaseBranch =
     request.baseOverride ?? worktreeConfig?.baseBranch ?? request.baseBranch;
-  const baseBranch = await syncWorkspaceBeforeCreate(repoPath, preferredBaseBranch, remote);
 
   if (isPRIsolationRequest(request)) {
+    if (remote.kind === 'none') {
+      throw new Error(
+        `Cannot check out PR #${request.identifier}: ${repoPath} has no git remote to fetch it from.`
+      );
+    }
+    await syncWorkspaceBeforeCreate(repoPath, preferredBaseBranch, remote.name);
     // For PRs: fetch and checkout the PR branch (actual or synthetic)
-    const pr = await createFromPR(request, worktreePath, setupLockReason, remote);
+    const pr = await createFromPR(request, worktreePath, setupLockReason, remote.name);
     if ('adopted' in pr) {
       return { kind: 'adopted', environment: pr.adopted };
     }
     return { kind: 'checked_out', branchCreated: pr.branchCreated };
   }
+
+  const baseBranch =
+    remote.kind === 'remote'
+      ? await syncWorkspaceBeforeCreate(repoPath, preferredBaseBranch, remote.name)
+      : await resolveLocalBase(repoPath, preferredBaseBranch);
   // For issues, tasks, threads: create new branch
   const created = await createNewBranch(
     request,
@@ -367,16 +378,32 @@ async function refreshIndex(worktreePath: string): Promise<void> {
 }
 
 /**
- * Resolve the git remote name to use for all fetch/push operations.
+ * The base-independent facts a new worktree needs, checked before anything is
+ * created: which remote to fetch from (or none), and, with no remote, that the
+ * repository has a commit to cut from. Creation calls this first, and trigger
+ * preparation calls it before admission, so the two cannot disagree.
  *
- * Resolution order: explicit config (worktree.remote) > auto-detect via
- * getDefaultRemote() > actionable error when ambiguous.
+ * Remote resolution: explicit config (worktree.remote) > auto-detect via
+ * getDefaultRemote() > none when the repository has no remote > actionable
+ * error when several remotes leave the choice ambiguous.
  */
-async function resolveRemote(repoPath: RepoPath, configuredRemote?: string): Promise<string> {
+export async function checkWorktreeStart(
+  repoPath: RepoPath,
+  worktreeConfig: Pick<WorktreeCreateConfig, 'remote'> | null
+): Promise<WorktreeRemote> {
+  const remote = await resolveRemote(repoPath, worktreeConfig?.remote);
+  if (remote.kind === 'none') await assertHasLocalCommit(repoPath);
+  return remote;
+}
+
+async function resolveRemote(
+  repoPath: RepoPath,
+  configuredRemote?: string
+): Promise<WorktreeRemote> {
   const configured = configuredRemote?.trim();
   if (configured) {
     getLog().debug({ repoPath, remote: configured }, 'worktree.remote_from_config');
-    return configured;
+    return { kind: 'remote', name: configured };
   }
 
   const detected = await getDefaultRemote(repoPath);
@@ -386,34 +413,105 @@ async function resolveRemote(repoPath: RepoPath, configuredRemote?: string): Pro
       // choice is visible when debugging fetch/push behavior.
       getLog().info({ repoPath, remote: detected }, 'worktree.remote_auto_detected');
     }
-    return detected;
+    return { kind: 'remote', name: detected };
   }
 
-  // Distinguish no remotes from multiple non-origin remotes for an actionable error.
-  let remoteNames: string[] | null = null;
-  try {
-    const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote'], { timeout: 10000 });
-    remoteNames = stdout
-      .split(/\r?\n/)
-      .map(remote => remote.trim())
-      .filter(remote => remote.length > 0);
-  } catch {
-    // Best-effort for error message only
-  }
+  // getDefaultRemote returns null for both no remote and several non-origin remotes.
+  const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote'], { timeout: 10000 });
+  const remoteNames = stdout
+    .split(/\r?\n/)
+    .map(remote => remote.trim())
+    .filter(remote => remote.length > 0);
+  if (remoteNames.length === 0) return { kind: 'none' };
 
-  if (remoteNames?.length === 0) {
-    throw new Error(
-      `Cannot determine git remote for ${repoPath}: no git remote is configured. ` +
-        'Add one with `git remote add origin URL`, or use `--no-worktree` to run in the live checkout.'
-    );
-  }
-
-  const remoteList = remoteNames?.join(', ') ?? '<unknown>';
   throw new Error(
     `Cannot determine git remote for ${repoPath}: no 'origin' remote found and ` +
-      `multiple remotes exist (${remoteList}). ` +
+      `multiple remotes exist (${remoteNames.join(', ')}). ` +
       'Set worktree.remote in .archon/config.yaml to specify which remote to use.'
   );
+}
+
+/** A repository with no remote and no local branch has nothing to cut a worktree from. */
+async function assertHasLocalCommit(repoPath: RepoPath): Promise<void> {
+  const { stdout } = await execFileAsync(
+    'git',
+    ['-C', repoPath, 'for-each-ref', '--count=1', '--format=%(refname)', 'refs/heads'],
+    { timeout: 10000 }
+  );
+  if (stdout.trim()) return;
+  throw new IsolationFailure(
+    'no_local_base',
+    `Cannot create a worktree for ${repoPath}: the repository has no commit to start from. ` +
+      'Commit once, or use `--no-worktree` to run in the live checkout.'
+  );
+}
+
+/**
+ * The base of a worktree in a repository with no remote: the configured base when
+ * one is set, else the checkout's current branch. Nothing is fetched or synced, and
+ * a detached HEAD with no configured base is refused rather than guessed.
+ */
+async function resolveLocalBase(repoPath: RepoPath, preferredBaseBranch?: string): Promise<string> {
+  if (preferredBaseBranch) {
+    if (!(await localCommitOf(repoPath, preferredBaseBranch))) {
+      throw new IsolationFailure(
+        'configured_branch_missing',
+        `Base branch '${preferredBaseBranch}' does not exist in ${repoPath}, which has no git remote. ` +
+          'Create the branch, or change `--base` or worktree.baseBranch in .archon/config.yaml.'
+      );
+    }
+    return preferredBaseBranch;
+  }
+
+  let current: string;
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', repoPath, 'symbolic-ref', '--quiet', '--short', 'HEAD'],
+      { timeout: 10000 }
+    );
+    current = stdout.trim();
+  } catch (error) {
+    // Exit 1 is git's answer for a detached HEAD; anything else is a real failure.
+    if (!(error instanceof Error && 'code' in error && error.code === 1)) throw error;
+    current = '';
+  }
+  if (!current) {
+    throw new IsolationFailure(
+      'no_local_base',
+      `Cannot choose a base for a worktree of ${repoPath}: it has no git remote and HEAD is detached. ` +
+        'Check out a branch, pass `--base <branch>`, or set worktree.baseBranch in .archon/config.yaml.'
+    );
+  }
+  const cutFromCommit = await localCommitOf(repoPath, current);
+  if (!cutFromCommit) {
+    throw new IsolationFailure(
+      'no_local_base',
+      `Cannot create a worktree for ${repoPath}: the current branch '${current}' has no commit yet. ` +
+        'Commit once, or pass `--base <branch>`.'
+    );
+  }
+  // The fallback is a choice made for the operator, so it is logged; the run records
+  // the base and the cut-from commit as it does for any other base.
+  getLog().info(
+    { repoPath, baseBranch: current, cutFromCommit },
+    'worktree.base_from_current_branch'
+  );
+  return current;
+}
+
+async function localCommitOf(repoPath: RepoPath, branch: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', repoPath, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`],
+      { timeout: 10000 }
+    );
+    return stdout.trim() || undefined;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 1) return undefined;
+    throw error;
+  }
 }
 
 /**
@@ -430,8 +528,8 @@ async function resolveRemote(repoPath: RepoPath, configuredRemote?: string): Pro
  */
 async function syncWorkspaceBeforeCreate(
   repoPath: RepoPath,
-  configuredBaseBranch?: string,
-  remote = 'origin'
+  configuredBaseBranch: string | undefined,
+  remote: string
 ): Promise<string> {
   try {
     getLog().debug(

@@ -64,6 +64,7 @@ interface WorktreeLane {
   cwd: string;
   envId: string;
   cutFromCommit?: string;
+  resolvedBaseBranch?: string;
   ownedWorktree?: OwnedWorktree;
 }
 
@@ -135,6 +136,9 @@ async function worktreeLane(
     envId: created.envId,
     ...(created.ownedWorktree ? { ownedWorktree: created.ownedWorktree } : {}),
     ...(created.cutFromCommit !== undefined ? { cutFromCommit: created.cutFromCommit } : {}),
+    ...(created.resolvedBaseBranch !== undefined
+      ? { resolvedBaseBranch: created.resolvedBaseBranch }
+      : {}),
   };
 }
 
@@ -265,6 +269,7 @@ export interface ExecutionLane {
   /** Absent for an in-place run. */
   envId?: string;
   cutFromCommit?: string;
+  resolvedBaseBranch?: string;
   ownedWorktree?: OwnedWorktree;
 }
 

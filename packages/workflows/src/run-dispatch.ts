@@ -388,9 +388,9 @@ async function resolveBaseBranch(
   try {
     const repoPath = toRepoPath(cwd);
     const remote = config.remote?.trim() || (await getDefaultRemote(repoPath));
-    // No remote to detect from is the normal state of a local repository. Like a folder
-    // project, $BASE_BRANCH stays unresolved; a worktree run refuses earlier, when it
-    // cannot choose a remote to cut from.
+    // No remote to detect from is the normal state of a local repository. A worktree run
+    // already has its base from creation (`resolvedBaseBranch` above); in place, like a
+    // folder project, $BASE_BRANCH stays unresolved.
     if (!remote) return '';
     return await getDefaultBranch(repoPath, remote);
   } catch (error) {

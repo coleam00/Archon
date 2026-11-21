@@ -202,6 +202,25 @@ interface RunRow {
   output_root: string | null;
 }
 
+async function commitProject(projectRoot: string): Promise<void> {
+  const commit = Bun.spawn(
+    [
+      'git',
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@t',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'base',
+    ],
+    { cwd: projectRoot }
+  );
+  expect(await commit.exited).toBe(0);
+}
+
 function readRows<T>(databasePath: string, sql: string): T[] {
   if (!existsSync(databasePath)) return [];
   const database = new Database(databasePath, { readonly: true });
@@ -308,9 +327,15 @@ describe('trigger CLI durable execution', () => {
     }
   }, 30_000);
 
-  test('a no-remote launch exposes its full error in both inspect forms and workflow get', async () => {
+  test('a launch whose base is missing exposes its full error in both inspect forms and workflow get', async () => {
     const fixture = await heldTriggerRun('launch-failure');
     fixture.writeWorkflow('echo unreachable');
+    await commitProject(fixture.projectRoot);
+    // The base is not checked before admission, so this fails when the worktree is cut.
+    writeFileSync(
+      join(fixture.projectRoot, '.archon', 'config.yaml'),
+      'worktree:\n  baseBranch: does-not-exist\n'
+    );
     const configPath = join(fixture.projectRoot, '..', 'trigger.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.binding.launch.isolation = { kind: 'default' };
@@ -321,7 +346,7 @@ describe('trigger CLI durable execution', () => {
       return run?.status === 'failed' ? run : undefined;
     }, 'launch failure');
     const metadata = JSON.parse(failed.metadata);
-    expect(metadata.error).toContain('no git remote');
+    expect(metadata.error).toContain("Base branch 'does-not-exist' does not exist");
     const invoke = (args: string[]) =>
       runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, args);
     const request = JSON.parse((await invoke(['trigger', 'inspect', failed.id])).stdout);
@@ -338,6 +363,32 @@ describe('trigger CLI durable execution', () => {
     expect(json.metadata.error).toBe(metadata.error);
     expect(json.terminal_record.error).toBe(metadata.error);
     expect((await invoke(['workflow', 'get', failed.id])).stdout).toContain(metadata.error);
+  }, 30_000);
+
+  test('a start whose worktree cannot be cut from any base fails the fire and takes no slot', async () => {
+    const fixture = await heldTriggerRun('ambiguous-remote');
+    await commitProject(fixture.projectRoot);
+    for (const name of ['jan', 'feb'])
+      expect(
+        await Bun.spawn(['git', 'remote', 'add', name, join(fixture.projectRoot, '..', name)], {
+          cwd: fixture.projectRoot,
+        }).exited
+      ).toBe(0);
+    const configPath = join(fixture.projectRoot, '..', 'trigger.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.binding.launch.isolation = { kind: 'default' };
+    writeFileSync(configPath, JSON.stringify(config));
+    const fire = await runCli(
+      fixture.cliPath,
+      fixture.projectRoot,
+      fixture.archonHome,
+      ['trigger', 'fire', '--config', configPath],
+      false
+    );
+    expect(fire.exitCode).not.toBe(0);
+    expect(fire.stderr + fire.stdout).toContain('multiple remotes exist (feb, jan)');
+    expect(fixture.requests()).toEqual([]);
+    expect(fixture.runs()).toEqual([]);
   }, 30_000);
 
   // What the item commands read and record once runs are on an item is proved in-process

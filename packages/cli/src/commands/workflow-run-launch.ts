@@ -212,6 +212,8 @@ export interface RunWorkspace {
   isolationEnvId: string | undefined;
   /** Set only when this invocation created the run's branch (#3305). */
   cutFromCommit: string | undefined;
+  /** The base this invocation's new worktree was cut from. */
+  resolvedBaseBranch?: string;
   ownedWorktree: OwnedWorktree | undefined;
   /**
    * Repo/worktree and folder-in-place both run on the host; the folder-backend seam sets
@@ -654,6 +656,7 @@ async function provisionWorktree(
   workspace.isolationEnvId = created.envId;
   workspace.ownedWorktree = created.ownedWorktree;
   workspace.cutFromCommit = created.cutFromCommit;
+  workspace.resolvedBaseBranch = created.resolvedBaseBranch;
   getLog().info({ path: workspace.workingCwd }, 'worktree_created');
 }
 

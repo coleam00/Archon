@@ -9,6 +9,12 @@ import {
 } from '@archon/git';
 import type { BranchName, RepoPath } from '@archon/git';
 
+/**
+ * The remote a new worktree fetches its base from, or none: a local repository with no
+ * remote cuts its worktree from a local branch and fetches nothing.
+ */
+export type WorktreeRemote = { kind: 'remote'; name: string } | { kind: 'none' };
+
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 export function getLog(): ReturnType<typeof createLogger> {
