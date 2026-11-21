@@ -136,6 +136,8 @@ interface PreparedLaunch {
   workflow: ResolvedWorkflow;
   preparedSource: PreparedWorkflowSource;
   preparedAiConfiguration: PreparedRunAiConfiguration;
+  /** The caller's inputs, with those naming the repository the forge check judged. */
+  inputs: Readonly<Record<string, string>> | undefined;
 }
 
 /** A background launch's estate: its project and, for a reuse adoption, the adopted worktree. */
@@ -184,11 +186,6 @@ async function dispatchBackgroundWorkflowOwned(
   if (!prepared) return;
   const { workflow, preparedAiConfiguration } = prepared;
   let { preparedSource } = prepared;
-  // Remotes are read from the project, never from a branch lane's archived config.
-  await assertRunForgeAccess(workflowDeps, workflow, preparedAiConfiguration, {
-    cwd: estate.codebase?.default_cwd ?? ctx.cwd,
-    codebaseId: ctx.codebaseId,
-  });
 
   const { workerPlatformId, workerConv } = await createWorkerConversation(ctx);
 
@@ -337,8 +334,16 @@ async function prepareLaunch(
     }
   );
   await assertRunCredentials(workflowDeps, preparedAiConfiguration, { cwd: launchConfigCwd });
+  // Pack settings come from where the configuration above was read; remotes come from the
+  // project, because a branch lane's snapshot is an archive with none.
+  const inputs = await assertRunForgeAccess(workflowDeps, workflow, preparedAiConfiguration, {
+    cwd: codebase?.default_cwd ?? ctx.cwd,
+    settingsCwd: launchConfigCwd,
+    codebaseId: ctx.codebaseId,
+    supplied: ctx.inputs,
+  });
 
-  return { workflow, preparedSource, preparedAiConfiguration };
+  return { workflow, preparedSource, preparedAiConfiguration, inputs };
 }
 
 async function captureLaunchSource(
@@ -426,7 +431,7 @@ function preCreateRun(
   workflowDeps: WorkflowDeps,
   ctx: WorkflowRoutingContext,
   workflow: ResolvedWorkflow,
-  { preparedSource, preparedAiConfiguration }: PreparedLaunch,
+  { preparedSource, preparedAiConfiguration, inputs }: PreparedLaunch,
   workerConv: Conversation
 ): Promise<PreCreatedRun> {
   return workflowDeps.store.createWorkflowRun({
@@ -449,8 +454,8 @@ function preCreateRun(
       // Declared inputs supplied by this invocation (#2554). Stamped here because the
       // executor only writes them when IT creates the row, and this path hands it a
       // pre-created one.
-      ...(ctx.inputs && Object.keys(ctx.inputs).length > 0
-        ? { [SUBRUN_METADATA_KEYS.inputs]: { ...ctx.inputs } }
+      ...(inputs && Object.keys(inputs).length > 0
+        ? { [SUBRUN_METADATA_KEYS.inputs]: { ...inputs } }
         : {}),
       ...(ctx.declaredContinuation
         ? { [CONTINUATION_METADATA_KEY]: ctx.declaredContinuation.stamp }

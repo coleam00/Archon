@@ -76,7 +76,9 @@ export function createReceiptOperations(
         sourceReceiptAcceptanceSchema.parse(input);
         if (
           input.receipt.itemKey !== undefined ||
-          input.bindings.some(binding => binding.itemKey !== undefined)
+          input.bindings.some(
+            binding => binding.itemKey !== undefined || binding.wake !== undefined
+          )
         )
           throw new FileStoreUnsupportedError('items');
         const deliveryPath =

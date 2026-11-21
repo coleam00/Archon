@@ -18,7 +18,7 @@ import type { PackBinding } from './schemas/pack-bindings';
 import { kindedPackBinding } from './schemas/pack-bindings';
 import { loopBodyStepNamePrefix, resolvedBodyNodes } from './graph-plan';
 import { isComposeFanOutNode, isLoopGroupNode } from './schemas/node-guards';
-import { asksSettledTriggerSchema } from './schemas/resource-start';
+import { asksSettledTriggerSchema, type RunEndedLinked } from './schemas/resource-start';
 import type {
   ResolvedWorkflow,
   WorkflowLoadResult,
@@ -73,11 +73,15 @@ const packGraphStageSchema = z.object({
 
 /**
  * What starts an arrow: a run of `stage` completing with `outcome`, or the asks a run of
- * `stage` left being `settled` that way.
+ * `stage` left being `settled` that way, and with `option`, answered choosing that option.
  */
 const arrowFromSchema = z.union([
   z.object({ stage: z.string(), outcome: z.string() }),
-  z.object({ stage: z.string(), settled: asksSettledTriggerSchema.shape.settled }),
+  z.object({
+    stage: z.string(),
+    settled: asksSettledTriggerSchema.shape.settled,
+    option: asksSettledTriggerSchema.shape.option,
+  }),
 ]);
 export type PackGraphArrowFrom = z.infer<typeof arrowFromSchema>;
 
@@ -243,10 +247,10 @@ export interface InstalledArrow {
   from: PackGraphArrowFrom;
   launchWorkflow: string;
   /**
-   * The file starts its stage on the items linked to the ended run's item
-   * (`on.runEnded.linked`). A pack declares only same-item arrows, so it matches none.
+   * The link the file starts its stage over (`on.runEnded.linked`), or null when it starts
+   * on the ended run's own item. It matches only a declared arrow with the same link.
    */
-  linked: boolean;
+  linked: RunEndedLinked | null;
   problems: readonly string[];
 }
 
@@ -322,7 +326,7 @@ const arrowKey = (from: PackGraphArrowFrom, to: string): string =>
   JSON.stringify(
     'outcome' in from
       ? [from.stage, 'outcome', from.outcome, to]
-      : [from.stage, 'settled', from.settled, to]
+      : [from.stage, 'settled', from.settled, from.option ?? null, to]
   );
 
 const installedSource = (
@@ -335,15 +339,20 @@ const installedSource = (
 
 /**
  * Each declared run-ended binding as one arrow per outcome it lists, and each declared
- * asks-settled binding as one arrow, from stage to stage. A workflow name that is not a
- * stage is kept as declared, with a problem, so a stage that failed to load leaves its
- * arrows and the load error in the graph instead of failing it.
+ * asks-settled binding as one arrow per option it lists (one when it lists none), from
+ * stage to stage. A workflow name that is not a stage is kept as declared, with a problem,
+ * so a stage that failed to load leaves its arrows and the load error in the graph instead
+ * of failing it.
  */
 interface DeclaredArrow {
   binding: { binding: string; problems: string[] };
   from: PackGraphArrowFrom;
   to: string;
+  linked: RunEndedLinked | null;
 }
+
+const sameLink = (a: RunEndedLinked | null, b: RunEndedLinked | null): boolean =>
+  a === null || b === null ? a === b : a.kind === b.kind && a.holder === b.holder;
 
 function declaredArrows(input: GraphInput): DeclaredArrow[] {
   const names = input.stages.map(stage => stage.name);
@@ -363,21 +372,24 @@ function declaredArrows(input: GraphInput): DeclaredArrow[] {
     if (kinded.kind === 'asks_settled') {
       const stage = stageName(kinded.binding.asks_settled.workflow);
       const to = stageName(kinded.binding.workflow);
-      return [
-        {
-          binding: { binding: id, problems },
-          from: { stage, settled: kinded.binding.asks_settled.settled },
-          to,
-        },
-      ];
+      const { settled, option } = kinded.binding.asks_settled;
+      const options =
+        option === undefined ? [undefined] : typeof option === 'string' ? [option] : option;
+      return options.map(value => ({
+        binding: { binding: id, problems: [...problems] },
+        from: { stage, settled, ...(value === undefined ? {} : { option: value }) },
+        to,
+        linked: null,
+      }));
     }
     const stage = stageName(kinded.binding.run_ended.workflow);
     const to = stageName(kinded.binding.workflow);
-    const { outcome } = kinded.binding.run_ended;
+    const { outcome, linked } = kinded.binding.run_ended;
     return (typeof outcome === 'string' ? [outcome] : outcome).map(value => ({
       binding: { binding: id, problems: [...problems] },
       from: { stage, outcome: value },
       to,
+      linked: linked ?? null,
     }));
   });
 }
@@ -389,10 +401,12 @@ function declaredArrows(input: GraphInput): DeclaredArrow[] {
 function graphArrows(input: GraphInput): PackGraphArrow[] {
   const arrows: PackGraphArrow[] = [];
   const matched = new Set<InstalledArrow>();
-  for (const { binding, from, to } of declaredArrows(input)) {
+  for (const { binding, from, to, linked } of declaredArrows(input)) {
     const ends = { from, to };
     const files = input.installed.filter(
-      entry => !entry.linked && arrowKey(entry.from, entry.launchWorkflow) === arrowKey(from, to)
+      entry =>
+        sameLink(entry.linked, linked) &&
+        arrowKey(entry.from, entry.launchWorkflow) === arrowKey(from, to)
     );
     if (files.length === 0)
       arrows.push({ ...ends, active: false, declared: binding, installed: null });

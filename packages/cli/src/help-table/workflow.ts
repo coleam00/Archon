@@ -169,7 +169,9 @@ export const workflowHelp: HelpGroup = {
       scopedFlags: [
         {
           spec: '--watch',
-          description: 'Repeat serial passes every 5 seconds; drain execution on shutdown',
+          description:
+            'Repeat serial passes every 5 seconds; drain execution on shutdown;\n' +
+            'exit 75 when Archon is updated, for the supervisor to restart',
         },
         { spec: '--json', description: 'One JSON document per pass' },
         { spec: 'schedule install|remove', description: 'Manage a macOS wake timer' },
@@ -334,6 +336,14 @@ export const workflowHelp: HelpGroup = {
         { spec: '--at <ISO>', description: 'When the forge says it merged' },
         { spec: '--commit <sha>', description: 'The merge commit, when the forge reported one' },
       ],
+    },
+    {
+      command: 'workflow',
+      subcommand: 'landing',
+      spec: 'workflow landing --item <key> --branch <name>',
+      description:
+        "Record the branch an item's change lands on. Every fresh run on the item, and on\nan item part_of it that records none, is cut from it and proposes against it.\nRecording again replaces it",
+      scopedFlags: [{ spec: '--branch <name>', description: 'The branch the item lands on' }],
     },
     {
       command: 'workflow',

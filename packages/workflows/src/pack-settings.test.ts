@@ -106,12 +106,24 @@ describe('parsePackDeclaration forge', () => {
         'p/.pack/pack.yaml'
       )
     ).toEqual({ forge: { operations: ['pr.view', 'resolve:subject'] } });
+    expect(
+      parsePackDeclaration(
+        'forge:\n  operations: [pr.view]\n  repository: { host: repo_host, path: repo_path }\n',
+        'p/.pack/pack.yaml'
+      )
+    ).toEqual({
+      forge: { operations: ['pr.view'], repository: { host: 'repo_host', path: 'repo_path' } },
+    });
   });
 
   it.each([
     ['forge:\n  operations: []\n', "'forge' is invalid at 'operations'"],
     ['forge:\n  operations: [pr.view, 3]\n', "'forge' is invalid at 'operations.1'"],
     ['forge:\n  operations: [pr.view]\n  host: github.com\n', "'forge' is invalid"],
+    [
+      'forge:\n  operations: [pr.view]\n  repository: { host: h, path: p, ref: r }\n',
+      "'forge' is invalid",
+    ],
     ['forge: [pr.view]\n', "'forge' must be a mapping"],
   ])('refuses %p, naming the file', (yaml, reason) => {
     expect(() => parsePackDeclaration(yaml, 'p/.pack/pack.yaml')).toThrow(reason);
@@ -231,6 +243,18 @@ describe('parsePackDeclaration bindings', () => {
     [
       '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: [] }\n',
       "binding 'plan' is invalid at 'run_ended.outcome'",
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done, linked: { kind: owns, holder: to } }\n',
+      "binding 'plan' is invalid at 'run_ended.linked.kind'",
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done, checkout: ended-run, linked: { kind: part_of, holder: to } }\n',
+      "binding 'plan' is invalid at 'run_ended.checkout': A linked start takes no checkout",
+    ],
+    [
+      '  build:\n    workflow: build\n    resource: build\n    overlap: queue\n    asks_settled: { workflow: build, settled: answered }\n    inputs:\n      m: { item: key }\n',
+      "binding 'build' input 'm' reads the ended run's item key, but only a run-ended binding has one",
     ],
     [
       '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { outcome: done }\n',

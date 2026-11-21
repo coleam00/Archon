@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { isJsonPointer } from '../json-pointer';
 import { jsonValueSchema } from '../output-ref';
 import { itemLinkKindSchema } from './item-link';
+import { attentionOptionSchema } from './wait-node';
 import { ITEM_KEY_MAX_LENGTH, itemKeySchema, workflowRunOriginSchema } from './workflow-run';
 import {
   DEFAULT_RESOURCE_CAPACITY,
@@ -421,6 +422,17 @@ export function readAsksCheckout(run: {
     : { refused: `run '${run.id}' has an invalid recorded ${ASKS_CHECKOUT_METADATA_KEY}` };
 }
 
+/** See `wake` on `resourceStartBindingIntentSchema`. */
+export const bindingWakeSchema = z
+  .object({
+    workflowName: z.string().min(1),
+    wait: z.string().min(1),
+    about: z.string().min(1),
+    input: z.string().min(1).optional(),
+  })
+  .strict();
+export type BindingWake = z.infer<typeof bindingWakeSchema>;
+
 export const resourceStartBindingIntentSchema = z
   .object({
     bindingId: z.string().min(1),
@@ -477,6 +489,18 @@ export const resourceStartBindingIntentSchema = z
      * `storableIntent` in core's start-receipt-writes.
      */
     checkoutFrom: checkoutHandoffSchema.optional(),
+    /**
+     * A source plugin's binding that wakes waiting work: the open wait `wait` a run of
+     * `workflowName` left, on an item of the project this binding launches in, whose `about`
+     * is exactly this `about`. With `itemKey`, the item the event names, only a wait on that
+     * item matches; an event that names its subject (a review names its pull request) must
+     * set it, so another subject at the same commit wakes nothing here. The store resolves
+     * the wake when it accepts the receipt, in the same transaction: a match closes the set
+     * as met and the binding starts on the wait's item, with the met wait as event input
+     * `input` when set; anything else is recorded as not started, with why. It never
+     * reaches the `intent` column.
+     */
+    wake: bindingWakeSchema.optional(),
   })
   .strict();
 export type ResourceStartBindingIntent = z.infer<typeof resourceStartBindingIntentSchema>;
@@ -565,6 +589,13 @@ export const sourceReceiptAcceptanceSchema = z
           message: 'A binding names its item only when its receipt names none',
         });
       }
+      if (binding.wake !== undefined && acceptance.receipt.itemKey !== undefined) {
+        context.addIssue({
+          code: 'custom',
+          path: ['bindings', index, 'wake'],
+          message: 'A binding that wakes a wait names its item on the binding, not the receipt',
+        });
+      }
     }
     for (const [index, binding] of (acceptance.evaluatedBindings ?? []).entries()) {
       if (seen.has(binding.bindingId)) {
@@ -589,10 +620,9 @@ const runInputSources = [
   z.object({ result: z.string().refine(isJsonPointer, 'Invalid JSON Pointer') }).strict(),
   z.object({ input: z.string().min(1) }).strict(),
 ] as const;
-export const runEndedInputSourceSchema = z.union([
-  ...runInputSources,
-  z.object({ item: z.literal('key') }).strict(),
-]);
+/** The key of the ended run's item; a pack's run-ended binding reads it as the file does. */
+export const endedItemKeySourceSchema = z.object({ item: z.literal('key') }).strict();
+export const runEndedInputSourceSchema = z.union([...runInputSources, endedItemKeySourceSchema]);
 export type RunEndedInputSource = z.infer<typeof runEndedInputSourceSchema>;
 
 /**
@@ -608,6 +638,19 @@ export const runEndedLinkedSchema = z
   .object({ kind: itemLinkKindSchema, holder: z.enum(['from', 'to']) })
   .strict();
 export type RunEndedLinked = z.infer<typeof runEndedLinkedSchema>;
+
+/**
+ * The ended run's checkout is its own item's work, not the holder's. A pack's run-ended
+ * binding applies the same rule to its `run_ended:`.
+ */
+export const linkedTakesNoCheckout = {
+  check: (trigger: { linked?: unknown; checkout?: unknown }): boolean =>
+    trigger.linked === undefined || trigger.checkout === undefined,
+  message: {
+    message: 'A linked start takes no checkout: the ended run left it for its own item',
+    path: ['checkout'],
+  },
+};
 
 /**
  * `on.runEnded` of a trigger file: the binding starts when a run of `workflowName`
@@ -627,11 +670,7 @@ export const runEndedTriggerSchema = z
     linked: runEndedLinkedSchema.optional(),
   })
   .strict()
-  // The ended run's checkout is its own item's work, not the holder's.
-  .refine(trigger => trigger.linked === undefined || trigger.checkout === undefined, {
-    message: 'A linked start takes no checkout: the ended run left it for its own item',
-    path: ['checkout'],
-  });
+  .refine(linkedTakesNoCheckout.check, linkedTakesNoCheckout.message);
 export type RunEndedTrigger = z.infer<typeof runEndedTriggerSchema>;
 
 /**
@@ -663,11 +702,17 @@ export type AsksSettledInputSource = z.infer<typeof asksSettledInputSourceSchema
  * `workflowName` left on an item are settled, in the project the binding launches in.
  * `answered` matches a set with at least one answer, `withdrawn` one whose every ask was
  * withdrawn, `any` either.
+ *
+ * `option` narrows `answered` to a set whose every answered ask chose that option id, as
+ * `chosenAskOption` reads it; withdrawn asks are not counted. A mixed set, or an answer
+ * that chose no offered option, matches no binding with `option`. Only the id is compared,
+ * never answer text, as `runEnded.outcome` compares the ended run's outcome.
  */
 export const asksSettledTriggerSchema = z
   .object({
     workflowName: z.string().min(1),
     settled: z.enum(['answered', 'withdrawn', 'any']),
+    option: attentionOptionSchema.shape.id.optional(),
     inputs: z.record(z.string().min(1), asksSettledInputSourceSchema).optional(),
     /**
      * `asking-run`: the started run works in the checkout the asking run left, on its
@@ -676,7 +721,12 @@ export const asksSettledTriggerSchema = z
      */
     checkout: z.literal('asking-run').optional(),
   })
-  .strict();
+  .strict()
+  // A withdrawn ask chose nothing, so an option can only select among answers.
+  .refine(trigger => trigger.option === undefined || trigger.settled === 'answered', {
+    message: 'option selects on an answer, so it takes settled: answered',
+    path: ['option'],
+  });
 export type AsksSettledTrigger = z.infer<typeof asksSettledTriggerSchema>;
 
 /**
@@ -698,6 +748,7 @@ export const triggerConfigSchema = z
       eventInputs: true,
       checkoutFrom: true,
       itemKey: true,
+      wake: true,
     }),
     item: itemMappingSchema.optional(),
     schedule: z

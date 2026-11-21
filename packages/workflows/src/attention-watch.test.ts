@@ -14,6 +14,7 @@ import {
   readAttentionQueueItem,
   readAttentionQueueItemByRef,
   type AttentionQueueItemWithoutRun,
+  heldRunOf,
 } from './attention-queue';
 import {
   attentionStreamLineSchema,
@@ -140,7 +141,7 @@ const attentionOf =
   (runId: string, revision?: number) =>
   (line: AttentionStreamLine): boolean =>
     line.type === 'attention' &&
-    line.item.run?.id === runId &&
+    heldRunOf(line.item)?.id === runId &&
     (revision === undefined || line.item.revision === revision);
 
 describe('watchAttentionQueue', () => {
@@ -736,7 +737,7 @@ describe('watchAttentionQueue', () => {
     });
     await scoped.close();
     expect(
-      scoped.lines.map(line => (line.type === 'attention' ? line.item.run?.id : line.type))
+      scoped.lines.map(line => (line.type === 'attention' ? heldRunOf(line.item)?.id : line.type))
     ).toEqual([beta.runId, 'ready']);
   });
 

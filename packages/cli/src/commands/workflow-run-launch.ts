@@ -66,6 +66,7 @@ import {
   type OwnedRunAdmission,
   type OwnedRunRequest,
 } from './workflow-run-admission';
+import { resolveLaunchBase, type LaunchBase } from './workflow-run-config';
 
 /**
  * Preflight before handing execution to a detached child. Refusals must reach the
@@ -108,6 +109,9 @@ export async function launchDetachedOwnedRun(
   // Adoption resolution is read-only; the child re-resolves against the live checkout.
   const declaration = await resolveContinuationDeclaration(host, options, detachCodebase);
   if (declaration && 'lane' in declaration) admission.aiConfigurationRun = declaration.adoptedRun;
+  // The item's landing branch is checked here so a missing one refuses before `Started`;
+  // the child resolves it again when it cuts the worktree.
+  await resolveLaunchBase(host, options.item, admission, detachCodebase, declaration);
   const adoptionLane = declaration && 'lane' in declaration ? declaration.lane : undefined;
   await refuseDetachedWorkspace(request, admission, adoptionLane, detachCodebase, detachIsFolder);
   const prepared = await prepareLaneAiConfiguration(
@@ -250,6 +254,8 @@ export interface ForegroundLaunch {
    * $BASE_BRANCH resolution all derive from this one value).
    */
   readonly codebaseDefaultBranch: string | undefined;
+  /** `--base` or the item's landing branch: the cut-from and `$BASE_BRANCH` override. */
+  readonly base: LaunchBase | undefined;
   readonly continuation: LaunchContinuation;
   /** The prior run a resume continues; the executor performs no implicit resume detection. */
   readonly resumable: WorkflowRun | null;
@@ -293,6 +299,14 @@ export async function prepareForegroundLaunch(
     container: undefined,
   };
   const continuation = await bindContinuationLane(request, admission, codebase, workspace);
+  // Before any worktree is cut, so a landing branch missing on the remote refuses the run.
+  const base = await resolveLaunchBase(
+    host,
+    options.item,
+    admission,
+    codebase,
+    continuation.declaration
+  );
   const { resumable, resumeBranch } = await bindResumableRun(
     request,
     admission,
@@ -326,6 +340,7 @@ export async function prepareForegroundLaunch(
     codebase,
     isFolderCodebase,
     codebaseDefaultBranch: codebase?.default_branch?.trim() || undefined,
+    base,
     continuation,
     resumable,
     resumeBranch,
@@ -620,12 +635,7 @@ async function provisionWorktree(
     options.fromBranch
   );
   if (existingEnv) {
-    await warnOnReusedWorktree(
-      existingEnv,
-      codebase,
-      admission.flagBase,
-      launch.codebaseDefaultBranch
-    );
+    await warnOnReusedWorktree(existingEnv, codebase, launch.base, launch.codebaseDefaultBranch);
     await recordWorktreeAdoption(host.records.isolation, existingEnv, codebase.default_cwd);
     workspace.workingCwd = existingEnv.working_path;
     workspace.isolationEnvId = existingEnv.id;
@@ -691,7 +701,7 @@ async function createRunWorktree(
       identifier: branchIdentifier,
       taskBranch: worktreeTaskBranch(options, launch.continuation.adoptedTaskBranch),
       baseBranch: codebaseDefaultBranch ? git.toBranchName(codebaseDefaultBranch) : undefined,
-      baseOverride: admission.flagBase ? git.toBranchName(admission.flagBase) : undefined,
+      baseOverride: launch.base ? git.toBranchName(launch.base.branch) : undefined,
       codebaseId: codebase.id,
       // owner/repo name lets resolveOwnerRepo use the registered identity
       // instead of the _local/<basename> path fallback (#2022, #2227)

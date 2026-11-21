@@ -9,6 +9,9 @@
  * The files are the ones run-ended bindings live in, read the same way (`readOnBindings`),
  * fresh at every close of an ask, so removing a file turns it off.
  *
+ * A binding with `option` starts only when every answered ask of the set chose that option
+ * (`choseOption`), so the options of one ask can each lead to a different stage, or to none.
+ *
  * A binding with `checkout: "asking-run"` starts its stage in the checkout the asking run
  * left. That checkout is read when the asking run completes (`createAsksCheckout`) and
  * recorded on its row, and the completion keeps the run's worktree. When the asks settle,
@@ -113,9 +116,10 @@ export function createAsksSettledStarts(
               answers,
             };
       return candidates
-        .filter(
-          candidate =>
-            candidate.asksSettled.settled === 'any' || candidate.asksSettled.settled === settledAs
+        .filter(({ asksSettled: { settled, option } }) =>
+          option === undefined
+            ? settled === 'any' || settled === settledAs
+            : choseOption(rows, option)
         )
         .map(candidate =>
           bindingReceipt(
@@ -134,6 +138,18 @@ export function createAsksSettledStarts(
         );
     };
   };
+}
+
+/**
+ * Whether a settled set chose `option`: at least one ask was answered, and every answered
+ * ask chose that declared option id. Withdrawn asks are not counted; a mixed set, or an
+ * answer that chose no offered option, did not choose it.
+ */
+function choseOption(rows: readonly StoredItemAsk[], option: string): boolean {
+  const chosen = rows.flatMap(({ ask, closed }) =>
+    closed?.as === 'answered' ? [chosenAskOption(ask, closed.answer)?.id] : []
+  );
+  return chosen.length > 0 && chosen.every(id => id === option);
 }
 
 /** The checkout the asking run recorded when it completed, or why a start cannot take one. */
@@ -307,8 +323,9 @@ function askingWorkflowProblems(
 
 /**
  * What `trigger check` prints for asks-settled bindings, one problems list per binding in
- * input order: the check a run gets before it starts, a missing `launch.cwd`, and two files
- * that start the same stage for the same settlement. A binding that starts the workflow
+ * input order: the check a run gets before it starts, a missing `launch.cwd`, two files
+ * that start the same stage for the same settlement, and two files that would both start
+ * when one option is chosen (`optionOverlaps`). A binding that starts the workflow
  * whose asks settled is the intended use (the work runs again with the answers), so it is
  * not reported; the loop ends when a run leaves no asks.
  */
@@ -319,6 +336,7 @@ export async function asksSettledTriggerCheck(
 ): Promise<string[][]> {
   const problems: string[][] = [];
   const stages: string[][] = [];
+  const projects: (string | null)[] = [];
   for (const candidate of bindings) {
     const { binding } = candidate;
     if (!existsSync(binding.launch.cwd)) {
@@ -326,10 +344,12 @@ export async function asksSettledTriggerCheck(
         `binding.launch.cwd '${binding.launch.cwd}' does not exist, so this binding never starts; fix the path or remove the file`,
       ]);
       stages.push([]);
+      projects.push(null);
       continue;
     }
     const project = (await bindingProjectKey(candidate, deps)) ?? binding.launch.cwd;
     stages.push(stageKeys(candidate, project));
+    projects.push(project);
     problems.push(await asksSettledBindingCheck(candidate, deps));
   }
   for (const [index, others] of sharingFiles(bindings, stages).entries())
@@ -337,11 +357,47 @@ export async function asksSettledTriggerCheck(
       problems[index].push(
         `binds the same settlement to the same stage as ${others.join(', ')}: the stage starts once per file on the item`
       );
+  for (const [index, overlaps] of optionOverlaps(bindings, projects).entries())
+    problems[index].push(...overlaps);
   return problems;
 }
 
-/** The stages a binding starts, one per kind of settlement it matches (`any` matches both). */
+/**
+ * For each binding, the other files in its project on the same asking workflow that would
+ * also start when an option it starts on is chosen, whatever stage each starts: a file
+ * naming the same option, or one naming none that takes answers beside one that names it.
+ * Two files naming no option are left to `stageKeys`, since several stages may start on
+ * one settlement on purpose. A binding whose project is null is not compared.
+ */
+export function optionOverlaps(
+  bindings: readonly AsksSettledBinding[],
+  projects: readonly (string | null)[]
+): string[][] {
+  const takesAnswers = ({ asksSettled }: AsksSettledBinding): boolean =>
+    asksSettled.settled !== 'withdrawn';
+  return bindings.map((own, index) =>
+    bindings.flatMap((other, at) => {
+      if (at === index || projects[index] === null || projects[index] !== projects[at]) return [];
+      if (own.asksSettled.workflowName !== other.asksSettled.workflowName) return [];
+      const mine = own.asksSettled.option;
+      const theirs = other.asksSettled.option;
+      const option = mine ?? theirs;
+      if (option === undefined || (mine !== undefined && theirs !== undefined && mine !== theirs))
+        return [];
+      if (!takesAnswers(own) || !takesAnswers(other)) return [];
+      return [
+        `starts when option '${option}' is chosen, as ${other.file} also does: both start on that answer`,
+      ];
+    })
+  );
+}
+
+/**
+ * The stages a binding names no option for, one per kind of settlement it matches (`any`
+ * matches both). A binding with `option` is compared by `optionOverlaps` instead.
+ */
 function stageKeys({ binding, asksSettled }: AsksSettledBinding, project: string): string[] {
+  if (asksSettled.option !== undefined) return [];
   const kinds = asksSettled.settled === 'any' ? ['answered', 'withdrawn'] : [asksSettled.settled];
   return kinds.map(kind =>
     JSON.stringify([project, asksSettled.workflowName, kind, binding.launch.workflowName])

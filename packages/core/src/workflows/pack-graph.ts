@@ -32,10 +32,19 @@ type GraphDeps = Pick<WorkflowDeps, 'loadConfig' | 'providers'> &
   Pick<RunEndedStartsDependencies, 'triggersDirectory' | 'projectKeyOf'>;
 
 /** Where an installed file's arrow starts, as the file spells it. */
+/** The link a run-ended file starts its stage over, or null for a same-item start. */
+function installedLink(file: OnBinding): InstalledArrow['linked'] {
+  return 'runEnded' in file ? (file.runEnded.linked ?? null) : null;
+}
+
 function installedFrom(file: OnBinding): InstalledArrow['from'] {
   return 'runEnded' in file
     ? { stage: file.runEnded.workflowName, outcome: file.runEnded.outcome }
-    : { stage: file.asksSettled.workflowName, settled: file.asksSettled.settled };
+    : {
+        stage: file.asksSettled.workflowName,
+        settled: file.asksSettled.settled,
+        ...(file.asksSettled.option === undefined ? {} : { option: file.asksSettled.option }),
+      };
 }
 
 /**
@@ -69,7 +78,7 @@ async function installedArrows(
       sourceInstanceId: file.sourceInstanceId,
       from,
       launchWorkflow,
-      linked: 'runEnded' in file && file.runEnded.linked !== undefined,
+      linked: installedLink(file),
     };
     // A start from a missing checkout is in no project, so the end of a run never starts
     // it (`launchProjectKey`). Which project it was meant for cannot be known, so a file

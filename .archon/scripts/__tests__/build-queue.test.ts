@@ -719,7 +719,9 @@ describe('the build queue scripts', () => {
     const at = install();
     seed(at, triaged({}, record({ status: 'asking', brief: '' })));
     const ruled = run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: ASKED, INPUTS_DECISION: 'park', INPUTS_TEXT: '' });
-    expect(ok(ruled)).toMatchObject({ decision: 'park', section: '' });
+    expect(ok(ruled)).toMatchObject({ decision: 'parked', section: '' });
+    // With nothing asked, the node hands on apply's decision as the run's outcome.
+    expect(ok(run(at, 'ruling', { INPUTS_ASKED: 'null', INPUTS_APPLIED: 'ready', INPUTS_DECISION: '', INPUTS_TEXT: '' }))).toMatchObject({ decision: 'ready' });
     expect(ruled.bodies).toEqual([]);
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'parked', brief: '' } } });
   }, 60_000);

@@ -5,9 +5,10 @@
  * (`run_ended:`), an asks-settled binding (`asks_settled:`) or, with none of them, a
  * fire-only binding. The checks that span bindings run here, where all are visible: a
  * sibling reference names a declared binding that is written as a file `trigger fire`
- * reads (a timer or fire-only binding), an event field is read only by an event binding, a
- * part of the run only by a run-ended or asks-settled binding, and the settled answers
- * only by an asks-settled binding.
+ * reads (a timer or fire-only binding), an event field is read only by an event binding, the
+ * met wait only by an event binding with `wake`, a
+ * part of the run only by a run-ended or asks-settled binding, the ended run's item key
+ * only by a run-ended binding, and the settled answers only by an asks-settled binding.
  */
 import type { Fail } from './pack-settings';
 import {
@@ -20,6 +21,7 @@ import {
   packTimerBindingSchema,
   type PackBinding,
   type PackBindingInput,
+  type PackBindingKind,
 } from './schemas/pack-bindings';
 
 const START_SCHEMAS = [
@@ -78,6 +80,13 @@ function checkInputs(
     const problem = inputProblem(binding, input, bindings);
     if (problem !== undefined) fail(`binding '${id}' input '${name}' ${problem}`);
   }
+  const waitInputs = Object.entries(binding.inputs).filter(
+    ([, input]) => typeof input === 'object' && 'wait' in input
+  );
+  if (waitInputs.length > 1)
+    fail(
+      `binding '${id}' inputs ${waitInputs.map(([name]) => `'${name}'`).join(' and ')} both read the met wait; read it once`
+    );
 }
 
 function inputProblem(
@@ -92,10 +101,26 @@ function inputProblem(
     return kind === 'event'
       ? undefined
       : 'reads an event field, but only an event binding has an event';
+  if ('wait' in input)
+    return kind === 'event' && 'wake' in binding && binding.wake !== undefined
+      ? undefined
+      : 'reads the met wait, but only an event binding with wake has one';
+  return runSourceProblem(kind, input);
+}
+
+/** An input read from the run that ended or left the asks. */
+function runSourceProblem(
+  kind: PackBindingKind,
+  input: Exclude<PackBindingInput, string>
+): string | undefined {
   if ('answers' in input)
     return kind === 'asks_settled'
       ? undefined
       : 'reads the settled answers, but only an asks-settled binding has them';
+  if ('item' in input)
+    return kind === 'run_ended'
+      ? undefined
+      : "reads the ended run's item key, but only a run-ended binding has one";
   return kind === 'run_ended' || kind === 'asks_settled'
     ? undefined
     : 'reads the ended run, but only a run-ended or asks-settled binding has a run to read';

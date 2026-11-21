@@ -36,6 +36,7 @@ import type {
   StoredItemAsk,
 } from './schemas/item-ask';
 import type { AttentionAnswer } from './schemas/run-wait';
+import type { ItemWait, ItemWaitsWithdrawResult, StoredItemWait } from './schemas/item-wait';
 import type { AttentionAnswerWrite, AttentionLabelWrite } from './store/attention-writes';
 import type {
   PauseCursor,
@@ -268,6 +269,21 @@ export interface IWorkflowStore
   recordItemMerge(
     input: import('./schemas/item-merge').ItemMergeReport
   ): Promise<import('./schemas/item-merge').ItemMergeRecorded | null>;
+  /** The landing branch recorded on an item; null when none is. An unreadable row is reported, not thrown. */
+  getItemLanding(
+    itemId: string
+  ): Promise<
+    | import('./schemas/item-landing').ItemLanding
+    | import('./schemas/item-landing').ItemLandingDegraded
+    | null
+  >;
+  /**
+   * Record the branch the item `key` names lands on, writing the item on first use.
+   * Recording again replaces the branch.
+   */
+  recordItemLanding(
+    input: import('./schemas/item-landing').ItemLandingReport
+  ): Promise<import('./schemas/item-landing').ItemLanding>;
   /**
    * Every link from or to an item, ended ones included, in recording order. A row that does
    * not read is reported as unreadable in its place, not thrown.
@@ -323,6 +339,16 @@ export interface IWorkflowStore
    * `refused`. Settles its set as `answerItemAsk` does.
    */
   withdrawItemAsk(input: { askId: string } & ItemAskActInput): Promise<ItemAskCloseResult>;
+  /**
+   * The open waits completed runs left (`returns.waits`), oldest set first; with `itemId`,
+   * those on that item only. A store without items has none.
+   */
+  listOpenItemWaits(itemId?: string): Promise<StoredItemWait[]>;
+  /**
+   * Withdraw the open waits run `runId` left: they close unmet and nothing starts. A set
+   * that is no longer open is `refused` with how it closed.
+   */
+  withdrawItemWaits(runId: string): Promise<ItemWaitsWithdrawResult>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */
   listWorkflowEvents(
@@ -564,6 +590,9 @@ export interface IWorkflowStore
    * from that workflow on the run's item close as `replaced`, and these open in their
    * place, so the asks exist exactly when the completion does. A store refuses a
    * non-empty list for a run with no item; a store without items refuses any.
+   *
+   * `result.waits` is the same for `returns.waits`: the open waits of that workflow on the
+   * run's item close as `replaced` and these open, in the same transaction.
    */
   completeWorkflowRun(
     id: string,
@@ -574,6 +603,7 @@ export interface IWorkflowStore
       startReceipts?: readonly SourceReceiptAcceptance[];
       linkedStarts?: readonly LinkedRunEndedStart[];
       asks?: readonly ItemAsk[];
+      waits?: readonly ItemWait[];
     }
   ): Promise<{ startReceipts: SourceReceiptAcceptance[] }>;
   /**

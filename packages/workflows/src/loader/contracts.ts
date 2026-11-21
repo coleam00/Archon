@@ -11,10 +11,11 @@ import { declaredFieldsFromSchema, outputFieldConstraints } from '../output-ref'
 import { compileOutputSchema } from '../structured-output';
 import { stringEnumValues } from '../completed-outcome';
 import { itemAsksJsonSchema } from '../schemas/item-ask';
+import { itemWaitsJsonSchema } from '../schemas/item-wait';
 import { isDeepStrictEqual } from 'node:util';
 
 /**
- * Validate the result contract (`returns: { node, outcome, asks }`) against its selected node.
+ * Validate the result contract (`returns: { node, outcome, asks, waits }`) against its selected node.
  *
  * Include aliases are deliberately deferred: `parseWorkflow` can only see the
  * `include:` directive, while `expandWorkflowIncludes` owns rebinding that alias
@@ -26,53 +27,77 @@ export function validateWorkflowResultContract(
     readonly nodes: readonly (DagNode | IncludeDirective)[];
   }
 ): string | null {
-  const field = workflow.result?.outcome;
-  const asks = workflow.result?.asks;
-  if (field === undefined && asks === undefined) return null;
-  if (workflow.returns === undefined) {
-    return field !== undefined
-      ? `Workflow declares returns.outcome: '${field}' without a returns node`
-      : `Workflow declares returns.asks: '${asks}' without a returns node`;
-  }
-  if (field !== undefined && field === asks) {
-    return `Workflow returns.asks: '${asks}' names the same property as returns.outcome; an outcome and the asks are different values`;
-  }
-
+  const declared = declaredResultFields(workflow.result);
+  const [first] = declared;
+  if (first === undefined) return null;
+  if (workflow.returns === undefined)
+    return `Workflow declares returns.${first.key}: '${first.field}' without a returns node`;
+  const shared = sharedPropertyError(declared);
+  if (shared !== null) return shared;
   const selectedNode = workflow.nodes.find(node => node.id === workflow.returns);
   if (selectedNode === undefined) {
     return `Workflow declares returns: '${workflow.returns}' but no top-level node has that id`;
   }
   if (isIncludeDirective(selectedNode)) return null;
+  for (const { key, field, engineSchema } of declared) {
+    const error = resultFieldError(
+      workflow.name,
+      key,
+      field,
+      workflow.returns,
+      selectedNode,
+      engineSchema
+    );
+    if (error !== null) return error;
+  }
+  return null;
+}
+
+/** A property the result contract names; `engineSchema` for one whose schema the engine owns. */
+interface DeclaredResultField {
+  key: 'outcome' | 'asks' | 'waits';
+  field: string;
+  engineSchema?: () => Record<string, unknown>;
+}
+
+function declaredResultFields(result: WorkflowDefinition['result']): DeclaredResultField[] {
+  const fields: DeclaredResultField[] = [];
+  if (result?.outcome !== undefined) fields.push({ key: 'outcome', field: result.outcome });
+  if (result?.asks !== undefined)
+    fields.push({ key: 'asks', field: result.asks, engineSchema: itemAsksJsonSchema });
+  if (result?.waits !== undefined)
+    fields.push({ key: 'waits', field: result.waits, engineSchema: itemWaitsJsonSchema });
+  return fields;
+}
+
+/** Each part of the contract is a different value, so two may not name one property. */
+function sharedPropertyError(declared: readonly DeclaredResultField[]): string | null {
+  for (const [index, { key, field }] of declared.entries()) {
+    const other = declared.slice(0, index).find(earlier => earlier.field === field);
+    if (other !== undefined)
+      return `Workflow returns.${key}: '${field}' names the same property as returns.${other.key}; each names a different value`;
+  }
+  return null;
+}
+
+/** Why the selected node cannot carry one declared property, or null. */
+function resultFieldError(
+  workflowName: string,
+  key: DeclaredResultField['key'],
+  field: string,
+  nodeId: string,
+  node: DagNode,
+  engineSchema: DeclaredResultField['engineSchema']
+): string | null {
+  const subject = `Workflow returns.${key}: '${field}'`;
+  if (engineSchema === undefined)
+    return (
+      selectedNodeShapeError(subject, nodeId, node, 'a required outcome property') ??
+      validateOutcomeFieldSchema(workflowName, subject, nodeId, field, node.output_format)
+    );
   return (
-    (field === undefined
-      ? null
-      : (selectedNodeShapeError(
-          `Workflow returns.outcome: '${field}'`,
-          workflow.returns,
-          selectedNode,
-          'a required outcome property'
-        ) ??
-        validateOutcomeFieldSchema(
-          workflow.name,
-          `Workflow returns.outcome: '${field}'`,
-          workflow.returns,
-          field,
-          selectedNode.output_format
-        ))) ??
-    (asks === undefined
-      ? null
-      : (selectedNodeShapeError(
-          `Workflow returns.asks: '${asks}'`,
-          workflow.returns,
-          selectedNode,
-          'an object output_format'
-        ) ??
-        validateAsksFieldSchema(
-          `Workflow returns.asks: '${asks}'`,
-          workflow.returns,
-          asks,
-          selectedNode
-        )))
+    selectedNodeShapeError(subject, nodeId, node, 'an object output_format') ??
+    validateEngineFieldSchema(subject, nodeId, field, node, engineSchema())
   );
 }
 
@@ -96,15 +121,16 @@ function selectedNodeShapeError(
 }
 
 /**
- * The asks property is the engine's: the node declares an object output, and the property
- * is either absent (the loader adds it) or exactly the engine's schema, which it is after
- * the loader added it and this check runs again on the expanded or dispatched workflow.
+ * An asks or waits property is the engine's: the node declares an object output, and the
+ * property is either absent (the loader adds it) or exactly the engine's schema, which it is
+ * after the loader added it and this check runs again on the expanded or dispatched workflow.
  */
-function validateAsksFieldSchema(
+function validateEngineFieldSchema(
   subject: string,
   nodeId: string,
   field: string,
-  node: DagNode
+  node: DagNode,
+  engineSchema: Record<string, unknown>
 ): string | null {
   const schema = node.output_format;
   if (schema === undefined || !isOutputFormatEnforced(node)) {
@@ -118,7 +144,7 @@ function validateAsksFieldSchema(
     properties !== null && typeof properties === 'object' && !Array.isArray(properties)
       ? (properties as Record<string, unknown>)[field]
       : undefined;
-  if (declared !== undefined && !isDeepStrictEqual(declared, itemAsksJsonSchema())) {
+  if (declared !== undefined && !isDeepStrictEqual(declared, engineSchema)) {
     return `${subject} on node '${nodeId}': the engine defines this property; remove it from output_format`;
   }
   return null;

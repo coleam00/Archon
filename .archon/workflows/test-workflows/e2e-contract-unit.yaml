@@ -13,7 +13,6 @@ description: |
   JSON text, which is why the script parses it.
 
   Zero AI nodes. Usage: not run directly; `e2e-contract-fanout` includes it.
-mutates_checkout: false
 
 inputs:
   unit:

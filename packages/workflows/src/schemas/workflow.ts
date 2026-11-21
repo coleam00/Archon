@@ -258,7 +258,7 @@ export const workflowBaseSchema = z.object({
    * sub-run child. Selecting by id (not text) works for every node type,
    * including a non-sink node.
    *
-   * Authored as `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field> }`. The
+   * Authored as `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field>, waits?: <field> }`. The
    * loader keeps the node id here and the rest of the declaration in `result`.
    */
   returns: z.string().min(1).optional(),
@@ -296,6 +296,13 @@ export const workflowResultContractSchema = z.strictObject({
    * the write that completes it. A workflow that declares it runs on an item.
    */
   asks: z.string().min(1).optional(),
+  /**
+   * A property of the returns node's output that holds what the run's item now waits for
+   * outside Archon. The engine defines its schema (`schemas/item-wait.ts`) and adds it to
+   * the node's `output_format`; the waits a completed top-level run leaves open on its item
+   * in the write that completes it. A workflow that declares it runs on an item.
+   */
+  waits: z.string().min(1).optional(),
 });
 
 export type WorkflowResultContract = z.infer<typeof workflowResultContractSchema>;

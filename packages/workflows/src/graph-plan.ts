@@ -2,7 +2,7 @@ import { isIncludeDirective } from './schemas/node-guards';
 import type { DagNode, LoopGroupNodeConfig } from './schemas/dag-node';
 import type { IncludeDirective } from './schemas/include-node';
 import type { GraphPlan, ResolvedWorkflow, WorkflowDefinition } from './schemas/workflow';
-import { withEngineAskSchema } from './completed-asks';
+import { withEngineResultSchemas } from './completed-asks';
 
 function requireResolvedNodes(nodes: readonly (DagNode | IncludeDirective)[]): DagNode[] {
   const resolved: DagNode[] = [];
@@ -71,11 +71,11 @@ export function planGraph(nodes: readonly (DagNode | IncludeDirective)[]): Graph
 
 /**
  * Construct the include-free workflow shape accepted by execution boundaries. A workflow
- * that declares `returns.asks` gets the engine's asks schema on its returns node here, so
- * provider calls, output validation and dry runs all see the one schema.
+ * that declares `returns.asks` or `returns.waits` gets the engine's schema on its returns
+ * node here, so provider calls, output validation and dry runs all see the one schema.
  */
 export function resolveWorkflow(authored: WorkflowDefinition): ResolvedWorkflow {
-  const definition = withEngineAskSchema(authored);
+  const definition = withEngineResultSchemas(authored);
   const plan = planResolvedNodes(requireResolvedNodes(definition.nodes));
   const resolved = { ...definition, nodes: plan.nodes, plan };
   Object.defineProperties(resolved, {

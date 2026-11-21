@@ -6,6 +6,7 @@ import {
   forgeEventEnvelopeSchema,
   type ForgeEvent,
   type ForgeEventEnvelope,
+  type ReviewState,
 } from '@archon/forge';
 import { actor, userSchema } from './actor';
 
@@ -31,6 +32,10 @@ export const githubSourceCapabilities = {
     ).map(action => ({ kind: 'pr.lifecycle' as const, action })),
     ...(['added', 'removed'] as const).map(action => ({ kind: 'label.changed' as const, action })),
     { kind: 'comment.changed', action: 'created' } as const,
+    ...(['submitted', 'dismissed'] as const).map(action => ({
+      kind: 'review.changed' as const,
+      action,
+    })),
     { kind: 'check.changed', action: 'changed', unitKind: 'check' } as const,
     { kind: 'check.changed', action: 'changed', unitKind: 'commit_status' } as const,
   ],
@@ -105,6 +110,16 @@ const issueCommentSchema = baseSchema.extend({
     id: z.union([z.string().min(1), z.number().int()]),
     user: userSchema,
     created_at: z.iso.datetime({ offset: true }).nullable().optional(),
+  }),
+});
+const pullRequestReviewSchema = baseSchema.extend({
+  pull_request: z.object({ number: z.number().int().positive() }),
+  review: z.object({
+    id: z.union([z.string().min(1), z.number().int()]),
+    user: userSchema,
+    state: z.string().min(1),
+    commit_id: z.string().min(1).nullable().optional(),
+    submitted_at: z.iso.datetime({ offset: true }).nullable().optional(),
   }),
 });
 const checkRunSchema = baseSchema.extend({
@@ -340,6 +355,56 @@ function normalizeIssueComment(
   return normalizeEnvelope(event, context, sourceActor, occurredAt);
 }
 
+/** GitHub sends review states lowercase in webhooks and uppercase in its APIs. */
+function reviewState(state: string): ReviewState {
+  switch (state.toLowerCase()) {
+    case 'approved':
+      return 'approved';
+    case 'changes_requested':
+      return 'changes_requested';
+    case 'commented':
+      return 'commented';
+    case 'dismissed':
+      return 'dismissed';
+    default:
+      return 'unknown';
+  }
+}
+
+function normalizePullRequestReview(
+  payload: unknown,
+  context: GitHubEnvelopeContext
+): GitHubNormalizationResult {
+  const parsed = pullRequestReviewSchema.safeParse(payload);
+  if (!parsed.success) return malformed(parsed.error);
+  const value = parsed.data;
+  // `edited` changes only a review's text, which the event does not carry.
+  if (value.action !== 'submitted' && value.action !== 'dismissed')
+    return {
+      status: 'unsupported',
+      reason: `Unsupported GitHub pull_request_review action: ${value.action}`,
+    };
+  const sourceActor = actor(context.host, value.sender ?? null);
+  const event: ForgeEvent = {
+    kind: 'review.changed',
+    action: value.action,
+    pr: {
+      repo: { host: context.host, path: value.repository.full_name },
+      number: value.pull_request.number,
+    },
+    review: {
+      id: String(value.review.id),
+      state: reviewState(value.review.state),
+      nativeState: value.review.state,
+      commit: value.review.commit_id ?? null,
+      author: actor(context.host, value.review.user),
+    },
+  };
+  // A dismissal happens after submission; GitHub's payload carries no dismissal time.
+  const occurredAt = value.action === 'submitted' ? (value.review.submitted_at ?? null) : null;
+  return normalizeEnvelope(event, context, sourceActor, occurredAt);
+}
+
 function normalizeCheckRun(
   payload: unknown,
   context: GitHubEnvelopeContext
@@ -415,6 +480,8 @@ export function normalizeGitHubWebhook(
       return normalizePullRequest(payload, context);
     case 'issue_comment':
       return normalizeIssueComment(payload, context);
+    case 'pull_request_review':
+      return normalizePullRequestReview(payload, context);
     case 'check_run':
       return normalizeCheckRun(payload, context);
     case 'status':

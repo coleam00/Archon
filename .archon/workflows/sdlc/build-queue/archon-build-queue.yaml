@@ -40,8 +40,8 @@ inputs:
       After this many rounds since the item's scope last changed, the answer to a round
       that ends wanting another also judges whether the rounds converge.
 
-# How the round left the item. A run that asked ends `asked` whatever the answer was.
-returns: { node: apply, outcome: decision }
+# How the run left the item: `ready`, `continue` or `parked`, after a person's answer too.
+returns: { node: ruling, outcome: decision }
 
 nodes:
   # Reads the item and writes the issue's body to build/issue.md, so every agent reads
@@ -212,7 +212,6 @@ nodes:
       pull_request: "$checkout.output.pull_request"
       prior_report: "$checkout.output.prior_report"
       branch: "$facts.output.branch"
-      ci: "$INPUTS.ci"
 
   - id: answer
     command: answer
@@ -322,20 +321,24 @@ nodes:
         item: "$apply.output.item"
         pr: "$apply.output.pr"
 
+  # Runs in every run, so the run's outcome is one node's: with nothing asked it hands
+  # on apply's decision, and after an ask it acts on the answer.
   - id: ruling
     script: ruling
     runtime: bun
     depends_on: [facts, apply, ask]
+    trigger_rule: none_failed_min_one_success
     with:
       item: { from: "$facts.output.item" }
       read_at: "$facts.output.read_at"
+      applied: "$apply.output.decision"
       asked: { from: "$apply.output.asked" }
-      decision: "$ask.output.decision"
-      text: "$ask.output.text"
+      decision: { from: "$ask.output.decision", if_skipped: "" }
+      text: { from: "$ask.output.text", if_skipped: "" }
     output_format:
       type: object
       properties:
-        decision: { type: string, enum: [continue, ready, park] }
+        decision: { type: string, enum: [continue, ready, parked] }
         section: { type: string }
         summary: { type: string }
       required: [decision, section, summary]
