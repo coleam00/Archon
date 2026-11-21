@@ -354,7 +354,7 @@ A real run prints a JSON payload only with `--detach`. Without it, `--json` supp
 | `--workflow-source <path>` | Read the workflow, its commands, and its scripts from this checkout root instead of `--cwd`. `<path>` is the directory that contains `.archon/`: Archon reads `<path>/.archon/workflows`, `.archon/commands`, and `.archon/scripts`. For a pack, pass the checkout that holds `.archon/workflows/<pack>`, not the pack folder. The named workflow must be found there, or the run is refused before it starts. Lets an **uncommitted** workflow in one checkout run against a different checkout, repository, or folder project, with no commit, push, or merge. Fresh runs only: a resumed run executes the source it already captured. See [Running a workflow from another checkout](#running-a-workflow-from-another-checkout). Repo config is not part of the source: the run reads `.archon/config.yaml` from the launch checkout (`--cwd`); see [Where a run reads `.archon/config.yaml`](/reference/configuration/#where-a-run-reads-archonconfigyaml). |
 | `--branch`, `-b <name>` | Branch name for the worktree; reuses a healthy active task worktree registered in Archon for the project and branch, or a usable checkout at the configured target path. If another path holds the branch and was not reused, check for a live Archon run before freeing it and retrying. A worktree created for a named branch is never removed when the run ends; `isolation cleanup --merged` removes it |
 | `--from <branch>`, `--from-branch <branch>` | Start point for the new worktree only. An existing worktree whose history lacks it is refused, not reused; see [Where the run executes](#where-the-run-executes). Unlike `--base`, it does not change the PR target. |
-| `--base-branch <name>` | Choose the project base branch on first registration only. Omit to follow the remote default at use time; no prompt. Rejected for folder projects, existing projects, adoption/supersedes, dry runs, and every subcommand other than `workflow run`. A reachable remote must advertise the branch. With `--base`, this flag stores the project choice while `--base` overrides only this dispatch. |
+| `--base-branch <name>` | Choose the project base branch on first registration only. Omit to follow the remote default at use time; no prompt. Rejected for folder projects, existing projects, adoption/supersedes, dry runs, and every subcommand other than `workflow run` and [`project add`](#project-add). A reachable remote must advertise the branch. With `--base`, this flag stores the project choice while `--base` overrides only this dispatch. |
 | `--base <branch>` | Per-dispatch base override, inherited by fresh shared-checkout children. Sets **both** the worktree cut-from **and** the PR target (`$BASE_BRANCH`), and outranks the item's [landing branch](#workflow-landing), `worktree.baseBranch` in config and the codebase default; see [Base branch precedence](#base-branch-precedence) below. The branch **must already exist on the remote**; a missing one is a hard error, not a fallback. Combine with `--from` to drive the two separately. Rejected with `--no-worktree`, `--folder`, and workflows pinning `worktree.enabled: false`. |
 | `--project <id\|name>` | Bind a fresh run to an existing registered repository by ID or exact name (for example `owner/repo`); see `archon project list`. Folder projects are unsupported. See `archon workflow run --help` for incompatible flags. |
 | `--no-worktree` | Run directly in the live checkout, without isolation |
@@ -2620,7 +2620,21 @@ archon project list          # ID, KIND, NAME, KEY and PATH per project
 archon project list --json   # { "projects": [ { ...project row, "key" } ] }
 ```
 
-`key` is the value `workflow attention --project` and `archon state --project` accept. The list is read-only; register and remove projects through the Web UI or chat.
+`key` is the value `workflow attention --project` and `archon state --project` accept. The list is read-only; register a project with [`project add`](#project-add), and remove one through the Web UI or chat.
+
+### `project add`
+
+`archon project add [path]` registers a project before anything runs in it, so a setup step can register the project and check it before the first run. It is the same registration a first `workflow run` or `trigger fire` performs in an unregistered checkout: the same row and the same key. `path` resolves against `--cwd` or the current directory and defaults to it. A subdirectory of a git repository registers the repository root. A directory that is not a git checkout needs `--folder`, which registers the directory itself as a [folder project](/guides/multi-repo-projects/); `--folder` on a git checkout registers it as a folder project too, as `workflow run --folder` does. `--base-branch <name>` stores the project base branch, with the same checks as on a first `workflow run`.
+
+Run again on a registered project, it changes nothing, says the project is already registered, and exits 0. It refuses, with exit 1, a missing directory, a non-git directory without `--folder`, `--folder` on a project registered as a repository, `--base-branch` on a folder or an already registered project, a second clone of a registered remote, and a base branch the remote does not advertise. It needs no server.
+
+```bash
+archon project add                       # register this checkout
+archon project add ../notes --folder     # register a non-git directory as a folder project
+archon project add --json                # { "project": { ...project row, "key" }, "registered": true|false }
+```
+
+The text output names the project, then its ID, kind, key and path. In JSON, `project` is the row `project list` prints and `registered` is `false` when the project was already registered.
 
 ### `project config`
 
@@ -3029,7 +3043,7 @@ a warning log, because no other report names it.
 
 ## Working directory
 
-The CLI starts from `--cwd`, or the current directory. A subdirectory such as `/repo/packages/cli` resolves to the nearest git repository root, `/repo`. A nested repository resolves as its own codebase and registers on first workflow use. Linked worktrees resolve to their registered source codebase. Ordinary subdirectories of registered folder projects continue to resolve to the registered folder. An exact folder registration wins over git detection. `--folder` retains the supplied directory rather than selecting a surrounding git root. Linked Git worktrees do not inherit a folder registration from the primary checkout. Listing commands do not register projects.
+The CLI starts from `--cwd`, or the current directory. A subdirectory such as `/repo/packages/cli` resolves to the nearest git repository root, `/repo`. A nested repository resolves as its own codebase and registers on first workflow use, or earlier with [`project add`](#project-add). Linked worktrees resolve to their registered source codebase. Ordinary subdirectories of registered folder projects continue to resolve to the registered folder. An exact folder registration wins over git detection. `--folder` retains the supplied directory rather than selecting a surrounding git root. Linked Git worktrees do not inherit a folder registration from the primary checkout. Listing commands do not register projects.
 
 When project registration fails, the command fails with the registration error, even with `--no-worktree`. Registering a second clone of an already-registered remote is refused with the registered project's path; use worktrees (`--branch`) for parallel checkouts. To bind a separate clone to the existing project, use its registered ID or exact name:
 

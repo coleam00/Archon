@@ -54,6 +54,7 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | List a run's artifact files | `archon workflow artifacts <run-id> --json` |
 | Read one artifact | `archon workflow artifacts <run-id> <path>` |
 | List registered projects (and their `--project` keys) | `archon project list --json` |
+| Register this checkout before its first run (`--folder` for a non-git directory) | `archon project add --json` |
 | Active runs (this project) | `archon workflow status --json` |
 | Active runs (all projects) | `archon workflow status --all --json` |
 | Block until the run ends or needs attention | `archon workflow wait <run-id> --json` |

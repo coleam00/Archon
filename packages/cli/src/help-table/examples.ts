@@ -45,6 +45,7 @@ export const orderedExamples: ExampleHelp[] = [
     owner: { command: 'workflow', subcommand: 'artifacts' },
   },
   { text: 'archon project list --json', owner: { command: 'project', subcommand: 'list' } },
+  { text: 'archon project add --json', owner: { command: 'project', subcommand: 'add' } },
   {
     text: 'archon project config <id|name> --json',
     owner: { command: 'project', subcommand: 'config' },
