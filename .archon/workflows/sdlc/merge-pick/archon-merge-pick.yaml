@@ -1,0 +1,51 @@
+name: archon-merge-pick
+description: |
+  The merge stage's backstop. A merge run starts on an issue's item when its build ends
+  ready, when a check completes at a commit the item waits on, and when its ask is
+  answered. This pass starts one for every item the merge stage has that none of those
+  will start, so a fact with no forge event still gets read: a review thread resolved, a
+  draft marked ready, the forge computing whether the pull request merges, a new review
+  verdict, a validation recorded under `ci: none`, a default branch fixed by a new
+  commit, and a start or an event that was lost. It reads no pull request itself and
+  runs no agent: each start is a fire of the operator's merge-queue binding on the
+  issue's item.
+
+  Use when: a schedule binding the operator installed starts it (see
+  https://archon.diy/guides/sdlc-operations/#merge-queue).
+  NOT for: merging one issue's pull request (archon-merge-queue, on the issue's item).
+
+requires: [github]
+
+inputs:
+  repo_host:
+    default: ""
+    description: >-
+      The forge host of the repository whose items the pass starts. Empty, with
+      repo_path empty too, resolves the repository from the checkout's git remotes.
+  repo_path:
+    default: ""
+    description: The owner/name path of that repository.
+  merge_queue_binding:
+    description: >-
+      The absolute path of the operator's fire-only binding config for this
+      repository's merge stage. Every start goes through it with `archon trigger fire`,
+      so it is admitted under that binding's resource, capacity and overlap policy.
+
+returns: pick
+
+# Read-only: runs in the launch checkout beside any other run, and creates no worktree.
+worktree:
+  enabled: false
+mutates_checkout: false
+
+nodes:
+  - id: pick
+    script: pick
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        # The issues a merge run was fired for.
+        started: { type: array, items: { type: integer } }
+        summary: { type: string }
+      required: [started, summary]

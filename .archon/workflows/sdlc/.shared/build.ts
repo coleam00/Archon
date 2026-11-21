@@ -7,15 +7,13 @@
  * whether the item waits for a round.
  */
 
-import { input, state } from 'archon:script';
+import { state } from 'archon:script';
 import { type QualifiedPr, sameRepo } from './identity.ts';
-import { followUp } from './follow-up.ts';
 import type { NodeOutput } from './outputs.generated.ts';
 import { PR_CREATE_UNRESOLVED, prFromUrl } from './pr.ts';
 import { type Ask, clipped, type DecisionEntry, withDecision } from './queue.ts';
 import {
   type HistoryEntry,
-  itemKey,
   newest,
   parseWorkItem,
   readWorkItem,
@@ -291,20 +289,4 @@ export function withBuild(doc: WorkItem, change: BuildChange): WorkItem {
     facts: { ...doc.facts, build },
     links: { runs: [...doc.links.runs.filter(id => id !== change.run_id), change.run_id].slice(-50) },
   };
-}
-
-/**
- * Start the build round the merge queue returned an item for, through the operator's
- * build-queue binding (`build_queue_binding`). One run starts at most one per item.
- */
-export function nextRound(item: QualifiedPr, runId: string): string {
-  const { host, path } = item.repo;
-  return followUp(
-    input('build_queue_binding'),
-    `build-round:${host}/${path}#${String(item.number)}:${runId}`,
-    { repo_host: host, repo_path: path, number: String(item.number) },
-    'its next round',
-    undefined,
-    itemKey(item.number)
-  );
 }
