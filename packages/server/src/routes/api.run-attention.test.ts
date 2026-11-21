@@ -61,7 +61,7 @@ test('the attention endpoint and detail expose the shared projection with wire d
     },
   };
   mockListAttentionQueueRows.mockImplementationOnce(async () => [makeDashboardWorkflowRun(run)]);
-  mockGetWorkflowRun.mockImplementationOnce(async () => run);
+  mockGetWorkflowRun.mockImplementation(async () => run);
   const { app } = makeApp();
   const list = await app.request('/api/runs/attention');
   expect(list.status).toBe(200);
@@ -78,6 +78,7 @@ test('the attention endpoint and detail expose the shared projection with wire d
   mockListWorkflowEvents.mockResolvedValueOnce([]);
   mockGetConversationById.mockResolvedValueOnce(null);
   const detail = await app.request(`/api/workflows/runs/${run.id}`);
+  mockGetWorkflowRun.mockImplementation(async () => null);
   expect(detail.status).toBe(200);
   const detailBody = (await detail.json()) as { run: unknown };
   expect(apiWorkflowRunSchema.parse(detailBody.run).attention).toEqual(body.runs[0]?.attention);
@@ -194,7 +195,7 @@ describe('the attention queue over HTTP', () => {
       }
     } finally {
       mockListAttentionQueueRows.mockReset();
-      mockGetWorkflowRun.mockReset();
+      mockGetWorkflowRun.mockImplementation(async () => null);
     }
   });
 
@@ -240,7 +241,7 @@ describe('the attention queue over HTTP', () => {
         via: 'api',
       });
     } finally {
-      mockGetWorkflowRun.mockReset();
+      mockGetWorkflowRun.mockImplementation(async () => null);
       mockLabelAttentionWait.mockReset();
     }
   });
@@ -277,7 +278,7 @@ test('batch list and counts preserve degraded reports even when scope or labels 
         expect(await response.json()).toEqual(
           countBy
             ? { counts: { by: 'project', counts: [] }, degraded: warnings }
-            : { runs: [], items: [], degraded: warnings }
+            : { runs: [], items: [], answerRefusals: {}, degraded: warnings }
         );
       }
     }
@@ -585,6 +586,26 @@ describe('asks answered and withdrawn by ref over HTTP', () => {
     } finally {
       mockListOpenItemAsks.mockImplementation(async () => []);
       mockGetItem.mockImplementation(async () => null);
+      mockListAttentionQueueRows.mockReset();
+    }
+  });
+
+  test('the list says which asks the caller may not answer, and why', async () => {
+    withAsk(open);
+    mockListOpenItemAsks.mockImplementation(async () => [open]);
+    mockListAttentionQueueRows.mockImplementation(async () => []);
+    const refusals = async (): Promise<Record<string, string>> => {
+      const response = await makeApp().app.request('/api/runs/attention');
+      expect(response.status).toBe(200);
+      return runsNeedingAttentionResponseSchema.parse(await response.json()).answerRefusals;
+    };
+    try {
+      expect(await refusals()).toEqual({});
+      setSessionUserId('member');
+      expect((await refusals())['ask:a1']).toContain('admin can respond to it.');
+    } finally {
+      setSessionUserId(undefined);
+      mockListOpenItemAsks.mockImplementation(async () => []);
       mockListAttentionQueueRows.mockReset();
     }
   });

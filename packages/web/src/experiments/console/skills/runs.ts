@@ -2,7 +2,7 @@ import type { paths } from '@/lib/api.generated';
 import type { ListRunsOptions, RunsAttention } from '../primitives/run';
 export type { ListRunsOptions, RunsAttention } from '../primitives/run';
 import { requestJson, buildApiUrl } from '../lib/http';
-import { toOwnerLostHolders, toRun, type Run } from '../primitives/run';
+import { isItemAsk, toOwnerLostHolders, toRun, type Run } from '../primitives/run';
 import { toRunEvent, type RunEvent, type RunNodeState } from '../primitives/event';
 import type { components } from '@/lib/api.generated';
 
@@ -45,6 +45,9 @@ export async function listRunsNeedingAttention(): Promise<RunsAttention> {
   return {
     runs: res.runs.map(toRun),
     ownerLost: toOwnerLostHolders(res.items),
+    asks: res.items.filter(isItemAsk),
+    answerRefusals: res.answerRefusals,
+    itemIds: new Set(res.items.flatMap(item => (item.item === undefined ? [] : [item.item.id]))),
     degraded: res.degraded ?? [],
   };
 }
@@ -96,6 +99,18 @@ export async function answerRun(
 ): Promise<void> {
   const body: AnswerWorkflowRunBody = { occurrence, choose, text };
   await requestJson('/api/workflows/runs/{runId}/answer', 'post', { params: { runId: id }, body });
+}
+
+/**
+ * Answer an attention item by its ref, through the answer operation the CLI's
+ * `workflow answer --ref` uses. An ask a completed run left is answered only this way.
+ */
+export async function answerAttentionItem(
+  ref: string,
+  choose: string[],
+  text?: string
+): Promise<void> {
+  await requestJson('/api/attention/answer', 'post', { body: { ref, choose, text } });
 }
 
 /** Asks the server to resume a run; resolves to the server's account of what it started. */
