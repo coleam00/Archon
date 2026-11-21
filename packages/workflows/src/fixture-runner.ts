@@ -477,8 +477,7 @@ async function disposeExecWorkspace(cwd: string, workspace: string): Promise<voi
  */
 export async function runFixtures(options: RunFixturesOptions): Promise<FixtureReport> {
   const roots = options.sourceRoots ?? liveSourceRoots(options.cwd);
-  // Same scope roots discovery reads (bundled only when enabled), project root included as its
-  // `.archon/workflows` dir. A disabled bundled fixture would fail for a workflow never loaded.
+  // Same roots discovery reads; bundled only when enabled, or its fixtures fail unloaded.
   const all = await discoverFixtures([
     ...(roots.project !== null ? [join(roots.project, '.archon', 'workflows')] : []),
     roots.globalWorkflows,
