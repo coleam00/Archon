@@ -86,7 +86,7 @@ excluded from formatting while its TypeScript scripts remain linted. Markdown an
 are hand-formatted. After resolving conflicts in an in-flight PR, run `bun run format`.
 
 The ratchet (`bun run check:ratchet`) lets code grow up to a ceiling and holds what is above
-it, compared with the merge base with `origin/dev` (fetch it locally). A touched function is
+it, compared with the merge base with `origin/dev` (fetch it locally; `--base <ref>` names another). A touched function is
 refused when it ends above cognitive complexity 15 and scores higher than at the merge base. A
 touched source file is refused when it ends above 800 lines and has more lines than at the
 merge base. Test files have no line ceiling. It scores the TS/JS files

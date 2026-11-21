@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, normalize } from 'node:path';
 
 const DOCS_DIRECTORY = 'packages/docs-web/';
@@ -99,7 +99,12 @@ function trackedFiles(repo: string, ...paths: string[]): string[] {
   if (result.exitCode !== 0) {
     throw new Error(`Could not list tracked files: ${result.stderr.toString().trim()}`);
   }
-  return result.stdout.toString().split('\0').filter(Boolean);
+  // A file deleted from the working tree but not yet from the index (a local, unstaged deletion)
+  // has nothing to read. Callers pass the changed files as extra candidates, so it still counts.
+  return result.stdout
+    .toString()
+    .split('\0')
+    .filter(file => file.length > 0 && existsSync(join(repo, file)));
 }
 
 /**

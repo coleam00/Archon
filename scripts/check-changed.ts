@@ -19,6 +19,7 @@ import {
   runTypeChecks,
   workspacePackages,
 } from './type-check';
+import { VALIDATE_CHECKS } from './validate';
 
 /**
  * `bun run check:changed`: type-check and test the packages a change touches plus every package
@@ -27,9 +28,9 @@ import {
  *
  * The scope comes from the package manifests (`workspace:` dependencies) and from CI's own change
  * classifier in `should-run-test-suite.ts`, so a file that CI treats as prose or as a reason to
- * run every job is treated the same way here. Each step runs a command its owner already has:
- * the package `type-check` and `test` scripts, `bun run test --plan scripts|pack`, `bun run lint`
- * and `bun run check:ratchet`.
+ * run every job is treated the same way here. Steps run commands their owners already have: each
+ * package's own `type-check` and `test` scripts, and the `validate.ts` checks by id for lint, the
+ * ratchet, the type-check and the root and pack tests.
  */
 
 /** The root manifest as a graph node: its devDependencies name workspace packages. */
@@ -88,34 +89,29 @@ export function loadGraph(root = REPO_ROOT): WorkspaceGraph {
   };
 }
 
-/** Root files that every tsc project or the lint configuration reads. */
-const SHARED_CONFIG = ['tsconfig.json', 'biome.jsonc'];
-
 type FileScope =
   | { kind: 'unchecked' }
   | { kind: 'everything'; because: string }
   | { kind: 'checked'; packages: string[]; reason: string; rootScripts: boolean; pack: boolean };
 
+function packageScope(file: string, graph: WorkspaceGraph): FileScope | undefined {
+  const packageDirectory = /^packages\/[^/]+/.exec(file)?.[0];
+  if (packageDirectory === undefined) return undefined;
+  const name = [...graph.directories].find(([, directory]) => directory === packageDirectory);
+  return name === undefined
+    ? { kind: 'everything', because: `${file} is in ${packageDirectory}, which has no manifest` }
+    : { kind: 'checked', packages: [name[0]], reason: 'changed', rootScripts: false, pack: false };
+}
+
 function classify(file: string, graph: WorkspaceGraph, inputs: ClassifierInputs): FileScope {
+  // CI's classifier reads all of packages/docs-web as documentation, because no job of its own
+  // checks the site. Here a package's code selects that package, so only Markdown defers to it.
+  const inPackage = packageScope(file, graph);
+  if (inPackage !== undefined && !/\.mdx?$/.test(file)) return inPackage;
   if (!shouldRunTestSuite([file])) return { kind: 'unchecked' };
+  if (inPackage !== undefined) return inPackage;
   if (shouldRunEveryJob([file], inputs.packRunner)) {
     return { kind: 'everything', because: `${file} makes CI run every job` };
-  }
-  if (SHARED_CONFIG.includes(file)) {
-    return { kind: 'everything', because: `${file} is read by every project` };
-  }
-  const packageDirectory = /^packages\/[^/]+/.exec(file)?.[0];
-  if (packageDirectory !== undefined) {
-    const name = [...graph.directories].find(([, directory]) => directory === packageDirectory);
-    return name === undefined
-      ? { kind: 'everything', because: `${file} is in ${packageDirectory}, which has no manifest` }
-      : {
-          kind: 'checked',
-          packages: [name[0]],
-          reason: 'changed',
-          rootScripts: false,
-          pack: false,
-        };
   }
   if (file.startsWith('scripts/')) {
     return {
@@ -194,8 +190,8 @@ function withDependents(scope: ScopedChange, graph: WorkspaceGraph): ScopedChang
   return scope;
 }
 
-function git(args: string[]): string {
-  const result = spawnSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' });
+function git(args: string[], repo: string): string {
+  const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
   if (result.status !== 0) {
     throw new Error(`git ${args.join(' ')} failed: ${result.stderr.trim()}`);
   }
@@ -205,10 +201,13 @@ function git(args: string[]): string {
 const nulList = (output: string): string[] => output.split('\0').filter(Boolean);
 
 /** Committed, staged, unstaged and untracked changes since the merge base with `base`. */
-function changedFiles(base: string): { mergeBase: string; files: string[] } {
+export function changedFiles(
+  base: string,
+  repo = REPO_ROOT
+): { mergeBase: string; files: string[] } {
   let mergeBase: string;
   try {
-    mergeBase = git(['merge-base', base, 'HEAD']).trim();
+    mergeBase = git(['merge-base', base, 'HEAD'], repo).trim();
   } catch (error) {
     const branch = base.replace(/^origin\//, '');
     throw new Error(
@@ -216,8 +215,8 @@ function changedFiles(base: string): { mergeBase: string; files: string[] } {
     );
   }
   const files = new Set([
-    ...nulList(git(['diff', '--name-only', '--no-renames', '-z', mergeBase])),
-    ...nulList(git(['ls-files', '--others', '--exclude-standard', '-z'])),
+    ...nulList(git(['diff', '--name-only', '--no-renames', '-z', mergeBase], repo)),
+    ...nulList(git(['ls-files', '--others', '--exclude-standard', '-z'], repo)),
   ]);
   return { mergeBase, files: [...files].sort() };
 }
@@ -271,12 +270,12 @@ function printScope(scope: ChangeScope, graph: WorkspaceGraph): void {
 
 type Step = { label: string; run: () => Promise<number> };
 
-function command(label: string, args: string[], cwd = REPO_ROOT, env = process.env): Step {
+function command(label: string, args: readonly string[], cwd = REPO_ROOT): Step {
   return {
     label,
     run: async () => {
       console.log(`\n=== ${label} ===\n$ ${args.join(' ')}`);
-      return await Bun.spawn(args, { cwd, env, stdio: ['inherit', 'inherit', 'inherit'] }).exited;
+      return await Bun.spawn([...args], { cwd, stdio: ['inherit', 'inherit', 'inherit'] }).exited;
     },
   };
 }
@@ -291,21 +290,24 @@ function typeCheckStep(tasks: TypeCheckTask[]): Step {
   };
 }
 
-/** The ratchet reads its base branch from `GITHUB_BASE_REF`, as CI sets it. */
-function ratchetStep(base: string): Step {
-  const branch = /^origin\/(.+)$/.exec(base)?.[1];
-  const env = branch === undefined ? process.env : { ...process.env, GITHUB_BASE_REF: branch };
-  return command('ratchet', ['bun', 'run', 'check:ratchet'], REPO_ROOT, env);
+/** The commands `scripts/validate.ts` owns for one check id, as one step each. */
+function validateSteps(id: string, label: string, extra: readonly string[] = []): Step[] {
+  const check = VALIDATE_CHECKS.find(candidate => candidate.id === id);
+  if (check === undefined) throw new Error(`scripts/validate.ts has no check named ${id}`);
+  return check.commands.map(args => command(label, [...args, ...extra]));
 }
 
 function steps(scope: ChangeScope, base: string): Step[] {
-  const lint = command('lint (whole repository)', ['bun', 'run', 'lint']);
+  const tail = [
+    ...validateSteps('lint', 'lint (whole repository)'),
+    ...validateSteps('ratchet', `ratchet against ${base}`, ['--base', base]),
+  ];
   if (scope.kind === 'everything') {
     return [
-      command('type-check (every project)', ['bun', 'run', 'type-check']),
+      ...validateSteps('type-check', 'type-check (every project)'),
+      // The root test runner owns the whole plan, so there is no list of test checks to repeat.
       command('tests (every package and root project)', ['bun', 'run', 'test']),
-      lint,
-      ratchetStep(base),
+      ...tail,
     ];
   }
   const packages = workspacePackages().filter(manifest => scope.packages.has(manifest.name));
@@ -323,14 +325,10 @@ function steps(scope: ChangeScope, base: string): Step[] {
       .map(manifest =>
         command(`tests: ${manifest.name}`, ['bun', 'run', 'test'], join(REPO_ROOT, manifest.path))
       ),
-    ...(scope.rootScripts
-      ? [command('tests: scripts/', ['bun', 'run', 'test', '--plan', 'scripts'])]
-      : []),
-    ...(scope.pack
-      ? [command('tests: .archon/scripts/', ['bun', 'run', 'test', '--plan', 'pack'])]
-      : []),
+    ...(scope.rootScripts ? validateSteps('script-tests', 'tests: scripts/') : []),
+    ...(scope.pack ? validateSteps('pack-tests', 'tests: .archon/scripts/') : []),
   ];
-  return [...(tasks.length > 0 ? [typeCheckStep(tasks)] : []), ...tests, lint, ratchetStep(base)];
+  return [...(tasks.length > 0 ? [typeCheckStep(tasks)] : []), ...tests, ...tail];
 }
 
 async function main(argv: readonly string[]): Promise<number> {
