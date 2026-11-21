@@ -178,7 +178,7 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
-  test('returns 400 for a pending run: nothing executes it yet, so abandon is the action', async () => {
+  test('cancels a pending run that no process is starting, before it starts', async () => {
     mockGetWorkflowRun.mockResolvedValue(MOCK_PENDING_RUN);
 
     const { app } = makeApp();
@@ -186,10 +186,12 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
       method: 'POST',
     });
 
-    expect(response.status).toBe(400);
-    const body = (await response.json()) as { error: string };
-    expect(body.error).toContain("status 'pending'");
-    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body).toMatchObject({ success: true });
+    expect(body.message).toContain('had not started');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
   });
 
   test('returns 404 when run not found', async () => {

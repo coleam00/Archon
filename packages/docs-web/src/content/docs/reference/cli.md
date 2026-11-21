@@ -354,7 +354,7 @@ A real run prints a JSON payload only with `--detach`. Without it, `--json` supp
 | `--workflow-source <path>` | Read the workflow, its commands, and its scripts from this checkout root instead of `--cwd`. `<path>` is the directory that contains `.archon/`: Archon reads `<path>/.archon/workflows`, `.archon/commands`, and `.archon/scripts`. For a pack, pass the checkout that holds `.archon/workflows/<pack>`, not the pack folder. The named workflow must be found there, or the run is refused before it starts. Lets an **uncommitted** workflow in one checkout run against a different checkout, repository, or folder project, with no commit, push, or merge. Fresh runs only: a resumed run executes the source it already captured. See [Running a workflow from another checkout](#running-a-workflow-from-another-checkout). Repo config is not part of the source: the run reads `.archon/config.yaml` from the launch checkout (`--cwd`); see [Where a run reads `.archon/config.yaml`](/reference/configuration/#where-a-run-reads-archonconfigyaml). |
 | `--branch`, `-b <name>` | Branch name for the worktree; reuses a healthy active task worktree registered in Archon for the project and branch, or a usable checkout at the configured target path. If another path holds the branch and was not reused, check for a live Archon run before freeing it and retrying. A worktree created for a named branch is never removed when the run ends; `isolation cleanup --merged` removes it |
 | `--from <branch>`, `--from-branch <branch>` | Start point for the new worktree only. An existing worktree whose history lacks it is refused, not reused; see [Where the run executes](#where-the-run-executes). Unlike `--base`, it does not change the PR target. |
-| `--base-branch <name>` | Choose the project base branch on first registration only. Omit to follow the remote default at use time; no prompt. Rejected for folder projects, existing projects, adoption/supersedes, dry runs, and every subcommand other than `workflow run`. A reachable remote must advertise the branch. With `--base`, this flag stores the project choice while `--base` overrides only this dispatch. |
+| `--base-branch <name>` | Choose the project base branch on first registration only. Omit to follow the remote default at use time; no prompt. Rejected for folder projects, existing projects, adoption/supersedes, dry runs, and every subcommand other than `workflow run` and [`project add`](#project-add). A reachable remote must advertise the branch. With `--base`, this flag stores the project choice while `--base` overrides only this dispatch. |
 | `--base <branch>` | Per-dispatch base override, inherited by fresh shared-checkout children. Sets **both** the worktree cut-from **and** the PR target (`$BASE_BRANCH`), and outranks the item's [landing branch](#workflow-landing), `worktree.baseBranch` in config and the codebase default; see [Base branch precedence](#base-branch-precedence) below. The branch **must already exist on the remote**; a missing one is a hard error, not a fallback. Combine with `--from` to drive the two separately. Rejected with `--no-worktree`, `--folder`, and workflows pinning `worktree.enabled: false`. |
 | `--project <id\|name>` | Bind a fresh run to an existing registered repository by ID or exact name (for example `owner/repo`); see `archon project list`. Folder projects are unsupported. See `archon workflow run --help` for incompatible flags. |
 | `--no-worktree` | Run directly in the live checkout, without isolation |
@@ -1798,11 +1798,29 @@ Two resumes of the same run cannot both start it. The first one admitted changes
 
 ### `workflow cancel`
 
-Stop a running workflow. Every cancel surface (this command, `/workflow cancel` in
-chat, the Web UI's Cancel action, `POST /api/workflows/runs/{runId}/cancel`, the Slack
-Cancel button, and the chat agent's `manage_run` tool) does the same thing, decided by
-who owns the run:
+Stop a running workflow, or withdraw a `pending` one before it starts. Every cancel
+surface (this command, `/workflow cancel` in chat, the Web UI's Cancel action,
+`POST /api/workflows/runs/{runId}/cancel`, the Slack Cancel button, and the chat agent's
+`manage_run` tool) does the same thing, decided by the run's status and who owns it:
 
+- **The run is `pending` and no process holds it** (an admitted start, or a detached
+  launch, that no process has picked up; for a `workflow:` sub-run, no owner answers for
+  any of its ancestor runs either): cancel takes the run's owner lock, records it
+  `cancelled` while it is still pending, and releases the lock. A starter takes the same
+  lock and checks the run is still pending before it prepares a checkout, so the start
+  never runs and its resource slot frees. Cancel stops no process and prints no
+  host-command or checkout warning. A checkout an earlier, failed start already prepared
+  is left in place. A pending run that a live process is starting, or one that starts
+  while cancel records it, is refused and left unchanged; cancel it again once it is
+  running. A start still `queued` for its resource has no run yet;
+  withdraw it with `archon trigger withdraw <request-id>`.
+
+  The owner lock and endpoint cancel checks live on this machine. A starter on another
+  machine that shares the same database holds its own lock there, and cancel cannot see
+  it. Cancel then records the run `cancelled` and frees its slot while that machine keeps
+  preparing the checkout and running setup. Until Archon records preparation in the
+  shared store, cancel a pending run only when no other machine starts runs from the same
+  database.
 - **The process handling the cancel executes the run** (a run the server started, cancelled
   from that server): the run is marked `cancelled` and its executor stops at its next
   status check. On macOS and Linux, cooperative cancellation reports possible
@@ -1827,8 +1845,8 @@ who owns the run:
   trigger it. Inspect processes using the checkout (for example with `lsof`), verify
   ownership, and stop any leftovers before reusing or removing it. Windows uses
   the owner's Job Object, including descendants whose parent exited.
-- **No owner answers, or the owner cannot be stopped:** cancel fails and leaves the run
-  unchanged. When no owner answers, it prints what the run recorded (host, pid, last
+- **A running run whose owner does not answer, or cannot be stopped:** cancel fails and
+  leaves the run unchanged. When no owner answers, it prints what the run recorded (host, pid, last
   activity) and points you at `abandon`. A foreground `archon workflow run` or a run
   executing in another Archon server answers but cannot be stopped from here; interrupt
   the foreground command, or cancel the run on the server that executes it.
@@ -1839,13 +1857,14 @@ archon workflow cancel <run-id> --json
 archon workflow cancel --item <key> [--all-runs]
 ```
 
-With `--item <key>`, cancel acts on the [item's](#items) run that is `running`, through
-the same path as `workflow cancel <run-id>`, so a live owner is handled the same way.
-Archon never chooses between runs: when several runs on the item are running, cancel
+With `--item <key>`, cancel acts on the [item's](#items) run that is `pending` or
+`running`, through the same path as `workflow cancel <run-id>`, so a live owner is handled
+the same way. Archon never chooses between runs: when several runs on the item are pending
+or running, cancel
 refuses and lists them; name one by id, or pass `--all-runs` to cancel each in start
 order. With `--all-runs`, one run's failure does not stop the rest, every run is
 reported, and the command exits `1` if any failed. Cancel also refuses an item with no
-running run, and an item one of whose runs cannot be read, since that run may be the one
+pending or running run, and an item one of whose runs cannot be read, since that run may be the one
 to act on. Under `--json` the command prints one
 `{ "ok", "action": "cancel", "item", "results": [...] }` document whose `results` hold
 exactly what the run-id form prints for each run. A refusal prints
@@ -1853,21 +1872,29 @@ exactly what the run-id form prints for each run. A refusal prints
 `no_project`, `not_found`, `unreadable`, `no_run` or `several_runs`, and `runs` lists the
 runs to choose from.
 
+Under `--json` a cancel prints `{ "ok": true, "runId", "action": "cancel", "status": "cancelled",
+"previousStatus", "processStopped", "workflowName", "cleanupWarnings"?, "cascadeFailures"?,
+"blockedParentRunId"? }`. `previousStatus` is
+`pending` for a run withdrawn before it started and `running` otherwise; `processStopped` says
+whether cancel stopped another process that owned the run.
+
 When cancel refuses, it exits nonzero. Under `--json` it also prints `{ "ok": false, "error": ... }`.
 `workflow resume` and `workflow abandon` follow the same contract, so a script or bash node can
 gate on the exit status.
 
-Refusing is deliberate: `cancelled` releases the run's worktree lock and resource slot,
-and a database transition cannot prove that host work stopped. After verifying that the
-owner process is gone, use `workflow abandon <run-id>`.
+Refusing a running run with no answering owner is deliberate: `cancelled` releases the
+run's worktree lock and resource slot, and a database transition cannot prove that host
+work stopped. After verifying that the owner process is gone, use
+`workflow abandon <run-id>`. A pending run with no owner needs no abandon; cancel ends it
+as described above.
 
-A `workflow:` sub-run normally executes inside its root run's process, and the root's row
-keeps the worktree lock and resource slot. When no owner answers for the sub-run itself
-but one answers for its root, cancel records `cancelled` and the root's executor stops the
-sub-run at its next status check. When no owner answers for the root either, cancel
-refuses and points at abandon, as for any other run. A sub-run resumed on its own (after a
+A running `workflow:` sub-run normally executes inside its root run's process, and the
+root's row keeps the worktree lock and resource slot. When no owner answers for the sub-run
+itself but one answers for its root, cancel records `cancelled` and the root's executor
+stops the sub-run at its next status check. When no owner answers for the root either,
+cancel refuses and points at abandon, as for any other running run. A sub-run resumed on its own (after a
 durable wait or a scheduled resume) has its own owner, and cancel stops that owner like
-any other run's. Only a `running` run can be
+any other run's. Only a `pending` or `running` run can be
 cancelled; abandon a paused or failed run instead.
 
 After termination is confirmed, `cancel` records cancellation through the same run-tree
@@ -2009,6 +2036,12 @@ with no open tool or reported background work still fails after its node's
 counts toward `idle_timeout` while waiting for settlement, even with live work;
 the node can fail before the attention threshold. A new running wake turn or
 newly started tool or subtask restores live-work protection until its next result.
+
+Before that, the engine sends the stalled session up to `workflows.stallMessageLimit`
+messages (2 by default) stating how long the work has shown no progress, without ending
+the call; `workflow status` shows the latest under the run, and `workflow logs` prints
+each with its text, or the provider's refusal. An agent that continues needs no
+request. See [workflow attention settings](/reference/configuration/#workflow-attention-and-continuation-settings).
 
 The command records each observed `(streamId, toolCallId, raisedAt)` occurrence.
 A live owner checks about every ten seconds and aborts only one of its own current
@@ -2614,7 +2647,21 @@ archon project list          # ID, KIND, NAME, KEY and PATH per project
 archon project list --json   # { "projects": [ { ...project row, "key" } ] }
 ```
 
-`key` is the value `workflow attention --project` and `archon state --project` accept. The list is read-only; register and remove projects through the Web UI or chat.
+`key` is the value `workflow attention --project` and `archon state --project` accept. The list is read-only; register a project with [`project add`](#project-add), and remove one through the Web UI or chat.
+
+### `project add`
+
+`archon project add [path]` registers a project before anything runs in it, so a setup step can register the project and check it before the first run. It is the same registration a first `workflow run` or `trigger fire` performs in an unregistered checkout: the same row and the same key. `path` resolves against `--cwd` or the current directory and defaults to it. A subdirectory of a git repository registers the repository root. A directory that is not a git checkout needs `--folder`, which registers the directory itself as a [folder project](/guides/multi-repo-projects/); `--folder` on a git checkout registers it as a folder project too, as `workflow run --folder` does. `--base-branch <name>` stores the project base branch, with the same checks as on a first `workflow run`.
+
+Run again on a registered project, it changes nothing, says the project is already registered, and exits 0. It refuses, with exit 1, a missing directory, a non-git directory without `--folder`, `--folder` on a project registered as a repository, `--base-branch` on a folder or an already registered project, a second clone of a registered remote, and a base branch the remote does not advertise. It needs no server.
+
+```bash
+archon project add                       # register this checkout
+archon project add ../notes --folder     # register a non-git directory as a folder project
+archon project add --json                # { "project": { ...project row, "key" }, "registered": true|false }
+```
+
+The text output names the project, then its ID, kind, key and path. In JSON, `project` is the row `project list` prints and `registered` is `false` when the project was already registered.
 
 ### `project config`
 
@@ -3023,7 +3070,7 @@ a warning log, because no other report names it.
 
 ## Working directory
 
-The CLI starts from `--cwd`, or the current directory. A subdirectory such as `/repo/packages/cli` resolves to the nearest git repository root, `/repo`. A nested repository resolves as its own codebase and registers on first workflow use. Linked worktrees resolve to their registered source codebase. Ordinary subdirectories of registered folder projects continue to resolve to the registered folder. An exact folder registration wins over git detection. `--folder` retains the supplied directory rather than selecting a surrounding git root. Linked Git worktrees do not inherit a folder registration from the primary checkout. Listing commands do not register projects.
+The CLI starts from `--cwd`, or the current directory. A subdirectory such as `/repo/packages/cli` resolves to the nearest git repository root, `/repo`. A nested repository resolves as its own codebase and registers on first workflow use, or earlier with [`project add`](#project-add). Linked worktrees resolve to their registered source codebase. Ordinary subdirectories of registered folder projects continue to resolve to the registered folder. An exact folder registration wins over git detection. `--folder` retains the supplied directory rather than selecting a surrounding git root. Linked Git worktrees do not inherit a folder registration from the primary checkout. Listing commands do not register projects.
 
 When project registration fails, the command fails with the registration error, even with `--no-worktree`. Registering a second clone of an already-registered remote is refused with the registered project's path; use worktrees (`--branch`) for parallel checkouts. To bind a separate clone to the existing project, use its registered ID or exact name:
 

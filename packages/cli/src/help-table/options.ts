@@ -33,7 +33,10 @@ export const orderedFlags: FlagHelp[] = [
     spec: '--base-branch <name>',
     description:
       'Initial repository registration only; omit to follow the remote default. Use --base for a run override.',
-    owners: [{ command: 'workflow', subcommand: 'run' }],
+    owners: [
+      { command: 'workflow', subcommand: 'run' },
+      { command: 'project', subcommand: 'add' },
+    ],
   },
   {
     spec: '--base <branch>',
@@ -54,8 +57,11 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--folder',
     description:
-      'Register the current directory (with or without git) as a folder project and run in place',
-    owners: [{ command: 'workflow', subcommand: 'run' }],
+      'Register the target directory (the project add path, else the current directory), with or without git, as a folder project; workflow run runs in place',
+    owners: [
+      { command: 'workflow', subcommand: 'run' },
+      { command: 'project', subcommand: 'add' },
+    ],
   },
   {
     spec: '--container',
@@ -160,7 +166,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--json',
     description:
-      'Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/pause/abandon/resume, project list/config)',
+      'Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/pause/abandon/resume, project list/add/config)',
     owners: [],
   },
   {

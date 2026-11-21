@@ -4,6 +4,7 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   backgroundWork: 'reported',
   sessionResume: true,
   sessionFork: true, // `thread/fork` copies a thread into a new one
+  turnMessages: true, // `turn/steer` adds input to the active turn
   mcp: true,
   hooks: false,
   // Codex has native filesystem skills, but does not implement Archon's per-node

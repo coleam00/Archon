@@ -55,6 +55,7 @@ const AXES: readonly { key: keyof ProviderCapabilities; label: string }[] = [
     label:
       'Immutable session fork (`context.resume`, cross-run `persist_session` and `context: same`)',
   },
+  { key: 'turnMessages', label: 'Engine message to a stalled session' },
   { key: 'mcp', label: 'MCP servers (`mcp:`)' },
   { key: 'hooks', label: 'Hooks (`hooks:`)' },
   { key: 'skills', label: 'Skills (`skills:`)' },
@@ -145,8 +146,8 @@ export function renderCell(caps: ProviderCapabilities, key: keyof ProviderCapabi
     if (mode === 'fresh-session') return 'fresh session';
     return '—';
   }
-  // sessionFork predates reporting declarations and explicitly defines omission as unsupported.
-  if (caps[key] === undefined && key !== 'sessionFork') return 'Unknown';
+  // sessionFork and turnMessages explicitly define omission as unsupported.
+  if (caps[key] === undefined && key !== 'sessionFork' && key !== 'turnMessages') return 'Unknown';
   return caps[key] ? '✅' : '❌';
 }
 

@@ -58,7 +58,11 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   matchDeniedModels: unmocked('matchDeniedModels'),
 }));
 
-import { TOOL_OUTPUT_MAX_CHARS, type ProviderStopReason } from '@archon/provider-contract';
+import {
+  TOOL_OUTPUT_MAX_CHARS,
+  createTurnMessageQueue,
+  type ProviderStopReason,
+} from '@archon/provider-contract';
 import { runProviderConformance } from '@archon/provider-contract/conformance';
 import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
 import * as claudeModule from './provider';
@@ -905,6 +909,49 @@ describe('subtasks and settling', () => {
     expect(chunks.filter(chunk => chunk.type === 'subtask')).toEqual([
       { type: 'subtask', taskId: 'live', status: 'started', description: 'never finished' },
     ]);
+  });
+
+  test('an engine turn message reaches the live session at its next step, and the turn settles', async () => {
+    const turnMessages = createTurnMessageQueue();
+    const received: unknown[] = [];
+    mockQuery.mockImplementation(async function* ({ prompt }) {
+      if (typeof prompt === 'string') throw new Error('Expected streaming input');
+      const input = prompt[Symbol.asyncIterator]();
+      received.push((await input.next()).value);
+      yield {
+        type: 'system',
+        subtype: 'background_tasks_changed',
+        tasks: [{ task_id: 'server', task_type: 'local_bash', description: 'dev server' }],
+      };
+      yield { type: 'result', subtype: 'success', session_id: 's', result: 'waiting' };
+      yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+      turnMessages.push('engine check-in');
+      received.push((await input.next()).value);
+      yield { type: 'system', subtype: 'session_state_changed', state: 'running' };
+      yield { type: 'system', subtype: 'background_tasks_changed', tasks: [] };
+      yield {
+        type: 'system',
+        subtype: 'task_notification',
+        task_id: 'server',
+        status: 'completed',
+      };
+      yield { type: 'result', subtype: 'success', session_id: 's', result: 'done' };
+      yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+    });
+    const chunks = await chunksOf('test', '/workspace', undefined, { turnMessages });
+    expect(received).toEqual([
+      expect.objectContaining({ message: { role: 'user', content: 'test' } }),
+      {
+        type: 'user',
+        message: { role: 'user', content: 'engine check-in' },
+        parent_tool_use_id: null,
+        session_id: '',
+        priority: 'next',
+        client_composed: true,
+      },
+    ]);
+    expect(chunks.filter(chunk => chunk.type === 'result').at(-1)?.text).toBe('done');
+    expect(chunks.at(-1)).toEqual({ type: 'settled' });
   });
 
   test('cancelling quiet background work closes streaming input without settling or inventing a stop', async () => {

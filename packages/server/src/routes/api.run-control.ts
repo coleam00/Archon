@@ -7,6 +7,7 @@ import {
   AbandonOwnerNotStoppedError,
   AbandonRefusedError,
   CancelRefusedError,
+  type CancelWorkflowResult,
   ResumeRefusedError,
   describeAbandonOwner,
   describeReleasedWorktrees,
@@ -193,8 +194,9 @@ export function registerRunControlRoutes(
   } = operations;
 
   // POST /api/workflows/runs/:runId/cancel - Cancel a workflow run through the shared
-  // owner-checked cancel: cooperative for a run this server executes, an owner stop for
-  // one another process owns, and a 409 refusal when no owner answers.
+  // owner-checked cancel: a pending run no process is starting is cancelled before it
+  // starts, cooperative for a run this server executes, an owner stop for one another
+  // process owns, and a 409 refusal when no owner answers or a process is starting it.
   registerOpenApiRoute(cancelWorkflowRunRoute, async c => {
     const runId = c.req.param('runId') ?? '';
     try {
@@ -203,23 +205,7 @@ export function registerRunControlRoutes(
         return apiError(c, 404, 'Workflow run not found');
       }
       const result = await cancelWorkflow(runId, await resolveRunActor(c));
-      if (result.kind === 'cooperative') {
-        return c.json({
-          success: true,
-          message: result.cancelled
-            ? `Cancelled workflow: ${run.workflow_name}${cancelCleanupWarnings(result.cleanupWarnings)}`
-            : `Workflow ${run.workflow_name} already finished — nothing to cancel.`,
-        });
-      }
-      let message = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled workflow: ${run.workflow_name}`;
-      message += cancelCleanupWarnings(result.cleanupWarnings);
-      if (result.cascadeFailures > 0) {
-        message += ` — warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
-      }
-      if (result.blockedParentRunId) {
-        message += ` — parent run ${result.blockedParentRunId} was blocked on this sub-run and stays paused; resume it so it reads this sub-run's outcome, or abandon it too`;
-      }
-      return c.json({ success: true, message });
+      return c.json({ success: true, message: cancelResultMessage(run.workflow_name, result) });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
       if (error instanceof CancelRefusedError) {
@@ -472,4 +458,27 @@ async function resumeHeadlessRun(
     success: true,
     message: `Resuming workflow: ${run.workflow_name}`,
   });
+}
+
+/** The API's one-line report of a cancel that did not refuse. */
+function cancelResultMessage(workflowName: string, result: CancelWorkflowResult): string {
+  switch (result.kind) {
+    case 'pending':
+      return `Cancelled pending workflow: ${workflowName} (its workflow had not started)${cancelCleanupWarnings(result.cleanupWarnings)}`;
+    case 'cooperative':
+      return result.cancelled
+        ? `Cancelled workflow: ${workflowName}${cancelCleanupWarnings(result.cleanupWarnings)}`
+        : `Workflow ${workflowName} already finished — nothing to cancel.`;
+    case 'stopped': {
+      let message = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled workflow: ${workflowName}`;
+      message += cancelCleanupWarnings(result.cleanupWarnings);
+      if (result.cascadeFailures > 0) {
+        message += ` — warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
+      }
+      if (result.blockedParentRunId) {
+        message += ` — parent run ${result.blockedParentRunId} was blocked on this sub-run and stays paused; resume it so it reads this sub-run's outcome, or abandon it too`;
+      }
+      return message;
+    }
+  }
 }

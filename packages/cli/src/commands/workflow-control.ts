@@ -184,9 +184,10 @@ export async function workflowAbandonCommand(
 }
 
 /**
- * Cancel a running run through the shared `cancelWorkflow` op.
+ * Cancel a pending or running run through the shared `cancelWorkflow` op.
  *
- * Ordering is the contract: prove the live exact-run owner, terminate its process
+ * A pending run no process is starting is recorded `cancelled` before it starts. For a
+ * running run, ordering is the contract: prove the live exact-run owner, terminate its process
  * tree, then record `cancelled`. An unreachable owner never falls back to a DB-only
  * transition — the refusal points at `abandon` for an orphan the operator has verified.
  */

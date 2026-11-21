@@ -86,17 +86,17 @@ In a terminal, an answer continues the run in place, unless a running continuati
 archon workflow resume <run-id>       # rerun a failed or paused run, skipping completed nodes
 archon workflow resume <run-id> --detach
 archon workflow end-turn <run-id>     # end a running run's stalled turn
-archon workflow cancel <run-id>       # stop a running run
+archon workflow cancel <run-id>       # stop a running run, or a queued one before it starts
 archon workflow abandon <run-id>      # give up on a run for good
 ```
 
 Pick the command by what is wrong:
 
-- **A turn is stuck, but the run should go on.** When `workflow wait` or `status` reports `stalled_tool_calls`, a tool or reported background work has made no progress. `end-turn` records a request to end that turn. Only the run's live owner acts on it: it ends the turn if the same stall is still active, the node fails as `timeout`, and the node's retry policy decides whether to try again. The command itself stops nothing, and it refuses a run that is not `running`.
-- **The run should stop.** Use `cancel`.
+- **A turn is stuck, but the run should go on.** When `workflow wait` or `status` reports `stalled_tool_calls`, a tool or reported background work has made no progress. When the provider can take one and stall messages are on (`workflows.stallMessageLimit` above `0`, the default), the engine sends the agent a message in its session, up to that many times, shown under the run in `status`; an agent that picks up again needs nothing from you. `end-turn` records a request to end that turn. Only the run's live owner acts on it: it ends the turn if the same stall is still active, the node fails as `timeout`, and the node's retry policy decides whether to try again. The command itself stops nothing, and it refuses a run that is not `running`.
+- **The run should stop, or a queued run should never start.** Use `cancel`.
 - **The run failed or paused.** Use `resume` to continue it.
 
-`cancel` works only on a `running` run. It stops the process that owns the run, confirms it stopped, and then records `cancelled`. When no owner answers, it refuses and changes nothing, because a database update cannot prove the work on the host stopped. A foreground `archon workflow run` can't be stopped from another shell: interrupt it in its terminal.
+`cancel` works on a `pending` or `running` run. A `pending` run that no process on this machine is starting is recorded `cancelled`, so it never starts; one a process is starting is refused. Cancel cannot see a starter on another machine that shares the database, so do not cancel a pending run there (see the [cancel reference](/reference/cli/#workflow-cancel)). For a `running` run, cancel stops the process that owns the run, confirms it stopped, and then records `cancelled`. When no owner answers, it refuses and changes nothing, because a database update cannot prove the work on the host stopped. A foreground `archon workflow run` can't be stopped from another shell: interrupt it in its terminal.
 
 `abandon` is for a paused or failed run, or one whose owner is gone. It stops a live owner on this host first, records `cancelled`, and attempts to remove the worktree Archon created for the run. When removal proceeds, it is forced: uncommitted and untracked files in that worktree are deleted. A sub-run whose execution owner cannot be accounted for retains its checkout with a cleanup warning; cancellation still succeeds. See the [abandon reference](/reference/cli/#workflow-abandon) for retention and recovery guidance. A branch with commits of its own stays, so committed work is recoverable. A branch Archon generated for the run that is still at the commit it was cut from is deleted with the worktree. Archon never decides a run is dead from its age.
 

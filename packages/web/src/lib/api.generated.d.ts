@@ -11391,6 +11391,7 @@ export interface components {
       backgroundWork: 'reported' | 'none' | 'unobserved';
       sessionResume: boolean;
       sessionFork?: boolean;
+      turnMessages?: boolean;
       mcp: boolean;
       hooks: boolean;
       skills: boolean;

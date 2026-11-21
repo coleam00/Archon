@@ -1396,6 +1396,24 @@
           "properties": {
             "kind": {
               "type": "string",
+              "const": "pending"
+            },
+            "cleanupWarnings": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
               "const": "cooperative"
             },
             "cancelled": {

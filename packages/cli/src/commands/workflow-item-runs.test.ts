@@ -108,6 +108,21 @@ describe('wait, cancel and abandon --item', () => {
     });
   });
 
+  it('cancel acts on a pending run and reports it was pending', async () => {
+    const { host, cancelWorkflow } = itemHost([run('done', 'completed'), run('queued', 'pending')]);
+    cancelWorkflow.mockImplementationOnce(async (id: string) => ({
+      kind: 'pending',
+      run: { id, workflow_name: 'implement' },
+    }));
+
+    expect(await workflowCancelItemCommand(host, 'issue-42', '/test/path', { json: true })).toBe(0);
+
+    expect(cancelWorkflow.mock.calls.map(call => call[0])).toEqual(['queued']);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+      results: [{ ok: true, runId: 'queued', previousStatus: 'pending', processStopped: false }],
+    });
+  });
+
   it('cancel refuses and lists the runs when several are running', async () => {
     const { host, cancelWorkflow } = itemHost([run('a', 'running'), run('b', 'running')]);
 

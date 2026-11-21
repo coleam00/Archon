@@ -87,6 +87,7 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   backgroundWork: 'reported',
   sessionResume: true,
   sessionFork: true,
+  turnMessages: true, // streamed input messages at priority 'next'
   mcp: true,
   hooks: true,
   skills: true,

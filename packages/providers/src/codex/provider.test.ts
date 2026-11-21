@@ -19,7 +19,12 @@ mock.module('@archon/paths', () => ({
   getArchonHome: () => '/tmp/archon-home-unused',
 }));
 
-import { TOOL_OUTPUT_MAX_CHARS, type ProviderFailureClass } from '@archon/provider-contract';
+import {
+  TOOL_OUTPUT_MAX_CHARS,
+  createTurnMessageQueue,
+  TURN_MESSAGE_REFUSED_WARNING_CODE,
+  type ProviderFailureClass,
+} from '@archon/provider-contract';
 import {
   checkFailureClasses,
   runProviderConformance,
@@ -48,6 +53,7 @@ import {
   type FakeTurnScript,
 } from '../test/codex-app-server-fake';
 import { CodexProvider } from './provider';
+import { steered } from './turn-messages';
 import * as pluginProcess from '@archon/paths/plugin-process';
 import { TOOL_FREE_THREAD_CONFIG } from './turn-params';
 import type { CodexErrorInfo } from './protocol/v2/CodexErrorInfo';
@@ -228,6 +234,7 @@ describe('CodexProvider', () => {
       backgroundWork: 'reported' as const,
       sessionResume: true,
       sessionFork: true,
+      turnMessages: true,
       mcp: true,
       hooks: false,
       skills: false,
@@ -575,6 +582,97 @@ describe('CodexProvider', () => {
       });
       expect(paramsOf(server, 'initialize')?.capabilities).toBeNull();
       expect(paramsOf(server, 'thread/start')).not.toHaveProperty('dynamicTools');
+    });
+  });
+
+  describe('engine turn messages', () => {
+    test('steer a text into the active turn over the plugin wire, and the turn completes', async () => {
+      const { provider, server } = providerWith({
+        notifications: [itemStarted(command('exec-1', 'sleep 900'))],
+        completion: null,
+      });
+      // The stream asks for the next text only once the steer is answered; the agent
+      // then finishes the turn it was stuck in.
+      async function* turnMessages(): AsyncGenerator<string> {
+        yield 'engine check-in';
+        server.processes[0].send(itemCompleted(command('exec-1', 'sleep 900', { exitCode: 0 })));
+        server.processes[0].send(turnCompleted('completed'));
+      }
+      const chunks = await Array.fromAsync(
+        overStreams(() => provider, descriptor).sendQuery('p', '/workspace', undefined, {
+          turnMessages: turnMessages(),
+        })
+      );
+      expect(paramsOf(server, 'turn/steer')).toEqual({
+        threadId: THREAD_ID,
+        expectedTurnId: TURN_ID,
+        input: [{ type: 'text', text: 'engine check-in', text_elements: [] }],
+      });
+      expect(server.processes[0].methods).not.toContain('turn/interrupt');
+      expect(chunks.filter(chunk => chunk.type === 'warning')).toEqual([]);
+      expect(resultOf(chunks).failure).toBeUndefined();
+      expect(chunks.at(-1)).toEqual({ type: 'settled' });
+    });
+
+    test('a long run of notifications attaches one reaction to the pending text read', async () => {
+      let reactions = 0;
+      class CountedPromise<T> extends Promise<T> {
+        override then<R1 = T, R2 = never>(
+          onFulfilled?: ((value: T) => R1 | PromiseLike<R1>) | null,
+          onRejected?: ((reason: unknown) => R2 | PromiseLike<R2>) | null
+        ): Promise<R1 | R2> {
+          reactions += 1;
+          return super.then(onFulfilled, onRejected);
+        }
+      }
+      const pendingText: AsyncIterable<string> = {
+        [Symbol.asyncIterator]: () => ({
+          next: () => new CountedPromise<IteratorResult<string>>(() => undefined),
+        }),
+      };
+      async function* notifications(): AsyncGenerator<ServerNotification> {
+        for (let i = 0; i < 1000; i++) yield turnCompleted('completed');
+      }
+      const connection = { notifications } as unknown as Parameters<typeof steered>[0];
+      let seen = 0;
+      for await (const _ of steered(
+        connection,
+        { threadId: THREAD_ID, turnId: TURN_ID },
+        pendingText
+      ))
+        seen += 1;
+      expect(seen).toBe(1000);
+      expect(reactions).toBe(1);
+    });
+
+    test("a refused steer is a warning with Codex's error, and the turn goes on", async () => {
+      const sleep = command('exec-1', 'sleep 900');
+      const { provider, server } = providerWith({
+        notifications: [itemStarted(sleep)],
+        completion: null,
+        errors: { 'turn/steer': { code: -32600, message: 'no active turn to steer' } },
+      });
+      const turnMessages = createTurnMessageQueue();
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', '/workspace', undefined, {
+        turnMessages,
+      })) {
+        chunks.push(chunk);
+        if (chunk.type === 'tool_call') turnMessages.push('engine check-in');
+        if (chunk.type === 'warning') {
+          server.processes[0].send(itemCompleted(command('exec-1', 'sleep 900', { exitCode: 0 })));
+          server.processes[0].send(turnCompleted('completed'));
+        }
+      }
+      expect(chunks.filter(chunk => chunk.type === 'warning')).toEqual([
+        {
+          type: 'warning',
+          code: TURN_MESSAGE_REFUSED_WARNING_CODE,
+          message: expect.stringContaining('no active turn to steer'),
+        },
+      ]);
+      expect(server.processes[0].methods).not.toContain('turn/interrupt');
+      expect(chunks.at(-1)).toEqual({ type: 'settled' });
     });
   });
 

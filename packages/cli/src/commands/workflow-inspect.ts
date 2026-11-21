@@ -34,6 +34,7 @@ import { writeJsonLine, writeStderr } from '../utils/stdout';
 import { formatAge, getLog } from './workflow-shared';
 import type { LatestWorkflowNotice } from '@archon/workflows/workflow-notice';
 import { formatRunUsage } from './workflow-usage';
+import { stallMessageLine } from './workflow-run-output';
 import { printRequestedBy, type RequestedBy } from '../utils/requested-by';
 import {
   formatFanOutOutcome,
@@ -55,10 +56,7 @@ export async function printStatusRun(
   console.log(`  Status: ${run.status}`);
   const pauseLine = operatorPauseLine(run);
   if (pauseLine !== undefined) console.log(pauseLine);
-  const attention = runAttention(run);
-  if (attention?.kind === 'stalled_tool_calls') console.log(formatToolAttention(attention));
-  if (attention?.kind === 'usage_limit')
-    console.log(usageLimitWaitLine(attention.nodeId, attention.resumeAt));
+  await printRunAttention(host, run);
   const outcome = displayedRunOutcome(run);
   if (outcome !== null) console.log(`  Authored outcome: ${outcome}`);
   console.log(`  Age:    ${age}`);
@@ -113,6 +111,40 @@ export function formatToolAttention(
       .join('\n') +
     `\nInspect with archon workflow logs ${attention.runId}, or request recovery with archon workflow end-turn ${attention.runId}.`
   );
+}
+
+/** What a running run needs: stalled tool calls with the engine's messages, or a usage-limit wait. */
+async function printRunAttention(host: WorkflowHost, run: DashboardWorkflowRun): Promise<void> {
+  const attention = runAttention(run);
+  if (attention?.kind === 'stalled_tool_calls') {
+    console.log(formatToolAttention(attention));
+    const stalledSteps = new Set(attention.calls.map(call => call.nodeId));
+    for (const line of await stallMessageStatusLines(host, run.id, stalledSteps)) console.log(line);
+  }
+  if (attention?.kind === 'usage_limit')
+    console.log(usageLimitWaitLine(attention.nodeId, attention.resumeAt));
+}
+
+/** The engine's latest message to each step that has stalled calls now; other steps' history is left out. */
+async function stallMessageStatusLines(
+  host: WorkflowHost,
+  runId: string,
+  stalledSteps: ReadonlySet<string>
+): Promise<string[]> {
+  let rows: WorkflowEventRow[];
+  try {
+    rows = (await host.deps.store.listEventsForRuns([runId], ['stall_message'])).get(runId) ?? [];
+  } catch (error) {
+    getLog().warn({ err: error as Error, runId }, 'cli.stall_messages_fetch_failed');
+    return ['  Engine: messages to stalled sessions unavailable — see logs'];
+  }
+  const latest = new Map<string, WorkflowEventRow>();
+  for (const row of rows)
+    if (row.step_name !== null && stalledSteps.has(row.step_name)) latest.set(row.step_name, row);
+  return [...latest.values()].flatMap(row => {
+    const line = stallMessageLine(row);
+    return line === undefined ? [] : [`  Engine: ${line} (${formatAge(row.created_at)} ago)`];
+  });
 }
 
 export async function writeWaitOutcome(

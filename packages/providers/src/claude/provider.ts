@@ -36,8 +36,8 @@ import {
   type HookCallback,
   type PostToolUseFailureHookInput,
   type PostToolUseHookInput,
-  type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
+import { createQueryInput } from './query-input';
 import type {
   IAgentProvider,
   SendQueryOptions,
@@ -568,37 +568,6 @@ function setResumeTarget(
   }
 }
 
-function createQueryInput(
-  prompt: string,
-  resumeSessionId: string | undefined,
-  signal: AbortSignal
-): {
-  messages: AsyncGenerator<SDKUserMessage>;
-  admit: () => void;
-  close: () => void;
-} {
-  const admission = Promise.withResolvers<boolean>();
-  const closed = Promise.withResolvers<void>();
-  async function* messages(): AsyncGenerator<SDKUserMessage> {
-    if (!(await admission.promise) || signal.aborted) return;
-    yield {
-      type: 'user',
-      message: { role: 'user', content: prompt },
-      parent_tool_use_id: null,
-      session_id: resumeSessionId ?? '',
-    };
-    await closed.promise;
-  }
-  return {
-    messages: messages(),
-    admit: () => admission.resolve(true),
-    close: () => {
-      admission.resolve(false);
-      closed.resolve();
-    },
-  };
-}
-
 /**
  * A silent CLI never initializes, so initialization is held to the first-event deadline.
  * Server readiness is not: a slow server stays pending until the CLI's own MCP connect
@@ -716,7 +685,12 @@ export class ClaudeProvider implements IAgentProvider {
         }
       );
 
-      const input = createQueryInput(prompt, resumeSessionId, controller.signal);
+      const input = createQueryInput(
+        prompt,
+        resumeSessionId,
+        controller.signal,
+        requestOptions?.turnMessages
+      );
       closeInput = input.close;
       controller.signal.addEventListener('abort', closeInput, { once: true });
       const spendBaseline = await readSessionSpendBaseline(resumeSessionId, {
