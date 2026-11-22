@@ -735,6 +735,68 @@ test('trigger list shows a refused binding with its forge refusal and omits the 
   }
 });
 
+test('trigger list names the run limit on a receipt with a queued start, only while it is full', async () => {
+  const host = hostForTest();
+  const accepted = acceptance(
+    {
+      bindingId: 'queued',
+      bindingRevision: null,
+      hostId: 'host',
+      runAsUserId: 'operator',
+      resource: 'portable',
+      capacity: 1,
+      overlap: 'queue',
+      launch: {
+        cwd: '/portable',
+        workflowName: 'portable',
+        inputs: {},
+        isolation: { kind: 'in-place' },
+      },
+    },
+    'limited'
+  );
+  await host.deps.store.acceptStartReceipt(accepted);
+  // The in-memory store keeps no run limit; stand in for one with a queued start under it.
+  const read = host.deps.store.getStartReceipt.bind(host.deps.store);
+  host.deps.store.getStartReceipt = async id => {
+    const receipt = await read(id);
+    return (
+      receipt && {
+        ...receipt,
+        bindings: receipt.bindings.map(binding => ({
+          ...binding,
+          requestStatus: 'queued' as const,
+        })),
+      }
+    );
+  };
+  for (const [runLimit, listed] of [
+    [
+      { limit: 2, live: 2 },
+      { limit: 2, live: 2 },
+    ],
+    [{ limit: 2, live: 1 }, null],
+  ] as const) {
+    host.deps.store.getRunLimit = async () => runLimit;
+    const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+      _chunk: unknown,
+      callback?: () => void
+    ) => {
+      callback?.();
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      await triggerCommand(host, 'list', [], {});
+      const [receipt] = JSON.parse(stdout.mock.calls.map(call => String(call[0])).join('')) as {
+        runLimit: unknown;
+      }[];
+      expect(receipt?.runLimit).toEqual(listed);
+    } finally {
+      stdout.mockRestore();
+    }
+  }
+});
+
 /** Accept one binding for `workflowYaml` and drain it; returns the prepared request or the error. */
 async function prepareTriggerInputs(
   workflowYaml: string,

@@ -51,6 +51,8 @@ import {
   lockResourceSlotForAdmission,
   readInstallHold,
   readRunRoom,
+  underRunLimit,
+  withinRunRoom,
   resourceStartOccupancy,
   parseQueuedResourceStart,
   type TransactionQuery as Query,
@@ -134,14 +136,10 @@ async function admitResourceStartWithQuery(
   if (existing.rows[0]) return disposition(existing.rows[0]);
 
   const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
-  const slotBlocker = resourceStartBlocker(
-    await resourceStartOccupancy(query, intent.resource, capacity),
-    launch,
-    intent.hostId,
-    itemId
-  );
-  const blocker = slotBlocker ?? (await readRunRoom(query)).blocker;
-  const status = slotBlocker && intent.overlap === 'skip' ? 'skipped' : 'queued';
+  const slot = await resourceStartOccupancy(query, intent.resource, capacity);
+  const slotBlocker = resourceStartBlocker(slot, launch, intent.hostId, itemId);
+  const { blocker, overlaps } = await underRunLimit(query, intent, slot, slotBlocker);
+  const status = overlaps && intent.overlap === 'skip' ? 'skipped' : 'queued';
   await query(
     `INSERT INTO remote_agent_resource_start_requests
        (id, resource_key, host_id, overlap_policy, status, blocker_run_id, blocker_kind, launch, receipt_id, binding_id, item_id)
@@ -239,8 +237,8 @@ export async function admitPendingRun(input: {
     const request = existing.rows[0];
     if (request?.status === 'admitted') return null;
     if (request) throw new Error(`Run '${id}' already has a ${request.status} resource request`);
-    const run = await query<{ status: string; item_id: string | null }>(
-      'SELECT status, item_id FROM remote_agent_workflow_runs WHERE id = $1',
+    const run = await query<{ status: string; item_id: string | null; parent_run_id: unknown }>(
+      'SELECT status, item_id, parent_run_id FROM remote_agent_workflow_runs WHERE id = $1',
       [id]
     );
     const status = run.rows[0]?.status;
@@ -256,8 +254,9 @@ export async function admitPendingRun(input: {
       itemId == null ? null : String(itemId)
     );
     if (blocker) return blocker;
-    const { refusal } = await readRunRoom(query);
-    if (refusal) throw refusal; // the caller waits for the limit, not for a resource
+    // A child runs inside its root's count; the caller waits for the limit, not a resource.
+    const { refusal } = run.rows[0]?.parent_run_id == null ? await readRunRoom(query) : {};
+    if (refusal) throw refusal;
     await query(
       `INSERT INTO remote_agent_resource_start_requests
          (id, resource_key, host_id, overlap_policy, status, launch, admitted_at)
@@ -279,9 +278,9 @@ export async function drainResourceStarts(options: {
     const { capacity } = await lockResourceSlotForAdmission(query, options.resource);
     if (await readInstallHold(query)) return [];
     const slot = await resourceStartOccupancy(query, options.resource, capacity);
-    const { room } = await readRunRoom(query);
+    const starts = drainableStarts(slot, options.hostId);
     const admitted: ResourceStartDisposition[] = [];
-    for (const start of drainableStarts(slot, options.hostId).slice(0, room))
+    for (const start of await withinRunRoom(query, options.hostId, options.resource, starts))
       admitted.push(await admitExisting(query, options.resource, start));
     return admitted;
   });

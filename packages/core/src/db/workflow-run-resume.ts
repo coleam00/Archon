@@ -258,10 +258,10 @@ export async function resumeWorkflowRun(
           ? await heldItemRefusal(query, id, ['failed'])
           : undefined;
       if (held) return { busy: held };
-      // A failed root's claim ended, so its resume is new work under the run limit. Checked
-      // before the slot is taken: this refusal must leave nothing behind.
+      // A failed or paused root does not count against the run limit, so resuming it takes
+      // room like a new start. Checked before the slot: this refusal leaves nothing behind.
       const full =
-        prior.status === 'failed' && prior.parent_run_id == null
+        prior.status !== 'running' && prior.parent_run_id == null
           ? await runLimitRefusal(query)
           : undefined;
       if (full) return { busy: full };

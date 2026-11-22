@@ -141,21 +141,43 @@ describe('run limit', () => {
     expect(await store.claimPendingWorkflowRun(waiting.id)).toMatchObject({ status: 'running' });
   });
 
-  test('a failed run resumes only while the limit has room', async () => {
-    await setRunLimit(1);
-    const failed = await hand();
-    await store.claimPendingWorkflowRun(failed.id);
-    await getDatabase().query(
-      "UPDATE remote_agent_workflow_runs SET status = 'failed' WHERE id = $1",
-      [failed.id]
-    );
-    const running = await hand();
-    await store.claimPendingWorkflowRun(running.id);
+  test.each(['failed', 'paused'] as const)(
+    'a %s root resumes only while the limit has room',
+    async stopped => {
+      await setRunLimit(1);
+      const resumed = await hand();
+      await store.claimPendingWorkflowRun(resumed.id);
+      await getDatabase().query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+        stopped,
+        resumed.id,
+      ]);
+      const running = await hand();
+      await store.claimPendingWorkflowRun(running.id);
 
-    await expect(store.resumeWorkflowRun(failed.id)).rejects.toBeInstanceOf(RunLimitError);
-    expect(await status(failed.id)).toBe('failed');
-    await end(running.id);
-    expect((await store.resumeWorkflowRun(failed.id)).status).toBe('running');
+      await expect(store.resumeWorkflowRun(resumed.id)).rejects.toBeInstanceOf(RunLimitError);
+      expect(await status(resumed.id)).toBe(stopped);
+      await end(running.id);
+      expect((await store.resumeWorkflowRun(resumed.id)).status).toBe('running');
+    }
+  );
+
+  test('a child takes a slot on another resource inside its counted root', async () => {
+    await setRunLimit(1);
+    const parent = await hand();
+    await store.claimPendingWorkflowRun(parent.id);
+    const child = await hand(parent.id);
+    const pending = launch();
+    pending.run.id = child.id;
+    expect(await store.admitPendingRun({ resource: 'other', capacity: 1, launch: pending })).toBe(
+      null
+    );
+  });
+
+  test('starts that only the limit holds back queue under skip, behind an older one', async () => {
+    await setRunLimit(1);
+    const statuses = [];
+    for (let i = 0; i < 3; i++) statuses.push((await bound('pool', 'skip')).disposition.status);
+    expect(statuses).toEqual(['admitted', 'queued', 'queued']);
   });
 
   test('lowering the limit stops no run, and raising it admits at the next drain', async () => {
@@ -194,6 +216,41 @@ describe('run limit', () => {
     });
     expect(started).toEqual([older.id]);
     expect((await store.getResourceStartRequest(newer.id))?.status).toBe('queued');
+  });
+
+  test('freed room goes to queued starts of a host in queue order, across resources', async () => {
+    await setRunLimit(2);
+    const live = [await bound('c'), await bound('c')];
+    const a1 = await bound('a');
+    const b1 = await bound('b');
+    const a2 = await bound('a');
+    for (const { id } of live) await end(id);
+    const started: string[] = [];
+    await drainResourceStartHost({
+      ...createSqlWorkflowHost(),
+      hostId: 'host',
+      startAdmitted: async id => {
+        started.push(id);
+        return null;
+      },
+    });
+    expect(started).toEqual([a1.id, b1.id]);
+    expect((await store.getResourceStartRequest(a2.id))?.status).toBe('queued');
+  });
+
+  test('a new start waits behind an older start of its host on another resource', async () => {
+    await setRunLimit(1);
+    const live = await bound('a');
+    const older = await bound('b');
+    await end(live.id);
+    const newer = await bound('a');
+    expect(newer.disposition).toMatchObject({
+      status: 'queued',
+      blocker: { kind: 'request', id: older.id },
+    });
+    expect(await store.drainResourceStarts({ resource: 'b', hostId: 'host' })).toMatchObject([
+      { status: 'admitted', requestId: older.id },
+    ]);
   });
 
   test('a value that is not a positive integer refuses admissions', async () => {

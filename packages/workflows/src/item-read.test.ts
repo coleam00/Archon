@@ -378,6 +378,12 @@ describe('reading an item', () => {
     expect(read?.degraded).toEqual([]);
   });
 
+  test('reads the run limit the store reports', async () => {
+    const runLimit = { limit: 2, live: 2 };
+    const limited = { ...source, store: { ...source.store, getRunLimit: async () => runLimit } };
+    expect((await readItem(limited, item.projectKey, item.key))?.runLimit).toEqual(runLimit);
+  });
+
   test('a landing that cannot be resolved is reported, and the rest of the item still reads', async () => {
     const unreadable: ItemReadSource = {
       ...source,

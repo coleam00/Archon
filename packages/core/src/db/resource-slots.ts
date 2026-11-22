@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { activeWorkflowPathHolderCondition } from './workflow-run-reads';
 import {
   capacityWaiters,
+  drainableStarts,
   recordedResourceCapacity,
   heldCheckouts,
   type ReusableCheckout,
@@ -226,8 +227,7 @@ export async function readRunLimit(
  * What the run limit leaves room for now: how many more runs it admits (`Infinity` without
  * a limit), and while it is full, the oldest counted run as the blocker a queued start
  * records and the `RunLimitError` a waiting start gets. Admission checks it after every
- * other rule, so a start it holds back waits for nothing else, and such a start queues even
- * under `overlap: skip`, which refuses an overlap on the resource, not on the install.
+ * other rule, so a start it holds back waits for nothing else.
  */
 export async function readRunRoom(query: TransactionQuery): Promise<{
   room: number;
@@ -244,6 +244,90 @@ export async function readRunRoom(query: TransactionQuery): Promise<{
     blocker: { kind: 'run', id: oldest },
     refusal: new RunLimitError({ limit, live }),
   };
+}
+
+/**
+ * This host's queued starts that a drain would admit now (`drainableStarts`) on resources
+ * other than `resource`, oldest first, and the queue position of every queued start of the
+ * host. Under the run limit the host's older starts take its room before newer ones, on
+ * any resource, so the host's queue keeps its order across resources.
+ */
+async function runnableHostStarts(
+  query: TransactionQuery,
+  hostId: string,
+  resource: string
+): Promise<{ elsewhere: { id: string; position: number }[]; positions: Map<string, number> }> {
+  const queued = await query<{ id: string; resource_key: string; queue_position: number | string }>(
+    `SELECT id, resource_key, queue_position FROM remote_agent_resource_start_requests
+      WHERE host_id = $1 AND status = 'queued' ORDER BY queue_position`,
+    [hostId]
+  );
+  const positions = new Map(queued.rows.map(row => [String(row.id), Number(row.queue_position)]));
+  const elsewhere: { id: string; position: number }[] = [];
+  for (const other of new Set(queued.rows.map(row => row.resource_key))) {
+    if (other === resource) continue;
+    const { capacity } = await lockResourceSlotForAdmission(query, other);
+    const slot = await resourceStartOccupancy(query, other, capacity);
+    for (const start of drainableStarts(slot, hostId))
+      elsewhere.push({ id: start.id, position: positions.get(start.id) ?? Infinity });
+  }
+  return { elsewhere: elsewhere.sort((a, b) => a.position - b.position), positions };
+}
+
+/**
+ * A new start's admission once the run limit is applied after the resource's own blocker
+ * (`slotBlocker`). With nothing on the resource in its way, the limit blocks it while full
+ * (the oldest counted run), or while the host's older runnable starts on other resources fill
+ * the room (the oldest of them). `overlaps` is whether the resource itself refuses it, which
+ * `overlap: skip` acts on: a start the limit holds back queues, and so does one behind an
+ * older request of its host that, with the slot free, waits only for the limit.
+ */
+export async function underRunLimit(
+  query: TransactionQuery,
+  start: { hostId: string; resource: string },
+  slot: ResourceSlotOccupancy,
+  slotBlocker: ResourceBlocker | null
+): Promise<{ blocker: ResourceBlocker | null; overlaps: boolean }> {
+  if ((await loadRunLimit()) === undefined)
+    return { blocker: slotBlocker, overlaps: slotBlocker !== null };
+  const free = slot.holders.length + slot.waiters.length < slot.capacity;
+  if (slotBlocker)
+    return { blocker: slotBlocker, overlaps: !(slotBlocker.kind === 'request' && free) };
+  const { room, blocker } = await readRunRoom(query);
+  if (blocker || room === Infinity) return { blocker, overlaps: false };
+  const { elsewhere } = await runnableHostStarts(query, start.hostId, start.resource);
+  const first = elsewhere[0];
+  return {
+    blocker: first && elsewhere.length >= room ? { kind: 'request', id: first.id } : null,
+    overlaps: false,
+  };
+}
+
+/**
+ * The prefix of `starts`, drainable on `resource` for `hostId`, that the run limit admits
+ * now: the room goes to the host's oldest runnable starts across all its resources, and only
+ * those on this resource are returned. A drain of each resource in turn then admits in the
+ * host's queue order.
+ */
+export async function withinRunRoom<T extends { id: string }>(
+  query: TransactionQuery,
+  hostId: string,
+  resource: string,
+  starts: T[]
+): Promise<T[]> {
+  const { room } = await readRunRoom(query);
+  if (room === Infinity) return starts;
+  const { elsewhere, positions } = await runnableHostStarts(query, hostId, resource);
+  const admitted = new Set(
+    [
+      ...starts.map(start => ({ id: start.id, position: positions.get(start.id) ?? Infinity })),
+      ...elsewhere,
+    ]
+      .sort((a, b) => a.position - b.position)
+      .slice(0, room)
+      .map(start => start.id)
+  );
+  return starts.filter(start => admitted.has(start.id));
 }
 
 /**
