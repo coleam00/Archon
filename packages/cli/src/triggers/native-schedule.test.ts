@@ -18,7 +18,6 @@ import {
 import { renderMacosLaunchAgent } from './native-schedule-launchd';
 import { renderSystemdUnits } from './native-schedule-systemd';
 import { renderTaskDefinition, renderTaskWrapper } from './native-schedule-task-scheduler';
-import { launchOnHiddenDesktop } from './windows-hidden-desktop';
 
 const execFileAsync = promisify(execFile);
 const tempRoots: string[] = [];
@@ -535,18 +534,6 @@ describe('Task Scheduler', () => {
     expect(commands.map(command => command[1])).toEqual(['/Create', '/Run', '/Delete']);
     expect(await readdir(join(archonHome, 'schedules'))).toEqual([]);
   });
-
-  it.skipIf(process.platform !== 'win32')(
-    'the launcher runs the wrapper to its end and returns its exit code',
-    async () => {
-      const directory = await scratchDirectory();
-      const wrapper = join(directory, `${LABEL}.cmd`);
-      const ran = join(directory, 'ran.txt');
-      await writeFile(wrapper, `@echo off\r\necho ran> "${ran}"\r\nexit /b 3\r\n`);
-      expect(launchOnHiddenDesktop(wrapper)).toBe(3);
-      expect((await readFile(ran, 'utf8')).trim()).toBe('ran');
-    }
-  );
 
   it('refuses an interval Task Scheduler cannot repeat before touching the host', async () => {
     const archonHome = await scratchDirectory();

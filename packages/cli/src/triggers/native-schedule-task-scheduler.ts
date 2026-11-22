@@ -7,6 +7,7 @@
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
+import { SCHEDULE_LAUNCH_FLAG } from './schedule-launch-flag';
 import {
   installedLabels,
   readInstalled,
@@ -112,7 +113,7 @@ export function renderTaskDefinition(
     throw new Error('A Task Scheduler schedule cannot run an archon whose path contains %');
   }
   const user = escapeXml(userId);
-  const launch = [...launcher, '--internal-schedule-launch', wrapperPath(job.archonHome, job.label)]
+  const launch = [...launcher, SCHEDULE_LAUNCH_FLAG, wrapperPath(job.archonHome, job.label)]
     .map(argument => escapeXml(cmdArgument(argument)))
     .join(' ');
   const logon = job.schedule.runAtLoad

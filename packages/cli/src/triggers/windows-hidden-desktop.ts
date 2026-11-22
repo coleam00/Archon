@@ -1,6 +1,7 @@
 import { dlopen, FFIType, ptr } from 'bun:ffi';
 import { appendFileSync } from 'node:fs';
 import { win32 } from 'node:path';
+import { SCHEDULE_LAUNCH_FLAG } from './schedule-launch-flag';
 
 /*
  * The second hop of a Windows schedule tick: run the job's `.cmd` wrapper on a desktop
@@ -157,7 +158,7 @@ export function launchOnHiddenDesktop(wrapper: string): number {
  */
 export function runScheduleLaunch(wrapper: string | undefined): number {
   if (wrapper === undefined || !wrapper.endsWith('.cmd')) {
-    process.stderr.write('Usage: archon --internal-schedule-launch <wrapper.cmd>\n');
+    process.stderr.write(`Usage: archon ${SCHEDULE_LAUNCH_FLAG} <wrapper.cmd>\n`);
     return 2;
   }
   try {
