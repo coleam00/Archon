@@ -275,8 +275,12 @@ async function checkOutBranch(
     return { kind: 'checked_out', branchCreated: pr.branchCreated };
   }
 
-  const baseBranch =
-    remote.kind === 'remote'
+  // A start commit was read when the run's definitions were captured; fetching again
+  // here could cut the code from a newer commit than the definitions.
+  const startCommit = request.workflowType === 'task' ? request.startCommit : undefined;
+  const baseBranch = startCommit
+    ? await ensureStartCommit(repoPath, startCommit, remote)
+    : remote.kind === 'remote'
       ? await syncWorkspaceBeforeCreate(repoPath, preferredBaseBranch, remote.name)
       : remote.baseBranch;
   // For issues, tasks, threads: create new branch
@@ -373,6 +377,23 @@ async function refreshIndex(worktreePath: string): Promise<void> {
 
 /** The base inputs a request carries; config comes from the repository. */
 type WorktreeBaseInputs = Pick<IsolationRequest, 'baseOverride' | 'baseBranch'>;
+
+/**
+ * The remote and base branch a new worktree is cut from, as creation resolves them.
+ * With a remote, the branch is undefined when nothing names one, which leaves it to
+ * remote default-branch detection; with none, it is the local base creation would cut
+ * from. Exported so a run's definition capture reads the same base its worktree is cut from.
+ */
+export async function resolveWorktreeBase(
+  repoPath: RepoPath,
+  worktreeConfig: WorktreeCreateConfig | null,
+  inputs: WorktreeBaseInputs
+): Promise<{ remote: string; branch: string | undefined } | { remote: undefined; branch: string }> {
+  const remote = await resolveRemote(repoPath, worktreeConfig?.remote);
+  const preferred = preferredBase(inputs, worktreeConfig);
+  if (remote.kind === 'remote') return { remote: remote.name, branch: preferred };
+  return { remote: undefined, branch: await resolveLocalBase(repoPath, preferred) };
+}
 
 /**
  * Base precedence: a per-dispatch --base override (`baseOverride`) wins, then explicit
@@ -526,8 +547,36 @@ async function commitOf(repoPath: RepoPath, rev: string): Promise<string | undef
 }
 
 /**
- * Sync workspace with remote before creating a new worktree
- * Ensures new work starts from the latest code on the base branch.
+ * The base branch of a start commit, once the commit is in this repository. The run's
+ * definitions were read where it was launched, which with `--project` can be another clone
+ * than this registered one; then the base branch is fetched here too. A commit the fetch
+ * does not bring (the branch was rewritten since), or one missing from a repository with no
+ * remote to fetch from, refuses rather than cut from another.
+ */
+async function ensureStartCommit(
+  repoPath: RepoPath,
+  startCommit: { commit: string; branch: BranchName },
+  remote: WorktreeStart
+): Promise<string> {
+  const present = async (): Promise<boolean> =>
+    (await commitOf(repoPath, startCommit.commit)) !== undefined;
+  if (await present()) return startCommit.branch;
+  if (remote.kind === 'remote') {
+    await syncWorkspaceBeforeCreate(repoPath, startCommit.branch, remote.name);
+    if (await present()) return startCommit.branch;
+  }
+  const fetched =
+    remote.kind === 'remote' ? ` even after fetching ${remote.name}/${startCommit.branch}` : '';
+  throw new IsolationFailure(
+    'start_commit_missing',
+    `Commit ${startCommit.commit.slice(0, 12)}, which this run's definitions were read at, is not ` +
+      `in ${repoPath}${fetched}. Start the run again.`
+  );
+}
+
+/**
+ * Fetch the base branch before creating a new worktree, so new work starts from the
+ * latest code on the base branch. The worktree is cut from `<remote>/<branch>`.
  *
  * Branch resolution:
  * - If configuredBaseBranch is provided: Uses that branch. Fails with actionable
@@ -547,13 +596,14 @@ async function syncWorkspaceBeforeCreate(
       { repoPath, branch: configuredBaseBranch ?? 'auto-detect', remote },
       'workspace_sync_starting'
     );
-    // Only hard-reset for Archon-managed clones when creating isolated worktrees.
-    // Locally-registered repos keep the non-destructive fast-forward mode.
+    // Only hard-reset for Archon-managed clones when creating isolated worktrees. A
+    // locally registered repository is the operator's checkout: it is only fetched,
+    // never moved, since the cut reads the remote-tracking ref anyway.
     const isManagedClone = isInsideArchonWorkspaces(repoPath);
     const { branch } = await syncWorkspace(
       repoPath,
       configuredBaseBranch ? toBranchName(configuredBaseBranch) : undefined,
-      { mode: isManagedClone ? 'reset' : 'fast-forward', remote }
+      { mode: isManagedClone ? 'reset' : 'fetch-only', remote }
     );
     getLog().debug({ repoPath, branch, remote }, 'workspace_synced');
     return branch;

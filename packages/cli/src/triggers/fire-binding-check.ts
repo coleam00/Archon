@@ -14,9 +14,11 @@ import {
   type SuppliedAtStart,
 } from '@archon/core/workflows/binding-workflow';
 import { getTriggersPath } from '@archon/core/workflows/run-ended';
-import type { WorkflowDeps } from '@archon/workflows/deps';
 import { triggerConfigSchema, type TriggerConfig } from '@archon/workflows/schemas/resource-start';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import {
+  discoverBindingWorkflows,
+  type BindingDefinitionsDeps,
+} from '@archon/core/workflows/definition-source';
 import {
   listNativeSchedules,
   type InstalledSchedule,
@@ -152,7 +154,7 @@ async function readFireBindingFiles(schedules: NativeScheduleOptions): Promise<F
 }
 
 async function fireBindingProblems(
-  deps: Pick<WorkflowDeps, 'loadConfig' | 'providers'>,
+  deps: BindingDefinitionsDeps,
   config: TriggerConfig,
   supplied: SuppliedAtStart
 ): Promise<string[]> {
@@ -161,13 +163,11 @@ async function fireBindingProblems(
     return [
       `binding.launch.cwd '${launch.cwd}' does not exist, so this binding never starts; fix the path or remove the file`,
     ];
-  const discovered = await discoverWorkflowsWithConfig(
-    launch.discoveryCwd ?? launch.cwd,
-    deps.loadConfig,
-    deps.providers
-  );
+  // The definitions a start would read, as the run-ended and asks-settled checks judge them.
+  const read = await discoverBindingWorkflows(launch, deps);
+  if ('refused' in read) return [read.refused];
   return startedWorkflowInputProblems(
-    selectStartedWorkflow(launch, discovered),
+    selectStartedWorkflow(launch, read.discovered),
     launch.inputs,
     supplied
   );
@@ -179,7 +179,7 @@ async function fireBindingProblems(
  * must supply every required input itself; a fire-only file may leave one to `--inputs`.
  */
 export async function checkFireBindings(
-  deps: Pick<WorkflowDeps, 'loadConfig' | 'providers'>,
+  deps: BindingDefinitionsDeps,
   schedules: NativeScheduleOptions
 ): Promise<CheckedFireBinding[]> {
   const checked: CheckedFireBinding[] = [];

@@ -26,18 +26,17 @@ import {
  * fence, and recovery stay behind the supplied store; nothing here declares an owner dead.
  */
 import { randomUUID } from 'node:crypto';
-import { resolve } from 'node:path';
 import { createLogger, canonicalizeProjectPath } from '@archon/paths';
 import type { WorkflowEngineSubmitInput } from '@archon/workflows/engine-port';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
   finalizeWorkflowSource,
-  prepareWorkflowSource,
   preparedWorkflowSourceRecord,
   recordSelectedWorkflow,
   resolveContinuationWorkflow,
   withCapturedSource,
 } from '@archon/workflows/run-source';
+import { preparedSourceConfigRoot, runProjectConfigRoot } from '@archon/workflows/workflow-source';
 import { canonicalValueText, type JsonValue } from '@archon/workflows/output-ref';
 import {
   readWorkflowRunConfigMetadata,
@@ -55,6 +54,7 @@ import {
   type ResourceStartRunMetadata,
 } from '@archon/workflows/schemas/resource-start';
 import type { ResolvedWorkflow, WorkflowExecutionResult } from '@archon/workflows/schemas/workflow';
+import type { WorkflowItem } from '@archon/workflows/schemas/workflow-run';
 import {
   SUBRUN_METADATA_KEYS,
   WORKFLOW_SOURCE_METADATA_KEY,
@@ -62,7 +62,6 @@ import {
 import { assertWorkflowRequirementsMet } from '@archon/workflows/utils/workflow-requirements';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
-import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import {
   itemRunConfig,
   loadWorkflowRunConfigFile,
@@ -78,6 +77,13 @@ import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { assertLaneStartable, executionLane, handoffIsolation } from './resource-start-lanes';
 import { resolveBindingInputs, selectStartedWorkflow } from './binding-workflow';
 import { refuseInPlaceLanding, resolveRunLanding } from './item-landing';
+import {
+  bindingItem,
+  captureBindingDefinitions,
+  definitionsStartCommit,
+  recaptureInPlace,
+  refuseWorktreeAfterInPlace,
+} from './binding-definitions';
 
 const log = createLogger('resource-start-host');
 
@@ -201,21 +207,27 @@ async function prepareBinding(
   host: WorkflowHost,
   intent: ResourceStartBindingIntent,
   identity: BindingIdentity,
+  item: WorkflowItem | null,
   runConfig: WorkflowRunConfigInput | undefined
 ): Promise<PreparationResult> {
   const cwd = await canonicalizeProjectPath(intent.launch.cwd);
-  const sourceRoot = resolve(intent.launch.discoveryCwd ?? cwd);
 
   return await withCapturedSource(async owner => {
-    let source = await prepareWorkflowSource(host.deps, { sourceRoot });
+    const codebase = await findOrRegisterCodebase(host, cwd);
+    let source = await captureBindingDefinitions(host, intent, cwd, codebase, item);
     owner.hold(source);
-
-    const workflow = await selectBindingWorkflow(host, intent.launch, cwd, source.roots);
+    let workflow = await selectBindingWorkflow(host, intent.launch, cwd, source.roots);
+    if (source.definitions?.from === 'base' && workflow.worktree?.enabled === false) {
+      source = await recaptureInPlace(host, source, cwd);
+      owner.hold(source);
+      workflow = refuseWorktreeAfterInPlace(
+        await selectBindingWorkflow(host, intent.launch, cwd, source.roots)
+      );
+    }
     await recordSelectedWorkflow(source.anchor.root, workflow.name);
     await assertBindingRequirements(host, intent, workflow);
     const bindingInputs = resolveBindingInputs(intent, workflow);
 
-    const codebase = await findOrRegisterCodebase(host, cwd);
     let isolation: PreparedWorkflowLaunch['execution']['isolation'];
     let handoff: CheckoutHandoffRunMetadata | undefined;
     if (intent.checkoutFrom) {
@@ -234,6 +246,7 @@ async function prepareBinding(
       bindingId: identity.bindingId,
     };
     const preparedAi = await prepareRunAiConfiguration(host.deps, workflow, cwd, {
+      configRoot: preparedSourceConfigRoot(source, cwd),
       codebaseId: codebase.id,
       userId: intent.runAsUserId,
       runConfig,
@@ -274,29 +287,6 @@ async function prepareBinding(
   });
 }
 
-/**
- * The run config of the item a binding start is on (see `itemRunConfig`). The item is the
- * one admission's `namedItem` writes the run onto: the binding's key, else the receipt's,
- * in the project of the launch cwd. Undefined for a start on no item or an item not
- * written yet.
- */
-async function bindingItemRunConfig(
-  host: WorkflowHost,
-  intent: ResourceStartBindingIntent,
-  receiptId: string
-): Promise<WorkflowRunConfigInput | undefined> {
-  const itemKey = intent.itemKey ?? (await host.deps.store.getStartReceipt(receiptId))?.itemKey;
-  if (!itemKey) return undefined;
-  // No registered project means no item yet: admission registers it and writes the item new.
-  const { codebase } = await resolveCodebaseForPath(intent.launch.cwd, host.records.codebases);
-  if (!codebase) return undefined;
-  const found = await host.deps.store.getItemRuns(
-    projectKeyForCodebase(codebase, codebase.default_cwd),
-    itemKey
-  );
-  return found ? itemRunConfig(itemKey, found.runs) : undefined;
-}
-
 async function prepareClaimedBinding(
   host: WorkflowHost,
   intent: ResourceStartBindingIntent,
@@ -311,13 +301,14 @@ async function prepareClaimedBinding(
     // The item's own config wins over `configSource`: a binding file's config is written
     // once for the install (`pack bindings --config`), a default for an item's first run,
     // not a change to this item's config.
+    const found = await bindingItem(host, intent, identity.receiptId);
     const runConfig =
-      (await bindingItemRunConfig(host, intent, identity.receiptId)) ??
+      (found ? itemRunConfig(found.item.key, found.runs) : undefined) ??
       (intent.launch.configSource
         ? await loadWorkflowRunConfigFile(intent.launch.configSource)
         : undefined);
     stage = 'launch_preparation';
-    return await prepareBinding(host, intent, identity, runConfig);
+    return await prepareBinding(host, intent, identity, found?.item ?? null, runConfig);
   } catch (error) {
     // Unknown failures are not an implicit retry policy; the receipt stays inspectable.
     // Configuration and provider errors can contain secret values, so persist the
@@ -649,6 +640,7 @@ async function prepareAdmittedResourceSubmission(
     frozen.workflow,
     launch.execution.cwd,
     {
+      configRoot: runProjectConfigRoot(run.metadata, launch.execution.cwd),
       aiConfigurationRun: run,
       inheritAiConfiguration: true,
       userId: run.user_id ?? undefined,
@@ -661,6 +653,7 @@ async function prepareAdmittedResourceSubmission(
   const execution = await executionLane(host, {
     run,
     lane,
+    startCommit: await definitionsStartCommit(run, codebase, baseOverride),
     codebase,
     cwd: launch.execution.cwd,
     platformType: platform.getPlatformType(),
@@ -711,8 +704,9 @@ async function prepareAdmittedResourceSubmission(
 /**
  * The prepared lane with the base the run takes. The item's landing branch outranks the
  * trigger file's static `baseOverride`, which is the same for every item the file starts.
- * Read now, not at preparation, so a queued start takes the branch the item records when
- * it runs, and the persisted launch keeps its shape. A missing branch, or an in-place start
+ * Read now as well as at preparation, so a queued start whose item changed its branch while
+ * it waited is refused (`definitionsStartCommit`) rather than run on definitions read from
+ * another branch, and the persisted launch keeps its shape. A missing branch, or an in-place start
  * on an item that has one, refuses it here.
  */
 async function landingLane(

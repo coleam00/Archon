@@ -3408,7 +3408,8 @@ Resume skips a completed fan-out and reports how many children were previously r
 It does not repeat children that ran, including failed children in an `all_done` batch.
 Resume uses the captured parent source, so correcting a binding in that source requires
 a fresh launch. Project child workflows still resolve from the live authoring directory
-when spawned; installed packs remain captured. A transient refusal may also clear before
+when spawned; under a parent whose definitions came from the base branch that is the parent's
+capture with its checkout's changes on top. Installed packs remain captured. A transient refusal may also clear before
 resume.
 
 ##### A completed fan-out node is not completed child work

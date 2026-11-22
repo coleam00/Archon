@@ -119,6 +119,13 @@ export interface TaskIsolationRequest extends IsolationRequestBase {
   identifier: string;
   /** Whether this task creates a branch or continues an exact existing branch. */
   taskBranch?: TaskBranchSelection;
+  /**
+   * The base commit the run's definitions were captured at, already fetched. A branch cut
+   * here starts at this commit and the provider fetches nothing, so the run's code and its
+   * definitions come from one commit. Ignored when the task continues an existing branch,
+   * names a `fromBranch`, or names a branch that already exists.
+   */
+  startCommit?: { commit: string; branch: BranchName };
 }
 
 export type IsolationRequest =

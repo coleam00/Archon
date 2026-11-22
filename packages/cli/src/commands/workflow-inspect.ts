@@ -16,6 +16,7 @@ import {
   isScheduledWorkflowResume,
   isWorkflowWaitContext,
   readRunStopReason,
+  readWorkflowSourceState,
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
@@ -43,6 +44,35 @@ import {
   printVerboseNodes,
 } from './workflow-node-summaries';
 
+/**
+ * Where a run's definitions came from, when it read them from the base branch: the commit,
+ * the commit its code started at when that differs (a continued or reused checkout), and
+ * every file taken from a checkout, so a forgotten local edit shows.
+ */
+function printDefinitions(run: Pick<WorkflowRun, 'metadata' | 'checkout_baseline'>): void {
+  const state = readWorkflowSourceState(run.metadata);
+  const definitions = state.kind === 'recorded' ? state.record.definitions : undefined;
+  if (definitions?.from !== 'base') return;
+  const code = run.checkout_baseline?.kind === 'git' ? run.checkout_baseline.commit : null;
+  const differs =
+    code && code !== definitions.commit ? `; code starts at ${code.slice(0, 12)}` : '';
+  console.log(
+    `  Definitions: ${definitions.remote === undefined ? '' : `${definitions.remote}/`}${definitions.branch} at ${definitions.commit.slice(0, 12)}${differs}`
+  );
+  printFiles(`Local files from ${definitions.checkout}`, definitions.local_files);
+  if (definitions.run_files)
+    printFiles(
+      `Files from the parent run's checkout ${definitions.run_files.checkout}`,
+      definitions.run_files.files
+    );
+}
+
+function printFiles(title: string, files: readonly { change: string; path: string }[]): void {
+  if (files.length === 0) return;
+  console.log(`  ${title}:`);
+  for (const file of files) console.log(`    ${file.change} ${file.path}`);
+}
+
 export async function printStatusRun(
   host: WorkflowHost,
   run: DashboardWorkflowRun,
@@ -59,6 +89,7 @@ export async function printStatusRun(
   await printRunAttention(host, run);
   const outcome = displayedRunOutcome(run);
   if (outcome !== null) console.log(`  Authored outcome: ${outcome}`);
+  printDefinitions(run);
   console.log(`  Age:    ${age}`);
   if (notice !== undefined) {
     // The run's own latest account of what it is doing or did.
@@ -500,6 +531,7 @@ export function printRunDetail(
   printRequestedBy(detail.requestedBy);
   console.log(`  Path:   ${run.working_path ?? '(none)'}`);
   console.log(`  Start:  ${describeCheckoutBaseline(run.checkout_baseline)}`);
+  printDefinitions(run);
   console.log(`  Transcript: ${transcriptPath ?? '(unavailable)'}`);
   console.log(`  Status: ${run.status}`);
   const outcome = displayedRunOutcome(run);

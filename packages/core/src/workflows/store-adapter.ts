@@ -60,7 +60,10 @@ import {
   createAsksSettledStarts,
 } from './asks-settled';
 import { createEndedCheckout } from './ended-checkout';
-import { registeredProjectKeyForPath } from '../services/codebase-checkout-resolver';
+import {
+  registeredProjectForPath,
+  registeredProjectKeyForPath,
+} from '../services/codebase-checkout-resolver';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
 import { createGitHubAppAuthProvider } from '../github-auth/auth';
 import { installGitHubCliShim } from '../github-auth/gh-shim-install';
@@ -138,6 +141,7 @@ function collectOAuthCredentialValues(
 }
 
 const launchProjectKeyOf = launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb));
+const launchProjectOf = (cwd: string) => registeredProjectForPath(cwd, codebaseDb);
 
 /**
  * The held binding starts on item `itemId`: those naming its key whose checkout is in its
@@ -408,6 +412,7 @@ export function createWorkflowDeps(
     ...onBindingDeps(id => store.getItem(id)),
     loadConfig: loadMergedConfig,
     providers: providerRegistry,
+    projectOf: launchProjectOf,
   };
   const runEndedPreflight = createRunEndedPreflight(onBindings);
   const asksSettledPreflight = createAsksSettledPreflight(onBindings);

@@ -11,6 +11,11 @@ import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import { createRunEndedPreflight, createRunEndedStarts, launchProjectKey } from './run-ended';
 
+/** No project is registered in these tests. */
+const NO_PROJECT_LOOKUPS = {
+  projectOf: async () => null,
+};
+
 const track = trackTempRoots();
 
 const ITEM = { id: 'item-row', projectKey: 'acme/widgets', key: 'issue-7' };
@@ -178,6 +183,7 @@ describe('run-ended starts', () => {
       ...dependencies,
       providers: providerRegistry,
       loadConfig: () => Promise.reject(new Error('a run with no item loads no config')),
+      ...NO_PROJECT_LOOKUPS,
     });
     expect(await preflight(noItem)).toBeUndefined();
   });
@@ -431,6 +437,7 @@ describe('run-ended starts', () => {
           ...dependencies,
           providers: providerRegistry,
           loadConfig: () => Promise.reject(new Error('not reached')),
+          ...NO_PROJECT_LOOKUPS,
         })(endedRun()),
     ]) {
       const refused = read();

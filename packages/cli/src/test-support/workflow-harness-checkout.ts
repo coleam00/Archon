@@ -44,6 +44,9 @@ mock.module('@archon/isolation', () => ({
   checkWorktreeStartable: mock(async () => undefined),
   readWorktreeBaseBranch: () => undefined,
   generatedTaskBranch,
+  resolveWorktreeBase: mock(async () => {
+    throw new Error('resolveWorktreeBase is not mocked here');
+  }),
   getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({
     state: 'NONE',
   })),

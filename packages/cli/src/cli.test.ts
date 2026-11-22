@@ -876,7 +876,18 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
     try {
       const result = spawnSync(
         process.execPath,
-        [CLI_ENTRY, 'workflow', 'run', 'x', '--dry-run', '--internal-detached-run-config', payload],
+        [
+          CLI_ENTRY,
+          'workflow',
+          'run',
+          'x',
+          '--dry-run',
+          // The offline path: a dry run reads an explicit source as it is.
+          '--workflow-source',
+          repo,
+          '--internal-detached-run-config',
+          payload,
+        ],
         {
           cwd: repo,
           encoding: 'utf8',
@@ -2820,7 +2831,8 @@ it.each([true, false])(
               ['validate', 'commands'],
             ]
           : []),
-        ['workflow', 'run', 'probe', '--dry-run', '--default-stubs'],
+        // Without a registry a dry run names its source, as a real start needs the registry.
+        ['workflow', 'run', 'probe', '--dry-run', '--default-stubs', '--workflow-source', repo],
         ['workflow', 'test', 'probe'],
       ]) {
         const result = spawnSync(process.execPath, [CLI_ENTRY, ...args], {
