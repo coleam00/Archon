@@ -157,26 +157,39 @@ export async function withLayeredDefinitions<T>(
   }
 }
 
-async function fetchBase(
+/**
+ * The remote and branch a run's base is: the override, else the registered checkout's
+ * `worktree.baseBranch`, else the project's default branch, else the remote's HEAD. The
+ * precedence worktree creation uses, so the base definitions are read from and the base a
+ * worktree is cut from are one branch.
+ */
+export async function resolveDefinitionsBase(
   input: LayeredDefinitionsInput
-): Promise<{ remote: string; branch: string; commit: string }> {
+): Promise<{ remote: string; branch: string }> {
   const repoPath = input.repoPath ?? input.checkout;
   const worktreeConfig = (await loadRepoConfig(repoPath)).worktree;
-  const repo = toRepoPath(input.checkout);
-  let remote: string;
-  let branch: string | undefined;
   try {
-    ({ remote, branch } = await resolveWorktreeBase(toRepoPath(repoPath), worktreeConfig, {
+    const { remote, branch } = await resolveWorktreeBase(toRepoPath(repoPath), worktreeConfig, {
       baseOverride: input.baseOverride,
       baseBranch: input.defaultBranch,
-    }));
-    branch ??= await getDefaultBranch(repo, remote);
+    });
+    return {
+      remote,
+      branch: branch ?? (await getDefaultBranch(toRepoPath(input.checkout), remote)),
+    };
   } catch (error) {
     throw new DefinitionSourceError(
       `Cannot read the base branch for this run's definitions: ${(error as Error).message}`,
       { cause: error }
     );
   }
+}
+
+async function fetchBase(
+  input: LayeredDefinitionsInput
+): Promise<{ remote: string; branch: string; commit: string }> {
+  const repo = toRepoPath(input.checkout);
+  const { remote, branch } = await resolveDefinitionsBase(input);
   const ref = `${remote}/${branch}`;
   try {
     await fetchWithRetry(repo, [remote, `+refs/heads/${branch}:refs/remotes/${ref}`], {

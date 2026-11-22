@@ -702,7 +702,7 @@ async function prepareAdmittedResourceSubmission(
   const execution = await executionLane(host, {
     run,
     lane,
-    startCommit: definitionsStartCommit(run, baseOverride),
+    startCommit: await definitionsStartCommit(run, codebase, baseOverride),
     codebase,
     cwd: launch.execution.cwd,
     platformType: platform.getPlatformType(),

@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { providerRegistry } from '@archon/providers';
 import { prepareWorkflowSource, preparedWorkflowSourceRecord } from '@archon/workflows/run-source';
+import { definitionsStartCommit } from './binding-definitions';
 import {
   DefinitionSourceError,
   discoverBindingWorkflows,
@@ -518,4 +519,45 @@ describe("a run's definitions", () => {
       'inplace'
     );
   });
+});
+
+describe("a queued start's worktree base", () => {
+  test('refuses definitions from a landing branch the item no longer has', async () => {
+    const { checkout, upstream } = project();
+    git(upstream, 'push', '-q', 'origin', 'dev:release');
+    // Prepared while the item landed on release; the link that gave it release then ended.
+    const captured = join(dirname(checkout), 'captured');
+    write(captured, '.archon/workflows/stage.yaml', 'name: stage\n');
+    const source = await prepareWorkflowSource(
+      {
+        loadConfig: async () => ({
+          assistant: 'claude' as const,
+          assistants: { claude: {}, codex: {} },
+          commands: {},
+        }),
+      },
+      {
+        sourceRoot: captured,
+        definitions: {
+          from: 'base',
+          remote: 'origin',
+          branch: 'release',
+          commit: 'c'.repeat(40),
+          merge_base: 'c'.repeat(40),
+          checkout,
+          local_files: [],
+        },
+      }
+    );
+    const run = {
+      id: 'run-1',
+      metadata: { workflow_source: preparedWorkflowSourceRecord(source) },
+    };
+    const codebase = { default_cwd: checkout, default_branch: null };
+
+    await expect(definitionsStartCommit(run, codebase, undefined)).rejects.toThrow(
+      "from origin/release, but now starts on base 'dev'"
+    );
+    expect((await definitionsStartCommit(run, codebase, 'release'))?.commit).toBe('c'.repeat(40));
+  }, 30_000);
 });

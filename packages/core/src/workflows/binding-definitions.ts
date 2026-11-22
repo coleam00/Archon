@@ -22,6 +22,7 @@ import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discover
 import {
   bindingDefinitionsPlan,
   DefinitionSourceError,
+  resolveDefinitionsBase,
   startsPinnedInPlace,
   withLayeredDefinitions,
 } from './definition-source';
@@ -143,21 +144,28 @@ export async function bindingItem(
  * The commit a run's worktree is cut from when its definitions came from the base branch:
  * the one they were captured at, so code and definitions are one commit. A start that
  * waited in the queue runs on a base as old as its wait. Refused when the base the run
- * now takes is another branch than its definitions came from (the item's landing branch
- * changed while it waited), since the run would then propose against one branch with the
- * definitions of another.
+ * now takes is another branch than its definitions came from, since the run would then
+ * propose against one branch with the definitions of another. That base is resolved as
+ * worktree creation resolves it, so an item that lost its landing branch while it waited
+ * (an inherited `part_of` link ended) is compared with the project default, not waved on.
  */
-export function definitionsStartCommit(
+export async function definitionsStartCommit(
   run: Pick<WorkflowRun, 'id' | 'metadata'>,
+  codebase: Pick<Codebase, 'default_cwd' | 'default_branch'>,
   baseOverride: string | undefined
-): { commit: string; branch: BranchName } | undefined {
+): Promise<{ commit: string; branch: BranchName } | undefined> {
   const state = readWorkflowSourceState(run.metadata);
   const definitions = state.kind === 'recorded' ? state.record.definitions : undefined;
   if (definitions?.from !== 'base') return undefined;
-  if (baseOverride !== undefined && baseOverride !== definitions.branch)
+  const { branch } = await resolveDefinitionsBase({
+    checkout: codebase.default_cwd,
+    baseOverride,
+    defaultBranch: codebase.default_branch?.trim() || undefined,
+  });
+  if (branch !== definitions.branch)
     throw new Error(
       `Run '${run.id}' read its definitions from ${definitions.remote}/${definitions.branch}, ` +
-        `but now starts on base '${baseOverride}'. Start it again so both come from one branch.`
+        `but now starts on base '${branch}'. Start it again so both come from one branch.`
     );
   return { commit: definitions.commit, branch: toBranchName(definitions.branch) };
 }
