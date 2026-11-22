@@ -80,19 +80,42 @@ describe('resumeWorkflow', () => {
     );
   });
 
+  const handoff = (lane: 'continue' | 'copy') => ({
+    checkout_handoff: {
+      runId: 'landed-run',
+      branch: 'archon/task-landed',
+      commit: 'a'.repeat(40),
+      lane,
+    },
+  });
+  const explicitSource = (root: string) => ({
+    workflow_source: {
+      version: 1,
+      root: '/archon/runs/run-1/source',
+      origin: root,
+      captured_at: '2026-11-22T00:00:00.000Z',
+      digest: 'digest',
+      file_count: 1,
+      byte_count: 1,
+      definitions: { from: 'source', root },
+    },
+  });
   test.each([
     ['a start', {}, 'archon workflow run test-workflow --supersedes run-1'],
     [
-      'a stage started on an ended run',
-      {
-        checkout_handoff: {
-          runId: 'landed-run',
-          branch: 'archon/task-landed',
-          commit: 'a'.repeat(40),
-          lane: 'continue',
-        },
-      },
+      'a stage that continues an ended run',
+      handoff('continue'),
       'archon workflow run test-workflow --adopt landed-run',
+    ],
+    [
+      'a read-only stage on its own copy of an ended run',
+      handoff('copy'),
+      `archon workflow run test-workflow --supersedes run-1 --from ${'a'.repeat(40)}`,
+    ],
+    [
+      'a start read from an explicit source',
+      explicitSource("/work/my pack's source"),
+      "archon workflow run test-workflow --supersedes run-1 --workflow-source '/work/my pack'\\''s source'",
     ],
   ])(
     '%s that failed before its checkout was prepared is refused with the command that starts it again',
@@ -110,7 +133,7 @@ describe('resumeWorkflow', () => {
       expect(error).toBeInstanceOf(ResumeRefusedError);
       const refusal = error as InstanceType<typeof ResumeRefusedError>;
       expect(refusal.reason).toBe('not_resumable');
-      expect(refusal.message).toContain(`Start it again with: ${command}`);
+      expect(refusal.message).toContain(`Start it again with: ${command} It was started`);
       expect(refusal.message).toContain('inputs item, pr; pass each with --input <name>=<value>');
       expect(refusal.message).not.toContain('secret-value');
     }

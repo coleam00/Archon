@@ -8,7 +8,10 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { readCheckoutHandoff } from '@archon/workflows/schemas/resource-start';
-import { readSubrunMetadata } from '@archon/workflows/schemas/run-metadata';
+import {
+  readSubrunMetadata,
+  readWorkflowSourceState,
+} from '@archon/workflows/schemas/run-metadata';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import {
@@ -147,12 +150,6 @@ export async function resumeWorkflow(
  */
 function assertHasCheckout(run: WorkflowRun): void {
   if (run.working_path) return;
-  // A malformed hand-off throws: naming `--supersedes` instead would start the stage on
-  // the base branch rather than on the checkout it was given.
-  const handoff = readCheckoutHandoff(run);
-  const command = handoff
-    ? `archon workflow run ${run.workflow_name} --adopt ${handoff.runId}`
-    : `archon workflow run ${run.workflow_name} --supersedes ${run.id}`;
   // Names only: a value can be large or secret, and the operator has it where it came from.
   const inputNames = Object.keys(readSubrunMetadata(run.metadata).inputs ?? {});
   const inputs =
@@ -162,8 +159,33 @@ function assertHasCheckout(run: WorkflowRun): void {
   throw new ResumeRefusedError(
     'not_resumable',
     `Run ${run.id} failed before its checkout was prepared, so there is nothing to resume. ` +
-      `Start it again with: ${command}${inputs}`
+      `Start it again with: ${restartCommand(run)}${inputs}`
   );
+}
+
+/**
+ * The `workflow run` that starts a run again on the checkout and definitions it was given.
+ * A stage given another run's checkout gets the same lane: `continue` adopts that run, and
+ * `copy` cuts a fresh worktree at the hand-off's commit, as the start would have, rather
+ * than adopting a checkout that may since have moved. `--supersedes` keeps the run's item.
+ * A malformed hand-off throws: no command here would start the stage where it was meant to.
+ */
+function restartCommand(run: WorkflowRun): string {
+  const handoff = readCheckoutHandoff(run);
+  const lane =
+    handoff?.lane === 'continue'
+      ? `--adopt ${handoff.runId}`
+      : `--supersedes ${run.id}${handoff ? ` --from ${handoff.commit}` : ''}`;
+  const source = readWorkflowSourceState(run.metadata);
+  const definitions = source.kind === 'recorded' ? source.record.definitions : undefined;
+  const explicitSource =
+    definitions?.from === 'source' ? ` --workflow-source ${shellWord(definitions.root)}` : '';
+  return `archon workflow run ${run.workflow_name} ${lane}${explicitSource}`;
+}
+
+/** A path as one shell word: quoted when it holds anything a shell would split or expand. */
+function shellWord(value: string): string {
+  return /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 /**
