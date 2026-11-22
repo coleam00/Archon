@@ -978,6 +978,45 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     expect(String(failed?.data.error)).toContain('$MAIN_CHECKOUT');
   });
 
+  it('keeps a resolved path that itself contains a sandbox token', async () => {
+    const repo = join(testDir, 'repo-literal');
+    const worktree = join(testDir, 'wt-$RUN_WORKTREE');
+    await mkdir(repo, { recursive: true });
+    await git(repo, 'init', '-q');
+    await writeFile(join(repo, 'README'), 'x\n');
+    await git(repo, 'add', 'README');
+    await git(repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'init');
+    await git(repo, 'worktree', 'add', '-q', '--detach', worktree, 'HEAD');
+    await mkdir(join(worktree, '.archon', 'commands'), { recursive: true });
+    await writeFile(join(worktree, '.archon', 'commands', 'my-cmd.md'), 'My command prompt');
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        cwd: worktree,
+        workflow: {
+          name: 'sandbox-literal-path',
+          nodes: [
+            {
+              id: 'step1',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              sandbox: { filesystem: { denyWrite: ['$RUN_WORKTREE'] } },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('sandbox-literal'),
+      })
+    );
+
+    const options = mockSendQueryDag.mock.calls.at(-1)?.[3] as Record<string, unknown>;
+    const sent = (options?.nodeConfig as Record<string, unknown>)?.sandbox as {
+      filesystem: { denyWrite: string[] };
+    };
+    expect(sent.filesystem.denyWrite).toEqual([worktree]);
+  });
+
   it('per-node effort overrides workflow-level effort', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();

@@ -547,6 +547,17 @@ async function resolveNodeSandbox(
       throw sandboxPathError(nodeId, '$MAIN_CHECKOUT', ctx.cwd, error);
     }
   }
+  const missing = SANDBOX_PATH_NAMES.filter(name => {
+    if (!sandboxHas(texts, name)) return false;
+    if (name === 'RUN_WORKTREE') return false;
+    if (name === 'GIT_COMMON_DIR') return gitCommonDir === undefined;
+    return mainCheckout === undefined;
+  });
+  if (missing.length > 0) {
+    throw new Error(
+      `Node '${nodeId}' sandbox cannot resolve ${missing.map(name => `$${name}`).join(', ')} from ${ctx.cwd}.`
+    );
+  }
   visitSandbox(copy, text =>
     substituteSandboxText(text, ctx, {
       runWorktree: ctx.cwd,
@@ -554,12 +565,6 @@ async function resolveNodeSandbox(
       ...(mainCheckout !== undefined ? { mainCheckout } : {}),
     })
   );
-  const unresolved = SANDBOX_PATH_NAMES.filter(name => sandboxHas(sandboxTexts(copy), name));
-  if (unresolved.length > 0) {
-    throw new Error(
-      `Node '${nodeId}' sandbox still contains ${unresolved.map(name => `$${name}`).join(', ')} after path substitution.`
-    );
-  }
   return copy;
 }
 
