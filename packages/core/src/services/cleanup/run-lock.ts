@@ -2,6 +2,7 @@ import type { IsolationEnvironmentRow } from '@archon/isolation';
 import {
   countCommitsMissingFromRemotes,
   execFileAsync,
+  getDefaultRemote,
   hasUncommittedChangesStrict,
   localBranchExists,
   toBranchName,
@@ -12,7 +13,6 @@ import type { RepoPath } from '@archon/git';
 import * as isolationEnvDb from '../../db/isolation-environments';
 import { getEnvUse, type WaitingHandoff } from '../../db/isolation-env-users';
 import { loadRepoConfig } from '../../config/config-loader';
-import { configuredRemote } from './merge-verdict';
 
 export interface LiveRunBlocker {
   reason: 'live_run';
@@ -183,7 +183,11 @@ export async function readLiveRemoteTips(
   repo: RepoPath
 ): Promise<string[]> {
   if ((await countUnpushedCommits(env, repo)) === 0) return [];
-  const remote = configuredRemote(await loadRepoConfig(repo));
+  // A repository with no remote, or several and none chosen, has no tips to read: its
+  // unpushed commits stay counted, so the worktree is retained for them.
+  const remote =
+    (await loadRepoConfig(repo)).worktree?.remote?.trim() || (await getDefaultRemote(repo));
+  if (!remote) return [];
   const live = ['-C', repo, 'ls-remote', '--quiet', '--', remote, 'refs/heads/*'];
   return (await execFileAsync('git', live, { timeout: 10000 })).stdout
     .split('\n')

@@ -4,6 +4,8 @@
  */
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { isContinueSubcommand, rejectRunFlagsOnContinue } from '../dispatch-guards';
+import type { ItemTarget } from '../commands/item-target';
+import type { WorkflowLinkRequest } from '../commands/workflow-link';
 import { writeJsonLine } from '../utils/stdout';
 import { type CliRouteContext, fail } from './context';
 import { loadRoute, usesDatabaseStore } from './route-loader';
@@ -659,12 +661,12 @@ export async function runWorkflowItems(route: WorkflowRoute): Promise<number> {
 
 export async function runWorkflowMerged(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, commands, effectiveCwd } = route;
-  const item = values.item as string | undefined;
+  const target = itemTarget(values);
   const change = values.change as string | undefined;
   const at = values.at as string | undefined;
   const commit = values.commit as string | undefined;
   if (
-    item === undefined ||
+    target === undefined ||
     change === undefined ||
     at === undefined ||
     positionals[2] !== undefined
@@ -673,41 +675,61 @@ export async function runWorkflowMerged(route: WorkflowRoute): Promise<number> {
   return await commands.workflowMergedCommand(
     route.host,
     effectiveCwd,
-    { item, change, at, ...(commit === undefined ? {} : { commit }) },
+    { ...target, change, at, ...(commit === undefined ? {} : { commit }) },
     json
   );
+}
+
+/** Exactly one of `--item <key>` and `--item-of <run-id>`, or undefined. */
+function itemTarget(values: WorkflowRoute['values']): ItemTarget | undefined {
+  const item = values.item as string | undefined;
+  const itemOf = values['item-of'] as string | undefined;
+  if (item !== undefined && itemOf === undefined) return { item };
+  if (itemOf !== undefined && item === undefined) return { itemOf };
+  return undefined;
 }
 
 export async function runWorkflowLanding(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, commands, effectiveCwd } = route;
-  const item = values.item as string | undefined;
+  const target = itemTarget(values);
   const branch = values.branch as string | undefined;
   const from = (values.from ?? values['from-branch']) as string | undefined;
-  if (item === undefined || branch === undefined || positionals[2] !== undefined)
+  if (target === undefined || branch === undefined || positionals[2] !== undefined)
     return await fail(json, commands.WORKFLOW_LANDING_USAGE);
   return await commands.workflowLandingCommand(
     route.host,
     effectiveCwd,
-    { item, branch, ...(from === undefined ? {} : { from }) },
+    { ...target, branch, ...(from === undefined ? {} : { from }) },
     json
   );
 }
 
+/**
+ * Exactly one form, or undefined: a link from `--item` to `--to`, a link from or to the
+ * `--item-of` run's item (`--to` or `--from`), or the id of a link to end.
+ */
+function linkRequest(values: WorkflowRoute['values']): WorkflowLinkRequest | undefined {
+  const text = (name: string) => values[name] as string | undefined;
+  const [item, itemOf, kind, to, from] = [
+    text('item'),
+    text('item-of'),
+    text('kind'),
+    text('to'),
+    text('from'),
+  ];
+  const [end, as] = [text('end'), text('as')];
+  const named = [item, itemOf, kind, to, from].filter(value => value !== undefined).length;
+  if (end !== undefined) return named === 0 ? { end, as } : undefined;
+  if (named !== 3 || kind === undefined) return undefined;
+  if (item !== undefined && to !== undefined) return { item, kind, to, as };
+  if (itemOf !== undefined && to !== undefined) return { itemOf, kind, to, as };
+  if (itemOf !== undefined && from !== undefined) return { itemOf, kind, from, as };
+  return undefined;
+}
+
 export async function runWorkflowLink(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, commands, effectiveCwd } = route;
-  const item = values.item as string | undefined;
-  const kind = values.kind as string | undefined;
-  const to = values.to as string | undefined;
-  const end = values.end as string | undefined;
-  const as = values.as as string | undefined;
-  if (positionals[2] !== undefined) return await fail(json, commands.WORKFLOW_LINK_USAGE);
-  // Exactly one of the two forms: a link to record, or the id of one to end.
-  const request =
-    end !== undefined && item === undefined && kind === undefined && to === undefined
-      ? { end, as }
-      : end === undefined && item !== undefined && kind !== undefined && to !== undefined
-        ? { item, kind, to, as }
-        : undefined;
+  const request = positionals[2] === undefined ? linkRequest(values) : undefined;
   if (request === undefined) return await fail(json, commands.WORKFLOW_LINK_USAGE);
   return await commands.workflowLinkCommand(route.host, effectiveCwd, request, json);
 }

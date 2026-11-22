@@ -305,6 +305,11 @@ export const workflowHelp: HelpGroup = {
         "Record a link from one item of this project to another: depends_on, part_of or\nduplicate_of, read from --item to --to. Recording it again leaves one link; prints the link's id",
       scopedFlags: [
         {
+          spec: '--item-of <run-id>',
+          description:
+            'In place of --item: the item the run is on, in its own project; link it --to\nanother item, or --from another item to it',
+        },
+        {
           spec: '--end <link-id>',
           description: 'End a link instead; the record stays and says who ended it and when',
         },
@@ -332,6 +337,10 @@ export const workflowHelp: HelpGroup = {
       description:
         "Record that an item's change merged, as the forge reported it. Recorded once:\na second report keeps the first",
       scopedFlags: [
+        {
+          spec: '--item-of <run-id>',
+          description: 'In place of --item: the item the run is on, in its own project',
+        },
         { spec: '--change <ref>', description: 'The merged change, such as its pull request URL' },
         { spec: '--at <ISO>', description: 'When the forge says it merged' },
         { spec: '--commit <sha>', description: 'The merge commit, when the forge reported one' },
@@ -344,11 +353,15 @@ export const workflowHelp: HelpGroup = {
       description:
         "Record the branch an item's change lands on. Every fresh run on the item, and on\nan item part_of it that records none, is cut from it and proposes against it.\nRecording again replaces it. With --from, first create the branch on the remote",
       scopedFlags: [
+        {
+          spec: '--item-of <run-id>',
+          description: 'In place of --item: the item the run is on, in its own project',
+        },
         { spec: '--branch <name>', description: 'The branch the item lands on' },
         {
           spec: '--from <start-point>',
           description:
-            'Create the branch on the remote from this commit or branch (origin/main for the\nremote tip) before recording; an existing branch is left as it is',
+            "Create the branch on the remote from this commit or branch (<remote>/main for the\nremote's tip) before recording; an existing branch is left as it is",
         },
       ],
     },

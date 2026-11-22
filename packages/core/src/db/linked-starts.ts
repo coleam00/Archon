@@ -4,6 +4,10 @@
  * linked to (the holders), so which items those are is read after the completing write
  * and before its commit: read earlier, a link ended meanwhile would still start a stage.
  *
+ * Without `linked.items` every holder starts. With it, the ended run named the items, and
+ * each named item starts only when it is a holder; one that is not gets the refusal the
+ * engine built for it, on the ended run's item.
+ *
  * The link rows read here are share-locked on PostgreSQL, so an end of one of them
  * (`endItemLink`) waits until this completion commits: the links that count are the links
  * active when the run completed. SQLite already serializes writers.
@@ -39,29 +43,47 @@ async function holdersOf(query: TransactionQuery, start: LinkedRunEndedStart): P
 
 /**
  * Write the receipts `starts` cause, inside the completing transaction and after its
- * write, and return the ones written (a replay writes nothing): one per holder, the
- * engine's receipt for the ended run on the holder's key, keyed by the ended run and the
- * holder. The ended run stays the receipt's source actor, so the started run's cause
- * names it.
+ * write, and return the ones written (a replay writes nothing): one per started holder,
+ * the engine's receipt for the ended run on the holder's key, keyed by the ended run and
+ * the holder, and one refusal per named item that is not a holder, keyed by the ended run
+ * and the named key. The ended run stays the receipt's source actor, so the started run's
+ * cause names it.
  */
 export async function insertLinkedStarts(
   query: TransactionQuery,
   starts: readonly LinkedRunEndedStart[]
 ): Promise<SourceReceiptAcceptance[]> {
   const written: SourceReceiptAcceptance[] = [];
+  const write = async (receipt: SourceReceiptAcceptance): Promise<void> => {
+    if (!(await insertStartReceipt(query, receipt)).replay) written.push(receipt);
+  };
   for (const start of starts) {
-    for (const holder of await holdersOf(query, start)) {
-      const receipt: SourceReceiptAcceptance = {
-        ...start.acceptance,
-        receipt: {
-          ...start.acceptance.receipt,
-          id: randomUUID(),
-          itemKey: holder.key,
-          deliveryId: `${start.endedRunId}:${holder.id}`,
-        },
-      };
-      if (!(await insertStartReceipt(query, receipt)).replay) written.push(receipt);
+    const holders = await holdersOf(query, start);
+    if ('acceptance' in start) {
+      for (const holder of holders) await write(onHolder(start, start.acceptance, holder));
+      continue;
+    }
+    const byKey = new Map(holders.map(holder => [holder.key, holder]));
+    for (const named of start.named) {
+      const holder = byKey.get(named.key);
+      await write(holder ? onHolder(start, named.acceptance, holder) : named.unlinked);
     }
   }
   return written;
+}
+
+function onHolder(
+  start: LinkedRunEndedStart,
+  acceptance: SourceReceiptAcceptance,
+  holder: Holder
+): SourceReceiptAcceptance {
+  return {
+    ...acceptance,
+    receipt: {
+      ...acceptance.receipt,
+      id: randomUUID(),
+      itemKey: holder.key,
+      deliveryId: `${start.endedRunId}:${holder.id}`,
+    },
+  };
 }

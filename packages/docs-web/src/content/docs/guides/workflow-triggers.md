@@ -301,7 +301,7 @@ archon workflow link --item issue-42 --kind part_of --to WO-12
 archon workflow link --item issue-43 --kind part_of --to WO-12
 ```
 
-`--from` creates `feat/checkout-redesign` on the project's remote from the remote's `main` before recording it; a branch the remote already has is left as it is. Leave `--from` out to record a branch that exists, or one you will create later. `issue-42` and `issue-43` record no branch of their own, so their stages take the branch of the item they are part of. Their changes land together on `feat/checkout-redesign`, can be tested there as a whole, and the work order lands once on the base. A stage run on `WO-12` itself also targets `feat/checkout-redesign`; start the final landing onto the base with `--base <base>`, or on another item.
+`--from` creates `feat/checkout-redesign` on the project's remote from that remote's `main` before recording it. The example assumes the remote is `origin`; with `worktree.remote: upstream`, name `upstream/main`, the tracking branch of the remote that is fetched. A branch the remote already has is left as it is. Leave `--from` out to record a branch that exists, or one you will create later. `issue-42` and `issue-43` record no branch of their own, so their stages take the branch of the item they are part of. Their changes land together on `feat/checkout-redesign`, can be tested there as a whole, and the work order lands once on the base. A stage run on `WO-12` itself also targets `feat/checkout-redesign`; start the final landing onto the base with `--base <base>`, or on another item.
 
 A start takes its base in this order, highest first:
 
@@ -461,6 +461,7 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
     {
       "from": { "stage": "plan", "outcome": "planned" },
       "to": "build",
+      "linked": null,
       "active": true,
       "declared": { "binding": "build-after-plan", "problems": [] },
       "installed": {
@@ -472,6 +473,7 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
     {
       "from": { "stage": "build", "outcome": "built" },
       "to": "ship",
+      "linked": null,
       "active": false,
       "declared": { "binding": "ship-after-build", "problems": [] },
       "installed": null
@@ -484,6 +486,7 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
 
 - A stage is a workflow of the pack. Its `outcome` is what its [`returns:`](/reference/workflow-language/) declares, read through an `include:` when the returns node is in an included block; a boolean outcome lists `succeeded` and `failed`.
 - `nodes` are the stage's nodes after includes are expanded, under the ids its runs record (`<include>__<id>`); `blocks` names the include each came from, outermost first. A `loop_group` is a node, and its body follows it: each body node has `loopGroup` set to the group's id, and its `id` and `dependsOn` are the step names its runs are recorded under (`<group>.<id>`, composing across nested groups, as in `rounds.review__check`). A body's included blocks are named the same way (`rounds.review`). An `include:` with `fan_out:` is one `compose_fan_out` node, because its width is known only at run time; its `fanOut.workflow` names its body in `fanOutBlocks`, which lists each such body's nodes once, including bodies a body fans out to.
+- An arrow's `linked` is the binding's [`linked`](#start-a-stage-on-an-item-when-the-items-it-links-to-end), with its `items` when it names them, or `null` when the stage starts on the ended run's own item. Its `entries` maps each input of the started stage that reads the started item's [own entry](#name-the-linked-items-that-start) to that entry pointer, for example `{ "brief": "/brief" }`, and is `{}` when none does. An active arrow shows the installed file's `entries`, an inactive one the declaration's. A declared arrow is active only through a file with the same `kind`, `holder` and `items`; `entries`, like any input mapping, does not part them.
 - An arrow is `active` when a trigger file launches it in this project. A declared arrow with no file is reported with `active: false`, not left out. `to` may be a workflow outside the pack. An active arrow's `installed.problems` is what `archon trigger check` reports as the check a run gets before it starts: when it is not empty, every run of `from.stage` on an item is refused before it starts, so the arrow starts nothing until the file is fixed. A file whose `launch.cwd` no longer exists is in no project, so the end of a run never starts it; it is shown with that problem because which project it was meant for cannot be known.
 - A declared binding that names a workflow which is not a stage as the pack loaded keeps the name as written, and its `declared.problems` says so. When that stage failed to load, its load error is in `discoveryErrors`; the rest of the graph is still read.
 - An arrow from an [asks-settled binding](#start-a-stage-again-when-its-asks-are-answered) has `from: { "stage", "settled" }` in place of `outcome`, where `settled` is the binding's `answered`, `withdrawn` or `any`, and `option` when the binding names one ([options](#start-a-different-stage-for-each-option)); a pack binding that lists several options is one arrow per option. It starts nothing for an outcome, so it does not change `startsNothing`.
@@ -568,11 +571,38 @@ A run-ended binding with `linked` starts its stage on the items the ended run's 
 - `kind` is the link kind to follow: `depends_on`, `part_of` or `duplicate_of`. The engine gives the kind no meaning; the file says which kind matters.
 - `holder` is the end of the link the started item is on. The ended run's item is on the other end. A link reads from `from` to `to`, so members that are `part_of` an order (`archon workflow link --item m1 --kind part_of --to order-3`) start the order with `holder: "to"`, and an item that `depends_on` another (`--item issue-42 --kind depends_on --to issue-17`) starts when `issue-17` ends with `holder: "from"`.
 
-The stage starts on every holder each time one of its linked items ends `workflowName` with `outcome`: an order of three members starts its stage three times. The engine does not count: the stage judges whether its item is ready, for example by reading the item's links and their runs with [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to) or `archon workflow runs --item`, and ends early when it is not. That is also what lets an order proceed when one member was declined, or weigh what each member returned. `inputs` maps from the run that ended as above, plus `{ "item": "key" }`, the key of the item whose run ended. A linked file cannot map `{ "item": "answers" }`: those answers belong to the item whose run ended, not to the holder the stage starts on, so the file is refused. The started stage reads its own item's answers with `archon workflow runs --item`.
+Without `items` ([below](#name-the-linked-items-that-start)), the stage starts on every holder each time one of its linked items ends `workflowName` with `outcome`: an order of three members starts its stage three times. The engine does not count: the stage judges whether its item is ready, for example by reading the item's links and their runs with [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to) or `archon workflow runs --item`, and ends early when it is not. That is also what lets an order proceed when one member was declined, or weigh what each member returned. `inputs` maps from the run that ended as above, plus `{ "item": "key" }`, the key of the item whose run ended. A linked file cannot map `{ "item": "answers" }`: those answers belong to the item whose run ended, not to the holder the stage starts on, so the file is refused. The started stage reads its own item's answers with `archon workflow runs --item`.
 
 Only links active when the run completes count: a link ended before then causes nothing, and an item with no active link of the kind never starts by this binding. A failed or cancelled run, or a run that completes with another outcome, starts nothing. A linked binding takes no `checkout`, because the ended run left its checkout for its own item.
 
-`archon workflow runs --item <holder> --json` shows each started run with `cause` `{"kind": "run_ended", "runId": <the run whose end caused it>, "sourceInstanceId"}`. The receipt's delivery ID is `<ended run ID>:<holder item ID>`. `archon trigger check` checks a linked binding as it checks any run-ended binding, does not report it as a duplicate of a same-item binding to the same stage, and does not report one that starts the workflow whose end fires it, since that start is on another item.
+`archon workflow runs --item <holder> --json` shows each started run with `cause` `{"kind": "run_ended", "runId": <the run whose end caused it>, "sourceInstanceId"}`. The receipt's delivery ID is `<ended run ID>:<holder item ID>`. `archon trigger check` checks a linked binding as it checks any run-ended binding, does not report it as a duplicate of a same-item binding to the same stage, and does not report one that starts the workflow whose end fires it, since that start is on another item. Two linked files to the same stage over the same `kind` and `holder` are reported as duplicates whatever `items` they name.
+
+### Name the linked items that start
+
+With `items`, the ended run decides which holders start and what each is given. `items` is a JSON Pointer into the ended run's result that holds a list. Each entry is an item key, or an object with a string `key`. Only the holders the list names start; a holder it does not name gets nothing. An input `{ "entry": <JSON Pointer> }` reads from the started item's own entry, so each start gets its own value; `""` is the whole entry. A split that links the members it creates to their parent and returns `start: [{ "key": "m1", "brief": "..." }, ...]` starts each named member with its own brief:
+
+```json
+"on": {
+  "runEnded": {
+    "workflowName": "split",
+    "outcome": "split",
+    "linked": { "kind": "part_of", "holder": "from", "items": "/start" },
+    "inputs": {
+      "brief": { "entry": "/brief" },
+      "part_of": { "item": "key" },
+      "land_on": { "result": "/land_on" }
+    }
+  }
+}
+```
+
+- A named key whose item holds no active link of `kind` at `holder` to the ended run's item, including a key that is no item at all, is refused: an `unmatched` receipt on the ended run's item, with delivery ID `<ended run ID>:unlinked:<key>` and a `reason` that names the key and the link. The others still start, and the run still completes.
+- A list that cannot be read starts nothing and is refused once on the ended run's item, naming the file and the pointer: the pointer does not resolve, its value is not a list, an entry has no key, or a key is named twice. The engine never falls back to every holder.
+- An empty list starts nothing.
+- An `entry` pointer that does not resolve in one entry refuses only that holder's start, on the holder.
+- `{ "entry" }` is refused when the file is read unless `linked.items` is set.
+
+`archon trigger list` shows the refusals with their reasons.
 
 A workflow pack can declare this binding as a [`run_ended:` binding](/reference/workflow-language/#pack-bindings) with `linked`; [`archon pack bindings`](/reference/cli/#pack-bindings) writes it, checked, and `archon trigger add` registers it.
 

@@ -24,6 +24,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import { landingCreateCommand } from '@archon/core/workflows/item-landing';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { itemReadSchema } from '@archon/workflows/item-read';
 import { itemWindowSchema } from '@archon/workflows/item-window';
@@ -558,7 +559,10 @@ test.serial(
     const [{ default_cwd: checkout } = { default_cwd: '' }] = rows<{ default_cwd: string }>(
       'SELECT default_cwd FROM remote_agent_codebases'
     );
-    const createCommand = `archon workflow landing --cwd ${checkout} --item lonely --branch feat/missing --from <start-point>`;
+    // Built by the same function, so a checkout path that needs quoting (Windows, a space)
+    // matches; the core test proves the quoting survives a shell.
+    const createCommand = landingCreateCommand('lonely', 'feat/missing', checkout);
+    expect(createCommand).toContain('--item lonely --branch feat/missing --from <start-point>');
     expect(refused.stderr).toContain(createCommand);
     expect(worktrees()).toBe(before);
     expect(readFileSync(out, 'utf8')).toBe('untouched');
@@ -629,6 +633,22 @@ test.serial(
       writeFileSync(config, saved);
     }
     expect(remoteSha('feat/on-files')).toBe('');
+
+    // `--item-of` finds the run's project wherever it is called from, and creates there.
+    const ofRun = await invoke(host =>
+      workflowLandingCommand(
+        host,
+        elsewhere,
+        { itemOf: memberRun?.id ?? '', branch: 'feat/of-run', from: 'main' },
+        true,
+        callerEnv
+      )
+    );
+    expect(succeeded(ofRun)).toMatchObject({
+      branch: 'feat/of-run',
+      create: { status: 'created' },
+    });
+    expect(remoteSha('feat/of-run')).toBe(remoteSha('main'));
 
     // A record the store would refuse is refused before anything is pushed.
     expect((await create('', 'feat/no-item', 'main')).exitCode).toBe(1);
@@ -715,5 +735,91 @@ test.serial(
     const again = await link({ end: recorded.id });
     expect(again.exitCode).toBe(1);
     expect(JSON.parse(again.stdout)).toEqual({ ok: false, error: 'already_ended' });
+  }
+);
+
+test.serial(
+  "--item-of writes on the run's own item in its own project, whatever the directory",
+  async () => {
+    // A second registered project with its own item-1, and the writes made from inside it.
+    const other = join(root, 'other');
+    mkdirSync(other);
+    const registered = await captureWorkflowCommand(archonHome, async host => {
+      await host.records.codebases.createCodebase({ name: 'other', default_cwd: other });
+    });
+    expect(registered.status, registered.stderr).toBe(0);
+    const landing = (request: Parameters<typeof workflowLandingCommand>[2]) =>
+      invoke(host => workflowLandingCommand(host, other, request, true, callerEnv));
+    succeeded(await landing({ item: 'item-1', branch: 'feat/other' }));
+
+    const onItem = runsWithItems().find(row => row.item_key === 'item-1');
+    const bare = runsWithItems().find(row => row.item_key === null);
+    if (!onItem || !bare) throw new Error('Expected a run on item-1 and a run with no item');
+    // Thunks: the commands share process stdout, so each runs alone.
+    const writes = (itemOf: string) => [
+      () => landing({ itemOf, branch: 'feat/own' }),
+      () =>
+        invoke(host =>
+          workflowMergedCommand(
+            host,
+            other,
+            { itemOf, change: 'https://github.com/acme/web/pull/2', at: '2026-11-02T10:00:00Z' },
+            true,
+            callerEnv
+          )
+        ),
+      () =>
+        invoke(host =>
+          workflowLinkCommand(
+            host,
+            other,
+            { itemOf, kind: 'depends_on', to: 'item-2' },
+            true,
+            callerEnv
+          )
+        ),
+      () =>
+        invoke(host =>
+          workflowLinkCommand(
+            host,
+            other,
+            { itemOf, kind: 'part_of', from: 'item-3' },
+            true,
+            callerEnv
+          )
+        ),
+    ];
+    for (const write of writes(onItem.id)) succeeded(await write());
+
+    const own = await readItemJson('item-1');
+    expect(own.landing).toMatchObject({ branch: 'feat/own', from: { kind: 'own' } });
+    expect(own.merged?.change).toBe('https://github.com/acme/web/pull/2');
+    expect(own.links).toMatchObject([
+      { direction: 'outgoing', kind: 'depends_on', other: { key: 'item-2' } },
+      { direction: 'incoming', kind: 'part_of', other: { key: 'item-3' } },
+    ]);
+    const othersItem = itemReadSchema.parse(
+      await readJson(host => workflowRunsCommand(host, other, { item: 'item-1', json: true }))
+    );
+    expect(othersItem).toMatchObject({
+      landing: { branch: 'feat/other' },
+      merged: null,
+      links: [],
+    });
+
+    // A run on no item is refused before anything is written.
+    const facts = () =>
+      rows<{ n: number }>(
+        `SELECT (SELECT count(*) FROM remote_agent_item_landings)
+              + (SELECT count(*) FROM remote_agent_item_merges)
+              + (SELECT count(*) FROM remote_agent_item_links) AS n`
+      )[0]?.n;
+    const before = facts();
+    for (const write of writes(bare.id)) {
+      const refused = await write();
+      expect(refused.exitCode).toBe(1);
+      expect(JSON.parse(refused.stdout)).toEqual({ ok: false, error: 'no_item' });
+    }
+    expect(facts()).toBe(before);
   }
 );

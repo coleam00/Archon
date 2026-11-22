@@ -13,26 +13,24 @@ import {
 } from '@archon/core/workflows/item-landing';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { loadStoreSelection } from '@archon/core/config/store-selection';
-import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { projectRefForCodebase } from '@archon/core/operations/attention-queue';
-import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
+import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import type { ItemLanding } from '@archon/workflows/schemas/item-landing';
 import { assertItemKey } from '@archon/workflows/schemas/workflow-run';
 import { readCallingNode } from '../utils/calling-node';
 import { writeJsonLine } from '../utils/stdout';
-import { inheritedWorkflowCodebase } from './workflow-shared';
+import { type ItemTarget, NoRunItemError, resolveItemTarget } from './item-target';
 
 export const WORKFLOW_LANDING_USAGE =
-  'Usage: archon workflow landing --item <key> --branch <name> [--from <start-point>] [--json]';
+  'Usage: archon workflow landing --item <key>|--item-of <run-id> --branch <name> [--from <start-point>] [--json]';
 
-export interface WorkflowLandingRequest {
-  item: string;
+export type WorkflowLandingRequest = ItemTarget & {
   branch: string;
   /** Create the branch on the remote from this start point before recording it. */
   from?: string;
-}
+};
 
-type Recorded = { landing: ItemLanding; create: CreatedLandingBranch | null };
+type Recorded = { key: string; landing: ItemLanding; create: CreatedLandingBranch | null };
 
 async function record(
   host: WorkflowHost,
@@ -45,26 +43,24 @@ async function record(
   } catch (error) {
     throw new Error(`--branch '${request.branch}' is not a valid branch name.`, { cause: error });
   }
-  const codebase =
-    (await inheritedWorkflowCodebase(host)) ??
-    (await findCodebaseForCheckoutPath(cwd, host.records.codebases));
-  if (!codebase) throw new Error('--item names an item in one registered project.');
+  const { projectKey, key } = await resolveItemTarget(host, cwd, request);
   // Everything the record would refuse is checked first, so a create never leaves a
   // pushed branch that the record step then rejects.
-  assertItemKey(request.item);
+  assertItemKey(key);
   const fromRun = env.WORKFLOW_ID ? readCallingNode(env.WORKFLOW_ID, env) : null;
   const save = () =>
-    host.deps.store.recordItemLanding({
-      projectKey: projectRefForCodebase(codebase).key,
-      key: request.item,
-      branch: request.branch,
-      fromRun,
-    });
-  if (request.from === undefined) return { landing: await save(), create: null };
+    host.deps.store.recordItemLanding({ projectKey, key, branch: request.branch, fromRun });
+  if (request.from === undefined) return { key, landing: await save(), create: null };
   // The file store cannot record a landing, so refuse before the push changes the remote.
   if ((await loadStoreSelection()) === 'files') throw new FileStoreUnsupportedError('items');
+  // `--item-of` names the item's project by key, so the checkout is found from it.
+  const codebase = (await host.records.codebases.listCodebases()).find(
+    candidate => projectRefForCodebase(candidate).key === projectKey
+  );
+  if (!codebase)
+    throw new Error(`Project '${projectKey}' has no registered checkout to create the branch in.`);
   const create = await createLandingBranch(codebase, request.branch, request.from);
-  return { landing: await save(), create };
+  return { key, landing: await save(), create };
 }
 
 function createdText(request: WorkflowLandingRequest, create: CreatedLandingBranch): string {
@@ -81,17 +77,21 @@ export async function workflowLandingCommand(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<number> {
   try {
-    const { landing, create } = await record(host, cwd, request, env);
+    const { key, landing, create } = await record(host, cwd, request, env);
     // `create` appears only when --from was given, so the record-only shape is unchanged.
     if (json) await writeJsonLine(create === null ? landing : { ...landing, create });
     else
       console.log(
-        `${create === null ? '' : createdText(request, create)}Item ${request.item} lands on ${landing.branch}.`
+        `${create === null ? '' : createdText(request, create)}Item ${key} lands on ${landing.branch}.`
       );
     return 0;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (json) await writeJsonLine({ ok: false, error: message });
+    if (json)
+      await writeJsonLine({
+        ok: false,
+        error: error instanceof NoRunItemError ? 'no_item' : message,
+      });
     else console.error(`Error: ${message}`);
     return 1;
   }

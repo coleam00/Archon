@@ -1,6 +1,6 @@
 /**
- * `pr.merge-state` on GitHub: how far a pull request's head is behind the default
- * branch, and whether it merges. GraphQL's `compare(headRef:)` takes a commit from
+ * `pr.merge-state` on GitHub: how far a pull request's head is behind its base
+ * branch, and whether it merges into it. GraphQL's `compare(headRef:)` takes a commit from
  * any fork of the repository, which REST compare by SHA does not promise.
  */
 import { z } from 'zod';
@@ -23,11 +23,17 @@ const pullSchema = z.object({
 const compareSchema = z.object({
   repository: z
     .object({
-      defaultBranchRef: z
+      pullRequest: z
         .object({
-          name: z.string().min(1),
-          target: z.object({ oid: z.string().min(1) }),
-          compare: z.object({ behindBy: z.number().int().nonnegative() }).nullable(),
+          baseRefName: z.string().min(1),
+          // Null once the base branch is deleted.
+          baseRef: z
+            .object({
+              name: z.string().min(1),
+              target: z.object({ oid: z.string().min(1) }),
+              compare: z.object({ behindBy: z.number().int().nonnegative() }).nullable(),
+            })
+            .nullable(),
         })
         .nullable(),
     })
@@ -55,16 +61,24 @@ export async function handleGithubPrMergeState(
     )
   ).repository?.pullRequest;
   if (!pull) throw notFound(`${repo.path} has no pull request ${String(number)}`);
-  const branch = compareSchema.parse(
+  // The base is read through the pull request, so the comparison is always against the
+  // branch it targets and no branch name has to be resolved to a ref.
+  const base = compareSchema.parse(
     await githubGraphql(
       fetchImpl,
       token,
       repo,
-      'query($owner:String!,$name:String!,$head:String!){repository(owner:$owner,name:$name){defaultBranchRef{name target{oid} compare(headRef:$head){behindBy}}}}',
-      { owner, name, head: pull.headRefOid }
+      'query($owner:String!,$name:String!,$number:Int!,$head:String!){repository(owner:$owner,name:$name){pullRequest(number:$number){baseRefName baseRef{name target{oid} compare(headRef:$head){behindBy}}}}}',
+      { owner, name, number, head: pull.headRefOid }
     )
-  ).repository?.defaultBranchRef;
-  if (!branch) throw notFound(`${repo.path} reports no default branch`);
+  ).repository?.pullRequest;
+  if (!base) throw notFound(`${repo.path} has no pull request ${String(number)}`);
+  const branch = base.baseRef;
+  if (!branch) {
+    throw notFound(
+      `${repo.path} pull request ${String(number)}'s base ${base.baseRefName} no longer exists`
+    );
+  }
   if (!branch.compare)
     throw notFound(`${repo.path} cannot compare ${pull.headRefOid} with ${branch.name}`);
   return {
@@ -75,8 +89,8 @@ export async function handleGithubPrMergeState(
       value: {
         ref: request.ref,
         head_revision: pull.headRefOid,
-        default_branch: branch.name,
-        default_revision: branch.target.oid,
+        base_branch: branch.name,
+        base_revision: branch.target.oid,
         behind: branch.compare.behindBy,
         // GitHub computes mergeability lazily, so a first read may be UNKNOWN.
         mergeable:

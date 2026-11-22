@@ -622,11 +622,20 @@ async function runOperation(
   const failure = processFailure(outcome);
   if (failure) return errorResponse(request, failure, lost);
   const response = pluginResponse(outcome.stdout);
+  if (!response.ok) {
+    return errorResponse(
+      request,
+      {
+        kind: 'invalid_response',
+        message: `forge plugin returned an invalid ${request.op} response: ${response.problem}`,
+      },
+      lost
+    );
+  }
   if (
-    !response ||
-    response.operationId !== request.operationId ||
-    response.ok !== (outcome.exitCode === 0) ||
-    !matchesForgeOperationResponse(request, response, plugin.metadata, hosts.repository)
+    response.value.operationId !== request.operationId ||
+    response.value.ok !== (outcome.exitCode === 0) ||
+    !matchesForgeOperationResponse(request, response.value, plugin.metadata, hosts.repository)
   ) {
     return errorResponse(
       request,
@@ -634,7 +643,7 @@ async function runOperation(
       lost
     );
   }
-  return retainHostClaim(response, hosts.repository, hosts.selected);
+  return retainHostClaim(response.value, hosts.repository, hosts.selected);
 }
 
 function processFailure(outcome: PluginProcessResult): ForgeError | undefined {
@@ -655,15 +664,28 @@ function processFailure(outcome: PluginProcessResult): ForgeError | undefined {
   return undefined;
 }
 
-function pluginResponse(stdout: string): ForgeResponse | undefined {
+/**
+ * Parse a plugin's stdout. A response that fails the schema names the failing schema paths and
+ * issue codes, so a plugin built against an older result shape learns which field to change.
+ * Never the received values: they are plugin output and may carry anything.
+ */
+function pluginResponse(
+  stdout: string
+): { ok: true; value: ForgeResponse } | { ok: false; problem: string } {
   let raw: unknown;
   try {
     raw = JSON.parse(stdout) as unknown;
   } catch {
-    raw = undefined;
+    return { ok: false, problem: 'stdout is not JSON' };
   }
   const parsed = forgeResponseSchema.safeParse(raw);
-  return parsed.success ? parsed.data : undefined;
+  if (parsed.success) return { ok: true, value: parsed.data };
+  const issues = parsed.error.issues;
+  const shown = issues
+    .slice(0, 5)
+    .map(issue => `${issue.path.map(String).join('.') || '(root)'} ${issue.code}`);
+  if (issues.length > shown.length) shown.push(`${String(issues.length - shown.length)} more`);
+  return { ok: false, problem: shown.join('; ') };
 }
 
 function finish(
