@@ -356,7 +356,7 @@ function normalizeIssueComment(
 }
 
 /** GitHub sends review states lowercase in webhooks and uppercase in its APIs. */
-function reviewState(state: string): ReviewState {
+export function reviewState(state: string): ReviewState {
   switch (state.toLowerCase()) {
     case 'approved':
       return 'approved';

@@ -882,7 +882,7 @@ GitHub event starts use an installed source plugin. The maintained plugin is tem
 
 From a source checkout, build the module with `bun run --cwd packages/adapters build:github-source-plugin`, then copy `packages/adapters/dist/github-source-plugin.mjs` to an operator-owned plugin directory. The compiled module can load outside the Archon source tree. Installation and module paths are explicit in this release; marketplace installation is separate work.
 
-Set `WEBHOOK_SECRET` for the server process, set `ARCHON_WEBHOOK_SOURCES` to the absolute path of the host configuration below, and set `ARCHON_TRIGGER_HOST` to the `hostId` the bindings name (`build-host-1` below) so the server starts the runs. Configure GitHub's webhook URL as `https://your-archon-host/webhooks/sources/github-production`. The existing `/webhooks/github` endpoint handles conversation and wait-signaling consumers separately.
+Set `WEBHOOK_SECRET` for the server process (the configuration's `webhookSecretEnv` names it; a source that [only observes waits](#without-a-webhook) needs none), set `ARCHON_WEBHOOK_SOURCES` to the absolute path of the host configuration below, and set `ARCHON_TRIGGER_HOST` to the `hostId` the bindings name (`build-host-1` below) so the server starts the runs. Configure GitHub's webhook URL as `https://your-archon-host/webhooks/sources/github-production`. The existing `/webhooks/github` endpoint handles conversation and wait-signaling consumers separately.
 
 The following configuration starts `review-pull-request` when a pull request is opened against `main` in `acme/widgets`:
 
@@ -956,7 +956,7 @@ GitHub does not automatically redeliver every failed webhook. Check delivery sta
 
 ## Start a stage when what an item waits for happens
 
-A stage that has to wait for something outside Archon, such as a change's checks finishing or a review arriving, ends instead of sleeping. It says what its item now waits for as [waits](/reference/workflow-language/#waits-what-an-item-waits-for-outside-archon) in its result. The run completes and holds no agent session, checkout or capacity slot, and nothing polls the forge. When the event arrives, a GitHub source plugin binding with `wake` starts the next stage on the item.
+A stage that has to wait for something outside Archon, such as a change's checks finishing or a review arriving, ends instead of sleeping. It says what its item now waits for as [waits](/reference/workflow-language/#waits-what-an-item-waits-for-outside-archon) in its result. The run completes and holds no agent session, checkout or capacity slot, and on an install that receives webhooks nothing polls the forge. When the event arrives, a GitHub source plugin binding with `wake` starts the next stage on the item.
 
 A host stage that reads a change's checks and reviews, and ends waiting when they are not in yet:
 
@@ -1034,6 +1034,39 @@ What the engine holds to when the event arrives:
 Each completed check is its own event. A host stage waiting for `checks` is woken by the first completed check at its commit, reads the change, and may end waiting again; narrow the binding's selector with predicates when it should wake for fewer. An event that arrives while the waiting stage is still running finds no open wait, because the waits open only when the run completes, and is recorded `unmatched`. If no later event follows, the set goes overdue and appears in attention.
 
 Wake bindings need the database store and a registered project, as items do.
+
+### Without a webhook
+
+An install that receives no webhooks, such as a laptop or a machine behind NAT with no `archon serve` the forge can reach, can have its check and review waits met by observing them instead. Add `observe` to the source's entry in the `ARCHON_WEBHOOK_SOURCES` file:
+
+```json
+{
+  "version": 1,
+  "sources": [
+    {
+      "sourceInstanceId": "github-production",
+      "module": "/opt/archon/plugins/github/source-plugin.mjs",
+      "observe": { "everySeconds": 60 },
+      "config": { "version": 1, "host": "github.com", "bindings": [] }
+    }
+  ]
+}
+```
+
+`everySeconds` is an integer of at least 15; an invalid file fails with its path and each wrong field. Put the source's bindings in `bindings` as for a webhook. Leave out `webhookSecretEnv` when the source receives no webhooks; it then refuses every delivery. A source module that cannot observe fails to load when `observe` is set.
+
+[`archon workflow wake`](/reference/cli/#workflow-wake) observes on every invocation, and `workflow wake --watch` (what `archon workflow wake schedule install` runs) observes each source once per interval, also while runs it resumed are still running. `workflow wake` loads only the sources that declare `observe`, so a webhook-only source in the same file, such as one whose secret is set only for the server, cannot stop it. A running `archon serve` with the same file observes on its own timer and logs `webhook_source_observing` with the source and interval at boot. Set `ARCHON_WEBHOOK_SOURCES` where the process reads it: `~/.archon/.env` is read by both.
+
+A pass reads the open waits. When none is open, it reads nothing from the forge. Otherwise it reads, through your forge plugin and credentials as [`archon forge`](/reference/cli/#forge) does, what each wait's binding is about:
+
+- **A check wait**, woken by a `check.changed` binding on `check.revision`: the checks at the wait's commit. Each check becomes the `check.changed` event its webhook would have carried, without the commit's pull requests; a check event names no subject.
+- **A review wait**, woken by a `review.changed` binding on `review.commit` that maps its `item` from `subject.number`: the reviews of the pull request the wait's item key names under that mapping (`pr-7` with prefix `pr-` names pull request 7). Each submitted or dismissed review becomes the `review.changed` event its webhook would have carried. A review not yet submitted is skipped.
+
+Only the bindings that wake an open wait are evaluated, so observing never starts a binding nothing waits on, and an event about another commit than the wait's is not recorded. Each start goes to the wait's own item. Each event is recorded as one delivery of the source per binding and item, with the delivery id `observe:check:<host>/<path>@<commit>:<unit kind>:<unit id>:<phase>:<native result>:<binding id>:<item key>` or `observe:review:<host>/<path>#<number>:<review id>:<submitted|dismissed>:<binding id>:<item key>`, and the engine matches it against the waits exactly as it matches a webhook's. The same state observed again for the same binding and item is a replay and wakes nothing, so a completed check or a review wakes an item's wait at most once per binding, even when the stage it woke ends waiting at the same commit again. A wait that opens later on another item, or for another binding, is a new delivery. A check that had already completed, or a review already submitted, when the wait opened wakes it on the first pass; a webhook would have arrived before the wait and found nothing to wake. The engine refuses a source's read of a commit no open wait is about, or of a pull request no open wait's item key ends with.
+
+A read that fails, such as a deleted commit or a repository the credential cannot see, is reported for its waits, and the other waits are still read. Any other wait the source binds is reported as not observed, with the reason: a wake binding of another kind, an item key that names no pull request, a project with no repository URL, a repository on another forge host, or a binding that matches the waited event but cannot start on it, such as an input mapped from a field the event lacks. `workflow wake` prints both on its `observe` line; a server logs `source_observe_failed` for a failed pass and `source_observe_unserved` once per process for each wait it cannot observe.
+
+`workflow wake --watch --json` writes `{"ok":true,"action":"wake","observe":[{"source":…,"everySeconds":…}]}` when it starts, and one `observe` line for each pass that read waits (see the [CLI reference](/reference/cli/#workflow-wake)). A stage start whose host could not be drained stays pending: a running watch drains that host again on its next pass, and the failure line names `archon trigger drain --host <id>` to run by hand. A one-shot `workflow wake`, or a watch that restarted, does not remember the host. Every wake pass drains the hosts this install's trigger files name, so a start on such a host is still handed on; a host named only by a source binding needs that command.
 
 ## Start workflows from any signed webhook
 

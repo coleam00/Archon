@@ -420,7 +420,9 @@ Registering a file starts runs, so ask first:
   Until then, run intake by hand for each new issue. The merge stage's two check
   bindings need the webhook subscribed to check runs and commit statuses; without them a
   pull request whose checks were running is read again only once its wait is an hour old
-  and the next `merge-pick` pass starts it.
+  and the next `merge-pick` pass starts it. An install with no webhook can
+  [observe the waits instead](https://archon.diy/guides/workflow-triggers/#without-a-webhook)
+  from `archon workflow wake --watch`.
 - **A run-ended or asks-settled binding** is a whole file: `archon trigger add <file>`
   registers it, and `archon trigger check` lists the registered ones with any problem.
 
