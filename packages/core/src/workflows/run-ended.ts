@@ -1,7 +1,8 @@
 /**
  * Run-ended bindings: a trigger file in `ARCHON_HOME/triggers/` with `on.runEnded` starts
  * its binding when a run of the named workflow completes with the named outcome on an
- * item, on that item or, with `linked`, on the items linked to it. The receipts built
+ * item, on that item or, with `linked`, on the items linked to it (with `linked.items`,
+ * only those of them the ended run names in its result). The receipts built
  * here are written by the write that completes the run, so a start exists exactly when
  * the end does, and then go through the one start path: preparation, admission, capacity
  * and the item. A linked start is matched here and resolved by that write, which alone
@@ -26,12 +27,18 @@ import {
   type AsksSettledTrigger,
   type LinkedRunEndedStart,
   type ResourceStartBindingIntent,
+  type RunEndedLinked,
   type RunEndedTrigger,
   type SourceReceiptAcceptance,
   type SourceReceiptInput,
   type TriggerConfig,
 } from '@archon/workflows/schemas/resource-start';
-import type { WorkflowItem, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import {
+  ITEM_KEY_MAX_LENGTH,
+  itemKeySchema,
+  type WorkflowItem,
+  type WorkflowRun,
+} from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowDeps } from '@archon/workflows/deps';
 import { declaredOutcome, outcomeValues } from '@archon/workflows/completed-outcome';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
@@ -194,6 +201,8 @@ export type MappedSources =
       inputs: Readonly<Record<string, JsonValue>>;
       result: JsonValue | undefined;
       itemKey?: string;
+      /** The started item's own entry of `linked.items`, for a start that names its items. */
+      entry?: JsonValue;
       answers?: JsonValue;
       itemAnswers?: ItemAnswers;
     }
@@ -236,9 +245,19 @@ function mappedValue(
   if ('item' in source)
     return from.itemKey === undefined ? 'there is no item key to read' : { value: from.itemKey };
   if ('input' in source) return { value: from.inputs[source.input] };
-  const value =
-    from.result === undefined ? undefined : resolveJsonPointer(from.result, source.result);
-  return value === undefined ? `result pointer '${source.result}' did not resolve` : { value };
+  // `{entry}` parses only in a linked run-ended binding with `items`, which passes the entry.
+  if ('entry' in source) return pointed(from.entry, source.entry, 'entry');
+  return pointed(from.result, source.result, 'result');
+}
+
+/** What `pointer` names in `from`, or why it names nothing. */
+function pointed(
+  from: JsonValue | undefined,
+  pointer: string,
+  what: 'entry' | 'result'
+): { value: JsonValue } | string {
+  const value = from === undefined ? undefined : resolveJsonPointer(from, pointer);
+  return value === undefined ? `${what} pointer '${pointer}' did not resolve` : { value };
 }
 
 export interface RunEndedStartsDependencies {
@@ -271,7 +290,7 @@ export interface RunEndedStartsDependencies {
  * gets its own receipt, keyed by the binding's source and the ended run, so a replayed
  * completion could never start it twice even if it reached the store. A match with
  * `linked` becomes a linked start, which the completing write turns into a receipt on
- * each item linked to this one.
+ * each item linked to this one, or with `linked.items` on each of those the run named.
  */
 export function createRunEndedStarts(
   dependencies: RunEndedStartsDependencies
@@ -294,41 +313,76 @@ export function createRunEndedStarts(
     let answers: Promise<ItemAnswers> | undefined;
     const answersOnItem = (): Promise<ItemAnswers> =>
       (answers ??= dependencies.listItemAsks(item.id).then(itemAnswers));
+    const now = dependencies.now?.() ?? new Date();
     for (const candidate of candidates) {
-      const acceptance = await matchedReceipt(candidate, ended, item, dependencies, {
+      if (!(await bindingMatches(candidate, ended, item, dependencies))) continue;
+      const start = await matchedStart(candidate, ended, item, now, {
         endedCheckout,
         answersOnItem,
       });
-      if (!acceptance) continue;
-      const link = candidate.runEnded.linked;
-      if (link) linked.push({ link, endedRunId: run.id, endedItemId: item.id, acceptance });
-      else receipts.push(acceptance);
+      if (start && 'receipt' in start) receipts.push(start.receipt);
+      else if (start) linked.push(start.linked);
     }
     return { receipts, linked };
   };
 }
 
 /**
- * The receipt one binding writes for the end of `ended` on `item`, or undefined when the
- * binding is not about this end. Its problems throw naming the file.
+ * What a matched binding causes: a receipt on the ended run's item, a linked start for
+ * the completing write to resolve, or nothing when the run names no items to start.
  */
-async function matchedReceipt(
+async function matchedStart(
   candidate: RunEndedBinding,
   ended: RunEndedFacts,
   item: WorkflowItem,
-  dependencies: RunEndedStartsDependencies,
+  now: Date,
   read: {
     endedCheckout: () => Promise<EndedCheckout>;
     answersOnItem: () => Promise<ItemAnswers>;
   }
-): Promise<SourceReceiptAcceptance | undefined> {
+): Promise<{ receipt: SourceReceiptAcceptance } | { linked: LinkedRunEndedStart } | undefined> {
+  const link = candidate.runEnded.linked;
+  if (link?.items !== undefined) {
+    const named = namedLinkedStart(candidate, { ...link, items: link.items }, ended, item, now);
+    if ('refused' in named) return { receipt: named.refused };
+    return named.named.length > 0 ? { linked: named } : undefined;
+  }
+  const acceptance = await endedReceipt(candidate, ended, item, now, read);
+  return link
+    ? { linked: { link, endedRunId: ended.run.id, endedItemId: item.id, acceptance } }
+    : { receipt: acceptance };
+}
+
+/**
+ * Whether one binding is about the end of `ended` on `item`. Its problems throw naming
+ * the file.
+ */
+async function bindingMatches(
+  candidate: RunEndedBinding,
+  ended: RunEndedFacts,
+  item: WorkflowItem,
+  dependencies: RunEndedStartsDependencies
+): Promise<boolean> {
   // A binding that launches in another project is not about this item, even when a
   // workflow there has the same name.
-  if ((await bindingProjectKey(candidate, dependencies)) !== item.projectKey) return undefined;
+  if ((await bindingProjectKey(candidate, dependencies)) !== item.projectKey) return false;
   const problems = runEndedBindingProblems(candidate.runEnded, ended);
   if (problems.length > 0)
     throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
-  if (candidate.runEnded.outcome !== ended.outcome.value) return undefined;
+  return candidate.runEnded.outcome === ended.outcome.value;
+}
+
+/** The receipt a matched binding writes for the end of `ended` on `item`. */
+async function endedReceipt(
+  candidate: RunEndedBinding,
+  ended: RunEndedFacts,
+  item: WorkflowItem,
+  now: Date,
+  read: {
+    endedCheckout: () => Promise<EndedCheckout>;
+    answersOnItem: () => Promise<ItemAnswers>;
+  }
+): Promise<SourceReceiptAcceptance> {
   const readsAnswers = Object.values(candidate.runEnded.inputs ?? {}).some(readsItemAnswers);
   return bindingReceipt(
     candidate,
@@ -339,8 +393,83 @@ async function matchedReceipt(
       ...(readsAnswers ? { itemAnswers: await read.answersOnItem() } : {}),
     }),
     candidate.runEnded.checkout === undefined ? undefined : await read.endedCheckout(),
-    dependencies.now?.() ?? new Date()
+    now
   );
+}
+
+/**
+ * The linked start of a matched binding with `linked.items`: one receipt per item the run
+ * names, with the inputs its own entry maps, and the refusal the store writes on the ended
+ * run's item instead when the named item holds no such link. A list that cannot be read
+ * refuses the binding on the ended run's item and starts nothing: falling back to every
+ * holder would start items the run did not name.
+ */
+function namedLinkedStart(
+  candidate: RunEndedBinding,
+  link: RunEndedLinked & { items: string },
+  ended: RunEndedFacts,
+  item: WorkflowItem,
+  now: Date
+): Extract<LinkedRunEndedStart, { named: unknown }> | { refused: SourceReceiptAcceptance } {
+  const sourceActor = runEndedActor(ended);
+  const refusal = (deliveryId: string, missing: string): SourceReceiptAcceptance =>
+    bindingReceipt(
+      candidate,
+      { deliveryId, sourceActor, itemKey: item.key },
+      { missing },
+      undefined,
+      now
+    );
+  const entries = linkedEntries(ended.result, link.items);
+  if (typeof entries === 'string')
+    return { refused: refusal(ended.run.id, `linked.items '${link.items}' ${entries}`) };
+  return {
+    link,
+    endedRunId: ended.run.id,
+    endedItemId: item.id,
+    named: entries.map(({ key, entry }) => ({
+      key,
+      // The store sets the delivery id from the holder it finds for `key`.
+      acceptance: bindingReceipt(
+        candidate,
+        { deliveryId: ended.run.id, sourceActor, itemKey: key },
+        mappedInputs(candidate.runEnded.inputs, { ...ended, itemKey: item.key, entry }),
+        undefined,
+        now
+      ),
+      unlinked: refusal(
+        `${ended.run.id}:unlinked:${key}`,
+        `item '${key}' is named at linked.items '${link.items}' but holds no active ${link.kind} link (holder: ${link.holder}) to '${item.key}'`
+      ),
+    })),
+  };
+}
+
+/**
+ * The entries of the list `pointer` holds in the run's result, each with its item key: an
+ * entry is the key itself or an object with a string `key`. Or why the list cannot be read.
+ */
+function linkedEntries(
+  result: JsonValue | undefined,
+  pointer: string
+): { key: string; entry: JsonValue }[] | string {
+  const list = result === undefined ? undefined : resolveJsonPointer(result, pointer);
+  if (list === undefined) return 'did not resolve';
+  if (!Array.isArray(list)) return 'is not a list';
+  const entries: { key: string; entry: JsonValue }[] = [];
+  for (const [index, entry] of list.entries()) {
+    const key =
+      typeof entry === 'string'
+        ? entry
+        : entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+          ? entry.key
+          : undefined;
+    if (typeof key !== 'string' || !itemKeySchema.safeParse(key).success)
+      return `entry ${String(index)} names no item key: it must be a key or an object with a string 'key' of 1 to ${String(ITEM_KEY_MAX_LENGTH)} characters`;
+    if (entries.some(other => other.key === key)) return `names item '${key}' more than once`;
+    entries.push({ key, entry });
+  }
+  return entries;
 }
 
 /** The source actor of a start a run's end caused: the run, and its outcome when it has one. */
@@ -550,13 +679,15 @@ export async function runEndedTriggerCheck(
     // twice; a path not registered yet is a project of its own.
     const project = (await bindingProjectKey(candidate, deps)) ?? binding.launch.cwd;
     // A linked binding starts the stage on other items, so it never collides with a
-    // same-item one, nor with a linked one of another kind or end.
+    // same-item one, nor with a linked one of another kind or end. Which items it names
+    // does not part two files: both start the stage over the same link.
+    const link = runEnded.linked;
     const stage = JSON.stringify([
       project,
       runEnded.workflowName,
       runEnded.outcome,
       binding.launch.workflowName,
-      runEnded.linked ?? null,
+      link ? { kind: link.kind, holder: link.holder } : null,
     ]);
     stages.set(stage, [...(stages.get(stage) ?? []), index]);
     const found = await runEndedBindingCheck(candidate, deps);

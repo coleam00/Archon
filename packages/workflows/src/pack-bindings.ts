@@ -8,11 +8,12 @@
  * reads (a timer or fire-only binding), an event field is read only by an event binding, the
  * met wait only by an event binding with `wake`, a
  * part of the run only by a run-ended or asks-settled binding, the ended run's item key
- * only by a run-ended binding, the settled answers only by an asks-settled binding, and
- * the item's answers by either, except a linked run-ended binding.
+ * only by a run-ended binding, a linked entry only by a linked run-ended binding with
+ * `items`, the settled answers only by an asks-settled binding, and the item's answers by
+ * either, except a linked run-ended binding.
  */
 import type { Fail } from './pack-settings';
-import { readsItemAnswers } from './schemas/binding-input-source';
+import { readsItemAnswers, readsLinkedEntry } from './schemas/binding-input-source';
 import {
   packBindingKind,
   packBindingNameSchema,
@@ -121,6 +122,10 @@ function runSourceProblem(
       ? undefined
       : 'reads the settled answers, but only an asks-settled binding has them';
   if (readsItemAnswers(input)) return itemAnswersProblem(binding, kind);
+  if (readsLinkedEntry(input))
+    return 'run_ended' in binding && binding.run_ended.linked?.items !== undefined
+      ? undefined
+      : 'reads a linked entry, but only a run-ended binding with linked.items has one per started item';
   if ('item' in input)
     return kind === 'run_ended'
       ? undefined
