@@ -23,6 +23,13 @@ import {
 // A command's stdout is its output (`archon … > file`, `| jq`, an agent reading
 // it); logs are diagnostics. Set before anything below can log.
 setLogDestination('stderr');
+// A Windows schedule tick's launcher (`triggers/windows-hidden-desktop.ts`). It runs before
+// any env loads: the job's wrapper inherits this process's environment, which must stay the
+// task's.
+if (process.argv[2] === '--internal-schedule-launch') {
+  const { runScheduleLaunch } = await import('./triggers/windows-hidden-desktop');
+  await withDrainedExit(async () => runScheduleLaunch(process.argv[3]));
+}
 const hasDetachedRunConfigHandoff = process.argv
   .slice(2)
   .includes('--internal-detached-run-config');
