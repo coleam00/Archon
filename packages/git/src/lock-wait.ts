@@ -32,30 +32,31 @@ function mayBeHeldLock(error: unknown): boolean {
  * Git releases a lock when its process exits, so this waits for that and tries again. It
  * never removes a lock. Only a step that converges when run again belongs here: a
  * failure that is not contention is retried too, so it is reported up to `budgetMs`
- * later, with the attempt count and the original error as its cause.
+ * after the step first started, with the attempt count and the original error as cause.
  */
 export async function waitOutGitLocks<T>(
   step: () => Promise<T>,
   context: { event: string; path: string },
   budgetMs = LOCK_WAIT_MS
 ): Promise<T> {
-  let firstFailureAt: number | undefined;
-  let delay = 200;
-  for (let attempt = 1; ; attempt++) {
+  const startedAt = Date.now();
+  for (let attempt = 1, delay = 200; ; attempt++, delay = Math.min(delay * 2, 2_000)) {
     try {
       return await step();
     } catch (error) {
-      if (!mayBeHeldLock(error)) throw error;
-      firstFailureAt ??= Date.now();
-      if (Date.now() - firstFailureAt + delay > budgetMs) {
-        if (attempt === 1) throw error;
-        getLog().warn({ err: error, ...context, attempts: attempt }, `${context.event}_gave_up`);
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`${message} (after ${String(attempt)} attempts)`, { cause: error });
+      if (!mayBeHeldLock(error) || Date.now() - startedAt + delay > budgetMs) {
+        throw gaveUp(error, attempt, context);
       }
       getLog().debug({ err: error, ...context, attempt }, `${context.event}_retry`);
       await new Promise(resolve => setTimeout(resolve, delay));
-      delay = Math.min(delay * 2, 2_000);
     }
   }
+}
+
+/** The error a step that stopped retrying reports: unchanged when it ran once. */
+function gaveUp(error: unknown, attempts: number, context: { event: string; path: string }) {
+  if (attempts === 1) return error;
+  getLog().warn({ err: error, ...context, attempts }, `${context.event}_gave_up`);
+  const message = error instanceof Error ? error.message : String(error);
+  return new Error(`${message} (after ${String(attempts)} attempts)`, { cause: error });
 }
