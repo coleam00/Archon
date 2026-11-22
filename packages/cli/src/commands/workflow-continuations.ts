@@ -426,6 +426,36 @@ async function reportPassError(
   }
 }
 
+/**
+ * One wake pass, reported as one result: wake the due continuations, then drain this
+ * install's hosts. Continuations go first so a paused run that is due takes a freed slot
+ * before a queued new start does, as admission orders them everywhere else. The drain
+ * still runs when the continuation scan throws, so a start whose admitter died waits one
+ * pass at most.
+ */
+async function wakePass(host: WorkflowHost, json: boolean): Promise<boolean> {
+  const cleanups: (() => Promise<void>)[] = [];
+  let settled: SettledOutcome[] | { error: unknown };
+  try {
+    const outcomes = await wakeDueWorkflowContinuations(
+      host.deps.store,
+      new Date(),
+      (run, cursor) => admit(host, run, cursor, cleanup => cleanups.push(cleanup))
+    );
+    settled = await Promise.all(outcomes.map(settle));
+  } catch (error) {
+    settled = { error };
+  } finally {
+    await Promise.all(cleanups.map(cleanup => cleanup()));
+  }
+  const drainErrors = await drainPass(host);
+  if (!Array.isArray(settled)) {
+    await reportPassError(settled.error, drainErrors, json);
+    return false;
+  }
+  return report('wake', settled, json, undefined, drainErrors);
+}
+
 async function wake(
   host: WorkflowHost,
   args: string[],
@@ -449,25 +479,7 @@ async function wake(
       // Checked before every pass, so an update during the sleep never gets
       // another pass on the old engine.
       if (await engineChanged(loaded, json)) return WAKE_ENGINE_CHANGED_EXIT;
-      // The same pass admits starts waiting on this install's hosts, so one whose admitter
-      // died (a run end, or an answer, that crashed after its commit) waits one pass at most.
-      const drainErrors = await drainPass(host);
-      const cleanups: (() => Promise<void>)[] = [];
-      try {
-        const outcomes = await wakeDueWorkflowContinuations(
-          host.deps.store,
-          new Date(),
-          (run, cursor) => admit(host, run, cursor, cleanup => cleanups.push(cleanup))
-        );
-        const settled = await Promise.all(outcomes.map(settle));
-        const passOk = await report('wake', settled, json, undefined, drainErrors);
-        ok = passOk && ok;
-      } catch (error) {
-        ok = false;
-        await reportPassError(error, drainErrors, json);
-      } finally {
-        await Promise.all(cleanups.map(cleanup => cleanup()));
-      }
+      ok = (await wakePass(host, json)) && ok;
       if (!values.watch || stopped) break;
       await new Promise<void>(resolve => {
         const timer = setTimeout(resolve, 5_000);
