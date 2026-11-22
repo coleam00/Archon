@@ -869,15 +869,19 @@ jobs:
 
   # A failed scheduled run leaves one open issue naming the failed jobs and their failing tests;
   # a later failure comments on it. Outside `test-suite`'s needs, so the aggregate never judges it.
+  # The event gate is on the step, not the job: a skipped job keeps a pull request run from
+  # proving its merge (`proofFromPullRequestRun`), so on every other event the job runs and
+  # succeeds with nothing to do.
   report-scheduled-failure:
     needs: test-suite
-    if: ${{ always() && github.event_name == 'schedule' && needs.test-suite.result == 'failure' }}
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
       issues: write
     steps:
       - name: Open or comment on the scheduled failure issue
+        if: github.event_name == 'schedule' && needs.test-suite.result == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

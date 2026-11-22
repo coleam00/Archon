@@ -783,6 +783,21 @@ function gitIn(cwd: string, ...args: string[]): string {
 }
 
 describe('a push proven by its pull request run', () => {
+  /**
+   * A pull request run proves its push only when every job concluded `success`, so a job that
+   * skips for the pull request's event, rather than for a `changes` output, makes every merge
+   * rerun the suite on push. An event gate belongs on a step.
+   */
+  test('no job in test.yml is gated on the event', () => {
+    const workflow = Bun.YAML.parse(
+      readFileSync(resolve(import.meta.dir, '../.github/workflows/test.yml'), 'utf8')
+    ) as { jobs: Record<string, { if?: unknown }> };
+    const eventGated = Object.entries(workflow.jobs)
+      .filter(([, job]) => String(job.if ?? '').includes('github.event_name'))
+      .map(([id]) => id);
+    expect(eventGated).toEqual([]);
+  });
+
   const PUSH = { head: 'squash-commit' };
   const PR_BASE = 'pr-base';
   const PR_HEAD = 'pr-head';
