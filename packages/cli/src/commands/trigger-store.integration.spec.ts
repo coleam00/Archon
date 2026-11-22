@@ -888,7 +888,9 @@ test('trigger list names the run limit on a receipt whose queued start only the 
     'limited'
   );
   await host.deps.store.acceptStartReceipt(accepted);
-  // The in-memory store keeps no run limit; stand in for one with a start queued under it.
+  // The in-memory store keeps no run limit; stand in for one with a start queued under it,
+  // or admitted by a drain after the limit was read (`admittedSince`).
+  let admittedSince = false;
   const read = host.deps.store.getStartReceipt.bind(host.deps.store);
   host.deps.store.getStartReceipt = async id => {
     const receipt = await read(id);
@@ -897,21 +899,34 @@ test('trigger list names the run limit on a receipt whose queued start only the 
         ...receipt,
         bindings: receipt.bindings.map(binding => ({
           ...binding,
-          requestStatus: 'queued' as const,
-          disposition: {
-            status: 'queued' as const,
-            requestId: 'queued-request',
-            blocker: { kind: 'run' as const, id: 'holder' },
-          },
+          ...(admittedSince
+            ? {
+                requestStatus: 'admitted' as const,
+                disposition: {
+                  status: 'admitted' as const,
+                  requestId: 'queued-request',
+                  runId: 'queued-request',
+                },
+              }
+            : {
+                requestStatus: 'queued' as const,
+                disposition: {
+                  status: 'queued' as const,
+                  requestId: 'queued-request',
+                  blocker: { kind: 'run' as const, id: 'holder' },
+                },
+              }),
         })),
       }
     );
   };
-  for (const [waiting, listed] of [
-    [['queued-request'], { limit: 1, live: 1 }],
-    [['another-request'], null],
+  for (const [waiting, admitted, listed] of [
+    [['queued-request'], false, { limit: 1, live: 1 }],
+    [['another-request'], false, null],
+    [['queued-request'], true, null],
   ] as const) {
     host.deps.store.getRunLimit = async () => ({ limit: 1, live: 1, waiting });
+    admittedSince = admitted;
     const stdout = spyOn(process.stdout, 'write').mockImplementation(((
       _chunk: unknown,
       callback?: () => void

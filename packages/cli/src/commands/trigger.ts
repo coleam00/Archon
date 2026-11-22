@@ -164,8 +164,11 @@ async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise
               forgeRefusal,
             })),
           hold: hold && bindings.some(heldBinding) ? hold : null,
-          runLimit: bindings.some(({ disposition }) =>
-            runLimit?.waiting.includes(disposition?.requestId ?? '')
+          // The limit is read before the receipt, so a start a drain admitted in between is
+          // still in `waiting`; only one that is still queued waits for it.
+          runLimit: bindings.some(
+            ({ requestStatus, disposition }) =>
+              requestStatus === 'queued' && runLimit?.waiting.includes(disposition?.requestId ?? '')
           )
             ? runLimit && { limit: runLimit.limit, live: runLimit.live }
             : null,
