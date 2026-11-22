@@ -15,7 +15,7 @@ sidebar:
 
 Install Archon and add a provider; see the [Quickstart](/getting-started/quick-start/). From a source checkout, run `bun run cli` in the repository, or `bun link` inside `packages/cli` to put `archon` on your PATH; see [Installation](/getting-started/installation/#from-source).
 
-The `workflow` subcommands, except `attention`, `test`, `wake` and `signal`, plus `complete`, `validate` and `setup --scope project`, run inside a git repository; a subdirectory resolves to the repository root. A non-git directory also works when it is a registered [folder project](/guides/multi-repo-projects/), or on first use with `--folder`, which registers it and runs in place. Every other command works from any directory. See [Working directory](#working-directory) for how the project is resolved.
+The `workflow` subcommands, except `attention`, `notice`, `test`, `wake`, `signal` and the `--item-of` forms of `runs`, `link`, `merged` and `landing`, plus `complete`, `validate` and `setup --scope project`, run inside a git repository; a subdirectory resolves to the repository root. A non-git directory also works when it is a registered [folder project](/guides/multi-repo-projects/), or on first use with `--folder`, which registers it and runs in place. Every other command works from any directory. See [Working directory](#working-directory) for how the project is resolved.
 
 ## Setup and maintenance
 
@@ -683,7 +683,7 @@ While the [install hold](#hold) is set, the waiting section says so and lists fi
 
 `--json` prints `{ item, runs, queued, skipped, hold, held, runLimit, waits, questions, answers, links, merged, landing, degraded }`: `hold` is the install hold (`{ setBy, setAt }`) or null, and `held` lists the item's held trigger starts as `{ receiptId, bindingId, workflow, receivedAt }`, empty while no hold is set; `runLimit` is the [run limit](/reference/configuration/#run-limit) with how many runs count against it now, `{ limit, live }`, full when `live` reaches `limit`, or null when none is set; `item` is `{ id, projectKey, key }`; each run is `{ id, workflow, status, outcome, startedAt, completedAt, cause, awaitingExecution, heldBehind, operatorPause, spend }`, where `awaitingExecution` is null unless the run's start is admitted and no executor has claimed it, and then `{ requestId, hostId, state, executor }`: `state` is `starting` when its executor answers as the run's owner, `unowned` when nothing can be running it (its hand-off started nothing, or the process it was handed to is gone from this host; run it once with `archon trigger execute <requestId> --host <hostId>`), or `unknown` when this process cannot tell, and `executor` is the process the start was recorded as handed to, `{ host, pid, uid }`, or null; `spend` is `{ usd, inputTokens, outputTokens }` as recorded on the run, each null when the run recorded none, and `operatorPause` is null, or `{ state, requested, pausedAt }` for a [pause](#workflow-pause): `state` is `requested` while the run finishes its running nodes and `paused` once it stopped, `requested` is `{ at, via, by, fromRun }`; each queued start is `{ requestId, workflow, resource, hostId, queuedAt, ahead, heldBehind }`, where `ahead` is read when the item is read and `workflow` is null when the stored launch does not read; each skipped start is `{ requestId, workflow, resource, heldBehind }`. `heldBehind` is null, or the run of the same workflow on the item that the start waits behind, was skipped for, or was refused for (a cancelled `--no-wait` start keeps it after that run ends): `{ runId, workflow, status, owner }`, where `owner` is what this process observes about that run's execution owner while it is running (`reachable`, `unreachable` when it is gone and only `workflow resume` or `workflow abandon` moves it, or `unknown`), and null otherwise. A queued start with a null `heldBehind` waits for capacity or its checkout; each question is the attention queue item `workflow attention --json` lists; each answer has `kind` `attention` (with `answer`, `by`, `fromRun`) or `gate` (with `decision`, and `text` for its comment or rejection reason), and `runId`, `node`, `occurrence`, `at`, `via`, null where the row does not record them; or `kind` `ruling`, with `id`, `text`, `at`, `via`, `by`, `fromRun` and `withdrawn` (null, or `{ at, via, by, fromRun }`), and no run. Each link is `{ id, kind, direction, other, at, via, by, fromRun, ended }` in recording order: `direction` is `outgoing` when this item is the one that depends on, is part of, or is a duplicate of `other`, and `incoming` when `other` points at this item; `other` is `{ id, projectKey, key }`; `ended` is null while the link is active, or `{ at, via, by, fromRun }`. An [ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) a completed run left reads as `kind` `ask`, with its `ref`, the `question` it asked, `answer` (null for a withdrawal), `chosen` (the chosen option's `id` and what it `does`, or null), `withdrawn`, `by` and `fromRun`, and `runId` naming the run that left it; `kind` `asks_settled` records that the last open ask of that run's set closed, with `answered` and `withdrawn` counts, at the time of that close; a set with an ask row that could not be read does not settle, and `degraded` names its run. Both are read from the item's asks, so they stay after the run that left them is deleted. Open asks on the item are among its questions. `merged` is the merge [recorded on the item](#workflow-merged), `{ change, commit, at, recordedAt, via, fromRun }`, or null. `landing` is the branch a fresh run on the item is cut from and proposes against, `{ branch, from }`, where `from` is `{ kind: "own" }` for the item's own [landing branch](#workflow-landing) or `{ kind: "part_of", item }` for that of the nearest item it is part of; null when neither records one. The read does not check that the branch is on the remote; a run does when it starts. `degraded` names each part that could not be read: a run in the item's tree, one of its own runs or a paused child (`reason: "run_unreadable"`, `runId`), a ruling (`reason: "ruling_unreadable"`, `rulingId`), a link (`reason: "link_unreadable"`, `linkId`), the merge (`reason: "merge_unreadable"`, `itemId`), or where the item lands (`reason: "landing_unresolved"`, `message`: a landing or link row on the way could not be read, or two items it is part of at the same distance land on different branches; a run on the item is refused for the same reason); the rest of the item still reads. An item named with no run yet reads with empty sections but for its queued and skipped starts, rulings and links; a key nothing has named exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "item": "<key>" }`.
 
-`--item-of <run-id>` reads the item a run belongs to, the item of its top-level run when it is a `workflow:` sub-run, in whichever project the run is. It prints the same read as `--item`. A run on no item, or one the store does not know, exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "run": "<run-id>" }`. It is the host command behind the `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to) export.
+`--item-of <run-id>` reads the item a run belongs to, the item of its top-level run when it is a `workflow:` sub-run, in whichever project the run is, from any directory. It prints the same read as `--item`. A run on no item, or one the store does not know, exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "run": "<run-id>" }`. It is the host command behind the `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to) export.
 
 With the SQL store, the recent-run list rejects the entire result if a returned row or a
 status-count group contains an unsupported persisted status; it never returns a partial
@@ -1416,6 +1416,7 @@ archon workflow link --end <link-id>
 | Flag | Effect |
 | --- | --- |
 | `--item <key>` | The item the link is from, in the project the working directory belongs to, as [`runs --item`](#workflow-runs) finds it |
+| `--item-of <run-id>` | In place of `--item`: the item the run is on (its root run's, for a `workflow:` child), in that item's project whatever the working directory. With `--to` the link is from it; with `--from <key>` it is to it, from that item of the same project |
 | `--kind <kind>` | `depends_on`, `part_of` or `duplicate_of` |
 | `--to <key>` | The item the link points at, in the same project |
 | `--end <link-id>` | End a link instead. The link stays in both items' reads with `ended` set; a link is ended once. Under [`--chat-project-id`](#global-options) the link must be from an item of the selected project; without it the id alone names the link, in any project |
@@ -1431,7 +1432,8 @@ prints the link's id. It exits 1 for a kind outside the three (`error: "unknown_
 a link from an item to itself (`error: "self_link"`), for a directory with no registered
 project, for a link id that names no link (`error: "not_found"`), for one already ended
 (`error: "already_ended"`), and under `--chat-project-id` for one from another project's
-item (`error: "outside_project"`), which stays as it was. Links need the database store.
+item (`error: "outside_project"`), which stays as it was. With `--item-of` it exits 1 for a
+run on no item (`error: "no_item"`) before writing anything. Links need the database store.
 
 ### `workflow items`
 
@@ -1481,6 +1483,7 @@ archon workflow merged --item issue-42 --change https://github.com/acme/web/pull
 | Flag | Effect |
 | --- | --- |
 | `--item <key>` | The item whose change merged, in the project the working directory belongs to |
+| `--item-of <run-id>` | In place of `--item`: the item the run is on (its root run's, for a `workflow:` child), in that item's project whatever the working directory |
 | `--change <ref>` | The merged change as the forge names it, such as its pull request URL; 1 to 2048 characters, never parsed |
 | `--at <ISO>` | When the forge says it merged, with an offset |
 | `--commit <sha>` | The merge commit, a full lowercase hash, when the forge reported one |
@@ -1489,8 +1492,9 @@ archon workflow merged --item issue-42 --change https://github.com/acme/web/pull
 The fact is recorded once. A second report keeps the first and prints it with
 `recorded: false`, so a caller can see a different `change`. Called from inside a workflow
 node, it records the node's run and node as `fromRun`. It exits 1 for a key no run or ruling
-has named in the project (`error: "not_found"`: a merge never creates an item), a malformed
-flag, or a directory with no registered project. Every later item read carries the fact as
+has named in the project (`error: "not_found"`: a merge never creates an item), a run on no
+item under `--item-of` (`error: "no_item"`), a malformed flag, or a directory with no
+registered project. Every later item read carries the fact as
 `merged`. It needs the database store.
 
 ### `workflow landing`
@@ -1509,6 +1513,7 @@ archon workflow link --item issue-42 --kind part_of --to WO-12
 | Flag | Effect |
 | --- | --- |
 | `--item <key>` | The item, in the project the working directory belongs to. A key nothing has named yet writes the item |
+| `--item-of <run-id>` | In place of `--item`: the item the run is on (its root run's, for a `workflow:` child), in that item's project whatever the working directory. A run on no item exits 1 with `error: "no_item"` |
 | `--branch <name>` | The branch it lands on; must be a valid branch name |
 | `--json` | Print `{ branch, recordedAt, fromRun }`, or `{ ok: false, error }` |
 
