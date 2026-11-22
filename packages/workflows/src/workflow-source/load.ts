@@ -7,6 +7,7 @@ import {
   WORKFLOW_SOURCE_METADATA_KEY,
   type WorkflowSourceConfig,
 } from '../schemas/workflow-run';
+import type { BaseRunDefinitions, RunDefinitions } from '../schemas/run-metadata';
 import { sourceReadError, WorkflowSourceIntegrityError } from './integrity';
 import {
   digestEntries,
@@ -15,7 +16,7 @@ import {
   type DigestEntry,
   type WorkflowSourceCapture,
 } from './manifest';
-import type { InstalledPacksRoot, WorkflowSourceRoots } from './roots';
+import { PROJECT_SCOPE_DIR, type InstalledPacksRoot, type WorkflowSourceRoots } from './roots';
 import { isDirectory } from './tree';
 import { getLog } from './log';
 
@@ -179,6 +180,63 @@ export async function resolveChildInstalledPacks(
 }
 
 /**
+ * Where a run reads its project `.archon/config.yaml`: the project scope of its capture
+ * when its definitions came from the base branch (the capture holds the config the run
+ * started with, the operator's uncommitted edits included), else `cwd`.
+ */
+export function runProjectConfigRoot(
+  metadata: Record<string, unknown> | undefined,
+  cwd: string
+): string {
+  const state = readWorkflowSourceState(metadata);
+  return state.kind === 'recorded' && state.record.definitions?.from === 'base'
+    ? join(state.record.root, PROJECT_SCOPE_DIR)
+    : cwd;
+}
+
+/**
+ * Where a run prepared with these definitions reads its project `.archon/config.yaml`: the
+ * capture at `captureRoot` when they came from the base branch, else `cwd`.
+ */
+export function preparedSourceConfigRoot(
+  prepared: { anchor: { root: string }; definitions?: RunDefinitions } | undefined,
+  cwd: string
+): string {
+  return prepared?.definitions?.from === 'base'
+    ? join(prepared.anchor.root, PROJECT_SCOPE_DIR)
+    : cwd;
+}
+
+/**
+ * What a not-yet-started `workflow:` child of a parent with base-branch definitions starts
+ * from: the project scope of the parent's verified capture, which the child lays its
+ * parent's checkout changes on (`withChildDefinitions`). Undefined for any other parent,
+ * whose child captures from the recorded origin ({@link resolveChildDiscoveryRoot}).
+ */
+export async function resolveChildBaseDefinitions(
+  metadata: Record<string, unknown> | undefined
+): Promise<
+  | {
+      projectRoot: string;
+      origin: string;
+      definitions: BaseRunDefinitions;
+      commandFolder: string | undefined;
+    }
+  | undefined
+> {
+  const state = readWorkflowSourceState(metadata);
+  if (state.kind !== 'recorded' || state.record.definitions?.from !== 'base') return undefined;
+  const capture = await resolveRunSourceCapture(metadata);
+  if (!capture) return undefined;
+  return {
+    projectRoot: join(capture.anchor.root, PROJECT_SCOPE_DIR),
+    origin: state.record.origin,
+    definitions: state.record.definitions,
+    commandFolder: capture.anchor.config.command_folder,
+  };
+}
+
+/**
  * The AUTHORING directory a run was captured from.
  *
  * Deliberately different from {@link resolveRunSourceCapture}, and the difference is the
@@ -191,6 +249,11 @@ export async function resolveChildInstalledPacks(
  * re-drives that child. Resolving it from the parent's frozen copy would re-drive the OLD
  * broken definition forever, so the fix could never take. The child's own run captures at its own start, which is where its
  * determinism begins.
+ *
+ * A parent whose definitions came from the base branch has no single live authoring
+ * directory: its origin is the operator's checkout, without the base layer. Its child
+ * starts from the parent's capture with the parent's execution checkout changes on top
+ * ({@link resolveChildBaseDefinitions}).
  *
  * Returns `undefined` only for a historical parent with no source record. Once a parent
  * records an authoring directory, an unreadable record or unavailable directory fails

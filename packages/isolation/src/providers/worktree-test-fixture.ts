@@ -99,7 +99,7 @@ export const ranGit = (token: string): boolean => gitCalls().some(args => args.i
 
 export const syncResult = (
   branch = 'main',
-  mode: git.WorkspaceSyncMode = 'fast-forward'
+  mode: git.WorkspaceSyncMode = 'fetch-only'
 ): git.WorkspaceSyncResult => ({
   branch: git.toBranchName(branch),
   synced: true,

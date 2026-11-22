@@ -39,10 +39,9 @@ import {
   type WorkflowItem,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowDeps } from '@archon/workflows/deps';
 import { declaredOutcome, outcomeValues } from '@archon/workflows/completed-outcome';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { discoverBindingWorkflows, type BindingDefinitionsDeps } from './definition-source';
 import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
 import { getArchonHome } from '@archon/paths';
 import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
@@ -121,6 +120,51 @@ export async function readOnBindings(directory: string): Promise<OnBinding[]> {
     bindings.push(binding);
   }
   return bindings;
+}
+
+/**
+ * The hosts this install serves: every distinct `binding.hostId` named by a trigger file
+ * in `directory`, whatever its form (`on`, `schedule` or fire-only), in file-name order. A
+ * host known only from queued work in a shared store is another machine's, so it is never
+ * read from the store. A file that does not read is returned as a failure naming it, and
+ * the other files are still read: one broken file must not keep every other host waiting.
+ */
+export async function readTriggerFileHosts(
+  directory: string
+): Promise<{ hostIds: string[]; failures: TriggerFileError[] }> {
+  let names: string[];
+  try {
+    names = (await readdir(directory)).filter(name => name.endsWith('.json')).sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { hostIds: [], failures: [] };
+    throw error;
+  }
+  const hostIds = new Set<string>();
+  const failures: TriggerFileError[] = [];
+  for (const name of names) {
+    const file = join(directory, name);
+    let value: unknown;
+    try {
+      value = JSON.parse(await readFile(file, 'utf8')) as unknown;
+    } catch (error) {
+      failures.push(
+        new TriggerFileError(
+          `Trigger file ${file} is not readable JSON: ${(error as Error).message}`,
+          { cause: error }
+        )
+      );
+      continue;
+    }
+    const parsed = triggerConfigSchema.safeParse(value);
+    if (parsed.success) hostIds.add(parsed.data.binding.hostId);
+    else
+      failures.push(
+        new TriggerFileError(
+          `Trigger file ${file} is invalid: ${parsed.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`
+        )
+      );
+  }
+  return { hostIds: [...hostIds], failures };
 }
 
 /** Every run-ended binding in `directory`; any broken `on` file throws (see `readOnBindings`). */
@@ -601,13 +645,13 @@ export function declaredInputNames(workflow: Pick<ResolvedWorkflow, 'inputs' | '
  */
 export async function runEndedBindingCheck(
   { binding, runEnded }: RunEndedBinding,
-  deps: Pick<WorkflowDeps, 'loadConfig' | 'providers'>
+  deps: BindingDefinitionsDeps,
+  /** The run starting now whose end or asks may fire the binding; see `discoverBindingWorkflows`. */
+  launchRun?: Pick<WorkflowRun, 'metadata'>
 ): Promise<string[]> {
-  const discovered = await discoverWorkflowsWithConfig(
-    binding.launch.discoveryCwd ?? binding.launch.cwd,
-    deps.loadConfig,
-    deps.providers
-  );
+  const read = await discoverBindingWorkflows(binding.launch, deps, launchRun);
+  if ('refused' in read) return [read.refused];
+  const { discovered } = read;
   const workflows = discovered.workflows.map(found => found.workflow);
   const problems: string[] = [];
   // A completion matches the ended run's own name exactly, so this does too.
@@ -654,8 +698,7 @@ export async function runEndedBindingCheck(
  */
 export async function runEndedTriggerCheck(
   bindings: readonly RunEndedBinding[],
-  deps: Pick<WorkflowDeps, 'loadConfig' | 'providers'> &
-    Pick<RunEndedStartsDependencies, 'projectKeyOf'>
+  deps: BindingDefinitionsDeps & Pick<RunEndedStartsDependencies, 'projectKeyOf'>
 ): Promise<string[][]> {
   const problems: string[][] = [];
   const stages = new Map<string, number[]>();
@@ -708,7 +751,7 @@ export async function runEndedTriggerCheck(
  */
 export function createRunEndedPreflight(
   dependencies: Omit<RunEndedStartsDependencies, 'now' | 'endedCheckout' | 'listItemAsks'> &
-    Pick<WorkflowDeps, 'loadConfig' | 'providers'>
+    BindingDefinitionsDeps
 ): (run: WorkflowRun) => Promise<void> {
   return async run => {
     if (!run.item_id) return;
@@ -720,7 +763,8 @@ export function createRunEndedPreflight(
     if (!item) throw new Error(`Run '${run.id}' names item '${run.item_id}', which is missing`);
     for (const candidate of candidates) {
       if ((await bindingProjectKey(candidate, dependencies)) !== item.projectKey) continue;
-      const problems = await runEndedBindingCheck(candidate, dependencies);
+      // Checked against the definitions this run executes.
+      const problems = await runEndedBindingCheck(candidate, dependencies, run);
       if (problems.length > 0)
         throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
     }

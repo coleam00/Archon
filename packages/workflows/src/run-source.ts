@@ -20,6 +20,7 @@ import {
   type WorkflowRun,
   type WorkflowSourceMetadata,
   type WorkflowWithSource,
+  type RunDefinitions,
 } from './schemas';
 import { isContainerRun } from './schemas/workflow-run';
 import { CONTINUATION_RETRY_MS, executionClaim } from './store';
@@ -79,6 +80,8 @@ export interface PreparedWorkflowSource {
   anchor: WorkflowSourceAnchor;
   /** Roots to discover from — pass to `discoverWorkflowsWithConfig`. */
   roots: WorkflowSourceRoots;
+  /** Where the project definitions came from; recorded on the run beside the capture. */
+  definitions?: RunDefinitions;
 }
 
 /**
@@ -333,6 +336,7 @@ export function preparedWorkflowSourceRecord(
     source_config: prepared.anchor.config,
     file_count: prepared.manifest.file_count,
     byte_count: prepared.manifest.byte_count,
+    ...(prepared.definitions !== undefined ? { definitions: prepared.definitions } : {}),
   };
 }
 
@@ -365,6 +369,12 @@ export async function prepareWorkflowSource(
     runId?: string;
     /** Installed packs to freeze instead of the live installs; see `captureWorkflowSource`. */
     installedFrom?: InstalledPacksRoot;
+    /** The authoring directory to record, when `sourceRoot` is a temporary composition. */
+    origin?: string;
+    /** Freeze the project `.archon/config.yaml` too; see `captureWorkflowSource`. */
+    includeProjectConfig?: boolean;
+    /** Where the definitions came from, recorded on the run. */
+    definitions?: RunDefinitions;
   }
 ): Promise<PreparedWorkflowSource> {
   // Read the SOURCE's command policy, not the target's. A repo may point `commands.folder`
@@ -397,6 +407,8 @@ export async function prepareWorkflowSource(
     commandFolder: sourceConfig.command_folder,
     sourceConfig,
     ...(opts.installedFrom !== undefined ? { installedFrom: opts.installedFrom } : {}),
+    ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
+    ...(opts.includeProjectConfig ? { includeProjectConfig: true } : {}),
   });
   return {
     runId,
@@ -404,6 +416,7 @@ export async function prepareWorkflowSource(
     manifest: capture.manifest,
     anchor: capture.anchor,
     roots: capturedSourceRoots(capture.anchor),
+    ...(opts.definitions !== undefined ? { definitions: opts.definitions } : {}),
   };
 }
 

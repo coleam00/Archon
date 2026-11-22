@@ -317,8 +317,8 @@ export function requestedStartPoint(request: IsolationRequest): string | undefin
 
 /**
  * Create a worktree for a named branch. A branch that exists nowhere yet is cut from
- * the start point: the request's `fromBranch`, else the base on the remote, or the
- * local base when the repository has no remote. A branch that already exists, locally
+ * the start point: the request's `fromBranch`, else its `startCommit`, else the base on
+ * the remote, or the local base when the repository has no remote. A branch that already exists, locally
  * or on the remote, is checked out at its current head and never moved backwards: its
  * commits may exist nowhere else. Returns the cut-from commit (only for a branch cut
  * here) and whether the local branch was created here.
@@ -396,8 +396,10 @@ async function checkOutNewBranch(
   remote: WorktreeRemote
 ): Promise<{ cutFromCommit?: string; resolvedBaseBranch?: string; branchCreated: boolean }> {
   const fromBranch = requestedStartPoint(request);
+  const startCommit = request.workflowType === 'task' ? request.startCommit : undefined;
   const startPoint =
     fromBranch ??
+    startCommit?.commit ??
     (remote.kind === 'remote' ? `${remote.name}/${baseBranch}` : `refs/heads/${baseBranch}`);
 
   const localExists = await localBranchExists(repoPath, branchName);

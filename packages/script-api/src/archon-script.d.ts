@@ -2173,6 +2173,7 @@ declare module 'archon:script' {
     readonly held: ReadonlyArray<{
       readonly receiptId: string;
       readonly bindingId: string;
+      readonly hostId: string | null;
       readonly workflow: string | null;
       readonly receivedAt: string;
     }>;
@@ -2699,6 +2700,7 @@ declare module 'archon:script' {
       readonly held: ReadonlyArray<{
         readonly receiptId: string;
         readonly bindingId: string;
+        readonly hostId: string | null;
         readonly workflow: string | null;
         readonly receivedAt: string;
       }>;

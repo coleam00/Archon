@@ -260,15 +260,17 @@ Commands:
 Options:
   --chat-project-id <id>     Confine chat workflow commands to a registered project ID
   --cwd <path>               Override working directory (default: current directory)
-  --project <id|name>        Bind to a registered repository (see project list). Source/config come from --cwd;
-                             isolated execution uses the registered checkout. Use --no-worktree to execute in --cwd.
+  --project <id|name>        Bind to a registered repository (see project list). Definitions come from the base branch
+                             with --cwd's uncommitted changes on top; isolated execution uses the registered checkout.
+                             Use --no-worktree to execute in --cwd.
                              Cannot combine with ${RUN_PROJECT_CONFLICT_FLAGS.map(flag => `--${flag}`).join(', ')}.
   --branch, -b <name>        Create worktree for branch (or reuse existing)
   --from, --from-branch <name> Create new branch from specific start point
   --base-branch <name>       Initial repository registration only; omit to follow the remote default. Use --base for a run override.
   --base <branch>            Per-dispatch base override for epic slices (worktree cut-from + PR target)
-  --workflow-source <path>   Read the workflow, its commands and scripts from this checkout root
-                             (<path>/.archon/workflows) instead of --cwd (which stays the workspace the run acts on)
+  --workflow-source <path>   Read the workflow, its commands and scripts from this checkout root as it is
+                             (<path>/.archon/workflows), instead of the base branch with --cwd's uncommitted changes on top
+                             (--cwd stays the workspace the run acts on)
   --no-worktree              Run on branch directly without worktree isolation
   --folder                   Register the target directory (the project add path, else the current directory), with or without git, as a folder project; workflow run runs in place
   --container                Run a folder project in container isolation

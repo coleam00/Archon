@@ -206,7 +206,7 @@ export type HeldStart =
 /** A held `trigger` start on one item, as the item read lists it. */
 export type HeldItemStart = Pick<
   Extract<HeldStart, { kind: 'trigger' }>,
-  'receiptId' | 'bindingId' | 'workflow' | 'receivedAt'
+  'receiptId' | 'bindingId' | 'hostId' | 'workflow' | 'receivedAt'
 >;
 
 /** A binding preparation the install hold turned back: the binding is pending again. */

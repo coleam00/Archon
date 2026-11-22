@@ -53,6 +53,8 @@ const drain = mock<
   typeof import('@archon/core/workflows/resource-start-host').drainResourceStartHost
 >(async () => undefined);
 const realResourceStartHost = await import('@archon/core/workflows/resource-start-host');
+// Taken before the module is mocked: the mock replaces the namespace's binding too.
+const realDrain = realResourceStartHost.drainResourceStartHost;
 mock.module('@archon/core/workflows/resource-start-host', () => ({
   ...realResourceStartHost,
   drainResourceStartHost: drain,
@@ -104,7 +106,9 @@ beforeEach(() => {
   install.mockClear();
   remove.mockClear();
   drain.mockReset();
-  drain.mockResolvedValue(undefined);
+  // The real drain by default, so a pass's own drain of the install's hosts reaches the
+  // store; the observation tests stub it where they hand starts on.
+  drain.mockImplementation(realDrain);
 });
 
 test('empty wake succeeds and rejects fresh execution flags before scanning', async () => {
@@ -638,6 +642,7 @@ test('a host whose drain failed is drained again on the next pass, with no new o
       process.emit('SIGTERM');
       return [];
     });
+  drain.mockResolvedValue(undefined);
   drain.mockRejectedValueOnce(new Error('database unavailable'));
   try {
     expect(
@@ -756,5 +761,70 @@ test('an engine update stops observation too, while a resumed run is still runni
     ).toHaveLength(1);
   } finally {
     timer.mockRestore();
+  }
+});
+
+test('a pass drains the install hosts without waiting for a resumed run to finish', async () => {
+  // A trigger file names a host, so the pass drains it. The drain's first store read is the
+  // install hold; returning one ends the drain there.
+  const { mkdir, rm, writeFile } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const triggers = join(String(process.env.ARCHON_HOME), 'triggers');
+  await mkdir(triggers, { recursive: true });
+  await writeFile(
+    join(triggers, 'stage.json'),
+    JSON.stringify({
+      version: 1,
+      sourceInstanceId: 'stage',
+      binding: {
+        bindingId: 'stage',
+        bindingRevision: null,
+        hostId: 'factory',
+        runAsUserId: 'operator',
+        resource: 'build',
+        overlap: 'queue',
+        launch: {
+          cwd: '/project',
+          workflowName: 'build',
+          inputs: {},
+          isolation: { kind: 'in-place' },
+        },
+      },
+    })
+  );
+  const drained = mock(async () => ({ setBy: 'operator', setAt: '2026-11-22T00:00:00.000Z' }));
+  const drainingHost = {
+    ...host,
+    deps: { store: { getWorkflowRun: getRun, getInstallHold: drained } },
+  } as unknown as typeof host;
+  let finish: (result: { success: true; workflowRunId: string }) => void = () => undefined;
+  resume.mockImplementationOnce(async () => ({
+    kind: 'accepted',
+    run: makeTestWorkflowRun(),
+    settled: new Promise(resolve => {
+      finish = resolve;
+    }),
+  }));
+  scan.mockImplementationOnce(async (_store, _now, admit) => [
+    {
+      runId: 'run',
+      ...(await admit(makeTestWorkflowRun(), {
+        kind: 'wait',
+        pauseId: 'wait',
+        nodeId: 'hold',
+        resumeAt: '2026-08-24T11:00:00Z',
+      })),
+    },
+  ]);
+  try {
+    const pass = workflowContinuationCommand(drainingHost, 'wake', [], { json: true });
+    for (let tries = 0; drained.mock.calls.length === 0 && tries < 100; tries++)
+      await Bun.sleep(10);
+    // The resumed run has not settled, and the queued work was already tried.
+    expect(drained).toHaveBeenCalled();
+    finish({ success: true, workflowRunId: 'run' });
+    expect(await pass).toBe(0);
+  } finally {
+    await rm(triggers, { recursive: true, force: true });
   }
 });
