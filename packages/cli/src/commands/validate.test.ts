@@ -17,10 +17,10 @@ mock.module('@archon/workflows/workflow-discovery', () => ({
 const mockLoadRepoConfig = mock(() => Promise.resolve(null));
 const mockLoadConfig = mock(() =>
   Promise.resolve({
-    assistant: 'claude',
+    assistant: 'claude' as string | undefined,
     aliases: {},
     tiers: {},
-    assistants: { claude: {} },
+    assistants: { claude: {} } as Record<string, object>,
     envVars: undefined as Record<string, string> | undefined,
   })
 );
