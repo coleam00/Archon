@@ -632,11 +632,12 @@ const OPT_IN_MODES: ReadonlySet<Mode> = new Set([
 ]);
 
 /**
- * The whole suite on Windows runs for a push to `main` only. A push to `dev` runs the Windows
- * set (`full-matrix`) instead: on a slow runner the whole suite failed mostly on timing, not on
- * Windows behaviour (#5926). `main` keeps it because a release has no Windows test run of its
- * own. A pull request runs it when its change runs every job, so its run can still prove the
- * push; a dispatch runs it when its `windows-full-suite` input asks.
+ * A push runs the whole suite on Windows only on `main`. A push to `dev` runs the
+ * Windows set (`full-matrix`) instead: on a slow runner the whole suite failed mostly on timing,
+ * not on Windows behaviour (#5926). `main` keeps it because a release has no Windows test run of
+ * its own. `dev` gets it once a day from the schedule (`scheduleDecision`). A pull request runs
+ * it when its change runs every job, so its run can still prove the push; a dispatch runs it
+ * when its `windows-full-suite` input asks.
  */
 const WINDOWS_FULL_SUITE_REF = 'refs/heads/main';
 
@@ -652,6 +653,68 @@ export function dispatchDecision(mode: Mode, event: EventPayload): boolean {
   if (value === true || value === 'true') return true;
   if (value === undefined || value === false || value === 'false') return false;
   throw new Error(`The dispatch input ${mode} is ${JSON.stringify(value)}, not a boolean`);
+}
+
+/**
+ * The modes a scheduled run can turn on: the whole suite on Windows, and the pack checks, which
+ * `test-pack-windows` gates its steps on. Every other job stays off, so a schedule spends its
+ * Windows minutes on what no push to `dev` runs.
+ */
+const SCHEDULED_MODES: ReadonlySet<Mode> = new Set([
+  'windows-full-suite',
+  'pack-tests',
+  'pack-fixtures',
+]);
+
+export type ScheduleCoverage =
+  | { covered: true; evidence: string }
+  | { covered: false; reason: string };
+
+/**
+ * Whether a scheduled run already covered `head`, the `dev` commit this scheduled run checked
+ * out: a completed scheduled run of `test.yml` at that commit concluded `success` or `failure`.
+ * A failure counts, because the issue its run filed tracks it and rerunning an unchanged `dev`
+ * would only repeat it. Any other conclusion, such as `cancelled`, does not, so the next day
+ * tries again. This run is still in progress, so `status=completed` leaves it out.
+ *
+ * Any failure to read the runs is "not covered": an extra run costs minutes, a wrong skip hides
+ * a Windows break.
+ */
+export async function coverageFromScheduledRuns(
+  head: string,
+  get: GitHubGet
+): Promise<ScheduleCoverage> {
+  try {
+    const runs = list(
+      field(
+        await get(
+          `actions/workflows/${TEST_WORKFLOW}/runs?event=schedule&head_sha=${head}&status=completed`
+        ),
+        'workflow_runs',
+        'the run list'
+      ),
+      'workflow_runs'
+    );
+    for (const run of runs) {
+      const conclusion = field(run, 'conclusion', 'a run');
+      if (conclusion === 'success' || conclusion === 'failure') {
+        const url = text(field(run, 'html_url', 'a run'), 'html_url');
+        return {
+          covered: true,
+          evidence: `Scheduled run ${url} already covered ${head} (${conclusion}), so this run skips the whole Windows suite.`,
+        };
+      }
+    }
+    return { covered: false, reason: `no completed scheduled run covered ${head}` };
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error);
+    return { covered: false, reason: `could not check scheduled runs: ${cause}` };
+  }
+}
+
+/** A scheduled run's decision: the scheduled modes when `dev` moved since one covered it, nothing else. */
+export function scheduleDecision(mode: Mode, coverage: ScheduleCoverage): boolean {
+  return SCHEDULED_MODES.has(mode) && !coverage.covered;
 }
 
 function readMode(args: readonly string[]): Mode {
@@ -707,6 +770,18 @@ async function main(): Promise<void> {
   const event: EventPayload = JSON.parse(readFileSync(eventPath, 'utf8'));
   if (eventName === 'workflow_dispatch') {
     console.log(dispatchDecision(mode, event));
+    return;
+  }
+  if (eventName === 'schedule') {
+    if (!SCHEDULED_MODES.has(mode)) {
+      console.log(false);
+      return;
+    }
+    const head = process.env.GITHUB_SHA;
+    if (!head) throw new Error('GITHUB_SHA must be set for a scheduled run');
+    const coverage = await coverageFromScheduledRuns(head, githubApi());
+    console.error(coverage.covered ? coverage.evidence : `Not covered: ${coverage.reason}.`);
+    console.log(scheduleDecision(mode, coverage));
     return;
   }
   if (

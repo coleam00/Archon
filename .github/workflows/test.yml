@@ -8,6 +8,11 @@
 #     (`test-windows`, `test-scripts-windows`, `test-pack-windows`). That run is the complete
 #     verification of a merge. It is skipped only when a pull request run already passed every
 #     job, the push-only ones included, on the same tree.
+#   - Once a day the schedule runs the whole suite on Windows for `dev` (`test-windows`,
+#     `test-scripts-windows`, `test-pack-windows`) and no other gated job. It skips them when a
+#     completed scheduled run already covered the `dev` head; a success or a failure counts, a
+#     cancelled run does not. A failed scheduled run comments on the open issue titled
+#     "Scheduled Windows suite fails on dev", or opens it (`report-scheduled-failure`).
 #   - To run every job on a branch before it merges, dispatch this workflow on it:
 #     `gh workflow run test.yml --ref <branch>`. The results appear on the branch's pull request.
 #     Add `-f windows-full-suite=true` for the whole suite on Windows too.
@@ -35,15 +40,19 @@ on:
   pull_request:
     branches: [main, dev]
     types: [opened, synchronize, reopened, ready_for_review]
+  # A schedule runs on the default branch, `dev`. Off the hour: GitHub delays on-the-hour starts.
+  schedule:
+    - cron: '17 4 * * *'
 
 env:
   BUN_VERSION: '1.4.5'
 
 # A pull request's newer push replaces its older run. A push to dev or main is the complete
 # verification of that merge (the pull request ran only the Linux jobs), so each pushed
-# commit gets its own group and its run is never cancelled by the next merge.
+# commit gets its own group and its run is never cancelled by the next merge. A scheduled run
+# has its own group too, so a dispatch on `dev` cannot cancel it.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.event_name == 'schedule' && format('schedule-{0}', github.run_id) || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -82,6 +91,8 @@ jobs:
       # whole Windows suite only when its `pack-tests`, `pack-fixtures` or `windows-full-suite`
       # input asks. `run-full-matrix` selects the Windows set and the macOS job;
       # `run-windows-full-suite` the whole suite on Windows, which a push runs only on `main`;
+      # a schedule turns on only that and the pack checks, and only when `dev` moved since a
+      # scheduled run covered it (`coverageFromScheduledRuns`);
       # `run-docker-build` and `run-serve-binary` each select one job.
       # Assign before echoing. A failing command substituted into another command's arguments
       # does not trip `set -e`, so `echo "run-tests=$(...)"` would report success and write an
@@ -89,7 +100,8 @@ jobs:
       - name: Decide whether tests are needed
         id: decision
         env:
-          # A push asks the API whether a pull request run already passed this tree.
+          # A push asks the API whether a pull request run already passed this tree, and a
+          # schedule whether a scheduled run already covered this commit.
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           run_tests=$(bun scripts/should-run-test-suite.ts)
@@ -117,10 +129,10 @@ jobs:
   # workspace shards run here, the root scripts shard in `test-scripts`, and the pack shard in
   # `test-pack`. They are separate jobs because each has its own gate, and a job-level `if`
   # cannot read the matrix. For the same reason each has a `-windows` twin gated on
-  # `run-windows-full-suite`: the whole suite on Windows runs for a push to `main`, and on a
-  # pull request whose change runs every job. A push to `dev` runs `windows-set` instead. A
-  # skipped job, unlike a skipped step, keeps a pull request run from proving its merge, so the
-  # push then runs every job.
+  # `run-windows-full-suite`: the whole suite on Windows runs for a push to `main`, once a day
+  # for `dev` from the schedule, and on a pull request whose change runs every job. A push to
+  # `dev` runs `windows-set` instead. A skipped job, unlike a skipped step, keeps a pull request
+  # run from proving its merge, so the push then runs every job.
   test:
     needs: changes
     if: needs.changes.outputs.run-workspace-tests == 'true'
@@ -418,8 +430,8 @@ jobs:
   # The Windows set: the test files marked `// @archon-test-windows` (CONTRIBUTING.md says which
   # files join), and the generated-file and import-boundary checks, whose scripts normalize
   # Windows path separators. On this runner the whole suite failed mostly on timing (#5926), so
-  # the `-windows` jobs above run it only for a push to `main`, a pull request whose change runs
-  # every job, or a dispatch with `windows-full-suite`.
+  # the `-windows` jobs above run it only for a push to `main`, the daily schedule on `dev`, a
+  # pull request whose change runs every job, or a dispatch with `windows-full-suite`.
   # Install, temp and git settings: see `test-windows`.
   windows-set:
     needs: changes
@@ -854,3 +866,58 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: bun scripts/test-suite-outcome.ts
+
+  # A failed scheduled run leaves one open issue naming the failed jobs and their failing tests;
+  # a later failure comments on it. Outside `test-suite`'s needs, so the aggregate never judges it.
+  report-scheduled-failure:
+    needs: test-suite
+    if: ${{ always() && github.event_name == 'schedule' && needs.test-suite.result == 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - name: Open or comment on the scheduled failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          title='Scheduled Windows suite fails on dev'
+          report="$RUNNER_TEMP/scheduled-failure-full.md"
+          body="$RUNNER_TEMP/scheduled-failure.md"
+          {
+            echo "The scheduled Test Suite run $RUN_URL failed on \`dev\` at $HEAD_SHA."
+            echo
+            # The failed jobs of this attempt, without the aggregate, whose log only repeats them.
+            gh api "repos/$GH_REPO/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" \
+              --jq '.jobs[] | select(.name != "Test Suite" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")) | [.id, .name, .conclusion, .html_url] | @tsv' |
+              while IFS=$'\t' read -r id name conclusion url; do
+                echo "### [$name]($url): $conclusion"
+                echo
+                # Bun's `(fail) ` lines name the failing tests. They only enrich the report; a job
+                # without them (an install failure, a timeout) still appears with its link.
+                fails=''
+                if log=$(gh api --allow-escape-sequences "repos/$GH_REPO/actions/jobs/$id/logs"); then
+                  fails=$(printf '%s\n' "$log" | grep -F '(fail) ' | sed -E 's/\x1b\[[0-9;]*m//g; s/\r$//; s/^[0-9-]+T[0-9:.]+Z //' | awk '!seen[$0]++' | cut -c1-300 | head -n 30) || true
+                fi
+                if [ -n "$fails" ]; then
+                  printf '```\n%s\n```\n\n' "$fails"
+                else
+                  echo "No \`(fail)\` lines; see the job log."
+                  echo
+                fi
+              done
+          } > "$report"
+          # GitHub refuses a body over 65,536 characters.
+          head -c 60000 "$report" > "$body"
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
+            --jq "map(select(.title == \"$title\"))[0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file "$body"
+          else
+            gh issue create --title "$title" --body-file "$body"
+          fi
