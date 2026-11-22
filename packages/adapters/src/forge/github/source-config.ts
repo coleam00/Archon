@@ -77,7 +77,8 @@ function wakeProblems(
 export const githubWebhookSourceConfigSchema = z
   .object({
     version: z.literal(1),
-    webhookSecretEnv: z.string().min(1),
+    /** Unset for a source that only observes waits: it then receives no webhook. */
+    webhookSecretEnv: z.string().min(1).optional(),
     host: z.literal('github.com'),
     bindings: z.array(githubSourceBindingSchema),
   })

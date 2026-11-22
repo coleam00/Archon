@@ -155,8 +155,8 @@ async function listHeldItemStarts(itemId: string): Promise<HeldItemStart[]> {
   for (const start of await installHold.listHeldStarts()) {
     if (start.kind !== 'trigger' || start.itemKey !== item.key || start.cwd === null) continue;
     if ((await launchProjectKeyOf(start.cwd)) !== item.projectKey) continue;
-    const { receiptId, bindingId, workflow, receivedAt } = start;
-    held.push({ receiptId, bindingId, workflow, receivedAt });
+    const { receiptId, bindingId, hostId, workflow, receivedAt } = start;
+    held.push({ receiptId, bindingId, hostId, workflow, receivedAt });
   }
   return held;
 }
@@ -186,6 +186,7 @@ export function createWorkflowStore(): IWorkflowStore {
     liftInstallHold: installHold.liftInstallHold,
     listHeldStarts: installHold.listHeldStarts,
     listHeldItemStarts,
+    getRunLimit: installHold.getRunLimit,
     admitResourceStart: resourceStarts.admitResourceStart,
     admitPendingRun: resourceStarts.admitPendingRun,
     drainResourceStarts: resourceStarts.drainResourceStarts,

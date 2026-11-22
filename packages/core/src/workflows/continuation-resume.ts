@@ -2,6 +2,7 @@ import * as runSource from '@archon/workflows/run-source';
 import {
   CONTINUATION_RETRY_MS,
   WorkflowNotResumableError,
+  RunLimitError,
   WorkflowResourceBusyError,
   resumeCursorMatches,
   deadlineWaitCursor,
@@ -57,6 +58,8 @@ export type ContinuationAdmission =
       refusal: Exclude<ResumeRefusal, 'waiting'>;
       message: string;
     }
+  /** The install's run limit is full; the run keeps its state and a later wake retries it. */
+  | { kind: 'run_limit_full'; message: string }
   | { kind: 'unavailable'; reason: string; sourceError?: runSource.WorkflowSourceIntegrityError };
 export type ContinuationContext =
   | { kind: 'ready'; platform: IWorkflowPlatform; conversationId: string }
@@ -186,6 +189,7 @@ async function resumeWithLiveOwner(
         ? { kind: 'waiting_for_capacity', blocker, message }
         : { kind: 'resource_busy', blocker, refusal, message };
     }
+    if (error instanceof RunLimitError) return { kind: 'run_limit_full', message: error.message };
     throw error;
   }
 }
@@ -263,6 +267,8 @@ export async function wakeDueWorkflowContinuations(
           { runId: run.id, kind: outcome.kind, blocker: outcome.blocker },
           'workflow_continuation_capacity_refused'
         );
+      if (outcome.kind === 'run_limit_full')
+        log.info({ runId: run.id, kind: outcome.kind }, 'workflow_continuation_capacity_refused');
       if (sourceFailureLimitReached(outcome, cursor)) return outcome;
       if (outcome.kind === 'accepted') structuralFailures.delete(run.id);
       if (outcome.kind !== 'accepted') {

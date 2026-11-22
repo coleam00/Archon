@@ -1,10 +1,10 @@
 import { holdsWorkflowPath } from '@archon/workflows/workflow-path-lock';
+import { drainableStarts } from '@archon/workflows/host-start-decision';
 import {
   validateStartReceiptLimit,
   skippedFireNotice,
   compareStartReceipts,
   capacityWaiters,
-  drainableStarts,
   heldCheckouts,
   compareCodeUnits,
   type ReusableCheckout,
@@ -335,6 +335,7 @@ export function createInMemoryResourceStartStore(
       ),
     // The install hold is proved against the SQL store; this one is never held.
     getInstallHold: async () => null,
+    getRunLimit: async () => null,
     setInstallHold: async () => {
       throw new Error('The test store has no install hold');
     },

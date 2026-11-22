@@ -303,8 +303,9 @@ mock.module('./routes/webhooks', () => ({
   registerGithubWebhookRoute: (): void => undefined,
   registerWebhookSourceRoutes: (): void => undefined,
 }));
-mock.module('./services/webhook-source-plugins', () => ({
+mock.module('@archon/core/workflows/source-plugins', () => ({
   loadWebhookSourcePlugins: async (): Promise<undefined> => undefined,
+  createItemWaitObserver: (): undefined => undefined,
 }));
 mock.module('./services/resource-start-hosting', () => ({
   createServerResourceStartHost: (): undefined => undefined,

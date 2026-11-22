@@ -21,6 +21,7 @@ import {
   sourceReleasedEvent,
   operatorPauseRequestWrite,
   operatorPauseWrite,
+  RunLimitError,
   type FanOutCancelReason,
   type OperatorPauseRequest,
   type SourceReleaseWrite,
@@ -43,7 +44,12 @@ import type { NodeFailureKind } from '@archon/workflows/schemas/node-execution';
 import type { IDatabase } from './adapters/types';
 import { getDatabase, getDialect } from './connection';
 import { lockConversationOwnership } from './conversation-ownership';
-import { heldItemRefusal, installHoldRefusal, type TransactionQuery } from './resource-slots';
+import {
+  heldItemRefusal,
+  installHoldRefusal,
+  runLimitRefusal,
+  type TransactionQuery,
+} from './resource-slots';
 import { continuedItem, ensureItem } from './items';
 import { insertWorkflowEvent } from './workflow-events';
 import { assertPublicConversation, ensureWorkflowOriginAnchor } from './workflow-origin-anchor';
@@ -185,14 +191,34 @@ async function insertRunRow(
   return row;
 }
 
+/**
+ * Creating a sub-run admits it under the run limit: its tree's place covers it while the tree
+ * counts, and one created after its whole tree ended (a cancellation race with the parent's
+ * node) needs room like a new start, so it never revives an ended tree past the limit.
+ */
 export async function createWorkflowRun(data: WorkflowRunInsert): Promise<WorkflowRun> {
   try {
-    return await getDatabase().withTransaction(query => insertWorkflowRun(query, data));
+    return await getDatabase().withTransaction(async query => {
+      const full = data.parent_run_id
+        ? await runLimitRefusal(query, data.parent_run_id)
+        : undefined;
+      if (full) throw full;
+      return insertWorkflowRun(query, data);
+    });
   } catch (error) {
+    if (error instanceof RunLimitError) throw error;
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_create_failed');
     throw err;
   }
+}
+
+async function isPending(query: TransactionQuery, id: string): Promise<boolean> {
+  const run = await query<{ status: string }>(
+    'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+    [id]
+  );
+  return run.rows[0]?.status === 'pending';
 }
 
 /**
@@ -212,8 +238,12 @@ export async function claimPendingWorkflowRun(
   workingPath?: string
 ): Promise<WorkflowRun | null> {
   return getDatabase().withTransaction(async query => {
+    // The run limit goes last, so a start it refuses waits for nothing else. Only a pending run
+    // is about to execute: a start cancelled while it waits learns that from this claim.
     const held =
-      (await installHoldRefusal(query, id)) ?? (await heldItemRefusal(query, id, ['pending']));
+      (await installHoldRefusal(query, id)) ??
+      (await heldItemRefusal(query, id, ['pending'])) ??
+      ((await isPending(query, id)) ? await runLimitRefusal(query, id) : undefined);
     if (held) throw held;
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs

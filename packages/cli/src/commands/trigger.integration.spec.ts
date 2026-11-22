@@ -499,6 +499,7 @@ describe('trigger CLI durable execution', () => {
         queuedAt: expect.any(String),
         ahead: 0,
         heldBehind: expect.objectContaining({ runId: runs()[0]?.id, workflow: 'item-proof' }),
+        waitsForRunLimit: false,
       },
     ]);
     // Every receipt shows the item it named; the follow-up inherited the first's.
@@ -1208,7 +1209,7 @@ describe('trigger CLI durable execution', () => {
       `
       import { createHmac } from 'node:crypto';
       import { OpenAPIHono } from ${JSON.stringify(import.meta.resolve('@hono/zod-openapi'))};
-      import { loadWebhookSourcePlugins } from ${JSON.stringify(join(packagesRoot, 'server/src/services/webhook-source-plugins.ts'))};
+      import { loadWebhookSourcePlugins } from ${JSON.stringify(join(packagesRoot, 'core/src/workflows/source-plugins.ts'))};
       import { registerWebhookSourceRoutes } from ${JSON.stringify(join(packagesRoot, 'server/src/routes/webhooks.ts'))};
       import { closeDatabase } from ${JSON.stringify(join(packagesRoot, 'core/src/db/connection.ts'))};
       import { createSqlWorkflowHost } from ${JSON.stringify(join(packagesRoot, 'core/src/workflows/sql-host.ts'))};
@@ -1398,7 +1399,7 @@ nodes:
       `
       import { createHmac } from 'node:crypto';
       import { OpenAPIHono } from ${JSON.stringify(import.meta.resolve('@hono/zod-openapi'))};
-      import { loadWebhookSourcePlugins } from ${JSON.stringify(join(packagesRoot, 'server/src/services/webhook-source-plugins.ts'))};
+      import { loadWebhookSourcePlugins } from ${JSON.stringify(join(packagesRoot, 'core/src/workflows/source-plugins.ts'))};
       import { registerWebhookSourceRoutes } from ${JSON.stringify(join(packagesRoot, 'server/src/routes/webhooks.ts'))};
       import { closeDatabase } from ${JSON.stringify(join(packagesRoot, 'core/src/db/connection.ts'))};
       import { createSqlWorkflowHost } from ${JSON.stringify(join(packagesRoot, 'core/src/workflows/sql-host.ts'))};

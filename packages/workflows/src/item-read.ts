@@ -68,6 +68,7 @@ import {
   startCause,
   startCauseSchema,
 } from './schemas/resource-start';
+import { runLimitSchema } from './schemas/run-limit';
 import type { IWorkflowStore } from './store';
 import {
   awaitingExecution,
@@ -155,10 +156,12 @@ export type ItemRun = z.infer<typeof itemRunSchema>;
 /**
  * A start on the item still waiting for admission, which has no run yet. `heldBehind`
  * names the run of its workflow that holds the item now, when one does; null when it
- * waits for capacity or its checkout only, or its workflow does not read.
+ * waits for capacity or its checkout only, or its workflow does not read. `waitsForRunLimit`:
+ * only the run limit holds it now (`RunLimitState.waiting`).
  */
 export const itemQueuedStartSchema = queuedItemStartSchema.extend({
   heldBehind: itemHeldBehindSchema.nullable(),
+  waitsForRunLimit: z.boolean(),
 });
 export type ItemQueuedStart = z.infer<typeof itemQueuedStartSchema>;
 
@@ -177,14 +180,15 @@ export const itemSkippedStartSchema = z.object({
 export type ItemSkippedStart = z.infer<typeof itemSkippedStartSchema>;
 
 /**
- * A start on the item that the install hold keeps from admission: a trigger's binding,
- * not yet prepared, so it has no request or run. After the lift it is prepared and
- * admitted, queued or skipped by its binding's `overlap`. `workflow` is null when the
- * stored binding does not read.
+ * A start on the item from a trigger's binding that is not yet prepared, so it has no
+ * request or run. Under the install hold it waits for the lift; otherwise for the next
+ * drain of its host (`hostId`), which prepares it and admits, queues or skips it by its
+ * binding's `overlap`. `workflow` is null when the stored binding does not read.
  */
 export const itemHeldStartSchema = z.object({
   receiptId: z.string(),
   bindingId: z.string(),
+  hostId: z.string().nullable(),
   workflow: z.string().nullable(),
   receivedAt: z.string(),
 });
@@ -298,8 +302,9 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * whole run tree, because a question is often asked inside a child; each names the run
  * that holds it. `queued` are the item's starts still waiting, which have no run yet;
  * `archon trigger withdraw <requestId>` withdraws one. `skipped` are its refused starts.
- * `hold` is the install hold while it is set, else null; `held` are the item's starts it
- * keeps that are not yet `queued`, empty while no hold is set.
+ * `hold` is the install hold while it is set, else null; `held` are the item's trigger
+ * starts not yet prepared into `queued` or a run: kept by the hold while it is set, else
+ * waiting for their host's next drain. `runLimit`: see `RunLimit`.
  * `degraded` names each part that could not be read: one of the item's own runs, a paused
  * run the queue could not read (`run_unreadable`, by `runId`), a ruling
  * (`ruling_unreadable`, by `rulingId`), a link (`link_unreadable`, by `linkId`), or the
@@ -321,6 +326,7 @@ export const itemReadSchema = z.object({
   skipped: z.array(itemSkippedStartSchema),
   hold: installHoldSchema.nullable(),
   held: z.array(itemHeldStartSchema),
+  runLimit: runLimitSchema.nullable(),
   waits: z.array(itemOpenWaitSchema),
   questions: z.array(attentionQueueItemSchema),
   answers: z.array(itemAnswerSchema),
@@ -357,6 +363,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'listSkippedItemStarts'
       | 'getInstallHold'
       | 'listHeldItemStarts'
+      | 'getRunLimit'
     >;
   /** Observes an awaiting start's executor; without it, the start reads `unknown`. */
   startExecutor?: StartExecutorObserver;
@@ -692,7 +699,7 @@ export async function assembleItemRead(
   // one that moves on between two reads shows twice, never in neither. An admitted start
   // shows in both queued and runs (its run id is its request id) and is listed once as a run.
   const hold = await source.store.getInstallHold();
-  const held = hold ? await source.store.listHeldItemStarts(item.id) : [];
+  const held = await source.store.listHeldItemStarts(item.id);
   const waiting = await source.store.listQueuedItemStarts(item.id);
   const found = await readItemRuns(source.store, item.projectKey, item.key);
   if (found === null) return null;
@@ -725,9 +732,14 @@ export async function assembleItemRead(
     // recording order among rulings, and a set's last answer before its settle.
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const holds = await itemHolds(source, found.item.id, own.values);
+  const runLimit = await source.store.getRunLimit();
   const queued: ItemQueuedStart[] = [];
   for (const start of waiting.filter(start => !tree.has(start.requestId)))
-    queued.push({ ...start, heldBehind: (await holds.queuedHeldBehind(start)) ?? null });
+    queued.push({
+      ...start,
+      heldBehind: (await holds.queuedHeldBehind(start)) ?? null,
+      waitsForRunLimit: runLimit?.waiting.includes(start.requestId) ?? false,
+    });
   const skipped: ItemSkippedStart[] = [];
   for (const start of await source.store.listSkippedItemStarts(found.item.id))
     skipped.push({
@@ -753,6 +765,7 @@ export async function assembleItemRead(
     skipped,
     hold,
     held,
+    runLimit: runLimit && { limit: runLimit.limit, live: runLimit.live },
     waits: (await source.store.listOpenItemWaits(found.item.id)).map(wait => ({
       event: wait.event,
       about: wait.about,

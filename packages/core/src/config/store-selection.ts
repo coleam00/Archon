@@ -4,6 +4,7 @@ import { getArchonConfigPath } from '@archon/paths';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { WORKFLOW_STORE_KINDS, type WorkflowStoreKind } from '@archon/workflows/store';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
+import { loadRunLimit } from './concurrency-config';
 import { loadProviderConcurrencyCaps } from './provider-concurrency';
 
 const selectionSchema = z.looseObject({ store: z.enum(WORKFLOW_STORE_KINDS).optional() });
@@ -35,4 +36,6 @@ export async function assertFileStoreConfiguration(): Promise<void> {
     );
   if ((await loadProviderConcurrencyCaps()).size)
     throw new FileStoreUnsupportedError('concurrency.providers (provider attempt slots)');
+  if ((await loadRunLimit()) !== undefined)
+    throw new FileStoreUnsupportedError('concurrency.runs (the install run limit)');
 }

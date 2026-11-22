@@ -2154,6 +2154,7 @@ declare module 'archon:script' {
         readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
         readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
       } | null;
+      readonly waitsForRunLimit: boolean;
     }>;
     readonly skipped: ReadonlyArray<{
       readonly requestId: string;
@@ -2173,9 +2174,14 @@ declare module 'archon:script' {
     readonly held: ReadonlyArray<{
       readonly receiptId: string;
       readonly bindingId: string;
+      readonly hostId: string | null;
       readonly workflow: string | null;
       readonly receivedAt: string;
     }>;
+    readonly runLimit: {
+      readonly limit: number;
+      readonly live: number;
+    } | null;
     readonly waits: ReadonlyArray<{
       readonly event: string;
       readonly about: string;
@@ -2680,6 +2686,7 @@ declare module 'archon:script' {
           readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
           readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
         } | null;
+        readonly waitsForRunLimit: boolean;
       }>;
       readonly skipped: ReadonlyArray<{
         readonly requestId: string;
@@ -2699,9 +2706,14 @@ declare module 'archon:script' {
       readonly held: ReadonlyArray<{
         readonly receiptId: string;
         readonly bindingId: string;
+        readonly hostId: string | null;
         readonly workflow: string | null;
         readonly receivedAt: string;
       }>;
+      readonly runLimit: {
+        readonly limit: number;
+        readonly live: number;
+      } | null;
       readonly waits: ReadonlyArray<{
         readonly event: string;
         readonly about: string;

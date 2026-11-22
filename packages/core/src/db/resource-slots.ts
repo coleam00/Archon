@@ -13,8 +13,9 @@ import {
   type InstallHold,
   type PreparedWorkflowLaunch,
 } from '@archon/workflows/schemas/resource-start';
+import type { RunLimit } from '@archon/workflows/schemas/run-limit';
 import { itemHolder, itemHolders, type ItemRunRow } from '@archon/workflows/item-hold';
-import { InstallHeldError, WorkflowItemHeldError } from '@archon/workflows/store';
+import { InstallHeldError, RunLimitError, WorkflowItemHeldError } from '@archon/workflows/store';
 import { toHydratedTimestamp } from './timestamps';
 /**
  * Keyed resource slots: a durable counting lock with typed holders.
@@ -38,7 +39,7 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   type WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
-import { loadResourceCapacities } from '../config/concurrency-config';
+import { loadResourceCapacities, loadRunLimit } from '../config/concurrency-config';
 import { getDatabase, getDatabaseType, getDialect } from './connection';
 import { parseJsonObject } from './workflow-run-normalization';
 import { getLog } from './workflow-run-shared';
@@ -156,6 +157,17 @@ export async function readInstallHold(query: TransactionQuery): Promise<InstallH
   return row ? { setBy: row.set_by, setAt: toHydratedTimestamp(row.set_at).toISOString() } : null;
 }
 
+/** Whether `runId` is a pending top-level run that nothing admitted: it has no start request. */
+async function isUnadmittedPendingRoot(query: TransactionQuery, runId: string): Promise<boolean> {
+  const unadmitted = await query(
+    `SELECT 1 FROM remote_agent_workflow_runs w
+      WHERE w.id = $1 AND w.status = 'pending' AND w.parent_run_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = w.id)`,
+    [runId]
+  );
+  return unadmitted.rows.length > 0;
+}
+
 /**
  * The refusal for claiming pending run `runId` while the hold is set, when nothing admitted
  * the run: a top-level run with no start request. A run admitted before the hold, and a
@@ -165,16 +177,92 @@ export async function installHoldRefusal(
   query: TransactionQuery,
   runId: string
 ): Promise<InstallHeldError | undefined> {
-  const unadmitted = await query(
-    `SELECT 1 FROM remote_agent_workflow_runs w
-      WHERE w.id = $1 AND w.status = 'pending' AND w.parent_run_id IS NULL
-        AND NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = w.id)`,
-    [runId]
-  );
-  if (unadmitted.rows.length === 0) return undefined;
+  if (!(await isUnadmittedPendingRoot(query, runId))) return undefined;
   await lockAdmission(query);
   const hold = await readInstallHold(query);
   return hold ? new InstallHeldError(hold) : undefined;
+}
+
+/**
+ * The run trees that count against the run limit, as their roots' ids, oldest first. A tree is
+ * a top-level run and its `workflow:` sub-runs. It counts from its root's admission until every
+ * run in it is terminal, whatever its runs are doing (pending, running, paused, resumed), so
+ * nothing inside the tree can free or lose its place. The one non-terminal run that does not
+ * make its tree count is a pending root nothing admitted: a queued or skipped bound start, or
+ * a hand start before its claim. A sub-run is admitted when it is created (`createWorkflowRun`
+ * asks `runLimitRefusal` for its parent), so a pending sub-run only ever stands in a tree that
+ * already counted or took room.
+ */
+async function countedTrees(query: TransactionQuery): Promise<string[]> {
+  const counted = await query<{ id: string }>(
+    `WITH RECURSIVE up(id, parent_run_id) AS (
+       SELECT w.id, w.parent_run_id FROM remote_agent_workflow_runs w
+        WHERE w.status NOT IN (${terminalList})
+          AND NOT (w.parent_run_id IS NULL AND w.status = 'pending' AND NOT EXISTS (
+            SELECT 1 FROM remote_agent_resource_start_requests q
+             WHERE q.id = w.id AND q.status = 'admitted'))
+       UNION
+       SELECT p.id, p.parent_run_id FROM remote_agent_workflow_runs p
+         JOIN up ON p.id = up.parent_run_id
+     )
+     SELECT r.id FROM remote_agent_workflow_runs r
+      WHERE r.parent_run_id IS NULL AND r.id IN (SELECT id FROM up)
+      ORDER BY r.started_at, r.id`
+  );
+  return counted.rows.map(row => String(row.id));
+}
+
+/** The root of the run tree `runId` belongs to. */
+async function treeRoot(query: TransactionQuery, runId: string): Promise<string | undefined> {
+  const root = await query<{ id: string }>(
+    `WITH RECURSIVE up(id, parent_run_id) AS (
+       SELECT id, parent_run_id FROM remote_agent_workflow_runs WHERE id = $1
+       UNION
+       SELECT p.id, p.parent_run_id FROM remote_agent_workflow_runs p
+         JOIN up ON p.id = up.parent_run_id
+     )
+     SELECT id FROM up WHERE parent_run_id IS NULL`,
+    [runId]
+  );
+  return root.rows[0] === undefined ? undefined : String(root.rows[0].id);
+}
+
+/**
+ * The run limit (`concurrency.runs`), how many run trees count against it (`countedTrees`) and
+ * the oldest one's root. Null when no limit is set. Read under `lockAdmission` by every
+ * admission point, so the config is read fresh each time.
+ */
+export async function readRunLimit(
+  query: TransactionQuery
+): Promise<(RunLimit & { oldest: string | undefined }) | null> {
+  const limit = await loadRunLimit();
+  if (limit === undefined) return null;
+  const trees = await countedTrees(query);
+  return { limit, live: trees.length, oldest: trees[0] };
+}
+
+/**
+ * The one rule for whether run `runId` may execute now under the run limit: it passes while
+ * its tree already counts (`countedTrees`), since it executes inside its tree's place, and
+ * otherwise needs `live < limit`. Every admission point asks it: a hand start's claim or
+ * resource admission, a sub-run's creation (asked for its parent), every resume and a
+ * cancelled sub-run's recovery. An admitted root, any sub-run of a counted tree, and a paused
+ * root therefore pass; a hand start, a failed tree's resume, and a sub-run created or recovered
+ * after its whole tree ended need room. The caller asks only for a run it is about to make
+ * execute or create. Takes `lockAdmission` only when a
+ * limit is set, so an install without one decides claims and resumes as it did before.
+ */
+export async function runLimitRefusal(
+  query: TransactionQuery,
+  runId: string
+): Promise<RunLimitError | undefined> {
+  const limit = await loadRunLimit();
+  if (limit === undefined) return undefined;
+  await lockAdmission(query);
+  const trees = await countedTrees(query);
+  const root = await treeRoot(query, runId);
+  if (root !== undefined && trees.includes(root)) return undefined;
+  return trees.length >= limit ? new RunLimitError({ limit, live: trees.length }) : undefined;
 }
 
 /**

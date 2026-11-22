@@ -1,10 +1,10 @@
 /**
-/**
  * The text of an item read (`workflow runs --item`): its runs, its starts waiting to start
  * and its refused starts, links, open questions, and answers with rulings, each oldest
  * first. Built from the same `ItemRead` that `--json` prints.
  */
 import { describeInstallHold } from '@archon/workflows/schemas/resource-start';
+import { describeRunLimit, fullRunLimit } from '@archon/workflows/schemas/run-limit';
 import type {
   ItemAnswer,
   ItemHeldBehind,
@@ -147,38 +147,73 @@ function runLines(run: ItemRun): string[] {
 }
 
 /**
- * One start waiting for capacity. The request id prints in full: it is what
- * `archon trigger inspect` and `archon trigger withdraw` take.
+ * Which drain will try a start waiting on `hostId`. A CLI run end and each `workflow wake`
+ * pass drain the hosts this install's trigger files name (`served`); any other host is
+ * another machine's, whose own drain tries it. A drain admits a start only once its slot,
+ * checkout and item are free, so the text never promises that one admits it at once.
  */
-function queuedLines(start: ItemQueuedStart): string[] {
+export function admittedByText(hostId: string, served: ReadonlySet<string>): string {
+  return served.has(hostId)
+    ? `admitted once its slot, checkout and item are free, at the next run end on this install or the wake watcher's next pass (archon workflow wake --watch); archon trigger drain --host ${hostId} tries again now`
+    : `no trigger file on this install names host ${hostId}; that host's own drain tries it (archon trigger drain --host ${hostId} where it runs)`;
+}
+
+/**
+ * One start waiting for capacity. The request id prints in full: it is what
+ * `archon trigger inspect` and `archon trigger withdraw` take. Under the install hold
+ * nothing is admitted, which the section already says, so no admitter is named.
+ */
+function queuedLines(
+  start: ItemQueuedStart,
+  runLimit: ItemRead['runLimit'],
+  served: ReadonlySet<string>,
+  held: boolean
+): string[] {
   const waits =
-    start.ahead === 0
-      ? `next for a free slot on host ${start.hostId}`
-      : `${String(start.ahead)} ahead on host ${start.hostId}`;
+    start.waitsForRunLimit && runLimit
+      ? `waits for the run limit (${describeRunLimit(runLimit)}) on host ${start.hostId}`
+      : start.ahead === 0
+        ? `next for a free slot on host ${start.hostId}`
+        : `${String(start.ahead)} ahead on host ${start.hostId}`;
   const lines = [
     `  ${start.requestId}  ${start.workflow ?? '(launch unreadable)'}  on ${start.resource}, ${waits}, queued ${minute(start.queuedAt)}`,
   ];
   if (start.heldBehind) lines.push(...heldBehindLines('waits behind', start.heldBehind));
+  if (!held) lines.push(`            ${admittedByText(start.hostId, served)}`);
   return lines;
 }
 
-function heldLine(start: ItemHeldStart): string {
-  return `  receipt ${start.receiptId}  ${start.workflow ?? '(binding unreadable)'}  binding ${start.bindingId}, received ${minute(start.receivedAt)}, waits for the install hold`;
+/** A start not yet prepared: kept by the install hold, or waiting for its host's drain. */
+function heldLines(start: ItemHeldStart, served: ReadonlySet<string>, held: boolean): string[] {
+  const head = `  receipt ${start.receiptId}  ${start.workflow ?? '(binding unreadable)'}  binding ${start.bindingId}, received ${minute(start.receivedAt)}`;
+  if (held) return [`${head}, waits for the install hold`];
+  if (start.hostId === null)
+    return [`${head}, names no host; archon trigger inspect ${start.receiptId} shows it`];
+  return [
+    `${head}, waits to be prepared on host ${start.hostId}`,
+    `            ${admittedByText(start.hostId, served)}`,
+  ];
 }
 
 /**
- * The item's starts with no run: those waiting to start, held ones first, then any that
- * were refused.
+ * The item's starts with no run: those waiting to start, unprepared ones first, then any
+ * that were refused.
  */
-function startSectionLines(read: ItemRead): string[] {
+function startSectionLines(read: ItemRead, served: ReadonlySet<string>): string[] {
   const lines = ['', 'Waiting to start:'];
   if (read.hold)
     lines.push(
       `  New runs are held on this install (${describeInstallHold(read.hold)}); nothing starts until archon hold lift.`
     );
-  for (const start of read.held) lines.push(heldLine(start));
+  const full = fullRunLimit(read.runLimit);
+  if (full)
+    lines.push(
+      `  The run limit is full (${describeRunLimit(full)}); nothing new starts until a run ends.`
+    );
+  const held = read.hold !== null;
+  for (const start of read.held) lines.push(...heldLines(start, served, held));
   if (read.queued.length === 0 && read.held.length === 0) lines.push('  none');
-  for (const start of read.queued) lines.push(...queuedLines(start));
+  for (const start of read.queued) lines.push(...queuedLines(start, read.runLimit, served, held));
   if (read.skipped.length > 0) {
     lines.push('', 'Refused starts:');
     for (const start of read.skipped) lines.push(...skippedLines(start));
@@ -239,13 +274,17 @@ function itemFactLines(read: ItemRead): string[] {
   return lines;
 }
 
-/** The item read as lines a terminal prints, each section saying `none` when empty. */
-export function itemReadLines(read: ItemRead): string[] {
+/**
+ * The item read as lines a terminal prints, each section saying `none` when empty.
+ * `served` are the hosts this install drains (`installHosts`), which decide what a waiting
+ * start is told admits it.
+ */
+export function itemReadLines(read: ItemRead, served: ReadonlySet<string>): string[] {
   const lines = [`Item ${read.item.key} (${read.item.projectKey})`, ...itemFactLines(read)];
   lines.push('', 'Runs:');
   if (read.runs.length === 0) lines.push('  none');
   for (const run of read.runs) lines.push(...runLines(run));
-  lines.push(...startSectionLines(read));
+  lines.push(...startSectionLines(read, served));
   lines.push('', 'Links:');
   // Active links first; an ended one stays readable below them.
   const active = read.links.filter(link => link.ended === null);

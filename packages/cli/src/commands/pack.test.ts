@@ -5,9 +5,9 @@
 import { closeDatabase } from '@archon/core/db/connection';
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github/source-config';
 import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
@@ -15,6 +15,9 @@ import { readAsksSettledBindings, readRunEndedBindings } from '@archon/core/work
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { packCommand, type PackBindingsOptions } from './pack';
+import { packCopyLines } from './pack-copies';
+import { loadWorkflows } from './workflow-list';
+import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 
 const DECLARATION = `bindings:
@@ -573,5 +576,157 @@ describe('archon pack bindings: asks-settled', () => {
     );
     await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(reason);
     expect(existsSync(out)).toBe(false);
+  });
+});
+
+describe('archon pack: a pack folder as the workflow source', () => {
+  /** The fixture pack as its author keeps it: its own folder, manifest at the root. */
+  async function writePackFolder(): Promise<string> {
+    const dir = join(root, 'fixture-pack');
+    await mkdir(join(dir, '.archon'), { recursive: true });
+    await writeFile(
+      join(dir, '.archon', 'config.yaml'),
+      'defaults:\n  loadDefaultWorkflows: false\n  loadDefaultCommands: false\n'
+    );
+    await writeFile(
+      join(dir, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'fixture',
+        description: 'd',
+        entrypoints: { 'fixture-sweep': 'fixture-sweep/fixture-sweep.yaml' },
+      })
+    );
+    await mkdir(join(dir, '.pack'), { recursive: true });
+    await writeFile(join(dir, '.pack', 'pack.yaml'), DECLARATION);
+    await writeWorkflow(
+      dir,
+      'fixture-sweep',
+      'name: fixture-sweep\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n'
+    );
+    return dir;
+  }
+
+  it('graph and bindings read the folder and say which copy they loaded', async () => {
+    const source = await writePackFolder();
+    await mkdir(cwd, { recursive: true });
+
+    await packCommand('graph', ['fixture'], options({ workflowSource: source }));
+    const printed = logSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+    expect(printed).toContain(`Pack 'fixture' loaded from ${source} (project`);
+    expect(printed).toContain('fixture-sweep');
+
+    let json = '';
+    const write = spyOn(process.stdout, 'write').mockImplementation(((
+      chunk: string | Uint8Array,
+      ...rest: unknown[]
+    ) => {
+      json += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
+      (rest.find(arg => typeof arg === 'function') as (() => void) | undefined)?.();
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      await packCommand(
+        'bindings',
+        ['fixture'],
+        options({ workflowSource: source, only: 'sweep,after', json: true })
+      );
+    } finally {
+      write.mockRestore();
+    }
+    // The test process's logger shares stdout; the command's payload is the last document.
+    expect(JSON.parse(json.slice(json.lastIndexOf('\n{\n') + 1))).toMatchObject({
+      loaded: [{ source: 'project', key: 'fixture', dir: source }],
+      otherCopies: [],
+    });
+  });
+
+  it('with an installed copy too, the hint to use it drops --workflow-source, and following it works', async () => {
+    const source = await writePackFolder();
+    // The same pack installed as acme/fixture, the way `archon plugin add` leaves it.
+    const pluginsDir = join(root, 'home', 'plugins');
+    const id = 'acme/fixture';
+    const commit = 'a'.repeat(40);
+    await cp(source, packTreePath(pluginsDir, id, commit), {
+      recursive: true,
+      filter: path => !path.includes(`${source}/.archon`),
+    });
+    const manifest = JSON.parse(await readFile(join(source, 'archon-plugin.json'), 'utf8'));
+    const receipt = receiptPath(pluginsDir, id);
+    await mkdir(dirname(receipt), { recursive: true });
+    await writeFile(
+      receipt,
+      JSON.stringify({
+        schemaVersion: 1,
+        id,
+        manifest,
+        commit,
+        installedAt: new Date(0).toISOString(),
+      })
+    );
+    await mkdir(join(cwd, '.archon'), { recursive: true });
+    await writeFile(
+      join(cwd, '.archon', 'config.yaml'),
+      'defaults:\n  loadDefaultWorkflows: false\n  loadDefaultCommands: false\n'
+    );
+
+    await packCommand('graph', ['fixture'], options({ workflowSource: source }));
+    const printed = logSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+    expect(printed).toContain("Drop --workflow-source and name 'acme.fixture' to use it.");
+
+    // Following the hint: the installed copy, discovered from the checkout.
+    await packCommand('bindings', ['acme.fixture'], options({ only: 'sweep' }));
+    const written = JSON.stringify(await readJson(await fileFor('sweep')));
+    expect(written).toContain('acme/fixture:fixture-sweep');
+    expect(written).not.toContain(source);
+  });
+});
+
+describe('run-start pack copy lines', () => {
+  /** One installed copy of review-kit, the way `archon plugin add` leaves it. */
+  async function install(owner: string): Promise<void> {
+    const pluginsDir = join(root, 'home', 'plugins');
+    const id = `${owner}/review-kit`;
+    const commit = 'a'.repeat(40);
+    const manifest = {
+      schemaVersion: 1,
+      kind: 'workflow-pack',
+      name: 'review-kit',
+      description: 'd',
+      entrypoints: { review: 'review/review.yaml' },
+    };
+    const tree = packTreePath(pluginsDir, id, commit);
+    await mkdir(join(tree, 'review'), { recursive: true });
+    await writeFile(join(tree, 'archon-plugin.json'), JSON.stringify(manifest));
+    await writeFile(
+      join(tree, 'review', 'review.yaml'),
+      'name: review\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n'
+    );
+    const receipt = receiptPath(pluginsDir, id);
+    await mkdir(dirname(receipt), { recursive: true });
+    await writeFile(
+      receipt,
+      JSON.stringify({
+        schemaVersion: 1,
+        id,
+        manifest,
+        commit,
+        installedAt: new Date(0).toISOString(),
+      })
+    );
+  }
+
+  it("names another owner's installed copy by its own qualified workflow name", async () => {
+    await install('acme');
+    await install('beta');
+    await mkdir(cwd, { recursive: true });
+    const { workflows } = await loadWorkflows(cwd);
+    const selected = workflows.find(entry => entry.workflow.name === 'acme/review-kit:review');
+    if (selected === undefined) throw new Error('acme/review-kit:review was not discovered');
+
+    const lines = await packCopyLines(selected.workflow, workflows, cwd, false);
+
+    expect(lines.join('\n')).toContain("To run it, name 'beta/review-kit:review'.");
   });
 });

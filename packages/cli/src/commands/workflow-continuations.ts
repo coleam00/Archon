@@ -12,6 +12,9 @@ import {
   type ContinuationAdmission,
 } from '@archon/core/workflows/continuation-resume';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
+import { drainResourceStartHost } from '@archon/core/workflows/resource-start-host';
+import type { ItemWaitObserver, ObservedSourceReport } from '@archon/core/workflows/source-plugins';
+import type { StartedExecutor } from '@archon/core/workflows/start-executor';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import { deadlineWaitCursor, type WorkflowResumeCursor } from '@archon/workflows/store';
@@ -20,6 +23,7 @@ import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { engineFingerprint } from '../utils/engine-fingerprint';
 import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
+import { drainFailureReasons, drainInstallHosts } from '../utils/install-hosts';
 
 import {
   installNativeSchedule,
@@ -152,7 +156,11 @@ async function settle(outcome: ContinuationWakeOutcome): Promise<SettledOutcome>
     return { runId, kind: outcome.kind, reason: outcome.reason, ...deferral };
   if (outcome.kind === 'failed')
     return { runId, kind: outcome.kind, error: errorMessage(outcome.error), ...deferral };
-  if (outcome.kind === 'waiting_for_capacity' || outcome.kind === 'resource_busy') {
+  if (
+    outcome.kind === 'waiting_for_capacity' ||
+    outcome.kind === 'resource_busy' ||
+    outcome.kind === 'run_limit_full'
+  ) {
     const { deferError: _deferError, ...refusal } = outcome;
     return { ...refusal, ...deferral };
   }
@@ -165,6 +173,7 @@ function successful(outcome: SettledOutcome): boolean {
     (outcome.kind === 'not-accepted' ||
       outcome.kind === 'waiting_for_capacity' ||
       outcome.kind === 'resource_busy' ||
+      outcome.kind === 'run_limit_full' ||
       (outcome.kind === 'accepted' && outcome.status !== 'failed'))
   );
 }
@@ -175,13 +184,28 @@ function describeOutcome(outcome: SettledOutcome): string {
   return `${outcome.runId}: ${outcome.kind}${'status' in outcome ? ` (${outcome.status}${observed})` : ''}${'reason' in outcome ? `: ${outcome.reason}` : ''}${'blocker' in outcome ? `: blocked by ${outcome.blocker.kind} ${outcome.blocker.id}` : ''}${'error' in outcome ? `: ${outcome.error}` : ''}${outcome.deferError ? `; deferral failed: ${outcome.deferError}` : ''}`;
 }
 
+/** A pass succeeds when every continuation did and every install host drained. */
+function passSucceeded(outcomes: SettledOutcome[], drainErrors: readonly string[]): boolean {
+  return outcomes.every(successful) && drainErrors.length === 0;
+}
+
+/** The pass result's `drainErrors`, present only when a drain failed. */
+function drainFields(drainErrors: readonly string[]): { drainErrors?: readonly string[] } {
+  return drainErrors.length === 0 ? {} : { drainErrors };
+}
+
+function printDrainErrors(action: string, drainErrors: readonly string[]): void {
+  for (const error of drainErrors) console.error(`${action}: ${error}`);
+}
+
 async function report(
   action: string,
   outcomes: SettledOutcome[],
   json: boolean,
-  signaled?: boolean
+  signaled?: boolean,
+  drainErrors: readonly string[] = []
 ): Promise<boolean> {
-  const ok = outcomes.every(successful);
+  const ok = passSucceeded(outcomes, drainErrors);
   const accepted = outcomes.filter(outcome => outcome.kind === 'accepted').length;
   if (json)
     await writeJsonLine({
@@ -195,12 +219,14 @@ async function report(
           }
         : {}),
       outcomes,
+      ...drainFields(drainErrors),
     });
   else {
     console.log(
       `${action}: ${String(accepted)} continuation(s) accepted${ok ? '' : '; errors reported'}`
     );
     for (const outcome of outcomes) console.log(describeOutcome(outcome));
+    printDrainErrors(action, drainErrors);
     if (signaled && !ok)
       console.error(
         'Signal retained. Retry archon workflow wake after resolving the refusal or failure.'
@@ -209,16 +235,27 @@ async function report(
   return ok;
 }
 
+/**
+ * Observes open item waits for an install that receives no webhooks (the sources in
+ * `ARCHON_WEBHOOK_SOURCES` that declare `observe`), and hands each start it admits to its
+ * executor.
+ */
+export interface WakeObservation {
+  observer: ItemWaitObserver;
+  dispatch: (requestId: string, hostId: string) => Promise<StartedExecutor | null>;
+}
+
 export async function workflowContinuationCommand(
   host: WorkflowHost,
   action: 'wake' | 'signal',
   args: string[],
-  values: Values
+  values: Values,
+  observation?: () => Promise<WakeObservation | undefined>
 ): Promise<number> {
   const json = values.json === true;
   try {
     if (action === 'signal') return await signalEvent(host, args, values, json);
-    return await wake(host, args, values, json);
+    return await wake(host, args, values, json, await observation?.());
   } catch (error) {
     if (json)
       await writeJsonLine({ ok: false, action, signaled: false, error: errorMessage(error) });
@@ -352,10 +389,18 @@ async function loadedEngine(watch: boolean, json: boolean): Promise<string | und
   return undefined;
 }
 
-async function engineChanged(loaded: string | undefined, json: boolean): Promise<boolean> {
-  if (loaded === undefined) return false;
+/** The installed engine, when it is no longer the one this watch loaded. */
+function movedEngine(loaded: string | undefined): { current: string | undefined } | undefined {
+  if (loaded === undefined) return undefined;
   const current = engineFingerprint();
-  if (current === loaded) return false;
+  return current === loaded ? undefined : { current };
+}
+
+async function reportEngineChanged(
+  loaded: string,
+  current: string | undefined,
+  json: boolean
+): Promise<void> {
   if (json) {
     await writeJsonLine({
       ok: true,
@@ -365,61 +410,324 @@ async function engineChanged(loaded: string | undefined, json: boolean): Promise
       current: current ?? null,
     });
   } else console.log(`wake: engine changed (${loaded} -> ${current}), exiting to restart`);
-  return true;
+}
+
+/**
+ * One source's observation, as `wake` reports it. The hosts of the starts it recorded are
+ * added to `owed`, which `drainOwed` empties.
+ */
+/** How many starts `receipts` recorded; adds each start's host to `owed`. */
+async function owedStarts(
+  host: WorkflowHost,
+  receipts: readonly string[],
+  owed: Set<string>
+): Promise<number> {
+  let started = 0;
+  for (const receiptId of receipts)
+    for (const binding of (await host.deps.store.getStartReceipt(receiptId))?.bindings ?? []) {
+      // A binding recorded as unmatched or rejected has no host and starts nothing.
+      if (!binding.hostId) continue;
+      started += 1;
+      owed.add(binding.hostId);
+    }
+  return started;
+}
+
+/** Says which sources a watch observes and how often, once when it starts. */
+async function announceObserving(
+  observation: WakeObservation | undefined,
+  watch: boolean,
+  json: boolean
+): Promise<void> {
+  if (!watch || !observation) return;
+  const observe = observation.observer.observing.map(({ sourceInstanceId, everySeconds }) => ({
+    source: sourceInstanceId,
+    everySeconds,
+  }));
+  if (json) await writeJsonLine({ ok: true, action: 'wake', observe });
+  else
+    for (const { source, everySeconds } of observe)
+      console.log(`wake: observing source ${source} every ${String(everySeconds)}s`);
+}
+
+/** One observation pass: report each source, then hand on the starts it owes. */
+async function observePass(
+  host: WorkflowHost,
+  observation: WakeObservation | undefined,
+  owed: Set<string>,
+  json: boolean
+): Promise<boolean> {
+  if (!observation) return true;
+  let ok = true;
+  for (const observed of await observation.observer.pass(new Date()))
+    ok = (await reportObserved(host, observed, owed, json)) && ok;
+  return (await drainOwed(host, observation, owed, json)) && ok;
+}
+
+async function reportObserved(
+  host: WorkflowHost,
+  report: ObservedSourceReport,
+  owed: Set<string>,
+  json: boolean
+): Promise<boolean> {
+  const started = await owedStarts(host, report.receipts, owed);
+  const { source, waits, reads, conflicts, unserved, error } = report;
+  const ok = error === undefined;
+  if (json)
+    await writeJsonLine({
+      ok,
+      action: 'observe',
+      source,
+      waits,
+      reads,
+      started,
+      conflicts,
+      unserved,
+      ...(ok ? {} : { error }),
+    });
+  else {
+    console.log(
+      `observe ${source}: ${String(waits)} wait(s), ${String(reads)} read(s), ${String(started)} start(s)${conflicts ? `, ${String(conflicts)} conflicting deliveries` : ''}${ok ? '' : `; ${error}`}`
+    );
+    for (const { wait, reason } of unserved)
+      console.log(
+        `  not observed: ${wait.event} about ${wait.about} on ${wait.itemKey} from ${wait.workflowName}: ${reason}`
+      );
+  }
+  return ok;
+}
+
+/**
+ * Hand the starts observation recorded to their executors, host by host. A met wait is
+ * closed when its receipt is recorded, so a later pass never observes it again: a host
+ * whose drain fails stays owed and is drained again on this process's next pass. Every wake
+ * pass also drains the hosts this install's trigger files name (`wakePass`), but a source
+ * binding's host is named in the source configuration and may be in no trigger file, so
+ * observation drains its own. The owed set lives only in this process.
+ */
+async function drainOwed(
+  host: WorkflowHost,
+  observation: WakeObservation,
+  owed: Set<string>,
+  json: boolean
+): Promise<boolean> {
+  let ok = true;
+  for (const hostId of [...owed]) {
+    try {
+      await drainResourceStartHost({
+        ...host,
+        hostId,
+        startAdmitted: requestId => observation.dispatch(requestId, hostId),
+      });
+      owed.delete(hostId);
+    } catch (drainError) {
+      ok = false;
+      const error = `host '${hostId}' drain failed: ${errorMessage(drainError)}`;
+      const hint = `A running watch retries it on its next pass; otherwise run archon trigger drain --host ${hostId}.`;
+      if (json) await writeJsonLine({ ok, action: 'observe', drain: hostId, error, hint });
+      else console.error(`observe: ${error}. ${hint}`);
+    }
+  }
+  return ok;
+}
+
+/** What the two loops of one `wake` share: whether it is stopping, and a sleep stop ends. */
+interface WakeControl {
+  stopped(): boolean;
+  sleep(ms: number): Promise<void>;
+  /**
+   * Whether the installed engine changed since the watch loaded it. Either loop checks it
+   * before each pass; the first to see a change reports it once and stops both, so no pass
+   * of either starts on old code.
+   */
+  engineMoved(): Promise<boolean>;
+  /** Whether `engineMoved` has seen a change, without checking again. */
+  moved(): boolean;
+}
+
+/** A stop flag for both loops, sleeps that a stop ends at once, and the engine check. */
+function wakeControl(
+  loaded: string | undefined,
+  json: boolean
+): { control: WakeControl; stop: () => void } {
+  let stopped = false;
+  let moved = false;
+  const sleeps = new Set<() => void>();
+  const stop = (): void => {
+    stopped = true;
+    for (const done of [...sleeps]) done();
+  };
+  return {
+    control: {
+      engineMoved: async () => {
+        if (moved) return true;
+        const change = movedEngine(loaded);
+        if (loaded === undefined || change === undefined) return false;
+        moved = true;
+        stop();
+        await reportEngineChanged(loaded, change.current, json);
+        return true;
+      },
+      moved: () => moved,
+      stopped: () => stopped,
+      sleep: ms =>
+        new Promise<void>(resolve => {
+          const done = (): void => {
+            clearTimeout(timer);
+            sleeps.delete(done);
+            resolve();
+          };
+          const timer = setTimeout(done, ms);
+          sleeps.add(done);
+        }),
+    },
+    stop,
+  };
+}
+
+/**
+ * Observation's own loop. It runs beside the continuation loop, not inside it, because a
+ * continuation pass awaits every resumed run to its end: a run that takes twenty minutes
+ * must not hold the waits it is not part of for twenty minutes. A one-shot wake observes
+ * once.
+ */
+async function observeLoop(
+  host: WorkflowHost,
+  observation: WakeObservation | undefined,
+  watch: boolean,
+  json: boolean,
+  control: WakeControl
+): Promise<boolean> {
+  if (!observation) return true;
+  // Hosts whose observed starts are not yet handed on; see `drainOwed`.
+  const owed = new Set<string>();
+  let ok = true;
+  do {
+    if (await control.engineMoved()) break;
+    try {
+      ok = (await observePass(host, observation, owed, json)) && ok;
+    } catch (error) {
+      ok = false;
+      if (json) await writeJsonLine({ ok: false, action: 'observe', error: errorMessage(error) });
+      else console.error(`observe: ${errorMessage(error)}`);
+    }
+    if (!watch || control.stopped()) break;
+    await control.sleep(5_000);
+  } while (!control.stopped());
+  return ok;
+}
+
+/**
+ * Drain every host this install serves (`drainInstallHosts`), returning each failure as
+ * redacted text for the pass's one result.
+ */
+async function drainPass(host: WorkflowHost): Promise<string[]> {
+  let failures: { hostId?: string; error: unknown }[];
+  try {
+    ({ failures } = await drainInstallHosts(host, {
+      // Loaded only when a start is admitted, so a pass that admits nothing pays nothing.
+      dispatch: async (requestId, hostId) =>
+        (await import('../utils/spawn-admitted')).spawnAdmitted(host, requestId, hostId),
+    }));
+  } catch (error) {
+    failures = [{ error }];
+  }
+  return failures.map(
+    failure =>
+      `${failure.hostId === undefined ? '' : `draining host ${failure.hostId}: `}${drainFailureReasons([failure.error])}`
+  );
+}
+
+/** A pass whose continuation scan threw: one failed result, with the pass's drain errors. */
+async function reportPassError(
+  error: unknown,
+  drainErrors: readonly string[],
+  json: boolean
+): Promise<void> {
+  if (json)
+    await writeJsonLine({
+      ok: false,
+      action: 'wake',
+      error: errorMessage(error),
+      ...drainFields(drainErrors),
+    });
+  else {
+    console.error(`wake: ${errorMessage(error)}`);
+    printDrainErrors('wake', drainErrors);
+  }
+}
+
+/**
+ * One wake pass, reported as one result: try to admit the due continuations, then drain
+ * this install's hosts, then await the continuations' settlement. Admission goes first so a
+ * paused run that is due takes a freed slot before a queued new start does, as admission
+ * orders them everywhere else; the drain does not wait for those runs to finish. The drain
+ * still runs when the continuation scan throws, so a start whose admitter died waits one
+ * pass at most. A report that throws becomes the pass's failed result, as before.
+ */
+async function wakePass(host: WorkflowHost, json: boolean): Promise<boolean> {
+  // Deferred cleanup runs only after the pass is reported, as `admit` requires.
+  const cleanups: (() => Promise<void>)[] = [];
+  let drainErrors: string[] | undefined;
+  try {
+    const outcomes = await wakeDueWorkflowContinuations(
+      host.deps.store,
+      new Date(),
+      (run, cursor) => admit(host, run, cursor, cleanup => cleanups.push(cleanup))
+    );
+    // Drained once admission was attempted, before settlement is awaited: a resumed run
+    // may take half an hour, and a queued start must not wait for it to finish.
+    drainErrors = await drainPass(host);
+    const settled = await Promise.all(outcomes.map(settle));
+    return await report('wake', settled, json, undefined, drainErrors);
+  } catch (error) {
+    // A scan that threw has not drained yet; a settlement or report that threw already has.
+    drainErrors ??= await drainPass(host);
+    await reportPassError(error, drainErrors, json);
+    return false;
+  } finally {
+    await Promise.all(cleanups.map(cleanup => cleanup()));
+  }
 }
 
 async function wake(
   host: WorkflowHost,
   args: string[],
   values: Values,
-  json: boolean
+  json: boolean,
+  observation?: WakeObservation
 ): Promise<number> {
   validateFlags(values, ['watch']);
   if (args.length) throw new Error('Usage: archon workflow wake [--watch] [--json]');
-  let stopped = false;
-  let wakeSleep: (() => void) | undefined;
-  const stop = (): void => {
-    stopped = true;
-    wakeSleep?.();
-  };
+  await announceObserving(observation, values.watch === true, json);
+  const loaded = await loadedEngine(values.watch === true, json);
+  const { control, stop } = wakeControl(loaded, json);
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
   let ok = true;
-  const loaded = await loadedEngine(values.watch === true, json);
+  let observedOk = true;
+  const observing = observeLoop(host, observation, values.watch === true, json, control);
   try {
     do {
       // Checked before every pass, so an update during the sleep never gets
       // another pass on the old engine.
-      if (await engineChanged(loaded, json)) return WAKE_ENGINE_CHANGED_EXIT;
-      const cleanups: (() => Promise<void>)[] = [];
-      try {
-        const outcomes = await wakeDueWorkflowContinuations(
-          host.deps.store,
-          new Date(),
-          (run, cursor) => admit(host, run, cursor, cleanup => cleanups.push(cleanup))
-        );
-        const passOk = await report('wake', await Promise.all(outcomes.map(settle)), json);
-        ok = passOk && ok;
-      } catch (error) {
-        ok = false;
-        if (json) await writeJsonLine({ ok: false, action: 'wake', error: errorMessage(error) });
-        else console.error(`wake: ${errorMessage(error)}`);
-      } finally {
-        await Promise.all(cleanups.map(cleanup => cleanup()));
-      }
-      if (!values.watch || stopped) break;
-      await new Promise<void>(resolve => {
-        const timer = setTimeout(resolve, 5_000);
-        wakeSleep = (): void => {
-          clearTimeout(timer);
-          resolve();
-        };
-      });
-      wakeSleep = undefined;
-    } while (!stopped);
+      if (await control.engineMoved()) break;
+      ok = (await wakePass(host, json)) && ok;
+      if (!values.watch || control.stopped()) break;
+      await control.sleep(5_000);
+    } while (!control.stopped());
   } finally {
+    // The observation loop ends with this one, after the pass it is in.
+    stop();
+    observedOk = await observing;
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
   }
-  return ok ? 0 : 1;
+  return wakeExitCode(control.moved(), [ok, observedOk]);
+}
+
+/** 75 when the engine changed under the watch, so its supervisor restarts it; else 0 or 1. */
+function wakeExitCode(engineMoved: boolean, passes: readonly boolean[]): number {
+  if (engineMoved) return WAKE_ENGINE_CHANGED_EXIT;
+  return passes.every(Boolean) ? 0 : 1;
 }

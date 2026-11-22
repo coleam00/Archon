@@ -59,7 +59,7 @@ export const WORKFLOW_PERSISTENCE_CONSUMERS = [
   'packages/cli/src/utils/owned-run-termination.ts',
   'packages/cli/src/utils/cli-user.ts',
   'packages/server/src/services/resource-start-hosting.ts',
-  'packages/server/src/services/webhook-source-plugins.ts',
+  'packages/core/src/workflows/source-plugins.ts',
 ];
 
 const SQL_COMPOSITION = new Set([

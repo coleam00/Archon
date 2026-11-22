@@ -28,11 +28,15 @@ export async function runWorkflowContinuation(
   );
   if (wakeSchedule) return await workflowWakeScheduleCommand(positionals.slice(2), values);
   const { createCliWorkflowHost } = await import('../utils/workflow-host');
+  const host = await createCliWorkflowHost({ forgeTrustedEnv });
+  // Loaded only when wake asks for it, so `signal` never loads the source plugins.
   return await workflowContinuationCommand(
-    await createCliWorkflowHost({ forgeTrustedEnv }),
+    host,
     subcommand,
     positionals.slice(2),
-    values
+    values,
+    async () =>
+      (await import('../commands/wake-observation')).wakeObservation(host, forgeTrustedEnv)
   );
 }
 

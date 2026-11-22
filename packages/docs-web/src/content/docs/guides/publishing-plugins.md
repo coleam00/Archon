@@ -24,6 +24,8 @@ Use lowercase words joined by hyphens for `name` and entrypoint names. Each entr
 
 The manifest is strict. Do not add version, credentials, install scripts, dependencies, or permission grants. `compatibility.archon` is optional; when supplied, installation checks it. Put prerequisites and usage instructions in a `README.md` alongside the manifest. The index links to the README on GitHub; it does not execute plugin code or embed author-supplied HTML.
 
+To try the pack before you publish or install it, pass its folder as the source: `archon workflow run <workflow> --workflow-source <plugin root>` or `archon pack graph <name> --workflow-source <plugin root>`. Archon reads it as the project pack `<name>`; see [A pack folder as the source](/reference/cli/#a-pack-folder-as-the-source).
+
 ## Tags and executable release assets
 
 Git tags are versions. For workflow packs, an untagged install resolves the default branch head and freezes its commit. Publish a tag to let operators choose a version:

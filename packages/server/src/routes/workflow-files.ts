@@ -1,6 +1,6 @@
 import { readFile } from 'fs/promises';
 import { join, basename, resolve } from 'path';
-import { getBundledWorkflowsPath } from '@archon/paths';
+import { getBundledWorkflowsPath, getWorkflowFolderSearchPaths } from '@archon/paths';
 import { providerRegistry } from '@archon/providers';
 import {
   loadErrorToError,
@@ -11,6 +11,7 @@ import {
 } from '@archon/workflows/pack-layout';
 import { parseWorkflow, parseYaml } from '@archon/workflows/loader';
 import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
+import { sourcePackFolder } from '@archon/workflows/workflow-source';
 
 /** A workflow definition found by name: its text, where it came from, and how it parsed. */
 export interface WorkflowFile {
@@ -157,6 +158,10 @@ export async function findPackagedWorkflowAt(
 
   const matches: PackagedMatches = { files: [], folderErrors: [] };
   for (const pack of packs) await collectPackMatches(pack.name, pack.path, name, matches);
+  return singleMatch(matches, name);
+}
+
+function singleMatch(matches: PackagedMatches, name: string): RawWorkflowFile | null {
   if (matches.files.length > 1) {
     throw new Error(`Multiple packaged workflows declare the name '${name}'`);
   }
@@ -165,6 +170,29 @@ export async function findPackagedWorkflowAt(
   const [folderError] = matches.folderErrors;
   if (folderError !== undefined) throw folderError;
   return null;
+}
+
+/**
+ * A project workflow by name: under the project's workflow folder, or, when the project
+ * root is itself a pack folder (`sourcePackFolder`), in that pack, as discovery lists it.
+ * A name both hold is refused, as two packaged matches are: discovery loads neither, and
+ * a save or delete must not pick one.
+ */
+export async function findProjectWorkflowAt(
+  projectRoot: string,
+  name: string
+): Promise<RawWorkflowFile | null> {
+  const found = await findWorkflowAt(join(projectRoot, getWorkflowFolderSearchPaths()[0]), name);
+  const pack = await sourcePackFolder(projectRoot);
+  if (pack === null) return found;
+  const matches: PackagedMatches = { files: [], folderErrors: [] };
+  await collectPackMatches(pack.name, pack.dir, name, matches);
+  if (found !== null && matches.files.length > 0) {
+    throw new Error(
+      `Multiple workflows declare the name '${name}': ${found.absolutePath} and ${matches.files[0].absolutePath}`
+    );
+  }
+  return found ?? singleMatch(matches, name);
 }
 
 export async function findWorkflowAt(

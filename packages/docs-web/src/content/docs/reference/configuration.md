@@ -145,6 +145,9 @@ concurrency:
   # See "Resource capacity" below.
   # resources:
   #   build: 5
+  # Optional number of run trees this install executes at once; unset = no limit.
+  # See "Run limit" below.
+  # runs: 6
 
 # Live tool attention and the provider-limit wait are both on by default.
 workflows:
@@ -197,6 +200,21 @@ The other blocks, `tiers`, `aliases`, `workflows`, `streaming`, `attentionNotice
 ## Resource capacity
 
 `concurrency.resources.<resource>: N` sets how many runs may hold a resource at once, for a workflow that declares `resource:` and for trigger bindings. It wins over the capacity a start declares (a binding's `capacity`, or a workflow's `resource: { name, capacity }` for a hand start or a binding that sets none), which wins over the engine default of 1. Admission re-reads it at every start, drain and resume, so a change applies to the next admission, and lowering it never ends a run that holds a slot. A value that is not a positive integer, or a config file that cannot be parsed, refuses resource admissions with an error naming the problem. See [Choose a resource, capacity, and overlap policy](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy).
+
+## Run limit
+
+`concurrency.runs: N` sets how many run trees the install executes at once, whatever their workflow, resource, binding or project. A run tree is a top-level run with its `workflow:` sub-runs. Without the setting there is no limit. Set it to what the machine can carry: a resource's capacity limits one stage, and only this number limits the machine.
+
+- **What counts.** A tree counts once, from its top-level run's admission until every run in it has ended (completed, failed or cancelled), whatever its runs are doing: pending, running, paused or resumed. Nothing inside a tree can free or lose its place, so a sub-run is created, starts, continues or resumes inside its tree's place on any resource, and a paused top-level run resumes without asking for room. A pending start that nothing admitted yet does not count: a queued or skipped bound start, or a hand start before its claim. A sub-run created, or recovered from an engine cancel, after every run in its tree has ended needs room like a new start, so a late child cannot revive a tree whose place went to another; while the limit is full its creation or recovery fails, and the parent's node reports the run limit.
+- **Paused trees keep their place.** A tree paused at an approval gate or a wait still counts, so paused trees can fill the limit overnight. Abandon or cancel a tree you will not continue (`archon workflow abandon`, `archon workflow cancel`) to free its place. A run whose process died also keeps its tree counted until it is resumed or abandoned, because Archon cannot tell it from a run that is still working.
+- **Hand starts count.** `archon workflow run`, chat, API and web starts need room when they are claimed, or at resource admission when their workflow declares `resource:`. A hand start waits in the process that started it, prints `Waiting for the run limit`, and starts when a tree ends; with `--no-wait` it is refused.
+- **With resource capacity.** A start needs a free slot on its resource and room under the limit, decided in one admission. The limit is asked only when the resource would admit the start, so a start never holds a slot while it waits for the other. A binding's `overlap` acts on the limit as on its resource: under `queue` a start the limit holds back queues, and under `skip` it is skipped, like a start its resource refuses.
+- **Waiting.** A queued start is admitted by the next drain of its host after a tree ends: the server's scheduler pass, the ending process's own trigger host, or a scheduled trigger pass. A resume of a failed run needs room like a new start; while the limit is full it is refused and the run stays failed. [`workflow runs --item`](/reference/cli/#workflow-runs) and [`trigger list`](/reference/cli/#trigger) say when a queued start waits only for the limit: the next drain of its host would admit it on its resource, counting what that drain admits ahead of it on every resource, and the limit's room goes to those older starts.
+- **Queue order.** A trigger host's queued starts take room in the order they queued, across resources: a drain admits them oldest first, and a new start of that host waits behind its older runnable starts, even when there is room for both. A hand start, and a start of another trigger host, does not wait for them: it takes room that is free when it asks, so it can pass an older queued start. That keeps a queue on a host that never drains from blocking hand starts, as resource capacity already treats other hosts. A hand start asks about once a second.
+- **Changes apply immediately.** The number is re-read at every admission. Lowering it never stops a run; new starts wait until enough trees end.
+- **Strict.** A value that is not a positive integer, or a config file that cannot be parsed, refuses every new run with an error naming the file, the key and the problem, instead of running without a limit. A hand start is refused with that error.
+- **One install, one number.** The count covers every Archon process sharing this database. On SQLite that is one machine. Machines that share one PostgreSQL database share one limit.
+- **Database storage only.** `store: files` refuses `concurrency.runs` at startup.
 
 ## Run-scoped configuration
 
