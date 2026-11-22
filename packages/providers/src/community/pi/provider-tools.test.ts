@@ -199,6 +199,28 @@ describe('PiProvider tools', () => {
     expect(merged.env.PATH).toBe(['/archon/gh-shim', '/usr/bin', '/pi/agent/bin'].join(delimiter));
   });
 
+  test('a caller PATH merges into a Pi env that spells the key Path', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        env: { PATH: '/archon/gh-shim' },
+      })
+    );
+
+    const bashCall = mockCreateBashTool.mock.calls.find(call => call[1] !== undefined);
+    const bashOptions = bashCall![1] as { spawnHook: (c: unknown) => unknown };
+    const merged = bashOptions.spawnHook({
+      command: 'echo',
+      cwd: '/tmp',
+      env: { Path: '/pi/agent/bin' },
+    }) as { env: Record<string, string> };
+    expect(merged.env.Path).toBe(['/archon/gh-shim', '/pi/agent/bin'].join(delimiter));
+    expect(merged.env.PATH).toBeUndefined();
+  });
+
   test('empty requestOptions.env does NOT construct a spawnHook', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());

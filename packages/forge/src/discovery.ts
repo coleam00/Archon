@@ -1,6 +1,7 @@
 import { access, readdir, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { delimiter, extname, resolve } from 'node:path';
+import { envPath } from '@archon/paths/env-path';
 import type { PluginMetadata } from './operations';
 import { pluginMetadataSchema } from './operations';
 import {
@@ -252,7 +253,7 @@ async function discoverCandidates(
   const dirs = [
     ...(options.pluginsDir !== undefined ? [options.pluginsDir] : []),
     ...config.pluginDirs,
-    ...(config.scanPath ? (env.PATH ?? env.Path ?? '').split(delimiter).filter(Boolean) : []),
+    ...(config.scanPath ? (envPath(env) ?? '').split(delimiter).filter(Boolean) : []),
   ];
   const configuredDirs = new Set(config.pluginDirs.map(dir => resolve(dir)));
   const scanned = (

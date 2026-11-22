@@ -13,6 +13,7 @@ import {
   type BashSpawnHook,
 } from '@earendil-works/pi-coding-agent';
 import { delimiter } from 'node:path';
+import { envPathKey } from '@archon/paths/env-path';
 import type { ThinkingLevel } from '@earendil-works/pi-ai';
 
 /**
@@ -111,12 +112,18 @@ function buildBashSpawnHook(env: Record<string, string> | undefined): BashSpawnH
   if (!env || Object.keys(env).length === 0) return undefined;
   return (context: BashSpawnContext): BashSpawnContext => {
     const merged = { ...context.env, ...env };
-    const basePath = context.env.PATH;
-    if (env.PATH !== undefined && basePath) {
-      const callerEntries = env.PATH.split(delimiter);
-      merged.PATH = [
+    // Pi's env copies process.env, which on Windows can spell the key `Path`: merge
+    // under Pi's key and drop a differently cased caller key, so the child gets one.
+    const baseKey = envPathKey(context.env);
+    const callerKey = envPathKey(env);
+    const basePath = context.env[baseKey] ?? '';
+    const callerPath = env[callerKey];
+    if (callerPath !== undefined) {
+      const callerEntries = callerPath.split(delimiter);
+      if (callerKey !== baseKey) delete merged[callerKey];
+      merged[baseKey] = [
         ...callerEntries,
-        ...basePath.split(delimiter).filter(entry => !callerEntries.includes(entry)),
+        ...basePath.split(delimiter).filter(entry => entry && !callerEntries.includes(entry)),
       ].join(delimiter);
     }
     return { ...context, env: merged };

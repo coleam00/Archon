@@ -28,6 +28,7 @@
     "./duration": "./src/duration.ts",
     "./regexp": "./src/regexp.ts",
     "./github-token-env": "./src/github-token-env.ts",
+    "./env-path": "./src/env-path.ts",
     "./source-commit": "./src/source-commit.ts"
   },
   "scripts": {
