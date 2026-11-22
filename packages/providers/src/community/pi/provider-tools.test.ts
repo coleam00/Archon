@@ -199,6 +199,27 @@ describe('PiProvider tools', () => {
     expect(merged.env.PATH).toBe(['/archon/gh-shim', '/usr/bin', '/pi/agent/bin'].join(delimiter));
   });
 
+  test('a caller PATH keeps the empty entries of Pi baseline PATH', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        env: { PATH: '/archon/gh-shim' },
+      })
+    );
+
+    const bashCall = mockCreateBashTool.mock.calls.find(call => call[1] !== undefined);
+    const bashOptions = bashCall![1] as { spawnHook: (c: unknown) => unknown };
+    const merged = bashOptions.spawnHook({
+      command: 'echo',
+      cwd: '/tmp',
+      env: { PATH: ['/bin', '', '/usr/bin'].join(delimiter) },
+    }) as { env: Record<string, string> };
+    expect(merged.env.PATH).toBe(['/archon/gh-shim', '/bin', '', '/usr/bin'].join(delimiter));
+  });
+
   test('a caller PATH merges into a Pi env that spells the key Path', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());

@@ -116,15 +116,18 @@ function buildBashSpawnHook(env: Record<string, string> | undefined): BashSpawnH
     // under Pi's key and drop a differently cased caller key, so the child gets one.
     const baseKey = envPathKey(context.env);
     const callerKey = envPathKey(env);
-    const basePath = context.env[baseKey] ?? '';
+    const basePath = context.env[baseKey];
     const callerPath = env[callerKey];
     if (callerPath !== undefined) {
-      const callerEntries = callerPath.split(delimiter);
       if (callerKey !== baseKey) delete merged[callerKey];
-      merged[baseKey] = [
-        ...callerEntries,
-        ...basePath.split(delimiter).filter(entry => entry && !callerEntries.includes(entry)),
-      ].join(delimiter);
+      // A baseline's empty entries stay: on POSIX one means the working directory.
+      const callerEntries = callerPath.split(delimiter);
+      merged[baseKey] = basePath
+        ? [
+            ...callerEntries,
+            ...basePath.split(delimiter).filter(entry => !callerEntries.includes(entry)),
+          ].join(delimiter)
+        : callerPath;
     }
     return { ...context, env: merged };
   };
