@@ -1082,7 +1082,7 @@ describe('a scheduled run', () => {
     'a %s scheduled run at the same commit covers it, so nothing runs',
     async conclusion => {
       const result = await coverage(runsWith('cancelled', conclusion));
-      expect(result).toEqual({ covered: true, evidence: expect.stringContaining(RUN_URL) });
+      expect(result).toEqual({ covered: true, why: expect.stringContaining(RUN_URL) });
       for (const mode of WINDOWS_MODES) expect(scheduleDecision(mode, result)).toBe(false);
     }
   );
@@ -1094,6 +1094,6 @@ describe('a scheduled run', () => {
   });
 
   test.each(OTHER_MODES)('%s never runs on a schedule', mode => {
-    expect(scheduleDecision(mode, { covered: false, reason: 'dev moved' })).toBe(false);
+    expect(scheduleDecision(mode, { covered: false, why: 'dev moved' })).toBe(false);
   });
 });
