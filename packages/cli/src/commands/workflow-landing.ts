@@ -17,6 +17,7 @@ import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { projectRefForCodebase } from '@archon/core/operations/attention-queue';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import type { ItemLanding } from '@archon/workflows/schemas/item-landing';
+import { assertItemKey } from '@archon/workflows/schemas/workflow-run';
 import { readCallingNode } from '../utils/calling-node';
 import { writeJsonLine } from '../utils/stdout';
 import { inheritedWorkflowCodebase } from './workflow-shared';
@@ -48,12 +49,16 @@ async function record(
     (await inheritedWorkflowCodebase(host)) ??
     (await findCodebaseForCheckoutPath(cwd, host.records.codebases));
   if (!codebase) throw new Error('--item names an item in one registered project.');
+  // Everything the record would refuse is checked first, so a create never leaves a
+  // pushed branch that the record step then rejects.
+  assertItemKey(request.item);
+  const fromRun = env.WORKFLOW_ID ? readCallingNode(env.WORKFLOW_ID, env) : null;
   const save = () =>
     host.deps.store.recordItemLanding({
       projectKey: projectRefForCodebase(codebase).key,
       key: request.item,
       branch: request.branch,
-      fromRun: env.WORKFLOW_ID ? readCallingNode(env.WORKFLOW_ID, env) : null,
+      fromRun,
     });
   if (request.from === undefined) return { landing: await save(), create: null };
   // The file store cannot record a landing, so refuse before the push changes the remote.

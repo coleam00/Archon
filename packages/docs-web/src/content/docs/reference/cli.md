@@ -1510,8 +1510,9 @@ Recording again replaces the branch. A run already started keeps the base it rec
 
 Without `--from`, the command only records, and does not check the remote, so a branch may
 be recorded before it exists. With `--from`, it creates the branch on the remote first and
-records it second; a create that fails records nothing. The remote is the one runs use:
-`worktree.remote`, else the automatically selected one. A folder project, or a project with
+records it second. The item key and the calling node are checked before the push, so a
+create that fails, or a record that would be refused, leaves the remote and the item as they
+were. The remote is the one runs use: `worktree.remote`, else the automatically selected one. A folder project, or a project with
 no remote, is refused. The start point resolves in the project's repository after a fetch of
 that remote, as [`workflow run --from`](#workflow-run-name-message) does: a commit, a local branch, or a
 remote-tracking branch. Name `origin/main` for the remote's tip of `main`; there is no
@@ -1521,9 +1522,11 @@ still recorded. `create` in the JSON output is `{ remote, status: "created", com
 
 A run checks the branch when it starts: a branch the project's remote does not have refuses
 the run before its first node, naming the branch, the remote, where the branch came from, and
-the command that creates it (`archon workflow landing --item <key> --branch <name> --from
-<start-point>`, filled in with the item that records it, each value shell-quoted when it
-needs quoting). It never falls back to the base branch.
+the command that creates it (`archon workflow landing --cwd <checkout> --item <key> --branch
+<name> --from <start-point>`, filled in with the project's checkout and the item that records
+it, each value shell-quoted when it needs quoting). `--cwd` keeps the command on that project
+when it is run from another directory, as after a `--project` start. It never falls back to
+the base branch.
 
 The branch a run takes is found in this order: `--base` on the dispatch; the item's own
 branch; the branch of the item it is `part_of` through an active link, nearest first (a

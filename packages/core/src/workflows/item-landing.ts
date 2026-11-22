@@ -52,11 +52,13 @@ function shellArgument(value: string): string {
 }
 
 /**
- * The command that creates `branch` on the remote and records it on `itemKey`. A branch
- * such as `feat/$USER` is valid to git, so the values are shell-quoted when they need it.
+ * The command that creates `branch` on the remote of the project at `projectPath` and
+ * records it on `itemKey`. `--cwd` keeps it on that project when it is run from another,
+ * as after a `--project` start. A branch such as `feat/$USER` is valid to git, so the
+ * values are shell-quoted when they need it.
  */
-export function landingCreateCommand(itemKey: string, branch: string): string {
-  return `archon workflow landing --item ${shellArgument(itemKey)} --branch ${shellArgument(branch)} --from <start-point>`;
+export function landingCreateCommand(itemKey: string, branch: string, projectPath: string): string {
+  return `archon workflow landing --cwd ${shellArgument(projectPath)} --item ${shellArgument(itemKey)} --branch ${shellArgument(branch)} --from <start-point>`;
 }
 
 /**
@@ -112,7 +114,7 @@ export async function resolveRunLanding(
   if (!branches.includes(landing.branch)) {
     const owner = landing.from.kind === 'own' ? item.key : landing.from.item.key;
     throw new LandingBranchRefusedError(
-      `${subject}, but '${landing.branch}' is not on remote '${remote}'. The run is refused. Record another branch, or create this one with: ${landingCreateCommand(owner, landing.branch)}`
+      `${subject}, but '${landing.branch}' is not on remote '${remote}'. The run is refused. Record another branch, or create this one with: ${landingCreateCommand(owner, landing.branch, codebase.default_cwd)}`
     );
   }
   return landing;

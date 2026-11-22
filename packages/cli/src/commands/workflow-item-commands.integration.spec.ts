@@ -555,12 +555,15 @@ test.serial(
     const refused = await start({ item: 'lonely' });
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr).toContain("'feat/missing' is not on remote 'origin'");
-    expect(refused.stderr).toContain(
-      'archon workflow landing --item lonely --branch feat/missing --from <start-point>'
+    const [{ default_cwd: checkout } = { default_cwd: '' }] = rows<{ default_cwd: string }>(
+      'SELECT default_cwd FROM remote_agent_codebases'
     );
+    const createCommand = `archon workflow landing --cwd ${checkout} --item lonely --branch feat/missing --from <start-point>`;
+    expect(refused.stderr).toContain(createCommand);
     expect(worktrees()).toBe(before);
     expect(readFileSync(out, 'utf8')).toBe('untouched');
-    // A member's refusal names the item that records the branch, where it is created.
+    // A member's refusal names the item that records the branch, and a start made from
+    // another directory with `--project` still names the selected project's checkout.
     succeeded(
       await invoke(host =>
         workflowLinkCommand(
@@ -572,18 +575,22 @@ test.serial(
         )
       )
     );
-    const memberRefused = await start({ item: 'lonely-member' });
+    const memberRefused = await start(
+      { item: 'lonely-member', codebaseId: selected?.id, discoveryCwd: projectRoot },
+      elsewhere
+    );
     expect(memberRefused.exitCode).not.toBe(0);
-    expect(memberRefused.stderr).toContain('--item lonely --branch feat/missing --from');
+    expect(memberRefused.stderr).toContain(createCommand);
 
     // The command it names creates the branch from the start point; runs are cut from it.
     const remoteSha = (branch: string) =>
       Bun.spawnSync(['git', 'ls-remote', remote, `refs/heads/${branch}`])
         .stdout.toString()
         .split('\t')[0];
+    // Run from the directory the printed `--cwd` names, as the command would be.
     const create = (item: string, branch: string, from: string) =>
       invoke(host =>
-        workflowLandingCommand(host, projectRoot, { item, branch, from }, true, callerEnv)
+        workflowLandingCommand(host, checkout, { item, branch, from }, true, callerEnv)
       );
     expect(succeeded(await create('lonely', 'feat/missing', 'feat/order'))).toMatchObject({
       branch: 'feat/missing',
@@ -622,6 +629,21 @@ test.serial(
       writeFileSync(config, saved);
     }
     expect(remoteSha('feat/on-files')).toBe('');
+
+    // A record the store would refuse is refused before anything is pushed.
+    expect((await create('', 'feat/no-item', 'main')).exitCode).toBe(1);
+    const noIdentity = await invoke(host =>
+      workflowLandingCommand(
+        host,
+        projectRoot,
+        { item: 'fresh', branch: 'feat/no-identity', from: 'main' },
+        true,
+        { ...callerEnv, WORKFLOW_ID: 'run-1' }
+      )
+    );
+    expect(noIdentity.exitCode).toBe(1);
+    expect(remoteSha('feat/no-item')).toBe('');
+    expect(remoteSha('feat/no-identity')).toBe('');
 
     // A start point that names no commit records nothing.
     const unresolved = await create('fresh', 'feat/fresh', 'no-such-ref');

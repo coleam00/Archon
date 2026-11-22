@@ -39,8 +39,11 @@ test('creating a landing branch refuses a folder project and a project with no r
 });
 
 // The refusal's command must run as shown: a shell must not expand a valid branch name.
-test('the create command keeps item and branch values literal in a shell', async () => {
-  const command = landingCreateCommand("WO 1's", 'feat/$USER').replace('<start-point>', 'main');
+test('the create command keeps its values literal in a shell', async () => {
+  const command = landingCreateCommand("WO 1's", 'feat/$USER', '/repos/my project').replace(
+    '<start-point>',
+    'main'
+  );
   const { stdout } = await execFileAsync('bash', [
     '-c',
     `printf '%s\\n' ${command.slice('archon '.length)}`,
@@ -48,6 +51,8 @@ test('the create command keeps item and branch values literal in a shell', async
   expect(stdout.split('\n')).toEqual([
     'workflow',
     'landing',
+    '--cwd',
+    '/repos/my project',
     '--item',
     "WO 1's",
     '--branch',
