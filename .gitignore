@@ -129,3 +129,6 @@ main/
 
 # Personal per-run config overlays (workflow run --config) — never tracked
 .config.*.yaml
+
+# local build artifacts
+archon-web.tar.gz
