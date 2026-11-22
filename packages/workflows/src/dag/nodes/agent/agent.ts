@@ -85,6 +85,7 @@ export async function executeAgentNode(
     namedResumeSourceNodeId: session.namedResumeSourceNodeId,
     iteration,
     nodeContext,
+    sandbox: nodeOptions?.nodeConfig?.sandbox,
   });
   const { execution, nodeMcp } = binding;
   const state = createAttemptState(ctx, node.id);

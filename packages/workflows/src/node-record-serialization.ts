@@ -8,6 +8,7 @@ import type { TokenUsage } from '@archon/provider-contract';
 import { providerFailureSchema } from '@archon/provider-contract';
 import type { NodeOutput } from './schemas/workflow-run';
 import { fanOutOutcomeSchema } from './schemas/fan-out-outcome';
+import { sandboxSettingsSchema } from './schemas/provider-options';
 import { nodeSkipReasonSchema, skipCauseSchema } from './schemas/node-state';
 import {
   childUsageSchema,
@@ -91,6 +92,7 @@ export const serializedNodeDataSchema = z.object({
   ordinal: z.number().optional(),
   approval_decision: z.string().optional(),
   mcp_unavailable: mcpUnavailableSchema.optional(),
+  sandbox: sandboxSettingsSchema.optional(),
   /** The full provider session id; only this durable row carries it. */
   session_id: z.string().optional(),
 });
@@ -367,6 +369,7 @@ function diagnosticFields(d: ExecutionDiagnostics): SerializedNodeData {
     ...(d.approvalDecision !== undefined ? { approval_decision: d.approvalDecision } : {}),
     ...(d.expr !== undefined ? { expr: d.expr } : {}),
     ...(d.mcpUnavailable !== undefined ? { mcp_unavailable: d.mcpUnavailable } : {}),
+    ...(d.sandbox !== undefined ? { sandbox: d.sandbox } : {}),
   };
 }
 

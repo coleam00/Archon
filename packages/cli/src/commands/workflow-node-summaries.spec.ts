@@ -34,6 +34,20 @@ function event(
 }
 
 describe('buildNodeSummaries', () => {
+  it('projects a completed node’s resolved sandbox', () => {
+    const sandbox = {
+      enabled: true,
+      filesystem: { denyWrite: ['/worktrees/run', '/repo/.git', '/repo'] },
+    };
+    const [summary] = buildNodeSummaries([
+      event('done', 'node_completed', 'step', '2026-11-22T10:00:00.000Z', {
+        sandbox,
+        node_output: 'done',
+      }),
+    ]);
+    expect(summary?.sandbox).toEqual(sandbox);
+  });
+
   it('renders include provenance while retaining legacy cause wording', () => {
     const boundary = { includeId: 'cycle.review%5Fqa', workflow: 'review-block' };
     const causes = [

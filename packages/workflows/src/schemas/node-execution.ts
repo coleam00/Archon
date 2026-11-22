@@ -20,6 +20,7 @@ import { effortLevelSchema } from './effort';
 import { tierNameSchema } from './model-binding';
 import { nodeSkipReasonSchema, skipCauseSchema, suspendReasonSchema } from './node-state';
 import { checkoutObservationSchema } from './checkout-observation';
+import { sandboxSettingsSchema } from './provider-options';
 
 export const unavailableMeasurementSchema = z.object({
   source: z.literal('unavailable'),
@@ -251,6 +252,8 @@ export const executionDiagnosticsSchema = z.object({
   expr: z.string().optional(),
   /** The node's optional MCP servers were not loaded, and why. */
   mcpUnavailable: mcpUnavailableSchema.optional(),
+  /** Sandbox settings for this attempt, with run-scoped path tokens resolved. */
+  sandbox: sandboxSettingsSchema.optional(),
 });
 export type ExecutionDiagnostics = z.infer<typeof executionDiagnosticsSchema>;
 

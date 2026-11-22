@@ -11,6 +11,7 @@ import type {
   NodeExecutionMetadata,
   NodeFailureKind,
 } from '@archon/workflows/schemas/node-execution';
+import type { SandboxSettings } from '@archon/workflows/schemas/provider-options';
 import {
   describeUnfinishedFanOut,
   fanOutSlotOutcomeLabel,
@@ -52,10 +53,16 @@ export interface NodeSummary {
   sessionIds?: string[];
   /** A `workflow:` fan-out node's per-slot record. */
   fanOutOutcome?: FanOutOutcome;
+  /** Sandbox settings recorded for the attempt, with run-scoped paths resolved. */
+  sandbox?: SandboxSettings;
 }
 
 function fanOutFields(outcome: FanOutOutcome | undefined): Pick<NodeSummary, 'fanOutOutcome'> {
   return outcome === undefined ? {} : { fanOutOutcome: outcome };
+}
+
+function sandboxFields(sandbox: SandboxSettings | undefined): Pick<NodeSummary, 'sandbox'> {
+  return sandbox === undefined ? {} : { sandbox };
 }
 
 /** Non-completed slots shown under a fan-out node; the tally still counts every slot. */
@@ -201,7 +208,13 @@ function nextNodeSummary(
     case 'node_started':
       // A retry is a new active attempt, so stale terminal details must not
       // leak into the compact current-state summary.
-      return { nodeId, state: 'running', startedAt: createdAt, ...executionFields(execution) };
+      return {
+        nodeId,
+        state: 'running',
+        startedAt: createdAt,
+        ...executionFields(execution),
+        ...sandboxFields(record.data.sandbox),
+      };
     case 'node_always_run_reset':
     case 'node_prior_cache_invalidated':
       return { nodeId, state: 'pending' };
@@ -220,6 +233,7 @@ function nextNodeSummary(
         durationMs: nodeDurationMs(record, createdAt, startTime),
         ...outputFields(record.data),
         ...fanOutFields(record.data.fan_out_outcome),
+        ...sandboxFields(record.data.sandbox),
         ...executionFields(execution),
       };
     case 'node_failed':
@@ -274,6 +288,7 @@ function failedNodeSummary(
       ? {}
       : { blockedOnChildRunId: data.blocked_on_child_run_id }),
     ...fanOutFields(data.fan_out_outcome),
+    ...sandboxFields(data.sandbox),
     ...executionFields(record.metadata),
   };
 }

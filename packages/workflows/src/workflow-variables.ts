@@ -102,6 +102,8 @@ export interface TemplateReferences {
  * - $WORKFLOW_ID - The workflow run ID
  * - $USER_MESSAGE, $ARGUMENTS - The user's trigger message
  * - $ARTIFACTS_DIR - External artifacts directory for this workflow run
+ * - $RUN_WORKTREE, $GIT_COMMON_DIR, $MAIN_CHECKOUT - Run-scoped sandbox paths.
+ *   Substituted only when the caller passes them; otherwise the token stays literal.
  * - $STATE_DIR - External per-PROJECT cross-run state directory (shared by every
  *   workflow in the project; pre-created by the executor). Throws if referenced
  *   without a resolved value.
@@ -162,6 +164,13 @@ export function substituteWorkflowVariables(
     typedArtifactsFile?: string;
     /** The consumer's node-outcome observation path, under the same rule as `typedArtifactsFile`. */
     nodeOutcomesFile?: string;
+    /**
+     * Run-scoped sandbox paths. Engine-controlled, so they substitute under `shellSafe`.
+     * Omitted, the token stays literal and does not throw.
+     */
+    runWorktree?: string;
+    gitCommonDir?: string;
+    mainCheckout?: string;
     references?: TemplateReferences;
   }
 ): { prompt: string; contextSubstituted: boolean } {
@@ -259,6 +268,15 @@ export function substituteWorkflowVariables(
     // Defensive: ensure docsDir always has a value (callers should resolve, but guard here)
     variable('DOCS_DIR', () => docsDir || 'docs/'),
   ];
+
+  // Engine-controlled like $ARTIFACTS_DIR, but a caller that does not own the path
+  // (prompt, env, argv) omits it and the token stays literal.
+  const runWorktree = options?.runWorktree;
+  const gitCommonDir = options?.gitCommonDir;
+  const mainCheckout = options?.mainCheckout;
+  if (runWorktree !== undefined) tokens.push(variable('RUN_WORKTREE', () => runWorktree));
+  if (gitCommonDir !== undefined) tokens.push(variable('GIT_COMMON_DIR', () => gitCommonDir));
+  if (mainCheckout !== undefined) tokens.push(variable('MAIN_CHECKOUT', () => mainCheckout));
 
   // When shellSafe is true, user-controlled variables stay literal — they are passed via
   // subprocess environment variables instead to prevent shell injection (#2115).

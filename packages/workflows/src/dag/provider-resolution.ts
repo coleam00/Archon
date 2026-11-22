@@ -7,13 +7,21 @@ import {
   requireProvider,
   isEffortRung,
 } from '@archon/provider-contract';
+import { getCanonicalRepoPath, getGitCheckoutIdentity } from '@archon/git';
 import {
   type ModelAliasPreset,
   type PresetEffortRejection,
   type TierName,
   resolvePresetEffort,
 } from '../model-validation';
-import { type DagNode, type EffortLevel, type NodeMcp, mcpDeclaration } from '../schemas';
+import {
+  type DagNode,
+  type EffortLevel,
+  type NodeMcp,
+  type SandboxSettings,
+  mcpDeclaration,
+} from '../schemas';
+import { substituteWorkflowVariables } from '../workflow-variables';
 import { type McpPathResolution, resolveMcpPath, missingMcpConfigMessage } from '../mcp-path';
 import type { McpUnavailable } from '../schemas/node-execution';
 import { capturedSourceReadGuard } from '../workflow-source';
@@ -147,6 +155,11 @@ type ProviderResolutionContext = Pick<
   | 'aiProfile'
   | 'workflowPreset'
   | 'execContext'
+  | 'cwd'
+  | 'artifactsDir'
+  | 'stateDir'
+  | 'baseBranch'
+  | 'docsDir'
 >;
 
 /**
@@ -218,7 +231,19 @@ export async function resolveNodeProviderAndModel(
 
   const aiFields = resolveNodeAiFields(node, workflowLevelOptions, resolveAiText);
   const baseOptions = baseQueryOptions(ctx, node, model, aiFields);
-  const nodeConfig = buildNodeConfig(node, workflowLevelOptions, caps, declaredEffort, aiFields);
+  const sandbox = await resolveNodeSandbox(
+    node.sandbox ?? workflowLevelOptions.sandbox,
+    ctx,
+    node.id
+  );
+  const nodeConfig = buildNodeConfig(
+    node,
+    workflowLevelOptions,
+    caps,
+    declaredEffort,
+    aiFields,
+    sandbox
+  );
 
   // Pass assistantConfig from config — provider parses internally
   const assistantConfig: Record<string, unknown> = { ...(config.assistants[provider] ?? {}) };
@@ -430,13 +455,122 @@ function baseQueryOptions(
   return baseOptions;
 }
 
+const SANDBOX_PATH_NAMES = ['RUN_WORKTREE', 'GIT_COMMON_DIR', 'MAIN_CHECKOUT'] as const;
+
+function sandboxPathError(nodeId: string, token: string, cwd: string, cause: unknown): Error {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  return new Error(
+    `Node '${nodeId}' cannot resolve ${token} for its sandbox from ${cwd}: ${detail}`,
+    cause instanceof Error ? { cause } : undefined
+  );
+}
+
+function visitSandbox(value: unknown, visit: (text: string) => string): void {
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      const item: unknown = value[index];
+      if (typeof item === 'string') value[index] = visit(item);
+      else if (item !== null && typeof item === 'object') visitSandbox(item, visit);
+    }
+    return;
+  }
+  if (value === null || typeof value !== 'object') return;
+  const record = value as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    const item = record[key];
+    if (typeof item === 'string') record[key] = visit(item);
+    else if (item !== null && typeof item === 'object') visitSandbox(item, visit);
+  }
+}
+
+function sandboxTexts(value: unknown): string[] {
+  const texts: string[] = [];
+  visitSandbox(value, text => {
+    texts.push(text);
+    return text;
+  });
+  return texts;
+}
+
+function sandboxHas(texts: readonly string[], name: string): boolean {
+  return texts.some(text => text.includes(`$${name}`));
+}
+
+function substituteSandboxText(
+  text: string,
+  ctx: ProviderResolutionContext,
+  paths: { runWorktree: string; gitCommonDir?: string; mainCheckout?: string }
+): string {
+  return substituteWorkflowVariables(
+    text,
+    ctx.workflowRun.id,
+    ctx.workflowRun.user_message,
+    ctx.artifactsDir,
+    ctx.baseBranch,
+    ctx.docsDir,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {
+      shellSafe: true,
+      stateDir: ctx.stateDir,
+      runWorktree: paths.runWorktree,
+      ...(paths.gitCommonDir !== undefined ? { gitCommonDir: paths.gitCommonDir } : {}),
+      ...(paths.mainCheckout !== undefined ? { mainCheckout: paths.mainCheckout } : {}),
+    }
+  ).prompt;
+}
+
+/** A copy of the sandbox with run-scoped path tokens resolved. Absent stays absent. */
+async function resolveNodeSandbox(
+  sandbox: SandboxSettings | undefined,
+  ctx: ProviderResolutionContext,
+  nodeId: string
+): Promise<SandboxSettings | undefined> {
+  if (sandbox === undefined) return undefined;
+  const copy = structuredClone(sandbox);
+  const texts = sandboxTexts(copy);
+  let gitCommonDir: string | undefined;
+  let mainCheckout: string | undefined;
+  if (sandboxHas(texts, 'GIT_COMMON_DIR')) {
+    try {
+      gitCommonDir = (await getGitCheckoutIdentity(ctx.cwd)).commonGitDir;
+    } catch (error) {
+      throw sandboxPathError(nodeId, '$GIT_COMMON_DIR', ctx.cwd, error);
+    }
+  }
+  if (sandboxHas(texts, 'MAIN_CHECKOUT')) {
+    try {
+      mainCheckout = await getCanonicalRepoPath(ctx.cwd);
+    } catch (error) {
+      throw sandboxPathError(nodeId, '$MAIN_CHECKOUT', ctx.cwd, error);
+    }
+  }
+  visitSandbox(copy, text =>
+    substituteSandboxText(text, ctx, {
+      runWorktree: ctx.cwd,
+      ...(gitCommonDir !== undefined ? { gitCommonDir } : {}),
+      ...(mainCheckout !== undefined ? { mainCheckout } : {}),
+    })
+  );
+  const unresolved = SANDBOX_PATH_NAMES.filter(name => sandboxHas(sandboxTexts(copy), name));
+  if (unresolved.length > 0) {
+    throw new Error(
+      `Node '${nodeId}' sandbox still contains ${unresolved.map(name => `$${name}`).join(', ')} after path substitution.`
+    );
+  }
+  return copy;
+}
+
 /** Raw nodeConfig — the provider translates it internally. */
 function buildNodeConfig(
   node: DagNode,
   workflowLevelOptions: ProviderResolutionContext['workflowLevelOptions'],
   caps: ProviderCapabilities,
   declaredEffort: EffortLevel | undefined,
-  { systemPrompt, agents, fallbackModel }: NodeAiFields
+  { systemPrompt, agents, fallbackModel }: NodeAiFields,
+  sandbox: SandboxSettings | undefined
 ): NodeConfig {
   return {
     nodeId: node.id,
@@ -457,7 +591,7 @@ function buildNodeConfig(
     // report a depth that was never applied, and would leave declared and preset
     // effort behaving oppositely on the same provider.
     effort: caps.effortControl ? declaredEffort : undefined,
-    sandbox: node.sandbox ?? workflowLevelOptions.sandbox,
+    sandbox,
     betas: node.betas ?? workflowLevelOptions.betas,
     output_format: node.output_format,
     maxBudgetUsd: node.maxBudgetUsd,

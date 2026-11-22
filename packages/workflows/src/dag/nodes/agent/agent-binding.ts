@@ -3,7 +3,12 @@ import type { IAgentProvider, ProviderCapabilities } from '@archon/provider-cont
 import { type NodeExecutionRecord } from '../../../schemas/node-execution';
 import { recordNodeState } from '../../../node-event-write';
 import { isSourceReadFailure } from '../../../workflow-source';
-import type { AgentNode, EffortLevel } from '../../../schemas';
+import {
+  sandboxSettingsSchema,
+  type AgentNode,
+  type EffortLevel,
+  type SandboxSettings,
+} from '../../../schemas';
 import { readHomeMcpDirectory } from '../../../compiled-command';
 import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { type TierName } from '../../../model-validation';
@@ -17,6 +22,11 @@ import {
 } from '../../run-context';
 import { isInsideAny } from '../../checkout-guard';
 import { resolveNodeMcp, type NodeMcpResolution } from '../../provider-resolution';
+
+function recordedSandbox(value: unknown): SandboxSettings | undefined {
+  if (!sandboxSettingsSchema.safeParse(value).success) return undefined;
+  return value as SandboxSettings;
+}
 
 /** The provider, model and session an agent attempt was dispatched with. */
 export interface AgentBindingRequest {
@@ -33,6 +43,8 @@ export interface AgentBindingRequest {
   /** Only inside a loop_group body; tags lifecycle rows with the iteration. */
   iteration: number | undefined;
   nodeContext: SendMessageContext;
+  /** The sandbox passed to the provider, after run-scoped path substitution. */
+  sandbox?: unknown;
 }
 
 export interface AgentBinding {
@@ -83,6 +95,7 @@ export async function bindAgentNode(
   }
   await request.reserveBudget();
   const aiClient = deps.getAgentProvider(provider);
+  const sandbox = recordedSandbox(request.sandbox);
   const execution: NodeExecutionRecord = {
     ...beginExecution(ctx, node, {
       provider,
@@ -102,6 +115,7 @@ export async function bindAgentNode(
           }
         : {}),
       ...(nodeMcp.kind === 'unavailable' ? { mcpUnavailable: nodeMcp.record } : {}),
+      ...(sandbox !== undefined ? { sandbox } : {}),
     },
   };
   getLog().info({ nodeId: node.id, provider }, 'dag_node_started');

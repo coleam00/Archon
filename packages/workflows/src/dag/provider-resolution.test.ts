@@ -1,8 +1,33 @@
 // @archon-test-isolated
 import { describe, beforeEach, afterEach, it, mock, expect, type Mock } from 'bun:test';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { mkdtemp, mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { getCanonicalRepoPath, getGitCheckoutIdentity } from '@archon/git';
+
+const runGit = promisify(execFile);
+
+async function git(cwd: string, ...args: string[]): Promise<void> {
+  await runGit('git', args, { cwd });
+}
+
+/** A linked checkout whose common git dir records no primary worktree. */
+async function checkoutWithoutPrimary(root: string): Promise<string> {
+  const common = join(root, 'common.git');
+  const linked = join(common, 'worktrees', 'linked');
+  const checkout = join(root, 'checkout');
+  await mkdir(root, { recursive: true });
+  await git(root, 'init', '--bare', '-q', common);
+  await mkdir(linked, { recursive: true });
+  await writeFile(join(linked, 'HEAD'), 'ref: refs/heads/main\n');
+  await writeFile(join(linked, 'commondir'), '../..\n');
+  await mkdir(join(checkout, '.archon', 'commands'), { recursive: true });
+  await writeFile(join(checkout, '.git'), `gitdir: ${linked}\n`);
+  await writeFile(join(checkout, '.archon', 'commands', 'my-cmd.md'), 'My command prompt');
+  return checkout;
+}
 import { removeTempTree } from '@archon/paths/test-utils';
 import { getProviderCapabilities, providerRegistry } from '@archon/providers';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
@@ -852,6 +877,105 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
     const nodeConfig = optionsArg?.nodeConfig as Record<string, unknown>;
     expect(nodeConfig?.sandbox).toEqual(sandbox);
+  });
+
+  it('resolves sandbox path tokens per worktree and keeps the authored placeholders', async () => {
+    const repo = join(testDir, 'repo');
+    const worktrees = [join(testDir, 'wt-a'), join(testDir, 'wt-b')];
+    await mkdir(repo, { recursive: true });
+    await git(repo, 'init', '-q');
+    await writeFile(join(repo, 'README'), 'x\n');
+    await git(repo, 'add', 'README');
+    await git(repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'init');
+    for (const worktree of worktrees) {
+      await git(repo, 'worktree', 'add', '-q', '--detach', worktree, 'HEAD');
+      await mkdir(join(worktree, '.archon', 'commands'), { recursive: true });
+      await writeFile(join(worktree, '.archon', 'commands', 'my-cmd.md'), 'My command prompt');
+    }
+
+    const sandbox = {
+      enabled: true,
+      filesystem: {
+        denyWrite: ['$RUN_WORKTREE', '$GIT_COMMON_DIR', '$MAIN_CHECKOUT'],
+        allowWrite: ['$USER_MESSAGE'],
+      },
+      note: { keep: '$plan.output' },
+    };
+    const store = createMockStore();
+    const resolved: unknown[] = [];
+    for (const [index, worktree] of worktrees.entries()) {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: worktree,
+          workflow: {
+            name: 'sandbox-paths',
+            nodes: [
+              { id: 'step1', kind: 'agent', source: { kind: 'command', name: 'my-cmd' }, sandbox },
+            ],
+          },
+          workflowRun: makeWorkflowRun(`sandbox-run-${String(index)}`),
+        })
+      );
+      const identity = await getGitCheckoutIdentity(worktree);
+      const main = await getCanonicalRepoPath(worktree);
+      expect(identity.linkedWorktree).toBe(true);
+      expect(identity.commonGitDir).not.toBe(identity.gitDir);
+      const options = mockSendQueryDag.mock.calls.at(-1)?.[3] as Record<string, unknown>;
+      const sent = (options?.nodeConfig as Record<string, unknown>)?.sandbox;
+      const expected = {
+        enabled: true,
+        filesystem: {
+          denyWrite: [worktree, identity.commonGitDir, main],
+          allowWrite: ['$USER_MESSAGE'],
+        },
+        note: { keep: '$plan.output' },
+      };
+      expect(sent).toEqual(expected);
+      expect(mockSendQueryDag.mock.calls.at(-1)?.[1]).toBe(worktree);
+      const completed = persistedEvents(store)
+        .filter(event => event.event_type === 'node_completed' && event.step_name === 'step1')
+        .at(-1);
+      expect(readNodeRecordEvent(completed!)?.data.sandbox).toEqual(expected);
+      resolved.push(sent);
+    }
+
+    expect(resolved[0]).not.toEqual(resolved[1]);
+    expect(sandbox.filesystem.denyWrite).toEqual([
+      '$RUN_WORKTREE',
+      '$GIT_COMMON_DIR',
+      '$MAIN_CHECKOUT',
+    ]);
+    expect(sandbox.note.keep).toBe('$plan.output');
+  });
+
+  it('does not call the provider when $MAIN_CHECKOUT cannot be resolved', async () => {
+    const checkout = await checkoutWithoutPrimary(join(testDir, 'unresolved'));
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: checkout,
+        workflow: {
+          name: 'sandbox-unresolved',
+          nodes: [
+            {
+              id: 'step1',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              sandbox: { filesystem: { denyWrite: ['$MAIN_CHECKOUT'] } },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
+    expect(String(failed?.data.error)).toContain('$MAIN_CHECKOUT');
   });
 
   it('per-node effort overrides workflow-level effort', async () => {

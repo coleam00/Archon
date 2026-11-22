@@ -171,6 +171,40 @@ describe('substituteWorkflowVariables', () => {
     expect(prompt).toBe('Save to /tmp/artifacts/runs/run-1/output.txt');
   });
 
+  it('leaves sandbox path tokens literal when the caller omits them', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'deny $RUN_WORKTREE $GIT_COMMON_DIR $MAIN_CHECKOUT',
+      'run-1',
+      'msg',
+      '/artifacts',
+      'main',
+      'docs/'
+    );
+    expect(prompt).toBe('deny $RUN_WORKTREE $GIT_COMMON_DIR $MAIN_CHECKOUT');
+  });
+
+  it('replaces sandbox path tokens under shellSafe when the caller supplies them', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'deny $RUN_WORKTREE $GIT_COMMON_DIR $MAIN_CHECKOUT $USER_MESSAGE',
+      'run-1',
+      'secret',
+      '/artifacts',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        shellSafe: true,
+        runWorktree: '/wt',
+        gitCommonDir: '/repo/.git',
+        mainCheckout: '/repo',
+      }
+    );
+    expect(prompt).toBe('deny /wt /repo/.git /repo $USER_MESSAGE');
+  });
+
   it('replaces $STATE_DIR with the resolved state directory', () => {
     const { prompt } = substituteWorkflowVariables(
       'Read $STATE_DIR/triage-state.json',
