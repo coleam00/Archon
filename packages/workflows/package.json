@@ -6,6 +6,7 @@
     "./schemas/*": "./src/schemas/*.ts",
     "./run-ai-configuration": "./src/run-ai-configuration.ts",
     "./run-preflight": "./src/run-preflight.ts",
+    "./run-limit-wait": "./src/run-limit-wait.ts",
     "./start-refusal": "./src/start-refusal.ts",
     "./run-credential-env": "./src/run-credential-env.ts",
     "./run-forge-access": "./src/run-forge-access.ts",

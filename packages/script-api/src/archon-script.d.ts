@@ -2154,6 +2154,10 @@ declare module 'archon:script' {
         readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
         readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
       } | null;
+      readonly behindHostQueue: {
+        readonly requestId: string;
+        readonly resource: string;
+      } | null;
     }>;
     readonly skipped: ReadonlyArray<{
       readonly requestId: string;
@@ -2683,6 +2687,10 @@ declare module 'archon:script' {
           readonly workflow: string;
           readonly status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
           readonly owner: 'reachable' | 'unreachable' | 'unknown' | null;
+        } | null;
+        readonly behindHostQueue: {
+          readonly requestId: string;
+          readonly resource: string;
         } | null;
       }>;
       readonly skipped: ReadonlyArray<{

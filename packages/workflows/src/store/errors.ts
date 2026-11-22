@@ -95,3 +95,18 @@ export class RunLimitError extends Error {
     this.name = 'RunLimitError';
   }
 }
+
+/**
+ * A concurrency number in the install config (`concurrency.*`) is invalid, so what it
+ * governs is refused, never run without the limit. Thrown before anything is written; the
+ * message names the file, the key and the problem.
+ */
+export class ConcurrencyConfigError extends Error {
+  constructor(configPath: string, detail: string, refused: string) {
+    super(
+      `Invalid concurrency config in '${configPath}': ${detail}. ` +
+        `${refused} are refused until the config is fixed.`
+    );
+    this.name = 'ConcurrencyConfigError';
+  }
+}

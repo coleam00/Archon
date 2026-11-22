@@ -69,6 +69,7 @@ import {
   startCauseSchema,
 } from './schemas/resource-start';
 import { runLimitSchema } from './schemas/run-limit';
+import { hostQueueWait, hostQueueWaitSchema } from './run-limit-wait';
 import type { IWorkflowStore } from './store';
 import {
   awaitingExecution,
@@ -160,6 +161,7 @@ export type ItemRun = z.infer<typeof itemRunSchema>;
  */
 export const itemQueuedStartSchema = queuedItemStartSchema.extend({
   heldBehind: itemHeldBehindSchema.nullable(),
+  behindHostQueue: hostQueueWaitSchema,
 });
 export type ItemQueuedStart = z.infer<typeof itemQueuedStartSchema>;
 
@@ -730,7 +732,11 @@ export async function assembleItemRead(
   const holds = await itemHolds(source, found.item.id, own.values);
   const queued: ItemQueuedStart[] = [];
   for (const start of waiting.filter(start => !tree.has(start.requestId)))
-    queued.push({ ...start, heldBehind: (await holds.queuedHeldBehind(start)) ?? null });
+    queued.push({
+      ...start,
+      heldBehind: (await holds.queuedHeldBehind(start)) ?? null,
+      behindHostQueue: await hostQueueWait(source.store, start.requestId),
+    });
   const skipped: ItemSkippedStart[] = [];
   for (const start of await source.store.listSkippedItemStarts(found.item.id))
     skipped.push({

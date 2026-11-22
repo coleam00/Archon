@@ -26,7 +26,7 @@ import type { ExecuteWorkflowOptions } from './executor';
 import type { WorkflowRun } from './schemas';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { IWorkflowStore } from './store';
-import { InstallHeldError } from './store/errors';
+import { ConcurrencyConfigError, InstallHeldError } from './store/errors';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { WorkflowStatusReadError } from './workflow-status-read';
 import { keepAwake } from './utils/keep-awake';
@@ -801,6 +801,28 @@ describe('asks without an item', () => {
     });
     expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
     expect(store.claimPendingWorkflowRun).toHaveBeenCalled();
+  });
+});
+
+describe('run limit config', () => {
+  it('an invalid concurrency number refuses the start with the config problem, not an ownership one', async () => {
+    const invalid = new ConcurrencyConfigError(
+      '/home/config.yaml',
+      'concurrency.runs: Too small: expected number to be >=1',
+      'Run admissions'
+    );
+    const cancelWorkflowRun = mock(async () => ({ cancelled: true }));
+    const result = await startWorkflow({
+      store: makeStore({
+        claimPendingWorkflowRun: mock(async () => {
+          throw invalid;
+        }),
+        cancelWorkflowRun,
+      }),
+    });
+    expect(result).toMatchObject({ success: false, error: invalid.message });
+    expect(cancelWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 });
 

@@ -50,7 +50,7 @@ import {
   lockResourceSlot,
   lockResourceSlotForAdmission,
   readInstallHold,
-  readRunRoom,
+  runLimitRefusal,
   underRunLimit,
   withinRunRoom,
   resourceStartOccupancy,
@@ -137,8 +137,7 @@ async function admitResourceStartWithQuery(
 
   const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
   const slot = await resourceStartOccupancy(query, intent.resource, capacity);
-  const slotBlocker = resourceStartBlocker(slot, launch, intent.hostId, itemId);
-  const { blocker, overlaps } = await underRunLimit(query, intent, slot, slotBlocker);
+  const { blocker, overlaps } = await underRunLimit(query, { ...intent, launch, itemId }, slot);
   const status = overlaps && intent.overlap === 'skip' ? 'skipped' : 'queued';
   await query(
     `INSERT INTO remote_agent_resource_start_requests
@@ -237,8 +236,8 @@ export async function admitPendingRun(input: {
     const request = existing.rows[0];
     if (request?.status === 'admitted') return null;
     if (request) throw new Error(`Run '${id}' already has a ${request.status} resource request`);
-    const run = await query<{ status: string; item_id: string | null; parent_run_id: unknown }>(
-      'SELECT status, item_id, parent_run_id FROM remote_agent_workflow_runs WHERE id = $1',
+    const run = await query<{ status: string; item_id: string | null }>(
+      'SELECT status, item_id FROM remote_agent_workflow_runs WHERE id = $1',
       [id]
     );
     const status = run.rows[0]?.status;
@@ -254,8 +253,8 @@ export async function admitPendingRun(input: {
       itemId == null ? null : String(itemId)
     );
     if (blocker) return blocker;
-    // A child runs inside its root's count; the caller waits for the limit, not a resource.
-    const { refusal } = run.rows[0]?.parent_run_id == null ? await readRunRoom(query) : {};
+    // Thrown: the caller waits for the limit, not a resource. A sub-run of a counted tree passes.
+    const refusal = await runLimitRefusal(query, id);
     if (refusal) throw refusal;
     await query(
       `INSERT INTO remote_agent_resource_start_requests
@@ -610,7 +609,7 @@ export async function listQueuedResourceStartsForHost(
   const result = await getDatabase().query<RequestInspectionRow>(
     `${requestInspectionSelect}
       WHERE r.host_id = $1 AND r.status = 'queued'
-      ORDER BY r.queue_position`,
+      ORDER BY r.resource_key, r.queue_position`,
     [hostId]
   );
   return result.rows.map(row => {

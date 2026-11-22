@@ -30,6 +30,7 @@ const read: ItemRead = {
       queuedAt: '2026-11-01T09:35:00.000Z',
       ahead: 12,
       heldBehind: null,
+      behindHostQueue: null,
     },
   ],
   skipped: [],
@@ -271,6 +272,18 @@ test('an item read prints a start waiting for capacity with the id that withdraw
     queued: read.queued.map(start => ({ ...start, ahead: 0 })),
   });
   expect(next.find(line => line.includes('b6f1c2d4'))).toContain('on host host');
+  // Held for the run limit behind its host's older start elsewhere, it names that start.
+  const behind = itemReadLines({
+    ...read,
+    queued: read.queued.map(start => ({
+      ...start,
+      ahead: 0,
+      behindHostQueue: { requestId: 'older-request', resource: 'other' },
+    })),
+  });
+  expect(behind.find(line => line.includes('b6f1c2d4'))).toContain(
+    'waits for the run limit behind queued start older-request on other of host host'
+  );
   const empty = itemReadLines({ ...read, queued: [] });
   expect(empty[empty.indexOf('Waiting to start:') + 1]).toBe('  none');
 });

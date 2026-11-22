@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { RunLimitError } from '@archon/workflows/store';
+import { hostQueueWait } from '@archon/workflows/run-limit-wait';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
 import { closeDatabase, getDatabase, resetDatabase } from './connection';
 import { createWorkflowStore } from '../workflows/store-adapter';
@@ -173,6 +174,63 @@ describe('run limit', () => {
     );
   });
 
+  test('a child continues inside its tree while the tree runs, and takes room once it does not', async () => {
+    await setRunLimit(1);
+    const parent = await hand();
+    await store.claimPendingWorkflowRun(parent.id);
+    const child = await hand(parent.id);
+    await store.claimPendingWorkflowRun(child.id);
+    const pause = (id: string) =>
+      getDatabase().query("UPDATE remote_agent_workflow_runs SET status = 'paused' WHERE id = $1", [
+        id,
+      ]);
+    // The child pauses at a gate; its running parent keeps the tree counted.
+    await pause(child.id);
+    expect((await store.resumeWorkflowRun(child.id)).status).toBe('running');
+    // Both pause, and another root takes the room the tree gave back.
+    await pause(child.id);
+    await pause(parent.id);
+    const other = await hand();
+    await store.claimPendingWorkflowRun(other.id);
+    await expect(store.resumeWorkflowRun(child.id)).rejects.toBeInstanceOf(RunLimitError);
+    await end(other.id);
+    expect((await store.resumeWorkflowRun(child.id)).status).toBe('running');
+    // A running child keeps its paused root's tree counted.
+    expect(await store.getRunLimit()).toEqual({ limit: 1, live: 1 });
+  });
+
+  test('a skip start that shares a held checkout is skipped behind an older request', async () => {
+    await setRunLimit(100);
+    const holder = launch();
+    await store.admitResourceStart({
+      resource: 'a',
+      capacity: 1,
+      hostId: 'host',
+      overlap: 'queue',
+      launch: holder,
+    });
+    const older = launch();
+    const queued = await store.admitResourceStart({
+      resource: 'a',
+      capacity: 1,
+      hostId: 'host',
+      overlap: 'queue',
+      launch: older,
+    });
+    expect(queued.status).toBe('queued');
+    const sharing = launch();
+    sharing.execution.cwd = holder.execution.cwd;
+    expect(
+      await store.admitResourceStart({
+        resource: 'a',
+        capacity: 5,
+        hostId: 'host',
+        overlap: 'skip',
+        launch: sharing,
+      })
+    ).toMatchObject({ status: 'skipped' });
+  });
+
   test('starts that only the limit holds back queue under skip, behind an older one', async () => {
     await setRunLimit(1);
     const statuses = [];
@@ -248,6 +306,10 @@ describe('run limit', () => {
       status: 'queued',
       blocker: { kind: 'request', id: older.id },
     });
+    // With room left, the reads say it waits for the limit behind that start.
+    expect(await store.getRunLimit()).toEqual({ limit: 1, live: 0 });
+    expect(await hostQueueWait(store, newer.id)).toEqual({ requestId: older.id, resource: 'b' });
+    expect(await hostQueueWait(store, older.id)).toBeNull();
     expect(await store.drainResourceStarts({ resource: 'b', hostId: 'host' })).toMatchObject([
       { status: 'admitted', requestId: older.id },
     ]);

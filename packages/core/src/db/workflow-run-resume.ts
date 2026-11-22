@@ -76,7 +76,7 @@ export async function listResumableRunsByParentConversation(
   }
 }
 
-type PriorRunRow = Pick<WorkflowRunRow, 'status' | 'metadata' | 'parent_run_id'> & {
+type PriorRunRow = Pick<WorkflowRunRow, 'status' | 'metadata'> & {
   resource_key?: string | null;
   item_id?: string | null;
 };
@@ -90,7 +90,7 @@ async function lockPriorRun(query: TransactionQuery, id: string): Promise<PriorR
     await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
   }
   const priorRows = await query<PriorRunRow>(
-    `SELECT w.status, w.metadata, q.resource_key, w.item_id, w.parent_run_id
+    `SELECT w.status, w.metadata, q.resource_key, w.item_id
        FROM remote_agent_workflow_runs w
        LEFT JOIN remote_agent_resource_start_requests q
          ON q.id = w.id AND q.status = 'admitted'
@@ -258,12 +258,9 @@ export async function resumeWorkflowRun(
           ? await heldItemRefusal(query, id, ['failed'])
           : undefined;
       if (held) return { busy: held };
-      // A failed or paused root does not count against the run limit, so resuming it takes
-      // room like a new start. Checked before the slot: this refusal leaves nothing behind.
-      const full =
-        prior.status !== 'running' && prior.parent_run_id == null
-          ? await runLimitRefusal(query)
-          : undefined;
+      // A resumed run takes room like a new start unless its tree already counts (a sub-run
+      // of a running root). Checked before the slot: this refusal leaves nothing behind.
+      const full = prior.status !== 'running' ? await runLimitRefusal(query, id) : undefined;
       if (full) return { busy: full };
       const busy = await claimResourceSlot(query, id, prior, cursor);
       if (busy) return { busy };

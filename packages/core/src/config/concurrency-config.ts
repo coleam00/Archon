@@ -11,16 +11,9 @@
 import { readFile } from 'fs/promises';
 import { z } from 'zod';
 import { getArchonConfigPath } from '@archon/paths/archon-paths';
+import { ConcurrencyConfigError } from '@archon/workflows/store';
 
-export class ConcurrencyConfigError extends Error {
-  constructor(configPath: string, detail: string, refused: string) {
-    super(
-      `Invalid concurrency config in '${configPath}': ${detail}. ` +
-        `${refused} are refused until the config is fixed.`
-    );
-    this.name = 'ConcurrencyConfigError';
-  }
-}
+export { ConcurrencyConfigError };
 
 /**
  * The config file checked against `schema`, or `{}` when there is none. Only the

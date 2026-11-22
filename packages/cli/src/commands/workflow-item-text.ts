@@ -152,8 +152,10 @@ function runLines(run: ItemRun): string[] {
  * `archon trigger inspect` and `archon trigger withdraw` take.
  */
 function queuedLines(start: ItemQueuedStart): string[] {
-  const waits =
-    start.ahead === 0
+  const behind = start.behindHostQueue;
+  const waits = behind
+    ? `waits for the run limit behind queued start ${behind.requestId} on ${behind.resource} of host ${start.hostId}`
+    : start.ahead === 0
       ? `next for a free slot on host ${start.hostId}`
       : `${String(start.ahead)} ahead on host ${start.hostId}`;
   const lines = [

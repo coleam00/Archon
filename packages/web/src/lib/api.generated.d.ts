@@ -8199,6 +8199,10 @@ export interface components {
           /** @enum {string|null} */
           owner: 'reachable' | 'unreachable' | 'unknown' | null;
         } | null;
+        behindHostQueue: {
+          requestId: string;
+          resource: string;
+        } | null;
       }[];
       skipped: {
         requestId: string;
@@ -8868,6 +8872,10 @@ export interface components {
             status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
             /** @enum {string|null} */
             owner: 'reachable' | 'unreachable' | 'unknown' | null;
+          } | null;
+          behindHostQueue: {
+            requestId: string;
+            resource: string;
           } | null;
         }[];
         skipped: {
