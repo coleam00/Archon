@@ -653,7 +653,7 @@ test('a host whose drain failed is drained again on the next pass, with no new o
       action: 'observe',
       drain: 'build-host',
       error: "host 'build-host' drain failed: database unavailable",
-      hint: 'Retried on the next pass, or run archon trigger drain --host build-host.',
+      hint: 'A running watch retries it on its next pass; otherwise run archon trigger drain --host build-host.',
     });
     expect(drain.mock.calls.map(([drained]) => drained.hostId)).toEqual([
       'build-host',

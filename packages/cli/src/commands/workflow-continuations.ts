@@ -470,7 +470,9 @@ async function reportObserved(
 /**
  * Hand the starts observation recorded to their executors, host by host. A met wait is
  * closed when its receipt is recorded, so a later pass never observes it again: a host
- * whose drain fails stays owed and is drained again on the next pass.
+ * whose drain fails stays owed and is drained again on this process's next pass. The owed
+ * set lives only in this process; issue 6019 makes every wake pass drain the hosts the
+ * install's trigger files name, which recovers a start after a restart too.
  */
 async function drainOwed(
   host: WorkflowHost,
@@ -490,7 +492,7 @@ async function drainOwed(
     } catch (drainError) {
       ok = false;
       const error = `host '${hostId}' drain failed: ${errorMessage(drainError)}`;
-      const hint = `Retried on the next pass, or run archon trigger drain --host ${hostId}.`;
+      const hint = `A running watch retries it on its next pass; otherwise run archon trigger drain --host ${hostId}.`;
       if (json) await writeJsonLine({ ok, action: 'observe', drain: hostId, error, hint });
       else console.error(`observe: ${error}. ${hint}`);
     }
