@@ -33,7 +33,6 @@ import {
   type AwaitingExecution,
   type StartBindingInspection,
 } from '@archon/workflows/resource-start-store';
-import { receiptWaitsForRunLimit } from '@archon/workflows/run-limit-wait';
 import {
   describeInstallHold,
   mappedItemKey,
@@ -159,8 +158,8 @@ async function triggerWhoami(host: WorkflowHost): Promise<void> {
  * And `refusedBindings`: its bindings whose preparation failed or was refused, each with
  * the failed boundary and, for a refusal of the pack's forge needs, the reasons and remedies.
  * `hold` is the install hold when the receipt has a start it keeps (a binding not yet
- * prepared, or a queued request), else null. `runLimit` is the run limit while the receipt
- * has a queued start that waits for it (`receiptWaitsForRunLimit`), else null.
+ * prepared, or a queued request), else null. `runLimit` is the run limit while one of the
+ * receipt's queued starts waits only for it (`RunLimitState.waiting`), else null.
  */
 async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise<void> {
   const receipts = await host.deps.store.listStartReceipts(
@@ -184,8 +183,10 @@ async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise
               forgeRefusal,
             })),
           hold: hold && bindings.some(heldBinding) ? hold : null,
-          runLimit: (await receiptWaitsForRunLimit(host.deps.store, runLimit, bindings))
-            ? runLimit
+          runLimit: bindings.some(({ disposition }) =>
+            runLimit?.waiting.includes(disposition?.requestId ?? '')
+          )
+            ? runLimit && { limit: runLimit.limit, live: runLimit.live }
             : null,
         };
       })

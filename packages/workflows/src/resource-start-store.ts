@@ -6,7 +6,7 @@ import {
   DEFAULT_RESOURCE_CAPACITY,
   readAdmissionCheckoutGuard,
 } from './schemas/resource-start';
-import type { RunLimit } from './schemas/run-limit';
+import type { RunLimitState } from './schemas/run-limit';
 import type { z } from 'zod';
 import type { AwaitingExecution, StartExecutorObservation } from './schemas/start-executor';
 import type {
@@ -610,10 +610,11 @@ export interface IResourceStartStore {
   /** The unprepared binding starts on item `itemId`. A store without items returns none. */
   listHeldItemStarts(itemId: string): Promise<HeldItemStart[]>;
   /**
-   * The install's run limit (`concurrency.runs`) with how many runs count against it now;
-   * null when none is set. A store without the limit reports none.
+   * The install's run limit (`concurrency.runs`), how many run trees count against it now and
+   * the queued starts only it holds (`RunLimitState`); null when none is set. A store without
+   * the limit reports none.
    */
-  getRunLimit(): Promise<RunLimit | null>;
+  getRunLimit(): Promise<RunLimitState | null>;
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
   /**
    * Admit an existing pending run that no binding started onto `resource` now, or return

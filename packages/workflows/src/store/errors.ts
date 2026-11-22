@@ -84,10 +84,11 @@ export class InstallHeldError extends Error {
 }
 
 /**
- * The install's run limit (`concurrency.runs`) is full, so no new top-level run is admitted
- * now. Thrown by `admitPendingRun`, by `claimPendingWorkflowRun` for a top-level run nothing
- * admitted, and by `resumeWorkflowRun` for a failed run; nothing was written. A hand start
- * that gets it waits and asks again, or is refused under `--no-wait`.
+ * The install's run limit (`concurrency.runs`) is full and the run is not inside a tree that
+ * already counts, so it is not admitted now. Thrown by `admitPendingRun`,
+ * `claimPendingWorkflowRun` and `resumeWorkflowRun` (a hand start, or a failed tree's resume);
+ * nothing was written. A hand start that gets it waits and asks again, or is refused under
+ * `--no-wait`.
  */
 export class RunLimitError extends Error {
   constructor(public readonly runLimit: RunLimit) {

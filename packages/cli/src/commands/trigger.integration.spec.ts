@@ -497,7 +497,7 @@ describe('trigger CLI durable execution', () => {
         queuedAt: expect.any(String),
         ahead: 0,
         heldBehind: expect.objectContaining({ runId: runs()[0]?.id, workflow: 'item-proof' }),
-        behindHostQueue: null,
+        waitsForRunLimit: false,
       },
     ]);
     // Every receipt shows the item it named; the follow-up inherited the first's.

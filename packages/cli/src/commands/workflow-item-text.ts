@@ -151,13 +151,13 @@ function runLines(run: ItemRun): string[] {
  * One start waiting for capacity. The request id prints in full: it is what
  * `archon trigger inspect` and `archon trigger withdraw` take.
  */
-function queuedLines(start: ItemQueuedStart): string[] {
-  const behind = start.behindHostQueue;
-  const waits = behind
-    ? `waits for the run limit behind queued start ${behind.requestId} on ${behind.resource} of host ${start.hostId}`
-    : start.ahead === 0
-      ? `next for a free slot on host ${start.hostId}`
-      : `${String(start.ahead)} ahead on host ${start.hostId}`;
+function queuedLines(start: ItemQueuedStart, runLimit: ItemRead['runLimit']): string[] {
+  const waits =
+    start.waitsForRunLimit && runLimit
+      ? `waits for the run limit (${describeRunLimit(runLimit)}) on host ${start.hostId}`
+      : start.ahead === 0
+        ? `next for a free slot on host ${start.hostId}`
+        : `${String(start.ahead)} ahead on host ${start.hostId}`;
   const lines = [
     `  ${start.requestId}  ${start.workflow ?? '(launch unreadable)'}  on ${start.resource}, ${waits}, queued ${minute(start.queuedAt)}`,
   ];
@@ -186,7 +186,7 @@ function startSectionLines(read: ItemRead): string[] {
     );
   for (const start of read.held) lines.push(heldLine(start));
   if (read.queued.length === 0 && read.held.length === 0) lines.push('  none');
-  for (const start of read.queued) lines.push(...queuedLines(start));
+  for (const start of read.queued) lines.push(...queuedLines(start, read.runLimit));
   if (read.skipped.length > 0) {
     lines.push('', 'Refused starts:');
     for (const start of read.skipped) lines.push(...skippedLines(start));

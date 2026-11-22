@@ -69,7 +69,6 @@ import {
   startCauseSchema,
 } from './schemas/resource-start';
 import { runLimitSchema } from './schemas/run-limit';
-import { hostQueueWait, hostQueueWaitSchema } from './run-limit-wait';
 import type { IWorkflowStore } from './store';
 import {
   awaitingExecution,
@@ -157,11 +156,12 @@ export type ItemRun = z.infer<typeof itemRunSchema>;
 /**
  * A start on the item still waiting for admission, which has no run yet. `heldBehind`
  * names the run of its workflow that holds the item now, when one does; null when it
- * waits for capacity or its checkout only, or its workflow does not read.
+ * waits for capacity or its checkout only, or its workflow does not read. `waitsForRunLimit`:
+ * only the run limit holds it now (`RunLimitState.waiting`).
  */
 export const itemQueuedStartSchema = queuedItemStartSchema.extend({
   heldBehind: itemHeldBehindSchema.nullable(),
-  behindHostQueue: hostQueueWaitSchema,
+  waitsForRunLimit: z.boolean(),
 });
 export type ItemQueuedStart = z.infer<typeof itemQueuedStartSchema>;
 
@@ -730,12 +730,13 @@ export async function assembleItemRead(
     // recording order among rulings, and a set's last answer before its settle.
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const holds = await itemHolds(source, found.item.id, own.values);
+  const runLimit = await source.store.getRunLimit();
   const queued: ItemQueuedStart[] = [];
   for (const start of waiting.filter(start => !tree.has(start.requestId)))
     queued.push({
       ...start,
       heldBehind: (await holds.queuedHeldBehind(start)) ?? null,
-      behindHostQueue: await hostQueueWait(source.store, start.requestId),
+      waitsForRunLimit: runLimit?.waiting.includes(start.requestId) ?? false,
     });
   const skipped: ItemSkippedStart[] = [];
   for (const start of await source.store.listSkippedItemStarts(found.item.id))
@@ -762,7 +763,7 @@ export async function assembleItemRead(
     skipped,
     hold,
     held,
-    runLimit: await source.store.getRunLimit(),
+    runLimit: runLimit && { limit: runLimit.limit, live: runLimit.live },
     waits: (await source.store.listOpenItemWaits(found.item.id)).map(wait => ({
       event: wait.event,
       about: wait.about,

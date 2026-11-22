@@ -11,22 +11,34 @@ import {
   type InstallHold,
   resourceStartBindingIntentSchema,
 } from '@archon/workflows/schemas/resource-start';
-import type { RunLimit } from '@archon/workflows/schemas/run-limit';
+import type { RunLimitState } from '@archon/workflows/schemas/run-limit';
 import { getDatabase } from './connection';
-import { INSTALL_HOLD_ID, lockAdmission, readInstallHold, readRunLimit } from './resource-slots';
+import {
+  INSTALL_HOLD_ID,
+  lockAdmission,
+  readInstallHold,
+  readRunLimitWaiting,
+} from './resource-slots';
 import { parseStoredJson, storedWorkflowName } from './resource-starts';
 import { toHydratedTimestamp } from './timestamps';
+import { loadRunLimit } from '../config/concurrency-config';
 
 export async function getInstallHold(): Promise<InstallHold | null> {
   const db = getDatabase();
   return readInstallHold(db.query.bind(db));
 }
 
-/** The run limit and how many runs count against it now; null when no limit is set. */
-export async function getRunLimit(): Promise<RunLimit | null> {
-  const db = getDatabase();
-  const runLimit = await readRunLimit(db.query.bind(db));
-  return runLimit && { limit: runLimit.limit, live: runLimit.live };
+/**
+ * The run limit, how many run trees count against it and the queued starts only it holds now
+ * (`readRunLimitWaiting`); null when no limit is set. Read under `lockAdmission`, so it sees
+ * what the next drain would see.
+ */
+export async function getRunLimit(): Promise<RunLimitState | null> {
+  if ((await loadRunLimit()) === undefined) return null;
+  return getDatabase().withTransaction(async query => {
+    await lockAdmission(query);
+    return readRunLimitWaiting(query);
+  });
 }
 
 export async function setInstallHold(input: {

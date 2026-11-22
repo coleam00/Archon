@@ -51,7 +51,7 @@ import {
   lockResourceSlotForAdmission,
   readInstallHold,
   runLimitRefusal,
-  underRunLimit,
+  runLimitBlocker,
   withinRunRoom,
   resourceStartOccupancy,
   parseQueuedResourceStart,
@@ -137,8 +137,10 @@ async function admitResourceStartWithQuery(
 
   const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
   const slot = await resourceStartOccupancy(query, intent.resource, capacity);
-  const { blocker, overlaps } = await underRunLimit(query, { ...intent, launch, itemId }, slot);
-  const status = overlaps && intent.overlap === 'skip' ? 'skipped' : 'queued';
+  const slotBlocker = resourceStartBlocker(slot, launch, intent.hostId, itemId);
+  const status = slotBlocker && intent.overlap === 'skip' ? 'skipped' : 'queued';
+  // Asked only when the resource admits the start, so the limit queues it and never skips it.
+  const blocker = slotBlocker ?? (await runLimitBlocker(query, intent.hostId, intent.resource));
   await query(
     `INSERT INTO remote_agent_resource_start_requests
        (id, resource_key, host_id, overlap_policy, status, blocker_run_id, blocker_kind, launch, receipt_id, binding_id, item_id)

@@ -735,7 +735,7 @@ test('trigger list shows a refused binding with its forge refusal and omits the 
   }
 });
 
-test('trigger list names the run limit on a receipt with a queued start that waits for it', async () => {
+test('trigger list names the run limit on a receipt whose queued start only the limit holds', async () => {
   const host = hostForTest();
   const accepted = acceptance(
     {
@@ -756,9 +756,7 @@ test('trigger list names the run limit on a receipt with a queued start that wai
     'limited'
   );
   await host.deps.store.acceptStartReceipt(accepted);
-  // The in-memory store keeps no run limit; stand in for a start queued under it, behind an
-  // older start of its host on another resource while `backlog` is set.
-  let backlog = false;
+  // The in-memory store keeps no run limit; stand in for one with a start queued under it.
   const read = host.deps.store.getStartReceipt.bind(host.deps.store);
   host.deps.store.getStartReceipt = async id => {
     const receipt = await read(id);
@@ -770,41 +768,18 @@ test('trigger list names the run limit on a receipt with a queued start that wai
           requestStatus: 'queued' as const,
           disposition: {
             status: 'queued' as const,
-            requestId: 'newer',
-            blocker: { kind: 'request' as const, id: 'older' },
+            requestId: 'queued-request',
+            blocker: { kind: 'run' as const, id: 'holder' },
           },
         })),
       }
     );
   };
-  const request = (id: string, resource: string) => ({
-    id,
-    resource,
-    hostId: 'host',
-    overlap: 'queue' as const,
-    status: 'queued' as const,
-    runStatus: null,
-    blocker: id === 'newer' ? { kind: 'request' as const, id: 'older' } : null,
-    blockerRunStatus: null,
-    launch: {
-      version: 2 as const,
-      run: { id, workflow_name: 'portable', codebase_id: 'c', user_message: '', metadata: {} },
-      execution: {
-        cwd: '/portable',
-        conversationId: 'c',
-        isolation: { kind: 'in-place' as const },
-      },
-    },
-  });
-  host.deps.store.getResourceStartRequest = async id =>
-    id === 'newer' ? request(id, 'a') : backlog && id === 'older' ? request(id, 'b') : null;
-  for (const [runLimit, behind, listed] of [
-    [{ limit: 2, live: 2 }, false, { limit: 2, live: 2 }],
-    [{ limit: 2, live: 1 }, false, null],
-    [{ limit: 2, live: 1 }, true, { limit: 2, live: 1 }],
+  for (const [waiting, listed] of [
+    [['queued-request'], { limit: 1, live: 1 }],
+    [['another-request'], null],
   ] as const) {
-    host.deps.store.getRunLimit = async () => runLimit;
-    backlog = behind;
+    host.deps.store.getRunLimit = async () => ({ limit: 1, live: 1, waiting });
     const stdout = spyOn(process.stdout, 'write').mockImplementation(((
       _chunk: unknown,
       callback?: () => void

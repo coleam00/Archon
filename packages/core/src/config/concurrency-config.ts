@@ -68,7 +68,7 @@ const runsSchema = z.looseObject({
   concurrency: z.looseObject({ runs: z.number().int().min(1).nullish() }).nullish(),
 });
 
-/** How many top-level runs the install executes at once; undefined when no limit is set. */
+/** How many run trees the install executes at once; undefined when no limit is set. */
 export async function loadRunLimit(): Promise<number | undefined> {
   const config = await readConcurrencyConfig(runsSchema, 'Run admissions');
   return config.concurrency?.runs ?? undefined;

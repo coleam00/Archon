@@ -46,7 +46,7 @@ import { lockConversationOwnership } from './conversation-ownership';
 import {
   heldItemRefusal,
   installHoldRefusal,
-  pendingRunLimitRefusal,
+  runLimitRefusal,
   type TransactionQuery,
 } from './resource-slots';
 import { continuedItem, ensureItem } from './items';
@@ -221,7 +221,7 @@ export async function claimPendingWorkflowRun(
     const held =
       (await installHoldRefusal(query, id)) ??
       (await heldItemRefusal(query, id, ['pending'])) ??
-      (await pendingRunLimitRefusal(query, id));
+      (await runLimitRefusal(query, id));
     if (held) throw held;
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs

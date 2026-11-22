@@ -378,10 +378,29 @@ describe('reading an item', () => {
     expect(read?.degraded).toEqual([]);
   });
 
-  test('reads the run limit the store reports', async () => {
-    const runLimit = { limit: 2, live: 2 };
-    const limited = { ...source, store: { ...source.store, getRunLimit: async () => runLimit } };
-    expect((await readItem(limited, item.projectKey, item.key))?.runLimit).toEqual(runLimit);
+  test('reads the run limit the store reports, and marks the queued starts only it holds', async () => {
+    const queued = (requestId: string) => ({
+      requestId,
+      workflow: 'review',
+      resource: 'build',
+      hostId: 'host',
+      queuedAt: '2026-11-01T09:35:00.000Z',
+      ahead: 0,
+    });
+    const limited: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        listQueuedItemStarts: async () => [queued('held'), queued('free')],
+        getRunLimit: async () => ({ limit: 2, live: 2, waiting: ['held'] }),
+      },
+    };
+    const read = await readItem(limited, item.projectKey, item.key);
+    expect(read?.runLimit).toEqual({ limit: 2, live: 2 });
+    expect(read?.queued.map(start => [start.requestId, start.waitsForRunLimit])).toEqual([
+      ['held', true],
+      ['free', false],
+    ]);
   });
 
   test('a landing that cannot be resolved is reported, and the rest of the item still reads', async () => {

@@ -212,7 +212,7 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 #   maxConversations: 10
 #   providers:        # optional cap on simultaneous attempts per provider; unlisted = unlimited
 #     pi: 1
-#   runs: 6           # optional number of top-level runs this install executes at once; unset = no limit
+#   runs: 6           # optional number of run trees this install executes at once; unset = no limit
 `;
 
 /**

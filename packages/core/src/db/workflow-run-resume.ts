@@ -258,9 +258,9 @@ export async function resumeWorkflowRun(
           ? await heldItemRefusal(query, id, ['failed'])
           : undefined;
       if (held) return { busy: held };
-      // A resumed run takes room like a new start unless its tree already counts (a sub-run
-      // of a running root). Checked before the slot: this refusal leaves nothing behind.
-      const full = prior.status !== 'running' ? await runLimitRefusal(query, id) : undefined;
+      // A resume needs room unless its tree still counts (`runLimitRefusal`): a failed tree's
+      // does. Checked before the slot is taken, so a refusal leaves nothing behind.
+      const full = await runLimitRefusal(query, id);
       if (full) return { busy: full };
       const busy = await claimResourceSlot(query, id, prior, cursor);
       if (busy) return { busy };

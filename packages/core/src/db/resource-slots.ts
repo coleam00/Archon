@@ -4,7 +4,6 @@ import {
   capacityWaiters,
   drainableStarts,
   recordedResourceCapacity,
-  resourceStartBlocker,
   heldCheckouts,
   type ReusableCheckout,
   type ResourceBlocker,
@@ -187,32 +186,21 @@ export async function installHoldRefusal(
 }
 
 /**
- * The refusal for claiming pending run `runId`, which no start request admitted, while the
- * run limit is full (`runLimitRefusal`). A run admitted through a resource start was
- * counted when it was admitted, so its claim is never refused here.
+ * The run trees that count against the run limit, as their roots' ids, oldest first. A tree is
+ * a top-level run and its `workflow:` sub-runs. It counts from its root's admission until every
+ * run in it is terminal, whatever state its runs are in, so nothing inside the tree (a pause,
+ * a pending child, a resume) can free or lose its place. The one non-terminal run that does not
+ * make its tree count is a pending root that nothing admitted: a queued or skipped bound start,
+ * or a hand start before its claim.
  */
-export async function pendingRunLimitRefusal(
-  query: TransactionQuery,
-  runId: string
-): Promise<RunLimitError | undefined> {
-  const unadmitted = await query(
-    `SELECT 1 FROM remote_agent_workflow_runs w
-      WHERE w.id = $1 AND w.status = 'pending'
-        AND NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = w.id)`,
-    [runId]
-  );
-  return unadmitted.rows.length === 0 ? undefined : runLimitRefusal(query, runId);
-}
-
-/** The run trees that count against the run limit, as their roots' ids, oldest first. */
 async function countedTrees(query: TransactionQuery): Promise<string[]> {
   const counted = await query<{ id: string }>(
     `WITH RECURSIVE up(id, parent_run_id) AS (
        SELECT w.id, w.parent_run_id FROM remote_agent_workflow_runs w
-        WHERE w.status = 'running'
-           OR (w.status = 'pending' AND w.parent_run_id IS NULL AND EXISTS (
-             SELECT 1 FROM remote_agent_resource_start_requests q
-              WHERE q.id = w.id AND q.status = 'admitted'))
+        WHERE w.status NOT IN (${terminalList})
+          AND NOT (w.parent_run_id IS NULL AND w.status = 'pending' AND NOT EXISTS (
+            SELECT 1 FROM remote_agent_resource_start_requests q
+             WHERE q.id = w.id AND q.status = 'admitted'))
        UNION
        SELECT p.id, p.parent_run_id FROM remote_agent_workflow_runs p
          JOIN up ON p.id = up.parent_run_id
@@ -239,15 +227,20 @@ async function treeRoot(query: TransactionQuery, runId: string): Promise<string 
   return root.rows[0] === undefined ? undefined : String(root.rows[0].id);
 }
 
+/** Whether run `runId` can still be claimed or resumed: it exists and is not completed or cancelled. */
+async function mayStillExecute(query: TransactionQuery, runId: string): Promise<boolean> {
+  const run = await query<{ status: WorkflowRunStatus }>(
+    'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+    [runId]
+  );
+  const status = run.rows[0]?.status;
+  return status !== undefined && status !== 'completed' && status !== 'cancelled';
+}
+
 /**
- * The run limit (`concurrency.runs`) and how many run trees count against it, with the oldest
- * tree's root. A tree is a top-level run and its `workflow:` sub-runs. It counts while any
- * run in it is running, and while its root is admitted and no executor has claimed it yet, so
- * a drain cannot admit past the limit while its starts boot. A tree counts once, however many
- * of its runs execute: a sub-run runs inside its tree's room, and counting it again would
- * deadlock a root at the limit that waits on its child. A tree whose runs are all paused
- * executes nothing and does not count. Null when no limit is set. Read under `lockAdmission`
- * by every admission point, so the config is read fresh each time.
+ * The run limit (`concurrency.runs`), how many run trees count against it (`countedTrees`) and
+ * the oldest one's root. Null when no limit is set. Read under `lockAdmission` by every
+ * admission point, so the config is read fresh each time.
  */
 export async function readRunLimit(
   query: TransactionQuery
@@ -259,10 +252,9 @@ export async function readRunLimit(
 }
 
 /**
- * What the run limit leaves room for now: how many more runs it admits (`Infinity` without
+ * What the run limit leaves room for now: how many more trees it admits (`Infinity` without
  * a limit), and while it is full, the oldest counted tree's root as the blocker a queued
- * start records. Admission checks it after every other rule, so a start it holds back waits
- * for nothing else.
+ * start records.
  */
 async function readRunRoom(
   query: TransactionQuery
@@ -303,44 +295,21 @@ async function runnableHostStarts(
 }
 
 /**
- * What keeps a new start from admission on `slot` (`resourceStartBlocker`), with the run
- * limit applied last. With nothing on the resource in its way, the limit blocks it while full
- * (the oldest counted tree), or while the host's older runnable starts on other resources fill
- * the room (the oldest of them). `overlaps` is whether the resource itself refuses it, which
- * `overlap: skip` acts on: a start the limit holds back queues, and so does one held only by
- * an older request of its host, which the limit keeps queued, when its item, checkout and
- * the slot's capacity would all admit it.
+ * What the run limit puts in the way of a new start of `hostId` on `resource` that its resource
+ * would admit (`resourceStartBlocker` returned null): the oldest counted tree while the limit
+ * is full, or the host's oldest runnable start elsewhere while those starts fill the room. Null
+ * when there is room. The limit only ever queues a start: skip is decided by the resource.
  */
-export async function underRunLimit(
+export async function runLimitBlocker(
   query: TransactionQuery,
-  start: {
-    hostId: string;
-    resource: string;
-    launch: PreparedWorkflowLaunch;
-    itemId: string | null;
-  },
-  slot: ResourceSlotOccupancy
-): Promise<{ blocker: ResourceBlocker | null; overlaps: boolean }> {
-  const refuses = (occupancy: ResourceSlotOccupancy) =>
-    resourceStartBlocker(occupancy, start.launch, start.hostId, start.itemId);
-  const slotBlocker = refuses(slot);
-  if ((await loadRunLimit()) === undefined)
-    return { blocker: slotBlocker, overlaps: slotBlocker !== null };
-  if (slotBlocker) {
-    const own =
-      slotBlocker.kind === 'request'
-        ? refuses({ ...slot, queue: [], queueError: undefined })
-        : slotBlocker;
-    return { blocker: slotBlocker, overlaps: own !== null };
-  }
+  hostId: string,
+  resource: string
+): Promise<ResourceBlocker | null> {
   const { room, blocker } = await readRunRoom(query);
-  if (blocker || room === Infinity) return { blocker, overlaps: false };
-  const { elsewhere } = await runnableHostStarts(query, start.hostId, start.resource);
+  if (blocker || room === Infinity) return blocker;
+  const { elsewhere } = await runnableHostStarts(query, hostId, resource);
   const first = elsewhere[0];
-  return {
-    blocker: first && elsewhere.length >= room ? { kind: 'request', id: first.id } : null,
-    overlaps: false,
-  };
+  return first && elsewhere.length >= room ? { kind: 'request', id: first.id } : null;
 }
 
 /**
@@ -371,10 +340,44 @@ export async function withinRunRoom<T extends { id: string }>(
 }
 
 /**
- * `RunLimitError` while the run limit is full and run `runId` is about to execute in a tree
- * that does not count yet: a new or resumed root, or a sub-run whose tree has nothing running.
- * A run whose tree already counts runs inside that tree's room. Takes `lockAdmission` only
- * when a limit is set, so an install without one decides claims and resumes as it did before.
+ * The run limit with the queued requests that only it holds now: those a drain of their host
+ * would admit on their resource (`drainableStarts`) and the limit's room does not
+ * (`withinRunRoom`). Computed by the drain's own functions from current state, so a reader
+ * sees what the next drain would do. Null when no limit is set.
+ */
+export async function readRunLimitWaiting(
+  query: TransactionQuery
+): Promise<(RunLimit & { waiting: string[] }) | null> {
+  const runLimit = await readRunLimit(query);
+  if (!runLimit) return null;
+  const queued = await query<{ host_id: string; resource_key: string }>(
+    `SELECT DISTINCT host_id, resource_key FROM remote_agent_resource_start_requests
+      WHERE status = 'queued'`
+  );
+  const waiting: string[] = [];
+  for (const { host_id: hostId, resource_key: resource } of queued.rows) {
+    const { capacity } = await lockResourceSlotForAdmission(query, resource);
+    const drainable = drainableStarts(
+      await resourceStartOccupancy(query, resource, capacity),
+      hostId
+    );
+    const admitted = new Set(
+      (await withinRunRoom(query, hostId, resource, drainable)).map(start => start.id)
+    );
+    for (const start of drainable) if (!admitted.has(start.id)) waiting.push(start.id);
+  }
+  return { limit: runLimit.limit, live: runLimit.live, waiting };
+}
+
+/**
+ * The one rule for whether run `runId` may execute now under the run limit: it passes while
+ * its tree already counts (`countedTrees`), since it executes inside its tree's place, and
+ * otherwise needs `live < limit`. Every admission point asks it: a hand start's claim or
+ * resource admission, a sub-run's, and every resume. An admitted root, any sub-run of a tree
+ * with a non-terminal run, and a paused root therefore pass; a hand start and a failed tree's
+ * resume need room. A run that can no longer execute is never refused, so a start cancelled
+ * while it waits learns it from its own claim. Takes `lockAdmission` only when a limit is set,
+ * so an install without one decides claims and resumes as it did before.
  */
 export async function runLimitRefusal(
   query: TransactionQuery,
@@ -383,6 +386,7 @@ export async function runLimitRefusal(
   const limit = await loadRunLimit();
   if (limit === undefined) return undefined;
   await lockAdmission(query);
+  if (!(await mayStillExecute(query, runId))) return undefined;
   const trees = await countedTrees(query);
   const root = await treeRoot(query, runId);
   if (root !== undefined && trees.includes(root)) return undefined;
