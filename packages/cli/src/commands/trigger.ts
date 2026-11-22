@@ -690,26 +690,15 @@ async function installTimer(
 }
 
 /**
- * List every trigger binding this install can start and check it against the workflows of
- * the project it launches in, reading only: it starts nothing and changes nothing.
- *
- * Bindings with `on` (each `on.runEnded` and `on.asksSettled` file in the triggers
- * directory): for a run-ended binding, the ended workflow declares the outcome and every
- * input the binding reads from it; for an asks-settled binding, the asking workflow
- * declares `returns.asks` and every input the binding reads. A run on an item whose end or
- * asks could fire such a binding is refused before it starts, by the same check. It also
- * reports what a run is not refused for: a `launch.cwd` that does not exist, a run-ended
- * binding that starts the workflow that ended, and two files that start the same stage.
- *
- * Every other binding (`bindings`): each file without `on` in the triggers directory, and
- * the config file of each `trigger fire` timer `schedule install` installed for this
- * ARCHON_HOME, wherever it lives. A timer whose config file is gone or invalid fails every
- * tick, so it is reported with how to remove the job by hand.
- *
- * Every binding's started workflow must exist and accept the binding's inputs, by the
- * validation a start runs (`startedWorkflowInputProblems`). A timer and an `on` binding
- * supply nothing else, so a missing required input is a problem; a fire-only binding's
- * `trigger fire --inputs` may supply one, so only an undeclared input is.
+ * List every trigger binding this install can start, reading only, and check that its
+ * started workflow accepts its inputs as a start would. Bindings with `on`: for run-ended,
+ * the ended workflow declares the outcome and every input the binding reads from it; for
+ * asks-settled, the asking workflow declares `returns.asks` and every input the
+ * binding reads. A run whose end or asks could fire such a binding is refused before it
+ * starts, by the same check. It also reports what no run is refused for: a missing
+ * `launch.cwd`, a run-ended binding that starts the workflow that ended, and two files that
+ * start the same stage. Every other binding, including installed timers' config files
+ * wherever they live, is listed under `bindings` (see `checkFireBindings`).
  */
 async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOptions): Promise<void> {
   const bindings = await readOnBindings(getTriggersPath());
