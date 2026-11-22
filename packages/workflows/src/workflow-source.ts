@@ -39,7 +39,9 @@
  * Runtime `workflow:` children are deliberately NOT part of the closure. A child is not a
  * run until it starts and freezes its own source — see {@link resolveChildDiscoveryRoot}.
  * The exception is installed packs: a child copies them from its parent's capture, so a
- * pack's children run at the revision its parent started with.
+ * pack's children run at the revision its parent started with. A parent whose definitions
+ * came from the base branch with the checkout's uncommitted changes on top (a composition
+ * that no longer exists once it is captured) gives its child its whole project scope too.
  *
  * This module is the public entry. The concerns live in `workflow-source/`: the roots
  * lookups resolve under (`roots.ts`), installed-pack listing (`installed-packs.ts`), taking
@@ -77,14 +79,30 @@ export {
 export type { WorkflowSourceCapture, WorkflowSourceManifest } from './workflow-source/manifest';
 export {
   AmbiguousSourcePackError,
+  loadablePackFolder,
   sourcePackFolder,
   type SourcePackFolder,
 } from './workflow-source/source-pack';
 export { captureWorkflowSource, recordSelectedWorkflow } from './workflow-source/capture';
+export { projectSourceDirs } from './workflow-source/tree';
+export {
+  changedPaths,
+  commitView,
+  DefinitionViewError,
+  sameEntry,
+  worktreeView,
+  writeEntry,
+  writeView,
+  type DefinitionView,
+  type ViewEntry,
+} from './workflow-source/definition-views';
 export {
   assertWorkflowSourceIntegrity,
   loadWorkflowSource,
+  preparedSourceConfigRoot,
+  resolveChildBaseDefinitions,
   resolveChildDiscoveryRoot,
   resolveChildInstalledPacks,
+  runProjectConfigRoot,
   resolveRunSourceCapture,
 } from './workflow-source/load';

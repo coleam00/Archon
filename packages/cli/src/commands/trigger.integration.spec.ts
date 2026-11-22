@@ -340,16 +340,18 @@ describe('trigger CLI durable execution', () => {
     }
   }, 30_000);
 
-  test('a launch whose base the remote lacks is admitted with a caveat and exposes its full error', async () => {
+  test('a launch whose worktree setup fails is admitted with a caveat and exposes its full error', async () => {
     const fixture = await heldTriggerRun('launch-failure');
     fixture.writeWorkflow('echo unreachable');
-    await commitProject(fixture.projectRoot);
-    await publishProject(fixture.projectRoot);
-    // Creation fetches a remote base, so this fails after admission, when the worktree is cut.
+    // A project with a base to read its definitions from, so the start is admitted and
+    // fails after admission, when its worktree is set up.
     writeFileSync(
       join(fixture.projectRoot, '.archon', 'config.yaml'),
-      'worktree:\n  baseBranch: does-not-exist\n'
+      'worktree:\n  postCreate:\n    - exit 3\n'
     );
+    expect(await Bun.spawn(['git', 'add', '-A'], { cwd: fixture.projectRoot }).exited).toBe(0);
+    await commitProject(fixture.projectRoot);
+    await publishProject(fixture.projectRoot);
     const configPath = join(fixture.projectRoot, '..', 'trigger.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.binding.launch.isolation = { kind: 'default' };
@@ -367,7 +369,7 @@ describe('trigger CLI durable execution', () => {
     expect(fire.stderr).toContain(`Run ${failed.id} is admitted; its checkout is prepared`);
     expect(fire.stderr).toContain(`archon workflow get ${failed.id}`);
     const metadata = JSON.parse(failed.metadata);
-    expect(metadata.error).toContain("Configured base branch 'does-not-exist' not found");
+    expect(metadata.error).toContain('exit code 3');
     const invoke = (args: string[]) =>
       runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, args);
     const request = JSON.parse((await invoke(['trigger', 'inspect', failed.id])).stdout);

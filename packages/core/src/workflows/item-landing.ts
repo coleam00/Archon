@@ -2,9 +2,18 @@
  * The landing branch a fresh run on an item starts from, checked against the remote the
  * worktree would be cut from. Both start paths (a trigger-file stage, a hand start with
  * `--item`) call this before any node runs, so a missing branch refuses the run instead of
- * cutting it from the base.
+ * cutting it from the base. A start never creates the branch: only `createLandingBranch`,
+ * behind `archon workflow landing --from`, does, from a start point its caller names.
  */
-import { getDefaultRemote, inspectRemoteBranches, toRepoPath } from '@archon/git';
+import {
+  execFileAsync,
+  fetchWithRetry,
+  getDefaultRemote,
+  GitFailure,
+  inspectRemoteBranches,
+  toRepoPath,
+  type RepoPath,
+} from '@archon/git';
 import { landingSourceText, resolveItemLanding } from '@archon/workflows/item-landing';
 import type { ResolvedItemLanding } from '@archon/workflows/schemas/item-landing';
 import type { WorkflowItem } from '@archon/workflows/schemas/workflow-run';
@@ -37,6 +46,55 @@ export function refuseInPlaceLanding(item: WorkflowItem, landing: ResolvedItemLa
   );
 }
 
+/** Quote a value for a shell unless it is plainly a single word, so the command runs as shown. */
+function shellArgument(value: string): string {
+  return /^[\w./:@%+=,-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * The command that creates `branch` on the remote of the project at `projectPath` and
+ * records it on `itemKey`. `--cwd` keeps it on that project when it is run from another,
+ * as after a `--project` start. A branch such as `feat/$USER` is valid to git, so the
+ * values are shell-quoted when they need it.
+ */
+export function landingCreateCommand(itemKey: string, branch: string, projectPath: string): string {
+  return `archon workflow landing --cwd ${shellArgument(projectPath)} --item ${shellArgument(itemKey)} --branch ${shellArgument(branch)} --from <start-point>`;
+}
+
+/**
+ * The remote a landing branch lives on: the one a run's worktree is cut from, so creating
+ * the branch and starting a run on it can never pick different remotes. `refuse` turns
+ * the problem into its caller's error.
+ */
+async function landingRemote(
+  codebase: Pick<Codebase, 'kind' | 'name' | 'default_cwd'>,
+  refuse: (problem: string) => Error
+): Promise<{ repoPath: RepoPath; remote: string }> {
+  if (codebase.kind === 'folder')
+    throw refuse(`project '${codebase.name}' is a folder with no git branches`);
+  const repoPath = toRepoPath(codebase.default_cwd);
+  const config = await loadRepoConfig(codebase.default_cwd);
+  const remote = config.worktree?.remote?.trim() || (await getDefaultRemote(repoPath));
+  if (!remote)
+    throw refuse(`project '${codebase.name}' has no remote to cut it from; set worktree.remote`);
+  return { repoPath, remote };
+}
+
+/** The branches `remote` advertises; `refuse` turns an unreadable remote into the caller's error. */
+async function advertisedBranches(
+  repoPath: RepoPath,
+  remote: string,
+  refuse: (problem: string, options?: ErrorOptions) => Error
+): Promise<string[]> {
+  const advertised = await inspectRemoteBranches({ kind: 'local', repoPath, remote });
+  if (advertised.status === 'unavailable')
+    throw refuse(
+      `remote '${remote}' could not be read: ${advertised.evidence}`,
+      advertised.failure ? { cause: advertised.failure } : undefined
+    );
+  return advertised.branches;
+}
+
 /**
  * Resolve where a run on `item` lands and check that the branch is on the remote. Null
  * when nothing records a branch, so the run takes its base as it would without an item.
@@ -49,26 +107,95 @@ export async function resolveRunLanding(
   const landing = await resolveItemLanding(store, item);
   if (landing === null) return null;
   const subject = describe(item, landing);
-  if (codebase.kind === 'folder')
+  const refuse = (problem: string, options?: ErrorOptions) =>
+    new LandingBranchRefusedError(`${subject}, but ${problem}. The run is refused.`, options);
+  const { repoPath, remote } = await landingRemote(codebase, refuse);
+  const branches = await advertisedBranches(repoPath, remote, refuse);
+  if (!branches.includes(landing.branch)) {
+    const owner = landing.from.kind === 'own' ? item.key : landing.from.item.key;
     throw new LandingBranchRefusedError(
-      `${subject}, but project '${codebase.name}' is a folder with no git branches; the run is refused.`
+      `${subject}, but '${landing.branch}' is not on remote '${remote}'. The run is refused. Record another branch, or create this one with: ${landingCreateCommand(owner, landing.branch, codebase.default_cwd)}`
     );
-  const repoPath = toRepoPath(codebase.default_cwd);
-  const config = await loadRepoConfig(codebase.default_cwd);
-  const remote = config.worktree?.remote?.trim() || (await getDefaultRemote(repoPath));
-  if (!remote)
-    throw new LandingBranchRefusedError(
-      `${subject}, but project '${codebase.name}' has no remote to cut it from; set worktree.remote. The run is refused.`
-    );
-  const advertised = await inspectRemoteBranches({ kind: 'local', repoPath, remote });
-  if (advertised.status === 'unavailable')
-    throw new LandingBranchRefusedError(
-      `${subject}, but remote '${remote}' could not be read: ${advertised.evidence}. The run is refused.`,
-      advertised.failure ? { cause: advertised.failure } : undefined
-    );
-  if (!advertised.branches.some(branch => branch === landing.branch))
-    throw new LandingBranchRefusedError(
-      `${subject}, but '${landing.branch}' is not on remote '${remote}'. Push the branch, or record another with 'archon workflow landing --item ${landing.from.kind === 'own' ? item.key : landing.from.item.key} --branch <name>'. The run is refused.`
-    );
+  }
   return landing;
+}
+
+export type CreatedLandingBranch =
+  | { remote: string; status: 'created'; commit: string }
+  | { remote: string; status: 'exists' };
+
+/** Creating a landing branch failed; nothing was recorded. */
+export class LandingBranchCreateError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'LandingBranchCreateError';
+  }
+}
+
+/**
+ * Create `branch` on the project's landing remote at `startPoint`, which resolves in the
+ * project's repository after a fetch, as `workflow run --from` does. A branch already on
+ * the remote is left where it is and reported as `exists`.
+ */
+export async function createLandingBranch(
+  codebase: Pick<Codebase, 'kind' | 'name' | 'default_cwd'>,
+  branch: string,
+  startPoint: string
+): Promise<CreatedLandingBranch> {
+  const subject = `Creating '${branch}' from '${startPoint}'`;
+  const refuse = (problem: string, options?: ErrorOptions) =>
+    new LandingBranchCreateError(`${subject}, but ${problem}.`, options);
+  const { repoPath, remote } = await landingRemote(codebase, refuse);
+  const read = async (): Promise<boolean> =>
+    (await advertisedBranches(repoPath, remote, refuse)).includes(branch);
+  if (await read()) return { remote, status: 'exists' };
+
+  await fetchWithRetry(repoPath, ['--no-tags', remote], { timeout: 60000 });
+  let commit: string;
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', repoPath, 'rev-parse', '--verify', '--end-of-options', `${startPoint}^{commit}`],
+      { timeout: 10000 }
+    );
+    commit = stdout.trim();
+  } catch (error) {
+    // Git ran and could not resolve it; a spawn failure or timeout is not a bad start point.
+    if (!(error instanceof GitFailure) || typeof error.code !== 'number' || error.killed)
+      throw error;
+    throw new LandingBranchCreateError(
+      `--from '${startPoint}' does not name a commit in project '${codebase.name}'.`,
+      { cause: error }
+    );
+  }
+  // The lease with an empty expected value makes git refuse a ref the remote already has; a
+  // plain push would fast-forward an existing branch to a descendant start point.
+  const ref = `refs/heads/${branch}`;
+  try {
+    await execFileAsync(
+      'git',
+      [
+        '-C',
+        repoPath,
+        'push',
+        '--porcelain',
+        `--force-with-lease=${ref}:`,
+        '--',
+        remote,
+        `${commit}:${ref}`,
+      ],
+      { timeout: 60000 }
+    );
+    return { remote, status: 'created', commit };
+  } catch (error) {
+    if (!(error instanceof GitFailure) || typeof error.code !== 'number' || error.killed)
+      throw error;
+    // Git's rejection text is not classified: reading the remote again tells a caller that
+    // created the branch first from a push that failed.
+    if (await read()) return { remote, status: 'exists' };
+    throw new LandingBranchCreateError(
+      `${subject}, but the push to remote '${remote}' failed: ${error.message}`,
+      { cause: error }
+    );
+  }
 }

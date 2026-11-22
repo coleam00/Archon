@@ -472,6 +472,58 @@ export const workflowSourceConfigSchema = z.object({
 
 export type WorkflowSourceConfig = Readonly<z.infer<typeof workflowSourceConfigSchema>>;
 
+const absolutePathSchema = z
+  .string()
+  .refine(p => isAbsolute(p), { message: 'must be an absolute path' });
+
+/**
+ * Where a run's project definitions (workflows, commands, scripts, an in-repository pack,
+ * `.archon/config.yaml`) came from.
+ *
+ * - `base`: the base branch commit fetched at the start, with the files uncommitted in the
+ *   operator's checkout laid on top. `local_files` names every file taken from the
+ *   checkout. The capture holds the project config, under `project/.archon/config.yaml`.
+ *   A child of such a run records its parent's and adds `run_files`.
+ * - `checkout`: an in-place run reads its checkout as it is; the checkout is its one commit.
+ * - `source`: an explicit source (`--workflow-source`, `launch.discoveryCwd`), read as it is.
+ */
+const definitionFilesSchema = z.array(
+  z.object({
+    path: z.string().min(1),
+    change: z.enum(['modified', 'added', 'deleted', 'ignored']),
+  })
+);
+
+export const runDefinitionsSchema = z.discriminatedUnion('from', [
+  z.object({
+    from: z.literal('base'),
+    /** Absent when the repository has no remote: the base is then a local branch. */
+    remote: z.string().min(1).optional(),
+    branch: z.string().min(1),
+    commit: z.string().min(1),
+    merge_base: z.string().min(1),
+    checkout: absolutePathSchema,
+    local_files: definitionFilesSchema,
+    /**
+     * A `workflow:` child's own layer: the definition files its parent's execution
+     * checkout changed since the parent started, laid on the parent's captured
+     * definitions when the child started. Absent on a run that is not such a child.
+     */
+    run_files: z
+      .object({
+        checkout: absolutePathSchema,
+        since: z.string().min(1),
+        files: definitionFilesSchema,
+      })
+      .optional(),
+  }),
+  z.object({ from: z.literal('checkout'), checkout: absolutePathSchema }),
+  z.object({ from: z.literal('source'), root: absolutePathSchema }),
+]);
+
+export type RunDefinitions = z.infer<typeof runDefinitionsSchema>;
+export type BaseRunDefinitions = Extract<RunDefinitions, { from: 'base' }>;
+
 /**
  * A run's recorded executable source.
  *
@@ -508,6 +560,11 @@ export const workflowSourceMetadataSchema = z.object({
   source_config: workflowSourceConfigSchema.optional(),
   file_count: z.number(),
   byte_count: z.number(),
+  /**
+   * Absent on runs created before definitions were recorded, on chat and web runs, on
+   * adopted lanes, and on children of a parent without base-branch definitions.
+   */
+  definitions: runDefinitionsSchema.optional(),
 });
 
 export type WorkflowSourceMetadata = z.infer<typeof workflowSourceMetadataSchema>;

@@ -4,7 +4,7 @@
  * (`checkout_handoff`). Preparation picks the lane and admission keys it; this lays it out
  * when the run starts.
  */
-import { execFileAsync, toBranchName, toRepoPath } from '@archon/git';
+import { execFileAsync, toBranchName, toRepoPath, type BranchName } from '@archon/git';
 import {
   checkWorktreeStartable,
   getIsolationProvider,
@@ -69,7 +69,7 @@ export async function assertLaneStartable(
 ): Promise<void> {
   if (lane.kind !== 'worktree' || lane.branch) return;
   ensureIsolationConfigured();
-  await checkWorktreeStartable(worktreeLaneRequest(lane, codebase, ''));
+  await checkWorktreeStartable(worktreeLaneRequest(lane, codebase, '', undefined));
 }
 
 type WorktreeLaneSpec = Extract<
@@ -104,10 +104,14 @@ async function adoptBranchWorktree(
   return { cwd: existing.working_path, envId: existing.id, resolvedBaseBranch };
 }
 
+/** The base commit a run's definitions were captured at; see `TaskIsolationRequest.startCommit`. */
+type StartCommit = { commit: string; branch: BranchName };
+
 function worktreeLaneRequest(
   lane: WorktreeLaneSpec,
   codebase: Codebase,
-  identifier: string
+  identifier: string,
+  startCommit: StartCommit | undefined
 ): RegisteredWorktreeInput['request'] {
   const fromBranch = lane.fromBranch ? toBranchName(lane.fromBranch) : undefined;
   const defaultBranch = codebase.default_branch?.trim();
@@ -124,6 +128,7 @@ function worktreeLaneRequest(
         : undefined,
     baseBranch: defaultBranch ? toBranchName(defaultBranch) : undefined,
     baseOverride: lane.baseOverride ? toBranchName(lane.baseOverride) : undefined,
+    ...(startCommit ? { startCommit } : {}),
     codebaseId: codebase.id,
     codebaseName: codebase.name,
     canonicalRepoPath: toRepoPath(codebase.default_cwd),
@@ -138,13 +143,14 @@ async function worktreeLane(
   identifier: string,
   platformType: string,
   userId: string | undefined,
-  setupExecutor: WorktreeSetupExecutor
+  setupExecutor: WorktreeSetupExecutor,
+  startCommit: StartCommit | undefined
 ): Promise<WorktreeLane> {
   ensureIsolationConfigured();
   const adopted = await adoptBranchWorktree(host, lane, codebase);
   if (adopted) return adopted;
   const created = await createRegisteredWorktree(host.records.isolation, {
-    request: worktreeLaneRequest(lane, codebase, identifier),
+    request: worktreeLaneRequest(lane, codebase, identifier, startCommit),
     setupExecutor,
     createdByPlatform: platformType,
     ...(userId ? { createdByUserId: userId } : {}),
@@ -301,6 +307,8 @@ export async function executionLane(
   input: {
     run: Pick<WorkflowRun, 'id' | 'workflow_name' | 'user_id' | 'metadata'>;
     lane: PreparedWorkflowLaunch['execution']['isolation'];
+    /** Cut a fresh worktree here; a hand-off lane ignores it. */
+    startCommit?: StartCommit;
     codebase: Codebase;
     /** The prepared cwd, where an in-place run works. */
     cwd: string;
@@ -323,6 +331,7 @@ export async function executionLane(
     `${run.workflow_name}-${run.id.slice(0, 8)}`,
     platformType,
     userId,
-    setupExecutor
+    setupExecutor,
+    handoff ? undefined : input.startCommit
   );
 }

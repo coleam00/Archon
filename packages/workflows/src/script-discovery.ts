@@ -19,7 +19,7 @@ import { collectInstalledBundleSources } from './defaults/bundle-inventory';
 import {
   listInstalledPacks,
   liveSourceRoots,
-  sourcePackFolder,
+  loadablePackFolder,
   type WorkflowSourceRoots,
 } from './workflow-source';
 import {
@@ -492,7 +492,7 @@ export async function discoverScriptsForCwd(
       )
     : new Map<string, ScriptDefinition>();
   // A source that is a pack folder, live or captured, holds a project pack at its root.
-  const sourcePack = roots.project ? await sourcePackFolder(roots.project) : null;
+  const sourcePack = roots.project ? await loadablePackFolder(roots.project) : null;
   if (sourcePack) {
     await discoverPackScripts(
       sourcePack.dir,

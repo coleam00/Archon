@@ -10,7 +10,7 @@ import {
 import { packTreePath, scanReceipts } from '@archon/plugin-manifest/store';
 import type { WorkflowResourceOwner } from '../packaged-workflow';
 import type { WorkflowSource } from '../schemas/workflow';
-import { sourcePackFolder } from './source-pack';
+import { loadablePackFolder } from './source-pack';
 import { INSTALLED_SCOPE_DIR, type InstalledPacksRoot, type WorkflowSourceRoots } from './roots';
 
 /** Where an installed pack came from, as its receipt recorded it. */
@@ -207,7 +207,7 @@ export async function packDirectory(
     case 'project': {
       if (roots.project === null) return null;
       // A source that is the pack's own folder holds it at its root, live or captured.
-      const sourcePack = await sourcePackFolder(roots.project);
+      const sourcePack = await loadablePackFolder(roots.project);
       if (sourcePack?.name === pack.key) return sourcePack.dir;
       return join(roots.project, '.archon', 'workflows', pack.key);
     }

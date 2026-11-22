@@ -8,7 +8,6 @@
  * `GET /api/packs/{pack}/graph` both read it here.
  */
 import { loadStoreSelection } from '../config/store-selection';
-import type { WorkflowDeps } from '@archon/workflows/deps';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { existsSync } from 'node:fs';
 import {
@@ -24,6 +23,7 @@ import {
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { liveSourceRoots } from '@archon/workflows/workflow-source';
 import { asksSettledBindingCheck } from './asks-settled';
+import type { BindingDefinitionsDeps } from './definition-source';
 import {
   bindingProjectKey,
   readOnBindings,
@@ -32,7 +32,7 @@ import {
   type RunEndedStartsDependencies,
 } from './run-ended';
 
-type GraphDeps = Pick<WorkflowDeps, 'loadConfig' | 'providers'> &
+type GraphDeps = BindingDefinitionsDeps &
   Pick<RunEndedStartsDependencies, 'triggersDirectory' | 'projectKeyOf'>;
 
 /** The link a run-ended file starts its stage over, or null for a same-item start. */

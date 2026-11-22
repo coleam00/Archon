@@ -91,11 +91,7 @@ export interface TreeListing {
  * times. `ancestors` holds the canonical (symlink-resolved) path of every directory open
  * above the current one, which cuts the cycle at the first repeat.
  */
-export async function listTree(
-  root: string,
-  /** Entries directly under `root` to leave out. */
-  skipAtRoot: readonly string[] = []
-): Promise<TreeListing> {
+export async function listTree(root: string): Promise<TreeListing> {
   const dirs: string[] = [];
   const files: TreeFile[] = [];
 
@@ -104,7 +100,6 @@ export async function listTree(
     const entries = await readdir(dir, { withFileTypes: true });
 
     for (const entry of entries) {
-      if (rel === '' && skipAtRoot.includes(entry.name)) continue;
       const absPath = join(dir, entry.name);
       const relPath = rel === '' ? entry.name : join(rel, entry.name);
 

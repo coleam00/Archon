@@ -85,6 +85,7 @@ async function fixture(packIn: 'project' | 'source') {
       commands: {},
     }),
     providers: providerRegistry,
+    projectOf: async () => null,
     triggersDirectory: () => triggers,
     projectKeyOf: async (cwd: string) => (cwd === project ? 'acme/widgets' : 'acme/other'),
   };

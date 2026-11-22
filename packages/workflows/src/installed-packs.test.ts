@@ -754,14 +754,59 @@ describe('a pack folder given as the source', () => {
     const nested = join(folder, '.archon', 'workflows', 'review-kit', 'review');
     await mkdir(nested, { recursive: true });
     await cp(join(folder, 'review'), nested, { recursive: true });
-    const { workflows, errors } = await discoverFrom(folder);
-    expect(workflows.some(entry => entry.workflow.pack?.key === 'review-kit')).toBe(false);
-    expect(errors.map(error => error.error)).toContainEqual(
-      expect.stringContaining('Neither copy is loaded')
+    await writeFile(join(folder, '.archon', 'workflows', 'other.yaml'), flow('other'));
+    const neither = expect.stringContaining('Neither copy is loaded');
+    const reads = (result: Awaited<ReturnType<typeof discoverFrom>>) => ({
+      pack: result.workflows.some(entry => entry.workflow.pack?.key === 'review-kit'),
+      other: result.workflows.some(entry => entry.workflow.name === 'other'),
+      errors: result.errors.map(error => error.error),
+    });
+    const live = reads(await discoverFrom(folder));
+    expect(live).toMatchObject({ pack: false, other: true });
+    expect(live.errors).toContainEqual(neither);
+
+    // The capture does not refuse: its run reads the same error, and the rest still starts.
+    const capture = await captureWorkflowSource({
+      sourceRoot: folder,
+      captureRoot: join(home, 'runs', 'run-1'),
+    });
+    const captured = reads(
+      await discoverWorkflowsWithConfig(
+        folder,
+        loadConfig,
+        providerRegistry,
+        capturedSourceRoots(capture.anchor)
+      )
     );
-    await expect(
-      captureWorkflowSource({ sourceRoot: folder, captureRoot: join(home, 'runs', 'run-1') })
-    ).rejects.toThrow('Neither copy is loaded');
+    expect(captured).toMatchObject({ pack: false, other: true });
+    expect(captured.errors).toContainEqual(neither);
+  });
+
+  test('a capture from a git checkout of a pack holds what an install would, and no .env', async () => {
+    const folder = await packFolder('local');
+    await writeFile(join(folder, '.gitignore'), 'node_modules/\nbuild/\n');
+    await mkdir(join(folder, 'node_modules', 'dep'), { recursive: true });
+    await writeFile(join(folder, 'node_modules', 'dep', 'index.js'), 'ignored\n');
+    await mkdir(join(folder, 'build'), { recursive: true });
+    await writeFile(join(folder, 'build', 'out.txt'), 'ignored\n');
+    await writeFile(join(folder, '.env'), 'SECRET=1\n');
+    await writeFile(join(folder, 'review', '.env.local'), 'SECRET=1\n');
+    await mkdir(join(folder, 'policy'), { recursive: true });
+    await writeFile(join(folder, 'policy', 'build.md'), 'untracked, not ignored\n');
+    Bun.spawnSync(['git', 'init', '-q'], { cwd: folder });
+    Bun.spawnSync(['git', 'add', 'archon-plugin.json', 'review'], { cwd: folder });
+
+    const capture = await captureWorkflowSource({
+      sourceRoot: folder,
+      captureRoot: join(home, 'runs', 'run-1'),
+    });
+    const frozen = join(capture.anchor.root, 'project');
+    for (const kept of ['archon-plugin.json', 'review/code-review.yaml', 'policy/build.md']) {
+      await access(join(frozen, kept));
+    }
+    for (const left of ['node_modules', 'build', '.env', 'review/.env.local']) {
+      await expect(access(join(frozen, left))).rejects.toThrow();
+    }
   });
 });
 
