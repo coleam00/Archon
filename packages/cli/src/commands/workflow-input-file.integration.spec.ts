@@ -81,6 +81,7 @@ async function fixture() {
       GH_TOKEN: '',
       GITHUB_APP_ID: '',
     });
+  // Safe only once the CLI has exited: a live run is read through `workflow wait`/`get`.
   const runs = (): { status: string; metadata: string }[] => {
     const path = join(archonHome, 'archon.db');
     if (!existsSync(path)) return [];
@@ -128,20 +129,27 @@ describe('workflow run --input-file', () => {
       'take',
       '--no-worktree',
       '--detach',
+      '--json',
       '--input-file',
       `big=${fx.bigPath}`,
     ]);
     expect(result.exitCode, result.stderr).toBe(0);
+    const { runId } = JSON.parse(result.stdout) as { runId: string };
+    expect(runId).toBeString();
     rmSync(fx.bigPath);
 
-    const deadline = Date.now() + 60_000;
-    let row = fx.runs()[0];
-    while (row?.status !== 'paused' && row?.status !== 'failed' && Date.now() < deadline) {
-      await Bun.sleep(200);
-      row = fx.runs()[0];
-    }
-    expect(row?.status).toBe('paused');
-    expect(recordedBig(row?.metadata ?? '{}')).toBe(CONTENT);
+    // Read the live run through the CLI, as an operator does: the detached child is
+    // still writing archon.db, and a second raw connection races its lock.
+    const waited = await fx.cli(['workflow', 'wait', runId, '--json', '--timeout', '60']);
+    expect(waited.exitCode, waited.stdout + waited.stderr).toBe(0);
+    const got = await fx.cli(['workflow', 'get', runId, '--json']);
+    expect(got.exitCode, got.stderr).toBe(0);
+    const detail = JSON.parse(got.stdout) as {
+      status: string;
+      metadata: { inputs?: { big?: unknown }; error?: unknown };
+    };
+    expect(detail.status, String(detail.metadata.error ?? '')).toBe('paused');
+    expect(detail.metadata.inputs?.big).toBe(CONTENT);
   }, 90_000);
 
   // The run's cwd is normalized to the repository root; the path must not follow it.
