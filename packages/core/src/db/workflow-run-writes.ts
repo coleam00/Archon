@@ -18,8 +18,7 @@ import {
   type WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
 import { WorkflowRunDeleteRefusedError, liveDescendantsRefusal } from '@archon/workflows/store';
-import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
-import { lockAdmission, type TransactionQuery } from './resource-slots';
+import { getDatabase, getDialect, pool } from './connection';
 import { insertWorkflowEvent } from './workflow-events';
 import { getWorkflowRun } from './workflow-run-reads';
 import { getLog, lockedRunRow, normalizeMetadata } from './workflow-run-shared';
@@ -271,6 +270,12 @@ const NO_OPEN_ASKS = `NOT EXISTS (
  * sub-run's parent link (ON DELETE SET NULL), which splits the tree `concurrency.runs`
  * counts as one. The walk goes up from every live run, like `countedTrees`, so it keeps a
  * finished middle run too and the tree is never half deleted.
+ *
+ * Neither this nor the single delete's check is atomic with a sub-run that starts or resumes
+ * while the delete runs: on PostgreSQL such a sub-run can miss the check and lose its parent,
+ * and the run limit then miscounts that tree by one until it ends. Locking the tree against
+ * that was ruled not worth its cost (2026-11-22): it orders deletion against admission and
+ * resume, which can deadlock, and makes cleanup lock every old tree.
  */
 const NO_LIVE_DESCENDANTS = `remote_agent_workflow_runs.id NOT IN (
   WITH RECURSIVE up(id, parent_run_id) AS (
@@ -280,58 +285,8 @@ const NO_LIVE_DESCENDANTS = `remote_agent_workflow_runs.id NOT IN (
   SELECT id FROM up)`;
 
 /**
- * Lock the runs `seed` selects and every run below them, and return their ids. A deletion
- * decides on a tree, so the tree must hold still until it commits: on PostgreSQL, a sub-run's
- * insert takes a key-share lock on its parent row and a revival updates the run's own row,
- * so both wait for this transaction, and the checks after the lock read what they committed.
- *
- * One pass is not enough. Its walk reads the snapshot its statement started with, so a
- * sub-run committed while the pass waited for a lock is missed, and could later be revived
- * unlocked. The walk repeats until a pass adds no run. A pass that adds none waited on no
- * lock, because it only re-locks rows this transaction already holds, so its snapshot holds
- * every committed run of the tree, and each is locked.
- *
- * SQLite serializes writers and reruns a transaction whose read went stale, so the walk
- * there only reads, and its second pass finds nothing new.
- */
-async function lockRunTrees(
-  query: TransactionQuery,
-  seed: string,
-  params: unknown[]
-): Promise<Set<string>> {
-  // Taken before the row locks, as every run-limit decision takes it before it decides. A
-  // sub-run admitted inside a tree must be inserted before this deletion decides, or admitted
-  // after it commits: admitted first and inserted after, under a run the deletion detached
-  // from its tree, it would stand in a tree that never took a place.
-  await lockAdmission(query);
-  const locked = new Set<string>();
-  for (;;) {
-    const pass = await query<{ id: string }>(
-      `WITH RECURSIVE tree(id) AS (
-         ${seed}
-         UNION
-         SELECT c.id FROM remote_agent_workflow_runs c JOIN tree ON c.parent_run_id = tree.id)
-       SELECT r.id FROM remote_agent_workflow_runs r JOIN tree ON r.id = tree.id${getDialect().rowLock('r')}`,
-      params
-    );
-    const before = locked.size;
-    for (const row of pass.rows) locked.add(String(row.id));
-    if (locked.size === before) return locked;
-  }
-}
-
-/** A `$n` parameter holding a JSON array of run ids, as a set to match `id IN (...)` against. */
-function runIdSet(parameter: string): string {
-  return getDatabaseType() === 'postgresql'
-    ? `SELECT value::uuid FROM json_array_elements_text(${parameter}::json) AS ids(value)`
-    : `SELECT value FROM json_each(${parameter})`;
-}
-
-/**
  * Delete terminal workflow runs older than the given number of days, except those kept above.
- * Returns the count of deleted runs. The candidates and their trees are locked first, and
- * only runs that were locked and then judged eligible are deleted, so eligibility cannot
- * change between the events delete and the runs delete.
+ * Returns the count of deleted runs.
  */
 export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }> {
   if (!Number.isInteger(olderThanDays) || olderThanDays < 0) {
@@ -340,32 +295,28 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
     );
   }
   const cutoff = getDialect().nowMinusDays(1);
-  const old = `status IN (${terminalList})
-    AND started_at < ${cutoff}
-    AND COALESCE(active_phase_started_at, started_at) < ${cutoff}`;
   try {
     return await getDatabase().withTransaction(async query => {
-      const locked = await lockRunTrees(
-        query,
-        `SELECT id FROM remote_agent_workflow_runs WHERE ${old}`,
-        [olderThanDays]
-      );
-      const eligible = await query<{ id: string }>(
-        `SELECT id FROM remote_agent_workflow_runs
-          WHERE ${old} AND ${NO_OPEN_ASKS} AND ${NO_LIVE_DESCENDANTS}`,
-        [olderThanDays]
-      );
-      const ids = eligible.rows.map(row => String(row.id)).filter(id => locked.has(id));
-      if (ids.length === 0) return { count: 0 };
-      const list = [JSON.stringify(ids)];
       // Delete events first (FK reference)
       await query(
-        `DELETE FROM remote_agent_workflow_events WHERE workflow_run_id IN (${runIdSet('$1')})`,
-        list
+        `DELETE FROM remote_agent_workflow_events WHERE workflow_run_id IN (
+          SELECT id FROM remote_agent_workflow_runs
+          WHERE status IN ('completed', 'failed', 'cancelled')
+            AND started_at < ${cutoff}
+            AND COALESCE(active_phase_started_at, started_at) < ${cutoff}
+            AND ${NO_OPEN_ASKS}
+            AND ${NO_LIVE_DESCENDANTS}
+        )`,
+        [olderThanDays]
       );
       const result = await query(
-        `DELETE FROM remote_agent_workflow_runs WHERE id IN (${runIdSet('$1')})`,
-        list
+        `DELETE FROM remote_agent_workflow_runs
+         WHERE status IN ('completed', 'failed', 'cancelled')
+           AND started_at < ${cutoff}
+           AND COALESCE(active_phase_started_at, started_at) < ${cutoff}
+           AND ${NO_OPEN_ASKS}
+           AND ${NO_LIVE_DESCENDANTS}`,
+        [olderThanDays]
       );
       return { count: result.rowCount ?? 0 };
     });
@@ -388,7 +339,6 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
 export async function deleteWorkflowRun(id: string): Promise<void> {
   try {
     await getDatabase().withTransaction(async query => {
-      await lockRunTrees(query, 'SELECT id FROM remote_agent_workflow_runs WHERE id = $1', [id]);
       // Guard: verify run exists and is terminal before deleting
       const check = await query<{ status: string }>(
         'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
