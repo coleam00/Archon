@@ -146,14 +146,15 @@ function runLines(run: ItemRun): string[] {
 }
 
 /**
- * What admits a start waiting on `hostId`. A CLI run end and each `workflow wake` pass
- * drain the hosts this install's trigger files name (`served`); any other host is another
- * machine's, whose own drain admits it.
+ * Which drain will try a start waiting on `hostId`. A CLI run end and each `workflow wake`
+ * pass drain the hosts this install's trigger files name (`served`); any other host is
+ * another machine's, whose own drain tries it. A drain admits a start only once its slot,
+ * checkout and item are free, so the text never promises that one admits it at once.
  */
 export function admittedByText(hostId: string, served: ReadonlySet<string>): string {
   return served.has(hostId)
-    ? `the next run end on this install or the wake watcher's next pass (archon workflow wake --watch) admits it; archon trigger drain --host ${hostId} admits it now`
-    : `no trigger file on this install names host ${hostId}; that host's own drain admits it (archon trigger drain --host ${hostId} where it runs)`;
+    ? `admitted once its slot, checkout and item are free, at the next run end on this install or the wake watcher's next pass (archon workflow wake --watch); archon trigger drain --host ${hostId} tries again now`
+    : `no trigger file on this install names host ${hostId}; that host's own drain tries it (archon trigger drain --host ${hostId} where it runs)`;
 }
 
 /**
