@@ -296,6 +296,7 @@ nodes:
     const review = resolveWorkflowName(REVIEW, definitions) as ResolvedWorkflow;
     const issues = await validateWorkflowResources(review, project, providerRegistry, {
       workflowSource: 'installed',
+      assistant: 'claude',
     });
     expect(issues.filter(issue => issue.level === 'error')).toEqual([]);
     const scope = review.nodes.find(node => node.id === 'scope');
