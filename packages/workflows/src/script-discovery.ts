@@ -16,7 +16,12 @@ import { join, basename, dirname, extname } from 'path';
 import { createLogger, getArchonHome } from '@archon/paths';
 import { BUNDLED_SCRIPT_PACKS, isBinaryBuild } from './defaults/bundled-defaults';
 import { collectInstalledBundleSources } from './defaults/bundle-inventory';
-import { listInstalledPacks, liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
+import {
+  listInstalledPacks,
+  liveSourceRoots,
+  sourcePackFolder,
+  type WorkflowSourceRoots,
+} from './workflow-source';
 import {
   formatPackagedResourceReference,
   isValidWorkflowFolderSegment,
@@ -486,6 +491,19 @@ export async function discoverScriptsForCwd(
         onMissing
       )
     : new Map<string, ScriptDefinition>();
+  // A live source that is a pack folder holds a project pack at its root.
+  const sourcePack =
+    roots.kind === 'live' && roots.project ? await sourcePackFolder(roots.project) : null;
+  if (sourcePack) {
+    await discoverPackScripts(
+      sourcePack.dir,
+      sourcePack.name,
+      'project',
+      repoPackagedScripts,
+      requestedNames,
+      onMissing
+    );
+  }
 
   // Internal packaged keys include their scope, so included workflows retain
   // exact ownership. Legacy shared scripts keep repo-over-home precedence.

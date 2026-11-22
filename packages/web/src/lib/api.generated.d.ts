@@ -11156,6 +11156,18 @@ export interface components {
     };
     PackGraph: {
       pack: string;
+      loaded: {
+        /** @enum {string} */
+        source: 'project' | 'bundled' | 'global' | 'installed';
+        key: string;
+        dir: string | null;
+      }[];
+      otherCopies: {
+        /** @enum {string} */
+        source: 'project' | 'bundled' | 'global' | 'installed';
+        key: string;
+        dir: string | null;
+      }[];
       stages: {
         name: string;
         returns: string | null;

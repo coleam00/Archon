@@ -24,6 +24,7 @@ import {
   type InstalledPacksRoot,
 } from './roots';
 import { copyListing, isDirectory, listTree, projectSourceDirs } from './tree';
+import { sourcePackFolder } from './source-pack';
 import { getLog } from './log';
 
 /**
@@ -116,7 +117,11 @@ export async function captureWorkflowSource(opts: {
   }
 }
 
-/** The project and global source directories that exist. */
+/**
+ * The project and global source directories that exist. A source that is a pack folder is
+ * frozen where a project pack lives, `project/.archon/workflows/<name>`, so the captured
+ * roots, a resume and a `workflow:` child read it as any project pack.
+ */
 async function mutableScopeJobs(
   sourceRoot: string,
   commandFolder: string | undefined
@@ -126,6 +131,15 @@ async function mutableScopeJobs(
     const from = join(sourceRoot, dir);
     if (await isDirectory(from))
       jobs.push({ dest: join(PROJECT_SCOPE_DIR, dir), from, scope: 'project' });
+  }
+  const pack = await sourcePackFolder(sourceRoot);
+  if (pack !== null) {
+    const [workflowFolder] = archonPaths.getWorkflowFolderSearchPaths();
+    jobs.push({
+      dest: join(PROJECT_SCOPE_DIR, workflowFolder, pack.name),
+      from: pack.dir,
+      scope: 'project',
+    });
   }
   for (const [name, from] of [
     ['workflows', archonPaths.getHomeWorkflowsPath()],

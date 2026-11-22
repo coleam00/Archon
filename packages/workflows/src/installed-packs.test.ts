@@ -23,9 +23,12 @@ import { loadCommandPrompt } from './load-command-prompt';
 import { discoverScriptsForCwd } from './script-discovery';
 import { resolveContinuationWorkflow } from './run-source';
 import { resolveFanOutChildDefinition } from './dag/nodes/compose-fan-out/compose-fan-out';
+import { packCopies, packWorkflows } from './pack-graph';
 import {
   captureWorkflowSource,
   capturedSourceRoots,
+  liveSourceRoots,
+  packDirectory,
   resolveChildInstalledPacks,
   type WorkflowSourceCapture,
 } from './workflow-source';
@@ -578,6 +581,117 @@ describe('installed pack boundaries', () => {
 });
 
 /** A run row that recorded `capture` as its source. */
+describe('a pack folder given as the source', () => {
+  /** A pack author's checkout of review-kit: the pack's own files, manifest at the root. */
+  async function packFolder(marker: string): Promise<string> {
+    const kit = reviewKit(COMMIT_B, marker);
+    const dir = join(dirname(project), 'review-kit-checkout');
+    for (const [path, content] of Object.entries({
+      ...kit.files,
+      'archon-plugin.json': JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: kit.name,
+        description: 'fixture pack',
+        entrypoints: kit.entrypoints,
+      }),
+    })) {
+      await mkdir(dirname(join(dir, path)), { recursive: true });
+      await writeFile(join(dir, path), content);
+    }
+    return dir;
+  }
+  const discoverFrom = (source: string): ReturnType<typeof discoverWorkflowsWithConfig> =>
+    discoverWorkflowsWithConfig(source, loadConfig, providerRegistry);
+
+  test('is the project pack that runs, live and from its capture, beside the installed copy', async () => {
+    await install(reviewKit(COMMIT_A, 'installed'));
+    const folder = await packFolder('local');
+
+    const live = await discoverFrom(folder);
+    const local = live.workflows.find(entry => entry.workflow.name === 'code-review');
+    expect(local?.source).toBe('project');
+    expect(local?.workflow.pack?.key).toBe('review-kit');
+    expect(local?.workflow.description).toBe('Review a change (local)');
+    // The installed copy is still in reach under its own name and bytes.
+    const installed = live.workflows.find(entry => entry.workflow.name === REVIEW);
+    expect(installed?.workflow.description).toBe('Review a change (installed)');
+
+    // Commands and scripts of the local pack resolve from the folder.
+    expect(
+      await packDirectory(liveSourceRoots(folder), { source: 'project', key: 'review-kit' })
+    ).toBe(folder);
+    const scope = local?.workflow.nodes.find(node => node.id === 'scope');
+    if (!scope || !isAgentNode(scope) || scope.source.kind !== 'command') {
+      throw new Error('scope is a command node');
+    }
+    expect(await loadCommandPrompt(deps, folder, scope.source.name)).toEqual({
+      success: true,
+      content: 'Scope the change (local).\n',
+    });
+    expect(
+      [...(await discoverScriptsForCwd(folder)).values()].some(
+        script => script.path === join(folder, 'review', 'scripts', 'check.ts')
+      )
+    ).toBe(true);
+
+    // A run freezes the folder where a project pack lives and resumes on those bytes.
+    const capture = await captureWorkflowSource({
+      sourceRoot: folder,
+      captureRoot: join(home, 'runs', 'run-1'),
+    });
+    await writeFile(join(folder, 'review', 'commands', 'scope.md'), 'Edited after start.\n');
+    const resumed = await resolveContinuationWorkflow(
+      deps,
+      runWith(capture, 'code-review'),
+      folder
+    );
+    expect(resumed?.workflow.pack).toMatchObject({ key: 'review-kit', source: 'project' });
+    expect(
+      await loadCommandPrompt(deps, folder, scope.source.name, undefined, resumed?.roots)
+    ).toEqual({ success: true, content: 'Scope the change (local).\n' });
+  });
+
+  test('names the copy it read and the other copy, and how to name each', async () => {
+    await install(reviewKit());
+    const folder = await packFolder('local');
+    const discovered = await discoverFrom(folder);
+    const roots = liveSourceRoots(folder);
+    const installedDir = packTreePath(join(home, 'plugins'), ID, COMMIT_A);
+
+    expect(await packCopies(discovered, roots, 'review-kit')).toEqual({
+      loaded: [{ source: 'project', key: 'review-kit', dir: folder }],
+      otherCopies: [{ source: 'installed', key: 'acme.review-kit', dir: installedDir }],
+    });
+    expect(await packCopies(discovered, roots, 'acme.review-kit')).toEqual({
+      loaded: [{ source: 'installed', key: 'acme.review-kit', dir: installedDir }],
+      otherCopies: [{ source: 'project', key: 'review-kit', dir: folder }],
+    });
+    // From a project without the folder, asking for the bare name points at the installed key.
+    expect(() => packWorkflows(discovered, 'review-kit', folder)).not.toThrow();
+    expect(() => packWorkflows(discovered, 'acme.review-kit', folder)).not.toThrow();
+    const elsewhere = await discover();
+    expect(() => packWorkflows(elsewhere, 'review-kit', project)).toThrow(
+      "Pack 'review-kit' is in reach as 'acme.review-kit' (installed); name 'acme.review-kit' to use it."
+    );
+  });
+
+  test('a folder that also holds a nested copy of its pack loads neither copy', async () => {
+    const folder = await packFolder('local');
+    const nested = join(folder, '.archon', 'workflows', 'review-kit', 'review');
+    await mkdir(nested, { recursive: true });
+    await cp(join(folder, 'review'), nested, { recursive: true });
+    const { workflows, errors } = await discoverFrom(folder);
+    expect(workflows.some(entry => entry.workflow.pack?.key === 'review-kit')).toBe(false);
+    expect(errors.map(error => error.error)).toContainEqual(
+      expect.stringContaining('Neither copy is loaded')
+    );
+    await expect(
+      captureWorkflowSource({ sourceRoot: folder, captureRoot: join(home, 'runs', 'run-1') })
+    ).rejects.toThrow('Neither copy is loaded');
+  });
+});
+
 function runWith(
   capture: WorkflowSourceCapture,
   workflowName: string

@@ -143,6 +143,60 @@ describe('workflow run --dry-run --workflow-source', () => {
     }
   });
 
+  /** A pack author's checkout: the pack's manifest at the root, no `.archon/` layout. */
+  function writePackFolder(fx: Fixture, nodes: string): void {
+    write(
+      join(fx.source, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'demo-pack',
+        description: 'demo',
+        entrypoints: { probe: 'probe/probe.yaml' },
+      })
+    );
+    write(
+      join(fx.source, 'probe', 'probe.yaml'),
+      `name: probe\ndescription: probe\nnodes:\n${nodes}`
+    );
+    write(join(fx.source, 'probe', 'commands', 'probe.md'), 'Probe the target.\n');
+  }
+
+  test("reads a pack folder given as the source as that pack, with the pack's command", async () => {
+    const fx = fixture();
+    writePackFolder(fx, '  - id: probe\n    command: probe\n');
+
+    const result = await dryRun(fx, 'probe');
+
+    expect(result.trace.find(entry => entry.nodeId === 'probe')?.reason).toBeUndefined();
+    expect(result.outcome).toBe('completed');
+  });
+
+  test('a captured run of a pack folder source runs it as a project pack and says so', async () => {
+    const fx = fixture();
+    writePackFolder(fx, '  - id: probe\n    bash: echo local-6034\n');
+
+    const result = await captureWorkflowCommand(fx.home, async host => {
+      await workflowRunCommand(host, fx.target, 'probe', '', {
+        discoveryCwd: fx.source,
+        noWorktree: true,
+        folder: true,
+      });
+    });
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain(`Pack 'demo-pack' loaded from ${fx.source}`);
+    const db = new Database(join(fx.home, 'archon.db'), { readonly: true });
+    try {
+      const rows = db
+        .query<{ metadata: string }, []>('SELECT metadata FROM remote_agent_workflow_runs')
+        .all();
+      expect(rows.map(row => JSON.parse(row.metadata).dispatch?.source)).toEqual(['project']);
+    } finally {
+      db.close();
+    }
+  });
+
   // A same-named global workflow stands in for any other scope the name could resolve from.
   function writeGlobalProbe(fx: Fixture): void {
     write(

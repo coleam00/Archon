@@ -10,6 +10,7 @@ import {
 import { packTreePath, scanReceipts } from '@archon/plugin-manifest/store';
 import type { WorkflowResourceOwner } from '../packaged-workflow';
 import type { WorkflowSource } from '../schemas/workflow';
+import { sourcePackFolder } from './source-pack';
 import { INSTALLED_SCOPE_DIR, type InstalledPacksRoot, type WorkflowSourceRoots } from './roots';
 
 /** Where an installed pack came from, as its receipt recorded it. */
@@ -47,6 +48,12 @@ export interface InstalledPack {
 
 export function installedPackKey(owner: string, name: string): string {
   return `${owner}.${name}`;
+}
+
+/** The owner and name an {@link installedPackKey} joins, or null for a key that is not one. */
+export function splitInstalledPackKey(key: string): { owner: string; name: string } | null {
+  const separator = key.indexOf('.');
+  return separator < 1 ? null : { owner: key.slice(0, separator), name: key.slice(separator + 1) };
 }
 
 /** The public name of a workflow in an installed pack: `owner/plugin:<name>`. */
@@ -160,13 +167,13 @@ async function listCapturedPacks(
   }
   for (const key of keys.sort()) {
     const dir = join(installedDir, key);
-    const separator = key.indexOf('.');
+    const split = splitInstalledPackKey(key);
     try {
       const manifest = await readPackManifest(dir);
-      if (separator < 1 || key.slice(separator + 1) !== manifest.name) {
+      if (split === null || split.name !== manifest.name) {
         throw new Error(`Captured pack ${key} does not match its manifest name ${manifest.name}`);
       }
-      packs.push({ owner: key.slice(0, separator), name: manifest.name, key, dir, manifest });
+      packs.push({ owner: split.owner, name: manifest.name, key, dir, manifest });
     } catch (error) {
       errors.push({ path: dir, message: (error as Error).message, cause: error });
     }
@@ -197,8 +204,15 @@ export async function packDirectory(
   pack: { source: WorkflowSource; key: string }
 ): Promise<string | null> {
   switch (pack.source) {
-    case 'project':
-      return roots.project === null ? null : join(roots.project, '.archon', 'workflows', pack.key);
+    case 'project': {
+      if (roots.project === null) return null;
+      // A live source that is the pack's own folder holds it at its root.
+      if (roots.kind === 'live') {
+        const sourcePack = await sourcePackFolder(roots.project);
+        if (sourcePack?.name === pack.key) return sourcePack.dir;
+      }
+      return join(roots.project, '.archon', 'workflows', pack.key);
+    }
     case 'global':
       return join(roots.globalWorkflows, pack.key);
     case 'bundled':

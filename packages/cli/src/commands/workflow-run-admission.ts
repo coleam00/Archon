@@ -1,6 +1,6 @@
 import { rmSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
@@ -42,6 +42,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { readSubrunMetadata } from '@archon/workflows/schemas/run-metadata';
 import { DETACHED_LAUNCH_METADATA_KEY } from '@archon/workflows/store';
 import { loadWorkflows } from './workflow-list';
+import { describeWorkflowSource, packCopyLines } from './pack-copies';
 import { resolveLaunchRunConfig } from './workflow-run-config';
 import { assertInheritedWorkflowCodebase, type WorkflowRunOptions } from './workflow-shared';
 import {
@@ -176,7 +177,9 @@ export async function selectRunWorkflow(request: OwnedRunRequest): Promise<RunSe
     );
   if (!workflow) {
     const error = workflowNotFoundError(workflowName, workflowEntries, errors);
-    throw isContinuation ? error : withSourceContext(error, options.discoveryCwd);
+    throw isContinuation
+      ? error
+      : await withSourceContext(error, options.discoveryCwd, workflowEntries);
   }
   const workflowEntry = workflowEntries.find(ws => ws.workflow === workflow);
   // An explicit --workflow-source that lacks the named workflow would otherwise run another
@@ -187,7 +190,24 @@ export async function selectRunWorkflow(request: OwnedRunRequest): Promise<RunSe
     options.discoveryCwd !== undefined &&
     workflowEntry?.source !== 'project'
   ) {
-    throw workflowNotInSourceError(workflowName, options.discoveryCwd, workflowEntry?.source);
+    throw await workflowNotInSourceError(
+      workflowName,
+      options.discoveryCwd,
+      workflowEntry?.source,
+      workflowEntries
+    );
+  }
+  // Which copy of the workflow's pack this run reads, from its live origin. A resume
+  // reads the copy its capture froze, so it has nothing to choose.
+  if (!isContinuation && !options.json && !options.quiet) {
+    const sourceRoot = options.discoveryCwd ?? cwd;
+    for (const line of await packCopyLines(
+      workflow,
+      workflowEntries,
+      sourceRoot,
+      options.discoveryCwd !== undefined
+    ))
+      console.log(line);
   }
   // Name the selection in the capture's manifest, now that it is known. The manifest is
   // outside the digest, so this records provenance without disturbing what was frozen.
@@ -377,9 +397,10 @@ async function discoverRunWorkflows(
   if (workflowEntries.length === 0 && errors.length === 0) {
     // No manual cleanup here or anywhere else in this run: the owner reclaims
     // anything unadopted on the way out, which is the point of having one.
-    throw withSourceContext(
+    throw await withSourceContext(
       new Error('No workflows found in .archon/workflows/'),
-      options.discoveryCwd
+      options.discoveryCwd,
+      workflowEntries
     );
   }
   return { workflowEntries, errors };
@@ -399,32 +420,37 @@ function workflowNotFoundError(
   return unknownWorkflowError(workflowName, workflowEntries);
 }
 
-function workflowNotInSourceError(
+async function workflowNotInSourceError(
   workflowName: string,
   sourceRoot: string,
-  resolvedScope: WorkflowSource | undefined
-): Error {
+  resolvedScope: WorkflowSource | undefined,
+  workflowEntries: readonly WorkflowWithSource[]
+): Promise<Error> {
   const root = resolve(sourceRoot);
   const lines = [
-    `Workflow '${workflowName}' is not in --workflow-source ${root}: Archon looked in ` +
-      `${join(root, '.archon', 'workflows')} and found it only in the ${resolvedScope ?? 'another'} scope. ` +
-      'Nothing was started.',
+    `Workflow '${workflowName}' is not in --workflow-source ${root}; Archon found it only in ` +
+      `the ${resolvedScope ?? 'another'} scope. Nothing was started.`,
+    `--workflow-source ${root}: ${await describeWorkflowSource(root, workflowEntries)}.`,
     ...checkoutRootHint(root),
   ];
   return new Error(lines.join('\n'));
 }
 
 /**
- * Every refusal under an explicit --workflow-source names the directory searched, so a wrong
- * path is visible whether or not the name exists in another scope.
+ * Every refusal under an explicit --workflow-source names what the directory was read as,
+ * so a wrong path or a wrong name is visible whether or not the name exists in another scope.
  */
-function withSourceContext(error: Error, sourceRoot: string | undefined): Error {
+async function withSourceContext(
+  error: Error,
+  sourceRoot: string | undefined,
+  workflowEntries: readonly WorkflowWithSource[]
+): Promise<Error> {
   if (sourceRoot === undefined) return error;
   const root = resolve(sourceRoot);
   const lines = [
     error.message,
     '',
-    `--workflow-source ${root}: Archon looked in ${join(root, '.archon', 'workflows')}.`,
+    `--workflow-source ${root}: ${await describeWorkflowSource(root, workflowEntries)}.`,
     ...checkoutRootHint(root),
   ];
   return new Error(lines.join('\n'));

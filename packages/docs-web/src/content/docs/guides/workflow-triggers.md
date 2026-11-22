@@ -411,6 +411,8 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
 ```json
 {
   "pack": "factory",
+  "loaded": [{ "source": "project", "key": "factory", "dir": "/home/alice/acme/widgets/.archon/workflows/factory" }],
+  "otherCopies": [],
   "stages": [
     {
       "name": "plan",
@@ -489,7 +491,8 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
 - An arrow from an [asks-settled binding](#start-a-stage-again-when-its-asks-are-answered) has `from: { "stage", "settled" }` in place of `outcome`, where `settled` is the binding's `answered`, `withdrawn` or `any`, and `option` when the binding names one ([options](#start-a-different-stage-for-each-option)); a pack binding that lists several options is one arrow per option. It starts nothing for an outcome, so it does not change `startsNothing`.
 - `startsNothing` marks an outcome no active arrow without problems leaves. With `asks: false` such an outcome ends in silence; whether that is right is the pack's call.
 - `discoveryErrors` lists every workflow that failed to load from the source the pack was read from. A stage that failed is missing from `stages`, so a non-empty list means the graph may be incomplete.
-- When the pack's workflows are not in the checkout, pass `--workflow-source <dir>` (`workflowSource=` on the API), the directory a binding's `launch.discoveryCwd` names. The arrows are still those of the checkout's project.
+- `loaded` is the copy of the pack the graph was read from, `{ source, key, dir }`, and `otherCopies` every other copy of the same pack in reach under another key, such as an installed `acme.factory` beside a project `factory`. Asking for that key reads that copy. `dir` is `null` for a bundled pack a compiled binary reads from its embedded bytes.
+- When the pack's workflows are not in the checkout, pass `--workflow-source <dir>` (`workflowSource=` on the API), the directory a binding's `launch.discoveryCwd` names. It may be [the pack's own folder](/reference/cli/#a-pack-folder-as-the-source). The arrows are still those of the checkout's project.
 
 To draw one item's path, read `archon workflow runs --item <key> --json` (or `GET /api/items`): each run's `workflow` is a stage, its `outcome` the value it ended with, and a `run_ended` cause names the run whose end started it (`runId`) and the arrow (`sourceInstanceId`, the arrow's `installed.sourceInstanceId`).
 
