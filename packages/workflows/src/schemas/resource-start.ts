@@ -622,15 +622,10 @@ export type SourceReceiptAcceptance = z.infer<typeof sourceReceiptAcceptanceSche
  * started item is on; the ended run's item is on the other end. An order whose members are
  * `part_of` it uses `holder: 'to'`; an item that `depends_on` another uses
  * `holder: 'from'`. The engine gives the kind no meaning: the file names both the kind and
- * the end. Only links active when the run completes count.
- *
- * Without `items`, the stage starts on every holder each time the run ends with the
- * outcome, with the same inputs; the stage judges whether its item is ready. With `items`,
- * a JSON Pointer into the ended run's result, the run names the holders: the pointer holds
- * a list whose entries are item keys or objects with a string `key`, and only those
- * holders start, each able to read its own entry through `{ entry: <pointer> }`. A named
- * key that is not a holder is refused on the ended run's item, naming it; a list that
- * cannot be read is refused there too and starts nothing.
+ * the end. Only links active when the run completes count. Without `items` every holder
+ * starts, with the same inputs. `items` points into the ended run's result at a list of
+ * item keys or objects with a string `key`; only those holders start, each reading its own
+ * entry through `{ entry: <pointer> }` (see `namedLinkedStart` in core for the refusals).
  */
 export const runEndedLinkedSchema = z
   .object({

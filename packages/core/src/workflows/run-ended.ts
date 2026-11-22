@@ -246,14 +246,18 @@ function mappedValue(
     return from.itemKey === undefined ? 'there is no item key to read' : { value: from.itemKey };
   if ('input' in source) return { value: from.inputs[source.input] };
   // `{entry}` parses only in a linked run-ended binding with `items`, which passes the entry.
-  if ('entry' in source) {
-    if (from.entry === undefined) return 'there is no linked entry to read';
-    const value = resolveJsonPointer(from.entry, source.entry);
-    return value === undefined ? `entry pointer '${source.entry}' did not resolve` : { value };
-  }
-  const value =
-    from.result === undefined ? undefined : resolveJsonPointer(from.result, source.result);
-  return value === undefined ? `result pointer '${source.result}' did not resolve` : { value };
+  if ('entry' in source) return pointed(from.entry, source.entry, 'entry');
+  return pointed(from.result, source.result, 'result');
+}
+
+/** What `pointer` names in `from`, or why it names nothing. */
+function pointed(
+  from: JsonValue | undefined,
+  pointer: string,
+  what: 'entry' | 'result'
+): { value: JsonValue } | string {
+  const value = from === undefined ? undefined : resolveJsonPointer(from, pointer);
+  return value === undefined ? `${what} pointer '${pointer}' did not resolve` : { value };
 }
 
 export interface RunEndedStartsDependencies {
@@ -312,22 +316,41 @@ export function createRunEndedStarts(
     const now = dependencies.now?.() ?? new Date();
     for (const candidate of candidates) {
       if (!(await bindingMatches(candidate, ended, item, dependencies))) continue;
-      const link = candidate.runEnded.linked;
-      if (link?.items !== undefined) {
-        const named = namedLinkedStart(candidate, { ...link, items: link.items }, ended, item, now);
-        if ('refused' in named) receipts.push(named.refused);
-        else if (named.named.length > 0) linked.push(named);
-        continue;
-      }
-      const acceptance = await endedReceipt(candidate, ended, item, now, {
+      const start = await matchedStart(candidate, ended, item, now, {
         endedCheckout,
         answersOnItem,
       });
-      if (link) linked.push({ link, endedRunId: run.id, endedItemId: item.id, acceptance });
-      else receipts.push(acceptance);
+      if (start && 'receipt' in start) receipts.push(start.receipt);
+      else if (start) linked.push(start.linked);
     }
     return { receipts, linked };
   };
+}
+
+/**
+ * What a matched binding causes: a receipt on the ended run's item, a linked start for
+ * the completing write to resolve, or nothing when the run names no items to start.
+ */
+async function matchedStart(
+  candidate: RunEndedBinding,
+  ended: RunEndedFacts,
+  item: WorkflowItem,
+  now: Date,
+  read: {
+    endedCheckout: () => Promise<EndedCheckout>;
+    answersOnItem: () => Promise<ItemAnswers>;
+  }
+): Promise<{ receipt: SourceReceiptAcceptance } | { linked: LinkedRunEndedStart } | undefined> {
+  const link = candidate.runEnded.linked;
+  if (link?.items !== undefined) {
+    const named = namedLinkedStart(candidate, { ...link, items: link.items }, ended, item, now);
+    if ('refused' in named) return { receipt: named.refused };
+    return named.named.length > 0 ? { linked: named } : undefined;
+  }
+  const acceptance = await endedReceipt(candidate, ended, item, now, read);
+  return link
+    ? { linked: { link, endedRunId: ended.run.id, endedItemId: item.id, acceptance } }
+    : { receipt: acceptance };
 }
 
 /**
