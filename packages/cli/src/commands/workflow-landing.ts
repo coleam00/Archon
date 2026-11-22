@@ -6,42 +6,35 @@
  */
 import { validateBranchName } from '@archon/git';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import { projectRefForCodebase } from '@archon/core/operations/attention-queue';
-import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import type { ItemLanding } from '@archon/workflows/schemas/item-landing';
 import { readCallingNode } from '../utils/calling-node';
 import { writeJsonLine } from '../utils/stdout';
-import { inheritedWorkflowCodebase } from './workflow-shared';
+import { type ItemTarget, NoRunItemError, resolveItemTarget } from './item-target';
 
 export const WORKFLOW_LANDING_USAGE =
-  'Usage: archon workflow landing --item <key> --branch <name> [--json]';
+  'Usage: archon workflow landing --item <key>|--item-of <run-id> --branch <name> [--json]';
 
-export interface WorkflowLandingRequest {
-  item: string;
-  branch: string;
-}
+export type WorkflowLandingRequest = ItemTarget & { branch: string };
 
 async function record(
   host: WorkflowHost,
   cwd: string,
   request: WorkflowLandingRequest,
   env: NodeJS.ProcessEnv
-): Promise<ItemLanding> {
+): Promise<{ key: string; landing: ItemLanding }> {
   try {
     await validateBranchName(request.branch);
   } catch (error) {
     throw new Error(`--branch '${request.branch}' is not a valid branch name.`, { cause: error });
   }
-  const codebase =
-    (await inheritedWorkflowCodebase(host)) ??
-    (await findCodebaseForCheckoutPath(cwd, host.records.codebases));
-  if (!codebase) throw new Error('--item names an item in one registered project.');
-  return host.deps.store.recordItemLanding({
-    projectKey: projectRefForCodebase(codebase).key,
-    key: request.item,
+  const { projectKey, key } = await resolveItemTarget(host, cwd, request);
+  const landing = await host.deps.store.recordItemLanding({
+    projectKey,
+    key,
     branch: request.branch,
     fromRun: env.WORKFLOW_ID ? readCallingNode(env.WORKFLOW_ID, env) : null,
   });
+  return { key, landing };
 }
 
 export async function workflowLandingCommand(
@@ -52,13 +45,17 @@ export async function workflowLandingCommand(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<number> {
   try {
-    const landing = await record(host, cwd, request, env);
+    const { key, landing } = await record(host, cwd, request, env);
     if (json) await writeJsonLine(landing);
-    else console.log(`Item ${request.item} lands on ${landing.branch}.`);
+    else console.log(`Item ${key} lands on ${landing.branch}.`);
     return 0;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (json) await writeJsonLine({ ok: false, error: message });
+    if (json)
+      await writeJsonLine({
+        ok: false,
+        error: error instanceof NoRunItemError ? 'no_item' : message,
+      });
     else console.error(`Error: ${message}`);
     return 1;
   }
