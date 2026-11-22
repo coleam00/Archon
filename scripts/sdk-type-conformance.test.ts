@@ -36,7 +36,7 @@ export type Comparison${index} = AssertNever<${drift}>;
 `,
     ];
   }).join('\n');
-  // Core's subscription tokens are stored and refreshed as Pi OAuth credentials. Core cannot
+  // Core's subscription credentials must stay assignable to Pi's OAuth credentials. Core cannot
   // import the Pi SDK and providers cannot import core, so this proof is where they meet.
   const proof = `
 import type { AssertNever } from '@archon/provider-contract';

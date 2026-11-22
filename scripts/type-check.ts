@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { PackageManifest } from './check-package-edges';
 
@@ -124,7 +124,17 @@ export async function runTypeChecks(tasks: readonly TypeCheckTask[]): Promise<st
   const failed: string[] = [];
   for (const task of tasks) {
     const startedAt = Date.now();
-    const child = Bun.spawn(task.command, { cwd: task.cwd, stdout: 'pipe', stderr: 'pipe' });
+    // TypeScript 7 takes its working directory from $PWD, which can keep a symlinked path (on
+    // macOS /tmp is /private/tmp), while it follows package symlinks to real paths. The two then
+    // name one declaration twice and a cold build reports dozens of false errors, so every task
+    // runs from the real path.
+    const cwd = realpathSync(task.cwd);
+    const child = Bun.spawn(task.command, {
+      cwd,
+      env: { ...process.env, PWD: cwd },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
     const [stdout, stderr, code] = await Promise.all([
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
