@@ -16,7 +16,7 @@ import { PACK_DECLARATION_PATH, qualifyWorkflowResources } from '../packaged-wor
 import { PackSettingsError, parsePackDeclaration, type PackDeclaration } from '../pack-settings';
 import type { DiscoveryContext } from './context';
 import {
-  loadPackWorkflows,
+  addPackToScope,
   loadPackagedWorkflowsFromDir,
   loadScopeDirectory,
   loadWorkflowsFromDir,
@@ -337,12 +337,12 @@ async function addSourcePack(
   }
   if (pack === null) return;
   getLog().debug({ pack: pack.name, packDir: pack.dir }, 'source_pack_folder_found');
-  const loaded = await loadPackWorkflows(
-    { ...context, pack: pack.name, source: 'project', label: pack.name },
-    pack.dir
-  );
-  const packaged: DirLoadResult = { workflows: new Map(), errors: loaded.errors };
-  for (const { filename, parsed } of loaded.files) packaged.workflows.set(filename, parsed);
+  const packaged: DirLoadResult = { workflows: new Map(), errors: [] };
+  await addPackToScope(context, packaged, new Set(), {
+    name: pack.name,
+    path: pack.dir,
+    source: 'project',
+  });
   mergeScopeResults(into, packaged);
 }
 

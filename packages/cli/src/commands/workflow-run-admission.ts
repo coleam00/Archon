@@ -182,33 +182,8 @@ export async function selectRunWorkflow(request: OwnedRunRequest): Promise<RunSe
       : await withSourceContext(error, options.discoveryCwd, workflowEntries);
   }
   const workflowEntry = workflowEntries.find(ws => ws.workflow === workflow);
-  // An explicit --workflow-source that lacks the named workflow would otherwise run another
-  // scope's copy while recording the source as its origin (#5826). Commands, scripts and
-  // composed workflows may still resolve from other scopes; the named workflow may not.
-  if (
-    !isContinuation &&
-    options.discoveryCwd !== undefined &&
-    workflowEntry?.source !== 'project'
-  ) {
-    throw await workflowNotInSourceError(
-      workflowName,
-      options.discoveryCwd,
-      workflowEntry?.source,
-      workflowEntries
-    );
-  }
-  // Which copy of the workflow's pack this run reads, from its live origin. A resume
-  // reads the copy its capture froze, so it has nothing to choose.
-  if (!isContinuation && !options.json && !options.quiet) {
-    const sourceRoot = options.discoveryCwd ?? cwd;
-    for (const line of await packCopyLines(
-      workflow,
-      workflowEntries,
-      sourceRoot,
-      options.discoveryCwd !== undefined
-    ))
-      console.log(line);
-  }
+  // A resume executes the copy its capture froze, so it has no source to check or choose.
+  if (!isContinuation) await admitFromSource(request, workflow, workflowEntry, workflowEntries);
   // Name the selection in the capture's manifest, now that it is known. The manifest is
   // outside the digest, so this records provenance without disturbing what was frozen.
   if (source.preparedSource) {
@@ -404,6 +379,40 @@ async function discoverRunWorkflows(
     );
   }
   return { workflowEntries, errors };
+}
+
+/**
+ * A fresh run's checks against the source it named, then the report of which pack copy it
+ * reads. An explicit --workflow-source that lacks the named workflow would otherwise run
+ * another scope's copy while recording the source as its origin (#5826). Commands, scripts
+ * and composed workflows may still resolve from other scopes; the named workflow may not.
+ */
+async function admitFromSource(
+  request: OwnedRunRequest,
+  workflow: ResolvedWorkflow,
+  workflowEntry: WorkflowWithSource | undefined,
+  workflowEntries: readonly WorkflowWithSource[]
+): Promise<void> {
+  const { cwd, workflowName, options } = request;
+  if (options.discoveryCwd !== undefined && workflowEntry?.source !== 'project') {
+    throw await workflowNotInSourceError(
+      workflowName,
+      options.discoveryCwd,
+      workflowEntry?.source,
+      workflowEntries
+    );
+  }
+  // Which copy of the workflow's pack this run reads, from its live origin. Under --json
+  // it goes to stderr, as parse warnings do, so an agent reading stdout gets only the payload.
+  if (options.quiet && !options.json) return;
+  const print = options.json ? console.error : console.log;
+  const lines = await packCopyLines(
+    workflow,
+    workflowEntries,
+    options.discoveryCwd ?? cwd,
+    options.discoveryCwd !== undefined
+  );
+  for (const line of lines) print(line);
 }
 
 function workflowNotFoundError(

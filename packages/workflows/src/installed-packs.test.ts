@@ -676,6 +676,65 @@ describe('a pack folder given as the source', () => {
     );
   });
 
+  /** A pack folder holding `files`, with a manifest naming it `name`. */
+  async function rawPackFolder(name: string, files: Record<string, string>): Promise<string> {
+    const dir = join(dirname(project), `${name}-checkout`);
+    for (const [path, content] of Object.entries({
+      ...files,
+      'archon-plugin.json': JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name,
+        description: 'fixture pack',
+        entrypoints: { one: 'one/workflow.yaml' },
+      }),
+    })) {
+      await mkdir(dirname(join(dir, path)), { recursive: true });
+      await writeFile(join(dir, path), content);
+    }
+    return dir;
+  }
+  const flow = (name: string): string =>
+    `name: ${name}\ndescription: d\nnodes:\n  - id: a\n    bash: echo ${name}\n`;
+
+  test('two workflow files with one filename fail live as they fail from the capture', async () => {
+    const folder = await rawPackFolder('twin-kit', {
+      'one/workflow.yaml': flow('one'),
+      'two/workflow.yaml': flow('two'),
+    });
+    const collision = expect.stringContaining('Workflow filename collision');
+    const live = await discoverFrom(folder);
+    expect(live.workflows.some(entry => entry.workflow.pack?.key === 'twin-kit')).toBe(false);
+    expect(live.errors.map(error => error.error)).toContainEqual(collision);
+
+    const capture = await captureWorkflowSource({
+      sourceRoot: folder,
+      captureRoot: join(home, 'runs', 'run-1'),
+    });
+    const captured = await discoverWorkflowsWithConfig(
+      folder,
+      loadConfig,
+      providerRegistry,
+      capturedSourceRoots(capture.anchor)
+    );
+    expect(captured.workflows.some(entry => entry.workflow.pack?.key === 'twin-kit')).toBe(false);
+    expect(captured.errors.map(error => error.error)).toContainEqual(collision);
+  });
+
+  test('a pack named for a reserved project folder is refused, not lost after capture', async () => {
+    for (const name of ['defaults', 'fixtures']) {
+      const folder = await rawPackFolder(name, { 'one/workflow.yaml': flow('one') });
+      const live = await discoverFrom(folder);
+      expect(live.workflows.some(entry => entry.workflow.name === 'one')).toBe(false);
+      expect(live.errors.map(error => error.error)).toContainEqual(
+        expect.stringContaining('cannot be a project pack folder name')
+      );
+      await expect(
+        captureWorkflowSource({ sourceRoot: folder, captureRoot: join(home, 'runs', name) })
+      ).rejects.toThrow('cannot be a project pack folder name');
+    }
+  });
+
   test('a folder that also holds a nested copy of its pack loads neither copy', async () => {
     const folder = await packFolder('local');
     const nested = join(folder, '.archon', 'workflows', 'review-kit', 'review');

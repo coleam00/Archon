@@ -572,3 +572,67 @@ describe('archon pack bindings: asks-settled', () => {
     expect(existsSync(out)).toBe(false);
   });
 });
+
+describe('archon pack: a pack folder as the workflow source', () => {
+  /** The fixture pack as its author keeps it: its own folder, manifest at the root. */
+  async function writePackFolder(): Promise<string> {
+    const dir = join(root, 'fixture-pack');
+    await mkdir(join(dir, '.archon'), { recursive: true });
+    await writeFile(
+      join(dir, '.archon', 'config.yaml'),
+      'defaults:\n  loadDefaultWorkflows: false\n  loadDefaultCommands: false\n'
+    );
+    await writeFile(
+      join(dir, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'fixture',
+        description: 'd',
+        entrypoints: { 'fixture-sweep': 'fixture-sweep/fixture-sweep.yaml' },
+      })
+    );
+    await mkdir(join(dir, '.pack'), { recursive: true });
+    await writeFile(join(dir, '.pack', 'pack.yaml'), DECLARATION);
+    await writeWorkflow(
+      dir,
+      'fixture-sweep',
+      'name: fixture-sweep\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n'
+    );
+    return dir;
+  }
+
+  it('graph and bindings read the folder and say which copy they loaded', async () => {
+    const source = await writePackFolder();
+    await mkdir(cwd, { recursive: true });
+
+    await packCommand('graph', ['fixture'], options({ workflowSource: source }));
+    const printed = logSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+    expect(printed).toContain(`Pack 'fixture' loaded from ${source} (project`);
+    expect(printed).toContain('fixture-sweep');
+
+    let json = '';
+    const write = spyOn(process.stdout, 'write').mockImplementation(((
+      chunk: string | Uint8Array,
+      ...rest: unknown[]
+    ) => {
+      json += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
+      (rest.find(arg => typeof arg === 'function') as (() => void) | undefined)?.();
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      await packCommand(
+        'bindings',
+        ['fixture'],
+        options({ workflowSource: source, only: 'sweep,after', json: true })
+      );
+    } finally {
+      write.mockRestore();
+    }
+    // The test process's logger shares stdout; the command's payload is the last document.
+    expect(JSON.parse(json.slice(json.lastIndexOf('\n{\n') + 1))).toMatchObject({
+      loaded: [{ source: 'project', key: 'fixture', dir: source }],
+      otherCopies: [],
+    });
+  });
+});

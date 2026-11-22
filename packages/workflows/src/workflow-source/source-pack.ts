@@ -6,6 +6,8 @@ import {
   PLUGIN_MANIFEST_FILE,
   workflowPackManifestSchema,
 } from '@archon/plugin-manifest';
+import { FIXTURES_DIR } from '../fixture-layout';
+import { isValidWorkflowFolderSegment } from '../packaged-workflow';
 import { isDirectory } from './tree';
 
 /**
@@ -42,7 +44,8 @@ export class AmbiguousSourcePackError extends Error {
  * discovery, script discovery, `packDirectory`, the run capture) asks this, so they
  * cannot disagree about what a pack folder is.
  *
- * Throws on an unreadable or invalid workflow-pack manifest, and when the folder also
+ * Throws on an unreadable or invalid workflow-pack manifest, on a pack name the project
+ * layout reserves (`defaults`, `fixtures`), and when the folder also
  * holds `.archon/workflows/<name>/`: two copies of one pack in one source is ambiguous,
  * and picking one would run bytes the author did not choose.
  */
@@ -68,6 +71,13 @@ export async function sourcePackFolder(dir: string): Promise<SourcePackFolder | 
   const parsed = workflowPackManifestSchema.safeParse(raw);
   if (!parsed.success) throw new Error(`Invalid ${file}: ${describeIssues(parsed.error)}`);
   const { name } = parsed.data;
+  // The run capture freezes the pack at `.archon/workflows/<name>`, where these names are
+  // not packs, so a pack named so would load live and vanish from its run.
+  if (name === 'defaults' || name === FIXTURES_DIR || !isValidWorkflowFolderSegment(name)) {
+    throw new Error(
+      `${file} names the pack '${name}', which cannot be a project pack folder name. Rename the pack to run it from its folder.`
+    );
+  }
   const [workflowFolder] = archonPaths.getWorkflowFolderSearchPaths();
   const nested = join(dir, workflowFolder, name);
   if (await isDirectory(nested)) throw new AmbiguousSourcePackError(name, file, nested);

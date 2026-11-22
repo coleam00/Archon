@@ -1785,6 +1785,50 @@ describe('DELETE /api/workflows/:name', () => {
     }
   });
 
+  test('fetches, saves and deletes a workflow of a project that is itself a pack folder', async () => {
+    const testDir = join(tmpdir(), `wf-pack-folder-${Date.now()}`);
+    await mkdir(join(testDir, 'one'), { recursive: true });
+    await writeFile(
+      join(testDir, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'demo-pack',
+        description: 'demo',
+        entrypoints: { one: 'one/one.yaml' },
+      })
+    );
+    const packFile = join(testDir, 'one', 'one.yaml');
+    await writeFile(packFile, 'name: one\ndescription: Before\nnodes: []\n');
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementation(async () => [{ default_cwd: testDir }]);
+
+      const fetched = await app.request(`/api/workflows/one?cwd=${testDir}`);
+      expect(fetched.status).toBe(200);
+      expect(((await fetched.json()) as { filename: string }).filename).toBe(
+        'demo-pack/one/one.yaml'
+      );
+
+      const saved = await app.request(`/api/workflows/one?cwd=${testDir}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ definition: { name: 'one', description: 'After', nodes: [] } }),
+      });
+      expect(saved.status).toBe(200);
+      expect(await readFile(packFile, 'utf-8')).toContain('description: After');
+      await expect(access(join(testDir, '.archon', 'workflows', 'one.yaml'))).rejects.toThrow();
+
+      const deleted = await app.request(`/api/workflows/one?cwd=${testDir}`, { method: 'DELETE' });
+      expect(deleted.status).toBe(200);
+      await expect(access(join(testDir, 'one'))).rejects.toThrow();
+    } finally {
+      mockListCodebases.mockImplementation(async () => [{ default_cwd: '/tmp/project' }]);
+      await removeTempTree(testDir);
+    }
+  });
+
   test('refuses to delete when the name matches a malformed packaged workflow folder', async () => {
     const testDir = join(tmpdir(), `wf-delete-crowded-packaged-${Date.now()}`);
     const workflowsRoot = join(testDir, '.archon', 'workflows');
