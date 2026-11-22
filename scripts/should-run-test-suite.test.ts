@@ -9,10 +9,12 @@ import {
 } from '../packages/workflows/src/defaults/bundle-inventory';
 import {
   changedFilesBetween,
+  coverageFromScheduledRuns,
   diffRange,
   dispatchDecision,
   packRunnerInputs,
   proofFromPullRequestRun,
+  scheduleDecision,
   shouldRunEveryJob,
   shouldRunPackTests,
   shouldRunPushOnlyJob,
@@ -21,6 +23,7 @@ import {
   workspaceTestInputs,
   type EventPayload,
   type GitHubGet,
+  type Mode,
 } from './should-run-test-suite';
 
 const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
@@ -780,6 +783,21 @@ function gitIn(cwd: string, ...args: string[]): string {
 }
 
 describe('a push proven by its pull request run', () => {
+  /**
+   * A pull request run proves its push only when every job concluded `success`, so a job that
+   * skips for the pull request's event, rather than for a `changes` output, makes every merge
+   * rerun the suite on push. An event gate belongs on a step.
+   */
+  test('no job in test.yml is gated on the event', () => {
+    const workflow = Bun.YAML.parse(
+      readFileSync(resolve(import.meta.dir, '../.github/workflows/test.yml'), 'utf8')
+    ) as { jobs: Record<string, { if?: unknown }> };
+    const eventGated = Object.entries(workflow.jobs)
+      .filter(([, job]) => String(job.if ?? '').includes('github.event_name'))
+      .map(([id]) => id);
+    expect(eventGated).toEqual([]);
+  });
+
   const PUSH = { head: 'squash-commit' };
   const PR_BASE = 'pr-base';
   const PR_HEAD = 'pr-head';
@@ -1034,5 +1052,48 @@ describe('a push proven by its pull request run', () => {
       expect(result.stdout).toBe('true');
       expect(result.stderr).toContain('No pull request run proves this push');
     });
+  });
+});
+
+describe('a scheduled run', () => {
+  const HEAD = 'dev-head';
+  const RUNS = `actions/workflows/test.yml/runs?event=schedule&head_sha=${HEAD}&status=completed`;
+  const RUN_URL = 'https://github.com/coleam00/Archon/actions/runs/9';
+  const WINDOWS_MODES: Mode[] = ['windows-full-suite', 'pack-tests', 'pack-fixtures'];
+  const OTHER_MODES: Mode[] = ['suite', 'workspace', 'full-matrix', 'docker-build', 'serve-binary'];
+
+  const coverage = (answer: unknown) =>
+    coverageFromScheduledRuns(HEAD, async path => {
+      if (path !== RUNS) throw new Error(`unexpected GET ${path}`);
+      if (answer instanceof Error) throw answer;
+      return answer;
+    });
+  const runsWith = (...conclusions: string[]) => ({
+    workflow_runs: conclusions.map(conclusion => ({ conclusion, html_url: RUN_URL })),
+  });
+
+  test('dev moved since a scheduled run covered it: the whole suite runs on Windows', async () => {
+    const result = await coverage(runsWith());
+    expect(result.covered).toBe(false);
+    for (const mode of WINDOWS_MODES) expect(scheduleDecision(mode, result)).toBe(true);
+  });
+
+  test.each(['success', 'failure'])(
+    'a %s scheduled run at the same commit covers it, so nothing runs',
+    async conclusion => {
+      const result = await coverage(runsWith('cancelled', conclusion));
+      expect(result).toEqual({ covered: true, why: expect.stringContaining(RUN_URL) });
+      for (const mode of WINDOWS_MODES) expect(scheduleDecision(mode, result)).toBe(false);
+    }
+  );
+
+  test('a cancelled run covers nothing, and neither does an unreadable answer', async () => {
+    expect((await coverage(runsWith('cancelled'))).covered).toBe(false);
+    expect((await coverage(new Error('answered 502'))).covered).toBe(false);
+    expect((await coverage({ message: 'Not Found' })).covered).toBe(false);
+  });
+
+  test.each(OTHER_MODES)('%s never runs on a schedule', mode => {
+    expect(scheduleDecision(mode, { covered: false, why: 'dev moved' })).toBe(false);
   });
 });

@@ -72,6 +72,8 @@ export interface NativeScheduleOptions {
   systemdUserDirectory?: string;
   /** Task Scheduler: the principal the task runs as. */
   windowsUserId?: string;
+  /** Task Scheduler: the archon command whose `--internal-schedule-launch` the task runs. */
+  windowsLauncher?: readonly [string, ...string[]];
 }
 
 export interface OwnedFile {

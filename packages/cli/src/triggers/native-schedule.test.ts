@@ -380,6 +380,7 @@ describe('systemd user timer', () => {
 });
 
 describe('Task Scheduler', () => {
+  const launcher = ['C:\\Program Files\\archon\\archon.exe'] as const;
   const windowsJob = (overrides: Partial<NativeScheduleConfig> = {}) =>
     config({
       programArguments: [
@@ -416,7 +417,7 @@ describe('Task Scheduler', () => {
 
   it('renders a task that repeats in whole minutes, never overlaps and runs on battery', () => {
     const job = scheduledJob(windowsJob({ archonHome: 'C:\\home' }), 'win32');
-    const xml = renderTaskDefinition(job, 'DOMAIN\\me');
+    const xml = renderTaskDefinition(job, 'DOMAIN\\me', launcher);
     expect(xml).toContain('<Interval>PT5M</Interval>');
     expect(xml).toContain('<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>');
     expect(xml).toContain('<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>');
@@ -424,11 +425,16 @@ describe('Task Scheduler', () => {
     expect(xml).toContain('<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>');
     expect(xml).toContain('<LogonTrigger><UserId>DOMAIN\\me</UserId>');
     expect(xml).toContain('<LogonType>InteractiveToken</LogonType>');
-    expect(xml).toContain(`/c ""C:\\home${join('/schedules', `${LABEL}.cmd`)}""`);
+    // The wrapper runs through the launcher, whose own console has no window.
+    expect(xml).toContain('<Command>%SystemRoot%\\System32\\conhost.exe</Command>');
+    expect(xml).toContain(
+      `<Arguments>--headless &quot;C:\\Program Files\\archon\\archon.exe&quot; &quot;--internal-schedule-launch&quot; &quot;C:\\home${join('/schedules', `${LABEL}.cmd`)}&quot;</Arguments>`
+    );
     expect(
       renderTaskDefinition(
         scheduledJob(windowsJob({ schedule: { intervalSeconds: 60, runAtLoad: false } }), 'win32'),
-        'me'
+        'me',
+        launcher
       )
     ).not.toContain('LogonTrigger');
 
@@ -436,20 +442,36 @@ describe('Task Scheduler', () => {
       expect(() =>
         renderTaskDefinition(
           scheduledJob(windowsJob({ schedule: { intervalSeconds, runAtLoad: false } }), 'win32'),
-          'me'
+          'me',
+          launcher
         )
       ).toThrow(`${String(intervalSeconds)} seconds`);
     }
     expect(() =>
-      renderTaskDefinition(scheduledJob(windowsJob({ archonHome: 'C:\\%TEMP%' }), 'win32'), 'me')
+      renderTaskDefinition(
+        scheduledJob(windowsJob({ archonHome: 'C:\\%TEMP%' }), 'win32'),
+        'me',
+        launcher
+      )
     ).toThrow('%');
+    // Task Scheduler expands %NAME% in the launcher's path too, and cmd cannot quote a `"`.
+    const otherJob = scheduledJob(windowsJob(), 'win32');
+    expect(() => renderTaskDefinition(otherJob, 'me', ['C:\\%USERNAME%\\archon.exe'])).toThrow('%');
+    expect(() => renderTaskDefinition(otherJob, 'me', ['C:\\a"b\\archon.exe'])).toThrow(
+      'double quote'
+    );
   });
 
   it('installs, reports and removes the task and its two files, keeping the log', async () => {
     const archonHome = await scratchDirectory();
     const job = windowsJob({ archonHome });
     const { commands, runCommand } = recorder();
-    const win32 = { platform: 'win32' as const, windowsUserId: 'me', runCommand };
+    const win32 = {
+      platform: 'win32' as const,
+      windowsUserId: 'me',
+      windowsLauncher: launcher,
+      runCommand,
+    };
     const schedules = join(archonHome, 'schedules');
     const xml = join(schedules, `${LABEL}.xml`);
     const task = `\\Archon\\${LABEL}`;
@@ -462,7 +484,7 @@ describe('Task Scheduler', () => {
     const definition = await readFile(xml);
     expect([...definition.subarray(0, 2)]).toEqual([0xff, 0xfe]);
     expect(definition.subarray(2).toString('utf16le')).toBe(
-      renderTaskDefinition(scheduledJob(job, 'win32'), 'me')
+      renderTaskDefinition(scheduledJob(job, 'win32'), 'me', launcher)
     );
     expect(await readFile(join(schedules, `${LABEL}.cmd`), 'utf8')).toBe(
       renderTaskWrapper(scheduledJob(job, 'win32'))

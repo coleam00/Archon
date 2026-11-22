@@ -15,6 +15,7 @@ import './workflow-scope';
 // Load Archon env before command imports. loadCliEnv preserves inherited workflow
 // identity and prevents repository env from redirecting the user's stored gh login.
 import { loadCliEnv } from './load-cli-env';
+import { SCHEDULE_LAUNCH_FLAG } from './triggers/schedule-launch-flag';
 import {
   captureDetachedInstallContext,
   restoreDetachedInstallContext,
@@ -23,6 +24,13 @@ import {
 // A command's stdout is its output (`archon … > file`, `| jq`, an agent reading
 // it); logs are diagnostics. Set before anything below can log.
 setLogDestination('stderr');
+// A Windows schedule tick's launcher (`triggers/windows-hidden-desktop.ts`). It runs before
+// any env loads: the job's wrapper inherits this process's environment, which must stay the
+// task's.
+if (process.argv[2] === SCHEDULE_LAUNCH_FLAG) {
+  const { runScheduleLaunch } = await import('./triggers/windows-hidden-desktop');
+  await withDrainedExit(async () => runScheduleLaunch(process.argv[3]));
+}
 const hasDetachedRunConfigHandoff = process.argv
   .slice(2)
   .includes('--internal-detached-run-config');
