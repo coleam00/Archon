@@ -937,7 +937,10 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
       const completed = persistedEvents(store)
         .filter(event => event.event_type === 'node_completed' && event.step_name === 'step1')
         .at(-1);
-      expect(readNodeRecordEvent(completed!)?.data.sandbox).toEqual(expected);
+      expect(completed).toBeDefined();
+      expect(
+        readNodeRecordEvent({ ...completed!, data: completed!.data ?? {} })?.data.sandbox
+      ).toEqual(expected);
       resolved.push(sent);
     }
 
@@ -975,7 +978,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
 
     expect(mockSendQueryDag).not.toHaveBeenCalled();
     const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
-    expect(String(failed?.data.error)).toContain('$MAIN_CHECKOUT');
+    expect(String(failed?.data?.error)).toContain('$MAIN_CHECKOUT');
   });
 
   it('keeps a resolved path that itself contains a sandbox token', async () => {
