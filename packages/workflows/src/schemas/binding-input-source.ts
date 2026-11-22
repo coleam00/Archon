@@ -9,8 +9,8 @@ import { isJsonPointer } from '../json-pointer';
 /**
  * Where a run-ended binding reads one input of the stage it starts: a JSON Pointer into
  * the ended run's result (its `returns:` node output), one of the ended run's own inputs
- * by name, the key of the ended run's item (which item ended, for a linked start), or
- * every answer on the item.
+ * by name, the key of the ended run's item (which item ended, for a linked start), a
+ * pointer into the started item's own entry of `linked.items`, or every answer on the item.
  */
 const runInputSources = [
   z.object({ result: z.string().refine(isJsonPointer, 'Invalid JSON Pointer') }).strict(),
@@ -24,10 +24,19 @@ export const endedItemKeySourceSchema = z.object({ item: z.literal('key') }).str
  * bindings; a linked start is on a holder item, which is not the item whose run ended.
  */
 export const itemAnswersSourceSchema = z.object({ item: z.literal('answers') }).strict();
+/**
+ * A JSON Pointer into the started item's own entry of the list `linked.items` names, so
+ * each linked start gets its own value; `""` is the whole entry. Read only by a linked
+ * run-ended binding with `items`.
+ */
+export const linkedEntrySourceSchema = z
+  .object({ entry: z.string().refine(isJsonPointer, 'Invalid JSON Pointer') })
+  .strict();
 export const runEndedInputSourceSchema = z.union([
   ...runInputSources,
   endedItemKeySourceSchema,
   itemAnswersSourceSchema,
+  linkedEntrySourceSchema,
 ]);
 export type RunEndedInputSource = z.infer<typeof runEndedInputSourceSchema>;
 
@@ -55,6 +64,28 @@ export const linkedReadsNoItemAnswers = {
     path: ['inputs'],
   },
 };
+
+/** Only a linked start that names its items has an entry per started item to read. */
+export const entryReadsNeedLinkedItems = {
+  check: (trigger: {
+    linked?: { items?: string };
+    inputs?: Readonly<Record<string, object>>;
+  }): boolean =>
+    trigger.linked?.items !== undefined ||
+    !Object.values(trigger.inputs ?? {}).some(source => readsLinkedEntry(source)),
+  message: {
+    message:
+      'An input reads { entry }, but only a linked start with linked.items has an entry per started item',
+    path: ['inputs'],
+  },
+};
+
+/** Whether an input source is `{ entry: <pointer> }`. */
+export function readsLinkedEntry(
+  source: object
+): source is z.infer<typeof linkedEntrySourceSchema> {
+  return 'entry' in source;
+}
 
 export type ItemAnswersSource = z.infer<typeof itemAnswersSourceSchema>;
 

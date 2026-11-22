@@ -63,8 +63,10 @@ the commands to set one; walk the user through it only when they ask to change m
 
 ## Before the first run
 
-- `archon workflow run archon-forge-check` must pass in the checkout. It proves the
-  pack can read the repository through the forge plugin
+- `archon forge check --data '{"remote":"<checkout remote URL>","operations":["pr.view","pr.merge"]}'`
+  must pass in the checkout (or let the engine check forge access automatically when the
+  run starts; see `reference/forge.md`, "Check forge access before a run spends"). It
+  proves the pack can reach the repository through the forge plugin
   (`archon plugin add coleam00/Archon/plugins/forge-github`).
 - `.archon/sdlc/policy/maintainers.json` on the default branch lists the forge logins
   whose issues are triaged and whose review comments count. Without the file

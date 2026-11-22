@@ -3,7 +3,7 @@ import { toPersistedMessageMetadata } from '@archon/core/types';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
-import { isAbsolute, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import { getArchonHome } from '@archon/paths';
 import {
@@ -39,7 +39,6 @@ import {
   resourceStartBindingIntentSchema,
   RUN_SOURCE_ACTOR,
   requestingRun,
-  triggerConfigSchema,
   type SourceReceiptInput,
   type TriggerConfig,
 } from '@archon/workflows/schemas/resource-start';
@@ -57,8 +56,11 @@ import {
   inspectNativeSchedule,
   installNativeSchedule,
   removeNativeSchedule,
+  type NativeScheduleOptions,
 } from '../triggers/native-schedule';
+import { checkFireBindings, fireConfig } from '../triggers/fire-binding-check';
 import { resolveCliUserId } from './auth';
+import { loadConfig } from '@archon/core/config/config-loader';
 import { readCallingNode } from '../utils/calling-node';
 import { requestedBy } from '../utils/requested-by';
 
@@ -79,14 +81,7 @@ function isTimerConfig(config: TriggerConfig): config is TimerTriggerConfig {
 }
 
 async function loadFireConfig(path: string): Promise<TriggerConfig> {
-  const value = triggerConfigSchema.safeParse(JSON.parse(await readFile(path, 'utf8')) as unknown);
-  if (!value.success)
-    throw new Error(
-      `Invalid trigger configuration fields: ${value.error.issues.map(issue => issue.path.join('.')).join(', ')}`
-    );
-  if (!isAbsolute(value.data.binding.launch.cwd))
-    throw new Error('Trigger execution cwd must be absolute.');
-  return value.data;
+  return fireConfig(JSON.parse(await readFile(path, 'utf8')) as unknown);
 }
 
 async function assertKnownRunAsUser(host: WorkflowHost, config: TriggerConfig): Promise<void> {
@@ -402,7 +397,26 @@ async function writeFiredReceipt(host: WorkflowHost, receiptId: string): Promise
     process.stderr.write(
       `New runs are held on this install (${describeInstallHold(held)}); this start waits until the hold is lifted.\n`
     );
+  for (const binding of retained?.bindings ?? []) {
+    const note = admittedStartNote(binding.disposition);
+    if (note) process.stderr.write(`${note}\n`);
+  }
   await writeJsonLine(retained && { ...retained, hold: held });
+}
+
+/**
+ * Admission checks what it can before a slot is taken, but the checkout is prepared
+ * when the run starts, in its own process. Say so, so an admitted receipt is not read
+ * as a run that is ready and cannot fail before its first node.
+ */
+function admittedStartNote(disposition: StartBindingInspection['disposition']): string | null {
+  const why =
+    'its checkout is prepared when it starts, and that can still fail before its first node, for example on a base branch the remote does not have';
+  if (disposition?.status === 'admitted')
+    return `Run ${disposition.runId} is admitted; ${why}. Watch it with \`archon workflow get ${disposition.runId}\`.`;
+  if (disposition?.status === 'queued')
+    return `Request ${disposition.requestId} is queued; when it starts, ${why}. Watch it with \`archon trigger inspect ${disposition.requestId}\`.`;
+  return null;
 }
 
 async function drainReceipt(
@@ -676,17 +690,17 @@ async function installTimer(
 }
 
 /**
- * List every binding with `on` that is active (each `on.runEnded` and `on.asksSettled`
- * file in the triggers directory) and check it against the workflows of the project it
- * launches in. For a run-ended binding, the ended workflow declares the outcome and every
- * input the binding reads from it; for an asks-settled binding, the asking workflow
- * declares `returns.asks` and every input the binding reads. The started workflow exists
- * and declares every input the binding maps. A run on an item whose end or asks could fire
- * such a binding is refused before it starts, by the same check. It also reports what a
- * run is not refused for: a `launch.cwd` that does not exist, a run-ended binding that
- * starts the workflow that ended, and two files that start the same stage.
+ * List every trigger binding this install can start, reading only, and check that its
+ * started workflow accepts its inputs as a start would. Bindings with `on`: for run-ended,
+ * the ended workflow declares the outcome and every input the binding reads from it; for
+ * asks-settled, the asking workflow declares `returns.asks` and every input the
+ * binding reads. A run whose end or asks could fire such a binding is refused before it
+ * starts, by the same check. It also reports what no run is refused for: a missing
+ * `launch.cwd`, a run-ended binding that starts the workflow that ended, and two files that
+ * start the same stage. Every other binding, including installed timers' config files
+ * wherever they live, is listed under `bindings` (see `checkFireBindings`).
  */
-async function checkTriggers(host: WorkflowHost): Promise<void> {
+async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOptions): Promise<void> {
   const bindings = await readOnBindings(getTriggersPath());
   // The file store has no items, so a binding with `on` can never start anything there.
   if (host.deps.credentialStore === 'files' && bindings.length > 0)
@@ -695,6 +709,8 @@ async function checkTriggers(host: WorkflowHost): Promise<void> {
     );
   const deps = {
     ...host.deps,
+    // A check changes nothing: a missing global config.yaml stays missing.
+    loadConfig: (cwd: string) => loadConfig(cwd, { readOnly: true }),
     projectKeyOf: (cwd: string) => registeredProjectKeyForPath(cwd, host.records.codebases),
   };
   const runEnded = bindings.filter(entry => 'runEnded' in entry);
@@ -714,9 +730,10 @@ async function checkTriggers(host: WorkflowHost): Promise<void> {
   const checked = {
     runEnded: runEnded.map((entry, index) => listed(entry, runEndedProblems[index])),
     asksSettled: asksSettled.map((entry, index) => listed(entry, asksSettledProblems[index])),
+    bindings: await checkFireBindings(deps, schedules),
   };
   await writeJsonLine({ directory: getTriggersPath(), ...checked });
-  const broken = [...checked.runEnded, ...checked.asksSettled].filter(
+  const broken = [...checked.runEnded, ...checked.asksSettled, ...checked.bindings].filter(
     entry => entry.problems.length > 0
   ).length;
   if (broken > 0)
@@ -734,6 +751,8 @@ export interface TriggerDependencies {
   dispatch?: TriggerDispatch;
   /** The environment `fire` reads the calling node's identity from; by default `process.env`. */
   env?: NodeJS.ProcessEnv;
+  /** Where `check` reads installed timers from; by default this host's scheduler directories. */
+  schedules?: NativeScheduleOptions;
 }
 
 export async function triggerCommand(
@@ -758,7 +777,7 @@ export async function triggerCommand(
     case 'add':
       return addTrigger(args);
     case 'check':
-      return checkTriggers(host);
+      return checkTriggers(host, dependencies.schedules ?? {});
     case 'fire':
       return triggerFire(host, options, dispatch, dependencies.env ?? process.env);
     case 'drain':

@@ -6,7 +6,6 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { projectRefForCodebase } from '@archon/core/operations/attention-queue';
 import { endItemLink, recordItemLink } from '@archon/core/operations/item-links';
-import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import {
   ItemLinkEndedError,
   ItemLinkNotFoundError,
@@ -17,16 +16,24 @@ import {
 } from '@archon/workflows/schemas/item-link';
 import { cliActor } from '../utils/calling-node';
 import { writeJsonLine } from '../utils/stdout';
+import { NoRunItemError, resolveItemTarget } from './item-target';
 import { inheritedWorkflowCodebase } from './workflow-shared';
 
 const KINDS = itemLinkKindSchema.options.join('|');
 
 export const WORKFLOW_LINK_USAGE =
   `Usage: archon workflow link --item <key> --kind <${KINDS}> --to <key> [--as <name>] [--json]\n` +
+  `       archon workflow link --item-of <run-id> --kind <${KINDS}> --to <key>|--from <key> [--as <name>] [--json]\n` +
   '       archon workflow link --end <link-id> [--as <name>] [--json]';
 
+/**
+ * A link to record, or the id of one to end. With `--item-of` the run's item is one end:
+ * the link goes from it `--to` another item, or to it `--from` another.
+ */
 export type WorkflowLinkRequest =
   | { item: string; kind: string; to: string; as?: string }
+  | { itemOf: string; kind: string; to: string; as?: string }
+  | { itemOf: string; kind: string; from: string; as?: string }
   | { end: string; as?: string };
 
 /** A kind outside the three; refused before anything is written. */
@@ -64,17 +71,17 @@ async function link(
     };
   const kind = itemLinkKindSchema.safeParse(request.kind);
   if (!kind.success) throw new UnknownLinkKindError(request.kind);
-  // The project comes from the checkout, the same way `workflow runs --item` finds it.
-  const codebase = selected ?? (await findCodebaseForCheckoutPath(cwd, host.records.codebases));
-  if (!codebase) throw new Error('--item names an item in one registered project.');
+  // `--item` is in the checkout's project, as `workflow runs --item` finds it; `--item-of`
+  // is in the project of the run's item, whatever the checkout.
+  const own = await resolveItemTarget(
+    host,
+    cwd,
+    'item' in request ? { item: request.item } : { itemOf: request.itemOf }
+  );
+  const [fromKey, toKey] = 'from' in request ? [request.from, own.key] : [own.key, request.to];
   return recordItemLink(
     host.deps.store,
-    {
-      projectKey: projectRefForCodebase(codebase).key,
-      fromKey: request.item,
-      toKey: request.to,
-      kind: kind.data,
-    },
+    { projectKey: own.projectKey, fromKey, toKey, kind: kind.data },
     actor,
     'cli'
   );
@@ -87,6 +94,7 @@ function refusalCode(error: unknown): string | undefined {
   if (error instanceof ItemLinkNotFoundError) return 'not_found';
   if (error instanceof ItemLinkEndedError) return 'already_ended';
   if (error instanceof ItemLinkOutsideProjectError) return 'outside_project';
+  if (error instanceof NoRunItemError) return 'no_item';
   return undefined;
 }
 

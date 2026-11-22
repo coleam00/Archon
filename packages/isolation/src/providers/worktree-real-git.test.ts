@@ -165,6 +165,81 @@ describe('missing registered project directory', () => {
   });
 });
 
+describe('a repository with no remote', () => {
+  const trackTempRoot = trackTempRoots();
+  const originalArchonHome = process.env.ARCHON_HOME;
+  let repoPath: string;
+
+  beforeEach(async () => {
+    const root = trackTempRoot(await realpath(await mkdtemp(join(tmpdir(), 'archon-no-remote-'))));
+    process.env.ARCHON_HOME = join(root, 'archon-home');
+    repoPath = join(root, 'repo');
+    await mkdir(repoPath);
+    // Not `main`, so the base is visibly the checkout's own branch.
+    await git(repoPath, 'init', '-q', '-b', 'trunk');
+    await git(repoPath, 'config', 'user.email', 'test@example.com');
+    await git(repoPath, 'config', 'user.name', 'Archon Test');
+    await git(repoPath, 'config', 'commit.gpgsign', 'false');
+  });
+
+  afterEach(() => {
+    if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = originalArchonHome;
+  });
+
+  async function commit(message: string): Promise<string> {
+    await git(repoPath, 'commit', '-q', '--allow-empty', '-m', message);
+    return (await git(repoPath, 'rev-parse', 'HEAD')).trim();
+  }
+
+  const request = (overrides: Partial<IsolationRequest> = {}): IsolationRequest =>
+    ({
+      codebaseId: 'cb-local',
+      codebaseName: 'repo',
+      canonicalRepoPath: toRepoPath(repoPath),
+      workflowType: 'task',
+      identifier: 'job',
+      ...overrides,
+    }) as IsolationRequest;
+
+  test('cuts the worktree from the current branch and records it', async () => {
+    const head = await commit('initial');
+    const env = await new WorktreeProvider().create(request());
+
+    expect(env.resolvedBaseBranch).toBe('trunk');
+    expect(env.metadata).toMatchObject({ provenance: 'created', cutFromCommit: head });
+    expect((await git(env.workingPath, 'rev-parse', 'HEAD')).trim()).toBe(head);
+  });
+
+  test('cuts from a named start commit', async () => {
+    const first = await commit('first');
+    await commit('second');
+    const env = await new WorktreeProvider().create(
+      request({ taskBranch: { kind: 'new', fromBranch: toBranchName(first) } })
+    );
+
+    expect((await git(env.workingPath, 'rev-parse', 'HEAD')).trim()).toBe(first);
+  });
+
+  test.each([
+    ['a configured base that does not exist', 'configured_branch_missing', 'nope'],
+    ['a detached HEAD and no configured base', 'no_local_base', 'detach'],
+    ['no commit at all', 'no_local_base', 'empty'],
+    ['a start point that does not exist', 'no_local_base', 'from'],
+  ] as const)('refuses %s', async (_name, kind, state) => {
+    if (state !== 'empty') await commit('initial');
+    if (state === 'detach') await git(repoPath, 'checkout', '-q', '--detach');
+    const overrides: Partial<IsolationRequest> =
+      state === 'nope'
+        ? { baseOverride: toBranchName('nope') }
+        : state === 'from'
+          ? { taskBranch: { kind: 'new', fromBranch: toBranchName('missing-start') } }
+          : {};
+    const failure = await typedFailure(new WorktreeProvider().create(request(overrides)));
+    expect(failure.kind).toBe(kind);
+  });
+});
+
 describe('WorktreeProvider against real git', () => {
   const trackTempRoot = trackTempRoots();
   const originalArchonHome = process.env.ARCHON_HOME;
