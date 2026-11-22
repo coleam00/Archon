@@ -366,6 +366,7 @@ A start is refused, naming the files or the ref, when:
 - a file is uncommitted in the checkout and also changed on the base branch since the checkout's merge base with it. You own that conflict: bring the checkout up to date with the base branch and reapply the change, or discard it. Committing it does not help, because only uncommitted files are laid on the base. A local file identical to the base's is not a conflict, and neither are two different files in one directory.
 - the checkout has no commit, or shares no history with the base branch.
 - the base branch cannot be fetched or read. There is no fallback to the checkout as it is.
+- the run's `.archon/config.yaml`, after the layers are laid, is invalid. The base branch's copy is not validated on its own, so an uncommitted fix to an invalid committed config applies. The registered checkout's copy must still load, because the `worktree.*` settings are read from it.
 
 These runs read their definitions as they are instead:
 

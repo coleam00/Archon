@@ -34,7 +34,9 @@ import {
   type DefinitionView,
 } from '@archon/workflows/workflow-source';
 import { readWorkflowSourceState, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { readFile } from 'node:fs/promises';
 import { loadRepoConfig } from '../config/config-loader';
+import { isConfigRecord } from '../config/config-validation';
 import { selectStartedWorkflow } from './binding-workflow';
 import type { Codebase } from '../schemas/codebase';
 
@@ -99,7 +101,9 @@ export async function withLayeredDefinitions<T>(
   const { remote, branch, commit } = await fetchBase(input);
   const head = await readHead(top, input.checkout);
   const mergeBase = await readMergeBase(top, input.checkout, head, commit, `${remote}/${branch}`);
-  const localConfig = await loadRepoConfig(input.checkout);
+  // The folders only widen what is read. Validating either config here would refuse a
+  // committed fault the uncommitted layer repairs; the composed config is validated below.
+  const localFolder = await readCommandFolder(input.checkout);
 
   const temp = getArchonTempPath();
   await mkdir(temp, { recursive: true });
@@ -113,11 +117,7 @@ export async function withLayeredDefinitions<T>(
       tree
     );
     const root = join(tree, prefix);
-    const baseConfig = await loadRepoConfig(root);
-    const paths = definitionPaths(prefix, [
-      localConfig.commands?.folder,
-      baseConfig.commands?.folder,
-    ]);
+    const paths = definitionPaths(prefix, [localFolder, await readCommandFolder(root)]);
     // One enumeration for every layer: each view resolves links and submodules alike.
     const base = await readView(() => commitView(top, commit, paths));
     const worktree = await readView(() => worktreeView(top, paths));
@@ -136,6 +136,7 @@ export async function withLayeredDefinitions<T>(
     await writeView(base, tree);
     for (const { path } of local) await writeEntry(tree, path, worktree.get(path));
     const ignored = local.length > 0 ? await ignoredFiles(top, paths) : new Set<string>();
+    await refuseInvalidConfig(root, local, `${prefix}${PROJECT_CONFIG}`, `${remote}/${branch}`);
 
     return await use({
       root,
@@ -167,8 +168,8 @@ export async function resolveDefinitionsBase(
   input: LayeredDefinitionsInput
 ): Promise<{ remote: string; branch: string }> {
   const repoPath = input.repoPath ?? input.checkout;
-  const worktreeConfig = (await loadRepoConfig(repoPath)).worktree;
   try {
+    const worktreeConfig = (await loadRepoConfig(repoPath)).worktree;
     const { remote, branch } = await resolveWorktreeBase(toRepoPath(repoPath), worktreeConfig, {
       baseOverride: input.baseOverride,
       baseBranch: input.defaultBranch,
@@ -180,6 +181,43 @@ export async function resolveDefinitionsBase(
   } catch (error) {
     throw new DefinitionSourceError(
       `Cannot read the base branch for this run's definitions: ${(error as Error).message}`,
+      { cause: error }
+    );
+  }
+}
+
+/**
+ * The `commands.folder` a project config names, read without validating anything else:
+ * it only widens which files are read, and the composed config is validated on its own.
+ * A missing or unparsable file names no folder.
+ */
+async function readCommandFolder(root: string): Promise<string | undefined> {
+  let raw: unknown;
+  try {
+    raw = Bun.YAML.parse(await readFile(join(root, PROJECT_CONFIG), 'utf8'));
+  } catch {
+    return undefined;
+  }
+  const commands = isConfigRecord(raw) ? raw.commands : undefined;
+  const folder = isConfigRecord(commands) ? commands.folder : undefined;
+  return typeof folder === 'string' ? folder : undefined;
+}
+
+/** The composed config is the one the run uses, so it is the one that must be valid. */
+async function refuseInvalidConfig(
+  root: string,
+  local: readonly { path: string }[],
+  configPath: string,
+  ref: string
+): Promise<void> {
+  try {
+    await loadRepoConfig(root);
+  } catch (error) {
+    const side = local.some(file => file.path === configPath)
+      ? 'the uncommitted copy in the checkout'
+      : `the copy on ${ref}`;
+    throw new DefinitionSourceError(
+      `This run's ${PROJECT_CONFIG}, ${side}, is invalid: ${(error as Error).message}`,
       { cause: error }
     );
   }

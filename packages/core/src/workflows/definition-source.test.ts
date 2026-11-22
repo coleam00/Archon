@@ -211,6 +211,21 @@ describe("a run's definitions", () => {
     expect(error.message).toContain('changed on origin/dev between');
   });
 
+  test('take an uncommitted repair of an invalid committed config, and refuse one still invalid', async () => {
+    const { checkout, upstream } = project();
+    land(upstream, { '.archon/config.yaml': 'env: []\n' });
+    expect((await refusal(checkout)).message).toContain(
+      '.archon/config.yaml, the copy on origin/dev, is invalid'
+    );
+
+    git(checkout, 'pull', '-q', '--ff-only');
+    write(checkout, '.archon/config.yaml', 'env: {}\n');
+    expect((await compose(checkout)).read('.archon/config.yaml')).toBe('env: {}\n');
+
+    write(checkout, '.archon/config.yaml', 'env: [still-a-list]\n');
+    expect((await refusal(checkout)).message).toContain('env must be a map of names');
+  });
+
   test('take a local change the base made identically', async () => {
     const { checkout, upstream } = project();
     land(upstream, {
