@@ -171,13 +171,21 @@ async function spawnTriggerExecutor(
 }
 
 /**
- * Relaying a trigger executor through the run's broker failed. The broker may have started
- * it before the failure, so whether it runs is unknown.
+ * Relaying a trigger executor through the run's broker failed before the broker answered.
+ * The broker may have started it before the failure, so whether it runs is unknown.
  */
 export class TriggerExecutorRelayError extends Error {
   constructor(options: ErrorOptions) {
     super('The run job broker did not confirm the trigger executor', options);
     this.name = 'TriggerExecutorRelayError';
+  }
+}
+
+/** The broker answered a relayed invocation with an error frame instead of an exit status. */
+export class BrokerRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BrokerRefusedError';
   }
 }
 
@@ -193,7 +201,8 @@ export interface TriggerExecutorLaunch {
  * Start a detached trigger executor. Inside a Windows run it starts through that run's
  * broker, so it is outside the run's job and outlives the run; elsewhere it starts here.
  * Resolves with the executor's pid when it started here, and with undefined when the broker
- * started it, since the broker does not report it. A failed relay rejects with
+ * started it, since the broker does not report it. A broker that answers with an error frame
+ * rejects with {@link BrokerRefusedError}; a failed relay rejects with
  * {@link TriggerExecutorRelayError}.
  */
 export async function startTriggerExecutor(
@@ -222,6 +231,10 @@ export async function startTriggerExecutor(
       { stdout: discard, stderr: discard }
     );
   } catch (error) {
+    // For an executor the broker sends an error frame only before it spawns one: it refused
+    // the invocation, or `spawnTriggerExecutor` rejected, which it does only before the
+    // executor starts. So this rejection means nothing started.
+    if (error instanceof BrokerRefusedError) throw error;
     throw new TriggerExecutorRelayError({ cause: error });
   }
   if (code !== 0)
@@ -476,7 +489,11 @@ interface RelayOutput {
   stderr(data: Uint8Array): Promise<void>;
 }
 
-/** Run `invocation` through the broker at `pipe` and return its exit status. */
+/**
+ * Run `invocation` through the broker at `pipe` and return its exit status. A broker that
+ * answers with an error frame rejects with {@link BrokerRefusedError}; a connection that
+ * fails or closes before the broker answers rejects with a plain Error.
+ */
 export async function relayOutsideRunJob(
   pipe: string,
   invocation: EscapedInvocation,
@@ -486,10 +503,9 @@ export async function relayOutsideRunJob(
   let written = Promise.resolve();
   const exit = await new Promise<number>((resolveExit, reject) => {
     let result: { exit: number } | { error: string } | undefined;
-    const unrelayed = (detail: string): Error =>
-      new Error(
-        `Could not run this detached launch outside the run's Windows job object: ${detail}`
-      );
+    const unrelayedMessage = (detail: string): string =>
+      `Could not run this detached launch outside the run's Windows job object: ${detail}`;
+    const unrelayed = (detail: string): Error => new Error(unrelayedMessage(detail));
     socket.once('connect', () => {
       socket.write(`${JSON.stringify(invocation)}\n`);
     });
@@ -510,7 +526,7 @@ export async function relayOutsideRunJob(
     });
     socket.once('close', () => {
       if (result === undefined) reject(unrelayed('the broker closed without an exit status'));
-      else if ('error' in result) reject(unrelayed(result.error));
+      else if ('error' in result) reject(new BrokerRefusedError(unrelayedMessage(result.error)));
       else resolveExit(result.exit);
     });
   });
