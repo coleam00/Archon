@@ -1,9 +1,13 @@
 /**
  * Windows: a Task Scheduler task under `\Archon\`. A task has no environment of its own, so
- * it runs a `.cmd` wrapper that sets `ARCHON_HOME` and `PATH` before the command.
+ * it runs a `.cmd` wrapper that sets `ARCHON_HOME` and `PATH` before the command. The task
+ * starts the wrapper through archon's schedule launcher, which keeps every window the tick
+ * opens off the operator's screen (`windows-hidden-desktop.ts`).
  */
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
+import { cliProgramArguments } from '../utils/cli-program-arguments';
+import { SCHEDULE_LAUNCH_FLAG } from './schedule-launch-flag';
 import {
   installedLabels,
   readInstalled,
@@ -90,7 +94,11 @@ export function readTaskWrapper(wrapper: string): InstalledJob | undefined {
   };
 }
 
-export function renderTaskDefinition(job: ScheduledJob, userId: string): string {
+export function renderTaskDefinition(
+  job: ScheduledJob,
+  userId: string,
+  launcher: readonly [string, ...string[]]
+): string {
   const seconds = job.schedule.intervalSeconds;
   if (seconds % 60 !== 0 || seconds < MIN_INTERVAL_SECONDS || seconds > MAX_INTERVAL_SECONDS) {
     throw new Error(
@@ -101,8 +109,13 @@ export function renderTaskDefinition(job: ScheduledJob, userId: string): string 
   if (job.archonHome.includes('%')) {
     throw new Error('A Task Scheduler schedule cannot use an ARCHON_HOME that contains %');
   }
+  if (launcher.some(argument => argument.includes('%'))) {
+    throw new Error('A Task Scheduler schedule cannot run an archon whose path contains %');
+  }
   const user = escapeXml(userId);
-  const wrapper = escapeXml(cmdValue(wrapperPath(job.archonHome, job.label)));
+  const launch = [...launcher, SCHEDULE_LAUNCH_FLAG, wrapperPath(job.archonHome, job.label)]
+    .map(argument => escapeXml(cmdArgument(argument)))
+    .join(' ');
   const logon = job.schedule.runAtLoad
     ? `
     <LogonTrigger><UserId>${user}</UserId><Enabled>true</Enabled></LogonTrigger>`
@@ -110,7 +123,9 @@ export function renderTaskDefinition(job: ScheduledJob, userId: string): string 
   // A fixed past StartBoundary keeps the rendering identical across installs. The settings
   // match launchd: no overlapping runs, no time limit, no replay of missed runs, and runs on
   // battery. InteractiveToken runs as the logged-on user, so the Credential Manager that gh
-  // and Git Credential Manager use stays readable.
+  // and Git Credential Manager use stays readable. The action is the launcher under
+  // `conhost --headless`, so the tick's first console has no window; the launcher puts the
+  // wrapper, and everything the run starts, on a desktop nobody looks at.
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>Archon schedule ${escapeXml(job.label)}</Description></RegistrationInfo>
@@ -131,8 +146,8 @@ export function renderTaskDefinition(job: ScheduledJob, userId: string): string 
     <Enabled>true</Enabled>
   </Settings>
   <Actions Context="Author"><Exec>
-    <Command>%SystemRoot%\\System32\\cmd.exe</Command>
-    <Arguments>/d /v:off /s /c ""${wrapper}""</Arguments>
+    <Command>%SystemRoot%\\System32\\conhost.exe</Command>
+    <Arguments>--headless ${launch}</Arguments>
   </Exec></Actions>
 </Task>
 `;
@@ -168,7 +183,13 @@ export function taskSchedulerBackend(
     render: job => [
       {
         path: definitionPath(archonHome, job.label),
-        contents: utf16le(renderTaskDefinition(job, options.windowsUserId ?? defaultUserId())),
+        contents: utf16le(
+          renderTaskDefinition(
+            job,
+            options.windowsUserId ?? defaultUserId(),
+            options.windowsLauncher ?? cliProgramArguments()
+          )
+        ),
       },
       { path: wrapperPath(archonHome, job.label), contents: renderTaskWrapper(job) },
     ],
