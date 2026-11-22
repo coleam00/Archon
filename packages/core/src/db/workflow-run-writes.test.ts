@@ -177,6 +177,7 @@ describe('workflow run writes', () => {
     test('deletes only the runs it locked and then found eligible, events first', async () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([{ id: 'old' }, { id: 'kept' }])) // tree lock
+        .mockResolvedValueOnce(createQueryResult([{ id: 'old' }, { id: 'kept' }])) // nothing new
         .mockResolvedValueOnce(createQueryResult([{ id: 'old' }, { id: 'unlocked' }])) // eligible
         .mockResolvedValueOnce(createQueryResult([], 0)) // events DELETE
         .mockResolvedValueOnce(createQueryResult([], 1)); // runs DELETE
@@ -190,10 +191,10 @@ describe('workflow run writes', () => {
         `COALESCE(active_phase_started_at, started_at) < ${mockPostgresDialect.nowMinusDays(1)}`
       );
       expect(lockParams).toEqual([30]);
-      const [eventsSql, eventsParams] = mockQuery.mock.calls[2] as [string, unknown[]];
+      const [eventsSql, eventsParams] = mockQuery.mock.calls[3] as [string, unknown[]];
       expect(eventsSql).toContain('DELETE FROM remote_agent_workflow_events');
       expect(eventsParams).toEqual([JSON.stringify(['old'])]);
-      const [runsSql, runsParams] = mockQuery.mock.calls[3] as [string, unknown[]];
+      const [runsSql, runsParams] = mockQuery.mock.calls[4] as [string, unknown[]];
       expect(runsSql).toContain('DELETE FROM remote_agent_workflow_runs');
       expect(runsParams).toEqual([JSON.stringify(['old'])]);
     });
@@ -223,6 +224,7 @@ describe('workflow run writes', () => {
     test('deletes events then run within a transaction for terminal run', async () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([{ id: 'run-123' }])) // tree lock
+        .mockResolvedValueOnce(createQueryResult([{ id: 'run-123' }])) // nothing new
         .mockResolvedValueOnce(createQueryResult([{ status: 'completed' }])) // SELECT guard
         .mockResolvedValueOnce(createQueryResult([{ open: 0 }])) // open asks guard
         .mockResolvedValueOnce(createQueryResult([{ open: 0 }])) // open waits guard
@@ -232,14 +234,14 @@ describe('workflow run writes', () => {
 
       await deleteWorkflowRun('run-123');
 
-      expect(mockQuery).toHaveBeenCalledTimes(7);
+      expect(mockQuery).toHaveBeenCalledTimes(8);
       const [lockSql] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(lockSql).toContain('FOR UPDATE OF r');
-      const [selectSql] = mockQuery.mock.calls[1] as [string, unknown[]];
+      const [selectSql] = mockQuery.mock.calls[2] as [string, unknown[]];
       expect(selectSql).toContain('SELECT status');
-      const [eventsSql] = mockQuery.mock.calls[5] as [string, unknown[]];
+      const [eventsSql] = mockQuery.mock.calls[6] as [string, unknown[]];
       expect(eventsSql).toContain('remote_agent_workflow_events');
-      const [runsSql] = mockQuery.mock.calls[6] as [string, unknown[]];
+      const [runsSql] = mockQuery.mock.calls[7] as [string, unknown[]];
       expect(runsSql).toContain('remote_agent_workflow_runs');
     });
 
@@ -254,6 +256,7 @@ describe('workflow run writes', () => {
     test('throws when run is not in terminal status', async () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([{ id: 'run-active' }])) // tree lock
+        .mockResolvedValueOnce(createQueryResult([{ id: 'run-active' }])) // nothing new
         .mockResolvedValueOnce(createQueryResult([{ status: 'running' }])); // SELECT guard
 
       await expect(deleteWorkflowRun('run-active')).rejects.toThrow(

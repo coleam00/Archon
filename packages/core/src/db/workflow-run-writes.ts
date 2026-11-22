@@ -284,23 +284,35 @@ const NO_LIVE_DESCENDANTS = `remote_agent_workflow_runs.id NOT IN (
  * decides on a tree, so the tree must hold still until it commits: on PostgreSQL, a sub-run's
  * insert takes a key-share lock on its parent row and a revival updates the run's own row,
  * so both wait for this transaction, and the checks after the lock read what they committed.
+ *
+ * One pass is not enough. Its walk reads the snapshot its statement started with, so a
+ * sub-run committed while the pass waited for a lock is missed, and could later be revived
+ * unlocked. The walk repeats until a pass adds no run. A pass that adds none waited on no
+ * lock, because it only re-locks rows this transaction already holds, so its snapshot holds
+ * every committed run of the tree, and each is locked.
+ *
  * SQLite serializes writers and reruns a transaction whose read went stale, so the walk
- * there only reads.
+ * there only reads, and its second pass finds nothing new.
  */
 async function lockRunTrees(
   query: TransactionQuery,
   seed: string,
   params: unknown[]
 ): Promise<Set<string>> {
-  const locked = await query<{ id: string }>(
-    `WITH RECURSIVE tree(id) AS (
-       ${seed}
-       UNION
-       SELECT c.id FROM remote_agent_workflow_runs c JOIN tree ON c.parent_run_id = tree.id)
-     SELECT r.id FROM remote_agent_workflow_runs r JOIN tree ON r.id = tree.id${getDialect().rowLock('r')}`,
-    params
-  );
-  return new Set(locked.rows.map(row => String(row.id)));
+  const locked = new Set<string>();
+  for (;;) {
+    const pass = await query<{ id: string }>(
+      `WITH RECURSIVE tree(id) AS (
+         ${seed}
+         UNION
+         SELECT c.id FROM remote_agent_workflow_runs c JOIN tree ON c.parent_run_id = tree.id)
+       SELECT r.id FROM remote_agent_workflow_runs r JOIN tree ON r.id = tree.id${getDialect().rowLock('r')}`,
+      params
+    );
+    const before = locked.size;
+    for (const row of pass.rows) locked.add(String(row.id));
+    if (locked.size === before) return locked;
+  }
 }
 
 /** A `$n` parameter holding a JSON array of run ids, as a set to match `id IN (...)` against. */

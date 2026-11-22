@@ -489,6 +489,101 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
       await harness.close();
     }
   });
+  // The deletion's first lock pass reads the snapshot it started with, so a sub-run created
+  // and finished while that pass waits is not in it. It must still be locked before the
+  // deletion decides, or a resume could make it live under a parent about to be deleted.
+  // `parentGate` holds the first pass on the parent row; `eventGate` parks the deletion after
+  // it decided, at its events delete, so the resume is tried while the decision stands.
+  test.each(['delete', 'cleanup'] as const)(
+    '%s locks a sub-run created while it waited, so its resume waits for the deletion',
+    async path => {
+      const harness = await makeHarness();
+      const parentGate = new Pool({ connectionString: harness.url, max: 1 });
+      const eventGate = new Pool({ connectionString: harness.url, max: 1 });
+      const open = { parentGate: false, eventGate: false };
+      try {
+        const { db, store } = harness;
+        const old = new Date(Date.now() - 10 * 86_400_000);
+        const parent = await store.createWorkflowRun({ workflow_name: 'parent', user_message: '' });
+        await store.claimPendingWorkflowRun(parent.id);
+        await store.completeWorkflowRun(parent.id, { duration_ms: 1 });
+        await harness.backdate(parent.id, { started_at: old, active_phase_started_at: old });
+        const pid = async (gate: Pool) =>
+          (await gate.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid ?? 0;
+        // The backend blocked by `blocker`, once there is one; `settled` ends the wait early.
+        const blockedBy = async (blocker: number, settled: { done: boolean }) => {
+          for (let tries = 0; tries < 200; tries++) {
+            const blocked = await db.query<{ pid: number }>(
+              'SELECT pid FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))',
+              [blocker]
+            );
+            const found = blocked.rows[0]?.pid;
+            if (found !== undefined) return found;
+            if (settled.done) throw new Error('It finished without waiting on the lock');
+            await new Promise(resolve => setTimeout(resolve, 25));
+          }
+          throw new Error('Expected a backend waiting on the lock');
+        };
+
+        await parentGate.query('BEGIN');
+        open.parentGate = true;
+        await parentGate.query(
+          'SELECT id FROM remote_agent_workflow_runs WHERE id = $1 FOR KEY SHARE',
+          [parent.id]
+        );
+        await eventGate.query('BEGIN');
+        open.eventGate = true;
+        await eventGate.query(
+          'SELECT id FROM remote_agent_workflow_events WHERE workflow_run_id = $1 FOR UPDATE',
+          [parent.id]
+        );
+        const { deleteWorkflowRun } = await import('./workflow-run-writes');
+        const deleted = { done: false };
+        const deletion = (
+          path === 'delete' ? deleteWorkflowRun(parent.id) : store.deleteOldWorkflowRuns(7)
+        ).finally(() => {
+          deleted.done = true;
+        });
+        await blockedBy(await pid(parentGate), deleted);
+
+        // Created and finished while the first pass waits: not in its snapshot.
+        const late = await store.createWorkflowRun({
+          workflow_name: 'late-child',
+          user_message: '',
+          parent_run_id: parent.id,
+        });
+        await store.claimPendingWorkflowRun(late.id);
+        await store.failWorkflowRun(late.id, 'interrupted');
+        await parentGate.query('COMMIT');
+        open.parentGate = false;
+        const deleter = await blockedBy(await pid(eventGate), deleted);
+
+        const resumed = { done: false };
+        const resume = store.resumeWorkflowRun(late.id).finally(() => {
+          resumed.done = true;
+        });
+        expect(await blockedBy(deleter, resumed)).toBeGreaterThan(0);
+        await eventGate.query('COMMIT');
+        open.eventGate = false;
+        await deletion;
+        await resume;
+
+        // The tree had ended when the deletion decided, so the parent is gone, and the
+        // resume ran after it: the sub-run is a root of its own, not a split live tree.
+        expect(await store.getWorkflowRun(parent.id)).toBeNull();
+        expect(await store.getWorkflowRun(late.id)).toMatchObject({
+          status: 'running',
+          parent_run_id: null,
+        });
+      } finally {
+        if (open.parentGate) await parentGate.query('ROLLBACK');
+        if (open.eventGate) await eventGate.query('ROLLBACK');
+        await parentGate.end();
+        await eventGate.end();
+        await harness.close();
+      }
+    }
+  );
   test('two completions of one workflow on one item that overlap leave one open set: the later one', async () => {
     const harness = await makeHarness();
     // Holding the item row FOR UPDATE parks each completion at its ask insert, whose
