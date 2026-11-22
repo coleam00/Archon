@@ -4,7 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github/source-config';
@@ -637,6 +637,46 @@ describe('archon pack: a pack folder as the workflow source', () => {
       loaded: [{ source: 'project', key: 'fixture', dir: source }],
       otherCopies: [],
     });
+  });
+
+  it('with an installed copy too, the hint to use it drops --workflow-source, and following it works', async () => {
+    const source = await writePackFolder();
+    // The same pack installed as acme/fixture, the way `archon plugin add` leaves it.
+    const pluginsDir = join(root, 'home', 'plugins');
+    const id = 'acme/fixture';
+    const commit = 'a'.repeat(40);
+    await cp(source, packTreePath(pluginsDir, id, commit), {
+      recursive: true,
+      filter: path => !path.includes(`${source}/.archon`),
+    });
+    const manifest = JSON.parse(await readFile(join(source, 'archon-plugin.json'), 'utf8'));
+    const receipt = receiptPath(pluginsDir, id);
+    await mkdir(dirname(receipt), { recursive: true });
+    await writeFile(
+      receipt,
+      JSON.stringify({
+        schemaVersion: 1,
+        id,
+        manifest,
+        commit,
+        installedAt: new Date(0).toISOString(),
+      })
+    );
+    await mkdir(join(cwd, '.archon'), { recursive: true });
+    await writeFile(
+      join(cwd, '.archon', 'config.yaml'),
+      'defaults:\n  loadDefaultWorkflows: false\n  loadDefaultCommands: false\n'
+    );
+
+    await packCommand('graph', ['fixture'], options({ workflowSource: source }));
+    const printed = logSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+    expect(printed).toContain("Drop --workflow-source and name 'acme.fixture' to use it.");
+
+    // Following the hint: the installed copy, discovered from the checkout.
+    await packCommand('bindings', ['acme.fixture'], options({ only: 'sweep' }));
+    const written = JSON.stringify(await readJson(await fileFor('sweep')));
+    expect(written).toContain('acme/fixture:fixture-sweep');
+    expect(written).not.toContain(source);
   });
 });
 
