@@ -389,6 +389,7 @@ describe('trigger CLI durable execution', () => {
   test.each([
     ['ambiguous remotes', 'multiple remotes exist (feb, jan)'],
     ['a local base that does not exist', "Base branch 'does-not-exist' does not exist"],
+    ['a start point that does not exist', "Start point 'missing-start' does not exist"],
   ])(
     'a start with %s fails the fire and takes no slot',
     async (state, reason) => {
@@ -401,14 +402,17 @@ describe('trigger CLI durable execution', () => {
               cwd: fixture.projectRoot,
             }).exited
           ).toBe(0);
-      else
+      else if (state === 'a local base that does not exist')
         writeFileSync(
           join(fixture.projectRoot, '.archon', 'config.yaml'),
           'worktree:\n  baseBranch: does-not-exist\n'
         );
       const configPath = join(fixture.projectRoot, '..', 'trigger.json');
       const config = JSON.parse(readFileSync(configPath, 'utf8'));
-      config.binding.launch.isolation = { kind: 'default' };
+      config.binding.launch.isolation =
+        state === 'a start point that does not exist'
+          ? { kind: 'worktree', fromBranch: 'missing-start' }
+          : { kind: 'default' };
       writeFileSync(configPath, JSON.stringify(config));
       const fire = await runCli(
         fixture.cliPath,

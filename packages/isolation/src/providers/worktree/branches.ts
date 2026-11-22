@@ -308,6 +308,13 @@ export async function createFromExistingBranch(
   }
 }
 
+/** The explicit start point (`--from`, a hand-off commit) a request cuts its branch from. */
+export function requestedStartPoint(request: IsolationRequest): string | undefined {
+  return request.workflowType === 'task' && request.taskBranch?.kind === 'new'
+    ? request.taskBranch.fromBranch
+    : undefined;
+}
+
 /**
  * Create a worktree for a named branch. A branch that exists nowhere yet is cut from
  * the start point: the request's `fromBranch`, else the base on the remote, or the
@@ -388,10 +395,7 @@ async function checkOutNewBranch(
   setupLockReason: string,
   remote: WorktreeRemote
 ): Promise<{ cutFromCommit?: string; resolvedBaseBranch?: string; branchCreated: boolean }> {
-  const fromBranch =
-    request.workflowType === 'task' && request.taskBranch?.kind === 'new'
-      ? request.taskBranch.fromBranch
-      : undefined;
+  const fromBranch = requestedStartPoint(request);
   const startPoint =
     fromBranch ??
     (remote.kind === 'remote' ? `${remote.name}/${baseBranch}` : `refs/heads/${baseBranch}`);

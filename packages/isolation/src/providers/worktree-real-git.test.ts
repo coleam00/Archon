@@ -225,14 +225,17 @@ describe('a repository with no remote', () => {
     ['a configured base that does not exist', 'configured_branch_missing', 'nope'],
     ['a detached HEAD and no configured base', 'no_local_base', 'detach'],
     ['no commit at all', 'no_local_base', 'empty'],
+    ['a start point that does not exist', 'no_local_base', 'from'],
   ] as const)('refuses %s', async (_name, kind, state) => {
     if (state !== 'empty') await commit('initial');
     if (state === 'detach') await git(repoPath, 'checkout', '-q', '--detach');
-    const failure = await typedFailure(
-      new WorktreeProvider().create(
-        request(state === 'nope' ? { baseOverride: toBranchName('nope') } : {})
-      )
-    );
+    const overrides: Partial<IsolationRequest> =
+      state === 'nope'
+        ? { baseOverride: toBranchName('nope') }
+        : state === 'from'
+          ? { taskBranch: { kind: 'new', fromBranch: toBranchName('missing-start') } }
+          : {};
+    const failure = await typedFailure(new WorktreeProvider().create(request(overrides)));
     expect(failure.kind).toBe(kind);
   });
 });

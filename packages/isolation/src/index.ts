@@ -49,6 +49,7 @@ export {
   WORKTREE_REGISTRATION_ID,
   WORKTREE_REMOVAL_OWNER,
   readWorktreeCreationId,
+  readWorktreeBaseBranch,
   readWorktreeBranchCreated,
   WorktreeRegistrationChangedError,
   WorktreeRemovalInProgressError,

@@ -1,5 +1,5 @@
 import type { OwnedRunLease } from '../utils/owned-run-lease';
-import { recordWorktreeAdoption } from '@archon/isolation';
+import { readWorktreeBaseBranch, recordWorktreeAdoption } from '@archon/isolation';
 import type {
   ExecutionContext,
   IsolationEnvironmentRow,
@@ -625,7 +625,6 @@ async function provisionWorktree(
     options.detachedWorktreeIdentifier ??
     generatedWorktreeIdentifier(request.workflowName, setupRunId(admission));
 
-  // Configure isolation with repo config loader (same as orchestrator)
   configureWorktreeIsolation();
 
   const existingEnv = await reusedBranchWorktree(
@@ -639,6 +638,7 @@ async function provisionWorktree(
     await recordWorktreeAdoption(host.records.isolation, existingEnv, codebase.default_cwd);
     workspace.workingCwd = existingEnv.working_path;
     workspace.isolationEnvId = existingEnv.id;
+    workspace.cut = { resolvedBaseBranch: readWorktreeBaseBranch(existingEnv.metadata) };
     return;
   }
 

@@ -132,7 +132,12 @@ async function resolveNewIsolation(
           resolvedBaseBranch: result.resolvedBaseBranch,
           ownedWorktree: result.ownedWorktree,
         }
-      : { cwd: result.cwd, cutFromCommit: undefined, ownedWorktree: undefined };
+      : {
+          cwd: result.cwd,
+          cutFromCommit: undefined,
+          resolvedBaseBranch: result.resolvedBaseBranch,
+          ownedWorktree: undefined,
+        };
   } catch (error) {
     if (!(error instanceof IsolationBlockedError)) throw error;
     if (setupRun)

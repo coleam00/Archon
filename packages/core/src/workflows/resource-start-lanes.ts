@@ -8,6 +8,7 @@ import { execFileAsync, toBranchName, toRepoPath } from '@archon/git';
 import {
   checkWorktreeStartable,
   getIsolationProvider,
+  readWorktreeBaseBranch,
   recordWorktreeAdoption,
   type WorktreeSetupExecutor,
 } from '@archon/isolation';
@@ -68,8 +69,7 @@ export async function assertLaneStartable(
 ): Promise<void> {
   if (lane.kind !== 'worktree' || lane.branch) return;
   ensureIsolationConfigured();
-  const request = worktreeLaneRequest(lane, codebase, '');
-  await checkWorktreeStartable(request.canonicalRepoPath, request);
+  await checkWorktreeStartable(worktreeLaneRequest(lane, codebase, ''));
 }
 
 type WorktreeLaneSpec = Extract<
@@ -100,7 +100,8 @@ async function adoptBranchWorktree(
   if (!existing || !(await getIsolationProvider().healthCheck(existing.working_path)))
     return undefined;
   await recordWorktreeAdoption(host.records.isolation, existing, codebase.default_cwd);
-  return { cwd: existing.working_path, envId: existing.id };
+  const resolvedBaseBranch = readWorktreeBaseBranch(existing.metadata);
+  return { cwd: existing.working_path, envId: existing.id, resolvedBaseBranch };
 }
 
 function worktreeLaneRequest(

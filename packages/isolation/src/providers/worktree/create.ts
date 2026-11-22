@@ -37,6 +37,7 @@ import {
   createFromPR,
   createNewBranch,
   generateBranchName,
+  requestedStartPoint,
 } from './branches';
 import { worktreeBaseFor, worktreePathFor } from './location';
 import { releaseSetupLock, rollBackOnFailure } from './setup-lock';
@@ -371,7 +372,7 @@ async function refreshIndex(worktreePath: string): Promise<void> {
 }
 
 /** The base inputs a request carries; config comes from the repository. */
-export type WorktreeBaseInputs = Pick<IsolationRequest, 'baseOverride' | 'baseBranch'>;
+type WorktreeBaseInputs = Pick<IsolationRequest, 'baseOverride' | 'baseBranch'>;
 
 /**
  * Base precedence: a per-dispatch --base override (`baseOverride`) wins, then explicit
@@ -390,11 +391,12 @@ export type WorktreeStart = { kind: 'remote'; name: string } | { kind: 'none'; b
 
 /**
  * What a new worktree needs before anything is created: the remote to fetch from, or,
- * with no remote, a local base branch that has a commit. Creation calls this first, and
- * trigger preparation calls it before admission, so the two cannot disagree. With a
- * remote the base is left to creation, which fetches it; with none the base is decided
- * here, since an item's landing branch, the one thing that could replace it at run
- * start, needs a remote.
+ * with no remote, a local base branch that has a commit and, when the request names
+ * one, a start point that resolves to a commit. Creation calls this first, and trigger
+ * preparation calls it before admission, so the two cannot disagree. With a remote the
+ * base is left to creation, which fetches it; with none nothing is fetched, so local
+ * refs are the whole answer, and an item's landing branch, the one thing that could
+ * replace the base at run start, needs a remote.
  *
  * Remote resolution: explicit config (worktree.remote) > auto-detect via
  * getDefaultRemote() > none when the repository has no remote > actionable
@@ -403,14 +405,20 @@ export type WorktreeStart = { kind: 'remote'; name: string } | { kind: 'none'; b
 export async function checkWorktreeStart(
   repoPath: RepoPath,
   worktreeConfig: WorktreeCreateConfig | null,
-  base: WorktreeBaseInputs
+  request: IsolationRequest
 ): Promise<WorktreeStart> {
   const remote = await resolveRemote(repoPath, worktreeConfig?.remote);
   if (remote.kind === 'remote') return remote;
-  return {
-    kind: 'none',
-    baseBranch: await resolveLocalBase(repoPath, preferredBase(base, worktreeConfig)),
-  };
+  const baseBranch = await resolveLocalBase(repoPath, preferredBase(request, worktreeConfig));
+  const startPoint = requestedStartPoint(request);
+  if (startPoint !== undefined && !(await commitOf(repoPath, startPoint))) {
+    throw new IsolationFailure(
+      'no_local_base',
+      `Start point '${startPoint}' does not exist in ${repoPath}, which has no git remote. ` +
+        'Pass an existing commit or branch with `--from`.'
+    );
+  }
+  return { kind: 'none', baseBranch };
 }
 
 async function resolveRemote(
@@ -455,7 +463,7 @@ async function resolveRemote(
  */
 async function resolveLocalBase(repoPath: RepoPath, preferredBaseBranch?: string): Promise<string> {
   if (preferredBaseBranch) {
-    if (!(await localCommitOf(repoPath, preferredBaseBranch))) {
+    if (!(await commitOf(repoPath, `refs/heads/${preferredBaseBranch}`))) {
       throw new IsolationFailure(
         'configured_branch_missing',
         `Base branch '${preferredBaseBranch}' does not exist in ${repoPath}, which has no git remote. ` +
@@ -485,7 +493,7 @@ async function resolveLocalBase(repoPath: RepoPath, preferredBaseBranch?: string
         'Check out a branch, pass `--base <branch>`, or set worktree.baseBranch in .archon/config.yaml.'
     );
   }
-  const cutFromCommit = await localCommitOf(repoPath, current);
+  const cutFromCommit = await commitOf(repoPath, `refs/heads/${current}`);
   if (!cutFromCommit) {
     throw new IsolationFailure(
       'no_local_base',
@@ -502,11 +510,12 @@ async function resolveLocalBase(repoPath: RepoPath, preferredBaseBranch?: string
   return current;
 }
 
-async function localCommitOf(repoPath: RepoPath, branch: string): Promise<string | undefined> {
+/** The commit a revision names in this repository, or undefined when it names none. */
+async function commitOf(repoPath: RepoPath, rev: string): Promise<string | undefined> {
   try {
     const { stdout } = await execFileAsync(
       'git',
-      ['-C', repoPath, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`],
+      ['-C', repoPath, 'rev-parse', '--verify', '--quiet', `${rev}^{commit}`],
       { timeout: 10000 }
     );
     return stdout.trim() || undefined;

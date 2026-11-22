@@ -261,6 +261,42 @@ test.each(['primary', 'external linked worktree'])(
   60_000
 );
 
+test('a repeated --branch run in a repository with no remote keeps the base its worktree was cut from', () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-no-remote-reuse-'));
+  roots.push(root);
+  const repo = join(root, 'repo');
+  const out = join(root, 'base.out');
+  mkdirSync(join(repo, '.archon', 'workflows'), { recursive: true });
+  writeFileSync(
+    join(repo, '.archon', 'workflows', 'base.yaml'),
+    `name: base\ndescription: Report the base\nnodes:\n  - id: base\n    bash: echo "$BASE_BRANCH" > '${out}'\n`
+  );
+  git(repo, ['init', '-qb', 'trunk']);
+  git(repo, ['add', '.']);
+  git(repo, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'fixture']);
+  for (const attempt of ['creates', 'reuses']) {
+    const result = spawnSync(
+      process.execPath,
+      [join(import.meta.dir, '..', 'cli.ts'), 'workflow', 'run', 'base', '--branch', 'repeat'],
+      {
+        cwd: repo,
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          ARCHON_HOME: join(root, 'home'),
+          DATABASE_URL: '',
+          WORKFLOW_ID: '',
+          ARCHON_NODE_EXECUTION: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+        },
+      }
+    );
+    expect(result.status, `${attempt}: ${result.stdout}${result.stderr}`).toBe(0);
+    expect(readFileSync(out, 'utf8').trim(), attempt).toBe('trunk');
+  }
+});
+
 test('legacy relative registration fails with recovery guidance', () => {
   const root = mkdtempSync(join(tmpdir(), 'archon-legacy-cwd-'));
   roots.push(root);

@@ -42,6 +42,7 @@ const {
 export { realReleaseRunVerificationImages };
 mock.module('@archon/isolation', () => ({
   checkWorktreeStartable: mock(async () => undefined),
+  readWorktreeBaseBranch: () => undefined,
   generatedTaskBranch,
   getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({
     state: 'NONE',

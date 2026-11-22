@@ -222,6 +222,7 @@ const { generatedTaskBranch, VerificationImageInventoryError, VERIFICATION_IMAGE
   await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
   checkWorktreeStartable: mock(async () => undefined),
+  readWorktreeBaseBranch: () => undefined,
   generatedTaskBranch,
   refuseUnappliedStartPoint: mock(async () => undefined),
   getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({

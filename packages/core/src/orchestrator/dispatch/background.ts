@@ -591,7 +591,7 @@ async function createWorkerWorktree(
         resolvedBaseBranch: result.resolvedBaseBranch,
         ownedWorktree: result.ownedWorktree,
       }
-    : { cwd: result.cwd };
+    : { cwd: result.cwd, resolvedBaseBranch: result.resolvedBaseBranch };
 }
 
 /** Notify parent chat that workflow is dispatching */
