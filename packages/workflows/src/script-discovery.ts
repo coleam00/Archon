@@ -491,9 +491,8 @@ export async function discoverScriptsForCwd(
         onMissing
       )
     : new Map<string, ScriptDefinition>();
-  // A live source that is a pack folder holds a project pack at its root.
-  const sourcePack =
-    roots.kind === 'live' && roots.project ? await sourcePackFolder(roots.project) : null;
+  // A source that is a pack folder, live or captured, holds a project pack at its root.
+  const sourcePack = roots.project ? await sourcePackFolder(roots.project) : null;
   if (sourcePack) {
     await discoverPackScripts(
       sourcePack.dir,

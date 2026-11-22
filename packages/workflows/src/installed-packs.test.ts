@@ -11,7 +11,7 @@ import { providerRegistry, claudeDescriptor } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { readHomeMcpDirectory } from './compiled-command';
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { access, cp, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
@@ -635,11 +635,15 @@ describe('a pack folder given as the source', () => {
       )
     ).toBe(true);
 
-    // A run freezes the folder where a project pack lives and resumes on those bytes.
+    // A run freezes the folder and resumes on those bytes. The folder's `.archon/.env` is
+    // project secrets, not pack source, and stays out of the capture.
+    await mkdir(join(folder, '.archon'), { recursive: true });
+    await writeFile(join(folder, '.archon', '.env'), 'SECRET=1\n');
     const capture = await captureWorkflowSource({
       sourceRoot: folder,
       captureRoot: join(home, 'runs', 'run-1'),
     });
+    await expect(access(join(capture.anchor.root, 'project', '.archon', '.env'))).rejects.toThrow();
     await writeFile(join(folder, 'review', 'commands', 'scope.md'), 'Edited after start.\n');
     const resumed = await resolveContinuationWorkflow(
       deps,
@@ -721,17 +725,27 @@ describe('a pack folder given as the source', () => {
     expect(captured.errors.map(error => error.error)).toContainEqual(collision);
   });
 
-  test('a pack named for a reserved project folder is refused, not lost after capture', async () => {
+  test('a pack named like a reserved project folder loads live and from its capture', async () => {
     for (const name of ['defaults', 'fixtures']) {
       const folder = await rawPackFolder(name, { 'one/workflow.yaml': flow('one') });
-      const live = await discoverFrom(folder);
-      expect(live.workflows.some(entry => entry.workflow.name === 'one')).toBe(false);
-      expect(live.errors.map(error => error.error)).toContainEqual(
-        expect.stringContaining('cannot be a project pack folder name')
+      const ownWorkflow = (result: Awaited<ReturnType<typeof discoverFrom>>): unknown =>
+        result.workflows.find(entry => entry.workflow.name === 'one')?.workflow.pack;
+      expect(ownWorkflow(await discoverFrom(folder))).toMatchObject({
+        key: name,
+        source: 'project',
+      });
+
+      const capture = await captureWorkflowSource({
+        sourceRoot: folder,
+        captureRoot: join(home, 'runs', name),
+      });
+      const captured = await discoverWorkflowsWithConfig(
+        folder,
+        loadConfig,
+        providerRegistry,
+        capturedSourceRoots(capture.anchor)
       );
-      await expect(
-        captureWorkflowSource({ sourceRoot: folder, captureRoot: join(home, 'runs', name) })
-      ).rejects.toThrow('cannot be a project pack folder name');
+      expect(ownWorkflow(captured)).toMatchObject({ key: name, source: 'project' });
     }
   });
 

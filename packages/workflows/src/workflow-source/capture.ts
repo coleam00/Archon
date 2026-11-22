@@ -42,6 +42,8 @@ interface CaptureJob {
   dest: string;
   from: string;
   scope: Exclude<CapturedScope, 'bundled'>;
+  /** Entries at the top of `from` not to copy. */
+  skip?: readonly string[];
 }
 
 /** The installed packs a capture copies, and what its manifest records about them. */
@@ -119,8 +121,9 @@ export async function captureWorkflowSource(opts: {
 
 /**
  * The project and global source directories that exist. A source that is a pack folder is
- * frozen where a project pack lives, `project/.archon/workflows/<name>`, so the captured
- * roots, a resume and a `workflow:` child read it as any project pack.
+ * frozen whole as the capture's project root, manifest included, so the captured roots
+ * read it through `sourcePackFolder` exactly as the live source was read, under any pack
+ * name the manifest accepts.
  */
 async function mutableScopeJobs(
   sourceRoot: string,
@@ -132,14 +135,10 @@ async function mutableScopeJobs(
     if (await isDirectory(from))
       jobs.push({ dest: join(PROJECT_SCOPE_DIR, dir), from, scope: 'project' });
   }
-  const pack = await sourcePackFolder(sourceRoot);
-  if (pack !== null) {
-    const [workflowFolder] = archonPaths.getWorkflowFolderSearchPaths();
-    jobs.push({
-      dest: join(PROJECT_SCOPE_DIR, workflowFolder, pack.name),
-      from: pack.dir,
-      scope: 'project',
-    });
+  // The folder's own `.archon/` is project config and state (`.env`, `state/`), not pack
+  // content; only the source directories above are frozen from it.
+  if ((await sourcePackFolder(sourceRoot)) !== null) {
+    jobs.push({ dest: PROJECT_SCOPE_DIR, from: sourceRoot, scope: 'project', skip: ['.archon'] });
   }
   for (const [name, from] of [
     ['workflows', archonPaths.getHomeWorkflowsPath()],
@@ -199,7 +198,7 @@ async function stageCapture(
   for (const job of jobs) {
     const target = join(staging, job.dest);
     await mkdir(dirname(target), { recursive: true });
-    const copied = await copyListing(await listTree(job.from), target);
+    const copied = await copyListing(await listTree(job.from, job.skip), target);
     fileCount += copied.files;
     byteCount += copied.bytes;
   }

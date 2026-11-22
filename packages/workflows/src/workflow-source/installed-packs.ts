@@ -206,11 +206,9 @@ export async function packDirectory(
   switch (pack.source) {
     case 'project': {
       if (roots.project === null) return null;
-      // A live source that is the pack's own folder holds it at its root.
-      if (roots.kind === 'live') {
-        const sourcePack = await sourcePackFolder(roots.project);
-        if (sourcePack?.name === pack.key) return sourcePack.dir;
-      }
+      // A source that is the pack's own folder holds it at its root, live or captured.
+      const sourcePack = await sourcePackFolder(roots.project);
+      if (sourcePack?.name === pack.key) return sourcePack.dir;
       return join(roots.project, '.archon', 'workflows', pack.key);
     }
     case 'global':

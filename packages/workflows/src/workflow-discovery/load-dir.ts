@@ -319,8 +319,8 @@ export async function loadPackagedWorkflowsFromDir(
 /**
  * Load one pack into a scope's packaged result. Two workflows of the scope's packs with
  * one filename both fail: a scope keys workflows by filename, so either would silently
- * replace the other. The live pack-folder source uses this too, so a pack loads with the
- * same files live and from its capture's `.archon/workflows/<name>`.
+ * replace the other. A pack-folder source is loaded through this too, so a pack folder
+ * and a pack in `.archon/workflows` fail a filename collision the same way.
  */
 export async function addPackToScope(
   context: WorkflowParseContext,

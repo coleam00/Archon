@@ -255,9 +255,9 @@ export async function loadGlobalScope(context: DiscoveryContext, files: ScopeFil
  * The repo's workflow folder, which overrides bundled and home scope by exact filename.
  * A missing folder is no project workflows; any other access failure rejects discovery.
  *
- * A live source that is itself a pack folder (`sourcePackFolder`) adds that pack to the
- * project scope under its manifest name. A capture already holds it under
- * `project/.archon/workflows/<name>`, so captured roots read only the folder.
+ * A source that is itself a pack folder (`sourcePackFolder`) adds that pack to the project
+ * scope under its manifest name. A capture freezes such a folder whole as its project
+ * root, so live and captured roots read it the same way.
  */
 export async function loadProjectScope(
   context: DiscoveryContext,
@@ -270,7 +270,7 @@ export async function loadProjectScope(
   getLog().debug({ workflowPath }, 'searching_repo_workflows');
 
   const repoResult = await loadRepoWorkflows(context, workflowPath);
-  if (context.roots.kind === 'live') await addSourcePack(context, projectRoot, repoResult);
+  await addSourcePack(context, projectRoot, repoResult);
 
   // Repo workflows override bundled AND home scope by exact filename match. A file read
   // from here is `project`, even when its name matches a bundled one: `--workflow-source`
