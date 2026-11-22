@@ -6,6 +6,10 @@
       "@archon/adapters/*": ["../adapters/src/*"],
       "@archon/core": ["../core/src"],
       "@archon/core/*": ["../core/src/*"],
+      // The CLI does not depend on the server. scripts/check-cli-import-boundary.ts injects a
+      // server import into the CLI bundle as its negative proof, and Bun resolves it here.
+      "@archon/server": ["../server/src"],
+      "@archon/server/*": ["../server/src/*"],
       "@archon/workflows": ["../workflows/src"],
       "@archon/workflows/*": ["../workflows/src/*"],
       "@archon/paths": ["../paths/src"],
