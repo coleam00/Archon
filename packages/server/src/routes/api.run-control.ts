@@ -441,7 +441,7 @@ async function resumeHeadlessRun(
     undefined,
     checkedResumeCursor(run)
   );
-  if (headless.kind === 'waiting_for_capacity' || headless.kind === 'resource_busy')
+  if (headless.kind !== 'resumed' && headless.kind !== 'not_resumed')
     return apiError(c, 409, headless.message);
   if (headless.kind === 'not_resumed') {
     return apiError(

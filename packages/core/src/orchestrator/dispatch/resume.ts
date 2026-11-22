@@ -8,6 +8,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   checkedResumeCursor,
   leasedResumeCursor,
+  RunLimitError,
   WorkflowItemHeldError,
   type RunOwnerLease,
 } from '@archon/workflows/store';
@@ -234,6 +235,19 @@ async function reportRefusedResume(
     await platform.sendMessage(
       conversationId,
       `⏳ **${workflow.name}** cannot resume while another run works its item. ${err.message}` +
+        deferredNote
+    );
+    return;
+  }
+  // The failed run stays failed; the install runs as many runs as it holds.
+  if (err instanceof RunLimitError) {
+    getLog().info(
+      { workflowName: workflow.name, runId: resumableRun.id, ...err.runLimit },
+      'orchestrator.resume_run_limit_full'
+    );
+    await platform.sendMessage(
+      conversationId,
+      `⏳ **${workflow.name}** cannot resume yet. ${err.message} Resume it once a run ends.` +
         deferredNote
     );
     return;

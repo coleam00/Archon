@@ -33,11 +33,13 @@ const read: ItemRead = {
       queuedAt: '2026-11-01T09:35:00.000Z',
       ahead: 12,
       heldBehind: null,
+      waitsForRunLimit: false,
     },
   ],
   skipped: [],
   hold: null,
   held: [],
+  runLimit: null,
   waits: [],
   questions: [
     {
@@ -291,6 +293,18 @@ test('an item read prints a start waiting for capacity with the id that withdraw
     SERVED
   );
   expect(next.find(line => line.includes('b6f1c2d4'))).toContain('on host host');
+  // A start only the run limit holds says so, with the count, in place of its queue place.
+  const limited = itemReadLines(
+    {
+      ...read,
+      runLimit: { limit: 2, live: 1 },
+      queued: read.queued.map(start => ({ ...start, waitsForRunLimit: true })),
+    },
+    SERVED
+  );
+  expect(limited.find(line => line.includes('b6f1c2d4'))).toContain(
+    'waits for the run limit (1 of 2 runs at once on this install) on host host'
+  );
   const empty = itemReadLines({ ...read, queued: [] }, SERVED);
   expect(empty[empty.indexOf('Waiting to start:') + 1]).toBe('  none');
 });
@@ -314,6 +328,16 @@ test('an unprepared start names what prepares it: the install hold, or its host'
   const held = itemReadLines({ ...read, queued: [], held: [start], hold }, SERVED).join('\n');
   expect(held).toContain('waits for the install hold');
   expect(held).not.toContain('archon trigger drain');
+});
+
+test('the waiting section says when the run limit is full, and only then', () => {
+  const lines = (runLimit: ItemRead['runLimit']) => itemReadLines({ ...read, runLimit }, SERVED);
+  const full = lines({ limit: 2, live: 2 });
+  expect(full[full.indexOf('Waiting to start:') + 1]).toBe(
+    '  The run limit is full (2 of 2 runs at once on this install); nothing new starts until a run ends.'
+  );
+  for (const room of [null, { limit: 3, live: 2 }])
+    expect(lines(room).some(line => line.includes('run limit'))).toBe(false);
 });
 
 test('an item read prints each link with the other item, kind and direction', () => {

@@ -153,7 +153,11 @@ async function settle(outcome: ContinuationWakeOutcome): Promise<SettledOutcome>
     return { runId, kind: outcome.kind, reason: outcome.reason, ...deferral };
   if (outcome.kind === 'failed')
     return { runId, kind: outcome.kind, error: errorMessage(outcome.error), ...deferral };
-  if (outcome.kind === 'waiting_for_capacity' || outcome.kind === 'resource_busy') {
+  if (
+    outcome.kind === 'waiting_for_capacity' ||
+    outcome.kind === 'resource_busy' ||
+    outcome.kind === 'run_limit_full'
+  ) {
     const { deferError: _deferError, ...refusal } = outcome;
     return { ...refusal, ...deferral };
   }
@@ -166,6 +170,7 @@ function successful(outcome: SettledOutcome): boolean {
     (outcome.kind === 'not-accepted' ||
       outcome.kind === 'waiting_for_capacity' ||
       outcome.kind === 'resource_busy' ||
+      outcome.kind === 'run_limit_full' ||
       (outcome.kind === 'accepted' && outcome.status !== 'failed'))
   );
 }

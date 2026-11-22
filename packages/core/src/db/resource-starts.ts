@@ -50,6 +50,9 @@ import {
   lockResourceSlot,
   lockResourceSlotForAdmission,
   readInstallHold,
+  runLimitRefusal,
+  runLimitBlocker,
+  withinRunRoom,
   resourceStartOccupancy,
   parseQueuedResourceStart,
   type TransactionQuery as Query,
@@ -133,12 +136,12 @@ async function admitResourceStartWithQuery(
   if (existing.rows[0]) return disposition(existing.rows[0]);
 
   const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
-  const blocker = resourceStartBlocker(
-    await resourceStartOccupancy(query, intent.resource, capacity),
-    launch,
-    intent.hostId,
-    itemId
-  );
+  const slot = await resourceStartOccupancy(query, intent.resource, capacity);
+  // The limit is asked last, when the resource admits the start; `overlap` then acts on
+  // whichever blocker holds it, as it does on a resource blocker.
+  const blocker =
+    resourceStartBlocker(slot, launch, intent.hostId, itemId) ??
+    (await runLimitBlocker(query, intent.hostId, intent.resource));
   const status = blocker && intent.overlap === 'skip' ? 'skipped' : 'queued';
   await query(
     `INSERT INTO remote_agent_resource_start_requests
@@ -254,6 +257,9 @@ export async function admitPendingRun(input: {
       itemId == null ? null : String(itemId)
     );
     if (blocker) return blocker;
+    // Thrown: the caller waits for the limit, not a resource. A sub-run of a counted tree passes.
+    const refusal = await runLimitRefusal(query, id);
+    if (refusal) throw refusal;
     await query(
       `INSERT INTO remote_agent_resource_start_requests
          (id, resource_key, host_id, overlap_policy, status, launch, admitted_at)
@@ -265,7 +271,7 @@ export async function admitPendingRun(input: {
   });
 }
 
-/** Admit this host's queued requests that fit the slot's free capacity; none under the install hold. */
+/** Admit this host's queued requests that fit the slot and the run limit; none under the hold. */
 export async function drainResourceStarts(options: {
   resource: string;
   hostId: string;
@@ -275,8 +281,9 @@ export async function drainResourceStarts(options: {
     const { capacity } = await lockResourceSlotForAdmission(query, options.resource);
     if (await readInstallHold(query)) return [];
     const slot = await resourceStartOccupancy(query, options.resource, capacity);
+    const starts = drainableStarts(slot, options.hostId);
     const admitted: ResourceStartDisposition[] = [];
-    for (const start of drainableStarts(slot, options.hostId))
+    for (const start of await withinRunRoom(query, options.hostId, options.resource, starts))
       admitted.push(await admitExisting(query, options.resource, start));
     return admitted;
   });

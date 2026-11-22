@@ -867,6 +867,85 @@ test('trigger list shows a refused binding with its forge refusal and omits the 
   }
 });
 
+test('trigger list names the run limit on a receipt whose queued start only the limit holds', async () => {
+  const host = hostForTest();
+  const accepted = acceptance(
+    {
+      bindingId: 'queued',
+      bindingRevision: null,
+      hostId: 'host',
+      runAsUserId: 'operator',
+      resource: 'portable',
+      capacity: 1,
+      overlap: 'queue',
+      launch: {
+        cwd: '/portable',
+        workflowName: 'portable',
+        inputs: {},
+        isolation: { kind: 'in-place' },
+      },
+    },
+    'limited'
+  );
+  await host.deps.store.acceptStartReceipt(accepted);
+  // The in-memory store keeps no run limit; stand in for one with a start queued under it,
+  // or admitted by a drain after the limit was read (`admittedSince`).
+  let admittedSince = false;
+  const read = host.deps.store.getStartReceipt.bind(host.deps.store);
+  host.deps.store.getStartReceipt = async id => {
+    const receipt = await read(id);
+    return (
+      receipt && {
+        ...receipt,
+        bindings: receipt.bindings.map(binding => ({
+          ...binding,
+          ...(admittedSince
+            ? {
+                requestStatus: 'admitted' as const,
+                disposition: {
+                  status: 'admitted' as const,
+                  requestId: 'queued-request',
+                  runId: 'queued-request',
+                },
+              }
+            : {
+                requestStatus: 'queued' as const,
+                disposition: {
+                  status: 'queued' as const,
+                  requestId: 'queued-request',
+                  blocker: { kind: 'run' as const, id: 'holder' },
+                },
+              }),
+        })),
+      }
+    );
+  };
+  for (const [waiting, admitted, listed] of [
+    [['queued-request'], false, { limit: 1, live: 1 }],
+    [['another-request'], false, null],
+    [['queued-request'], true, null],
+  ] as const) {
+    host.deps.store.getRunLimit = async () => ({ limit: 1, live: 1, waiting });
+    admittedSince = admitted;
+    const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+      _chunk: unknown,
+      callback?: () => void
+    ) => {
+      callback?.();
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      await triggerCommand(host, 'list', [], {});
+      const [receipt] = JSON.parse(stdout.mock.calls.map(call => String(call[0])).join('')) as {
+        runLimit: unknown;
+      }[];
+      expect(receipt?.runLimit).toEqual(listed);
+    } finally {
+      stdout.mockRestore();
+    }
+  }
+});
+
 /** Accept one binding for `workflowYaml` and drain it; returns the prepared request or the error. */
 async function prepareTriggerInputs(
   workflowYaml: string,

@@ -8199,6 +8199,7 @@ export interface components {
           /** @enum {string|null} */
           owner: 'reachable' | 'unreachable' | 'unknown' | null;
         } | null;
+        waitsForRunLimit: boolean;
       }[];
       skipped: {
         requestId: string;
@@ -8225,6 +8226,10 @@ export interface components {
         workflow: string | null;
         receivedAt: string;
       }[];
+      runLimit: {
+        limit: number;
+        live: number;
+      } | null;
       waits: {
         event: string;
         about: string;
@@ -8866,6 +8871,7 @@ export interface components {
             /** @enum {string|null} */
             owner: 'reachable' | 'unreachable' | 'unknown' | null;
           } | null;
+          waitsForRunLimit: boolean;
         }[];
         skipped: {
           requestId: string;
@@ -8892,6 +8898,10 @@ export interface components {
           workflow: string | null;
           receivedAt: string;
         }[];
+        runLimit: {
+          limit: number;
+          live: number;
+        } | null;
         waits: {
           event: string;
           about: string;

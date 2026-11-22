@@ -4,6 +4,7 @@
  * first. Built from the same `ItemRead` that `--json` prints.
  */
 import { describeInstallHold } from '@archon/workflows/schemas/resource-start';
+import { describeRunLimit, fullRunLimit } from '@archon/workflows/schemas/run-limit';
 import type {
   ItemAnswer,
   ItemHeldBehind,
@@ -162,11 +163,18 @@ export function admittedByText(hostId: string, served: ReadonlySet<string>): str
  * `archon trigger inspect` and `archon trigger withdraw` take. Under the install hold
  * nothing is admitted, which the section already says, so no admitter is named.
  */
-function queuedLines(start: ItemQueuedStart, served: ReadonlySet<string>, held: boolean): string[] {
+function queuedLines(
+  start: ItemQueuedStart,
+  runLimit: ItemRead['runLimit'],
+  served: ReadonlySet<string>,
+  held: boolean
+): string[] {
   const waits =
-    start.ahead === 0
-      ? `next for a free slot on host ${start.hostId}`
-      : `${String(start.ahead)} ahead on host ${start.hostId}`;
+    start.waitsForRunLimit && runLimit
+      ? `waits for the run limit (${describeRunLimit(runLimit)}) on host ${start.hostId}`
+      : start.ahead === 0
+        ? `next for a free slot on host ${start.hostId}`
+        : `${String(start.ahead)} ahead on host ${start.hostId}`;
   const lines = [
     `  ${start.requestId}  ${start.workflow ?? '(launch unreadable)'}  on ${start.resource}, ${waits}, queued ${minute(start.queuedAt)}`,
   ];
@@ -197,10 +205,15 @@ function startSectionLines(read: ItemRead, served: ReadonlySet<string>): string[
     lines.push(
       `  New runs are held on this install (${describeInstallHold(read.hold)}); nothing starts until archon hold lift.`
     );
+  const full = fullRunLimit(read.runLimit);
+  if (full)
+    lines.push(
+      `  The run limit is full (${describeRunLimit(full)}); nothing new starts until a run ends.`
+    );
   const held = read.hold !== null;
   for (const start of read.held) lines.push(...heldLines(start, served, held));
   if (read.queued.length === 0 && read.held.length === 0) lines.push('  none');
-  for (const start of read.queued) lines.push(...queuedLines(start, served, held));
+  for (const start of read.queued) lines.push(...queuedLines(start, read.runLimit, served, held));
   if (read.skipped.length > 0) {
     lines.push('', 'Refused starts:');
     for (const start of read.skipped) lines.push(...skippedLines(start));

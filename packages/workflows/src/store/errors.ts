@@ -1,5 +1,6 @@
 import type { ResourceBlocker } from '../resource-start-store';
 import { describeInstallHold, type InstallHold } from '../schemas/resource-start';
+import { describeRunLimit, type RunLimit } from '../schemas/run-limit';
 
 /** Only a zero-row pause CAS produces this error; storage failures must propagate. */
 export class WorkflowRunPauseConflictError extends Error {
@@ -79,5 +80,34 @@ export class InstallHeldError extends Error {
   constructor(public readonly hold: InstallHold) {
     super(`New runs are held on this install (${describeInstallHold(hold)}).`);
     this.name = 'InstallHeldError';
+  }
+}
+
+/**
+ * The install's run limit (`concurrency.runs`) is full and the run is not inside a tree that
+ * already counts, so it is not admitted now. Thrown by `admitPendingRun`,
+ * `claimPendingWorkflowRun` and `resumeWorkflowRun` (a hand start, or a failed tree's resume);
+ * nothing was written. A hand start that gets it waits and asks again, or is refused under
+ * `--no-wait`.
+ */
+export class RunLimitError extends Error {
+  constructor(public readonly runLimit: RunLimit) {
+    super(`The run limit is full (${describeRunLimit(runLimit)}).`);
+    this.name = 'RunLimitError';
+  }
+}
+
+/**
+ * A concurrency number in the install config (`concurrency.*`) is invalid, so what it
+ * governs is refused, never run without the limit. Thrown before anything is written; the
+ * message names the file, the key and the problem.
+ */
+export class ConcurrencyConfigError extends Error {
+  constructor(configPath: string, detail: string, refused: string) {
+    super(
+      `Invalid concurrency config in '${configPath}': ${detail}. ` +
+        `${refused} are refused until the config is fixed.`
+    );
+    this.name = 'ConcurrencyConfigError';
   }
 }
