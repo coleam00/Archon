@@ -74,7 +74,10 @@ function resolveOwnerRepo(
     // break docker-compose short-form volume specs (HOST:CONTAINER:OPT) (#1583).
     const parsed = parseOwnerRepo(codebaseName);
     if (parsed) return parsed;
-    getLog().warn({ codebaseName }, 'worktree.invalid_codebase_name_format');
+    // A bare name is how a repository with no remote is registered, so only a name
+    // that tried to be `owner/repo` (or carries ':' / '@') is worth a warning.
+    if (/[/:@]/.test(codebaseName))
+      getLog().warn({ codebaseName }, 'worktree.invalid_codebase_name_format');
   }
   if (isInsideArchonWorkspaces(repoPath)) {
     const parts = relative(resolve(getArchonWorkspacesPath()), resolve(repoPath)).split(/[/\\]/);

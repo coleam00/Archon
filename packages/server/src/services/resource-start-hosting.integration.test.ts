@@ -899,7 +899,7 @@ describe('server resource-start host', () => {
     expect(released).toBe(true);
   });
 
-  test.each(['missing-branch', 'missing-remote'] as const)(
+  test.each(['missing-branch', 'ambiguous-remote'] as const)(
     'isolation failure %s fails the run and frees the next drain',
     async failure => {
       const { deliver, engine } = await fixture(false, {
@@ -919,8 +919,12 @@ describe('server resource-start host', () => {
         },
       });
       expect((await bindingOf('second')).disposition?.status).toBe('queued');
-      if (failure === 'missing-remote')
-        await execFileAsync('git', ['remote', 'remove', 'origin'], { cwd: join(root, 'project') });
+      if (failure === 'ambiguous-remote')
+        for (const argv of [
+          ['remote', 'rename', 'origin', 'jan'],
+          ['remote', 'add', 'feb', join(root, 'origin.git')],
+        ])
+          await execFileAsync('git', argv, { cwd: join(root, 'project') });
       const host = { ...createSqlWorkflowHost(), engine };
       let diagnostic = '';
       try {

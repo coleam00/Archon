@@ -3166,11 +3166,13 @@ ids too long to fit in a branch name. Four consequences are worth knowing before
 for it:
 
 - **The branch starts from the repo's base branch, not the parent's.** The worktree is cut
-  from `origin/<baseBranch>` **in the canonical checkout**, not from the parent's working
+  from `<remote>/<baseBranch>` **in the canonical checkout**, not from the parent's working
   tree. The base is levels 3–5 of the [base-branch precedence
   table](/reference/cli/#base-branch-precedence): `worktree.baseBranch` in
   `.archon/config.yaml`, else the codebase's stored default branch, else git
-  auto-detection. Levels 1 and 2 are missing on purpose: **the per-dispatch `--base` / `--from`
+  auto-detection. A repository with no remote needs no fake one: each child is cut from
+  that local branch, or from the canonical checkout's current branch when none is set,
+  and nothing is fetched. Levels 1 and 2 are missing on purpose: **the per-dispatch `--base` / `--from`
   overrides and the parent item's landing branch do not change an isolated child's cut-from**, so
   `archon workflow run parent --base release/2.0` still cuts every isolated child from the
   repo's configured base. Its `$BASE_BRANCH` reports that provisioning base. If the branch
