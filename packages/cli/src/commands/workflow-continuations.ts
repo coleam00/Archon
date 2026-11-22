@@ -500,6 +500,68 @@ async function drainOwed(
   return ok;
 }
 
+/** What the two loops of one `wake` share: whether it is stopping, and a sleep stop ends. */
+interface WakeControl {
+  stopped(): boolean;
+  sleep(ms: number): Promise<void>;
+}
+
+/**
+ * Observation's own loop. It runs beside the continuation loop, not inside it, because a
+ * continuation pass awaits every resumed run to its end: a run that takes twenty minutes
+ * must not hold the waits it is not part of for twenty minutes. A one-shot wake observes
+ * once.
+ */
+/** A stop flag for both loops, and sleeps that a stop ends at once. */
+function wakeControl(): { control: WakeControl; stop: () => void } {
+  let stopped = false;
+  const sleeps = new Set<() => void>();
+  return {
+    control: {
+      stopped: () => stopped,
+      sleep: ms =>
+        new Promise<void>(resolve => {
+          const done = (): void => {
+            clearTimeout(timer);
+            sleeps.delete(done);
+            resolve();
+          };
+          const timer = setTimeout(done, ms);
+          sleeps.add(done);
+        }),
+    },
+    stop: () => {
+      stopped = true;
+      for (const done of [...sleeps]) done();
+    },
+  };
+}
+
+async function observeLoop(
+  host: WorkflowHost,
+  observation: WakeObservation | undefined,
+  watch: boolean,
+  json: boolean,
+  control: WakeControl
+): Promise<boolean> {
+  if (!observation) return true;
+  // Hosts whose observed starts are not yet handed on; see `drainOwed`.
+  const owed = new Set<string>();
+  let ok = true;
+  do {
+    try {
+      ok = (await observePass(host, observation, owed, json)) && ok;
+    } catch (error) {
+      ok = false;
+      if (json) await writeJsonLine({ ok: false, action: 'observe', error: errorMessage(error) });
+      else console.error(`observe: ${errorMessage(error)}`);
+    }
+    if (!watch || control.stopped()) break;
+    await control.sleep(5_000);
+  } while (!control.stopped());
+  return ok;
+}
+
 async function wake(
   host: WorkflowHost,
   args: string[],
@@ -510,17 +572,12 @@ async function wake(
   validateFlags(values, ['watch']);
   if (args.length) throw new Error('Usage: archon workflow wake [--watch] [--json]');
   await announceObserving(observation, values.watch === true, json);
-  let stopped = false;
-  let wakeSleep: (() => void) | undefined;
-  const stop = (): void => {
-    stopped = true;
-    wakeSleep?.();
-  };
+  const { control, stop } = wakeControl();
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
   let ok = true;
-  // Hosts whose observed starts are not yet handed on; see `drainOwed`.
-  const owed = new Set<string>();
+  let observedOk = true;
+  const observing = observeLoop(host, observation, values.watch === true, json, control);
   const loaded = await loadedEngine(values.watch === true, json);
   try {
     do {
@@ -534,10 +591,7 @@ async function wake(
           new Date(),
           (run, cursor) => admit(host, run, cursor, cleanup => cleanups.push(cleanup))
         );
-        const passOk = await report('wake', await Promise.all(outcomes.map(settle)), json);
-        // Observed after the continuations, whether or not they all succeeded.
-        const observedOk = await observePass(host, observation, owed, json);
-        ok = passOk && observedOk && ok;
+        ok = (await report('wake', await Promise.all(outcomes.map(settle)), json)) && ok;
       } catch (error) {
         ok = false;
         if (json) await writeJsonLine({ ok: false, action: 'wake', error: errorMessage(error) });
@@ -545,19 +599,15 @@ async function wake(
       } finally {
         await Promise.all(cleanups.map(cleanup => cleanup()));
       }
-      if (!values.watch || stopped) break;
-      await new Promise<void>(resolve => {
-        const timer = setTimeout(resolve, 5_000);
-        wakeSleep = (): void => {
-          clearTimeout(timer);
-          resolve();
-        };
-      });
-      wakeSleep = undefined;
-    } while (!stopped);
+      if (!values.watch || control.stopped()) break;
+      await control.sleep(5_000);
+    } while (!control.stopped());
   } finally {
+    // The observation loop ends with this one, after the pass it is in.
+    stop();
+    observedOk = await observing;
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
   }
-  return ok ? 0 : 1;
+  return [ok, observedOk].every(Boolean) ? 0 : 1;
 }

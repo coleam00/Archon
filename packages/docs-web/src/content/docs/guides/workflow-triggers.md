@@ -1018,7 +1018,7 @@ An install that receives no webhooks, such as a laptop or a machine behind NAT w
 
 `everySeconds` is an integer of at least 15; an invalid file fails with its path and each wrong field. Put the source's bindings in `bindings` as for a webhook. Leave out `webhookSecretEnv` when the source receives no webhooks; it then refuses every delivery. A source module that cannot observe fails to load when `observe` is set.
 
-[`archon workflow wake`](/reference/cli/#workflow-wake) observes on every invocation, and `workflow wake --watch` (what `archon workflow wake schedule install` runs) observes each source once per interval. A running `archon serve` with the same file observes on its own timer and logs `webhook_source_observing` with the source and interval at boot. Set `ARCHON_WEBHOOK_SOURCES` where the process reads it: `~/.archon/.env` is read by both.
+[`archon workflow wake`](/reference/cli/#workflow-wake) observes on every invocation, and `workflow wake --watch` (what `archon workflow wake schedule install` runs) observes each source once per interval, also while runs it resumed are still running. A running `archon serve` with the same file observes on its own timer and logs `webhook_source_observing` with the source and interval at boot. Set `ARCHON_WEBHOOK_SOURCES` where the process reads it: `~/.archon/.env` is read by both.
 
 A pass reads the open waits. When none is open, it reads nothing from the forge. Otherwise it reads, through your forge plugin and credentials as [`archon forge`](/reference/cli/#forge) does, what each wait's binding is about:
 

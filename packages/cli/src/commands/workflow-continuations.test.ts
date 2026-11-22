@@ -603,7 +603,8 @@ test('watch says what it observes, and starts what an observed wait admitted on 
     action: 'wake',
     observe: [{ source: 'github', everySeconds: 60 }],
   });
-  expect(output[2]).toEqual({
+  // The observation loop runs beside the continuation pass, so its line has no fixed place.
+  expect(output.find(line => (line as { action?: string }).action === 'observe')).toEqual({
     ok: true,
     action: 'observe',
     source: 'github',
@@ -626,18 +627,18 @@ test('a host whose drain failed is drained again on the next pass, with no new o
     originalTimeout(callback, 0)
   );
   const observed = observation(['woken']);
-  // The wait closed when its receipt was recorded, so the next pass observes nothing.
+  // The wait closed when its receipt was recorded, so the next pass observes nothing; the
+  // third observation pass stops the watch.
   observed.pass
     .mockImplementationOnce(async () => [
       { source: 'github', waits: 1, reads: 1, receipts: ['woken'], conflicts: 0, unserved: [] },
     ])
-    .mockImplementationOnce(async () => []);
+    .mockImplementationOnce(async () => [])
+    .mockImplementation(async () => {
+      process.emit('SIGTERM');
+      return [];
+    });
   drain.mockRejectedValueOnce(new Error('database unavailable'));
-  scan.mockImplementationOnce(async () => []);
-  scan.mockImplementationOnce(async () => {
-    process.emit('SIGTERM');
-    return [];
-  });
   try {
     expect(
       await workflowContinuationCommand(
@@ -659,6 +660,54 @@ test('a host whose drain failed is drained again on the next pass, with no new o
       'build-host',
       'build-host',
     ]);
+  } finally {
+    timer.mockRestore();
+  }
+});
+
+test('watch keeps observing at its interval while a resumed run is still running', async () => {
+  const originalTimeout = globalThis.setTimeout;
+  const timers: {
+    setTimeout(callback: () => void, delay?: number): ReturnType<typeof setTimeout>;
+  } = globalThis;
+  const timer = spyOn(timers, 'setTimeout').mockImplementation((callback: () => void) =>
+    originalTimeout(callback, 0)
+  );
+  let finish!: (value: { success: true; workflowRunId: string }) => void;
+  const settled = new Promise<{ success: true; workflowRunId: string }>(resolve => {
+    finish = resolve;
+  });
+  scan.mockImplementationOnce(async () => [
+    { runId: 'long', kind: 'accepted', run: makeTestWorkflowRun(), settled },
+  ]);
+  const observed = observation([]);
+  let passes = 0;
+  // The resumed run ends only once three observation passes have run beside it.
+  observed.pass.mockImplementation(async () => {
+    passes += 1;
+    if (passes === 3) {
+      finish({ success: true, workflowRunId: 'long' });
+      process.emit('SIGTERM');
+    }
+    return [];
+  });
+  try {
+    expect(
+      await workflowContinuationCommand(
+        host,
+        'wake',
+        [],
+        { json: true, watch: true },
+        async () => observed.value
+      )
+    ).toBe(0);
+    expect(passes).toBe(3);
+    expect(output).toContainEqual(
+      expect.objectContaining({
+        action: 'wake',
+        outcomes: [expect.objectContaining({ runId: 'long', status: 'completed' })],
+      })
+    );
   } finally {
     timer.mockRestore();
   }
