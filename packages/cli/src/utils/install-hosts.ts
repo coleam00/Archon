@@ -1,9 +1,11 @@
 /**
- * Which trigger hosts a CLI process drains, in one place: the hosts this install's trigger
- * files name (`ARCHON_HOME/triggers`), plus the host the process is declared to serve. A
- * host known only from queued work in the store belongs to another machine and is left to
- * that machine's drain. A run end, each `workflow wake` pass and `hold lift` all drain
- * through here, so a policy on who may drain a host has one place to apply.
+ * Which trigger hosts a CLI process drains on its own, in one place: the hosts this
+ * install's trigger files name (`ARCHON_HOME/triggers`). The one exception is the run end
+ * of a `trigger execute --host <hostId>` process, which also drains `<hostId>`: a drain of
+ * that host handed it its run. A host known only from the store, or from a setting such as
+ * `ARCHON_TRIGGER_HOST`, belongs to another machine or process and is left to its drain.
+ * A run end, each `workflow wake` pass and `hold lift` all drain through here, so a policy
+ * on who may drain a host has one place to apply.
  */
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { drainResourceStartHost } from '@archon/core/workflows/resource-start-host';
@@ -14,25 +16,30 @@ import {
   collectCredentialValues,
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
-import { cliOwnTriggerHost } from './workflow-host';
 
-/** The hosts a drain from this process covers, and the trigger files that did not read. */
+/**
+ * The hosts a drain from this process covers, and the trigger files that did not read.
+ * `executorHost` is the `--host` of a `trigger execute` process, for its run end only.
+ */
 export async function installHosts(
-  ownHost: string | undefined
+  executorHost?: string
 ): Promise<{ hostIds: string[]; failures: Error[] }> {
   const named = await readTriggerFileHosts(getTriggersPath());
   return {
-    hostIds: [...new Set([...(ownHost === undefined ? [] : [ownHost]), ...named.hostIds])],
+    hostIds: [
+      ...new Set([...(executorHost === undefined ? [] : [executorHost]), ...named.hostIds]),
+    ],
     failures: named.failures,
   };
 }
 
 /**
- * The hosts a drain from this process covers, for a reader that tells an operator what
- * admits a waiting start. A trigger file that does not read is reported by the drains.
+ * The hosts this install's run ends and wake passes drain, for a reader that tells an
+ * operator what admits a waiting start. A trigger file that does not read is reported by
+ * the drains.
  */
 export async function servedHosts(): Promise<ReadonlySet<string>> {
-  return new Set((await installHosts(cliOwnTriggerHost())).hostIds);
+  return new Set((await installHosts()).hostIds);
 }
 
 export interface InstallHostsDrain {
@@ -49,11 +56,11 @@ export interface InstallHostsDrain {
 export async function drainInstallHosts(
   host: WorkflowHost,
   options: {
-    ownHost: string | undefined;
+    executorHost?: string;
     dispatch: (requestId: string, hostId: string) => Promise<StartedExecutor | null>;
   }
 ): Promise<InstallHostsDrain> {
-  const { hostIds, failures: fileFailures } = await installHosts(options.ownHost);
+  const { hostIds, failures: fileFailures } = await installHosts(options.executorHost);
   const failures: InstallHostsDrain['failures'] = fileFailures.map(error => ({ error }));
   for (const hostId of hostIds) {
     try {

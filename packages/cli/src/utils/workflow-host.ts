@@ -6,23 +6,19 @@ import type { IWorkflowStore } from '@archon/workflows/store';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import { trackerExit } from './tracker-exit';
 
-/**
- * The trigger host this process serves, if any: the `--host` a `trigger execute` process
- * runs as, otherwise `ARCHON_TRIGGER_HOST`. Never guessed, because a binding names the
- * host its work executes on.
- */
-export function cliOwnTriggerHost(executeHost?: string): string | undefined {
-  return executeHost ?? (process.env.ARCHON_TRIGGER_HOST?.trim() || undefined);
-}
-
 /** A host that executes workflows: it can start, resume or pause runs. */
 export interface CliWorkflowExecution {
   forgeTrustedEnv: NodeJS.ProcessEnv;
 }
 
+/**
+ * `executorHost` is set only in a `trigger execute --host <hostId>` process: a drain of
+ * that host handed it its run, so its run end drains that host too, beside the hosts the
+ * install's trigger files name. No other process has a host of its own here.
+ */
 export async function createCliWorkflowHost(
   execution?: CliWorkflowExecution,
-  ownTriggerHost = cliOwnTriggerHost()
+  executorHost?: string
 ): Promise<WorkflowHost> {
   const executesWorkflow = execution !== undefined;
   if (execution) await trackerExit.prepare(execution.forgeTrustedEnv);
@@ -30,7 +26,7 @@ export async function createCliWorkflowHost(
   let host: WorkflowHost | undefined;
   const wrapStore = async <S extends IWorkflowStore>(store: S): Promise<S> => {
     const { drainAfterRunEnds } = await import('@archon/core/workflows/run-end-drain');
-    return drainAfterRunEnds(store, await afterRunEnded(() => host, ownTriggerHost));
+    return drainAfterRunEnds(store, await afterRunEnded(() => host, executorHost));
   };
   if ((await loadStoreSelection()) === 'files') {
     if (executesWorkflow) {
@@ -61,7 +57,7 @@ export async function createCliWorkflowHost(
  */
 async function afterRunEnded(
   getHost: () => WorkflowHost | undefined,
-  ownTriggerHost: string | undefined
+  executorHost: string | undefined
 ): Promise<(runId: string, caused: readonly SourceReceiptAcceptance[]) => Promise<void>> {
   const { serializedDrain } = await import('@archon/core/workflows/run-end-drain');
   // Loaded only when an end happens, so a process that ends no run pays nothing.
@@ -78,7 +74,7 @@ async function afterRunEnded(
     const host = getHost();
     if (!host) return;
     const { drainInstallHosts, dispatch } = await starting(host);
-    const { failures } = await drainInstallHosts(host, { ownHost: ownTriggerHost, dispatch });
+    const { failures } = await drainInstallHosts(host, { executorHost, dispatch });
     if (failures.length > 0)
       throw new AggregateError(
         failures.map(failure => failure.error),
@@ -91,7 +87,7 @@ async function afterRunEnded(
     const host = getHost();
     if (!host) return;
     createLogger('cli.run-end-drain').debug(
-      { workflowRunId: runId, ownTriggerHost, caused: caused.length },
+      { workflowRunId: runId, executorHost, caused: caused.length },
       'run_end_drain'
     );
     const byHost = new Map<string, Set<string>>();

@@ -9,7 +9,6 @@ import { describeInstallHold } from '@archon/workflows/schemas/resource-start';
 import { writeJsonLine } from '../utils/stdout';
 import { resolveCliUserId } from './auth';
 import { drainFailureReasons, drainInstallHosts } from '../utils/install-hosts';
-import { cliOwnTriggerHost } from '../utils/workflow-host';
 import type { TriggerDispatch } from './trigger';
 
 async function setHold(host: WorkflowHost, json: boolean): Promise<number> {
@@ -37,7 +36,7 @@ async function liftHold(
   const lifted = await host.deps.store.liftInstallHold();
   // Drained after the lift, so a start held until the last moment is not left for a later pass.
   const drained = lifted
-    ? await drainInstallHosts(host, { ownHost: cliOwnTriggerHost(), dispatch })
+    ? await drainInstallHosts(host, { dispatch })
     : { hostIds: [], failures: [] };
   const hostIds = drained.hostIds;
   const failures = drained.failures.map(failure => ({

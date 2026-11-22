@@ -18,6 +18,7 @@ const saved = {
   home: process.env.ARCHON_HOME,
   database: process.env.DATABASE_URL,
   user: process.env.ARCHON_USER_ID,
+  triggerHost: process.env.ARCHON_TRIGGER_HOST,
 };
 let root = '';
 
@@ -35,6 +36,7 @@ afterEach(async () => {
     ['ARCHON_HOME', saved.home],
     ['DATABASE_URL', saved.database],
     ['ARCHON_USER_ID', saved.user],
+    ['ARCHON_TRIGGER_HOST', saved.triggerHost],
   ] as const) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -149,6 +151,8 @@ test('a fire under the hold is listed as held and starts exactly once after the 
   expect(heldDrain).toEqual({ hostId: 'host', drained: false, hold });
   expect(dispatched).toEqual([]);
 
+  // A host named only by ARCHON_TRIGGER_HOST is not one this install drains.
+  process.env.ARCHON_TRIGGER_HOST = 'other-host';
   const [lifted] = await jsonLines(() => holdCommand(host, 'lift', { json: true }, dispatch));
   expect(lifted).toEqual({
     lifted: hold,

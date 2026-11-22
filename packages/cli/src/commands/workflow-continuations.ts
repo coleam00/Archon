@@ -21,7 +21,6 @@ import { engineFingerprint } from '../utils/engine-fingerprint';
 import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
 import { drainFailureReasons, drainInstallHosts } from '../utils/install-hosts';
-import { cliOwnTriggerHost } from '../utils/workflow-host';
 
 import {
   installNativeSchedule,
@@ -395,7 +394,6 @@ async function drainPass(host: WorkflowHost): Promise<string[]> {
   let failures: { hostId?: string; error: unknown }[];
   try {
     ({ failures } = await drainInstallHosts(host, {
-      ownHost: cliOwnTriggerHost(),
       // Loaded only when a start is admitted, so a pass that admits nothing pays nothing.
       dispatch: async (requestId, hostId) =>
         (await import('../utils/spawn-admitted')).spawnAdmitted(host, requestId, hostId),

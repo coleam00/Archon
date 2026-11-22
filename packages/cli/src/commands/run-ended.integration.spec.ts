@@ -1342,5 +1342,10 @@ describe('a run end on a trigger host', () => {
     expect(started.exitCode, started.stdout + started.stderr).toBe(0);
     expect(readFileSync(join(fixture.projectRoot, 'quick-ran'), 'utf8')).toBe('ran\n');
     expect(queued()).toEqual([{ status: 'queued' }]);
+
+    // A wake pass does not take a host from ARCHON_TRIGGER_HOST either: no trigger file
+    // here names other-host, so its start stays queued for that host's own drain.
+    await fixture.cli(['workflow', 'wake'], { ARCHON_TRIGGER_HOST: 'other-host' });
+    expect(queued()).toEqual([{ status: 'queued' }]);
   }, 90_000);
 });
