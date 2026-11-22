@@ -24,6 +24,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import { landingCreateCommand } from '@archon/core/workflows/item-landing';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { itemReadSchema } from '@archon/workflows/item-read';
 import { itemWindowSchema } from '@archon/workflows/item-window';
@@ -31,6 +32,7 @@ import { itemLinkSchema } from '@archon/workflows/schemas/item-link';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
 import { captureWorkflowCommand } from '../test-support/command';
 import * as workflowScope from '../workflow-scope';
+import { projectAddCommand } from './project';
 import { workflowLinkCommand } from './workflow-link';
 import { workflowItemsCommand } from './workflow-items';
 import { workflowLandingCommand } from './workflow-landing';
@@ -554,11 +556,128 @@ test.serial(
     const refused = await start({ item: 'lonely' });
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr).toContain("'feat/missing' is not on remote 'origin'");
+    const [{ default_cwd: checkout } = { default_cwd: '' }] = rows<{ default_cwd: string }>(
+      'SELECT default_cwd FROM remote_agent_codebases'
+    );
+    // Built by the same function, so a checkout path that needs quoting (Windows, a space)
+    // matches; the core test proves the quoting survives a shell.
+    const createCommand = landingCreateCommand('lonely', 'feat/missing', checkout);
+    expect(createCommand).toContain('--item lonely --branch feat/missing --from <start-point>');
+    expect(refused.stderr).toContain(createCommand);
     expect(worktrees()).toBe(before);
     expect(readFileSync(out, 'utf8')).toBe('untouched');
+    // A member's refusal names the item that records the branch, and a start made from
+    // another directory with `--project` still names the selected project's checkout.
+    succeeded(
+      await invoke(host =>
+        workflowLinkCommand(
+          host,
+          projectRoot,
+          { item: 'lonely-member', kind: 'part_of', to: 'lonely' },
+          true,
+          callerEnv
+        )
+      )
+    );
+    const memberRefused = await start(
+      { item: 'lonely-member', codebaseId: selected?.id, discoveryCwd: projectRoot },
+      elsewhere
+    );
+    expect(memberRefused.exitCode).not.toBe(0);
+    expect(memberRefused.stderr).toContain(createCommand);
+
+    // The command it names creates the branch from the start point; runs are cut from it.
+    const remoteSha = (branch: string) =>
+      Bun.spawnSync(['git', 'ls-remote', remote, `refs/heads/${branch}`])
+        .stdout.toString()
+        .split('\t')[0];
+    // Run from the directory the printed `--cwd` names, as the command would be.
+    const create = (item: string, branch: string, from: string) =>
+      invoke(host =>
+        workflowLandingCommand(host, checkout, { item, branch, from }, true, callerEnv)
+      );
+    expect(succeeded(await create('lonely', 'feat/missing', 'feat/order'))).toMatchObject({
+      branch: 'feat/missing',
+      create: { remote: 'origin', status: 'created', commit: remoteSha('feat/order') },
+    });
+    expect(remoteSha('feat/missing')).toBe(remoteSha('feat/order'));
+    const cut = await start({ item: 'lonely' });
+    expect(cut.exitCode, cut.stderr).toBe(0);
+    expect(readFileSync(out, 'utf8').trim()).toBe('feat/missing from-feat');
+    writeFileSync(out, 'untouched');
+    const inherited = await start({ item: 'lonely-member' });
+    expect(inherited.exitCode, inherited.stderr).toBe(0);
+    expect(readFileSync(out, 'utf8').trim()).toBe('feat/missing from-feat');
+
+    // Creating a branch the remote has leaves it where it is, even when the start point
+    // descends from it and a plain push would fast-forward it.
+    git(['checkout', '-q', '-b', 'ahead', 'feat/order']);
+    git(['commit', '-q', '--allow-empty', '-m', 'ahead']);
+    git(['checkout', '-q', 'main']);
+    const existing = remoteSha('feat/missing');
+    expect(succeeded(await create('lonely', 'feat/missing', 'ahead'))).toMatchObject({
+      create: { remote: 'origin', status: 'exists' },
+    });
+    expect(remoteSha('feat/missing')).toBe(existing);
+
+    // The file store cannot record a landing, so the remote is left untouched.
+    const config = join(archonHome, 'config.yaml');
+    const saved = readFileSync(config, 'utf8');
+    writeFileSync(config, `${saved}\nstore: files\n`);
+    try {
+      succeeded(await invoke(host => projectAddCommand(host, { path: projectRoot, json: true })));
+      const onFiles = await create('on-files', 'feat/on-files', 'main');
+      expect(onFiles.exitCode).not.toBe(0);
+      expect(JSON.parse(onFiles.stdout).error).toContain('store: files');
+    } finally {
+      writeFileSync(config, saved);
+    }
+    expect(remoteSha('feat/on-files')).toBe('');
+
+    // `--item-of` finds the run's project wherever it is called from, and creates there.
+    const ofRun = await invoke(host =>
+      workflowLandingCommand(
+        host,
+        elsewhere,
+        { itemOf: memberRun?.id ?? '', branch: 'feat/of-run', from: 'main' },
+        true,
+        callerEnv
+      )
+    );
+    expect(succeeded(ofRun)).toMatchObject({
+      branch: 'feat/of-run',
+      create: { status: 'created' },
+    });
+    expect(remoteSha('feat/of-run')).toBe(remoteSha('main'));
+
+    // A record the store would refuse is refused before anything is pushed.
+    expect((await create('', 'feat/no-item', 'main')).exitCode).toBe(1);
+    const noIdentity = await invoke(host =>
+      workflowLandingCommand(
+        host,
+        projectRoot,
+        { item: 'fresh', branch: 'feat/no-identity', from: 'main' },
+        true,
+        { ...callerEnv, WORKFLOW_ID: 'run-1' }
+      )
+    );
+    expect(noIdentity.exitCode).toBe(1);
+    expect(remoteSha('feat/no-item')).toBe('');
+    expect(remoteSha('feat/no-identity')).toBe('');
+
+    // A start point that names no commit records nothing.
+    const unresolved = await create('fresh', 'feat/fresh', 'no-such-ref');
+    expect(unresolved.exitCode).toBe(1);
+    expect(remoteSha('feat/fresh')).toBe('');
+    expect(
+      rows(
+        `SELECT 1 FROM remote_agent_item_landings l JOIN remote_agent_items i
+           ON i.id = l.item_id WHERE i.key = 'fresh'`
+      )
+    ).toEqual([]);
   },
-  // Five real runs, each cutting a worktree.
-  60_000
+  // Seven real runs, each cutting a worktree.
+  90_000
 );
 
 test.serial(

@@ -1506,7 +1506,8 @@ it and records no branch of its own. A work order made of several items records 
 once, links its members to it, and their changes land together on that branch.
 
 ```bash
-archon workflow landing --item WO-12 --branch feat/checkout-redesign
+# The project's remote is origin here; name your remote's tracking branch.
+archon workflow landing --item WO-12 --branch feat/checkout-redesign --from origin/main
 archon workflow link --item issue-42 --kind part_of --to WO-12
 ```
 
@@ -1515,13 +1516,32 @@ archon workflow link --item issue-42 --kind part_of --to WO-12
 | `--item <key>` | The item, in the project the working directory belongs to. A key nothing has named yet writes the item |
 | `--item-of <run-id>` | In place of `--item`: the item the run is on (its root run's, for a `workflow:` child), in that item's project whatever the working directory. A run on no item exits 1 with `error: "no_item"` |
 | `--branch <name>` | The branch it lands on; must be a valid branch name |
-| `--json` | Print `{ branch, recordedAt, fromRun }`, or `{ ok: false, error }` |
+| `--from <start-point>` | Create the branch on the project's remote from this start point before recording it (alias `--from-branch`) |
+| `--json` | Print `{ branch, recordedAt, fromRun }`, with `create` added when `--from` is given, or `{ ok: false, error }` |
 
 Recording again replaces the branch. A run already started keeps the base it recorded.
-Recording does not check the remote, so a branch may be recorded before it is pushed. A run
-checks it when it starts: a branch the project's remote (`worktree.remote`, else the
-automatically selected one) does not have refuses the run before its first node, naming the
-branch, the remote and where the branch came from. It never falls back to the base branch.
+
+Without `--from`, the command only records, and does not check the remote, so a branch may
+be recorded before it exists. With `--from`, it creates the branch on the remote first and
+records it second. The item key and the calling node are checked before the push, so a
+create that fails, or a record that would be refused, leaves the remote and the item as they
+were. The remote is the one runs use: `worktree.remote`, else the automatically selected one.
+A folder project, or a project with no remote, is refused. The start point resolves in the
+project's repository after a fetch of that remote, as
+[`workflow run --from`](#workflow-run-name-message) does: a commit, a local branch, or a
+remote-tracking branch. Name `<remote>/main` for that remote's tip of `main`, such as
+`origin/main`, or `upstream/main` when `worktree.remote` is `upstream`. Only that remote is
+fetched, so another remote's tracking branch may be stale. There is no implicit default. A branch the remote already has is left where it is, never moved, and is
+still recorded. `create` in the JSON output is `{ remote, status: "created", commit }` or
+`{ remote, status: "exists" }`. Nothing else creates a landing branch: a start never does.
+
+A run checks the branch when it starts: a branch the project's remote does not have refuses
+the run before its first node, naming the branch, the remote, where the branch came from, and
+the command that creates it (`archon workflow landing --cwd <checkout> --item <key> --branch
+<name> --from <start-point>`, filled in with the project's checkout and the item that records
+it, each value shell-quoted when it needs quoting). `--cwd` keeps the command on that project
+when it is run from another directory, as after a `--project` start. It never falls back to
+the base branch.
 
 The branch a run takes is found in this order: `--base` on the dispatch; the item's own
 branch; the branch of the item it is `part_of` through an active link, nearest first (a
@@ -1530,8 +1550,10 @@ Two items at the same distance with different branches refuse the run, naming bo
 the branch on the item itself to settle it. Then come the existing sources: a trigger
 binding's `launch.isolation.baseOverride`, `worktree.baseBranch`, the codebase default and
 the remote's HEAD. Called from inside a workflow node, it records the node's run and node as
-`fromRun`. It exits 1 for an invalid branch name or a directory with no registered project.
-`workflow runs --item <key>` shows the branch and where it came from. It needs the database store.
+`fromRun`. It exits 1 for an invalid branch name, a directory with no registered project, a
+`--from` that names no commit, or a create the remote refused.
+`workflow runs --item <key>` shows the branch and where it came from. It needs the database store;
+with `store: files`, `--from` is refused before anything is pushed.
 
 ### `workflow attention label`
 
