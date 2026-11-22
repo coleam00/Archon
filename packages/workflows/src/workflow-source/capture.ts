@@ -23,7 +23,8 @@ import {
   liveSourceRoots,
   type InstalledPacksRoot,
 } from './roots';
-import { copyListing, isDirectory, listTree, projectSourceDirs } from './tree';
+import { copyListing, isDirectory, listTree, projectSourceDirs, type TreeListing } from './tree';
+import { sourcePackFiles } from './source-pack';
 import { getLog } from './log';
 
 /**
@@ -41,6 +42,8 @@ interface CaptureJob {
   dest: string;
   from: string;
   scope: Exclude<CapturedScope, 'bundled'>;
+  /** The files to copy, when not the whole tree under `from`. */
+  listing?: TreeListing;
 }
 
 /** The installed packs a capture copies, and what its manifest records about them. */
@@ -137,7 +140,11 @@ async function isFile(path: string): Promise<boolean> {
   }
 }
 
-/** The project and global source directories that exist. */
+/**
+ * The project and global source directories that exist. A source that is a pack folder
+ * also freezes the pack's files at the capture's project root, manifest included, so the
+ * captured roots read it through `sourcePackFolder` exactly as the live source was read.
+ */
 async function mutableScopeJobs(
   sourceRoot: string,
   commandFolder: string | undefined
@@ -147,6 +154,10 @@ async function mutableScopeJobs(
     const from = join(sourceRoot, dir);
     if (await isDirectory(from))
       jobs.push({ dest: join(PROJECT_SCOPE_DIR, dir), from, scope: 'project' });
+  }
+  const packFiles = await sourcePackFiles(sourceRoot);
+  if (packFiles !== null) {
+    jobs.push({ dest: PROJECT_SCOPE_DIR, from: sourceRoot, scope: 'project', listing: packFiles });
   }
   for (const [name, from] of [
     ['workflows', archonPaths.getHomeWorkflowsPath()],
@@ -206,7 +217,7 @@ async function stageCapture(
   for (const job of jobs) {
     const target = join(staging, job.dest);
     await mkdir(dirname(target), { recursive: true });
-    const copied = await copyListing(await listTree(job.from), target);
+    const copied = await copyListing(job.listing ?? (await listTree(job.from)), target);
     fileCount += copied.files;
     byteCount += copied.bytes;
   }

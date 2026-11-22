@@ -311,27 +311,41 @@ export async function loadPackagedWorkflowsFromDir(
   const result: DirLoadResult = { workflows: new Map(), errors };
   const collided = new Set<string>();
   for (const pack of packs) {
-    const loaded = await loadPackWorkflows(
-      { ...context, pack: pack.name, source, label: pack.name },
-      pack.path
-    );
-    result.errors.push(...loaded.errors);
-    for (const { filename, parsed } of loaded.files) {
-      if (result.workflows.has(filename) || collided.has(filename)) {
-        result.workflows.delete(filename);
-        collided.add(filename);
-        result.errors.push({
-          filename,
-          error: `Workflow filename collision across packaged folders: '${filename}'. Workflow filenames must be unique within a scope.`,
-          errorType: 'validation_error',
-        });
-        continue;
-      }
-      result.workflows.set(filename, parsed);
-    }
+    await addPackToScope(context, result, collided, { ...pack, source });
   }
-
   return result;
+}
+
+/**
+ * Load one pack into a scope's packaged result. Two workflows of the scope's packs with
+ * one filename both fail: a scope keys workflows by filename, so either would silently
+ * replace the other. A pack-folder source is loaded through this too, so a pack folder
+ * and a pack in `.archon/workflows` fail a filename collision the same way.
+ */
+export async function addPackToScope(
+  context: WorkflowParseContext,
+  result: DirLoadResult,
+  collided: Set<string>,
+  pack: { name: string; path: string; source: WorkflowSource }
+): Promise<void> {
+  const loaded = await loadPackWorkflows(
+    { ...context, pack: pack.name, source: pack.source, label: pack.name },
+    pack.path
+  );
+  result.errors.push(...loaded.errors);
+  for (const { filename, parsed } of loaded.files) {
+    if (result.workflows.has(filename) || collided.has(filename)) {
+      result.workflows.delete(filename);
+      collided.add(filename);
+      result.errors.push({
+        filename,
+        error: `Workflow filename collision across packaged folders: '${filename}'. Workflow filenames must be unique within a scope.`,
+        errorType: 'validation_error',
+      });
+      continue;
+    }
+    result.workflows.set(filename, parsed);
+  }
 }
 
 /**

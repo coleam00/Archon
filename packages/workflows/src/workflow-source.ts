@@ -65,6 +65,7 @@ export {
   listInstalledPacks,
   packDirectory,
   packagedWorkflowDirectory,
+  splitInstalledPackKey,
   type InstalledPack,
 } from './workflow-source/installed-packs';
 export {
@@ -76,6 +77,12 @@ export {
   WorkflowSourceUnavailableError,
 } from './workflow-source/integrity';
 export type { WorkflowSourceCapture, WorkflowSourceManifest } from './workflow-source/manifest';
+export {
+  AmbiguousSourcePackError,
+  loadablePackFolder,
+  sourcePackFolder,
+  type SourcePackFolder,
+} from './workflow-source/source-pack';
 export { captureWorkflowSource, recordSelectedWorkflow } from './workflow-source/capture';
 export { projectSourceDirs } from './workflow-source/tree';
 export {

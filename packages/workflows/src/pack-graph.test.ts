@@ -535,6 +535,8 @@ describe('a pack graph', () => {
     const graph = graphOf(stages(stage('a', ['ready'])), { declared: undefined, installed: [] });
     const newer = {
       ...graph,
+      loaded: [],
+      otherCopies: [],
       laterField: 1,
       stages: graph.stages.map(s => ({ ...s, laterField: true })),
     };
