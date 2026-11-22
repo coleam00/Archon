@@ -116,7 +116,7 @@ export async function bindAgentNode(
           }
         : {}),
       ...(nodeMcp.kind === 'unavailable' ? { mcpUnavailable: nodeMcp.record } : {}),
-      ...(nodeSkills.unavailable.length > 0 ? { skillsUnavailable: nodeSkills.unavailable } : {}),
+      ...skillsDiagnostic(nodeSkills.unavailable),
     },
   };
   getLog().info({ nodeId: node.id, provider }, 'dag_node_started');
@@ -138,19 +138,31 @@ export async function bindAgentNode(
       request.nodeContext
     );
   }
-  if (nodeSkills.unavailable.length > 0) {
-    getLog().warn(
-      { nodeId: node.id, skills: nodeSkills.unavailable },
-      'dag.skills_optional_unavailable'
-    );
-    await safeSendMessage(
-      ctx.platform,
-      ctx.conversationId,
-      optionalSkillsLine(node.id, provider, nodeSkills.unavailable),
-      request.nodeContext
-    );
-  }
+  await reportOptionalSkills(ctx, node.id, provider, nodeSkills.unavailable, request.nodeContext);
   return { capabilities, nodeMcp, nodeSkills, aiClient, execution };
+}
+
+function skillsDiagnostic(
+  unavailable: NodeSkillsResolution['unavailable']
+): { skillsUnavailable: NodeSkillsResolution['unavailable'] } | Record<string, never> {
+  return unavailable.length > 0 ? { skillsUnavailable: unavailable } : {};
+}
+
+async function reportOptionalSkills(
+  ctx: RunLayersContext,
+  nodeId: string,
+  provider: string,
+  unavailable: NodeSkillsResolution['unavailable'],
+  nodeContext: SendMessageContext
+): Promise<void> {
+  if (unavailable.length === 0) return;
+  getLog().warn({ nodeId, skills: unavailable }, 'dag.skills_optional_unavailable');
+  await safeSendMessage(
+    ctx.platform,
+    ctx.conversationId,
+    optionalSkillsLine(nodeId, provider, unavailable),
+    nodeContext
+  );
 }
 
 function skillSources(
