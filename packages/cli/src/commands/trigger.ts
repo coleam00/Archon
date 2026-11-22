@@ -33,6 +33,7 @@ import {
   type AwaitingExecution,
   type StartBindingInspection,
 } from '@archon/workflows/resource-start-store';
+import { fullRunLimit } from '@archon/workflows/schemas/run-limit';
 import {
   describeInstallHold,
   mappedItemKey,
@@ -163,17 +164,15 @@ async function triggerWhoami(host: WorkflowHost): Promise<void> {
  * And `refusedBindings`: its bindings whose preparation failed or was refused, each with
  * the failed boundary and, for a refusal of the pack's forge needs, the reasons and remedies.
  * `hold` is the install hold when the receipt has a start it keeps (a binding not yet
- * prepared, or a queued request), else null. `runLimit` is the install's run limit while it
- * is full and the receipt has a queued request, which then waits at least for a run to end;
- * else null.
+ * prepared, or a queued request), else null. `runLimit` is the run limit while it is full
+ * and the receipt has a queued request, which then waits for a run to end, else null.
  */
 async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise<void> {
   const receipts = await host.deps.store.listStartReceipts(
     options.limit === undefined ? undefined : Number(options.limit)
   );
   const hold = await host.deps.store.getInstallHold();
-  const runLimit = await host.deps.store.getRunLimit();
-  const fullRunLimit = runLimit && runLimit.live >= runLimit.limit ? runLimit : null;
+  const runLimit = fullRunLimit(await host.deps.store.getRunLimit());
   await writeJsonLine(
     await Promise.all(
       receipts.map(async receipt => {
@@ -190,10 +189,7 @@ async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise
               forgeRefusal,
             })),
           hold: hold && bindings.some(heldBinding) ? hold : null,
-          runLimit:
-            fullRunLimit && bindings.some(binding => binding.requestStatus === 'queued')
-              ? fullRunLimit
-              : null,
+          runLimit: bindings.some(binding => binding.requestStatus === 'queued') ? runLimit : null,
         };
       })
     )

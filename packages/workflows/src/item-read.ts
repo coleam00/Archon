@@ -63,12 +63,12 @@ import { awaitingExecutionSchema } from './schemas/start-executor';
 import {
   installHoldSchema,
   queuedItemStartSchema,
-  runLimitSchema,
   type QueuedItemStart,
   readResourceStartReceiptId,
   startCause,
   startCauseSchema,
 } from './schemas/resource-start';
+import { runLimitSchema } from './schemas/run-limit';
 import type { IWorkflowStore } from './store';
 import {
   awaitingExecution,

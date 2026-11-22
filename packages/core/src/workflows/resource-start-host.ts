@@ -577,7 +577,6 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
   }
 }
 
-/** Resources in the order their first request is listed: oldest first under the run limit. */
 function queuedDrainResources(
   queued: readonly QueuedResourceStartInspection[],
   failures: ResourceStartDrainFailure[]

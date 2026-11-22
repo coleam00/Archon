@@ -14,8 +14,8 @@ import {
   preparedWorkflowLaunchSchema,
   type InstallHold,
   type PreparedWorkflowLaunch,
-  type RunLimit,
 } from '@archon/workflows/schemas/resource-start';
+import type { RunLimit } from '@archon/workflows/schemas/run-limit';
 import { itemHolder, itemHolders, type ItemRunRow } from '@archon/workflows/item-hold';
 import { InstallHeldError, RunLimitError, WorkflowItemHeldError } from '@archon/workflows/store';
 import { toHydratedTimestamp } from './timestamps';

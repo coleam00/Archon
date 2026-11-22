@@ -6,12 +6,12 @@ import {
   DEFAULT_RESOURCE_CAPACITY,
   readAdmissionCheckoutGuard,
 } from './schemas/resource-start';
+import type { RunLimit } from './schemas/run-limit';
 import type { z } from 'zod';
 import type { AwaitingExecution, StartExecutorObservation } from './schemas/start-executor';
 import type {
   ForgeRefusal,
   InstallHold,
-  RunLimit,
   PreparedWorkflowLaunch,
   QueuedItemStart,
   ResourceStartBindingIntent,

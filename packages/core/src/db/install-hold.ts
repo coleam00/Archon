@@ -9,9 +9,9 @@ import { z } from 'zod';
 import type { HeldStart } from '@archon/workflows/resource-start-store';
 import {
   type InstallHold,
-  type RunLimit,
   resourceStartBindingIntentSchema,
 } from '@archon/workflows/schemas/resource-start';
+import type { RunLimit } from '@archon/workflows/schemas/run-limit';
 import { getDatabase } from './connection';
 import { INSTALL_HOLD_ID, lockAdmission, readInstallHold, readRunLimit } from './resource-slots';
 import { parseStoredJson, storedWorkflowName } from './resource-starts';

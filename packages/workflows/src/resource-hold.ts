@@ -13,11 +13,10 @@ import {
   ADMISSION_CHECKOUT_GUARD_METADATA_KEY,
   DEFAULT_RESOURCE_CAPACITY,
   describeInstallHold,
-  describeRunLimit,
   type InstallHold,
   type PreparedWorkflowLaunch,
-  type RunLimit,
 } from './schemas/resource-start';
+import { describeRunLimit, type RunLimit } from './schemas/run-limit';
 import { InstallHeldError, RunLimitError } from './store/errors';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 

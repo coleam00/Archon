@@ -1,10 +1,6 @@
 import type { ResourceBlocker } from '../resource-start-store';
-import {
-  describeInstallHold,
-  describeRunLimit,
-  type InstallHold,
-  type RunLimit,
-} from '../schemas/resource-start';
+import { describeInstallHold, type InstallHold } from '../schemas/resource-start';
+import { describeRunLimit, type RunLimit } from '../schemas/run-limit';
 
 /** Only a zero-row pause CAS produces this error; storage failures must propagate. */
 export class WorkflowRunPauseConflictError extends Error {
