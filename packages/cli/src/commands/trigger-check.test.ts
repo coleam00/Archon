@@ -83,14 +83,28 @@ async function fixture() {
   registerBuiltinProviders();
   setPlatformPolicies([]);
   const scheduled: string[][] = [];
-  const schedules: NativeScheduleOptions = {
-    platform: 'darwin',
-    uid: 501,
-    launchAgentsDirectory: join(root, 'LaunchAgents'),
-    runCommand: async (executable, args) => {
-      scheduled.push([executable, ...args]);
-    },
+  const runCommand: NativeScheduleOptions['runCommand'] = async (executable, args) => {
+    scheduled.push([executable, ...args]);
   };
+  // A job is validated by its scheduler's path rules, so the scheduler must be one whose
+  // rules accept the host paths this fixture writes: Task Scheduler on Windows, launchd elsewhere.
+  const { schedules, timerPrefix, removeByHand } =
+    process.platform === 'win32'
+      ? {
+          schedules: { platform: 'win32', windowsUserId: 'me', runCommand } as const,
+          timerPrefix: join(archonHome, 'schedules', 'com.archon.trigger.'),
+          removeByHand: 'schtasks.exe /Delete /TN \\Archon\\com.archon.trigger.',
+        }
+      : {
+          schedules: {
+            platform: 'darwin',
+            uid: 501,
+            launchAgentsDirectory: join(root, 'LaunchAgents'),
+            runCommand,
+          } as const,
+          timerPrefix: join(root, 'LaunchAgents', 'com.archon.trigger.'),
+          removeByHand: 'launchctl bootout gui/501/com.archon.trigger.',
+        };
   const config = (inputs: Record<string, unknown>, schedule = true) => ({
     version: 1,
     sourceInstanceId: 'timer',
@@ -146,11 +160,11 @@ async function fixture() {
     if (printed === '') throw error;
     return { ...(JSON.parse(printed) as { bindings: CheckedBinding[] }), error };
   };
-  return { root, archonHome, config, installTimer, check, scheduled };
+  return { root, archonHome, config, installTimer, check, scheduled, timerPrefix, removeByHand };
 }
 
 test('reports an installed timer outside the triggers directory that passes an undeclared input', async () => {
-  const { root, archonHome, config, installTimer, check, scheduled } = await fixture();
+  const { root, archonHome, config, installTimer, check, scheduled, timerPrefix } = await fixture();
   const path = join(root, 'bindings', 'merge-queue.json');
   await mkdir(join(root, 'bindings'));
   await writeFile(path, JSON.stringify(config({ a: 1, b: 1 })));
@@ -170,7 +184,7 @@ test('reports an installed timer outside the triggers directory that passes an u
     expect.objectContaining({
       file: path,
       workflowName: 'stage',
-      timer: expect.stringContaining(join(root, 'LaunchAgents', 'com.archon.trigger.')),
+      timer: expect.stringContaining(timerPrefix),
       problems: [
         expect.stringContaining("Cannot run workflow 'stage': it does not declare input 'b'"),
       ],
@@ -206,7 +220,7 @@ test('finds a timer when ARCHON_HOME reaches its home through a symlink', async 
 });
 
 test('reports a timer whose config file is gone, with how to remove it by hand', async () => {
-  const { root, config, installTimer, check } = await fixture();
+  const { root, config, installTimer, check, removeByHand } = await fixture();
   const path = join(root, 'timer.json');
   await writeFile(path, JSON.stringify(config({ a: 1 })));
   await installTimer(path);
@@ -215,11 +229,11 @@ test('reports a timer whose config file is gone, with how to remove it by hand',
   const [broken] = (await check()).bindings;
   expect(broken).toMatchObject({ file: path, workflowName: null });
   expect(broken?.problems[0]).toContain('is missing; every tick fails');
-  expect(broken?.problems[0]).toContain('launchctl bootout gui/501/com.archon.trigger.');
+  expect(broken?.problems[0]).toContain(removeByHand);
 });
 
 test('reports an invalid timer config inside the triggers directory with how to remove the timer', async () => {
-  const { archonHome, config, installTimer, check } = await fixture();
+  const { archonHome, config, installTimer, check, removeByHand } = await fixture();
   const path = join(archonHome, 'triggers', 'timer.json');
   await writeFile(path, JSON.stringify(config({ a: 1 })));
   await installTimer(path);
@@ -228,7 +242,7 @@ test('reports an invalid timer config inside the triggers directory with how to 
   const [broken] = (await check()).bindings;
   expect(broken).toMatchObject({ file: path, timer: expect.any(String) });
   expect(broken?.problems[0]).toContain('is invalid: Invalid trigger configuration fields');
-  expect(broken?.problems[0]).toContain('launchctl bootout gui/501/com.archon.trigger.');
+  expect(broken?.problems[0]).toContain(removeByHand);
 });
 
 test('a fire-only file may leave a required input to --inputs, but not pass an undeclared one', async () => {

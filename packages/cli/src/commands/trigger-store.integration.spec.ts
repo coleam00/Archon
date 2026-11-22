@@ -686,7 +686,9 @@ test("a binding start reads the base branch with the checkout's uncommitted conf
   gitIn(upstream, 'add', '-A');
   gitIn(upstream, 'commit', '-qm', 'old');
   gitIn(upstream, 'push', '-q', 'origin', 'dev');
-  Bun.spawnSync(['git', 'clone', '-q', remote, project]);
+  // Windows runners set core.autocrlf=true, which would check the workflow out with CRLF
+  // and break the byte comparison that proves the checkout was left alone.
+  Bun.spawnSync(['git', 'clone', '-q', '-c', 'core.autocrlf=false', remote, project]);
   // Landed on the base, never pulled into the operator's checkout.
   await writeFile(join(upstream, '.archon/workflows/portable.yaml'), workflow('new'));
   gitIn(upstream, 'commit', '-qam', 'new');
