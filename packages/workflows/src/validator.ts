@@ -156,41 +156,60 @@ function validateProviderSelection(
       const invocation = providerInvocation(node);
       if (invocation.kind === 'none') continue;
       if (invocation.kind === 'group') {
-        const group = invocation.node;
-        let next = current;
-        try {
-          const resolved = resolveNodeModelScope(group, current, models, validation.aiProfile);
-          next = {
-            ...current,
-            provider: resolved.provider,
-            model: resolved.model,
-            preset: resolved.preset,
-            tier: resolved.tier,
-            providerOrigin: resolved.providerOrigin,
-          };
-        } catch (error) {
-          if (error instanceof NoDefaultProviderError) {
-            validation.issues.push(missingProviderIssue(group.id, error));
-          } else if (!recordedModelRefError(error)) {
-            throw error;
-          }
-        }
-        visit(group.loop_group.nodes, next);
+        visit(
+          invocation.node.loop_group.nodes,
+          groupScope(validation, invocation.node, current, models)
+        );
         continue;
       }
       const invoked = invocation.kind === 'gate_rework' ? invocation.rework : invocation.node;
-      try {
-        resolveNodeModel(invoked, current, models, validation.aiProfile);
-      } catch (error) {
-        if (!(error instanceof NoDefaultProviderError)) {
-          if (!recordedModelRefError(error)) throw error;
-          continue;
-        }
-        validation.issues.push(missingProviderIssue(invoked.id, error));
-      }
+      recordResolvedProvider(validation, invoked, current, models);
     }
   };
   visit(workflow.nodes, scope);
+}
+
+function groupScope(
+  validation: ResourceValidation,
+  group: DagNode,
+  current: WorkflowModelScope,
+  models: Readonly<Record<string, string | undefined>>
+): WorkflowModelScope {
+  try {
+    const resolved = resolveNodeModelScope(group, current, models, validation.aiProfile);
+    return {
+      ...current,
+      provider: resolved.provider,
+      model: resolved.model,
+      preset: resolved.preset,
+      tier: resolved.tier,
+      providerOrigin: resolved.providerOrigin,
+    };
+  } catch (error) {
+    if (error instanceof NoDefaultProviderError) {
+      validation.issues.push(missingProviderIssue(group.id, error));
+    } else if (!recordedModelRefError(error)) {
+      throw error;
+    }
+    return current;
+  }
+}
+
+function recordResolvedProvider(
+  validation: ResourceValidation,
+  node: DagNode,
+  current: WorkflowModelScope,
+  models: Readonly<Record<string, string | undefined>>
+): void {
+  try {
+    resolveNodeModel(node, current, models, validation.aiProfile);
+  } catch (error) {
+    if (!(error instanceof NoDefaultProviderError)) {
+      if (!recordedModelRefError(error)) throw error;
+      return;
+    }
+    validation.issues.push(missingProviderIssue(node.id, error));
+  }
 }
 
 function missingProviderIssue(nodeId: string, error: NoDefaultProviderError): ValidationIssue {
