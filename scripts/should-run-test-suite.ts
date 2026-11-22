@@ -236,12 +236,8 @@ const PACK_INPUTS = [
 ];
 
 /** The root `scripts/` files that run the pack shard and the fixtures: the runner and its imports. */
-export function packRunnerInputs(
-  repo: string,
-  extraCandidates: Iterable<string> = []
-): Set<string> {
-  return rootScriptImports(repo, WORKSPACE_RUNNER_ENTRY_POINTS, extraCandidates);
-}
+export const packRunnerInputs = (repo: string, extra: Iterable<string> = []): Set<string> =>
+  rootScriptImports(repo, WORKSPACE_RUNNER_ENTRY_POINTS, extra);
 
 /** `roots` (root scripts) plus every root script they reach through relative static imports. */
 export function rootScriptImports(
