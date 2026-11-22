@@ -43,9 +43,11 @@ nodes:
       - remotion-best-practices
 ```
 
-For Codex, leave out the `skills:` list (a Codex node that names skills fails the run
-before any node starts) and invoke the skill explicitly in the node body, preferably in
-a named command file. First install it into Codex's native `.agents/skills/` root:
+For Codex, leave out a required `skills:` entry (a Codex node that names a required
+skill fails the run before any node starts) and invoke the skill explicitly in the node
+body, preferably in a named command file. An optional entry runs without the skill
+instead — see [Optional skills](#optional-skills). First install it into Codex's native
+`.agents/skills/` root:
 
 ```bash
 npx skills add remotion-dev/skills --agent codex --skill remotion-best-practices -y
@@ -190,6 +192,36 @@ what it declares.
 This follows the Stripe Minions principle: "agents perform best when given a
 smaller box with a tastefully curated set of tools."
 
+## Optional skills
+
+A node that can do useful work without a skill names it optional. A string is
+required. Only `optional: true` is optional; omitting `optional`, or setting it
+to `false`, keeps the skill required.
+
+```yaml
+skills:
+  - code-review
+  - name: playwright-cli
+    optional: true
+```
+
+`{ name, optional: true }` runs the node without that skill and records why when
+the provider cannot load named skills, or when no `SKILL.md` exists in the
+directories that provider searches. The node's `node_started` and terminal rows
+record `skills_unavailable` as `{ name, reason }` entries (`provider_unsupported`
+or `not_installed`), and the chat shows one line naming the skill and the reason.
+An installed optional skill is passed like a required one. A skill whose directory
+exists outside the directories that provider searches is still passed, so the
+provider's existing unreachable-skill error still fires. A required name is always
+passed, including one that is on no directory.
+
+A list that contains a required name still fails the run before it starts on a
+provider without the skills capability. An all-optional list does not: the node
+runs, and each entry is recorded as `provider_unsupported`. `archon validate
+workflows` reports nothing for an optional skill that is absent, or for an
+all-optional list on a provider that cannot load skills. Required entries keep
+their existing errors.
+
 ## Popular Skills
 
 | Skill | Install | What It Teaches |
@@ -244,9 +276,11 @@ skill. Direct Codex chat and other non-workflow calls keep their normal Codex be
   command file or prompt. Codex performs progressive disclosure and loads the
   selected skill from its original directory.
 - **YAML `skills:` is not Codex activation** — a non-empty list does not re-enable
-  the automatic catalog, inject metadata, or create an exclusive allowlist, so a
-  non-empty list on a Codex node fails the run before any node starts. Remove it and
-  write the explicit `$skill-name` invocation instead.
+  the automatic catalog, inject metadata, or create an exclusive allowlist. A list
+  that contains a required name fails the run before any node starts. Remove the
+  required names and write the explicit `$skill-name` invocation instead. An
+  all-optional list runs without those skills and records why (see
+  [Optional skills](#optional-skills)).
 - **Omission and `skills: []`** — both keep the automatic catalog off on Codex
   workflow nodes. Exact-loading providers interpret `[]` as an empty declared set.
 - **SKILL.md format** — Codex parses the same `name`/`description` frontmatter
@@ -298,7 +332,7 @@ installed one. A plugin's skill loads only when the node also names that plugin 
 | Claude skill not found (error) | Installed, but outside an enabled `.claude/skills/` root | Move it to `.claude/skills/<name>/SKILL.md`, or enable the setting source that holds it |
 | Claude skill not found (warning) | Absent from disk — normal for built-in and `plugin:skill` names | Ignore it for those, and name the plugin under `plugins:` for a `plugin:skill`; otherwise check the spelling or run `npx skills add <source>` |
 | Codex does not use a skill | Automatic catalogs are off in workflow nodes | Invoke it explicitly in the command/prompt with `$skill-name` and install it under a Codex-native root such as `.agents/skills/` |
-| Codex run fails on `skills:` | Codex does not implement the YAML list | Remove the list from Codex nodes; use `$skill-name` in the command or prompt |
+| Codex run fails on `skills:` | The list contains a required name, and Codex cannot load the YAML list | Remove the required names and use `$skill-name` in the command or prompt, or mark an entry `{ name, optional: true }` |
 | Too many skills | Context budget exceeded | Reduce to 2-3 most relevant skills per node |
 | Skill has no effect | Description too vague | Rewrite SKILL.md with specific, actionable instructions |
 

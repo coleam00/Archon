@@ -214,6 +214,18 @@ export const mcpUnavailableSchema = z.object({
 });
 export type McpUnavailable = z.infer<typeof mcpUnavailableSchema>;
 
+/**
+ * Why one optional skill did not reach the node's provider. A required name is
+ * never recorded here: it keeps the provider's existing missing-skill behavior.
+ */
+export const skillUnavailableReasonSchema = z.enum(['provider_unsupported', 'not_installed']);
+
+export const skillUnavailableSchema = z.object({
+  name: z.string(),
+  reason: skillUnavailableReasonSchema,
+});
+export type SkillUnavailable = z.infer<typeof skillUnavailableSchema>;
+
 // A child run's usage reaches its parent through run metadata, which carries counters
 // only. Its request evidence (`calls`) lives in the child run's own node records.
 export const childUsageSchema = runUsageSchema.extend({
@@ -251,6 +263,8 @@ export const executionDiagnosticsSchema = z.object({
   expr: z.string().optional(),
   /** The node's optional MCP servers were not loaded, and why. */
   mcpUnavailable: mcpUnavailableSchema.optional(),
+  /** Optional skills that were not passed to the provider, and why. */
+  skillsUnavailable: z.array(skillUnavailableSchema).optional(),
 });
 export type ExecutionDiagnostics = z.infer<typeof executionDiagnosticsSchema>;
 

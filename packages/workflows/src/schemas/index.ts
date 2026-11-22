@@ -94,6 +94,8 @@ export {
 export {
   nodeMcpSchema,
   mcpDeclaration,
+  nodeSkillSchema,
+  skillDeclaration,
   loopGroupNodeSchema,
   loopGroupNodeConfigSchema,
   MAX_DURABLE_WAIT_MS,

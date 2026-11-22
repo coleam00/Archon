@@ -1,5 +1,6 @@
 import { requireProvider } from '@archon/provider-contract';
 import type { IAgentProvider, ProviderCapabilities } from '@archon/provider-contract';
+import { DEFAULT_SETTING_SOURCES, parseSettingSources } from '@archon/paths/skills';
 import { type NodeExecutionRecord } from '../../../schemas/node-execution';
 import { recordNodeState } from '../../../node-event-write';
 import { isSourceReadFailure } from '../../../workflow-source';
@@ -16,7 +17,12 @@ import {
   type SessionResumeIntent,
 } from '../../run-context';
 import { isInsideAny } from '../../checkout-guard';
-import { resolveNodeMcp, type NodeMcpResolution } from '../../provider-resolution';
+import {
+  resolveNodeMcp,
+  resolveNodeSkills,
+  type NodeMcpResolution,
+  type NodeSkillsResolution,
+} from '../../provider-resolution';
 
 /** The provider, model and session an agent attempt was dispatched with. */
 export interface AgentBindingRequest {
@@ -38,6 +44,7 @@ export interface AgentBindingRequest {
 export interface AgentBinding {
   capabilities: ProviderCapabilities;
   nodeMcp: Exclude<NodeMcpResolution, { kind: 'read_error' }>;
+  nodeSkills: NodeSkillsResolution;
   aiClient: IAgentProvider;
   /** The started attempt, already recorded as running. */
   execution: NodeExecutionRecord;
@@ -59,7 +66,14 @@ export async function bindAgentNode(
     homeMcpDirectory !== undefined
       ? await assertNodeSourceReadable(workflowSourceRoots, stepName)
       : undefined;
-  const capabilities = requireProvider(deps.providers, provider).capabilities;
+  const descriptor = requireProvider(deps.providers, provider);
+  const capabilities = descriptor.capabilities;
+  const nodeSkills = resolveNodeSkills(node.skills, capabilities.skills, {
+    cwd,
+    discovery: descriptor.skillDiscovery,
+    env: ctx.config.envVars,
+    sources: skillSources(node, capabilities, ctx.config.assistants[provider]),
+  });
   const nodeMcp = await resolveNodeMcp(
     node.mcp,
     capabilities,
@@ -102,6 +116,7 @@ export async function bindAgentNode(
           }
         : {}),
       ...(nodeMcp.kind === 'unavailable' ? { mcpUnavailable: nodeMcp.record } : {}),
+      ...(nodeSkills.unavailable.length > 0 ? { skillsUnavailable: nodeSkills.unavailable } : {}),
     },
   };
   getLog().info({ nodeId: node.id, provider }, 'dag_node_started');
@@ -123,5 +138,48 @@ export async function bindAgentNode(
       request.nodeContext
     );
   }
-  return { capabilities, nodeMcp, aiClient, execution };
+  if (nodeSkills.unavailable.length > 0) {
+    getLog().warn(
+      { nodeId: node.id, skills: nodeSkills.unavailable },
+      'dag.skills_optional_unavailable'
+    );
+    await safeSendMessage(
+      ctx.platform,
+      ctx.conversationId,
+      optionalSkillsLine(node.id, provider, nodeSkills.unavailable),
+      request.nodeContext
+    );
+  }
+  return { capabilities, nodeMcp, nodeSkills, aiClient, execution };
+}
+
+function skillSources(
+  node: AgentNode,
+  capabilities: ProviderCapabilities,
+  assistant: unknown
+): readonly ('project' | 'user')[] | undefined {
+  if (!capabilities.settingSources) return undefined;
+  const configured =
+    assistant !== null && typeof assistant === 'object' && 'settingSources' in assistant
+      ? assistant.settingSources
+      : undefined;
+  return node.settingSources ?? parseSettingSources(configured) ?? DEFAULT_SETTING_SOURCES;
+}
+
+function optionalSkillsLine(
+  nodeId: string,
+  provider: string,
+  unavailable: NodeSkillsResolution['unavailable']
+): string {
+  const why = (reason: (typeof unavailable)[number]['reason']): string =>
+    reason === 'provider_unsupported'
+      ? `provider '${provider}' cannot load named skills`
+      : 'no SKILL.md in the skill directories this provider searches';
+  const reason = unavailable[0]?.reason;
+  if (reason !== undefined && unavailable.every(entry => entry.reason === reason)) {
+    const names = unavailable.map(entry => entry.name).join(', ');
+    return `Node '${nodeId}' runs without its optional skills (${names}): ${why(reason)}.`;
+  }
+  const parts = unavailable.map(entry => `${entry.name}: ${why(entry.reason)}`).join('; ');
+  return `Node '${nodeId}' runs without its optional skills (${parts}).`;
 }

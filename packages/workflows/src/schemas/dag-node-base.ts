@@ -11,6 +11,7 @@ import { modelRefSchema } from './model-binding';
 import {
   betasSchema,
   nodeMcpSchema,
+  nodeSkillSchema,
   piNodeConfigSchema,
   sandboxSettingsSchema,
 } from './provider-options';
@@ -81,7 +82,7 @@ export const dagNodeBaseSchema = z.object({
   retry: stepRetryConfigSchema.optional(),
   hooks: workflowNodeHooksSchema.optional(),
   mcp: nodeMcpSchema.optional(),
-  skills: z.array(z.string().min(1, 'each skill must be a non-empty string')).optional(),
+  skills: z.array(nodeSkillSchema).optional(),
   // Exact provider plugin ids (Claude: `name@marketplace`). A workflow node loads
   // only the plugins it names; the provider fails the node when it cannot.
   plugins: z.array(z.string().trim().min(1, 'each plugin must be a non-empty string')).optional(),

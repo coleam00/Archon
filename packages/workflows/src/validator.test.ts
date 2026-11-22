@@ -1682,6 +1682,83 @@ describe('validateWorkflowResources — skills search roots', () => {
     expect(missingSkillIssues(issues)).toHaveLength(0);
   });
 
+  test('an optional skill that is absent is not an issue', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [
+        {
+          id: 'step1',
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'do work' },
+          skills: [{ name: 'playwright-cli', optional: true }],
+        } as unknown as DagNode,
+      ],
+      'claude'
+    );
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry);
+    expect(issues.filter(issue => issue.field === 'skills')).toEqual([]);
+  });
+
+  test('Codex accepts an optional-only skills list', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [
+        {
+          id: 'step1',
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'do work' },
+          skills: [{ name: 'playwright-cli', optional: true }],
+        } as unknown as DagNode,
+      ],
+      'codex'
+    );
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry);
+    expect(issues.filter(issue => issue.field === 'skills')).toEqual([]);
+  });
+
+  test('Codex still rejects a list that contains a required skill', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [
+        {
+          id: 'step1',
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'do work' },
+          skills: ['code-review', { name: 'playwright-cli', optional: true }],
+        } as unknown as DagNode,
+      ],
+      'codex'
+    );
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry);
+    const error = issues.find(issue => issue.level === 'error' && issue.field === 'skills');
+    expect(error?.message).toContain("Provider 'codex' cannot load named skills");
+  });
+
+  test('an optional skill installed outside the enabled roots is still an error', async () => {
+    await stageSkill(tmpDir, '.agents', 'playwright-cli');
+    const workflow = makeWorkflow(
+      'test',
+      [
+        {
+          id: 'step1',
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'do work' },
+          skills: [{ name: 'playwright-cli', optional: true }],
+        } as unknown as DagNode,
+      ],
+      'claude'
+    );
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry);
+    const missing = missingSkillIssues(issues);
+    expect(missing).toHaveLength(1);
+    expect(missing[0].level).toBe('error');
+    expect(missing[0].message).toContain('installed elsewhere');
+  });
+
   test('Codex rejects YAML skills without four-root validation', async () => {
     await stageSkill(tmpDir, '.claude', 'claude-only');
     const workflow = makeWorkflow(

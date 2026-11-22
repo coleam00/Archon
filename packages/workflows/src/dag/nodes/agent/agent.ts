@@ -271,17 +271,25 @@ function attemptFailure(
 
 function attemptQueryOptions(
   ctx: RunLayersContext,
-  { nodeMcp, execution }: AgentBinding,
+  { nodeMcp, nodeSkills, execution }: AgentBinding,
   nodeOptions: SendQueryOptions | undefined,
   { resumeSessionId, resumeIntent }: AttemptSession,
   abortController: AbortController
 ): SendQueryOptions {
   const shouldForkSession = resumeSessionId !== undefined && resumeIntent !== 'owner-continuation';
+  const loadMcp = nodeMcp.kind === 'load' || nodeMcp.kind === 'missing';
+  const declaredSkills = nodeSkills.names !== undefined;
   return {
     ...nodeOptions,
     env: { ...nodeOptions?.env, ...aiNodeEnvironment(ctx, execution) },
-    ...(nodeMcp.kind === 'load' || nodeMcp.kind === 'missing'
-      ? { nodeConfig: { ...nodeOptions?.nodeConfig, mcp: nodeMcp.path } }
+    ...(declaredSkills || loadMcp
+      ? {
+          nodeConfig: {
+            ...nodeOptions?.nodeConfig,
+            ...(declaredSkills ? { skills: nodeSkills.names } : {}),
+            ...(loadMcp ? { mcp: nodeMcp.path } : {}),
+          },
+        }
       : {}),
     abortSignal: abortController.signal,
     ...(resumeIntent === 'owner-continuation'
