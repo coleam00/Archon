@@ -512,8 +512,8 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
     }
     return decisions.some(decision => decision.status === 'admitted');
   };
-  // Under the run limit a resource's drain stops at the host's next older start on another
-  // resource (`withinRunRoom`), so the pass repeats while it admits anything.
+  // Under the run limit a resource's drain stops at the host's next start its decision admits
+  // on another resource (`drainAdmits`), so the pass repeats while it admits anything.
   const resources = queuedDrainResources(queued, failures);
   for (let admitted = true; admitted; ) {
     admitted = false;

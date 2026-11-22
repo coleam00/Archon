@@ -15,8 +15,8 @@ import {
   preparedWorkflowLaunchSchema,
   type ResourceStartDisposition,
 } from '../schemas/resource-start';
+import { drainableStarts } from '../host-start-decision';
 import {
-  drainableStarts,
   compareCodeUnits,
   type ReusableCheckout,
   type ResourceCapacityOverride,

@@ -20,6 +20,7 @@
     "./router": "./src/router.ts",
     "./workflow-path-lock": "./src/workflow-path-lock.ts",
     "./resource-start-store": "./src/resource-start-store.ts",
+    "./host-start-decision": "./src/host-start-decision.ts",
     "./store": "./src/store.ts",
     "./attention-queue": "./src/attention-queue.ts",
     "./queue-items-without-run": "./src/queue-items-without-run.ts",
