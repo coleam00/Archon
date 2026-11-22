@@ -682,6 +682,18 @@ describe('review threads and issue bodies', () => {
       });
     }
   );
+
+  test('a plugin answering merge state in the pre-base shape is told which field is missing', async () => {
+    const { response } = await dispatch(
+      { operationId: 'merge-state-1', op: 'pr.merge-state', ref },
+      'old-shape'
+    );
+    expect(response).toMatchObject({ ok: false, error: { kind: 'invalid_response' } });
+    const message = response.ok ? '' : response.error.message;
+    expect(message).toContain('pr.merge-state');
+    expect(message).toContain('result.value.base_branch');
+    expect(message).toContain('result.value.base_revision');
+  });
 });
 
 describe('temporary failures at the dispatch boundary', () => {
