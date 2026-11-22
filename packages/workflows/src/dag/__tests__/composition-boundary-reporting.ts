@@ -1,5 +1,6 @@
 import { expect, it, spyOn } from 'bun:test';
 import { runInputsMetadata } from '../../schemas';
+import type { WorkflowDefinition } from '../../schemas/workflow';
 import { skipCauseSchema, nodeSkipReasonSchema } from '../../schemas/node-state';
 import { readComposedMeta } from '../../compiled-command';
 import { executeDagWorkflow } from '../../dag-executor';
@@ -555,7 +556,7 @@ export function registerBoundaryReportingTests(
       { id: 'outer', include: 'collision-middle', with: { route: '$source.output' } },
     ]);
     const expanded = expandWorkflowIncludes(
-      new Map([
+      new Map<string, WorkflowDefinition>([
         ['other-leaf', otherLeaf],
         ['collision-leaf', leaf],
         ['collision-middle', middle],
@@ -619,7 +620,7 @@ export function registerBoundaryReportingTests(
       inputs: { route: { default: {} } },
     };
     const expanded = expandWorkflowIncludes(
-      new Map([
+      new Map<string, WorkflowDefinition>([
         ['leaf', leaf],
         ['scoped-parent', parent],
       ])

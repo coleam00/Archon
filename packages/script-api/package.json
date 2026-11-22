@@ -9,8 +9,7 @@
     "./text": "./src/text.ts"
   },
   "scripts": {
-    "test": "bun run ../../scripts/package-tests.ts",
-    "type-check": "bun x tsc --noEmit"
+    "test": "bun run ../../scripts/package-tests.ts"
   },
   "devDependencies": {
     "@archon/paths": "workspace:*"

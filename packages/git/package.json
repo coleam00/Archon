@@ -10,8 +10,7 @@
     "./archon-commit": "./src/archon-commit.ts"
   },
   "scripts": {
-    "test": "bun run ../../scripts/package-tests.ts",
-    "type-check": "bun x tsc --noEmit"
+    "test": "bun run ../../scripts/package-tests.ts"
   },
   "dependencies": {
     "@archon/paths": "workspace:*"

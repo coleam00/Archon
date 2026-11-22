@@ -58,8 +58,9 @@ The wrapper cannot distinguish successful zero-file execution from report loss a
 CI is the full validation gate. While working and before you push, run
 `bun run check:changed`. It finds the packages your change touches against the merge base
 with `origin/dev` (`--base <ref>` for another), adds every package that depends on them
-through the manifests, and runs those packages' own `type-check` and `test` scripts, the root
-script and pack projects when the change reaches them, then `bun run lint` and the ratchet.
+through the manifests, type-checks those packages and the root script and pack projects the
+change reaches in one `tsc -b` build, runs their `test` scripts, then `bun run lint` and the
+ratchet.
 It prints the packages it checked and skipped, and `--list` prints only that. A change to
 the root manifest, the lockfile, CI, shared config or a file it cannot place runs the full
 local set and says why. It leaves to CI the generated files, package boundaries, format, the

@@ -40,8 +40,7 @@
     "./in-process": "./src/in-process.ts"
   },
   "scripts": {
-    "test": "bun run ../../scripts/package-tests.ts",
-    "type-check": "bun x tsc --noEmit"
+    "test": "bun run ../../scripts/package-tests.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.327",

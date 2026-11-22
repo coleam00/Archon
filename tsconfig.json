@@ -10,8 +10,12 @@
     "resolveJsonModule": true,
     "moduleResolution": "bundler",
     "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
+    // Every package is a composite project: `scripts/type-check.ts` builds them with `tsc -b`,
+    // and a package that imports another reads its declarations instead of re-checking its
+    // source. Only declarations are written, into each project's gitignored `.tsbuild`.
+    "composite": true,
+    "emitDeclarationOnly": true,
+    "outDir": "${configDir}/.tsbuild",
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noImplicitReturns": true,
