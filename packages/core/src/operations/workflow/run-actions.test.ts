@@ -80,6 +80,42 @@ describe('resumeWorkflow', () => {
     );
   });
 
+  test.each([
+    ['a start', {}, 'archon workflow run test-workflow --supersedes run-1'],
+    [
+      'a stage started on an ended run',
+      {
+        checkout_handoff: {
+          runId: 'landed-run',
+          branch: 'archon/task-landed',
+          commit: 'a'.repeat(40),
+          lane: 'continue',
+        },
+      },
+      'archon workflow run test-workflow --adopt landed-run',
+    ],
+  ])(
+    '%s that failed before its checkout was prepared is refused with the command that starts it again',
+    async (_kind, metadata, command) => {
+      mockGetWorkflowRun.mockResolvedValueOnce(
+        makePausedRun({
+          status: 'failed',
+          working_path: null,
+          metadata: { ...metadata, inputs: { item: 'secret-value', pr: '42' } },
+        })
+      );
+
+      const error = await resumeWorkflow('run-1', operator).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ResumeRefusedError);
+      const refusal = error as InstanceType<typeof ResumeRefusedError>;
+      expect(refusal.reason).toBe('not_resumable');
+      expect(refusal.message).toContain(`Start it again with: ${command}`);
+      expect(refusal.message).toContain('inputs item, pr; pass each with --input <name>=<value>');
+      expect(refusal.message).not.toContain('secret-value');
+    }
+  );
+
   test('throws wrapped message when DB throws', async () => {
     mockGetWorkflowRun.mockRejectedValueOnce(new Error('connection reset'));
 

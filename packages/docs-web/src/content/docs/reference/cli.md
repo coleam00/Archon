@@ -1834,6 +1834,8 @@ archon workflow resume <run-id> --detach   # continue in a background child
 archon workflow resume <run-id> --json     # validate and acknowledge only
 ```
 
+A run that failed before its checkout was prepared, such as a trigger start whose worktree could not be created, has nothing to resume, and resume refuses it. The refusal names the command that starts it again: `archon workflow run <workflow> --supersedes <run-id>`, which keeps the run's item, or `archon workflow run <workflow> --adopt <run-id>` naming the ended run whose checkout the stage was given. Neither carries the run's inputs, so the refusal lists their names to pass again with `--input`.
+
 With `--json` the command validates that the run is resumable, reports its state and returns without executing, because execution output would corrupt the JSON. To drive the run to completion, use the blocking form or `--detach`.
 
 `--detach` hands the resume to a background child that runs it without `--json`, so the run does continue, outside your shell. The acknowledgement carries `continues: true` and is sent only after the engine accepts the resume and clears the old pause. An immediate `workflow wait` can therefore report a new pause, even repeated attention at the same node, but never the cleared one. See [Detached control verbs](#detached-control-verbs).

@@ -66,16 +66,11 @@ export async function workflowResumeCommand(
     const resolvedId = await resolveRunIdArg(host, runId, cwd);
     return runDetachedControlCommand(resolvedId, 'resume', json, cwd, async () => {
       const run = await resumeWorkflowOp(resolvedId);
-      // The inline path below refuses a run with no recorded working path, or one
-      // whose checkout is gone. Check both here too, on the run the precheck already
-      // holds: otherwise the parent acks success and the child throws where nobody
-      // reads it.
-      if (!run.working_path) {
-        throw new Error(
-          `Workflow run '${resolvedId}' has no working path recorded.\n` +
-            'Cannot determine where to resume. The run may be too old.'
-        );
-      }
+      // The inline path below refuses a run whose checkout is gone. Check here too, on
+      // the run the precheck already holds: otherwise the parent acks success and the
+      // child throws where nobody reads it. Resume itself refuses a run with no working
+      // path, naming the command that starts it again.
+      if (!run.working_path) throw new Error(`Workflow run '${resolvedId}' has no working path.`);
       assertResumeWorkingPathExists(run.working_path);
       return run;
     });
@@ -108,12 +103,8 @@ export async function workflowResumeCommand(
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
   const run = await resumeWorkflowOp(resolvedId);
-  if (!run.working_path) {
-    throw new Error(
-      `Workflow run '${resolvedId}' has no working path recorded.\n` +
-        'Cannot determine where to resume. The run may be too old.'
-    );
-  }
+  // Resume refuses a run with no working path; this narrows the type.
+  if (!run.working_path) throw new Error(`Workflow run '${resolvedId}' has no working path.`);
   console.log(`Resuming workflow: ${run.workflow_name}`);
   console.log(`Path: ${run.working_path}`);
   console.log('');

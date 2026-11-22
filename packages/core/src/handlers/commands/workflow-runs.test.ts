@@ -699,6 +699,7 @@ describe('CommandHandler', () => {
           conversation_id: 'conv-1',
           status: 'failed' as const,
           user_message: 'test',
+          working_path: '/workspace/wt',
         });
         mockGetWorkflowRun.mockResolvedValueOnce(run);
         spyDiscoverWorkflows.mockResolvedValueOnce({
@@ -722,6 +723,7 @@ describe('CommandHandler', () => {
           conversation_id: 'conv-1',
           status: 'failed' as const,
           user_message: 'test',
+          working_path: '/workspace/wt',
         });
         mockGetWorkflowRun.mockResolvedValueOnce(run);
         spyDiscoverWorkflows.mockResolvedValueOnce({ workflows: [], errors: [] });

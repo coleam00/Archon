@@ -1826,7 +1826,7 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     try {
       await expect(
         workflowResumeCommand(createTestWorkflowHost(), 'run-123', undefined, undefined, true)
-      ).rejects.toThrow('has no working path recorded');
+      ).rejects.toThrow('failed before its checkout was prepared');
       expect(spawnSpy.mock.calls.length).toBe(0);
     } finally {
       spawnSpy.mockRestore();
