@@ -291,6 +291,12 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
           prReviews: async () => {
             throw new Error('No review is read for a check wait');
           },
+          issuesWithLabel: async () => {
+            throw new Error('No label is read for a check wait');
+          },
+          labelAdded: async () => {
+            throw new Error('No label is read for a check wait');
+          },
         },
       });
       const at = (seconds: number) => new Date(Date.parse('2026-01-01T00:00:00Z') + seconds * 1000);

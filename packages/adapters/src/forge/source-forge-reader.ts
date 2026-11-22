@@ -21,7 +21,7 @@ export class SourceForgeReadError extends Error {
 type DispatchOptions = NonNullable<Parameters<typeof dispatchForge>[1]>;
 
 /**
- * The forge reads a source plugin makes while it observes waits, through the forge as
+ * The forge reads a source plugin makes while it observes, through the forge as
  * `archon forge` reaches it: the `forge:` block of the Archon config, the installed plugins
  * and, from a source checkout, the bundled GitHub plugin. The plugin holds no credential;
  * the operator's forge plugin does. The config is read once, on first use.
@@ -78,6 +78,24 @@ export function hostSourceForgeReader(
       if (checks.result.op !== 'checks.commit')
         throw new SourceForgeReadError('invalid_response', 'The forge answered another operation');
       return checks.result.value;
+    },
+    // A label binding names its repository, not a remote, so these need no resolve.
+    async issuesWithLabel({ repo, label }) {
+      const listed = await read({ operationId: randomUUID(), op: 'workitem.list', repo, label });
+      if (listed.result.op !== 'workitem.list')
+        throw new SourceForgeReadError('invalid_response', 'The forge answered another operation');
+      return listed.result.value;
+    },
+    async labelAdded({ repo, number, label }) {
+      const added = await read({
+        operationId: randomUUID(),
+        op: 'workitem.label.added',
+        subject: { kind: 'issue', ref: { repo, number } },
+        name: label,
+      });
+      if (added.result.op !== 'workitem.label.added')
+        throw new SourceForgeReadError('invalid_response', 'The forge answered another operation');
+      return added.result.value;
     },
   };
 }

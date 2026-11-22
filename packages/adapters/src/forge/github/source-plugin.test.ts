@@ -558,6 +558,12 @@ describe('GitHub source plugin observing open waits', () => {
             items: reviews,
           };
         },
+        issuesWithLabel: async (): Promise<never> => {
+          throw new Error('no label read expected');
+        },
+        labelAdded: async (): Promise<never> => {
+          throw new Error('no label read expected');
+        },
       },
     };
   }
@@ -578,7 +584,7 @@ describe('GitHub source plugin observing open waits', () => {
   test('a completed check at the waited commit is the start its webhook would make, on the wait’s item', async () => {
     const { observe } = await observer([checksWake], true);
     const { forge, reads } = reader([unit('77', 'completed'), unit('78', 'in_progress')]);
-    const observed = await observe({ waits: [wait], forge });
+    const observed = await observe({ labels: [], waits: [wait], forge });
     expect(reads).toEqual([{ remote, revision }]);
     // The check still running starts nothing, so it is not recorded.
     expect(observed.acceptances).toHaveLength(1);
@@ -617,13 +623,14 @@ describe('GitHub source plugin observing open waits', () => {
     });
     const { observe } = await observer([checksWake, otherWake]);
     const { forge } = reader([unit('77', 'completed')]);
-    const [first] = (await observe({ waits: [wait], forge })).acceptances;
-    const [second] = (await observe({ waits: [wait], forge })).acceptances;
+    const [first] = (await observe({ labels: [], waits: [wait], forge })).acceptances;
+    const [second] = (await observe({ labels: [], waits: [wait], forge })).acceptances;
     expect(second?.receipt.deliveryId).toBe(first?.receipt.deliveryId ?? '');
     expect(second?.receipt.contentDigest).toBe(first?.receipt.contentDigest ?? '');
     // A wait that opened after the first observation, on another item or for another
     // workflow, is not a replay of a delivery made before it existed.
     const later = await observe({
+      labels: [],
       waits: [wait, { ...wait, itemKey: 'issue-3' }, { ...wait, workflowName: 'build' }],
       forge,
     });
@@ -640,7 +647,7 @@ describe('GitHub source plugin observing open waits', () => {
         review('302', 'PENDING', revision),
       ]
     );
-    const observed = await observe({ waits: [reviewWait], forge });
+    const observed = await observe({ labels: [], waits: [reviewWait], forge });
     expect(reads).toEqual([{ remote, number: 7 }]);
     // The review of another commit and the unsubmitted one are not recorded.
     expect(observed.acceptances).toHaveLength(1);
@@ -676,7 +683,7 @@ describe('GitHub source plugin observing open waits', () => {
     });
     const { observe } = await observer([mapsAuthor]);
     const { forge } = reader([], [{ ...review('300', 'APPROVED', revision), author: null }]);
-    const observed = await observe({ waits: [reviewWait], forge });
+    const observed = await observe({ labels: [], waits: [reviewWait], forge });
     expect(observed.acceptances).toEqual([]);
     expect(observed.unserved).toHaveLength(1);
     expect(observed.unserved[0]?.reason).toContain("binding 'reviewed' rejects the event");
@@ -687,6 +694,7 @@ describe('GitHub source plugin observing open waits', () => {
     const { observe } = await observer([checksWake]);
     const { forge } = reader([unit('77', 'completed')]);
     const observed = await observe({
+      labels: [],
       waits: [{ ...wait, about: 'gone', itemKey: 'pr-8' }, wait],
       forge,
     });
@@ -704,6 +712,7 @@ describe('GitHub source plugin observing open waits', () => {
     const { observe } = await observer([checksWake, reviewWake, unwaited]);
     const { forge, reads } = reader([unit('77', 'completed')]);
     const observed = await observe({
+      labels: [],
       waits: [
         { ...reviewWait, itemKey: 'issue-3' },
         { ...wait, remote: null },
@@ -715,6 +724,7 @@ describe('GitHub source plugin observing open waits', () => {
     expect(observed).toEqual({
       acceptances: [],
       failed: [],
+      labelFailures: [],
       unserved: [
         {
           wait: { workflowName: 'host', event: 'review', about: revision, itemKey: 'issue-3' },
@@ -731,9 +741,10 @@ describe('GitHub source plugin observing open waits', () => {
   test('a waited commit on another forge host is named as not observed', async () => {
     const { observe } = await observer([checksWake]);
     const { forge } = reader([unit('77', 'completed')], [], 'gitlab.example.com');
-    expect(await observe({ waits: [wait], forge })).toEqual({
+    expect(await observe({ labels: [], waits: [wait], forge })).toEqual({
       acceptances: [],
       failed: [],
+      labelFailures: [],
       unserved: [
         {
           wait: { workflowName: 'host', event: 'checks', about: revision, itemKey: 'pr-7' },
@@ -753,5 +764,188 @@ describe('GitHub source plugin observing open waits', () => {
         receivedAt: '2026-09-22T10:00:00.000Z',
       })
     ).toEqual({ status: 'rejected', reason: 'unauthenticated' });
+  });
+});
+
+describe('GitHub source plugin observing label bindings', () => {
+  const repo = { host: 'github.com', path: 'owner/repo' };
+  const intake = (overrides: Record<string, unknown> = {}) =>
+    binding({
+      bindingId: 'factory-intake',
+      selector: {
+        kind: 'label.changed',
+        actions: ['added'],
+        repository: repo,
+        predicates: [{ field: 'label.name', equals: 'factory' }],
+      },
+      inputMapping: {
+        number: { source: 'field', field: 'subject.number' },
+        labeller: { source: 'field', field: 'label.actor.login' },
+      },
+      item: { field: 'subject.number', prefix: 'issue-' },
+      ...overrides,
+    });
+  async function labelSource(bindings: unknown[], withSecret = false) {
+    return createGitHubWebhookSource({
+      sourceInstanceId: 'github-primary',
+      config: githubWebhookSourceConfigSchema.parse({
+        version: 1,
+        host: 'github.com',
+        bindings,
+        ...(withSecret ? { webhookSecretEnv: 'ARCHON_SOURCE_PLUGIN_TEST_SECRET' } : {}),
+      }),
+    });
+  }
+  /** Issue 8 labelled by event 555, pull request 9 in the same list, and issue 10 with no add. */
+  function labelReader() {
+    const reads: string[] = [];
+    return {
+      reads,
+      forge: {
+        commitChecks: async (): Promise<never> => {
+          throw new Error('no check read expected');
+        },
+        prReviews: async (): Promise<never> => {
+          throw new Error('no review read expected');
+        },
+        async issuesWithLabel(input: { repo: typeof repo; label: string }) {
+          reads.push(`list ${input.label}`);
+          const item = (number: number, kind: 'issue' | 'pr') => ({
+            ref: { repo, number },
+            kind,
+            url: `https://github.com/owner/repo/issues/${String(number)}`,
+            state: 'open' as const,
+          });
+          return { ...input, items: [item(8, 'issue'), item(9, 'pr'), item(10, 'issue')] };
+        },
+        async labelAdded(input: { repo: typeof repo; number: number; label: string }) {
+          reads.push(`added ${String(input.number)}`);
+          return {
+            subject: { kind: 'issue' as const, ref: { repo, number: input.number } },
+            name: input.label,
+            added:
+              input.number === 8
+                ? {
+                    id: '555',
+                    at: '2026-11-23T10:00:00Z',
+                    actor: {
+                      host: 'github.com',
+                      id: '4242',
+                      login: 'maintainer',
+                      type: 'user' as const,
+                    },
+                  }
+                : null,
+          };
+        },
+      },
+    };
+  }
+
+  test('declares one read per labelled binding, and names each it cannot observe', async () => {
+    const plugin = await labelSource([
+      intake({
+        selector: {
+          kind: 'label.changed',
+          actions: ['added'],
+          repository: repo,
+          predicates: [{ field: 'label.name', in: ['factory', 'urgent'] }],
+        },
+      }),
+      intake({
+        bindingId: 'pr-labels',
+        selector: {
+          kind: 'label.changed',
+          actions: ['added'],
+          repository: repo,
+          subject: { kind: 'pr', number: 3 },
+          predicates: [{ field: 'label.name', equals: 'factory' }],
+        },
+      }),
+      intake({
+        bindingId: 'anywhere',
+        selector: {
+          kind: 'label.changed',
+          actions: ['added'],
+          predicates: [{ field: 'label.name', equals: 'factory' }],
+        },
+      }),
+      intake({
+        bindingId: 'any-label',
+        selector: { kind: 'label.changed', actions: ['added'], repository: repo },
+      }),
+      binding(),
+    ]);
+    expect(plugin.observedLabels).toEqual({
+      reads: [
+        { bindingId: 'factory-intake', repo, label: 'factory' },
+        { bindingId: 'factory-intake', repo, label: 'urgent' },
+      ],
+      unserved: [
+        { bindingId: 'pr-labels', reason: 'pull-request labels are not observed; only issues are' },
+        { bindingId: 'anywhere', reason: 'the selector names no repository to list' },
+        { bindingId: 'any-label', reason: 'the selector names no label' },
+      ],
+    });
+    // A source that receives webhooks gets its label events by webhook, never twice.
+    expect((await labelSource([intake()], true)).observedLabels).toEqual({
+      reads: [],
+      unserved: [
+        {
+          bindingId: 'factory-intake',
+          reason: 'this source receives webhooks; label events arrive by webhook',
+        },
+      ],
+    });
+  });
+
+  test('a labelled issue is the start its webhook would make; a pull request is skipped', async () => {
+    const plugin = await labelSource([intake()]);
+    const { forge, reads } = labelReader();
+    const read = { bindingId: 'factory-intake', repo, label: 'factory' };
+    const observed = await plugin.observe?.({
+      waits: [],
+      labels: [{ ...read, seeding: false }],
+      forge,
+    });
+    expect(reads).toEqual(['list factory', 'added 8', 'added 10']);
+    expect(observed?.labelFailures).toEqual([
+      {
+        bindingId: 'factory-intake',
+        label: 'factory',
+        number: 10,
+        reason: 'the forge records no add',
+      },
+    ]);
+    const [accepted] = observed?.acceptances ?? [];
+    expect(observed?.acceptances).toHaveLength(1);
+    expect(accepted?.receipt.deliveryId).toBe(
+      'observe:label:github.com/owner/repo#8:555:factory-intake:issue-8'
+    );
+
+    // The webhook for the same add starts the same binding with the same inputs and item.
+    const recorded = recorder();
+    const github = await adapter(config([intake()]), recorded.intake);
+    const payload = JSON.stringify({
+      action: 'labeled',
+      repository: { full_name: 'owner/repo' },
+      sender: { id: 4242, login: 'maintainer', type: 'User' },
+      issue: { number: 8, state: 'open' },
+      label: { id: 1, name: 'factory' },
+    });
+    await github.receiveWebhook(payload, sign(payload), 'delivery-label', 'issues');
+    expect(accepted?.outcome).toBe('matched');
+    expect(accepted?.bindings).toEqual(recorded.calls[0]?.bindings ?? []);
+
+    // While the read is seeding the same add is recorded, under the same delivery, unmatched.
+    const seeded = await plugin.observe?.({
+      waits: [],
+      labels: [{ ...read, seeding: true }],
+      forge: labelReader().forge,
+    });
+    expect(seeded?.acceptances).toMatchObject([
+      { outcome: 'unmatched', bindings: [], receipt: { deliveryId: accepted?.receipt.deliveryId } },
+    ]);
+    expect(seeded?.acceptances[0]?.receipt.contentDigest).toBe(accepted?.receipt.contentDigest);
   });
 });

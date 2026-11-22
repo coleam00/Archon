@@ -12,7 +12,7 @@ import {
 } from '@archon/forge/operations';
 import type { ForgeSubjectRef, PrRef, RepoRef } from '@archon/forge';
 import { GitHubError, githubPages, githubRequest, location, type Fetch } from './api';
-import { authorField, userSchema } from './actor';
+import { actor, authorField, userSchema } from './actor';
 import { applied, failure, refused, unverified, type Submit } from './mutation-outcome';
 
 const labelSchema = z.object({
@@ -563,6 +563,61 @@ export async function handleGithubWorkItemList(
         items: items
           .filter(item => item.labels.some(label => label.name === request.label))
           .map(item => itemRecord(request.repo, item)),
+      },
+    },
+  };
+}
+
+const issueEventSchema = z.object({
+  id: z.number().int(),
+  event: z.string(),
+  created_at: z.iso.datetime({ offset: true }),
+  actor: userSchema.optional(),
+  label: z.object({ name: z.string().min(1) }).optional(),
+});
+
+export async function handleGithubWorkItemLabelAdded(
+  request: Extract<ForgeRequest, { op: 'workitem.label.added' }>,
+  fetchImpl: Fetch,
+  token: string
+): Promise<ForgeResponse> {
+  const { repo, number } = request.subject.ref;
+  const { root, path } = location(repo);
+  const events = await githubPages(
+    fetchImpl,
+    token,
+    `${root}/repos/${path}/issues/${String(number)}/events`,
+    raw => z.array(issueEventSchema).parse(raw)
+  );
+  // GitHub matches label names case-insensitively elsewhere; the seam's names are exact.
+  const order = (event: z.infer<typeof issueEventSchema>): [number, number] => [
+    Date.parse(event.created_at),
+    event.id,
+  ];
+  const latest = events
+    .filter(event => event.event === 'labeled' && event.label?.name === request.name)
+    .reduce<z.infer<typeof issueEventSchema> | undefined>((last, event) => {
+      if (last === undefined) return event;
+      const [at, id] = order(event);
+      const [lastAt, lastId] = order(last);
+      return at > lastAt || (at === lastAt && id > lastId) ? event : last;
+    }, undefined);
+  return {
+    operationId: request.operationId,
+    ok: true,
+    result: {
+      op: request.op,
+      value: {
+        subject: request.subject,
+        name: request.name,
+        added:
+          latest === undefined
+            ? null
+            : {
+                id: String(latest.id),
+                at: latest.created_at,
+                actor: latest.actor === undefined ? null : actor(repo.host, latest.actor),
+              },
       },
     },
   };

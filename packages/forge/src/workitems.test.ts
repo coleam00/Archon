@@ -293,6 +293,38 @@ test('a label listing proves its repository, label and open state', () => {
     expect(matches(request, listed(wrong))).toBe(false);
 });
 
+test('a label-added read proves the item and label it was asked about', () => {
+  const subject = { kind: 'issue' as const, ref };
+  const request = {
+    operationId: 'added',
+    op: 'workitem.label.added',
+    subject,
+    name: 'queued',
+  } satisfies ForgeRequest;
+  const answered = (value: object): ForgeResponse =>
+    forgeResponseSchema.parse({
+      operationId: 'added',
+      ok: true,
+      result: {
+        op: request.op,
+        value: {
+          subject,
+          name: request.name,
+          added: { id: '9', at: '2026-11-23T10:00:00Z', actor: null },
+          ...value,
+        },
+      },
+    });
+  expect(matches(request, answered({}))).toBe(true);
+  expect(matches(request, answered({ added: null }))).toBe(true);
+  for (const wrong of [
+    { name: 'other' },
+    { subject: { kind: 'pr', ref } },
+    { subject: { kind: 'issue', ref: { ...ref, number: ref.number + 1 } } },
+  ])
+    expect(matches(request, answered(wrong))).toBe(false);
+});
+
 test('item and pull request views accept an author and still parse without one', () => {
   const author = { host: repo.host, id: '1', login: 'octo' };
   const pr = {

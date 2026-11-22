@@ -18,6 +18,7 @@ import {
   type SourceReceiptInput,
 } from '@archon/workflows/schemas/resource-start';
 import type {
+  ObservedLabels,
   SourceObservation,
   WebhookSourcePlugin,
   WebhookSourcePluginFactory,
@@ -210,7 +211,7 @@ async function observeWaits(
   sourceInstanceId: string,
   config: GitHubSourceConfig,
   { waits, forge }: ObserveInput
-): Promise<SourceObservation> {
+): Promise<Omit<SourceObservation, 'labelFailures'>> {
   const { targets, unserved } = planTargets(config, waits);
   const failed: SourceObservation['failed'] = [];
   const acceptances: SourceReceiptAcceptance[] = [];
@@ -333,6 +334,164 @@ function waitAcceptances(
   return { acceptances, unserved: [...rejections].map(reason => ({ wait, reason })) };
 }
 
+/**
+ * The label reads this source's `label.changed` bindings name, one per label name, and the
+ * label bindings it cannot observe, with why.
+ */
+function labelReadsOf(config: GitHubSourceConfig): ObservedLabels {
+  const reads: ObservedLabels['reads'] = [];
+  const unserved: NonNullable<ObservedLabels['unserved']> = [];
+  for (const binding of config.bindings) {
+    const { selector, bindingId } = binding;
+    if (selector.kind !== 'label.changed') continue;
+    const names = (selector.predicates ?? []).flatMap(predicate =>
+      predicate.field !== 'label.name'
+        ? []
+        : predicate.equals === undefined
+          ? (predicate.in ?? [])
+          : [predicate.equals]
+    );
+    const read = labelReadOf(config, binding, names);
+    if ('reason' in read) unserved.push({ bindingId, reason: read.reason });
+    else for (const label of new Set(names)) reads.push({ bindingId, repo: read.repo, label });
+  }
+  return { reads, unserved };
+}
+
+/** The repository a label binding lists, or why it cannot be observed. */
+function labelReadOf(
+  config: GitHubSourceConfig,
+  binding: GitHubSourceBinding,
+  names: readonly string[]
+): { repo: { host: string; path: string } } | { reason: string } {
+  const { selector } = binding;
+  // Observing as well would start it twice: by the webhook's delivery and by this read.
+  if (config.webhookSecretEnv !== undefined)
+    return { reason: 'this source receives webhooks; label events arrive by webhook' };
+  if (selector.kind !== 'label.changed' || !selector.actions.includes('added'))
+    return { reason: 'only an added label is observed' };
+  if (binding.wake !== undefined) return { reason: 'a label wake is not observed' };
+  if (selector.subject?.kind === 'pr')
+    return { reason: 'pull-request labels are not observed; only issues are' };
+  if (selector.repository === undefined)
+    return { reason: 'the selector names no repository to list' };
+  if (selector.repository.host !== config.host)
+    return { reason: `the selector's repository is not on ${config.host}` };
+  if (names.length === 0) return { reason: 'the selector names no label' };
+  return { repo: { host: config.host, path: selector.repository.path } };
+}
+
+type LabelRead = ObserveInput['labels'][number];
+type LabelFailure = SourceObservation['labelFailures'][number];
+
+const errorText = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+/**
+ * The label events a webhook would have carried for the open issues each read lists: one
+ * `label.changed` added event per issue, with the forge's own label-added event. While a
+ * read is seeding, each is recorded unmatched, so a label already on an issue when the
+ * binding is first seen starts nothing. Only state is seen: a label added and removed
+ * between two passes is never read.
+ */
+async function observeLabels(
+  sourceInstanceId: string,
+  config: GitHubSourceConfig,
+  { labels, forge }: ObserveInput
+): Promise<Pick<SourceObservation, 'acceptances' | 'labelFailures'>> {
+  const acceptances: SourceReceiptAcceptance[] = [];
+  const labelFailures: LabelFailure[] = [];
+  const receivedAt = new Date().toISOString();
+  for (const read of labels) {
+    const { bindingId, label, repo } = read;
+    const binding = config.bindings.find(entry => entry.bindingId === bindingId);
+    if (binding === undefined) continue;
+    let listed: Awaited<ReturnType<ObserveInput['forge']['issuesWithLabel']>>;
+    try {
+      listed = await forge.issuesWithLabel({ repo, label });
+    } catch (error) {
+      labelFailures.push({ bindingId, label, reason: errorText(error) });
+      continue;
+    }
+    // The list holds pull requests too; only issues are observed.
+    for (const item of listed.items.filter(entry => entry.kind === 'issue')) {
+      const result = await issueLabelAcceptance(sourceInstanceId, receivedAt, binding, read, {
+        number: item.ref.number,
+        forge,
+      });
+      if (result?.kind === 'failed') labelFailures.push(result.failure);
+      else if (result?.kind === 'accepted') acceptances.push(result.acceptance);
+    }
+  }
+  return { acceptances, labelFailures };
+}
+
+/**
+ * The acceptance one read makes for one labelled issue; why it cannot, as a failure; or
+ * nothing, when the binding does not select the event.
+ */
+async function issueLabelAcceptance(
+  sourceInstanceId: string,
+  receivedAt: string,
+  binding: GitHubSourceBinding,
+  read: LabelRead,
+  { number, forge }: { number: number; forge: ObserveInput['forge'] }
+): Promise<
+  | { kind: 'accepted'; acceptance: SourceReceiptAcceptance }
+  | { kind: 'failed'; failure: LabelFailure }
+  | undefined
+> {
+  const { bindingId, label, repo } = read;
+  const failure = (reason: string) => ({
+    kind: 'failed' as const,
+    failure: { bindingId, label, number, reason },
+  });
+  let added: Awaited<ReturnType<ObserveInput['forge']['labelAdded']>>['added'];
+  try {
+    ({ added } = await forge.labelAdded({ repo, number, label }));
+  } catch (error) {
+    return failure(errorText(error));
+  }
+  // Without the forge's event there is no identity for this add; never invent one.
+  if (added === null) return failure('the forge records no add');
+  const event = {
+    kind: 'label.changed',
+    action: 'added',
+    subject: { kind: 'issue', ref: { repo, number } },
+    // The list does not carry the label's own id.
+    label: { name: label, id: null },
+    actor: added.actor,
+  } satisfies ForgeEvent;
+  const evaluated = evaluateBinding(binding, event);
+  if ('skipped' in evaluated)
+    return evaluated.skipped.status === 'rejected'
+      ? failure(`the binding rejects the event: ${evaluated.skipped.reason}`)
+      : undefined;
+  const receipt: SourceReceiptInput = {
+    id: randomUUID(),
+    sourceInstanceId,
+    // A persisted contract: one delivery per label add, binding and item. The forge's event
+    // id makes a remove and re-add a new delivery; the same add read on a later pass is a
+    // replay, so it starts once.
+    deliveryId: `observe:label:${repo.host}/${repo.path}#${String(number)}:${added.id}:${bindingId}:${evaluated.start.itemKey ?? ''}`,
+    contentDigest: createHash('sha256').update(JSON.stringify(event)).digest('hex'),
+    receivedAt,
+    occurredAt: added.at,
+    sourceActor: added.actor === null ? null : { source: sourceInstanceId, id: added.actor.id },
+  };
+  return {
+    kind: 'accepted',
+    acceptance: read.seeding
+      ? {
+          receipt,
+          outcome: 'unmatched',
+          reason: 'label was on the issue when the binding was first observed',
+          bindings: [],
+        }
+      : { receipt, outcome: 'matched', bindings: [evaluated.start] },
+  };
+}
+
 /** Configured source plugins run as trusted operator-installed code. */
 const createGitHubWebhookSource: WebhookSourcePluginFactory = ({
   sourceInstanceId,
@@ -346,7 +505,16 @@ const createGitHubWebhookSource: WebhookSourcePluginFactory = ({
   if (config.webhookSecretEnv !== undefined && !secret)
     throw new Error('GitHub source plugin webhook secret is unavailable');
   return {
-    observe: input => observeWaits(sourceInstanceId, config, input),
+    observedLabels: labelReadsOf(config),
+    async observe(input) {
+      const waits = await observeWaits(sourceInstanceId, config, input);
+      const labels = await observeLabels(sourceInstanceId, config, input);
+      return {
+        ...waits,
+        acceptances: [...waits.acceptances, ...labels.acceptances],
+        labelFailures: labels.labelFailures,
+      };
+    },
     async receive(request): Promise<WebhookSourceResult> {
       if (
         secret === undefined ||
