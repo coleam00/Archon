@@ -404,9 +404,13 @@ export async function listNativeSchedules(
   archonHome: string,
   options: NativeScheduleOptions = {}
 ): Promise<InstalledSchedule[]> {
-  const backend = backendFor(options.platform ?? process.platform, archonHome, options);
+  const platform = options.platform ?? process.platform;
+  const backend = backendFor(platform, archonHome, options);
   if (!backend) return [];
+  // ARCHON_HOME is taken as written, so `/x/home` and `/x/home/` are one install.
+  const { resolve } = platform === 'win32' ? win32 : posix;
+  const home = resolve(archonHome);
   return (await backend.installed()).filter(
-    entry => !('archonHome' in entry) || entry.archonHome === archonHome
+    entry => !('archonHome' in entry) || resolve(entry.archonHome) === home
   );
 }

@@ -156,7 +156,13 @@ test('reports an installed timer outside the triggers directory that passes an u
   await writeFile(path, JSON.stringify(config({ a: 1, b: 1 })));
   await installTimer(path);
   scheduled.length = 0;
-  const before = [await readdir(join(archonHome, 'triggers')), await readdir(root)];
+  // The home holds no config.yaml yet; check must not create one.
+  const listing = async () => [
+    await readdir(join(archonHome, 'triggers')),
+    await readdir(archonHome),
+    await readdir(root),
+  ];
+  const before = await listing();
 
   const { bindings, error } = await check();
 
@@ -173,7 +179,7 @@ test('reports an installed timer outside the triggers directory that passes an u
   expect(error).toBeInstanceOf(Error);
   // Reading only: no scheduler command, no file written.
   expect(scheduled).toEqual([]);
-  expect([await readdir(join(archonHome, 'triggers')), await readdir(root)]).toEqual(before);
+  expect(await listing()).toEqual(before);
 });
 
 test('reports a timer that omits a required input, naming it', async () => {

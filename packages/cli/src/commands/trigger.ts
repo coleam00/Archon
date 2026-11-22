@@ -60,6 +60,7 @@ import {
 } from '../triggers/native-schedule';
 import { checkFireBindings, fireConfig } from '../triggers/fire-binding-check';
 import { resolveCliUserId } from './auth';
+import { loadConfig } from '@archon/core/config/config-loader';
 import { readCallingNode } from '../utils/calling-node';
 import { requestedBy } from '../utils/requested-by';
 
@@ -700,6 +701,8 @@ async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOption
     );
   const deps = {
     ...host.deps,
+    // A check changes nothing: a missing global config.yaml stays missing.
+    loadConfig: (cwd: string) => loadConfig(cwd, { readOnly: true }),
     projectKeyOf: (cwd: string) => registeredProjectKeyForPath(cwd, host.records.codebases),
   };
   const runEnded = bindings.filter(entry => 'runEnded' in entry);
@@ -719,7 +722,7 @@ async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOption
   const checked = {
     runEnded: runEnded.map((entry, index) => listed(entry, runEndedProblems[index])),
     asksSettled: asksSettled.map((entry, index) => listed(entry, asksSettledProblems[index])),
-    bindings: await checkFireBindings(host.deps, schedules),
+    bindings: await checkFireBindings(deps, schedules),
   };
   await writeJsonLine({ directory: getTriggersPath(), ...checked });
   const broken = [...checked.runEnded, ...checked.asksSettled, ...checked.bindings].filter(

@@ -567,6 +567,10 @@ describe('reading installed jobs back', () => {
       expect(await listNativeSchedules(archonHome, scheduler)).toEqual([
         expect.objectContaining({ label: LABEL, archonHome, programArguments }),
       ]);
+      // ARCHON_HOME is taken as written; another spelling of the same home finds the job.
+      expect(await listNativeSchedules(`${archonHome}/`, scheduler)).toEqual([
+        expect.objectContaining({ label: LABEL }),
+      ]);
     }
   );
 
