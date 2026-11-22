@@ -21,6 +21,7 @@ import {
   sourceReleasedEvent,
   operatorPauseRequestWrite,
   operatorPauseWrite,
+  RunLimitError,
   type FanOutCancelReason,
   type OperatorPauseRequest,
   type SourceReleaseWrite,
@@ -190,10 +191,22 @@ async function insertRunRow(
   return row;
 }
 
+/**
+ * Creating a sub-run admits it under the run limit: its tree's place covers it while the tree
+ * counts, and one created after its whole tree ended (a cancellation race with the parent's
+ * node) needs room like a new start, so it never revives an ended tree past the limit.
+ */
 export async function createWorkflowRun(data: WorkflowRunInsert): Promise<WorkflowRun> {
   try {
-    return await getDatabase().withTransaction(query => insertWorkflowRun(query, data));
+    return await getDatabase().withTransaction(async query => {
+      const full = data.parent_run_id
+        ? await runLimitRefusal(query, data.parent_run_id)
+        : undefined;
+      if (full) throw full;
+      return insertWorkflowRun(query, data);
+    });
   } catch (error) {
+    if (error instanceof RunLimitError) throw error;
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_create_failed');
     throw err;

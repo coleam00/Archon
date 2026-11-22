@@ -286,7 +286,46 @@ describe('run limit', () => {
     const live = [await bound('c'), await bound('c'), await bound('c')];
     const queued = [await bound('a'), await bound('b'), await bound('a')];
     for (const { id } of live) await end(id);
+    // The whole queue fits, so none of it waits for the limit, though a pass reaches b first.
+    expect((await store.getRunLimit())?.waiting).toEqual([]);
     expect(await drainHost()).toEqual(queued.map(start => start.id));
+  });
+
+  test('a new start of a host waits behind its older start elsewhere even with room for both', async () => {
+    await setRunLimit(2);
+    const live = [await bound('c'), await bound('c')];
+    const older = await bound('b');
+    for (const { id } of live) await end(id);
+    const newer = await bound('a');
+    expect(newer.disposition).toMatchObject({
+      status: 'queued',
+      blocker: { kind: 'request', id: older.id },
+    });
+    expect((await store.getRunLimit())?.waiting).toEqual([]);
+    expect(await drainHost()).toEqual([older.id, newer.id]);
+  });
+
+  test('a pending sub-run keeps its tree counted after its parent is cancelled', async () => {
+    await setRunLimit(1);
+    const parent = await running();
+    const plain = await hand(parent.id);
+    await setStatus(parent.id, 'cancelled');
+    // Only the pending child is left, and it holds the tree's place.
+    expect(await store.getRunLimit()).toMatchObject({ live: 1 });
+    const unrelated = await hand();
+    expect(await refusal(store.claimPendingWorkflowRun(unrelated.id))).toBeInstanceOf(
+      RunLimitError
+    );
+    // A sibling created now is inside the counted tree, and so is its resource admission.
+    const admitted = await hand(parent.id);
+    const onResource = launch();
+    onResource.run.id = admitted.id;
+    expect(
+      await store.admitPendingRun({ resource: 'other', capacity: 1, launch: onResource })
+    ).toBe(null);
+    expect(await store.claimPendingWorkflowRun(admitted.id)).toMatchObject({ status: 'running' });
+    expect(await store.claimPendingWorkflowRun(plain.id)).toMatchObject({ status: 'running' });
+    expect(await store.getRunLimit()).toMatchObject({ live: 1 });
   });
 
   test('a sub-run created or recovered after its whole tree ended needs room', async () => {
@@ -299,9 +338,8 @@ describe('run limit', () => {
     );
     await setStatus(parent.id, 'cancelled');
     const other = await running();
-    // A child created late, after its parent was cancelled, waits at its claim.
-    const late = await hand(parent.id);
-    expect(await refusal(store.claimPendingWorkflowRun(late.id))).toBeInstanceOf(RunLimitError);
+    // A child created late, after its parent was cancelled, is refused at its creation.
+    expect(await refusal(hand(parent.id))).toBeInstanceOf(RunLimitError);
     // An engine-cancelled child is not recovered into the room another tree holds.
     expect(await refusal(store.recoverCancelledFanOutRun(cancelledChild.id))).toBeInstanceOf(
       RunLimitError
@@ -309,6 +347,9 @@ describe('run limit', () => {
     expect(await status(cancelledChild.id)).toBe('cancelled');
     expect(await store.getRunLimit()).toMatchObject({ live: 1 });
     await end(other.id);
+    // With room, its creation takes the tree's place again, and its claim runs inside it.
+    const late = await hand(parent.id);
+    expect(await store.getRunLimit()).toMatchObject({ live: 1 });
     expect(await store.claimPendingWorkflowRun(late.id)).toMatchObject({ status: 'running' });
   });
 

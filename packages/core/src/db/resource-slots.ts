@@ -188,19 +188,21 @@ export async function installHoldRefusal(
 /**
  * The run trees that count against the run limit, as their roots' ids, oldest first. A tree is
  * a top-level run and its `workflow:` sub-runs. It counts from its root's admission until every
- * run in it is terminal, whatever its runs are doing (running, paused, resumed), so nothing
- * inside the tree can free or lose its place. A pending run makes its tree count only when it
- * is an admitted root: a pending sub-run is not yet executing, so one created or left pending
- * after its whole tree ended does not revive the tree; its claim needs room (`runLimitRefusal`).
+ * run in it is terminal, whatever its runs are doing (pending, running, paused, resumed), so
+ * nothing inside the tree can free or lose its place. The one non-terminal run that does not
+ * make its tree count is a pending root nothing admitted: a queued or skipped bound start, or
+ * a hand start before its claim. A sub-run is admitted when it is created (`createWorkflowRun`
+ * asks `runLimitRefusal` for its parent), so a pending sub-run only ever stands in a tree that
+ * already counted or took room.
  */
 async function countedTrees(query: TransactionQuery): Promise<string[]> {
   const counted = await query<{ id: string }>(
     `WITH RECURSIVE up(id, parent_run_id) AS (
        SELECT w.id, w.parent_run_id FROM remote_agent_workflow_runs w
         WHERE w.status NOT IN (${terminalList})
-          AND (w.status <> 'pending' OR (w.parent_run_id IS NULL AND EXISTS (
+          AND NOT (w.parent_run_id IS NULL AND w.status = 'pending' AND NOT EXISTS (
             SELECT 1 FROM remote_agent_resource_start_requests q
-             WHERE q.id = w.id AND q.status = 'admitted')))
+             WHERE q.id = w.id AND q.status = 'admitted'))
        UNION
        SELECT p.id, p.parent_run_id FROM remote_agent_workflow_runs p
          JOIN up ON p.id = up.parent_run_id
@@ -287,8 +289,9 @@ async function runnableHostStarts(
 /**
  * What the run limit puts in the way of a new start of `hostId` on `resource` that its resource
  * would admit (`resourceStartBlocker` returned null): the oldest counted tree while the limit
- * is full, or the host's oldest runnable start elsewhere while those starts fill the room. Null
- * when there is room. The caller applies `overlap` to it as to any blocker.
+ * is full, or else the host's oldest runnable start on another resource, which goes first as
+ * an older request of the host does on the same resource. Null otherwise. The caller applies
+ * `overlap` to it as to any blocker.
  */
 export async function runLimitBlocker(
   query: TransactionQuery,
@@ -299,13 +302,38 @@ export async function runLimitBlocker(
   if (blocker || room === Infinity) return blocker;
   const { elsewhere } = await runnableHostStarts(query, hostId, resource);
   const first = elsewhere[0];
-  return first && elsewhere.length >= room ? { kind: 'request', id: first.id } : null;
+  return first ? { kind: 'request', id: first.id } : null;
 }
 
 /**
- * The prefix of `starts`, drainable on `resource` for `hostId`, that the run limit admits
- * now. The room goes to the host's oldest runnable starts across all its resources, and only
- * the leading ones on this resource are returned: none past the host's next older start on
+ * The run limit's room for `starts`, drainable on `resource` for `hostId`: the host's runnable
+ * starts on all its resources, oldest first (`ranked`), and the ids among them the room holds
+ * now (`roomFor`, everything when no limit is set).
+ */
+async function rankRunRoom(
+  query: TransactionQuery,
+  hostId: string,
+  resource: string,
+  starts: readonly { id: string }[]
+): Promise<{ ranked: string[]; roomFor: Set<string> }> {
+  const { room } = await readRunRoom(query);
+  if (room === Infinity) {
+    const ids = starts.map(start => start.id);
+    return { ranked: ids, roomFor: new Set(ids) };
+  }
+  const { elsewhere, positions } = await runnableHostStarts(query, hostId, resource);
+  const ranked = [
+    ...starts.map(start => ({ id: start.id, position: positions.get(start.id) ?? Infinity })),
+    ...elsewhere,
+  ]
+    .sort((a, b) => a.position - b.position)
+    .map(start => start.id);
+  return { ranked, roomFor: new Set(ranked.slice(0, room)) };
+}
+
+/**
+ * The prefix of `starts`, drainable on `resource` for `hostId`, that a drain admits now: those
+ * the run limit's room holds (`rankRunRoom`), and only up to the host's next older start on
  * another resource. A host drain that passes over its resources until a pass admits nothing
  * (`drainResourceStartHost`) therefore admits in the host's queue order.
  */
@@ -315,17 +343,11 @@ export async function withinRunRoom<T extends { id: string }>(
   resource: string,
   starts: T[]
 ): Promise<T[]> {
-  const { room } = await readRunRoom(query);
-  if (room === Infinity) return starts;
-  const { elsewhere, positions } = await runnableHostStarts(query, hostId, resource);
+  const { ranked, roomFor } = await rankRunRoom(query, hostId, resource, starts);
   const mine = new Set(starts.map(start => start.id));
-  const ranked = [
-    ...starts.map(start => ({ id: start.id, position: positions.get(start.id) ?? Infinity })),
-    ...elsewhere,
-  ].sort((a, b) => a.position - b.position);
   const admitted = new Set<string>();
-  for (const { id } of ranked.slice(0, room)) {
-    if (!mine.has(id)) break;
+  for (const id of ranked) {
+    if (!roomFor.has(id) || !mine.has(id)) break;
     admitted.add(id);
   }
   return starts.filter(start => admitted.has(start.id));
@@ -333,9 +355,9 @@ export async function withinRunRoom<T extends { id: string }>(
 
 /**
  * The run limit with the queued requests that only it holds now: those a drain of their host
- * would admit on their resource (`drainableStarts`) and the limit's room does not
- * (`withinRunRoom`). Computed by the drain's own functions from current state, so a reader
- * sees what the next drain would do. Null when no limit is set.
+ * would admit on their resource (`drainableStarts`) and the limit's room does not hold
+ * (`rankRunRoom`). A start the room holds but a pass reaches later is not waiting for the
+ * limit. Computed by the drain's own functions from current state. Null when no limit is set.
  */
 export async function readRunLimitWaiting(
   query: TransactionQuery
@@ -353,10 +375,8 @@ export async function readRunLimitWaiting(
       await resourceStartOccupancy(query, resource, capacity),
       hostId
     );
-    const admitted = new Set(
-      (await withinRunRoom(query, hostId, resource, drainable)).map(start => start.id)
-    );
-    for (const start of drainable) if (!admitted.has(start.id)) waiting.push(start.id);
+    const { roomFor } = await rankRunRoom(query, hostId, resource, drainable);
+    for (const start of drainable) if (!roomFor.has(start.id)) waiting.push(start.id);
   }
   return { limit: runLimit.limit, live: runLimit.live, waiting };
 }
@@ -365,10 +385,11 @@ export async function readRunLimitWaiting(
  * The one rule for whether run `runId` may execute now under the run limit: it passes while
  * its tree already counts (`countedTrees`), since it executes inside its tree's place, and
  * otherwise needs `live < limit`. Every admission point asks it: a hand start's claim or
- * resource admission, a sub-run's, every resume and a cancelled sub-run's recovery. An admitted
- * root, any sub-run of a counted tree, and a paused root therefore pass; a hand start and a failed tree's
- * resume need room, and so does a sub-run claimed or recovered after its whole tree ended. The
- * caller asks only for a run it is about to make execute. Takes `lockAdmission` only when a
+ * resource admission, a sub-run's creation (asked for its parent), every resume and a
+ * cancelled sub-run's recovery. An admitted root, any sub-run of a counted tree, and a paused
+ * root therefore pass; a hand start, a failed tree's resume, and a sub-run created or recovered
+ * after its whole tree ended need room. The caller asks only for a run it is about to make
+ * execute or create. Takes `lockAdmission` only when a
  * limit is set, so an install without one decides claims and resumes as it did before.
  */
 export async function runLimitRefusal(
