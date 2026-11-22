@@ -56,6 +56,9 @@ mock.module('@archon/core/workflows/definition-source', () => ({
   startsPinnedInPlace: () => {
     throw new Error('startsPinnedInPlace is not mocked here');
   },
+  resolveDefinitionsBase: async () => {
+    throw new Error('resolveDefinitionsBase is not mocked here');
+  },
 }));
 
 export const mockCreateWorkflowEvent = mock(() => Promise.resolve());
