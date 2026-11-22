@@ -125,12 +125,17 @@ format, generated files, the ratchet), the Linux test jobs (`test`, `test-script
 `test-pack`), `schema-upgrade` and `postgres-parity`. A push to `dev` or `main` runs every
 job on every platform, and that run is the complete verification of a merge. On Windows a push
 to `dev` runs only the Windows set (`windows-set`, see "How a test joins the Windows set"
-below); a push to `main` also runs the whole suite there. These jobs wait for the push:
+below); a push to `main` also runs the whole suite there. Once a day a scheduled run runs the
+whole suite on Windows for `dev`, and no other job a change selects, when `dev` has a commit no
+completed scheduled run covered; a scheduled run that succeeded or failed counts, a cancelled one
+does not. A failed scheduled run comments on the open issue titled "Scheduled Windows suite fails
+on dev", or opens it, with the failed jobs and the failing tests their logs name. These jobs wait
+for the push:
 
 | Job | Also runs on a pull request that changes |
 | --- | --- |
 | `windows-set`, `file-store-primitives-macos` | nothing narrower than the list below |
-| `test-windows`, `test-scripts-windows`, `test-pack-windows` (the whole suite on Windows) | nothing narrower than the list below; a push runs them only on `main` |
+| `test-windows`, `test-scripts-windows`, `test-pack-windows` (the whole suite on Windows) | nothing narrower than the list below; a push runs them only on `main`, and the daily schedule on `dev` |
 | `docker-build` | `Dockerfile`, `.dockerignore`, `docker-entrypoint.sh`, or a script the image build or its upgrade test runs |
 | `serve-binary` | `scripts/build-binaries.sh` or a smoke test the job runs |
 
@@ -147,7 +152,8 @@ pull request's checks. A dispatch runs the Windows set; add `-f windows-full-sui
 the whole suite on Windows, as a push to `main` runs it. Dispatching needs write access, and the branch must be in this
 repository, so on a pull request from a fork a maintainer decides whether to push the branch
 here and dispatch it. A break that only another platform shows otherwise appears in the push
-run on `dev`, or, when no test in the Windows set reaches it, in the push run on `main`.
+run on `dev`, or, when no test in the Windows set reaches it, in the next scheduled run on `dev`,
+which opens or comments on the scheduled failure issue.
 
 A change touching only prose or files no check reads skips the test, service and binary jobs.
 `scripts/should-run-test-suite.ts` decides which files those are: Markdown and the docs site
@@ -167,7 +173,7 @@ included, and otherwise runs them, so a prose change's test-visible effects are 
 
 The tests under `.archon/scripts/` (the SDLC pack's script tests) and the workflow fixtures
 run in the `test-pack` job (and `test-pack-windows` when it runs, which a push does only on
-`main`) when a pull request or an unproven push changes the pack or a
+`main` and the daily schedule does on `dev`) when a pull request or an unproven push changes the pack or a
 contract it is written against: `PACK_INPUTS` in `scripts/should-run-test-suite.ts` lists
 those paths. Run them locally with `bun run test --plan pack` and
 `bun run validate --only workflow-fixtures`; a single test file runs with
@@ -190,10 +196,11 @@ lines include `// @archon-test-windows`. Those lines must start the file and fol
 another: a blank line, a block comment or an import before the marker hides it. When a file
 has both, `// @archon-test-isolated` stays on line 1 and the Windows marker follows it;
 discovery refuses the isolation directive anywhere else in those leading lines. Every other test
-runs on Windows only on a push to `main`, on a pull request whose change runs every job (see
-`EVERY_JOB_INPUTS` above), or on a dispatch with `windows-full-suite=true`. Most of those
-prove nothing Linux does not, but not all: a Windows branch in an unmarked file, such as an
-assertion whose expected value differs on Windows, is not checked on `dev`. When that branch
+runs on Windows only on a push to `main`, in the daily scheduled run on `dev`, on a pull
+request whose change runs every job (see `EVERY_JOB_INPUTS` above), or on a dispatch with
+`windows-full-suite=true`. Most of those prove nothing Linux does not, but not all: a Windows
+branch in an unmarked file, such as an assertion whose expected value differs on Windows, is
+not checked by a push to `dev`, only by the next scheduled run. When that branch
 is what the test is about, move the case into a marked file.
 
 Mark a file when its subject behaves differently on Windows and the test exercises the real
