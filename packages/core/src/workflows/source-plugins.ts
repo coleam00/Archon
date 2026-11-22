@@ -170,15 +170,24 @@ async function loadSourcePlugin(source: SourceEntry): Promise<WebhookSourcePlugi
   return plugin;
 }
 
+/**
+ * The configured sources' plugins. `observingOnly` loads just the sources that declare
+ * `observe`, for a host that receives no webhooks: a source it would never call cannot
+ * stop it, such as one whose webhook secret is only in the server's environment.
+ */
 export async function loadWebhookSourcePlugins(
   configPath: string,
-  dependencies: WebhookSourceHostDependencies
+  dependencies: WebhookSourceHostDependencies,
+  options: { observingOnly?: boolean } = {}
 ): Promise<WebhookSourcePluginHost> {
   const parsed = await readSourceConfig(configPath);
   const plugins = new Map<string, WebhookSourcePlugin>();
   const observing: ObservingSource[] = [];
+  const loaded = options.observingOnly
+    ? parsed.sources.filter(source => source.observe !== undefined)
+    : parsed.sources;
 
-  for (const source of parsed.sources) {
+  for (const source of loaded) {
     if (plugins.has(source.sourceInstanceId))
       throw new Error(`Duplicate webhook source instance '${source.sourceInstanceId}'`);
     plugins.set(source.sourceInstanceId, await loadSourcePlugin(source));

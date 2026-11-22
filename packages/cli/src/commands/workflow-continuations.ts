@@ -495,9 +495,10 @@ async function reportObserved(
 /**
  * Hand the starts observation recorded to their executors, host by host. A met wait is
  * closed when its receipt is recorded, so a later pass never observes it again: a host
- * whose drain fails stays owed and is drained again on this process's next pass. The owed
- * set lives only in this process; issue 6019 makes every wake pass drain the hosts the
- * install's trigger files name, which recovers a start after a restart too.
+ * whose drain fails stays owed and is drained again on this process's next pass. Every wake
+ * pass also drains the hosts this install's trigger files name (`wakePass`), but a source
+ * binding's host is named in the source configuration and may be in no trigger file, so
+ * observation drains its own. The owed set lives only in this process.
  */
 async function drainOwed(
   host: WorkflowHost,

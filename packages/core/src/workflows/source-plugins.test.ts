@@ -535,6 +535,33 @@ describe('observing open item waits', () => {
     expect(conflicting).toMatchObject({ receipts: [], conflicts: 1 });
   });
 
+  test('a host that receives no webhooks loads only the sources that observe', async () => {
+    const configPath = await observingFixture({ acceptances: [] });
+    const config = JSON.parse(await Bun.file(configPath).text()) as {
+      sources: Record<string, unknown>[];
+    };
+    // A webhook-only source whose module this process could never load.
+    config.sources.push({
+      sourceInstanceId: 'webhook-only',
+      module: '/missing/source.ts',
+      config: {},
+    });
+    await writeFile(configPath, JSON.stringify(config), 'utf8');
+    const dependencies = {
+      acceptReceipt: async () => ({ receiptId: 'unused', replay: false }),
+      isKnownUser: async () => true,
+      hasDeliveryReceipt: async () => false,
+    };
+    await expect(loadWebhookSourcePlugins(configPath, dependencies)).rejects.toThrow(
+      'webhook-only'
+    );
+    const sources = await loadWebhookSourcePlugins(configPath, dependencies, {
+      observingOnly: true,
+    });
+    expect(sources.observing.map(source => source.sourceInstanceId)).toEqual(['source-1']);
+    expect(sources.hasSource('webhook-only')).toBe(false);
+  });
+
   test('a source without observe is never observed, and one whose plugin cannot is refused', async () => {
     const { configPath } = await fixture({ status: 'rejected', reason: 'unauthenticated' });
     const dependencies = {

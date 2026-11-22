@@ -21,12 +21,17 @@ export async function wakeObservation(
       import('@archon/adapters/forge/source-forge-reader'),
     ]);
   const { store } = host.deps;
-  const sources = await loadWebhookSourcePlugins(configPath, {
-    acceptReceipt: input => store.acceptStartReceipt(input),
-    isKnownUser: async id => (await host.records.users.getUserById(id)) !== null,
-    hasDeliveryReceipt: (sourceInstanceId, deliveryId) =>
-      store.hasStartReceiptForDelivery(sourceInstanceId, deliveryId),
-  });
+  const sources = await loadWebhookSourcePlugins(
+    configPath,
+    {
+      acceptReceipt: input => store.acceptStartReceipt(input),
+      isKnownUser: async id => (await host.records.users.getUserById(id)) !== null,
+      hasDeliveryReceipt: (sourceInstanceId, deliveryId) =>
+        store.hasStartReceiptForDelivery(sourceInstanceId, deliveryId),
+    },
+    // Wake receives no webhooks: a source that does not observe is never loaded here.
+    { observingOnly: true }
+  );
   const observer = createItemWaitObserver({
     sources,
     store,
