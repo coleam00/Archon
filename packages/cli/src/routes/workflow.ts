@@ -4,6 +4,7 @@
  */
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { isContinueSubcommand, rejectRunFlagsOnContinue } from '../dispatch-guards';
+import type { ItemTarget } from '../commands/item-target';
 import type { WorkflowLinkRequest } from '../commands/workflow-link';
 import { writeJsonLine } from '../utils/stdout';
 import { type CliRouteContext, fail } from './context';
@@ -680,9 +681,7 @@ export async function runWorkflowMerged(route: WorkflowRoute): Promise<number> {
 }
 
 /** Exactly one of `--item <key>` and `--item-of <run-id>`, or undefined. */
-function itemTarget(
-  values: WorkflowRoute['values']
-): { item: string } | { itemOf: string } | undefined {
+function itemTarget(values: WorkflowRoute['values']): ItemTarget | undefined {
   const item = values.item as string | undefined;
   const itemOf = values['item-of'] as string | undefined;
   if (item !== undefined && itemOf === undefined) return { item };
