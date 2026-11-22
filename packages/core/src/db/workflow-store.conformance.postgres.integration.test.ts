@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { resourceStartFixtures } from '@archon/workflows/store-conformance';
-import { executionClaim } from '@archon/workflows/store';
+import { WorkflowRunDeleteRefusedError, executionClaim } from '@archon/workflows/store';
 import { workflowPathPriorityTime } from '@archon/workflows/workflow-path-lock';
 import {
   describeWorkflowStoreConformance,
@@ -406,6 +406,89 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   describeSqlItemWaitConformance(makeHarness);
   describeSqlItemAskStartConformance(makeHarness);
   describeSqlRunDeleteConformance(makeHarness);
+  // A deletion decides on a tree, so a sub-run that becomes live while it runs must make it
+  // keep the parent, never split the tree or strip the kept parent's events. The gate holds
+  // the overlapping write uncommitted until the deletion is parked behind it.
+  const overlaps = {
+    'a sub-run is created': async (gate: Pool, parent: string) => {
+      const id = randomUUID();
+      await gate.query(
+        `INSERT INTO remote_agent_workflow_runs (id, workflow_name, user_message, parent_run_id)
+         VALUES ($1, 'late-child', '', $2)`,
+        [id, parent]
+      );
+      return id;
+    },
+    'a finished sub-run is resumed': async (gate: Pool, _parent: string, finished: string) => {
+      await gate.query("UPDATE remote_agent_workflow_runs SET status = 'running' WHERE id = $1", [
+        finished,
+      ]);
+      return finished;
+    },
+  };
+  test.each(
+    (['delete', 'cleanup'] as const).flatMap(path =>
+      (Object.keys(overlaps) as (keyof typeof overlaps)[]).map(overlap => [path, overlap] as const)
+    )
+  )('%s keeps a parent when %s while it runs', async (path, overlap) => {
+    const harness = await makeHarness();
+    const gate = new Pool({ connectionString: harness.url, max: 1 });
+    let gateOpen = false;
+    try {
+      const { db, store } = harness;
+      const old = new Date(Date.now() - 10 * 86_400_000);
+      const parent = await store.createWorkflowRun({ workflow_name: 'parent', user_message: '' });
+      const finished = await store.createWorkflowRun({
+        workflow_name: 'child',
+        user_message: '',
+        parent_run_id: parent.id,
+      });
+      for (const run of [finished, parent]) {
+        await store.claimPendingWorkflowRun(run.id);
+        await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+        await harness.backdate(run.id, { started_at: old, active_phase_started_at: old });
+      }
+      const events = await store.listWorkflowEvents(parent.id);
+      expect(events.length).toBeGreaterThan(0);
+      const parked = async () => {
+        for (let tries = 0; tries < 200; tries++) {
+          const waiting = await db.query<{ n: number }>(
+            `SELECT count(*)::int AS n FROM pg_stat_activity
+              WHERE datname = current_database() AND wait_event_type = 'Lock'`
+          );
+          if ((waiting.rows[0]?.n ?? 0) >= 1) return;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        throw new Error('Expected the deletion to wait on a lock');
+      };
+
+      await gate.query('BEGIN');
+      gateOpen = true;
+      const live = await overlaps[overlap](gate, parent.id, finished.id);
+      const { deleteWorkflowRun } = await import('./workflow-run-writes');
+      const deletion = (
+        path === 'delete' ? deleteWorkflowRun(parent.id) : store.deleteOldWorkflowRuns(7)
+      ).catch((error: unknown) => error);
+      await parked();
+      await gate.query('COMMIT');
+      gateOpen = false;
+      const outcome = await deletion;
+
+      if (path === 'delete') {
+        expect(outcome).toBeInstanceOf(WorkflowRunDeleteRefusedError);
+        expect((outcome as Error).message).toContain(live);
+      } else {
+        expect(outcome).not.toBeInstanceOf(Error);
+      }
+      expect(await store.getWorkflowRunStatus(parent.id)).toBe('completed');
+      expect(await store.listWorkflowEvents(parent.id)).toEqual(events);
+      expect((await store.getWorkflowRun(live))?.parent_run_id).toBe(parent.id);
+    } finally {
+      if (gateOpen) await gate.query('ROLLBACK');
+      await gate.end();
+      await harness.close();
+    }
+  });
   test('two completions of one workflow on one item that overlap leave one open set: the later one', async () => {
     const harness = await makeHarness();
     // Holding the item row FOR UPDATE parks each completion at its ask insert, whose
