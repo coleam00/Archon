@@ -17,6 +17,20 @@ async function assertTrustFiles(
   if (newlinePath) expect(await Bun.file(sibling).text()).toBe(siblingContents);
 }
 
+/** Boot while another writer holds the global config lock, then release it. */
+async function bootWhileConfigLockHeld(env: Record<string, string>, config: string): Promise<void> {
+  await writeFile(`${config}.lock`, 'held');
+  const boot = Bun.spawn(['bash', resolve(import.meta.dir, '../docker-entrypoint.sh')], {
+    env,
+    stderr: 'pipe',
+  });
+  await Bun.sleep(1_000);
+  expect(boot.exitCode).toBeNull();
+  expect(await Bun.file(`${config}.lock`).text()).toBe('held');
+  await unlink(`${config}.lock`);
+  expect(await boot.exited).toBe(0);
+}
+
 test.skipIf(process.platform === 'win32').each([false, true])(
   'Docker startup preserves exact effective trust (newline path: %s)',
   async newlinePath => {
@@ -93,7 +107,8 @@ elif [ "$5" = --unset-all ]; then
   touch "$ARCHON_TEST_MARKER"
 elif [ "$5" = --replace-all ] && [ "$ARCHON_TEST_FAIL" = 1 ]; then
   echo injected-replacement-failure >&2
-  exit 9
+  # A git killed by a signal is not waited out as a held lock, so the failure surfaces.
+  kill -KILL $$
 else
   exec "$ARCHON_TEST_GIT" "$@"
 fi
@@ -135,18 +150,15 @@ fi
     expect(scan.exitCode).toBe(7);
     expect(scan.stderr.toString()).toContain('scan-failed');
     await writeFile(join(bin, 'find'), `#!/bin/sh\n${scripts.find}\n`, { mode: 0o755 });
+    // Another writer holds the config lock: startup waits for it, for a repair and for a
+    // first grant, and leaves the lock to its owner.
     git('config', '--global', '--add', 'safe.directory', repo);
-    await writeFile(`${config}.lock`, '');
-    expect(() =>
-      execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env })
-    ).toThrow();
-    await unlink(`${config}.lock`);
+    await bootWhileConfigLockHeld(env, config);
     git('config', '--global', '--fixed-value', '--unset-all', 'safe.directory', repo);
-    await writeFile(`${config}.lock`, '');
-    expect(() =>
-      execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env })
-    ).toThrow();
-  }
+    await bootWhileConfigLockHeld(env, config);
+    execFileSync(realGit, ['-C', repo, 'status', '--porcelain'], { env });
+  },
+  30_000
 );
 
 test.skipIf(process.platform === 'win32').each(['include-reset', 'two-globals'])(

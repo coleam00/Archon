@@ -7,6 +7,11 @@ import {
   readExecutionOwner,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { readCheckoutHandoff } from '@archon/workflows/schemas/resource-start';
+import {
+  readSubrunMetadata,
+  readWorkflowSourceState,
+} from '@archon/workflows/schemas/run-metadata';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import {
@@ -25,7 +30,8 @@ export interface WorkflowStatusData {
 /**
  * Why resume left a run unchanged.
  *
- * `not_resumable`: the run is in a status resume cannot continue.
+ * `not_resumable`: the run is in a status resume cannot continue, or it failed before it
+ *   got a checkout to continue in.
  * `awaiting_answer`: the run is paused at an attention wait that needs an answer.
  * `live_owner`: the run is `running` and its owner, or its root run's owner, answers on
  *   this host. A second executor would run the same work. It resumes once that process
@@ -112,6 +118,7 @@ export async function resumeWorkflow(
   await ctx.assertMayAct(run, actor, 'resume');
   if (run.status === 'running') {
     await assertNoLiveOwner(ctx, run);
+    assertHasCheckout(run);
     return run;
   }
   if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
@@ -131,7 +138,63 @@ export async function resumeWorkflow(
         'Answer it with answer instead of resuming it.'
     );
   }
+  assertHasCheckout(run);
   return run;
+}
+
+/**
+ * Refuse a run that has no checkout to continue in. A start fails this way when its
+ * worktree could not be prepared: the run was recorded first, with no working path, and
+ * failed before it got one. Preparing a checkout now would be a new start, so the refusal
+ * names the command that makes one.
+ */
+function assertHasCheckout(run: WorkflowRun): void {
+  if (run.working_path) return;
+  // Names only: a value can be large or secret, and the operator has it where it came from.
+  const inputNames = Object.keys(readSubrunMetadata(run.metadata).inputs ?? {});
+  const inputs =
+    inputNames.length > 0
+      ? ` It was started with the inputs ${inputNames.join(', ')}; pass each with --input <name>=<value>.`
+      : '';
+  throw new ResumeRefusedError(
+    'not_resumable',
+    `Run ${run.id} failed before its checkout was prepared, so there is nothing to resume. ` +
+      `Start it again with: ${restartCommand(run)}${inputs}`
+  );
+}
+
+/**
+ * The `workflow run` that starts a run again on the checkout and definitions it was given.
+ * A stage given another run's checkout gets the same lane: `continue` adopts that run, and
+ * `copy` cuts a fresh worktree at the hand-off's commit, as the start would have, rather
+ * than adopting a checkout that may since have moved. `--supersedes` keeps the run's item.
+ * A malformed hand-off throws: no command here would start the stage where it was meant to.
+ */
+function restartCommand(run: WorkflowRun): string {
+  const handoff = readCheckoutHandoff(run);
+  const lane =
+    handoff?.lane === 'continue'
+      ? `--adopt ${handoff.runId}`
+      : `--supersedes ${run.id}${handoff ? ` --from ${handoff.commit}` : ''}`;
+  const source = readWorkflowSourceState(run.metadata);
+  const definitions = source.kind === 'recorded' ? source.record.definitions : undefined;
+  const explicitSource =
+    definitions?.from === 'source' ? ` --workflow-source ${shellWord(definitions.root)}` : '';
+  return `archon workflow run ${shellWord(run.workflow_name)} ${lane}${explicitSource}`;
+}
+
+/**
+ * A value as one argument in the shell an operator pastes it into: a POSIX shell, or
+ * PowerShell on Windows. Plain words stay bare. Otherwise double quotes, which both
+ * shells read literally unless the value holds `"`, `$`, a backtick, `!` (bash history),
+ * or a backslash that POSIX would read as an escape: doubled, or before the closing
+ * quote. Only such a value gets POSIX single quotes, whose `'\\''` escape PowerShell
+ * does not share.
+ */
+function shellWord(value: string): string {
+  if (/^[\w@%+=:,./-]+$/.test(value)) return value;
+  if (!/["$`!]|\\\\|\\$/.test(value)) return `"${value}"`;
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 /**

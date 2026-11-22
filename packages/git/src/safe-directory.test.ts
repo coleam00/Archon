@@ -260,6 +260,49 @@ describe('git utilities', () => {
       }
     });
 
+    test.each(['first grant', 'repair'] as const)(
+      'a %s waits for a held global config lock and never removes it',
+      async write => {
+        execSpy.mockRestore();
+        const root = trackTempRoot(await realpath(await mkdtemp(join(tmpdir(), 'git-safe-held-'))));
+        const configPath = join(root, 'gitconfig');
+        const restoreEnvironment = saveEnvironment(
+          'GIT_CONFIG_GLOBAL',
+          'GIT_TEST_ASSUME_DIFFERENT_OWNER'
+        );
+        // As on Windows: the new path keeps its grant, so the global config is written.
+        Object.assign(process.env, {
+          GIT_CONFIG_GLOBAL: configPath,
+          GIT_TEST_ASSUME_DIFFERENT_OWNER: '1',
+        });
+        try {
+          // A reset entry sends the write through the lock-taking repair.
+          await writeFile(configPath, write === 'repair' ? '[safe]\n\tdirectory = \n' : '');
+          const lock = `${configPath}.lock`;
+          // Stands in for another setup's `git config --global` holding the lock.
+          await writeFile(lock, 'held by another process');
+          const checkout = repo(join(root, 'worktree'));
+          let settled = false;
+          const adding = git.addSafeDirectory(checkout).finally(() => (settled = true));
+          await Bun.sleep(600);
+          expect(settled).toBe(false);
+          expect(await readFile(lock, 'utf8')).toBe('held by another process');
+          await rm(lock);
+
+          await adding;
+          const { stdout } = await git.execFileAsync('git', [
+            'config',
+            '--global',
+            '--get-all',
+            'safe.directory',
+          ]);
+          expect(stdout.trim().split('\n').at(-1)).toBe(checkout);
+        } finally {
+          restoreEnvironment();
+        }
+      }
+    );
+
     // Windows and root keep the write: git compares owner SIDs on Windows, which
     // we do not read, and judges root callers by SUDO_UID.
     test.skipIf(process.platform === 'win32' || process.geteuid?.() === 0)(

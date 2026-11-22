@@ -73,7 +73,11 @@ async function paused(
   form: NonNullable<WorkflowAttentionWaitContext['form']> | undefined,
   pauseId: string | null = 'pause-1'
 ): Promise<string> {
-  const run = await store.createWorkflowRun({ workflow_name: 'ask', user_message: '' });
+  const run = await store.createWorkflowRun({
+    workflow_name: 'ask',
+    user_message: '',
+    working_path: '/workspace/ask',
+  });
   await store.claimPendingWorkflowRun(run.id);
   await store.pauseWorkflowRunForWait(
     run.id,

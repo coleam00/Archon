@@ -646,6 +646,49 @@ describe('WorktreeProvider against real git', () => {
     }
   });
 
+  test.each([false, true])(
+    'two creates on one managed clone at the same moment both get a worktree (git checks ownership: %s)',
+    async checksOwnership => {
+      // A clone under the Archon workspaces is reset to its base before each cut, so the
+      // two creates take the clone's index lock together.
+      const remote = join(root, 'remote');
+      await cp(templateRepo, remote, { recursive: true });
+      const clone = join(root, 'archon-home', 'workspaces', 'acme', 'widgets', 'source');
+      await mkdir(join(clone, '..'), { recursive: true });
+      await git(root, 'clone', '-q', remote, clone);
+      const previousOwnerCheck = process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+      if (checksOwnership) {
+        // As on Windows: each new worktree's grant is written to the one global config.
+        await git(root, 'config', '--global', '--add', 'safe.directory', clone);
+        process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1';
+      }
+      try {
+        for (let round = 0; round < 4; round++) {
+          const starts = await Promise.allSettled(
+            ['1', '2'].map(n =>
+              provider.create({
+                codebaseId: request.codebaseId,
+                codebaseName: CODEBASE_NAME,
+                canonicalRepoPath: toRepoPath(clone),
+                workflowType: 'issue',
+                identifier: `${String(round)}${n}`,
+                baseBranch: toBranchName('main'),
+              })
+            )
+          );
+          expect(starts.map(start => (start.status === 'rejected' ? start.reason : 'ok'))).toEqual([
+            'ok',
+            'ok',
+          ]);
+        }
+      } finally {
+        if (previousOwnerCheck === undefined) delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+        else process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = previousOwnerCheck;
+      }
+    },
+    30_000
+  );
+
   test('post-create sees copied files in a new checkout of an existing branch and skips reuse', async () => {
     await writeFile(join(repoPath, '.seed'), 'seed');
     let executions = 0;
