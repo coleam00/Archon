@@ -10,8 +10,11 @@ import {
   type ScopedChange,
   changeScope,
   changedFiles,
+  lintInputs,
+  lintPlan,
   scopedTypeChecks,
 } from './check-changed';
+import { REPO_ROOT } from './type-check';
 import { workspaceTestInputs } from './should-run-test-suite';
 
 // leaf -> mid -> base, and the root manifest depends on mid.
@@ -101,6 +104,58 @@ describe('changeScope', () => {
   test('an unmapped root file checks everything and names the file', () => {
     const scope = changeScope(['packages/leaf/a.ts', 'Dockerfile'], graph, inputs);
     expect(scope.kind === 'everything' && scope.because.join()).toContain('Dockerfile');
+  });
+});
+
+describe('lintPlan', () => {
+  const fakeInputs = new Set([
+    'scripts/check-mock-modules.ts',
+    'scripts/mock-module-baseline.json',
+  ]);
+  const plan = (files: string[]) =>
+    lintPlan(changeScope(files, graph, inputs), files, graph, fakeInputs);
+  const runs = (files: string[]) =>
+    Object.fromEntries(plan(files).steps.map(step => [step.id, step.run]));
+
+  test('a leaf change scopes mock-modules to the leaf', () => {
+    const lint = plan(['packages/leaf/src/index.ts']);
+    const mock = lint.steps.find(step => step.id === 'check-mock-modules');
+    expect(mock?.args.slice(-2)).toEqual(['--scope', 'packages/leaf']);
+    expect(lint.wholeBecause).toEqual([]);
+  });
+
+  test('a scoped change scopes mock-modules to its dependents and the root scripts', () => {
+    const mock = plan(['packages/base/src/index.ts']).steps.find(
+      step => step.id === 'check-mock-modules'
+    );
+    expect(mock?.note).toBe('packages/base, packages/leaf, packages/mid, scripts');
+  });
+
+  test.each([
+    ['a lint script', 'scripts/check-mock-modules.ts'],
+    ['the mock.module() baseline', 'scripts/mock-module-baseline.json'],
+    ['a package tsconfig', 'packages/leaf/tsconfig.json'],
+  ])('%s runs every lint check whole', (_, file) => {
+    const lint = plan(['packages/leaf/src/index.ts', file]);
+    expect(lint.steps.every(step => step.run === 'whole')).toBe(true);
+    expect(lint.wholeBecause).toEqual([`${file} is a lint input`]);
+  });
+
+  test('the lint inputs are the lint scripts, the root scripts they import and the baseline', () => {
+    const real = lintInputs(REPO_ROOT, []);
+    for (const file of [
+      'scripts/lint.ts',
+      'scripts/check-mock-modules.ts',
+      'scripts/check-test-cleanup-drift.ts',
+      'scripts/mock-module-baseline.json',
+    ]) {
+      expect(real.has(file)).toBe(true);
+    }
+    expect(real.has('scripts/check-changed.ts')).toBe(false);
+  });
+
+  test('a change that reaches everything runs every lint check whole', () => {
+    expect(Object.values(runs(['bun.lock'])).every(run => run === 'whole')).toBe(true);
   });
 });
 

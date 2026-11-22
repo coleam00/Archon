@@ -25,6 +25,13 @@ import { gitOutput } from './check-test-cleanup-drift';
  * Each owning tsconfig's files are read by a child process of their own, one after another, so
  * only one TypeScript program is in memory at a time (see `collectInChildren`).
  *
+ * `--scope <dir>` (repeatable; `check:changed` passes it) reads only the mocking files under
+ * those directories, so only the tsconfigs that own them build a program. Each site read is
+ * still held to the whole committed baseline, and a grandfathered file in scope that no longer
+ * needs its entry is still stale. An export name the baseline lists is judged stale only by a
+ * whole run, because that depends on every grandfathered site of its module. `--write` refuses
+ * a scope: it would drop every entry outside it.
+ *
  * Limits:
  * - Factory keys come from the factory's type, so an `as` cast can misstate them.
  * - Only literal specifiers are checked; a non-literal one is refused rather than skipped.
@@ -313,16 +320,25 @@ function siteFailure(site: MockSite, baseline: Baseline): string | null {
   return `${at} omits ${missing.join(', ')}; an omitted export keeps its real implementation. Mock each one, or spread the real module (...(await import('${site.specifier}'))) to keep the rest real on purpose.`;
 }
 
-function staleEntries(committed: Baseline, needed: Baseline): string[] {
+/** Repository-relative directories a run reads; `undefined` reads the whole repository. */
+export type Scope = readonly string[] | undefined;
+
+const inScope = (file: string, scope: Scope): boolean =>
+  scope === undefined || scope.some(directory => file.startsWith(`${directory}/`));
+
+function staleEntries(committed: Baseline, needed: Baseline, scope: Scope): string[] {
   const stale: string[] = [];
   for (const [file, specifiers] of Object.entries(committed.factories)) {
+    if (!inScope(file, scope)) continue;
     for (const specifier of specifiers) {
       if (!needed.factories[file]?.includes(specifier)) {
         stale.push(`${BASELINE_PATH}: ${file} no longer mocks '${specifier}' incompletely`);
       }
     }
   }
-  for (const [module, names] of Object.entries(committed.exports)) {
+  // A scoped run does not see every grandfathered site of a module, so it cannot tell a name
+  // nobody omits any more from one a site outside the scope still omits.
+  for (const [module, names] of scope === undefined ? Object.entries(committed.exports) : []) {
     const stillOmitted = new Set(needed.exports[module] ?? []);
     const gone = names.filter(name => !stillOmitted.has(name));
     if (gone.length > 0) {
@@ -335,10 +351,17 @@ function staleEntries(committed: Baseline, needed: Baseline): string[] {
   return stale;
 }
 
-/** Failure lines: sites that omit more than the baseline allows, then stale baseline entries. */
-export function compareBaseline(sites: readonly MockSite[], committed: Baseline): string[] {
+/**
+ * Failure lines: sites that omit more than the baseline allows, then stale baseline entries.
+ * `sites` must be every site under `scope`.
+ */
+export function compareBaseline(
+  sites: readonly MockSite[],
+  committed: Baseline,
+  scope?: Scope
+): string[] {
   const failures = sites.flatMap(site => siteFailure(site, committed) ?? []);
-  return [...failures, ...staleEntries(committed, computeBaseline(sites))];
+  return [...failures, ...staleEntries(committed, computeBaseline(sites), scope)];
 }
 
 /** One string per entry, so the ratchet can refuse entries a change adds. */
@@ -359,14 +382,15 @@ export function parseBaseline(text: string): Baseline {
 }
 
 /** Tracked and untracked TypeScript under packages/ and scripts/ that calls mock.module. */
-function mockingFiles(root: string): string[] {
+export function mockingFiles(root: string, scope: Scope): string[] {
   return gitOutput(['ls-files', '--cached', '--others', '--exclude-standard'], root)
     .split('\n')
     .filter(
       path =>
         CHECKED_FILE.test(path) &&
         (path.startsWith('packages/') || path.startsWith('scripts/')) &&
-        !path.includes('node_modules/')
+        !path.includes('node_modules/') &&
+        inScope(path, scope)
     )
     .map(path => join(root, path))
     .filter(path => existsSync(path) && readFileSync(path, 'utf8').includes('mock.module('));
@@ -414,10 +438,32 @@ function runGroup(config: string): void {
   process.stdout.write(JSON.stringify(collectGroup(root, config, files)));
 }
 
+/** Every `--scope <dir>` value, without a trailing slash; `undefined` when there is none. */
+export function parseScope(argv: readonly string[]): Scope {
+  const directories: string[] = [];
+  for (
+    let index = argv.indexOf('--scope');
+    index !== -1;
+    index = argv.indexOf('--scope', index + 1)
+  ) {
+    const directory = argv[index + 1];
+    if (directory === undefined || directory.startsWith('--')) {
+      throw new Error('--scope needs a directory');
+    }
+    directories.push(directory.replace(/\/+$/, ''));
+  }
+  return directories.length > 0 ? directories : undefined;
+}
+
 function main(): void {
-  const { sites, errors } = collectInChildren(REPO_ROOT, mockingFiles(REPO_ROOT));
+  const scope = parseScope(process.argv);
+  const write = process.argv.includes('--write');
+  if (write && scope !== undefined) {
+    throw new Error('--write rewrites the whole baseline, so it cannot run with --scope');
+  }
+  const { sites, errors } = collectInChildren(REPO_ROOT, mockingFiles(REPO_ROOT, scope));
   const baselineFile = join(REPO_ROOT, BASELINE_PATH);
-  if (process.argv.includes('--write')) {
+  if (write) {
     writeFileSync(baselineFile, `${JSON.stringify(computeBaseline(sites), null, 2)}\n`);
     const format = Bun.spawnSync(['bun', 'x', 'biome', 'format', '--write', baselineFile], {
       cwd: REPO_ROOT,
@@ -429,14 +475,15 @@ function main(): void {
   const committed = existsSync(baselineFile)
     ? parseBaseline(readFileSync(baselineFile, 'utf8'))
     : { factories: {}, exports: {} };
-  const failures = [...errors, ...compareBaseline(sites, committed)];
+  const failures = [...errors, ...compareBaseline(sites, committed, scope)];
   if (failures.length > 0) {
     console.error(['mock.module() check failed:', ...failures.map(line => `  ${line}`)].join('\n'));
     process.exit(1);
   }
   const grandfathered = sites.filter(isIncomplete).length;
+  const scoped = scope === undefined ? '' : ` (scoped to ${scope.join(', ')})`;
   console.log(
-    `mock.module() check passed: ${sites.length} sites, ${grandfathered} grandfathered in ${BASELINE_PATH}.`
+    `mock.module() check passed${scoped}: ${sites.length} sites, ${grandfathered} grandfathered in ${BASELINE_PATH}.`
   );
 }
 

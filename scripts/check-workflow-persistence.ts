@@ -77,6 +77,18 @@ const CORE_BARRELS = new Set([
   'packages/core/src/workflows/index.ts',
 ]);
 
+/**
+ * The packages whose files can change this check's result: the consumers' packages, and core,
+ * which holds the persistence and barrels they must not reach. `check:changed` skips the check
+ * when none of them is in its scope.
+ */
+export const PERSISTENCE_PACKAGE_DIRECTORIES: readonly string[] = [
+  ...new Set([
+    'packages/core',
+    ...WORKFLOW_PERSISTENCE_CONSUMERS.map(file => file.split('/').slice(0, 2).join('/')),
+  ]),
+];
+
 function isPersistence(path: string): boolean {
   return path.startsWith('packages/core/src/db/') || SQL_COMPOSITION.has(path);
 }

@@ -1,9 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { BASELINE_PATH } from './check-mock-modules';
 import type { PackageManifest } from './check-package-edges';
+import { LINT_CHECKS, type LintStep, lintSteps } from './lint';
 import {
   packRunnerInputs,
+  rootScriptImports,
   shouldRunEveryJob,
   shouldRunPackTests,
   shouldRunTestSuite,
@@ -24,15 +27,16 @@ import { VALIDATE_CHECKS } from './validate';
 
 /**
  * `bun run check:changed`: type-check and test the packages a change touches plus every package
- * that depends on them, then run lint and the ratchet. It is the local check while building and
- * before pushing; CI stays the full validation, so this never reports a full pass.
+ * that depends on them, then run lint scoped to them and the ratchet. It is the local check while
+ * building and before pushing; CI stays the full validation, so this never reports a full pass.
  *
  * The scope comes from the package manifests (`workspace:` dependencies) and from CI's own change
  * classifier in `should-run-test-suite.ts`, so a file that CI treats as prose or as a reason to
  * run every job is treated the same way here. Steps run commands their owners already have: one
  * `tsc -b` over the scoped projects from `type-check.ts` (which also brings their dependencies up
- * to date from cache), each package's own `test` script, and the `validate.ts` checks by id for
- * lint, the ratchet, the type-check and the root and pack tests.
+ * to date from cache), each package's own `test` script, the lint checks `scripts/lint.ts` lists
+ * (see `lintPlan`), and the `validate.ts` checks by id for the ratchet, the type-check and the
+ * root and pack tests.
  */
 
 /** The root manifest as a graph node: its devDependencies name workspace packages. */
@@ -192,6 +196,53 @@ function withDependents(scope: ScopedChange, graph: WorkspaceGraph): ScopedChang
   return scope;
 }
 
+/** The lint checks this change runs, and why they all run whole when they do. */
+export interface LintPlan {
+  steps: LintStep[];
+  wholeBecause: string[];
+}
+
+const TSCONFIG = /(?:^|\/)tsconfig[^/]*\.json$/;
+
+/**
+ * Files whose change can alter a lint result anywhere: the lint scripts and the root scripts
+ * they import, and the mock.module() baseline. Any tsconfig counts too (see `lintPlan`).
+ */
+export function lintInputs(repo: string, changed: Iterable<string>): Set<string> {
+  const scripts = LINT_CHECKS.flatMap(check =>
+    check.args.filter(arg => arg.startsWith('scripts/'))
+  );
+  return new Set([
+    BASELINE_PATH,
+    ...rootScriptImports(repo, ['scripts/lint.ts', ...scripts], changed),
+  ]);
+}
+
+/**
+ * Lint runs whole when the change reaches everything or touches a lint input, since then any
+ * file's result can change. Otherwise it runs scoped to the packages in scope (changed ones and
+ * their dependents) and the root scripts when they are in scope.
+ */
+export function lintPlan(
+  scope: ChangeScope,
+  files: readonly string[],
+  graph: WorkspaceGraph,
+  inputs: ReadonlySet<string>
+): LintPlan {
+  if (scope.kind === 'everything') {
+    return { steps: lintSteps(), wholeBecause: ['the change reaches everything'] };
+  }
+  const touched = files.filter(file => inputs.has(file) || TSCONFIG.test(file));
+  if (touched.length > 0) {
+    return { steps: lintSteps(), wholeBecause: touched.map(file => `${file} is a lint input`) };
+  }
+  const directories = [
+    ...[...scope.packages.keys()].flatMap(name => graph.directories.get(name) ?? []).sort(),
+    ...(scope.rootScripts ? ['scripts'] : []),
+  ];
+  return { steps: lintSteps({ directories }), wholeBecause: [] };
+}
+
 function git(args: string[], repo: string): string {
   const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
   if (result.status !== 0) {
@@ -247,10 +298,21 @@ const LEFT_TO_CI =
   'packages/cli/src/cli.ts, root tests that read package files, web types generated from the ' +
   'server API).';
 
-function printScope(scope: ChangeScope, graph: WorkspaceGraph): void {
+function printLint(lint: LintPlan): void {
+  console.log('Lint checks:');
+  for (const step of lint.steps) {
+    console.log(`  ${step.id}: ${step.run}${step.note === '' ? '' : ` (${step.note})`}`);
+  }
+  if (lint.wholeBecause.length > 0) {
+    console.log(`  Whole because: ${lint.wholeBecause.join('; ')}`);
+  }
+}
+
+function printScope(scope: ChangeScope, graph: WorkspaceGraph, lint: LintPlan): void {
   if (scope.kind === 'everything') {
     console.log('The change reaches everything, so this runs the full local set:');
     for (const reason of scope.because) console.log(`  ${reason}`);
+    printLint(lint);
     return;
   }
   const all = [...graph.directories.keys()].sort();
@@ -268,6 +330,7 @@ function printScope(scope: ChangeScope, graph: WorkspaceGraph): void {
     console.log('Prose and inert files, which nothing checks:');
     for (const file of scope.unchecked) console.log(`  ${file}`);
   }
+  printLint(lint);
 }
 
 type Step = { label: string; run: () => Promise<number> };
@@ -315,9 +378,13 @@ function validateSteps(id: string, label: string, extra: readonly string[] = [])
   return check.commands.map(args => command(label, [...args, ...extra]));
 }
 
-function steps(scope: ChangeScope, base: string): Step[] {
+function steps(scope: ChangeScope, lint: LintPlan, base: string): Step[] {
   const tail = [
-    ...validateSteps('lint', 'lint (whole repository)'),
+    ...lint.steps
+      .filter(step => step.run !== 'skipped')
+      .map(step =>
+        command(`lint: ${step.id} (${step.run}${step.note && `: ${step.note}`})`, step.args)
+      ),
     ...validateSteps('ratchet', `ratchet against ${base}`, ['--base', base]),
   ];
   if (scope.kind === 'everything') {
@@ -358,11 +425,12 @@ async function main(argv: readonly string[]): Promise<number> {
     packRunner: packRunnerInputs(REPO_ROOT, files),
     workspaceTest: workspaceTestInputs(REPO_ROOT, files),
   });
-  printScope(scope, graph);
+  const lint = lintPlan(scope, files, graph, lintInputs(REPO_ROOT, files));
+  printScope(scope, graph, lint);
   console.log(LEFT_TO_CI);
   if (list) return 0;
 
-  for (const step of steps(scope, base)) {
+  for (const step of steps(scope, lint, base)) {
     const code = await step.run();
     if (code !== 0) {
       console.error(`\ncheck:changed failed at: ${step.label} (exit ${String(code)})`);
