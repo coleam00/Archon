@@ -17,7 +17,7 @@ import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-r
 import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
-import { checkedResumeCursor } from '@archon/workflows/store';
+import { WorkflowRunDeleteRefusedError, checkedResumeCursor } from '@archon/workflows/store';
 import { isConversationOwnershipEnforced } from '../auth';
 import { resumeWorkflowRunFromServer } from '../services/workflow-resume-service';
 import type { OrchestratorDispatch } from './api-message-dispatch';
@@ -359,6 +359,7 @@ export function registerRunCleanupRoutes(
       return c.json({ success: true, message: `Deleted workflow run: ${run.workflow_name}` });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
+      if (error instanceof WorkflowRunDeleteRefusedError) return apiError(c, 400, error.message);
       getLog().error({ err: error, runId }, 'api.workflow_run_delete_failed');
       return apiError(c, 500, 'Failed to delete workflow run');
     }

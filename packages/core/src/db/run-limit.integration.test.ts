@@ -4,13 +4,14 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { RunLimitError } from '@archon/workflows/store';
+import { RunLimitError, WorkflowRunDeleteRefusedError } from '@archon/workflows/store';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
 import { closeDatabase, getDatabase, resetDatabase } from './connection';
 import { createWorkflowStore } from '../workflows/store-adapter';
 import { createSqlWorkflowHost } from '../workflows/sql-host';
 import { drainResourceStartHost } from '../workflows/resource-start-host';
 import { ConcurrencyConfigError } from '../config/concurrency-config';
+import { deleteWorkflowRun } from './workflow-run-writes';
 
 const CODEBASE_ID = '33333333-3333-4333-8333-333333333333';
 const originalArchonHome = process.env.ARCHON_HOME;
@@ -359,6 +360,50 @@ describe('run limit', () => {
     expect(await store.claimPendingWorkflowRun(plain.id)).toMatchObject({ status: 'running' });
     expect(await store.getRunLimit()).toMatchObject({ live: 1 });
   });
+
+  // A finished parent's delete would null its live runs' parent link and split the tree.
+  const liveTrees = {
+    'a pending child': async () => {
+      const parent = await running();
+      const child = await hand(parent.id);
+      await end(parent.id);
+      return { parent: parent.id, live: child.id, linkedTo: parent.id, ended: [] };
+    },
+    'a running child': async () => {
+      const parent = await running();
+      const child = await running(parent.id);
+      await end(parent.id);
+      return { parent: parent.id, live: child.id, linkedTo: parent.id, ended: [] };
+    },
+    'a pending grandchild under a finished child': async () => {
+      const parent = await running();
+      const child = await running(parent.id);
+      const grandchild = await hand(child.id);
+      await end(child.id);
+      await end(parent.id);
+      return { parent: parent.id, live: grandchild.id, linkedTo: child.id, ended: [child.id] };
+    },
+  };
+  for (const [shape, build] of Object.entries(liveTrees)) {
+    test(`a finished parent with ${shape} is not deleted, and its tree keeps one place`, async () => {
+      await setRunLimit(1);
+      const { parent, live, linkedTo, ended } = await build();
+      const refused = await refusal(deleteWorkflowRun(parent));
+      expect(refused).toBeInstanceOf(WorkflowRunDeleteRefusedError);
+      expect((refused as Error).message).toContain(live);
+      expect(await status(parent)).toBe('completed');
+      expect((await store.getWorkflowRun(live))?.parent_run_id).toBe(linkedTo);
+      expect(await store.getRunLimit()).toMatchObject({ live: 1 });
+      const unrelated = await hand();
+      expect(await refusal(store.claimPendingWorkflowRun(unrelated.id))).toBeInstanceOf(
+        RunLimitError
+      );
+      await end(live);
+      await deleteWorkflowRun(parent);
+      expect(await store.getWorkflowRun(parent)).toBe(null);
+      for (const id of ended) expect(await status(id)).toBe('completed');
+    });
+  }
 
   test('a sub-run created or recovered after its whole tree ended needs room', async () => {
     await setRunLimit(1);

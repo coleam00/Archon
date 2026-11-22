@@ -30,6 +30,7 @@ import {
 } from '../test/api-workflow-runs-harness';
 import { RUN_ACTIONS } from '@archon/core/operations/run-authorization';
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
+import { WorkflowRunDeleteRefusedError } from '@archon/workflows/store';
 import type { RunActor } from '@archon/core';
 import * as sqlHost from '@archon/core/workflows/sql-host';
 import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
@@ -918,6 +919,17 @@ describe('DELETE /api/workflows/runs/:runId', () => {
     });
     expect(response.status).toBe(200);
     expect(mockDeleteWorkflowRun).toHaveBeenCalledWith('run-uuid-4');
+  });
+
+  test("returns 400 with the store's reason when the store refuses the delete", async () => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_COMPLETED_RUN);
+    const reason =
+      'Cannot delete workflow run run-uuid-2: its sub-runs have not ended: child (running).';
+    mockDeleteWorkflowRun.mockRejectedValueOnce(new WorkflowRunDeleteRefusedError(reason));
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-2', { method: 'DELETE' });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toBe(reason);
   });
 });
 

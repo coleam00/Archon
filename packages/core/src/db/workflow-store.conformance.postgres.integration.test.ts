@@ -25,6 +25,7 @@ import {
 } from './linked-starts.conformance-harness';
 import { describeSqlItemAskStartConformance } from './item-ask-starts.conformance';
 import { describeSqlItemAskConformance } from './item-asks.conformance';
+import { describeSqlRunDeleteConformance } from './workflow-run-delete.conformance';
 import {
   HEAD,
   accept,
@@ -404,6 +405,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   describeSqlItemAskConformance(makeHarness);
   describeSqlItemWaitConformance(makeHarness);
   describeSqlItemAskStartConformance(makeHarness);
+  describeSqlRunDeleteConformance(makeHarness);
   test('two completions of one workflow on one item that overlap leave one open set: the later one', async () => {
     const harness = await makeHarness();
     // Holding the item row FOR UPDATE parks each completion at its ask insert, whose

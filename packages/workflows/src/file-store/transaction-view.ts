@@ -116,6 +116,24 @@ export { TERMINAL_RUN_EVENT_TYPES } from '../schemas/workflow-run';
 const log = createLogger('file-store');
 
 /**
+ * Every run with a sub-run that has not ended, at any depth: cleanup keeps each of them, up
+ * to the root, so the tree `concurrency.runs` counts as one is never cut.
+ */
+function ancestorsOfLiveRuns(runs: ReadonlyMap<string, WorkflowRun>): Set<string> {
+  const ancestors = new Set<string>();
+  for (const run of runs.values()) {
+    if (isTerminalRunStatus(run.status)) continue;
+    for (
+      let up: string | null = run.parent_run_id;
+      up !== null && !ancestors.has(up);
+      up = runs.get(up)?.parent_run_id ?? null
+    )
+      ancestors.add(up);
+  }
+  return ancestors;
+}
+
+/**
  * `artifacts` holds the manifests the caller walked before taking the store lock; a
  * terminal write never walks the filesystem itself.
  */
@@ -477,10 +495,12 @@ export function createTransactionView(
     },
     deleteOldWorkflowRuns: async days => {
       if (!Number.isInteger(days) || days < 0) throw new Error('Invalid olderThanDays');
+      const liveTree = ancestorsOfLiveRuns(runs);
       const ids = [...runs.values()]
         .filter(
           run =>
             isTerminalRunStatus(run.status) &&
+            !liveTree.has(run.id) &&
             Math.max(
               run.started_at.getTime(),
               run.active_phase_started_at?.getTime() ?? -Infinity
