@@ -5,7 +5,8 @@ import { describe, it, expect } from 'bun:test';
 import { isAgentNode, isExecNode, workflowDefinitionSchema, type DagNode } from '../schemas';
 import { parseWorkflow as parseWorkflowWithProviders, type ParseResult } from '../loader';
 import { resolveWorkflow } from '../graph-plan';
-import { itemAsksJsonSchema } from '../schemas/item-ask';
+import { findPreparedStrictSchemaIssues } from '@archon/provider-contract';
+import { itemAsksJsonSchema, parseItemAsks } from '../schemas/item-ask';
 import { itemWaitsJsonSchema } from '../schemas/item-wait';
 import { validateWorkflowResultContract } from './contracts';
 
@@ -480,6 +481,24 @@ nodes:${node}
     const authored = workflow.nodes[0];
     const authoredFormat = authored && 'output_format' in authored ? authored.output_format : {};
     expect(Object.keys(authoredFormat?.properties ?? {})).toEqual(['summary']);
+  });
+
+  it('takes an ask with a null recommendation, and its schema stays strict-mode ready', () => {
+    const ask = {
+      question: 'Which way?',
+      context: 'Nothing settles it.',
+      options: [
+        { id: 'drop', does: 'Drops it.', cost: 'The work is lost.' },
+        { id: 'reshape', does: 'Plans it again.', cost: 'A round.' },
+      ],
+      recommendation: null,
+      artifacts: [],
+    };
+    expect(parseItemAsks([ask])).toEqual({ asks: [ask] });
+    expect(parseItemAsks([{ ...ask, recommendation: { option: 'keep', why: 'x' } }])).toEqual({
+      problem: "[0].recommendation.option names 'keep', which is not one of the ask's options",
+    });
+    expect(findPreparedStrictSchemaIssues(itemAsksJsonSchema())).toEqual([]);
   });
 
   it('refuses a property the author declared under the asks name', () => {

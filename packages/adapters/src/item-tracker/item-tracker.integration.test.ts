@@ -483,7 +483,13 @@ function newComments(fake: ReturnType<typeof fakeForge>): string[] {
 
 const act = { via: 'cli', by: { declared: 'Private Person' }, fromRun: null } as const;
 
-async function leaveAsk(runId: string): Promise<void> {
+async function leaveAsk(
+  runId: string,
+  recommendation: { option: string; why: string } | null = {
+    option: 'drop',
+    why: 'The scripts are ours.',
+  }
+): Promise<void> {
   await getDatabase().withTransaction(query =>
     openItemAsksForCompletedRun(query, runId, [
       {
@@ -493,7 +499,7 @@ async function leaveAsk(runId: string): Promise<void> {
           { id: 'keep', does: 'Keeps the flag.', cost: 'Two names for one thing.' },
           { id: 'drop', does: 'Removes the flag.', cost: 'Two scripts need edits.' },
         ],
-        recommendation: { option: 'drop', why: 'The scripts are ours.' },
+        recommendation,
         artifacts: [],
       },
     ])
@@ -587,6 +593,18 @@ test('an open ask gets one new comment with its options and the command that ans
   expect(ask).toContain('Recommended: `drop`. The scripts are ours.');
   expect(ask).toMatch(/archon workflow answer --ref ask:\S+ --choose <option>/);
   expect(fake.calls.filter(call => call.marker.includes('archon-item-ask')).length).toBe(1);
+});
+
+test('an ask with no recommendation says so in its comment', async () => {
+  const fake = fakeForge();
+  const tracker = await activeTracker(fake.forge);
+  const run = await startRun('issue-7', 'plan');
+  await endRun(run, 'completed', 'asked');
+  await leaveAsk(run, null);
+  await tracker.scan();
+  const [ask] = newComments(fake);
+  expect(ask).toContain('No recommendation: choose an option.');
+  expect(ask).not.toContain('Recommended:');
 });
 
 test('a run paused at an attention wait gets one question comment with its options', async () => {

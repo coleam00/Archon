@@ -208,3 +208,15 @@ test('an item no run holds is named by its ref and answered by it, not by a run 
     })
   ).toBe('Item ask:1 is no longer listed.');
 });
+
+test('an ask with no recommendation says it has none and offers none to accept', () => {
+  const { run: _, recommendation: _none, ...withoutRun } = ask;
+  const block = opened({
+    ...withoutRun,
+    ref: 'ask:3',
+    askedIn: { runId: 'run-plan', workflow: 'plan' },
+  });
+  expect(block).toContain('recommended: none (choose an option)');
+  expect(block).not.toContain('--recommended');
+  expect(block).toContain('archon workflow answer --ref ask:3 --choose <option>');
+});

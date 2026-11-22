@@ -167,3 +167,16 @@ test('an ask the caller may not answer shows the reason and no answer controls',
     await view.unmount();
   }
 });
+
+test('an ask with no recommendation says so and marks no option recommended', async () => {
+  const { recommendation: _none, ...unrecommended } = ask('ask:a3', 'Which way?');
+  const view = await mount();
+  try {
+    await view.render(<Harness listed={[unrecommended]} />);
+    expect(view.container.textContent).toContain('No recommendation. Choose an option.');
+    expect(view.container.textContent).not.toContain('Recommended:');
+    expect(buttons(view.container).map(button => button.textContent)).toEqual(['keep', 'drop']);
+  } finally {
+    await view.unmount();
+  }
+});

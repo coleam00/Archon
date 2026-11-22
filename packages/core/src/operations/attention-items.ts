@@ -32,6 +32,7 @@ import { RunActionForbiddenError, type RunActor } from './run-authorization';
 import {
   AttentionAnswerInvalidError,
   expectedGateForOccurrence,
+  RecommendationRefusedError,
   type AttentionAnswerRequest,
   type WorkflowOperations,
 } from './workflow-operations';
@@ -207,6 +208,16 @@ async function answerableAsk(
   return permission.kind === 'allowed' ? { ask, item } : undefined;
 }
 
+/** The option `ask` recommends, as an answer accepting the recommendation chooses it. */
+function recommendedAskOption(ask: StoredItemAsk, item: AskQueueItem): string {
+  if (ask.ask.recommendation === null)
+    throw new RecommendationRefusedError(
+      'none_recorded',
+      `Ask ${item.ref} has no recommendation to accept. Choose one of its options.`
+    );
+  return ask.ask.recommendation.option;
+}
+
 async function answerAsk(
   deps: AttentionItemDeps,
   askId: string,
@@ -218,7 +229,7 @@ async function answerAsk(
   if (found === undefined) return { kind: 'unknown' };
   const { ask, item } = found;
   const text = request.text ?? '';
-  const choose = 'recommended' in request ? [ask.ask.recommendation.option] : request.choose;
+  const choose = 'recommended' in request ? [recommendedAskOption(ask, item)] : request.choose;
   const problem = attentionAnswerProblem(item, { choose, text });
   if (problem !== undefined) throw new AttentionAnswerInvalidError(`Ask ${item.ref} ${problem}`);
   const [decision = ''] = choose;

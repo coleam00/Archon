@@ -1675,7 +1675,8 @@ archon workflow answer --withdraw ask:<id> --json                         # with
 archon workflow answer --withdraw wait:<run-id>                           # withdraw overdue waits
 ```
 
-An ask is a `select` question that also offers `other`, answered with text. Who may answer or
+An ask is a `select` question that also offers `other`, answered with text. `--recommended` is refused
+on an ask that has no recommendation, and the ask stays open: choose one of its options. Who may answer or
 withdraw it is the rule of the run that left it: its starter, or an admin; the operator always.
 `--as` and `fromRun` are recorded as for any answer. The same answer to an answered ask, or a
 second withdrawal, changes nothing; a different answer to an answered ask, withdrawing an
