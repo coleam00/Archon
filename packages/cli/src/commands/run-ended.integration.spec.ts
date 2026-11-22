@@ -429,6 +429,7 @@ describe('a run-ended binding', () => {
       {
         from: { stage: 'chain-plan', outcome: 'planned' },
         to: 'chain-build',
+        linked: null,
         active: false,
         declared: { binding: 'build', problems: [] },
         installed: null,
@@ -952,6 +953,10 @@ describe('trigger check', () => {
       runEnded: { workflowName: 'stage-a', outcome: 'plannned', linked },
     });
     fixture.bind('order-missing', { runEnded: { workflowName: 'stage-z', outcome: 'x', linked } });
+    // Naming the items in the result does not part it from a file over the same link.
+    fixture.bind('order-named', {
+      runEnded: { ...RUN_ENDED.runEnded, linked: { ...linked, items: '/start' } },
+    });
 
     const checked = await fixture.attempt(['trigger', 'check']);
     expect(checked.exitCode).not.toBe(0);
@@ -967,7 +972,8 @@ describe('trigger check', () => {
     expect(problems.get('plan-again')).toEqual([
       "binding starts 'stage-a', the workflow whose end fires it: each run that completes with 'planned' starts another on the same item",
     ]);
-    expect(problems.get('order-after-plan')).toEqual([]);
+    expect(problems.get('order-after-plan')).toEqual([duplicate('order-named')]);
+    expect(problems.get('order-named')).toEqual([duplicate('order-after-plan')]);
     expect(problems.get('order-typo')).toEqual([
       "outcome 'plannned' is not one 'stage-a' completes with ('planned', 'blocked')",
     ]);

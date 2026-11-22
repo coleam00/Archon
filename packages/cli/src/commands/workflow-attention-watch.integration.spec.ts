@@ -202,7 +202,32 @@ test('a launch failure reaches protocol and text watchers without diagnostics', 
     'launch-proof':
       'name: launch-proof\ndescription: Launch failure.\nnodes:\n  - id: one\n    bash: echo unreachable\n',
   });
-  expect(await Bun.spawn(['git', 'init', '-q'], { cwd: fixture.projectRoot }).exited).toBe(0);
+  const origin = join(fixture.projectRoot, '..', 'origin.git');
+  for (const argv of [
+    ['git', 'init', '-q'],
+    [
+      'git',
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@t',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'base',
+    ],
+    ['git', 'branch', '-M', 'main'],
+    ['git', 'init', '-q', '--bare', '-b', 'main', origin],
+    ['git', 'remote', 'add', 'origin', origin],
+    ['git', 'push', '-q', 'origin', 'main'],
+  ])
+    expect(await Bun.spawn(argv, { cwd: fixture.projectRoot, stdout: 'ignore' }).exited).toBe(0);
+  // A base the remote lacks fails when the worktree is cut, after the fire admitted the start.
+  writeFileSync(
+    join(fixture.projectRoot, '.archon', 'config.yaml'),
+    'worktree:\n  baseBranch: does-not-exist\n'
+  );
   const who = await runCli(fixture, ['trigger', 'whoami']);
   expect(who.exitCode).toBe(0);
   const { runAsUserId } = JSON.parse(who.stdout);
@@ -256,9 +281,9 @@ test('a launch failure reaches protocol and text watchers without diagnostics', 
     await readUntil('launch failed before the first node');
     expect(text).toContain(runId);
     const detail = JSON.parse((await runCli(fixture, ['workflow', 'get', runId, '--json'])).stdout);
-    expect(detail.metadata.error).toContain('no git remote');
+    expect(detail.metadata.error).toContain("Configured base branch 'does-not-exist' not found");
     for (const output of [text, JSON.stringify(watch.lines)]) {
-      expect(output).not.toContain('no git remote');
+      expect(output).not.toContain('does-not-exist');
       expect(output).not.toContain('Could not create isolated workspace');
       expect(output).not.toContain(fixture.projectRoot);
     }

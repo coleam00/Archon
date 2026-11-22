@@ -24,7 +24,13 @@ nodes:
 function trigger(
   id: string,
   cwd: string,
-  fields: { from?: string; to?: string; discoveryCwd?: string; inputs?: unknown } = {}
+  fields: {
+    from?: string;
+    to?: string;
+    discoveryCwd?: string;
+    inputs?: unknown;
+    linked?: unknown;
+  } = {}
 ) {
   return {
     version: 1,
@@ -49,6 +55,7 @@ function trigger(
         workflowName: fields.from ?? 'chain-a',
         outcome: 'ready',
         ...(fields.inputs === undefined ? {} : { inputs: fields.inputs }),
+        ...(fields.linked === undefined ? {} : { linked: fields.linked }),
       },
     },
   };
@@ -108,6 +115,24 @@ describe('readPackGraph', () => {
 
     expect(graph.arrows).toMatchObject([
       { active: true, installed: { sourceInstanceId: 'here', problems: [] } },
+    ]);
+  });
+
+  test("a linked file's arrow shows the items it names and the inputs read from each entry", async () => {
+    const { project, write, deps } = await fixture('project');
+    const linked = { kind: 'part_of', holder: 'from', items: '/start' } as const;
+    await write(
+      'split',
+      trigger('split', project, {
+        linked,
+        inputs: { brief: { entry: '/brief' }, parent: { item: 'key' } },
+      })
+    );
+
+    const graph = await readPackGraph(project, 'chain', deps);
+
+    expect(graph.arrows.map(arrow => arrow.linked)).toEqual([
+      { ...linked, entries: { brief: '/brief' } },
     ]);
   });
 

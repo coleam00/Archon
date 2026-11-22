@@ -63,8 +63,7 @@ const FACTS: PrFacts = {
   state: 'open',
   is_draft: false,
   base: 'dev',
-  default_branch: 'dev',
-  default_head: OLD,
+  base_head: OLD,
   behind: 0,
   head: 'feature',
   head_revision: HEAD,
@@ -75,7 +74,7 @@ const FACTS: PrFacts = {
   verdict: { state: 'ready', reviewed: HEAD, url: `${PR_URL}#issuecomment-1`, contract: 'complete' },
 };
 
-const BASE = { head: OLD, checks: { state: 'green', failing: [], pending: [] } } as const;
+const BASE = { branch: 'dev', head: OLD, checks: { state: 'green', failing: [], pending: [] } } as const;
 const FORGE = { mode: 'forge' } as const;
 const AUTO = { manual: false, protected: [], approved: null } as const;
 
@@ -198,7 +197,7 @@ interface FakePr {
   readonly checks?: 'green' | 'pending' | 'red' | 'unknown';
   readonly threads?: number;
   /** The default branch's head as the pull request's merge state reports it. */
-  readonly defaultRevision?: string;
+  readonly baseRevision?: string;
   /** The merge is accepted and the pull request stays open, as when the forge queues merges. */
   readonly queuesMerge?: boolean;
   /** The merge is applied but names no landed commit, which the contract allows. */
@@ -250,7 +249,7 @@ const forgeOp = (op, request) => {
     const url = ${JSON.stringify(PR_URL.replace(/42$/, ''))} + ref.number;
     return out(true, { title: 'Fix the thing', body: '', pr: { schemaVersion: 1, repo: ref.repo, number: ref.number, url, head: 'feature', base: 'dev', is_draft: false, state: state(), head_repo: ref.repo, head_revision: forgePr.headRefOid, base_revision: null, maintainer_can_modify: null } });
   }
-  if (op === 'pr.merge-state') return out(true, { ref, head_revision: forgePr.mergeStateHead ?? forgePr.headRefOid, default_branch: 'dev', default_revision: forgePr.defaultRevision ?? ${JSON.stringify(OLD)}, behind: forgePr.behind ?? 0, mergeable: forgePr.conflicts ? 'conflict' : 'clean', merge_commit: state() === 'merged' ? forgePr.mergeCommit : null });
+  if (op === 'pr.merge-state') return out(true, { ref, head_revision: forgePr.mergeStateHead ?? forgePr.headRefOid, base_branch: 'dev', base_revision: forgePr.baseRevision ?? ${JSON.stringify(OLD)}, behind: forgePr.behind ?? 0, mergeable: forgePr.conflicts ? 'conflict' : 'clean', merge_commit: state() === 'merged' ? forgePr.mergeCommit : null });
   if (op === 'checks.state') return out(true, { ref, revision: forgePr.checksRevision ?? forgePr.headRefOid, units: units(forgePr.checks) });
   if (op === 'pr.files') return out(true, { ref, head_revision: forgePr.filesRevision ?? forgePr.headRefOid, files: (forgePr.files ?? []).map(path => ({ path, previous_path: null, status: 'modified', patch: null })) });
   if (op === 'pr.threads') return out(true, { ref, threads: Array.from({ length: forgePr.threads }, (_, index) => ({ id: 'thread-' + index, resolved: false, comments: [{ url: 'thread' }] })) });

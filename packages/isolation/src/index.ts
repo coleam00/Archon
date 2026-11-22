@@ -49,6 +49,7 @@ export {
   WORKTREE_REGISTRATION_ID,
   WORKTREE_REMOVAL_OWNER,
   readWorktreeCreationId,
+  readWorktreeBaseBranch,
   readWorktreeBranchCreated,
   WorktreeRegistrationChangedError,
   WorktreeRemovalInProgressError,
@@ -81,7 +82,7 @@ export {
 } from './errors';
 
 // --- Factory ---
-export { getIsolationProvider, configureIsolation } from './factory';
+export { getIsolationProvider, configureIsolation, checkWorktreeStartable } from './factory';
 
 // --- Resolver ---
 export { IsolationResolver } from './resolver';

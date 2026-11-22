@@ -411,20 +411,24 @@ const NO_GIT_COMMANDS = [
   'isolation',
 ];
 
-function requiresGitRepo(command: string | undefined, subcommand: string | undefined): boolean {
+/** Item reads and writes that take their item and project from `--item-of <run-id>`. */
+const ITEM_OF_SUBCOMMANDS = ['runs', 'link', 'merged', 'landing'];
+
+function requiresGitRepo({ command, subcommand, values }: CliRouteContext): boolean {
   // `workflow attention` resolves its own scope: `--all`, `--project`, or the working
   // directory's project, which need not be registered or a git repository. `workflow
-  // notice` acts on the run its environment names, wherever the node runs.
-  return (
-    !NO_GIT_COMMANDS.includes(command ?? '') &&
-    !(command === 'workflow' && (subcommand === 'attention' || subcommand === 'notice'))
-  );
+  // notice` acts on the run its environment names, wherever the node runs, and so does
+  // an `--item-of` read or write, which `archon:script` makes from any directory.
+  if (NO_GIT_COMMANDS.includes(command ?? '')) return false;
+  if (command !== 'workflow') return true;
+  if (subcommand === 'attention' || subcommand === 'notice') return false;
+  return !(values['item-of'] !== undefined && ITEM_OF_SUBCOMMANDS.includes(subcommand ?? ''));
 }
 
 /** The project gate: the directory a command acts on, or the exit code of its refusal. */
 async function resolveEffectiveCwd(ctx: CliRouteContext): Promise<string | number> {
   const { command, subcommand, values, cwd, json } = ctx;
-  if (!requiresGitRepo(command, subcommand)) return cwd;
+  if (!requiresGitRepo(ctx)) return cwd;
   if (!existsSync(cwd)) {
     return await fail(json, `Error: Directory does not exist: ${cwd}`);
   }

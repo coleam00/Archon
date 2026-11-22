@@ -31,6 +31,7 @@ import type {
   IsolationRequest,
   ResolutionMethod,
 } from './types';
+import { readWorktreeBaseBranch } from './types';
 
 function makeEnvRow(overrides?: Partial<IsolationEnvironmentRow>): IsolationEnvironmentRow {
   return {
@@ -62,6 +63,7 @@ function makeMockStore(overrides?: Partial<IIsolationStore>): IIsolationStore {
         workflow_id: env.workflow_id,
         working_path: env.working_path,
         branch_name: env.branch_name,
+        ...(env.metadata ? { metadata: env.metadata } : {}),
       }),
     updateStatus: async () => undefined,
     withWorktreeRegistration: async (observed, remove) =>
@@ -446,7 +448,7 @@ describe('IsolationResolver', () => {
     }
   });
 
-  test('create new — returns resolved with created method', async () => {
+  test('create new — returns resolved with created method and records the base it was cut from', async () => {
     // A canonical path distinct from defaultCwd proves the rollback proof
     // carries the canonical repo path, not the codebase's working path.
     const canonicalRepoPath = git.toRepoPath('/repos/canonical-myrepo');
@@ -458,7 +460,7 @@ describe('IsolationResolver', () => {
         ...provider,
         create: async request => {
           capturedRequest = request as { canonicalRepoPath?: unknown };
-          return provider.create(request);
+          return { ...(await provider.create(request)), resolvedBaseBranch: 'trunk' };
         },
       },
     });
@@ -479,6 +481,8 @@ describe('IsolationResolver', () => {
         canonicalRepoPath,
         branchCreated: true,
       });
+      // The record keeps the base, so every later reuse of the worktree can report it.
+      expect(readWorktreeBaseBranch(result.env.metadata)).toBe('trunk');
     }
   });
 

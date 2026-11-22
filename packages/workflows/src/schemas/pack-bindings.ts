@@ -11,7 +11,11 @@
  */
 import { z } from 'zod';
 import { jsonValueSchema } from '../output-ref';
-import { asksSettledInputSourceSchema, endedItemKeySourceSchema } from './binding-input-source';
+import {
+  asksSettledInputSourceSchema,
+  endedItemKeySourceSchema,
+  linkedEntrySourceSchema,
+} from './binding-input-source';
 import {
   asksSettledTriggerSchema,
   itemMappingSchema,
@@ -32,9 +36,9 @@ export const packBindingNameSchema = z
  * for a sibling binding, (event bindings only) a field of the event, (event bindings with
  * `wake` only) the wait the event met, (run-ended and asks-settled bindings only) a part of
  * the run that ended or left the asks, as `on.runEnded.inputs` reads it, (run-ended
- * bindings only) the key of the ended run's item, (asks-settled bindings only) the
- * settled answers, or (asks-settled and non-linked run-ended bindings) every answer on the
- * item.
+ * bindings only) the key of the ended run's item, (linked run-ended bindings with `items`
+ * only) a part of the started item's own entry, (asks-settled bindings only) the settled
+ * answers, or (asks-settled and non-linked run-ended bindings) every answer on the item.
  */
 const packBindingInputSchema = z.union([
   z.string(),
@@ -44,6 +48,7 @@ const packBindingInputSchema = z.union([
   z.object({ wait: z.literal(true) }).strict(),
   ...asksSettledInputSourceSchema.options,
   endedItemKeySourceSchema,
+  linkedEntrySourceSchema,
 ]);
 export type PackBindingInput = z.infer<typeof packBindingInputSchema>;
 
@@ -132,8 +137,8 @@ const checkoutTakesDefaultIsolation = {
  * of the outcomes on an item. A trigger file holds one outcome, so each listed outcome
  * is written as its own file. `checkout: ended-run` starts it in the checkout the run
  * left, as `on.runEnded.checkout` does. `linked` starts it on the items holding a link of
- * that kind to the ended run's item instead of on that item, as `on.runEnded.linked` does,
- * and takes no `checkout`.
+ * that kind to the ended run's item instead of on that item, as `on.runEnded.linked` does
+ * (with `items`, only those the run names), and takes no `checkout`.
  */
 export const packRunEndedBindingSchema = z
   .object({

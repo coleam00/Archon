@@ -52,6 +52,7 @@ import {
   type PackCopy,
   packCopies,
   type PackGraph,
+  type PackGraphLink,
   packWorkflowName,
   packWorkflows,
 } from '@archon/workflows/pack-graph';
@@ -676,7 +677,16 @@ function arrowText(arrow: PackGraph['arrows'][number]): string {
     'outcome' in arrow.from
       ? `${arrow.from.stage}:${arrow.from.outcome}`
       : `${arrow.from.stage}:asks(${arrow.from.settled}${arrow.from.option === undefined ? '' : `: ${arrow.from.option}`})`;
-  return `  ${from} -> ${arrow.to} [${state}]${note}`;
+  return `  ${from} -> ${arrow.to}${arrow.linked ? linkText(arrow.linked) : ''} [${state}]${note}`;
+}
+
+/** ` linked <kind> <holder>`, then the items it names and each input read from an entry. */
+function linkText(link: PackGraphLink): string {
+  const parts = [`linked ${link.kind} ${link.holder}`];
+  if (link.items !== undefined) parts.push(`items ${link.items}`);
+  for (const [target, pointer] of Object.entries(link.entries))
+    parts.push(`${target} from entry ${pointer}`);
+  return ` ${parts.join(', ')}`;
 }
 
 /** The graph as plain lines; `--json` prints the read itself, which is the contract. */

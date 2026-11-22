@@ -120,7 +120,8 @@ export const cliArgOptions: CliArgOptions = {
   item: { type: 'string' },
   // `workflow cancel|abandon --item <key> --all-runs`: act on every matching run of the item.
   'all-runs': { type: 'boolean' },
-  // `workflow runs --item-of <run-id>`: read the item a run belongs to.
+  // `workflow runs --item-of <run-id>`: read the item a run belongs to; `workflow link`,
+  // `merged` and `landing` write on it.
   'item-of': { type: 'string' },
   // `workflow rule --withdraw <ruling-id>` and `workflow answer --withdraw <ref>`.
   withdraw: { type: 'string' },

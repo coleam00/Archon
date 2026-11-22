@@ -18,6 +18,9 @@ import { join } from 'node:path';
 import type {
   ForgeFailure,
   ForgeOperations,
+  ItemLanding,
+  ItemLink,
+  ItemMergeRecorded,
   ItemRead,
   ItemWindow,
   NodeOutcomesListing,
@@ -92,6 +95,22 @@ export class HostCommandError extends Error {
     const what = exitCode === null ? 'could not run' : `failed (exit ${String(exitCode)})`;
     super(`archon ${command} ${what}${detail === '' ? '' : `: ${detail}`}`);
     this.name = 'HostCommandError';
+  }
+}
+
+/**
+ * The host refused an item write and wrote nothing. `reason` is the CLI's `error`: a fixed
+ * code (`no_item` when the run is on no item, `self_link`, `unknown_kind`) or its message.
+ */
+export class ItemWriteError extends HostCommandError {
+  constructor(
+    command: string,
+    exitCode: number,
+    readonly reason: string
+  ) {
+    super(command, exitCode, reason);
+    this.name = 'ItemWriteError';
+    this.message = `archon ${command} refused: ${reason}`;
   }
 }
 
@@ -331,6 +350,68 @@ export function item(): ItemRead | null {
   if (answer.code === 1 && isRecord(answer.value) && answer.value.error === 'not_found')
     return null;
   throw failed('workflow runs --item-of', answer);
+}
+
+/**
+ * Write on this run's own item: `--item-of` makes the host resolve the item and its project
+ * from the run, so neither the key nor the script's directory can point elsewhere.
+ */
+function itemWrite(command: string, args: readonly string[]): Record<string, unknown> {
+  const answer = archon(command, ['--item-of', runId(), ...args, '--json']);
+  if (answer.code === 0 && isRecord(answer.value)) return answer.value;
+  const error = isRecord(answer.value) ? answer.value.error : undefined;
+  // Exit 1 with `{ok:false,error}` is the CLI refusing; anything else is no usable answer.
+  if (answer.code === 1 && typeof error === 'string') throw new ItemWriteError(command, 1, error);
+  throw failed(command, answer);
+}
+
+/** One end of a link: the run's own item is the other. Exactly one of `to` and `from`. */
+export type ItemLinkRequest =
+  | { readonly kind: ItemLink['kind']; readonly to: string; readonly from?: never }
+  | { readonly kind: ItemLink['kind']; readonly from: string; readonly to?: never };
+
+/**
+ * Record a link (`archon workflow link`) from this run's own item, the one `item()` reads,
+ * to the item `to` names, or to it from the item `from` names. `created` is false when the
+ * same active link was already recorded. Throws {@link ItemWriteError} on a refusal
+ * (`no_item` when the run is on no item), and {@link HostCommandError} when the host gives
+ * no answer, in which case the link may or may not have been recorded.
+ * A container run cannot call it, as it has no host CLI.
+ */
+export function linkItem(request: ItemLinkRequest): ItemLink & { readonly created: boolean } {
+  const end = request.to !== undefined ? ['--to', request.to] : ['--from', request.from];
+  return itemWrite('workflow link', ['--kind', request.kind, ...end]) as ItemLink & {
+    readonly created: boolean;
+  };
+}
+
+/**
+ * Record that this run's own item's change merged (`archon workflow merged`), as the forge
+ * reported it: `change` names the change, such as a pull request URL, `at` is an ISO time
+ * with an offset, `commit` the full merge commit when the forge gave one. Throws
+ * {@link ItemWriteError} on a refusal (`no_item` when the run is on no item), and
+ * {@link HostCommandError} when the host gives no answer, in which case the merge may or
+ * may not have been recorded. A container run cannot call it, as it has no host CLI.
+ */
+export function recordMerge(merge: {
+  readonly change: string;
+  readonly at: string;
+  readonly commit?: string | null;
+}): ItemMergeRecorded {
+  const args = ['--change', merge.change, '--at', merge.at];
+  if (typeof merge.commit === 'string') args.push('--commit', merge.commit);
+  return itemWrite('workflow merged', args) as ItemMergeRecorded;
+}
+
+/**
+ * Record the branch this run's own item's change lands on (`archon workflow landing`);
+ * recording again replaces it. Throws {@link ItemWriteError} on a refusal (`no_item` when
+ * the run is on no item), and {@link HostCommandError} when the host gives no answer, in
+ * which case the branch may or may not have been recorded.
+ * A container run cannot call it, as it has no host CLI.
+ */
+export function recordLanding(branch: string): ItemLanding {
+  return itemWrite('workflow landing', ['--branch', branch]) as ItemLanding;
 }
 
 /**

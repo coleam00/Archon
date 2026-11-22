@@ -12,6 +12,7 @@ export async function submitFreshForeground(
     freshCaptured: CapturedSource | undefined;
     cwd: string;
     cutFromCommit: string | undefined;
+    resolvedBaseBranch?: string;
     ownedWorktree: OwnedWorktree | undefined;
     preparedAiConfiguration: PreparedAiConfiguration | undefined;
     setupRun: WorkflowRun | undefined;
@@ -41,6 +42,7 @@ export async function submitFreshForeground(
     freshCaptured,
     cwd,
     cutFromCommit,
+    resolvedBaseBranch,
     ownedWorktree,
     preparedAiConfiguration,
     setupRun,
@@ -90,6 +92,7 @@ export async function submitFreshForeground(
         capturedSourceOwner: owner,
         inputs: resolvedInputs,
         ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
+        resolvedBaseBranch,
         ownedWorktree,
         ...(declaredContinuation
           ? {
