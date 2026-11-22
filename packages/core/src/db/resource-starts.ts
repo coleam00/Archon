@@ -3,7 +3,6 @@ import { insertWorkflowEvent } from './workflow-events';
 import { z } from 'zod';
 import {
   DIRECT_START_HOST_ID,
-  drainableStarts,
   preparedBindingStart,
   skippedFireNotice,
   resourceStartBlocker,
@@ -51,12 +50,11 @@ import {
   lockResourceSlotForAdmission,
   readInstallHold,
   runLimitRefusal,
-  runLimitBlocker,
-  withinRunRoom,
   resourceStartOccupancy,
   parseQueuedResourceStart,
   type TransactionQuery as Query,
 } from './resource-slots';
+import { drainAdmits, runLimitBlocker } from './run-room';
 import { loadResourceCapacities } from '../config/concurrency-config';
 import { insertWorkflowRun } from './workflows';
 import { getLog } from './workflow-run-shared';
@@ -281,9 +279,8 @@ export async function drainResourceStarts(options: {
     const { capacity } = await lockResourceSlotForAdmission(query, options.resource);
     if (await readInstallHold(query)) return [];
     const slot = await resourceStartOccupancy(query, options.resource, capacity);
-    const starts = drainableStarts(slot, options.hostId);
     const admitted: ResourceStartDisposition[] = [];
-    for (const start of await withinRunRoom(query, options.hostId, options.resource, starts))
+    for (const start of await drainAdmits(query, options.hostId, options.resource, slot))
       admitted.push(await admitExisting(query, options.resource, start));
     return admitted;
   });

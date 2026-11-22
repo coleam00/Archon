@@ -3,10 +3,10 @@ import { expect, test } from 'bun:test';
 import {
   heldCheckouts,
   resourceResumeBlocker,
-  drainableStarts,
   resourceStartBlocker,
   type ResourceSlotOccupancy,
 } from './resource-start-store';
+import { drainableStarts } from './host-start-decision';
 import type { PreparedWorkflowLaunch } from './schemas/resource-start';
 import { itemHoldKey } from './item-hold';
 

@@ -18,21 +18,25 @@ const originalDatabaseUrl = process.env.DATABASE_URL;
 let root = '';
 const store = createWorkflowStore();
 
-function launch(): PreparedWorkflowLaunch {
+function launch(cwd?: string): PreparedWorkflowLaunch {
   const id = crypto.randomUUID();
   return {
     version: 2,
     run: { id, workflow_name: 'test', codebase_id: CODEBASE_ID, user_message: '', metadata: {} },
-    execution: { cwd: `/tmp/test/${id}`, conversationId: id, isolation: { kind: 'in-place' } },
+    execution: {
+      cwd: cwd ?? `/tmp/test/${id}`,
+      conversationId: id,
+      isolation: { kind: 'in-place' },
+    },
   };
 }
 
 const setRunLimit = (runs: number | string) =>
   writeFile(join(root, 'config.yaml'), `concurrency:\n  runs: ${String(runs)}\n`);
 
-/** A bound start on `resource`, which has room for five. */
-const bound = (resource = 'pool', overlap: 'queue' | 'skip' = 'queue') => {
-  const prepared = launch();
+/** A bound start on `resource`, which has room for five, in its own checkout unless `cwd` names one. */
+const bound = (resource = 'pool', overlap: 'queue' | 'skip' = 'queue', cwd?: string) => {
+  const prepared = launch(cwd);
   return store
     .admitResourceStart({ resource, capacity: 5, hostId: 'host', overlap, launch: prepared })
     .then(disposition => ({ id: prepared.run.id, disposition }));
@@ -247,7 +251,7 @@ describe('run limit', () => {
     const a1 = await bound('a');
     const b1 = await bound('b');
     const a2 = await bound('a');
-    expect((await store.getRunLimit())?.waiting).toEqual([a1.id, a2.id, b1.id]);
+    expect((await store.getRunLimit())?.waiting).toEqual([a1.id, b1.id, a2.id]);
     await end(live[0]!.id);
     // A hand start takes the free room ahead of the host's queue (the ruling).
     const handStart = await running();
@@ -279,6 +283,34 @@ describe('run limit', () => {
     });
     expect(started).toEqual([a1.id, b1.id]);
     expect((await store.getResourceStartRequest(a2.id))?.status).toBe('queued');
+  });
+
+  // b1 and a1 share a checkout on different resources, queued behind a full limit that then
+  // frees `room`. The drain admits b1 first, so a1 is held by b1's checkout, not by the limit.
+  const sharedCheckoutQueue = async (runs: number, room: number) => {
+    await setRunLimit(runs);
+    const live = [];
+    for (let i = 0; i < runs; i++) live.push(await bound('c'));
+    const b1 = await bound('b', 'queue', '/tmp/test/shared');
+    const a1 = await bound('a', 'queue', '/tmp/test/shared');
+    const a2 = await bound('a', 'queue', '/tmp/test/other');
+    for (const { id } of live.slice(0, room)) await end(id);
+    return { b1, a1, a2 };
+  };
+
+  test('a start held by a checkout an earlier admit takes is not waiting for the limit', async () => {
+    const { b1, a1, a2 } = await sharedCheckoutQueue(3, 2);
+    expect((await store.getRunLimit())?.waiting).toEqual([]);
+    expect(await drainHost()).toEqual([b1.id, a2.id]);
+    expect((await store.getResourceStartRequest(a1.id))?.status).toBe('queued');
+  });
+
+  test('a start the limit holds behind a shared checkout is reported before and after the drain', async () => {
+    const { b1, a1, a2 } = await sharedCheckoutQueue(2, 1);
+    expect((await store.getRunLimit())?.waiting).toEqual([a2.id]);
+    expect(await drainHost()).toEqual([b1.id]);
+    expect((await store.getResourceStartRequest(a1.id))?.status).toBe('queued');
+    expect((await store.getRunLimit())?.waiting).toEqual([a2.id]);
   });
 
   test('freed room reaches every queued start of a host in queue order in one drain', async () => {

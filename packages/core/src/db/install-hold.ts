@@ -13,12 +13,8 @@ import {
 } from '@archon/workflows/schemas/resource-start';
 import type { RunLimitState } from '@archon/workflows/schemas/run-limit';
 import { getDatabase } from './connection';
-import {
-  INSTALL_HOLD_ID,
-  lockAdmission,
-  readInstallHold,
-  readRunLimitWaiting,
-} from './resource-slots';
+import { INSTALL_HOLD_ID, lockAdmission, readInstallHold } from './resource-slots';
+import { readRunLimitWaiting } from './run-room';
 import { parseStoredJson, storedWorkflowName } from './resource-starts';
 import { toHydratedTimestamp } from './timestamps';
 import { loadRunLimit } from '../config/concurrency-config';
@@ -30,8 +26,8 @@ export async function getInstallHold(): Promise<InstallHold | null> {
 
 /**
  * The run limit, how many run trees count against it and the queued starts only it holds now
- * (`readRunLimitWaiting`); null when no limit is set. Read under `lockAdmission`, so it sees
- * what the next drain would see.
+ * (`readRunLimitWaiting`); null when no limit is set. Read under `lockAdmission` from the
+ * decision the drain admits from, so a start reported waiting is one the next drain holds.
  */
 export async function getRunLimit(): Promise<RunLimitState | null> {
   if ((await loadRunLimit()) === undefined) return null;

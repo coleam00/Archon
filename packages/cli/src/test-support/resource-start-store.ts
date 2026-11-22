@@ -1,10 +1,10 @@
 import { holdsWorkflowPath } from '@archon/workflows/workflow-path-lock';
+import { drainableStarts } from '@archon/workflows/host-start-decision';
 import {
   validateStartReceiptLimit,
   skippedFireNotice,
   compareStartReceipts,
   capacityWaiters,
-  drainableStarts,
   heldCheckouts,
   compareCodeUnits,
   type ReusableCheckout,
