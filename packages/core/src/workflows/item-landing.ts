@@ -46,9 +46,17 @@ export function refuseInPlaceLanding(item: WorkflowItem, landing: ResolvedItemLa
   );
 }
 
-/** The command that creates `branch` on the remote and records it on `itemKey`. */
+/** Quote a value for a shell unless it is plainly a single word, so the command runs as shown. */
+function shellArgument(value: string): string {
+  return /^[\w./:@%+=,-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * The command that creates `branch` on the remote and records it on `itemKey`. A branch
+ * such as `feat/$USER` is valid to git, so the values are shell-quoted when they need it.
+ */
 export function landingCreateCommand(itemKey: string, branch: string): string {
-  return `archon workflow landing --item ${itemKey} --branch ${branch} --from <start-point>`;
+  return `archon workflow landing --item ${shellArgument(itemKey)} --branch ${shellArgument(branch)} --from <start-point>`;
 }
 
 /**
@@ -104,7 +112,7 @@ export async function resolveRunLanding(
   if (!branches.includes(landing.branch)) {
     const owner = landing.from.kind === 'own' ? item.key : landing.from.item.key;
     throw new LandingBranchRefusedError(
-      `${subject}, but '${landing.branch}' is not on remote '${remote}'. Create it with '${landingCreateCommand(owner, landing.branch)}', or record another branch. The run is refused.`
+      `${subject}, but '${landing.branch}' is not on remote '${remote}'. The run is refused. Record another branch, or create this one with: ${landingCreateCommand(owner, landing.branch)}`
     );
   }
   return landing;

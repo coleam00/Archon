@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileAsync } from '@archon/git';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { createLandingBranch, LandingBranchCreateError } from './item-landing';
+import {
+  createLandingBranch,
+  LandingBranchCreateError,
+  landingCreateCommand,
+} from './item-landing';
 
 let root: string;
 const previousHome = process.env.ARCHON_HOME;
@@ -32,4 +36,24 @@ test('creating a landing branch refuses a folder project and a project with no r
   await expect(createLandingBranch(unpushed, 'feat/x', 'main')).rejects.toBeInstanceOf(
     LandingBranchCreateError
   );
+});
+
+// The refusal's command must run as shown: a shell must not expand a valid branch name.
+test('the create command keeps item and branch values literal in a shell', async () => {
+  const command = landingCreateCommand("WO 1's", 'feat/$USER').replace('<start-point>', 'main');
+  const { stdout } = await execFileAsync('bash', [
+    '-c',
+    `printf '%s\\n' ${command.slice('archon '.length)}`,
+  ]);
+  expect(stdout.split('\n')).toEqual([
+    'workflow',
+    'landing',
+    '--item',
+    "WO 1's",
+    '--branch',
+    'feat/$USER',
+    '--from',
+    'main',
+    '',
+  ]);
 });

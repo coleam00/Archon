@@ -31,6 +31,7 @@ import { itemLinkSchema } from '@archon/workflows/schemas/item-link';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
 import { captureWorkflowCommand } from '../test-support/command';
 import * as workflowScope from '../workflow-scope';
+import { projectAddCommand } from './project';
 import { workflowLinkCommand } from './workflow-link';
 import { workflowItemsCommand } from './workflow-items';
 import { workflowLandingCommand } from './workflow-landing';
@@ -559,6 +560,21 @@ test.serial(
     );
     expect(worktrees()).toBe(before);
     expect(readFileSync(out, 'utf8')).toBe('untouched');
+    // A member's refusal names the item that records the branch, where it is created.
+    succeeded(
+      await invoke(host =>
+        workflowLinkCommand(
+          host,
+          projectRoot,
+          { item: 'lonely-member', kind: 'part_of', to: 'lonely' },
+          true,
+          callerEnv
+        )
+      )
+    );
+    const memberRefused = await start({ item: 'lonely-member' });
+    expect(memberRefused.exitCode).not.toBe(0);
+    expect(memberRefused.stderr).toContain('--item lonely --branch feat/missing --from');
 
     // The command it names creates the branch from the start point; runs are cut from it.
     const remoteSha = (branch: string) =>
@@ -577,17 +593,6 @@ test.serial(
     const cut = await start({ item: 'lonely' });
     expect(cut.exitCode, cut.stderr).toBe(0);
     expect(readFileSync(out, 'utf8').trim()).toBe('feat/missing from-feat');
-    succeeded(
-      await invoke(host =>
-        workflowLinkCommand(
-          host,
-          projectRoot,
-          { item: 'lonely-member', kind: 'part_of', to: 'lonely' },
-          true,
-          callerEnv
-        )
-      )
-    );
     writeFileSync(out, 'untouched');
     const inherited = await start({ item: 'lonely-member' });
     expect(inherited.exitCode, inherited.stderr).toBe(0);
@@ -603,6 +608,20 @@ test.serial(
       create: { remote: 'origin', status: 'exists' },
     });
     expect(remoteSha('feat/missing')).toBe(existing);
+
+    // The file store cannot record a landing, so the remote is left untouched.
+    const config = join(archonHome, 'config.yaml');
+    const saved = readFileSync(config, 'utf8');
+    writeFileSync(config, `${saved}\nstore: files\n`);
+    try {
+      succeeded(await invoke(host => projectAddCommand(host, { path: projectRoot, json: true })));
+      const onFiles = await create('on-files', 'feat/on-files', 'main');
+      expect(onFiles.exitCode).not.toBe(0);
+      expect(JSON.parse(onFiles.stdout).error).toContain('store: files');
+    } finally {
+      writeFileSync(config, saved);
+    }
+    expect(remoteSha('feat/on-files')).toBe('');
 
     // A start point that names no commit records nothing.
     const unresolved = await create('fresh', 'feat/fresh', 'no-such-ref');

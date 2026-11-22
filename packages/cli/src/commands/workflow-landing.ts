@@ -12,6 +12,8 @@ import {
   type CreatedLandingBranch,
 } from '@archon/core/workflows/item-landing';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import { loadStoreSelection } from '@archon/core/config/store-selection';
+import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { projectRefForCodebase } from '@archon/core/operations/attention-queue';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import type { ItemLanding } from '@archon/workflows/schemas/item-landing';
@@ -46,17 +48,18 @@ async function record(
     (await inheritedWorkflowCodebase(host)) ??
     (await findCodebaseForCheckoutPath(cwd, host.records.codebases));
   if (!codebase) throw new Error('--item names an item in one registered project.');
-  const create =
-    request.from === undefined
-      ? null
-      : await createLandingBranch(codebase, request.branch, request.from);
-  const landing = await host.deps.store.recordItemLanding({
-    projectKey: projectRefForCodebase(codebase).key,
-    key: request.item,
-    branch: request.branch,
-    fromRun: env.WORKFLOW_ID ? readCallingNode(env.WORKFLOW_ID, env) : null,
-  });
-  return { landing, create };
+  const save = () =>
+    host.deps.store.recordItemLanding({
+      projectKey: projectRefForCodebase(codebase).key,
+      key: request.item,
+      branch: request.branch,
+      fromRun: env.WORKFLOW_ID ? readCallingNode(env.WORKFLOW_ID, env) : null,
+    });
+  if (request.from === undefined) return { landing: await save(), create: null };
+  // The file store cannot record a landing, so refuse before the push changes the remote.
+  if ((await loadStoreSelection()) === 'files') throw new FileStoreUnsupportedError('items');
+  const create = await createLandingBranch(codebase, request.branch, request.from);
+  return { landing: await save(), create };
 }
 
 function createdText(request: WorkflowLandingRequest, create: CreatedLandingBranch): string {

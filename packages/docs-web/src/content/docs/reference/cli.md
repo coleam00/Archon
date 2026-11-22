@@ -1522,8 +1522,8 @@ still recorded. `create` in the JSON output is `{ remote, status: "created", com
 A run checks the branch when it starts: a branch the project's remote does not have refuses
 the run before its first node, naming the branch, the remote, where the branch came from, and
 the command that creates it (`archon workflow landing --item <key> --branch <name> --from
-<start-point>`, filled in with the item that records it). It never falls back to the base
-branch.
+<start-point>`, filled in with the item that records it, each value shell-quoted when it
+needs quoting). It never falls back to the base branch.
 
 The branch a run takes is found in this order: `--base` on the dispatch; the item's own
 branch; the branch of the item it is `part_of` through an active link, nearest first (a
@@ -1534,7 +1534,8 @@ binding's `launch.isolation.baseOverride`, `worktree.baseBranch`, the codebase d
 the remote's HEAD. Called from inside a workflow node, it records the node's run and node as
 `fromRun`. It exits 1 for an invalid branch name, a directory with no registered project, a
 `--from` that names no commit, or a create the remote refused.
-`workflow runs --item <key>` shows the branch and where it came from. It needs the database store.
+`workflow runs --item <key>` shows the branch and where it came from. It needs the database store;
+with `store: files`, `--from` is refused before anything is pushed.
 
 ### `workflow attention label`
 
