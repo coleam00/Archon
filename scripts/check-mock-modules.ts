@@ -382,7 +382,7 @@ export function parseBaseline(text: string): Baseline {
 }
 
 /** Tracked and untracked TypeScript under packages/ and scripts/ that calls mock.module. */
-function mockingFiles(root: string, scope: Scope): string[] {
+export function mockingFiles(root: string, scope: Scope): string[] {
   return gitOutput(['ls-files', '--cached', '--others', '--exclude-standard'], root)
     .split('\n')
     .filter(

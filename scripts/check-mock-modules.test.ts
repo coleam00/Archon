@@ -9,6 +9,7 @@ import {
   collectSites,
   compareBaseline,
   computeBaseline,
+  mockingFiles,
 } from './check-mock-modules';
 
 const track = trackTempRoots();
@@ -116,6 +117,21 @@ describe('check-mock-modules', () => {
     expect(compareBaseline(sites, stale, ['src'])).toContain(
       "scripts/mock-module-baseline.json: src/a.test.ts no longer mocks './gone' incompletely"
     );
+  });
+
+  test('a scoped run reads only the mocking files under its directories', () => {
+    const { root } = project(partial);
+    mkdirSync(join(root, 'packages/a'), { recursive: true });
+    mkdirSync(join(root, 'packages/b'), { recursive: true });
+    writeFileSync(join(root, 'packages/a/x.test.ts'), partial);
+    writeFileSync(join(root, 'packages/b/y.test.ts'), partial);
+    writeFileSync(join(root, 'packages/b/plain.ts'), 'export {};\n');
+    Bun.spawnSync(['git', 'init', '-q'], { cwd: root });
+    expect(mockingFiles(root, ['packages/a'])).toEqual([join(root, 'packages/a/x.test.ts')]);
+    expect(mockingFiles(root, undefined)).toEqual([
+      join(root, 'packages/a/x.test.ts'),
+      join(root, 'packages/b/y.test.ts'),
+    ]);
   });
 
   // `bun run lint` reads each tsconfig's files in a child process; these cover that path.

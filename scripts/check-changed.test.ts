@@ -9,8 +9,10 @@ import {
   type WorkspaceGraph,
   changeScope,
   changedFiles,
+  lintInputs,
   lintPlan,
 } from './check-changed';
+import { REPO_ROOT } from './type-check';
 import { workspaceTestInputs } from './should-run-test-suite';
 
 // leaf -> mid -> base, and the root manifest depends on mid.
@@ -104,12 +106,12 @@ describe('changeScope', () => {
 });
 
 describe('lintPlan', () => {
-  const lintInputs = new Set([
+  const fakeInputs = new Set([
     'scripts/check-mock-modules.ts',
     'scripts/mock-module-baseline.json',
   ]);
   const plan = (files: string[]) =>
-    lintPlan(changeScope(files, graph, inputs), files, graph, lintInputs);
+    lintPlan(changeScope(files, graph, inputs), files, graph, fakeInputs);
   const runs = (files: string[]) =>
     Object.fromEntries(plan(files).steps.map(step => [step.id, step.run]));
 
@@ -135,6 +137,19 @@ describe('lintPlan', () => {
     const lint = plan(['packages/leaf/src/index.ts', file]);
     expect(lint.steps.every(step => step.run === 'whole')).toBe(true);
     expect(lint.wholeBecause).toEqual([`${file} is a lint input`]);
+  });
+
+  test('the lint inputs are the lint scripts, the root scripts they import and the baseline', () => {
+    const real = lintInputs(REPO_ROOT, []);
+    for (const file of [
+      'scripts/lint.ts',
+      'scripts/check-mock-modules.ts',
+      'scripts/check-test-cleanup-drift.ts',
+      'scripts/mock-module-baseline.json',
+    ]) {
+      expect(real.has(file)).toBe(true);
+    }
+    expect(real.has('scripts/check-changed.ts')).toBe(false);
   });
 
   test('a change that reaches everything runs every lint check whole', () => {
