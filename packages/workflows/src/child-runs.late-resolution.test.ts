@@ -1,4 +1,5 @@
 // @archon-test-isolated
+// @archon-test-windows
 import { makeDeps, makePlatform } from './child-runs/test-utils';
 import { holdsPathLock, InMemoryStore } from './child-runs/test-store';
 import { providerRegistry } from '@archon/providers';

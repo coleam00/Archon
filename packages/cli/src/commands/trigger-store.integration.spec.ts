@@ -1,4 +1,5 @@
 // @archon-test-isolated
+// @archon-test-windows
 import { runProject } from '@archon/workflows/attention-queue';
 import { watchAttentionQueue } from '@archon/workflows/attention-watch';
 import {

@@ -1,4 +1,5 @@
 // @archon-test-isolated
+// @archon-test-windows
 /**
  * `archon trigger check` reads the bindings this install can start, wherever a timer's
  * config lives, and reports a start that would be refused for its inputs, reading only.
