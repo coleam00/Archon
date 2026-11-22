@@ -2,11 +2,9 @@ import { z } from 'zod';
 import { activeWorkflowPathHolderCondition } from './workflow-run-reads';
 import {
   capacityWaiters,
-  drainableStarts,
   recordedResourceCapacity,
   heldCheckouts,
   type ReusableCheckout,
-  type ResourceBlocker,
   type ResourceSlotOccupancy,
   type QueuedStart,
 } from '@archon/workflows/resource-start-store';
@@ -241,144 +239,6 @@ export async function readRunLimit(
   if (limit === undefined) return null;
   const trees = await countedTrees(query);
   return { limit, live: trees.length, oldest: trees[0] };
-}
-
-/**
- * What the run limit leaves room for now: how many more trees it admits (`Infinity` without
- * a limit), and while it is full, the oldest counted tree's root as the blocker a queued
- * start records.
- */
-async function readRunRoom(
-  query: TransactionQuery
-): Promise<{ room: number; blocker: ResourceBlocker | null }> {
-  const runLimit = await readRunLimit(query);
-  if (!runLimit) return { room: Infinity, blocker: null };
-  const { limit, live, oldest } = runLimit;
-  const room = Math.max(0, limit - live);
-  return { room, blocker: room === 0 && oldest !== undefined ? { kind: 'run', id: oldest } : null };
-}
-
-/**
- * This host's queued starts that a drain would admit now (`drainableStarts`) on resources
- * other than `resource`, oldest first, and the queue position of every queued start of the
- * host. Under the run limit the host's older starts take its room before newer ones, on
- * any resource, so the host's queue keeps its order across resources.
- */
-async function runnableHostStarts(
-  query: TransactionQuery,
-  hostId: string,
-  resource: string
-): Promise<{ elsewhere: { id: string; position: number }[]; positions: Map<string, number> }> {
-  const queued = await query<{ id: string; resource_key: string; queue_position: number | string }>(
-    `SELECT id, resource_key, queue_position FROM remote_agent_resource_start_requests
-      WHERE host_id = $1 AND status = 'queued' ORDER BY queue_position`,
-    [hostId]
-  );
-  const positions = new Map(queued.rows.map(row => [String(row.id), Number(row.queue_position)]));
-  const elsewhere: { id: string; position: number }[] = [];
-  for (const other of new Set(queued.rows.map(row => row.resource_key))) {
-    if (other === resource) continue;
-    const { capacity } = await lockResourceSlotForAdmission(query, other);
-    const slot = await resourceStartOccupancy(query, other, capacity);
-    for (const start of drainableStarts(slot, hostId))
-      elsewhere.push({ id: start.id, position: positions.get(start.id) ?? Infinity });
-  }
-  return { elsewhere: elsewhere.sort((a, b) => a.position - b.position), positions };
-}
-
-/**
- * What the run limit puts in the way of a new start of `hostId` on `resource` that its resource
- * would admit (`resourceStartBlocker` returned null): the oldest counted tree while the limit
- * is full, or else the host's oldest runnable start on another resource, which goes first as
- * an older request of the host does on the same resource. Null otherwise. The caller applies
- * `overlap` to it as to any blocker.
- */
-export async function runLimitBlocker(
-  query: TransactionQuery,
-  hostId: string,
-  resource: string
-): Promise<ResourceBlocker | null> {
-  const { room, blocker } = await readRunRoom(query);
-  if (blocker || room === Infinity) return blocker;
-  const { elsewhere } = await runnableHostStarts(query, hostId, resource);
-  const first = elsewhere[0];
-  return first ? { kind: 'request', id: first.id } : null;
-}
-
-/**
- * The run limit's room for `starts`, drainable on `resource` for `hostId`: the host's runnable
- * starts on all its resources, oldest first (`ranked`), and the ids among them the room holds
- * now (`roomFor`, everything when no limit is set).
- */
-async function rankRunRoom(
-  query: TransactionQuery,
-  hostId: string,
-  resource: string,
-  starts: readonly { id: string }[]
-): Promise<{ ranked: string[]; roomFor: Set<string> }> {
-  const { room } = await readRunRoom(query);
-  if (room === Infinity) {
-    const ids = starts.map(start => start.id);
-    return { ranked: ids, roomFor: new Set(ids) };
-  }
-  const { elsewhere, positions } = await runnableHostStarts(query, hostId, resource);
-  const ranked = [
-    ...starts.map(start => ({ id: start.id, position: positions.get(start.id) ?? Infinity })),
-    ...elsewhere,
-  ]
-    .sort((a, b) => a.position - b.position)
-    .map(start => start.id);
-  return { ranked, roomFor: new Set(ranked.slice(0, room)) };
-}
-
-/**
- * The prefix of `starts`, drainable on `resource` for `hostId`, that a drain admits now: those
- * the run limit's room holds (`rankRunRoom`), and only up to the host's next older start on
- * another resource. A host drain that passes over its resources until a pass admits nothing
- * (`drainResourceStartHost`) therefore admits in the host's queue order.
- */
-export async function withinRunRoom<T extends { id: string }>(
-  query: TransactionQuery,
-  hostId: string,
-  resource: string,
-  starts: T[]
-): Promise<T[]> {
-  const { ranked, roomFor } = await rankRunRoom(query, hostId, resource, starts);
-  const mine = new Set(starts.map(start => start.id));
-  const admitted = new Set<string>();
-  for (const id of ranked) {
-    if (!roomFor.has(id) || !mine.has(id)) break;
-    admitted.add(id);
-  }
-  return starts.filter(start => admitted.has(start.id));
-}
-
-/**
- * The run limit with the queued requests that only it holds now: those a drain of their host
- * would admit on their resource (`drainableStarts`) and the limit's room does not hold
- * (`rankRunRoom`). A start the room holds but a pass reaches later is not waiting for the
- * limit. Computed by the drain's own functions from current state. Null when no limit is set.
- */
-export async function readRunLimitWaiting(
-  query: TransactionQuery
-): Promise<(RunLimit & { waiting: string[] }) | null> {
-  const runLimit = await readRunLimit(query);
-  if (!runLimit) return null;
-  const queued = await query<{ host_id: string; resource_key: string }>(
-    `SELECT DISTINCT host_id, resource_key FROM remote_agent_resource_start_requests
-      WHERE status = 'queued'`
-  );
-  const waiting: string[] = [];
-  for (const { host_id: hostId, resource_key: resource } of queued.rows) {
-    const { capacity } = await lockResourceSlotForAdmission(query, resource);
-    const drainable = drainableStarts(
-      await resourceStartOccupancy(query, resource, capacity),
-      hostId
-    );
-    const { roomFor } = await rankRunRoom(query, hostId, resource, drainable);
-    for (const start of drainable) if (!roomFor.has(start.id)) waiting.push(start.id);
-  }
-  return { limit: runLimit.limit, live: runLimit.live, waiting };
 }
 
 /**

@@ -32,7 +32,7 @@ import {
 } from './schemas/workflow-run';
 import type { WorkflowResource } from './schemas/resource-name';
 import type { ResumeClaimCursor, ResumeRefusal } from './store';
-import { itemHolder, itemHoldKey } from './item-hold';
+import { itemHolder } from './item-hold';
 import type { AttentionRead } from './schemas/attention-degraded';
 
 export type { AwaitingExecution, StartExecutorObservation } from './schemas/start-executor';
@@ -340,7 +340,8 @@ export interface ReusableCheckout {
   workingPath: string;
 }
 
-function checkoutKeys(
+/** The checkout keys a run holds: its launch checkout, its working path, and their aliases. */
+export function checkoutKeys(
   launch: PreparedWorkflowLaunch | undefined,
   workingPath: string | null | undefined,
   reusable: readonly ReusableCheckout[]
@@ -409,7 +410,7 @@ export interface ResourceSlotOccupancy {
 }
 
 /** The run that holds the start's item for its workflow, other than the start's own run. */
-function queuedItemHolder(
+export function queuedItemHolder(
   held: ReadonlyMap<string, string>,
   start: Pick<QueuedStart, 'launch' | 'itemId'>
 ): string | undefined {
@@ -420,7 +421,8 @@ function queuedItemHolder(
   });
 }
 
-function checkoutHolder(
+/** The run that holds the checkout `launch` locks, other than its own run. */
+export function checkoutHolder(
   slot: Pick<
     ResourceSlotOccupancy,
     'heldCheckouts' | 'foreignHeldCheckouts' | 'unknownForeignCheckoutHolder'
@@ -439,7 +441,8 @@ function checkoutHolder(
   return holders.find(holder => holder !== undefined && holder !== launch.run.id);
 }
 
-function validQueuedStarts(slot: ResourceSlotOccupancy): QueuedStart[] {
+/** The queued starts whose admission guard reads; a corrupt one is logged and passed over. */
+export function validQueuedStarts(slot: ResourceSlotOccupancy): QueuedStart[] {
   return slot.queue.filter(start => {
     try {
       readAdmissionCheckoutGuard(start.launch);
@@ -504,31 +507,6 @@ export function resourceStartBlocker(
   return first && slot.holders.length + slot.waiters.length >= slot.capacity
     ? { kind: 'run', id: first.id }
     : null;
-}
-
-/**
- * The queued requests a drain by `hostId` admits now, in order. A request of another
- * host is passed over: it waits only for its own host's drain and blocks no other host
- * (see `resourceStartBlocker`). A request admitted here holds its checkout and its item
- * for the rest of the drain.
- */
-export function drainableStarts(slot: ResourceSlotOccupancy, hostId: string): QueuedStart[] {
-  const free = slot.capacity - slot.holders.length - slot.waiters.length;
-  const held = new Map(slot.heldCheckouts);
-  const heldItems = new Map(slot.heldItems);
-  const admitted: QueuedStart[] = [];
-  for (const start of validQueuedStarts(slot)) {
-    if (admitted.length >= free) break;
-    if (checkoutHolder({ ...slot, heldCheckouts: held }, start.launch) !== undefined) continue;
-    if (queuedItemHolder(heldItems, start) !== undefined) continue;
-    if (start.hostId !== hostId) continue;
-    admitted.push(start);
-    for (const checkout of checkoutKeys(start.launch, undefined, slot.reusableCheckouts))
-      held.set(checkout, start.id);
-    if (start.itemId !== null)
-      heldItems.set(itemHoldKey(start.launch.run.workflow_name, start.itemId), start.id);
-  }
-  return admitted;
 }
 
 /**
