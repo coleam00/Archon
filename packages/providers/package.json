@@ -37,7 +37,8 @@
     "./pi/descriptor": "./src/community/pi/descriptor.ts",
     "./pi/auth-path-env": "./src/community/pi/auth-path-env.ts",
     "./pi": "./src/community/pi/index.ts",
-    "./in-process": "./src/in-process.ts"
+    "./in-process": "./src/in-process.ts",
+    "./community/zcode": "./src/community/zcode/index.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts"

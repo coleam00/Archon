@@ -41,6 +41,7 @@ export type { CodexProviderDefaults } from './codex/config';
 export type { CopilotProviderDefaults } from './community/copilot/config';
 export type { PiProviderDefaults } from './community/pi/config';
 export type { OpencodeProviderDefaults } from './community/opencode/config';
+export type { ZcodeProviderDefaults } from './community/zcode/config';
 
 /**
  * API-safe projection of ProviderRegistration (excludes non-serializable fields).

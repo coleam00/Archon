@@ -3,6 +3,7 @@ import { MAINTAINED_PROVIDER_IDS } from '@archon/provider-contract';
 import { maintainedDescriptors, registerProvider } from '@archon/providers';
 import { registerCopilotProvider } from '@archon/providers/community/copilot';
 import { registerOpencodeProvider } from '@archon/providers/community/opencode';
+import { registerZcodeProvider } from '@archon/providers/community/zcode';
 import { getVendorCatalog } from '../credentials/catalog';
 import { loadProviderPlugins } from './load-provider-plugins';
 import { processProviderRegistration } from './process-registration';
@@ -25,6 +26,7 @@ export async function registerHostProviders(): Promise<void> {
   }
   registerOpencodeProvider();
   registerCopilotProvider();
+  registerZcodeProvider();
   for (const registration of await loadProviderPlugins(getPluginsPath(), {
     maintained: BUNDLED_IS_BINARY ? 'installed' : 'source',
   })) {

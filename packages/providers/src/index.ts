@@ -57,6 +57,7 @@ export type {
   PiProviderDefaults,
   OpencodeProviderDefaults,
   CopilotProviderDefaults,
+  ZcodeProviderDefaults,
 } from './types';
 export type { PiModelInfo } from './community/pi/model-catalog';
 export type {
