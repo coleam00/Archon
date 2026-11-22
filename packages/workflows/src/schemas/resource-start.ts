@@ -1,7 +1,9 @@
 import { z } from 'zod';
+import { isJsonPointer } from '../json-pointer';
 import { jsonValueSchema } from '../output-ref';
 import {
   asksSettledInputSourceSchema,
+  entryReadsNeedLinkedItems,
   linkedReadsNoItemAnswers,
   runEndedInputSourceSchema,
 } from './binding-input-source';
@@ -631,15 +633,21 @@ export type SourceReceiptAcceptance = z.infer<typeof sourceReceiptAcceptanceSche
 
 /**
  * `on.runEnded.linked`: the stage starts on the items the ended run's item is linked to
- * (the holders), not on that item, once for every holder each time the run ends with the
- * outcome; the stage judges whether its item is ready. `kind` names the link and `holder`
- * the end of it the started item is on; the ended run's item is on the other end. An
- * order whose members are `part_of` it uses `holder: 'to'`; an item that `depends_on`
- * another uses `holder: 'from'`. The engine gives the kind no meaning: the file names
- * both the kind and the end. Only links active when the run completes count.
+ * (the holders), not on that item. `kind` names the link and `holder` the end of it the
+ * started item is on; the ended run's item is on the other end. An order whose members are
+ * `part_of` it uses `holder: 'to'`; an item that `depends_on` another uses
+ * `holder: 'from'`. The engine gives the kind no meaning: the file names both the kind and
+ * the end. Only links active when the run completes count. Without `items` every holder
+ * starts, with the same inputs. `items` points into the ended run's result at a list of
+ * item keys or objects with a string `key`; only those holders start, each reading its own
+ * entry through `{ entry: <pointer> }` (see `namedLinkedStart` in core for the refusals).
  */
 export const runEndedLinkedSchema = z
-  .object({ kind: itemLinkKindSchema, holder: z.enum(['from', 'to']) })
+  .object({
+    kind: itemLinkKindSchema,
+    holder: z.enum(['from', 'to']),
+    items: z.string().refine(isJsonPointer, 'Invalid JSON Pointer').optional(),
+  })
   .strict();
 export type RunEndedLinked = z.infer<typeof runEndedLinkedSchema>;
 
@@ -675,21 +683,35 @@ export const runEndedTriggerSchema = z
   })
   .strict()
   .refine(linkedTakesNoCheckout.check, linkedTakesNoCheckout.message)
-  .refine(linkedReadsNoItemAnswers.check, linkedReadsNoItemAnswers.message);
+  .refine(linkedReadsNoItemAnswers.check, linkedReadsNoItemAnswers.message)
+  .refine(entryReadsNeedLinkedItems.check, entryReadsNeedLinkedItems.message);
 export type RunEndedTrigger = z.infer<typeof runEndedTriggerSchema>;
 
 /**
  * A linked run-ended start, as the completing write resolves it. Which items hold an
  * active link to the ended run's item can only be read exactly inside the transaction
- * that completes the run. `acceptance` is the receipt for the ended run; the store sets
- * its `id`, `itemKey` and `deliveryId` per holder.
+ * that completes the run.
+ *
+ * Without `linked.items`, every holder starts: `acceptance` is the receipt for the ended
+ * run, and the store sets its `id`, `itemKey` and `deliveryId` per holder. With it,
+ * `named` lists the items the run named, each with its own `acceptance` (the store sets
+ * its `id` and `deliveryId`) and the prebuilt `unlinked` refusal on the ended run's item
+ * that the store writes instead when that item holds no such link.
  */
-export interface LinkedRunEndedStart {
+export type LinkedRunEndedStart = {
   link: RunEndedLinked;
   endedRunId: string;
   endedItemId: string;
-  acceptance: SourceReceiptAcceptance;
-}
+} & (
+  | { acceptance: SourceReceiptAcceptance }
+  | {
+      named: readonly {
+        key: string;
+        acceptance: SourceReceiptAcceptance;
+        unlinked: SourceReceiptAcceptance;
+      }[];
+    }
+);
 
 /**
  * `on.asksSettled` of a trigger file: the binding starts when the asks a run of

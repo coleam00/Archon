@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { IsolationBlockedError, recordWorktreeAdoption } from '@archon/isolation';
+import {
+  IsolationBlockedError,
+  readWorktreeBaseBranch,
+  recordWorktreeAdoption,
+} from '@archon/isolation';
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import { requireTerminalStatusWrite } from '@archon/workflows/terminal-status-write';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
@@ -20,6 +24,7 @@ import type {
 export interface ForegroundIsolation {
   cwd: string;
   cutFromCommit: string | undefined;
+  resolvedBaseBranch?: string;
   ownedWorktree: OwnedWorktree | undefined;
 }
 
@@ -56,7 +61,11 @@ export async function resolveForegroundIsolation(
     return { cwd, ...live };
   }
   if (adoptedEnvironment)
-    return { cwd: await runInAdoptedWorktree(scope, adoptedEnvironment), ...live };
+    return {
+      cwd: await runInAdoptedWorktree(scope, adoptedEnvironment),
+      ...live,
+      resolvedBaseBranch: readWorktreeBaseBranch(adoptedEnvironment.metadata),
+    };
   if (workflow.worktree?.enabled === false) {
     getLog().info(
       { workflowName: workflow.name, conversationId, codebaseId: codebase.id },
@@ -128,9 +137,15 @@ async function resolveNewIsolation(
       ? {
           cwd: result.cwd,
           cutFromCommit: result.cutFromCommit,
+          resolvedBaseBranch: result.resolvedBaseBranch,
           ownedWorktree: result.ownedWorktree,
         }
-      : { cwd: result.cwd, cutFromCommit: undefined, ownedWorktree: undefined };
+      : {
+          cwd: result.cwd,
+          cutFromCommit: undefined,
+          resolvedBaseBranch: result.resolvedBaseBranch,
+          ownedWorktree: undefined,
+        };
   } catch (error) {
     if (!(error instanceof IsolationBlockedError)) throw error;
     if (setupRun)

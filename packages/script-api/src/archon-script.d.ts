@@ -540,8 +540,8 @@ declare module 'archon:script' {
           readonly number: number;
         };
         readonly head_revision: string;
-        readonly default_branch: string;
-        readonly default_revision: string;
+        readonly base_branch: string;
+        readonly base_revision: string;
         readonly behind: number;
         readonly mergeable: 'clean' | 'conflict' | 'unknown';
         readonly merge_commit: string | null;

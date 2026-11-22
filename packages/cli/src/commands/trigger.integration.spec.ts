@@ -202,6 +202,38 @@ interface RunRow {
   output_root: string | null;
 }
 
+/** Give the project an `origin` that has its current branch as `main`. */
+async function publishProject(projectRoot: string): Promise<void> {
+  const remote = join(projectRoot, '..', 'origin.git');
+  for (const [cwd, argv] of [
+    [projectRoot, ['git', 'init', '-q', '--bare', '-b', 'main', remote]],
+    [projectRoot, ['git', 'branch', '-M', 'main']],
+    [projectRoot, ['git', 'remote', 'add', 'origin', remote]],
+    [projectRoot, ['git', 'push', '-q', 'origin', 'main']],
+    [projectRoot, ['git', 'remote', 'set-head', 'origin', 'main']],
+  ] as const)
+    expect(await Bun.spawn([...argv], { cwd, stdout: 'ignore' }).exited).toBe(0);
+}
+
+async function commitProject(projectRoot: string): Promise<void> {
+  const commit = Bun.spawn(
+    [
+      'git',
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@t',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'base',
+    ],
+    { cwd: projectRoot }
+  );
+  expect(await commit.exited).toBe(0);
+}
+
 function readRows<T>(databasePath: string, sql: string): T[] {
   if (!existsSync(databasePath)) return [];
   const database = new Database(databasePath, { readonly: true });
@@ -308,20 +340,34 @@ describe('trigger CLI durable execution', () => {
     }
   }, 30_000);
 
-  test('a no-remote launch exposes its full error in both inspect forms and workflow get', async () => {
+  test('a launch whose base the remote lacks is admitted with a caveat and exposes its full error', async () => {
     const fixture = await heldTriggerRun('launch-failure');
     fixture.writeWorkflow('echo unreachable');
+    await commitProject(fixture.projectRoot);
+    await publishProject(fixture.projectRoot);
+    // Creation fetches a remote base, so this fails after admission, when the worktree is cut.
+    writeFileSync(
+      join(fixture.projectRoot, '.archon', 'config.yaml'),
+      'worktree:\n  baseBranch: does-not-exist\n'
+    );
     const configPath = join(fixture.projectRoot, '..', 'trigger.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.binding.launch.isolation = { kind: 'default' };
     writeFileSync(configPath, JSON.stringify(config));
-    await fixture.fire();
+    const fire = await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
+      'trigger',
+      'fire',
+      '--config',
+      configPath,
+    ]);
     const failed = await waitFor(() => {
       const run = fixture.runs()[0];
       return run?.status === 'failed' ? run : undefined;
     }, 'launch failure');
+    expect(fire.stderr).toContain(`Run ${failed.id} is admitted; its checkout is prepared`);
+    expect(fire.stderr).toContain(`archon workflow get ${failed.id}`);
     const metadata = JSON.parse(failed.metadata);
-    expect(metadata.error).toContain('no git remote');
+    expect(metadata.error).toContain("Configured base branch 'does-not-exist' not found");
     const invoke = (args: string[]) =>
       runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, args);
     const request = JSON.parse((await invoke(['trigger', 'inspect', failed.id])).stdout);
@@ -338,6 +384,68 @@ describe('trigger CLI durable execution', () => {
     expect(json.metadata.error).toBe(metadata.error);
     expect(json.terminal_record.error).toBe(metadata.error);
     expect((await invoke(['workflow', 'get', failed.id])).stdout).toContain(metadata.error);
+  }, 30_000);
+
+  test.each([
+    ['ambiguous remotes', 'multiple remotes exist (feb, jan)'],
+    ['a local base that does not exist', "Base branch 'does-not-exist' does not exist"],
+    ['a start point that does not exist', "Start point 'missing-start' does not exist"],
+  ])(
+    'a start with %s fails the fire and takes no slot',
+    async (state, reason) => {
+      const fixture = await heldTriggerRun('refused-start');
+      await commitProject(fixture.projectRoot);
+      if (state === 'ambiguous remotes')
+        for (const name of ['jan', 'feb'])
+          expect(
+            await Bun.spawn(['git', 'remote', 'add', name, join(fixture.projectRoot, '..', name)], {
+              cwd: fixture.projectRoot,
+            }).exited
+          ).toBe(0);
+      else if (state === 'a local base that does not exist')
+        writeFileSync(
+          join(fixture.projectRoot, '.archon', 'config.yaml'),
+          'worktree:\n  baseBranch: does-not-exist\n'
+        );
+      const configPath = join(fixture.projectRoot, '..', 'trigger.json');
+      const config = JSON.parse(readFileSync(configPath, 'utf8'));
+      config.binding.launch.isolation =
+        state === 'a start point that does not exist'
+          ? { kind: 'worktree', fromBranch: 'missing-start' }
+          : { kind: 'default' };
+      writeFileSync(configPath, JSON.stringify(config));
+      const fire = await runCli(
+        fixture.cliPath,
+        fixture.projectRoot,
+        fixture.archonHome,
+        ['trigger', 'fire', '--config', configPath],
+        false
+      );
+      expect(fire.exitCode).not.toBe(0);
+      expect(fire.stderr + fire.stdout).toContain(reason);
+      expect(fixture.requests()).toEqual([]);
+      expect(fixture.runs()).toEqual([]);
+    },
+    30_000
+  );
+
+  test('a start in a repository with no remote runs in a worktree cut from its current branch', async () => {
+    const fixture = await heldTriggerRun('no-remote');
+    const out = join(fixture.projectRoot, '..', 'base.out');
+    fixture.writeWorkflow(`echo "$BASE_BRANCH $(git rev-parse --abbrev-ref HEAD)" > '${out}'`);
+    expect(
+      await Bun.spawn(['git', 'checkout', '-q', '-b', 'trunk'], { cwd: fixture.projectRoot }).exited
+    ).toBe(0);
+    await commitProject(fixture.projectRoot);
+    const configPath = join(fixture.projectRoot, '..', 'trigger.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.binding.launch.isolation = { kind: 'default' };
+    writeFileSync(configPath, JSON.stringify(config));
+    await fixture.fire();
+    await waitFor(() => (fixture.runs()[0]?.status === 'completed' ? true : undefined), 'the run');
+    const [base, branch] = readFileSync(out, 'utf8').trim().split(' ');
+    expect(base).toBe('trunk');
+    expect(branch).not.toBe('trunk');
   }, 30_000);
 
   // What the item commands read and record once runs are on an item is proved in-process

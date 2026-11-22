@@ -1201,7 +1201,7 @@ describe('base branch and remote', () => {
   test('throws actionable error when remote is ambiguous', async () => {
     getDefaultRemoteSpy.mockResolvedValue(null);
     execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-      // `git remote` listing for the error message
+      // The remotes getDefaultRemote could not choose between
       if (args.includes('remote') && !args.includes('get-url')) {
         return { stdout: 'jan\nfeb\nmar\n', stderr: '' };
       }
@@ -1212,18 +1212,6 @@ describe('base branch and remote', () => {
       /Cannot determine git remote.*jan, feb, mar.*Set worktree\.remote/s
     );
     // No sync attempted from an unknown remote
-    expect(syncWorkspaceSpy).not.toHaveBeenCalled();
-  });
-
-  test('throws actionable error when no remote is configured', async () => {
-    getDefaultRemoteSpy.mockResolvedValue(null);
-
-    const creation = provider.create(issueRequest);
-
-    await expect(creation).rejects.toThrow(
-      /no git remote is configured.*git remote add origin URL.*--no-worktree/s
-    );
-    await expect(creation).rejects.not.toThrow(/multiple remotes|worktree\.remote/s);
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
   });
 });

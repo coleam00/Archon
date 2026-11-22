@@ -172,24 +172,24 @@ describe('checks.commit', () => {
 });
 
 describe('pr.merge-state', () => {
+  // The base is not the default branch, so a comparison read from `defaultBranchRef` would show.
+  const releaseBase = {
+    name: 'release/x',
+    target: { oid: 'releasesha' },
+    compare: { behindBy: 3 },
+  };
   const answer =
-    (mergeable: string, mergeCommit: { oid: string } | null) =>
+    (
+      mergeable: string,
+      mergeCommit: { oid: string } | null,
+      baseRef: typeof releaseBase | null = releaseBase
+    ) =>
     (call: Call): unknown =>
-      call.query?.includes('pullRequest')
-        ? {
-            data: {
-              repository: { pullRequest: { headRefOid: 'headsha', mergeable, mergeCommit } },
-            },
-          }
+      call.query?.includes('baseRef')
+        ? { data: { repository: { pullRequest: { baseRefName: 'release/x', baseRef } } } }
         : {
             data: {
-              repository: {
-                defaultBranchRef: {
-                  name: 'main',
-                  target: { oid: 'mainsha' },
-                  compare: { behindBy: 3 },
-                },
-              },
+              repository: { pullRequest: { headRefOid: 'headsha', mergeable, mergeCommit } },
             },
           };
 
@@ -198,7 +198,7 @@ describe('pr.merge-state', () => {
     ['CONFLICTING', 'conflict'],
     ['UNKNOWN', 'unknown'],
   ] as const)(
-    'compares the head it read with the default branch: %s is %s',
+    "compares the head it read with the pull request's own base: %s is %s",
     async (native, mergeable) => {
       const github = fakeGitHub(answer(native, null));
       expect(await run({ operationId: 'm', op: 'pr.merge-state', ref }, github)).toEqual({
@@ -209,17 +209,26 @@ describe('pr.merge-state', () => {
           value: {
             ref,
             head_revision: 'headsha',
-            default_branch: 'main',
-            default_revision: 'mainsha',
+            base_branch: 'release/x',
+            base_revision: 'releasesha',
             behind: 3,
             mergeable,
             merge_commit: null,
           },
         },
       });
-      expect(github.calls[1]?.variables).toMatchObject({ head: 'headsha' });
+      expect(github.calls[1]?.query).not.toContain('defaultBranchRef');
+      expect(github.calls[1]?.variables).toMatchObject({ head: 'headsha', number: ref.number });
     }
   );
+
+  test('a pull request whose base branch was deleted is not found', async () => {
+    const github = fakeGitHub(answer('MERGEABLE', null, null));
+    expect(await run({ operationId: 'm', op: 'pr.merge-state', ref }, github)).toMatchObject({
+      ok: false,
+      error: { kind: 'not_found', message: expect.stringContaining('release/x') },
+    });
+  });
 
   test('a merged pull request carries its merge commit', async () => {
     const github = fakeGitHub(answer('UNKNOWN', { oid: 'landedsha' }));

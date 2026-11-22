@@ -300,7 +300,11 @@ export const workItemCommentSchema = z.object({
   url: z.url(),
   body: z.string(),
 });
-/** How far a pull request's head is behind its repository's default branch, and whether it merges. */
+/**
+ * How far a pull request's head is behind the pull request's own base branch, and whether it
+ * merges into it. A caller that needs the default branch reads it with `checks.commit` at
+ * `{kind:'default_branch'}`.
+ */
 export const prMergeStateRequestSchema = requestBase.extend({
   op: z.literal('pr.merge-state'),
   ref: prRefSchema,
@@ -308,9 +312,9 @@ export const prMergeStateRequestSchema = requestBase.extend({
 export const prMergeStateSchema = z.object({
   ref: prRefSchema,
   head_revision: gitObjectIdSchema,
-  default_branch: text,
-  default_revision: gitObjectIdSchema,
-  /** Commits of the default branch at `default_revision` that the head at `head_revision` lacks. */
+  base_branch: text,
+  base_revision: gitObjectIdSchema,
+  /** Commits of `base_branch` at `base_revision` that the head at `head_revision` lacks. */
   behind: z.number().int().nonnegative(),
   mergeable: z.enum(['clean', 'conflict', 'unknown']),
   /** The commit the pull request landed as; null until it is merged. */

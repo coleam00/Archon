@@ -273,7 +273,8 @@ commands:
 
 # Worktree settings
 worktree:
-  baseBranch: main  # Optional: auto-detected from git when not set
+  baseBranch: main  # Optional: auto-detected from git when not set (the remote's
+                    # default branch, or the current branch when there is no remote)
   copyFiles:  # Optional: Gitignored files/dirs to copy into new worktrees.
               # Nothing is copied unless you list it here.
     - .env
@@ -291,6 +292,7 @@ worktree:
                         # Must be relative; no absolute, no `..` segments.
   remote: origin        # Optional: git remote name for fetch/push. Auto-detected
                         # when omitted (origin if it exists, sole remote otherwise).
+                        # A repository with no remote cuts worktrees locally.
 
 # Documentation directory
 docs:

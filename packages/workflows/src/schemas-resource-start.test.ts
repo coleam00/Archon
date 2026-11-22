@@ -196,6 +196,37 @@ describe('item mapping', () => {
     ]);
   });
 
+  test('a trigger file reads a linked entry only beside linked.items', async () => {
+    const { triggerConfigSchema } = await import('./schemas/resource-start');
+    const file = (linked: unknown) => ({
+      version: 1,
+      sourceInstanceId: 'source',
+      binding: {
+        bindingId: 'b',
+        bindingRevision: null,
+        hostId: 'h',
+        runAsUserId: 'u',
+        resource: 'r',
+        overlap: 'queue',
+        launch: { cwd: '/repo', workflowName: 'w', inputs: {}, isolation: { kind: 'default' } },
+      },
+      on: {
+        runEnded: {
+          workflowName: 'split',
+          outcome: 'split',
+          linked,
+          inputs: { brief: { entry: '/brief' } },
+        },
+      },
+    });
+    const named = { kind: 'part_of', holder: 'from', items: '/start' };
+    expect(triggerConfigSchema.safeParse(file(named)).success).toBe(true);
+    const unnamed = triggerConfigSchema.safeParse(file({ kind: 'part_of', holder: 'from' }));
+    expect(unnamed.error?.issues.map(issue => issue.message)).toEqual([
+      'An input reads { entry }, but only a linked start with linked.items has an entry per started item',
+    ]);
+  });
+
   test('a trigger file maps an item only when fire-only', async () => {
     const { triggerConfigSchema } = await import('./schemas/resource-start');
     const fireOnly = {

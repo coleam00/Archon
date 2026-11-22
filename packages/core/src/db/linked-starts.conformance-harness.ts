@@ -40,6 +40,11 @@ export interface Reviews {
   finish: (runId: string, item: string, outcome: string, link?: RunEndedLinked) => Promise<Ended>;
   /** Start and complete a run of `review` on `item`. */
   complete: (item: string, outcome: string, link?: RunEndedLinked) => Promise<Ended>;
+  /**
+   * Start and complete a run of `split` on `item` whose result names `named`, each with
+   * its own brief, passing the named linked start the engine builds over `link`.
+   */
+  split: (item: string, link: RunEndedLinked, named: readonly string[]) => Promise<Ended>;
 }
 
 /** Runs of `review` on items of the conformance project, completed as the engine would. */
@@ -66,6 +71,24 @@ export function reviews({ db, store }: Harness): Reviews {
     start,
     finish,
     complete: async (item, outcome, link) => finish(await start(item), item, outcome, link),
+    split: async (item, link, named) => {
+      const runId = await start(item);
+      const start_: LinkedRunEndedStart = {
+        link,
+        endedRunId: runId,
+        endedItemId: await itemId(store, item),
+        named: named.map(key => ({
+          key,
+          acceptance: acceptance(link, runId, key, { brief: `brief for ${key}` }),
+          unlinked: refusal(link, `${runId}:unlinked:${key}`, item, `'${key}' holds no link`),
+        })),
+      };
+      const written = await store.completeWorkflowRun(runId, { duration_ms: 1 }, undefined, {
+        outcome: { kind: 'enum', value: 'split' },
+        linkedStarts: [start_],
+      });
+      return { runId, written: written.startReceipts };
+    },
   };
 }
 
@@ -106,41 +129,76 @@ function linkedStart(
   runId: string,
   itemId: string,
   member: string
-): LinkedRunEndedStart {
+): Extract<LinkedRunEndedStart, { acceptance: unknown }> {
   return {
     link,
     endedRunId: runId,
     endedItemId: itemId,
-    acceptance: {
-      receipt: {
-        id: crypto.randomUUID(),
-        sourceInstanceId: link.kind,
-        deliveryId: runId,
-        contentDigest: `digest-${member}`,
-        receivedAt: new Date().toISOString(),
-        occurredAt: null,
-        sourceActor: { source: RUN_ENDED_SOURCE_ACTOR, id: runId, display: 'approved' },
-        itemKey: member,
-      },
-      outcome: 'matched',
-      bindings: [
-        {
-          bindingId: 'ship',
-          bindingRevision: 'r1',
-          hostId: 'host',
-          runAsUserId: 'operator',
-          resource: 'ship',
-          overlap: 'queue',
-          launch: {
-            cwd: '/conformance',
-            workflowName: 'ship',
-            inputs: {},
-            isolation: { kind: 'in-place' },
-          },
-          eventInputs: { member },
-        },
-      ],
+    acceptance: acceptance(link, runId, member, { member }),
+  };
+}
+
+/** The engine's matched receipt for the end of `runId`, on `itemKey`, mapping `inputs`. */
+function acceptance(
+  link: RunEndedLinked,
+  runId: string,
+  itemKey: string,
+  inputs: Record<string, string>
+): SourceReceiptAcceptance {
+  return {
+    receipt: {
+      id: crypto.randomUUID(),
+      sourceInstanceId: link.kind,
+      deliveryId: runId,
+      contentDigest: `digest-${JSON.stringify(inputs)}`,
+      receivedAt: new Date().toISOString(),
+      occurredAt: null,
+      sourceActor: { source: RUN_ENDED_SOURCE_ACTOR, id: runId, display: 'approved' },
+      itemKey,
     },
+    outcome: 'matched',
+    bindings: [
+      {
+        bindingId: 'ship',
+        bindingRevision: 'r1',
+        hostId: 'host',
+        runAsUserId: 'operator',
+        resource: 'ship',
+        overlap: 'queue',
+        launch: {
+          cwd: '/conformance',
+          workflowName: 'ship',
+          inputs: {},
+          isolation: { kind: 'in-place' },
+        },
+        eventInputs: inputs,
+      },
+    ],
+  };
+}
+
+/** The engine's refusal of a start, on `itemKey`, keyed by `deliveryId`. */
+function refusal(
+  link: RunEndedLinked,
+  deliveryId: string,
+  itemKey: string,
+  reason: string
+): SourceReceiptAcceptance {
+  return {
+    receipt: {
+      id: crypto.randomUUID(),
+      sourceInstanceId: link.kind,
+      deliveryId,
+      contentDigest: `digest-${reason}`,
+      receivedAt: new Date().toISOString(),
+      occurredAt: null,
+      sourceActor: { source: RUN_ENDED_SOURCE_ACTOR, id: deliveryId, display: 'split' },
+      itemKey,
+    },
+    outcome: 'unmatched',
+    reason,
+    bindings: [],
+    evaluatedBindings: [{ bindingId: 'ship', bindingRevision: 'r1', status: 'rejected', reason }],
   };
 }
 
@@ -195,6 +253,49 @@ export function describeLinkedStartConformance(makeHarness: () => Promise<Harnes
       // An item with links of another kind only is no holder.
       expect((await complete('waiter-1', 'approved', ORDER)).written).toEqual([]);
       expect(await store.listStartReceipts()).toHaveLength(2);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a named linked start starts only the named holders, each with its own inputs', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      // A split names its members; they are `part_of` the order that ends.
+      const split: RunEndedLinked = { kind: 'part_of', holder: 'from', items: '/start' };
+      for (const member of ['m1', 'm2', 'm3', 'stale'])
+        await link(harness, member, 'order', 'part_of');
+      const [stale] = await store.listItemLinks(await itemId(store, 'stale'));
+      if (!stale || 'type' in stale) throw new Error('no link for stale');
+      await store.endItemLink({ linkId: stale.id, ...byCli });
+      // 'stranger' is not an item at all: a run may name a key that does not exist.
+
+      const { runId, written } = await reviews(harness).split('order', split, [
+        'm1',
+        'm3',
+        'stale',
+        'stranger',
+      ]);
+
+      expect((await store.getWorkflowRun(runId))?.status).toBe('completed');
+      const receipts = [];
+      for (const { receipt } of written) receipts.push(await store.getStartReceipt(receipt.id));
+      // m2 is a holder the run did not name: nothing starts on it.
+      expect(
+        receipts.map(receipt => [
+          receipt?.itemKey,
+          receipt?.outcome,
+          receipt?.bindings[0]?.intent?.eventInputs ?? receipt?.reason,
+        ])
+      ).toEqual([
+        ['m1', 'matched', { brief: 'brief for m1' }],
+        ['m3', 'matched', { brief: 'brief for m3' }],
+        // A named item whose link ended, or that holds none, is refused on the order.
+        ['order', 'unmatched', "'stale' holds no link"],
+        ['order', 'unmatched', "'stranger' holds no link"],
+      ]);
+      expect(await store.listStartReceipts()).toHaveLength(4);
     } finally {
       await harness.close();
     }
