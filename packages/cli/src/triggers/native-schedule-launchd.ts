@@ -1,11 +1,14 @@
 /** macOS: a per-user LaunchAgent in the GUI domain. */
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type {
-  NativeScheduleOptions,
-  RunCommand,
-  ScheduleBackend,
-  ScheduledJob,
+import {
+  installedLabels,
+  readInstalled,
+  type InstalledJob,
+  type NativeScheduleOptions,
+  type RunCommand,
+  type ScheduleBackend,
+  type ScheduledJob,
 } from './native-schedule';
 
 const LAUNCHCTL = '/bin/launchctl';
@@ -17,6 +20,18 @@ function escapeXml(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&apos;');
+}
+
+const XML_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+};
+
+function unescapeXml(value: string): string {
+  return value.replace(/&(amp|lt|gt|quot|apos);/g, (_, name: string) => XML_ENTITIES[name]);
 }
 
 function xmlString(value: string): string {
@@ -65,6 +80,17 @@ ${output}  </dict>
 `;
 }
 
+/** The inverse of `renderMacosLaunchAgent` for what check needs; undefined for any other plist. */
+export function readMacosLaunchAgent(plist: string): InstalledJob | undefined {
+  const array = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(plist)?.[1];
+  const home = /<key>ARCHON_HOME<\/key>\s*<string>([^<]*)<\/string>/.exec(plist)?.[1];
+  if (array === undefined || home === undefined) return undefined;
+  const programArguments = [...array.matchAll(/<string>([^<]*)<\/string>/g)].map(match =>
+    unescapeXml(match[1])
+  );
+  return { archonHome: unescapeXml(home), programArguments };
+}
+
 export function launchdBackend(run: RunCommand, options: NativeScheduleOptions): ScheduleBackend {
   const uid = options.uid ?? process.getuid?.();
   if (uid === undefined) throw new Error('Cannot determine the macOS user launchd domain');
@@ -83,6 +109,13 @@ export function launchdBackend(run: RunCommand, options: NativeScheduleOptions):
     render: job => [{ path: plistPath(job.label), contents: renderMacosLaunchAgent(job) }],
     isRegistered,
     register: job => run(LAUNCHCTL, ['bootstrap', domain, plistPath(job.label)]),
+    installed: async () =>
+      readInstalled(
+        await installedLabels(directory, '.plist'),
+        plistPath,
+        readMacosLaunchAgent,
+        label => `${LAUNCHCTL} bootout ${domain}/${label}, then delete ${plistPath(label)}`
+      ),
     // bootout fails for a plist launchd has not loaded, which would strand its file.
     unregister: async label => {
       if (await isRegistered(label)) await run(LAUNCHCTL, ['bootout', domain, plistPath(label)]);

@@ -1,11 +1,14 @@
 /** Linux: a systemd user timer and the oneshot service it starts. */
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import type {
-  NativeScheduleOptions,
-  RunCommand,
-  ScheduleBackend,
-  ScheduledJob,
+import {
+  installedLabels,
+  readInstalled,
+  type InstalledJob,
+  type NativeScheduleOptions,
+  type RunCommand,
+  type ScheduleBackend,
+  type ScheduledJob,
 } from './native-schedule';
 
 const SYSTEMCTL = 'systemctl';
@@ -59,6 +62,30 @@ WantedBy=timers.target
   };
 }
 
+/** The values of a line's `quoted` words: `\\`, `\"` and `%%` reversed, then `$$` when it is ExecStart. */
+function quotedWords(line: string, dollarsDoubled: boolean): string[] {
+  return [...line.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map(match =>
+    (dollarsDoubled ? match[1].replaceAll('$$', '$') : match[1])
+      .replace(/\\(.)/g, (_, escaped: string) => escaped)
+      .replaceAll('%%', '%')
+  );
+}
+
+/** The inverse of the `.service` `renderSystemdUnits` writes, for what check needs. */
+export function readSystemdService(service: string): InstalledJob | undefined {
+  const lines = service.split('\n');
+  const execStart = lines.find(line => line.startsWith('ExecStart='));
+  const home = lines
+    .filter(line => line.startsWith('Environment='))
+    .map(line => quotedWords(line, false)[0])
+    .find(value => value?.startsWith('ARCHON_HOME='));
+  if (execStart === undefined || home === undefined) return undefined;
+  return {
+    archonHome: home.slice('ARCHON_HOME='.length),
+    programArguments: quotedWords(execStart, true),
+  };
+}
+
 function userUnitDirectory(): string {
   const configHome = process.env.XDG_CONFIG_HOME;
   return join(
@@ -100,5 +127,13 @@ export function systemdBackend(run: RunCommand, options: NativeScheduleOptions):
     },
     unregister: label => systemctl('disable', '--now', timer(label)),
     afterRemove: () => systemctl('daemon-reload'),
+    installed: async () =>
+      readInstalled(
+        await installedLabels(directory, '.service'),
+        label => paths(label)[1],
+        readSystemdService,
+        label =>
+          `${SYSTEMCTL} --user disable --now ${timer(label)}, then delete ${paths(label).join(' and ')} and run ${SYSTEMCTL} --user daemon-reload`
+      ),
   };
 }
