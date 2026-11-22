@@ -234,7 +234,11 @@ async function continueLane(
   await assertBranchAtHandoff(codebase, handoff);
   if (lane.kind === 'reuse-worktree') {
     const env = await adoptRegisteredWorktree(host.records.isolation, lane, codebase.default_cwd);
-    return { cwd: env.working_path, envId: env.id };
+    return {
+      cwd: env.working_path,
+      envId: env.id,
+      resolvedBaseBranch: readWorktreeBaseBranch(env.metadata),
+    };
   }
   const created = await createRegisteredWorktree(host.records.isolation, {
     request: {

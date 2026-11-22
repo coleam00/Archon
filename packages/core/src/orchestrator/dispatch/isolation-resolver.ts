@@ -189,8 +189,10 @@ async function sendResolutionNotices(
 }
 
 function toIsolationResolution(result: ResolvedIsolation): IsolationResolution {
+  // The record keeps the base its worktree was cut from, however the resolver reached it:
+  // created, reused for the same workflow, shared through a linked issue, or existing.
+  const resolvedBaseBranch = readWorktreeBaseBranch(result.env.metadata);
   if (result.method.type === 'existing') {
-    const resolvedBaseBranch = readWorktreeBaseBranch(result.env.metadata);
     return { status: 'existing', cwd: result.cwd, env: result.env, resolvedBaseBranch };
   }
   const created = result.method.type === 'created' ? result.method : undefined;
@@ -200,7 +202,7 @@ function toIsolationResolution(result: ResolvedIsolation): IsolationResolution {
     cwd: result.cwd,
     env: result.env,
     ...(created?.cutFromCommit !== undefined ? { cutFromCommit: created.cutFromCommit } : {}),
-    resolvedBaseBranch: created?.resolvedBaseBranch,
+    resolvedBaseBranch,
   };
 }
 

@@ -6,6 +6,7 @@ import type { ResolvedRunContinuation } from '../../operations/workflow-continua
 // then the detached run in background-run.ts.
 import { createLogger } from '@archon/paths';
 import type { IsolationHints } from '@archon/isolation';
+import { readWorktreeBaseBranch } from '@archon/isolation';
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import { providerRegistry } from '@archon/providers';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
@@ -511,7 +512,11 @@ async function resolveWorkerCheckout(input: WorkerCheckoutInput): Promise<Worker
     return { cwd: ctx.cwd, ...shared };
   }
   if (adoptedEnvironment) {
-    return { cwd: await inheritAdoptedWorktree(input, adoptedEnvironment), ...shared };
+    return {
+      cwd: await inheritAdoptedWorktree(input, adoptedEnvironment),
+      resolvedBaseBranch: readWorktreeBaseBranch(adoptedEnvironment.metadata),
+      ...shared,
+    };
   }
   return { ...(await createWorkerWorktree(input, codebase)), ...shared };
 }

@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { IsolationBlockedError, recordWorktreeAdoption } from '@archon/isolation';
+import {
+  IsolationBlockedError,
+  readWorktreeBaseBranch,
+  recordWorktreeAdoption,
+} from '@archon/isolation';
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import { requireTerminalStatusWrite } from '@archon/workflows/terminal-status-write';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
@@ -57,7 +61,11 @@ export async function resolveForegroundIsolation(
     return { cwd, ...live };
   }
   if (adoptedEnvironment)
-    return { cwd: await runInAdoptedWorktree(scope, adoptedEnvironment), ...live };
+    return {
+      cwd: await runInAdoptedWorktree(scope, adoptedEnvironment),
+      ...live,
+      resolvedBaseBranch: readWorktreeBaseBranch(adoptedEnvironment.metadata),
+    };
   if (workflow.worktree?.enabled === false) {
     getLog().info(
       { workflowName: workflow.name, conversationId, codebaseId: codebase.id },

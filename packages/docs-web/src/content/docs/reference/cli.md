@@ -539,9 +539,9 @@ A repository with no remote fetches nothing: its worktree is cut from the local 
 level 1, 3 or 4 names, else from the branch checked out in it, and the run records that
 base. A detached HEAD with none of those set is refused. A landing branch (level 2) needs
 a remote, so a run on an item that records one is refused there. A later run that reuses
-a worktree Archon cut (the same `--branch`, a trigger lane's `branch`, or a chat
-conversation's worktree) reports the base that worktree was cut from, unless `--base` or a
-landing branch names another.
+a worktree Archon cut (the same `--branch`, `--adopt`, a trigger lane's `branch` or
+hand-off, or a chat conversation's worktree) reports the base that worktree was cut from,
+unless `--base` or a landing branch names another.
 Existing stored branches remain explicit, including values older versions detected from a
 local checkout. See [Troubleshooting](/reference/troubleshooting/) to clear a stale choice.
 

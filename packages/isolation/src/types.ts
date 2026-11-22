@@ -540,8 +540,6 @@ export type ResolutionMethod =
       autoCleanedCount?: number;
       /** The commit the branch was cut from, when this resolution cut it. */
       cutFromCommit?: string;
-      /** The base the branch was cut from, which the run reports as `$BASE_BRANCH`. */
-      resolvedBaseBranch?: string;
     };
 
 export type IsolationResolution =

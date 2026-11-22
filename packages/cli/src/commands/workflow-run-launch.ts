@@ -1,5 +1,5 @@
 import type { OwnedRunLease } from '../utils/owned-run-lease';
-import { readWorktreeBaseBranch, recordWorktreeAdoption } from '@archon/isolation';
+import { recordWorktreeAdoption } from '@archon/isolation';
 import type {
   ExecutionContext,
   IsolationEnvironmentRow,
@@ -49,6 +49,7 @@ import {
   folderRunsInContainer,
   prepareFolderExecution,
   resolveRunCodebase,
+  useReusedWorktree,
   warnOnReusedWorktree,
   type FolderExecution,
 } from './workflow-isolation';
@@ -410,8 +411,7 @@ async function bindAdoptionLane(
       lane,
       codebase.default_cwd
     );
-    workspace.workingCwd = env.working_path;
-    workspace.isolationEnvId = env.id;
+    useReusedWorktree(workspace, env);
     continuation.runsIsolatedCheckout = true;
     // The reuse lane IS the isolation: run in the inherited worktree as-is.
     // Leaving wantsIsolation set would fall through to worktree creation
@@ -636,9 +636,7 @@ async function provisionWorktree(
   if (existingEnv) {
     await warnOnReusedWorktree(existingEnv, codebase, launch.base, launch.codebaseDefaultBranch);
     await recordWorktreeAdoption(host.records.isolation, existingEnv, codebase.default_cwd);
-    workspace.workingCwd = existingEnv.working_path;
-    workspace.isolationEnvId = existingEnv.id;
-    workspace.cut = { resolvedBaseBranch: readWorktreeBaseBranch(existingEnv.metadata) };
+    useReusedWorktree(workspace, existingEnv);
     return;
   }
 
