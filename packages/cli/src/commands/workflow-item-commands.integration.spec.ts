@@ -554,11 +554,69 @@ test.serial(
     const refused = await start({ item: 'lonely' });
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr).toContain("'feat/missing' is not on remote 'origin'");
+    expect(refused.stderr).toContain(
+      'archon workflow landing --item lonely --branch feat/missing --from <start-point>'
+    );
     expect(worktrees()).toBe(before);
     expect(readFileSync(out, 'utf8')).toBe('untouched');
+
+    // The command it names creates the branch from the start point; runs are cut from it.
+    const remoteSha = (branch: string) =>
+      Bun.spawnSync(['git', 'ls-remote', remote, `refs/heads/${branch}`])
+        .stdout.toString()
+        .split('\t')[0];
+    const create = (item: string, branch: string, from: string) =>
+      invoke(host =>
+        workflowLandingCommand(host, projectRoot, { item, branch, from }, true, callerEnv)
+      );
+    expect(succeeded(await create('lonely', 'feat/missing', 'feat/order'))).toMatchObject({
+      branch: 'feat/missing',
+      create: { remote: 'origin', status: 'created', commit: remoteSha('feat/order') },
+    });
+    expect(remoteSha('feat/missing')).toBe(remoteSha('feat/order'));
+    const cut = await start({ item: 'lonely' });
+    expect(cut.exitCode, cut.stderr).toBe(0);
+    expect(readFileSync(out, 'utf8').trim()).toBe('feat/missing from-feat');
+    succeeded(
+      await invoke(host =>
+        workflowLinkCommand(
+          host,
+          projectRoot,
+          { item: 'lonely-member', kind: 'part_of', to: 'lonely' },
+          true,
+          callerEnv
+        )
+      )
+    );
+    writeFileSync(out, 'untouched');
+    const inherited = await start({ item: 'lonely-member' });
+    expect(inherited.exitCode, inherited.stderr).toBe(0);
+    expect(readFileSync(out, 'utf8').trim()).toBe('feat/missing from-feat');
+
+    // Creating a branch the remote has leaves it where it is, even when the start point
+    // descends from it and a plain push would fast-forward it.
+    git(['checkout', '-q', '-b', 'ahead', 'feat/order']);
+    git(['commit', '-q', '--allow-empty', '-m', 'ahead']);
+    git(['checkout', '-q', 'main']);
+    const existing = remoteSha('feat/missing');
+    expect(succeeded(await create('lonely', 'feat/missing', 'ahead'))).toMatchObject({
+      create: { remote: 'origin', status: 'exists' },
+    });
+    expect(remoteSha('feat/missing')).toBe(existing);
+
+    // A start point that names no commit records nothing.
+    const unresolved = await create('fresh', 'feat/fresh', 'no-such-ref');
+    expect(unresolved.exitCode).toBe(1);
+    expect(remoteSha('feat/fresh')).toBe('');
+    expect(
+      rows(
+        `SELECT 1 FROM remote_agent_item_landings l JOIN remote_agent_items i
+           ON i.id = l.item_id WHERE i.key = 'fresh'`
+      )
+    ).toEqual([]);
   },
-  // Five real runs, each cutting a worktree.
-  60_000
+  // Seven real runs, each cutting a worktree.
+  90_000
 );
 
 test.serial(

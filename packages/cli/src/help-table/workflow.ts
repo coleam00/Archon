@@ -340,10 +340,17 @@ export const workflowHelp: HelpGroup = {
     {
       command: 'workflow',
       subcommand: 'landing',
-      spec: 'workflow landing --item <key> --branch <name>',
+      spec: 'workflow landing --item <key> --branch <name> [--from <start-point>]',
       description:
-        "Record the branch an item's change lands on. Every fresh run on the item, and on\nan item part_of it that records none, is cut from it and proposes against it.\nRecording again replaces it",
-      scopedFlags: [{ spec: '--branch <name>', description: 'The branch the item lands on' }],
+        "Record the branch an item's change lands on. Every fresh run on the item, and on\nan item part_of it that records none, is cut from it and proposes against it.\nRecording again replaces it. With --from, first create the branch on the remote",
+      scopedFlags: [
+        { spec: '--branch <name>', description: 'The branch the item lands on' },
+        {
+          spec: '--from <start-point>',
+          description:
+            'Create the branch on the remote from this commit or branch (origin/main for the\nremote tip) before recording; an existing branch is left as it is',
+        },
+      ],
     },
     {
       command: 'workflow',

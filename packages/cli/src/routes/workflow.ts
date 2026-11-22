@@ -682,9 +682,15 @@ export async function runWorkflowLanding(route: WorkflowRoute): Promise<number> 
   const { positionals, values, json, commands, effectiveCwd } = route;
   const item = values.item as string | undefined;
   const branch = values.branch as string | undefined;
+  const from = (values.from ?? values['from-branch']) as string | undefined;
   if (item === undefined || branch === undefined || positionals[2] !== undefined)
     return await fail(json, commands.WORKFLOW_LANDING_USAGE);
-  return await commands.workflowLandingCommand(route.host, effectiveCwd, { item, branch }, json);
+  return await commands.workflowLandingCommand(
+    route.host,
+    effectiveCwd,
+    { item, branch, ...(from === undefined ? {} : { from }) },
+    json
+  );
 }
 
 export async function runWorkflowLink(route: WorkflowRoute): Promise<number> {

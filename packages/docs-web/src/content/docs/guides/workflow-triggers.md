@@ -296,12 +296,12 @@ A timer file refuses `item`, since a tick is about no item, and so does a run-en
 A chain of stages on one item (order, plan, build, land) is cut from the project's base branch unless the item says otherwise. Record the branch the item's change lands on, and every stage a trigger file starts on the item works in a worktree cut from that branch, with `$BASE_BRANCH` set to it, so the change it proposes targets that branch:
 
 ```bash
-archon workflow landing --item WO-12 --branch feat/checkout-redesign
+archon workflow landing --item WO-12 --branch feat/checkout-redesign --from origin/main
 archon workflow link --item issue-42 --kind part_of --to WO-12
 archon workflow link --item issue-43 --kind part_of --to WO-12
 ```
 
-`issue-42` and `issue-43` record no branch of their own, so their stages take the branch of the item they are part of. Their changes land together on `feat/checkout-redesign`, can be tested there as a whole, and the work order lands once on the base. A stage run on `WO-12` itself also targets `feat/checkout-redesign`; start the final landing onto the base with `--base <base>`, or on another item.
+`--from` creates `feat/checkout-redesign` on the project's remote from the remote's `main` before recording it; a branch the remote already has is left as it is. Leave `--from` out to record a branch that exists, or one you will create later. `issue-42` and `issue-43` record no branch of their own, so their stages take the branch of the item they are part of. Their changes land together on `feat/checkout-redesign`, can be tested there as a whole, and the work order lands once on the base. A stage run on `WO-12` itself also targets `feat/checkout-redesign`; start the final landing onto the base with `--base <base>`, or on another item.
 
 A start takes its base in this order, highest first:
 
@@ -311,7 +311,7 @@ A start takes its base in this order, highest first:
 4. The binding's `launch.isolation.baseOverride`. A trigger file's value is the same for every item the file starts, so the item's branch outranks it.
 5. `worktree.baseBranch`, the project's stored default branch, then the remote's HEAD, as in [base branch precedence](/reference/cli/#base-branch-precedence).
 
-The branch is read when the start runs, not when it is prepared, so a start that waited in the queue takes the branch the item records then. A run already started keeps the base it recorded. A stage that takes another run's checkout (`checkout: "ended-run"` or `"asking-run"`) keeps that checkout and reports the branch as `$BASE_BRANCH`. A stage whose binding sets `launch.isolation` to `in-place` cannot be cut from the branch, so on an item with a landing branch it fails as `launch_failed` before its first node; use `default` or `worktree` isolation. A branch the project's remote does not have fails the start as `launch_failed` before its first node, with a message naming the branch, the remote and the item it came from: push the branch, or record another. Nothing falls back to the base branch. `archon workflow runs --item <key>` shows the branch and where it came from. Recording again replaces the branch.
+The branch is read when the start runs, not when it is prepared, so a start that waited in the queue takes the branch the item records then. A run already started keeps the base it recorded. A stage that takes another run's checkout (`checkout: "ended-run"` or `"asking-run"`) keeps that checkout and reports the branch as `$BASE_BRANCH`. A stage whose binding sets `launch.isolation` to `in-place` cannot be cut from the branch, so on an item with a landing branch it fails as `launch_failed` before its first node; use `default` or `worktree` isolation. A branch the project's remote does not have fails the start as `launch_failed` before its first node, with a message naming the branch, the remote, the item it came from and the `archon workflow landing --from` command that creates it; run that, or record another branch. Nothing falls back to the base branch. `archon workflow runs --item <key>` shows the branch and where it came from. Recording again replaces the branch.
 
 ## Start a stage when a run on an item ends
 
