@@ -114,8 +114,13 @@ describe('resumeWorkflow', () => {
     ],
     [
       'a start read from an explicit source',
-      explicitSource("/work/my pack's source"),
-      "archon workflow run test-workflow --supersedes run-1 --workflow-source '/work/my pack'\\''s source'",
+      explicitSource("/Users/O'Brien/my src"),
+      `archon workflow run test-workflow --supersedes run-1 --workflow-source "/Users/O'Brien/my src"`,
+    ],
+    [
+      'a start read from a source no double quotes can hold',
+      explicitSource('/work/$pack'),
+      "archon workflow run test-workflow --supersedes run-1 --workflow-source '/work/$pack'",
     ],
   ])(
     '%s that failed before its checkout was prepared is refused with the command that starts it again',
@@ -138,6 +143,16 @@ describe('resumeWorkflow', () => {
       expect(refusal.message).not.toContain('secret-value');
     }
   );
+
+  test('a workflow name with a space stays one argument in the restart command', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({ status: 'failed', working_path: null, workflow_name: 'daily check' })
+    );
+
+    await expect(resumeWorkflow('run-1', operator)).rejects.toThrow(
+      'Start it again with: archon workflow run "daily check" --supersedes run-1'
+    );
+  });
 
   test('throws wrapped message when DB throws', async () => {
     mockGetWorkflowRun.mockRejectedValueOnce(new Error('connection reset'));

@@ -180,12 +180,21 @@ function restartCommand(run: WorkflowRun): string {
   const definitions = source.kind === 'recorded' ? source.record.definitions : undefined;
   const explicitSource =
     definitions?.from === 'source' ? ` --workflow-source ${shellWord(definitions.root)}` : '';
-  return `archon workflow run ${run.workflow_name} ${lane}${explicitSource}`;
+  return `archon workflow run ${shellWord(run.workflow_name)} ${lane}${explicitSource}`;
 }
 
-/** A path as one shell word: quoted when it holds anything a shell would split or expand. */
+/**
+ * A value as one argument in the shell an operator pastes it into: a POSIX shell, or
+ * PowerShell on Windows. Plain words stay bare. Otherwise double quotes, which both
+ * shells read literally unless the value holds `"`, `$`, a backtick, `!` (bash history),
+ * or a backslash that POSIX would read as an escape: doubled, or before the closing
+ * quote. Only such a value gets POSIX single quotes, whose `'\\''` escape PowerShell
+ * does not share.
+ */
 function shellWord(value: string): string {
-  return /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
+  if (/^[\w@%+=:,./-]+$/.test(value)) return value;
+  if (!/["$`!]|\\\\|\\$/.test(value)) return `"${value}"`;
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 /**
