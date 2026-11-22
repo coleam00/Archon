@@ -1322,6 +1322,7 @@ test('keyed replays fail for every receipt queued on a resource whose drain fail
     const damaged = JSON.stringify(row);
     await writeFile(path, damaged);
     stdout.mockClear();
+    stderr.mockClear();
     for (const deliveryId of deliveries)
       await expect(
         triggerCommand(

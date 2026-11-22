@@ -2861,6 +2861,17 @@ bindings:
       number: { input: number }       # one of the ended run's inputs; run-ended bindings only
       findings: { result: /findings } # a JSON Pointer into the ended run's result
       decided: { item: answers }      # every answer on the item; not with linked
+  order-after-split:
+    workflow: order
+    resource: order
+    overlap: queue
+    run_ended:
+      workflow: split
+      outcome: split
+      linked: { kind: part_of, holder: from, items: /start }  # only the items the run names
+    inputs:
+      brief: { entry: /brief }        # the started item's own entry; linked with items only
+      part_of: { item: key }          # the key of the item whose run ended
   fix-again:
     workflow: review-fix
     resource: fix
@@ -2898,8 +2909,14 @@ left, as [`on.runEnded.checkout`](/guides/workflow-triggers/#work-in-the-checkou
 does. `run_ended.linked: { kind: <link kind>, holder: from | to }` starts the workflow on every
 item holding an active link of that kind to the ended run's item instead of on that item, as
 [`on.runEnded.linked`](/guides/workflow-triggers/#start-a-stage-on-an-item-when-the-items-it-links-to-end)
-does, and takes no `checkout`. A `{ item: key }` input, run-ended bindings only, passes the key
-of the item whose run ended. A `{ item: answers }` input passes every answer given on the item,
+does, and takes no `checkout`. `linked.items: <JSON Pointer>` narrows it to the items the ended
+run names in the list at that pointer in its result, each entry an item key or an object with a
+string `key`, as
+[`on.runEnded.linked.items`](/guides/workflow-triggers/#name-the-linked-items-that-start)
+does; a named item that holds no such link is refused on the ended run's item. A
+`{ entry: <JSON Pointer> }` input reads from the started item's own entry of that list, so each
+start gets its own value, and is refused unless `linked.items` is set. A `{ item: key }` input,
+run-ended bindings only, passes the key of the item whose run ended. A `{ item: answers }` input passes every answer given on the item,
 as `on.runEnded.inputs` does; a binding with `linked` cannot map it.
 
 An `asks_settled:` binding is an
@@ -3166,11 +3183,13 @@ ids too long to fit in a branch name. Four consequences are worth knowing before
 for it:
 
 - **The branch starts from the repo's base branch, not the parent's.** The worktree is cut
-  from `origin/<baseBranch>` **in the canonical checkout**, not from the parent's working
+  from `<remote>/<baseBranch>` **in the canonical checkout**, not from the parent's working
   tree. The base is levels 3–5 of the [base-branch precedence
   table](/reference/cli/#base-branch-precedence): `worktree.baseBranch` in
   `.archon/config.yaml`, else the codebase's stored default branch, else git
-  auto-detection. Levels 1 and 2 are missing on purpose: **the per-dispatch `--base` / `--from`
+  auto-detection. A repository with no remote needs no fake one: each child is cut from
+  that local branch, or from the canonical checkout's current branch when none is set,
+  and nothing is fetched. Levels 1 and 2 are missing on purpose: **the per-dispatch `--base` / `--from`
   overrides and the parent item's landing branch do not change an isolated child's cut-from**, so
   `archon workflow run parent --base release/2.0` still cuts every isolated child from the
   repo's configured base. Its `$BASE_BRANCH` reports that provisioning base. If the branch

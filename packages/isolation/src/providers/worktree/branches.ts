@@ -24,6 +24,7 @@ import type {
 import { findRegisteredWorktree } from './adopt';
 import { WorktreeAddError, addLockedWorktree, rollBackOnFailure } from './setup-lock';
 import { GIT_OPERATION_TIMEOUT_MS, getForkReviewBranch, getLog } from './shared';
+import type { WorktreeRemote } from './shared';
 
 /**
  * Generate semantic branch name based on workflow type
@@ -154,7 +155,7 @@ export async function createFromPR(
   request: PRIsolationRequest,
   worktreePath: string,
   setupLockReason: string,
-  remote = 'origin'
+  remote: string
 ): Promise<{ adopted: WorktreeCreationEnvironment } | { branchCreated: boolean }> {
   const repoPath = request.canonicalRepoPath;
   const prNumber = request.identifier;
@@ -194,7 +195,7 @@ async function createFromSameRepoPR(
   worktreePath: string,
   prBranch: string,
   setupLockReason: string,
-  remote = 'origin'
+  remote: string
 ): Promise<boolean> {
   try {
     await syncWorkspace(toRepoPath(repoPath), toBranchName(prBranch), {
@@ -233,7 +234,7 @@ async function createFromForkPR(
   request: PRIsolationRequest,
   worktreePath: string,
   setupLockReason: string,
-  remote = 'origin'
+  remote: string
 ): Promise<WorktreeCreationEnvironment | null> {
   const repoPath = request.canonicalRepoPath;
   const prNumber = request.identifier;
@@ -307,12 +308,20 @@ export async function createFromExistingBranch(
   }
 }
 
+/** The explicit start point (`--from`, a hand-off commit) a request cuts its branch from. */
+export function requestedStartPoint(request: IsolationRequest): string | undefined {
+  return request.workflowType === 'task' && request.taskBranch?.kind === 'new'
+    ? request.taskBranch.fromBranch
+    : undefined;
+}
+
 /**
  * Create a worktree for a named branch. A branch that exists nowhere yet is cut from
- * the start point. A branch that already exists, locally or on the remote, is checked
- * out at its current head and never moved backwards: its commits may exist nowhere
- * else. Returns the cut-from commit (only for a branch cut here) and whether the local
- * branch was created here.
+ * the start point: the request's `fromBranch`, else its `startCommit`, else the base on
+ * the remote, or the local base when the repository has no remote. A branch that already exists, locally
+ * or on the remote, is checked out at its current head and never moved backwards: its
+ * commits may exist nowhere else. Returns the cut-from commit (only for a branch cut
+ * here) and whether the local branch was created here.
  */
 export async function createNewBranch(
   request: IsolationRequest,
@@ -321,7 +330,7 @@ export async function createNewBranch(
   branchName: string,
   baseBranch: string,
   setupLockReason: string,
-  remote = 'origin'
+  remote: WorktreeRemote
 ): Promise<{ cutFromCommit?: string; resolvedBaseBranch?: string; branchCreated: boolean }> {
   const held = await branchHolderFailure(repoPath, worktreePath, branchName);
   if (held) throw held;
@@ -384,17 +393,18 @@ async function checkOutNewBranch(
   branchName: string,
   baseBranch: string,
   setupLockReason: string,
-  remote: string
+  remote: WorktreeRemote
 ): Promise<{ cutFromCommit?: string; resolvedBaseBranch?: string; branchCreated: boolean }> {
-  const fromBranch =
-    request.workflowType === 'task' && request.taskBranch?.kind === 'new'
-      ? request.taskBranch.fromBranch
-      : undefined;
+  const fromBranch = requestedStartPoint(request);
   const startCommit = request.workflowType === 'task' ? request.startCommit : undefined;
-  const startPoint = fromBranch ?? startCommit?.commit ?? `${remote}/${baseBranch}`;
+  const startPoint =
+    fromBranch ??
+    startCommit?.commit ??
+    (remote.kind === 'remote' ? `${remote.name}/${baseBranch}` : `refs/heads/${baseBranch}`);
 
   const localExists = await localBranchExists(repoPath, branchName);
-  const remoteExists = await remoteBranchExists(repoPath, remote, branchName);
+  const remoteExists =
+    remote.kind === 'remote' && (await remoteBranchExists(repoPath, remote.name, branchName));
   if (!localExists && !remoteExists) {
     const checkout = await cutBranch(
       repoPath,
@@ -414,18 +424,18 @@ async function checkOutNewBranch(
     );
   }
 
-  const remoteRef = `${remote}/${branchName}`;
-  const source = remoteExists
-    ? await catchUpWithRemote(repoPath, remote, branchName, localExists)
-    : 'local';
+  const source =
+    remoteExists && remote.kind === 'remote'
+      ? await catchUpWithRemote(repoPath, remote.name, branchName, localExists)
+      : 'local';
 
   getLog().info({ branchName, source, repoPath }, 'worktree.existing_branch_checked_out');
   await addLockedWorktree(
     repoPath,
     worktreePath,
     setupLockReason,
-    source === 'remote'
-      ? ['--track', worktreePath, '-b', branchName, remoteRef]
+    source === 'remote' && remote.kind === 'remote'
+      ? ['--track', worktreePath, '-b', branchName, `${remote.name}/${branchName}`]
       : [worktreePath, branchName]
   );
   return { branchCreated: source === 'remote' };

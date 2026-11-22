@@ -17,9 +17,11 @@ import {
   type ExecutionContext,
   type IsolationEnvironmentRow,
   type PreparedEnv,
+  readWorktreeBaseBranch,
 } from '@archon/isolation';
 import * as git from '@archon/git';
 import type { LaunchBase } from './workflow-run-config';
+import type { RunWorkspace } from './workflow-run-launch';
 import { mkdir } from 'node:fs/promises';
 import { loadRepoConfig } from '@archon/core/config/config-loader';
 import type { OverlayMode } from '@archon/workflows/container-context';
@@ -632,6 +634,20 @@ async function containerMounts(
   // inside the container, so a path means one thing on either side of the
   // boundary.
   return { sourceMount: preparedSource.anchor.root, artifactsMount: artifactsDir };
+}
+
+/**
+ * Run in a worktree this launch reuses (`--branch` again, or `--adopt`). Its record keeps
+ * the base it was cut from, which the run reports as `$BASE_BRANCH`: without a remote
+ * there is nothing else to detect it from.
+ */
+export function useReusedWorktree(
+  workspace: Pick<RunWorkspace, 'workingCwd' | 'isolationEnvId' | 'cut'>,
+  env: IsolationEnvironmentRow
+): void {
+  workspace.workingCwd = env.working_path;
+  workspace.isolationEnvId = env.id;
+  workspace.cut = { resolvedBaseBranch: readWorktreeBaseBranch(env.metadata) };
 }
 
 /**

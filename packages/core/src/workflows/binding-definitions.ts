@@ -21,6 +21,7 @@ import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import {
   bindingDefinitionsPlan,
+  baseRefName,
   DefinitionSourceError,
   resolveDefinitionsBase,
   startsPinnedInPlace,
@@ -164,7 +165,7 @@ export async function definitionsStartCommit(
   });
   if (branch !== definitions.branch)
     throw new Error(
-      `Run '${run.id}' read its definitions from ${definitions.remote}/${definitions.branch}, ` +
+      `Run '${run.id}' read its definitions from ${baseRefName(definitions)}, ` +
         `but now starts on base '${branch}'. Start it again so both come from one branch.`
     );
   return { commit: definitions.commit, branch: toBranchName(definitions.branch) };

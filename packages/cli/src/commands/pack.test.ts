@@ -456,11 +456,11 @@ describe('archon pack bindings: run-ended', () => {
     }
   });
 
-  it('writes a linked binding into on.runEnded.linked, passing the ended item key', async () => {
+  it('writes a linked binding into on.runEnded.linked, with the items it names and their entries', async () => {
     const declaration = RUN_ENDED_DECLARATION.replace(
       '[planned, blocked] }',
-      'planned, linked: { kind: part_of, holder: to } }'
-    ).replace('{ input: issue }', '{ item: key }');
+      'planned, linked: { kind: part_of, holder: from, items: /start } }'
+    ).replace('{ input: issue }', '{ entry: /brief }');
     await writePack(declaration);
     await packCommand('bindings', ['fixture'], options());
 
@@ -469,8 +469,8 @@ describe('archon pack bindings: run-ended', () => {
     expect(entry?.runEnded).toEqual({
       workflowName: 'fixture-plan',
       outcome: 'planned',
-      linked: { kind: 'part_of', holder: 'to' },
-      inputs: { plan: { result: '/plan' }, issue: { item: 'key' } },
+      linked: { kind: 'part_of', holder: 'from', items: '/start' },
+      inputs: { plan: { result: '/plan' }, issue: { entry: '/brief' } },
     });
   });
 

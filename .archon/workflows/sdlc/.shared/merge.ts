@@ -231,10 +231,9 @@ export interface PrFacts {
   readonly state: 'open' | 'closed' | 'merged';
   readonly is_draft: boolean;
   readonly base: string;
-  readonly default_branch: string;
-  /** The default branch's head when the pull request was read. */
-  readonly default_head: string;
-  /** How many commits of the default branch at `default_head` the pull request's head lacks. */
+  /** The base branch's head when the pull request was read. */
+  readonly base_head: string;
+  /** How many commits of `base` at `base_head` the pull request's head lacks. */
   readonly behind: number;
   readonly head: string;
   readonly head_revision: string;
@@ -341,14 +340,14 @@ function checksOf(units: unknown): Checks {
   return { state, failing, pending };
 }
 
-/** How far `head` is behind the default branch and whether it merges, read at that head. */
-function readMergeState(ref: QualifiedPr, url: string, head: string) {
+/** How far `head` is behind the pull request's base `base` and whether it merges into it, read at that head. */
+function readMergeState(ref: QualifiedPr, url: string, head: string, base: string) {
   const value = forge('pr.merge-state', { ref });
   const mergeable = MERGEABLE.find(state => state === value?.mergeable);
   if (
     typeof value?.head_revision !== 'string' ||
-    typeof value.default_branch !== 'string' ||
-    typeof value.default_revision !== 'string' ||
+    typeof value.base_branch !== 'string' ||
+    typeof value.base_revision !== 'string' ||
     typeof value.behind !== 'number' ||
     mergeable === undefined ||
     !(typeof value.merge_commit === 'string' || value.merge_commit === null)
@@ -356,9 +355,9 @@ function readMergeState(ref: QualifiedPr, url: string, head: string) {
     throw new Error(`forge pr.merge-state returned an incomplete answer for ${url}`);
   }
   if (value.head_revision !== head) throw new Error(`the head of ${url} moved while it was read`);
+  if (value.base_branch !== base) throw new Error(`the base of ${url} moved while it was read`);
   return {
-    default_branch: value.default_branch,
-    default_head: value.default_revision,
+    base_head: value.base_revision,
     behind: value.behind,
     mergeable,
     merge_commit: value.merge_commit,
@@ -403,7 +402,7 @@ export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrFac
   const view = viewPr(ref);
   const { url, head_revision: head } = view.pr;
   if (head === null) throw new Error(`${url} reports no head commit`);
-  const mergeState = readMergeState(ref, url, head);
+  const mergeState = readMergeState(ref, url, head, view.pr.base);
   const checks = forge('checks.state', { ref });
   if (checks?.revision !== head) throw new Error(`the checks read for ${url} are not on its head`);
   return {
@@ -444,27 +443,28 @@ function ciRefusal(checks: Checks, head: string, ci: CiTrust): string | null {
  * on the default branch does not hold a merge. Whether an open review thread holds the
  * merge is the judge's call, from the thread facts it reads. Under the manual lane, or
  * with a protected path changed, a maintainer's approval at `head` is required. The rest
- * keep the merge on an open, non-draft pull request into the default branch at exactly
- * the commit that was judged, and that commit either containing the default branch's
- * head or merging into it with no conflict.
+ * keep the merge on an open, non-draft pull request into the default branch
+ * (`base.branch`, read by `readBase`) at exactly the commit that was judged, and that commit
+ * either containing its base's head or merging into it with no conflict. The merge state is
+ * about the pull request's own base, so the target check is what makes that base the default.
  */
 export function gateRefusals(
   facts: PrFacts,
   head: string,
-  base: { readonly head: string; readonly checks: Checks },
+  base: BaseFacts,
   ci: CiTrust,
   lane: Lane
 ): string[] {
   const refusals: string[] = [];
   if (facts.state !== 'open') refusals.push(`it is ${facts.state}`);
   if (facts.is_draft) refusals.push('it is a draft');
-  if (facts.base !== facts.default_branch) {
-    refusals.push(`it targets ${facts.base}, not the default branch ${facts.default_branch}`);
+  if (facts.base !== base.branch) {
+    refusals.push(`it targets ${facts.base}, not the default branch ${base.branch}`);
   }
   if (facts.head_revision !== head) refusals.push(`its head is ${facts.head_revision}, not ${head}`);
   if (facts.behind > 0 && facts.mergeable !== 'clean') {
     refusals.push(
-      `it lacks ${String(facts.behind)} commits of ${facts.default_branch} at ${facts.default_head} and its merge is ${facts.mergeable}`
+      `it lacks ${String(facts.behind)} commits of ${facts.base} at ${facts.base_head} and its merge is ${facts.mergeable}`
     );
   }
   const { verdict } = facts;
@@ -473,7 +473,7 @@ export function gateRefusals(
   const unvalidated = ciRefusal(facts.checks, head, ci);
   if (unvalidated !== null) refusals.push(unvalidated);
   if (base.checks.state === 'red') {
-    refusals.push(`the default branch ${facts.default_branch} is red at ${base.head} (${base.checks.failing.join(', ')})`);
+    refusals.push(`the default branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')})`);
   }
   if (lane.approved !== head) {
     if (lane.manual) refusals.push('the merge lane is manual and no maintainer approved it at this head');

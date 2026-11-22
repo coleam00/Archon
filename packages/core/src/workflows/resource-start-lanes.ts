@@ -6,7 +6,9 @@
  */
 import { execFileAsync, toBranchName, toRepoPath, type BranchName } from '@archon/git';
 import {
+  checkWorktreeStartable,
   getIsolationProvider,
+  readWorktreeBaseBranch,
   recordWorktreeAdoption,
   type WorktreeSetupExecutor,
 } from '@archon/isolation';
@@ -55,6 +57,21 @@ export function handoffIsolation(
     : { isolation: { kind: 'worktree', branch: handoff.branch }, lane: 'continue' };
 }
 
+/**
+ * Refuse, before admission, a fresh worktree lane that is already known to fail, so it
+ * never takes a slot. A named branch may reuse a checkout at execution, so it is not
+ * checked. With a remote the base is not checked: creation fetches it, and the item's
+ * landing branch can replace it when the run starts (`landingLane`).
+ */
+export async function assertLaneStartable(
+  lane: PreparedWorkflowLaunch['execution']['isolation'],
+  codebase: Codebase
+): Promise<void> {
+  if (lane.kind !== 'worktree' || lane.branch) return;
+  ensureIsolationConfigured();
+  await checkWorktreeStartable(worktreeLaneRequest(lane, codebase, '', undefined));
+}
+
 type WorktreeLaneSpec = Extract<
   PreparedWorkflowLaunch['execution']['isolation'],
   { kind: 'worktree' }
@@ -64,6 +81,7 @@ interface WorktreeLane {
   cwd: string;
   envId: string;
   cutFromCommit?: string;
+  resolvedBaseBranch?: string;
   ownedWorktree?: OwnedWorktree;
 }
 
@@ -82,7 +100,8 @@ async function adoptBranchWorktree(
   if (!existing || !(await getIsolationProvider().healthCheck(existing.working_path)))
     return undefined;
   await recordWorktreeAdoption(host.records.isolation, existing, codebase.default_cwd);
-  return { cwd: existing.working_path, envId: existing.id };
+  const resolvedBaseBranch = readWorktreeBaseBranch(existing.metadata);
+  return { cwd: existing.working_path, envId: existing.id, resolvedBaseBranch };
 }
 
 /** The base commit a run's definitions were captured at; see `TaskIsolationRequest.startCommit`. */
@@ -141,6 +160,9 @@ async function worktreeLane(
     envId: created.envId,
     ...(created.ownedWorktree ? { ownedWorktree: created.ownedWorktree } : {}),
     ...(created.cutFromCommit !== undefined ? { cutFromCommit: created.cutFromCommit } : {}),
+    ...(created.resolvedBaseBranch !== undefined
+      ? { resolvedBaseBranch: created.resolvedBaseBranch }
+      : {}),
   };
 }
 
@@ -218,7 +240,11 @@ async function continueLane(
   await assertBranchAtHandoff(codebase, handoff);
   if (lane.kind === 'reuse-worktree') {
     const env = await adoptRegisteredWorktree(host.records.isolation, lane, codebase.default_cwd);
-    return { cwd: env.working_path, envId: env.id };
+    return {
+      cwd: env.working_path,
+      envId: env.id,
+      resolvedBaseBranch: readWorktreeBaseBranch(env.metadata),
+    };
   }
   const created = await createRegisteredWorktree(host.records.isolation, {
     request: {
@@ -271,6 +297,7 @@ export interface ExecutionLane {
   /** Absent for an in-place run. */
   envId?: string;
   cutFromCommit?: string;
+  resolvedBaseBranch?: string;
   ownedWorktree?: OwnedWorktree;
 }
 

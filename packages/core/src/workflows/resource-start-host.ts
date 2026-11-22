@@ -78,7 +78,7 @@ import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { handOffAdmitted, type StartedExecutor } from './start-executor';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
-import { executionLane, handoffIsolation } from './resource-start-lanes';
+import { assertLaneStartable, executionLane, handoffIsolation } from './resource-start-lanes';
 import { selectStartedWorkflow } from './binding-workflow';
 import { refuseInPlaceLanding, resolveRunLanding } from './item-landing';
 import {
@@ -286,6 +286,7 @@ async function prepareBinding(
       handoff = { ...intent.checkoutFrom, lane: chosen.lane };
     } else {
       isolation = resolveBindingIsolation(intent.launch.isolation, workflow, codebase);
+      await assertLaneStartable(isolation, codebase);
     }
 
     source = await finalizeWorkflowSource(host.deps, source, { cwd, codebaseId: codebase.id });
@@ -731,6 +732,7 @@ async function prepareAdmittedResourceSubmission(
       baseBranch,
       ownedWorktree: execution.ownedWorktree,
       ...(execution.cutFromCommit !== undefined ? { cutFromCommit: execution.cutFromCommit } : {}),
+      resolvedBaseBranch: execution.resolvedBaseBranch,
       // A hand-off lane too: it keeps the handed-on checkout and proposes against the base.
       ...(baseOverride ? { baseOverride } : {}),
       resolveChildIsolation: createCodebaseChildResolver(

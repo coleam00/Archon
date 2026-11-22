@@ -297,6 +297,22 @@ describe("a run's definitions", () => {
     expect(error.message).toContain('shares no history with origin/dev');
   });
 
+  test('read the local branch as the base of a repository with no remote', async () => {
+    const root = track(realpathSync(mkdtempSync(join(tmpdir(), 'archon-definitions-'))));
+    git(root, 'init', '-q', '--initial-branch=main');
+    write(root, '.archon/workflows/build.yaml', 'name: build\nversion: committed\n');
+    git(root, 'add', '-A');
+    git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'base');
+    write(root, '.archon/workflows/local.yaml', 'name: local\n');
+
+    const { definitions, read } = await compose(root);
+
+    expect(read('.archon/workflows/build.yaml')).toBe('name: build\nversion: committed\n');
+    expect(read('.archon/workflows/local.yaml')).toBe('name: local\n');
+    expect(definitions).toMatchObject({ branch: 'main', commit: git(root, 'rev-parse', 'HEAD') });
+    expect(definitions.remote).toBeUndefined();
+  });
+
   test('refuse a base that cannot be fetched, naming the ref', async () => {
     const { checkout } = project();
 

@@ -497,7 +497,8 @@ const definitionFilesSchema = z.array(
 export const runDefinitionsSchema = z.discriminatedUnion('from', [
   z.object({
     from: z.literal('base'),
-    remote: z.string().min(1),
+    /** Absent when the repository has no remote: the base is then a local branch. */
+    remote: z.string().min(1).optional(),
     branch: z.string().min(1),
     commit: z.string().min(1),
     merge_base: z.string().min(1),

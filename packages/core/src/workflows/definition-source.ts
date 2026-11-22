@@ -11,7 +11,13 @@
  */
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
-import { execFileAsync, fetchWithRetry, getDefaultBranch, toRepoPath } from '@archon/git';
+import {
+  execFileAsync,
+  fetchWithRetry,
+  getDefaultBranch,
+  toBranchName,
+  toRepoPath,
+} from '@archon/git';
 import { resolveWorktreeBase } from '@archon/isolation';
 import { getArchonTempPath } from '@archon/paths';
 import type { WorkflowDeps } from '@archon/workflows/deps';
@@ -100,7 +106,8 @@ export async function withLayeredDefinitions<T>(
   const prefix = (await git(input.checkout, ['rev-parse', '--show-prefix'])).trim();
   const { remote, branch, commit } = await fetchBase(input);
   const head = await readHead(top, input.checkout);
-  const mergeBase = await readMergeBase(top, input.checkout, head, commit, `${remote}/${branch}`);
+  const ref = baseRefName({ remote, branch });
+  const mergeBase = await readMergeBase(top, input.checkout, head, commit, ref);
   // The folders only widen what is read. Validating either config here would refuse a
   // committed fault the uncommitted layer repairs; the composed config is validated below.
   const localFolder = await readCommandFolder(input.checkout);
@@ -129,20 +136,20 @@ export async function withLayeredDefinitions<T>(
         input.checkout,
         local,
         { base, mergeBase: mergeBaseView, worktree },
-        { mergeBase, commit, ref: `${remote}/${branch}` },
+        { mergeBase, commit, ref },
         prefix
       );
     }
     await writeView(base, tree);
     for (const { path } of local) await writeEntry(tree, path, worktree.get(path));
     const ignored = local.length > 0 ? await ignoredFiles(top, paths) : new Set<string>();
-    await refuseInvalidConfig(root, local, `${prefix}${PROJECT_CONFIG}`, `${remote}/${branch}`);
+    await refuseInvalidConfig(root, local, `${prefix}${PROJECT_CONFIG}`, ref);
 
     return await use({
       root,
       definitions: {
         from: 'base',
-        remote,
+        ...(remote !== undefined ? { remote } : {}),
         branch,
         commit,
         merge_base: mergeBase,
@@ -162,21 +169,23 @@ export async function withLayeredDefinitions<T>(
  * The remote and branch a run's base is: the override, else the registered checkout's
  * `worktree.baseBranch`, else the project's default branch, else the remote's HEAD. The
  * precedence worktree creation uses, so the base definitions are read from and the base a
- * worktree is cut from are one branch.
+ * worktree is cut from are one branch. A repository with no remote has a local base, as
+ * creation has: the configured branch, else the registered checkout's current branch.
  */
 export async function resolveDefinitionsBase(
   input: LayeredDefinitionsInput
-): Promise<{ remote: string; branch: string }> {
+): Promise<{ remote: string | undefined; branch: string }> {
   const repoPath = input.repoPath ?? input.checkout;
   try {
-    const worktreeConfig = (await loadRepoConfig(repoPath)).worktree;
-    const { remote, branch } = await resolveWorktreeBase(toRepoPath(repoPath), worktreeConfig, {
-      baseOverride: input.baseOverride,
-      baseBranch: input.defaultBranch,
+    const worktreeConfig = (await loadRepoConfig(repoPath)).worktree ?? null;
+    const base = await resolveWorktreeBase(toRepoPath(repoPath), worktreeConfig, {
+      baseOverride: input.baseOverride ? toBranchName(input.baseOverride) : undefined,
+      baseBranch: input.defaultBranch ? toBranchName(input.defaultBranch) : undefined,
     });
+    if (base.remote === undefined) return base;
     return {
-      remote,
-      branch: branch ?? (await getDefaultBranch(toRepoPath(input.checkout), remote)),
+      remote: base.remote,
+      branch: base.branch ?? (await getDefaultBranch(toRepoPath(input.checkout), base.remote)),
     };
   } catch (error) {
     throw new DefinitionSourceError(
@@ -184,6 +193,11 @@ export async function resolveDefinitionsBase(
       { cause: error }
     );
   }
+}
+
+/** How a base is named in messages: `<remote>/<branch>`, or the local branch alone. */
+export function baseRefName(base: { remote?: string; branch: string }): string {
+  return base.remote === undefined ? base.branch : `${base.remote}/${base.branch}`;
 }
 
 /**
@@ -223,18 +237,24 @@ async function refuseInvalidConfig(
   }
 }
 
+/**
+ * The base commit, fetched now from its remote. With no remote there is nothing to fetch:
+ * the local branch is the base, as it is for the worktree cut from it.
+ */
 async function fetchBase(
   input: LayeredDefinitionsInput
-): Promise<{ remote: string; branch: string; commit: string }> {
+): Promise<{ remote: string | undefined; branch: string; commit: string }> {
   const repo = toRepoPath(input.checkout);
   const { remote, branch } = await resolveDefinitionsBase(input);
-  const ref = `${remote}/${branch}`;
+  const ref = baseRefName({ remote, branch });
   try {
-    await fetchWithRetry(repo, [remote, `+refs/heads/${branch}:refs/remotes/${ref}`], {
-      timeout: FETCH_TIMEOUT_MS,
-    });
+    if (remote !== undefined)
+      await fetchWithRetry(repo, [remote, `+refs/heads/${branch}:refs/remotes/${ref}`], {
+        timeout: FETCH_TIMEOUT_MS,
+      });
+    const local = remote === undefined ? `refs/heads/${ref}` : `refs/remotes/${ref}`;
     const commit = (
-      await git(input.checkout, ['rev-parse', '--verify', `refs/remotes/${ref}^{commit}`])
+      await git(input.checkout, ['rev-parse', '--verify', `${local}^{commit}`])
     ).trim();
     return { remote, branch, commit };
   } catch (error) {

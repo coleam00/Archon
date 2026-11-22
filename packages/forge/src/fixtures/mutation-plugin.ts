@@ -157,8 +157,10 @@ else {
     read({
       ref: { ...ref, number },
       head_revision: 'headsha',
-      default_branch: 'dev',
-      default_revision: 'devsha',
+      // `old-shape` answers with the fields merge state had before it was base-relative.
+      ...(mode === 'old-shape'
+        ? { default_branch: 'dev', default_revision: 'devsha' }
+        : { base_branch: 'dev', base_revision: 'devsha' }),
       behind: 2,
       mergeable: 'clean',
       merge_commit: null,

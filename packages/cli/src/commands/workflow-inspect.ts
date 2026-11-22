@@ -57,7 +57,7 @@ function printDefinitions(run: Pick<WorkflowRun, 'metadata' | 'checkout_baseline
   const differs =
     code && code !== definitions.commit ? `; code starts at ${code.slice(0, 12)}` : '';
   console.log(
-    `  Definitions: ${definitions.remote}/${definitions.branch} at ${definitions.commit.slice(0, 12)}${differs}`
+    `  Definitions: ${definitions.remote === undefined ? '' : `${definitions.remote}/`}${definitions.branch} at ${definitions.commit.slice(0, 12)}${differs}`
   );
   printFiles(`Local files from ${definitions.checkout}`, definitions.local_files);
   if (definitions.run_files)

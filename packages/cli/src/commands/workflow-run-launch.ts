@@ -49,6 +49,7 @@ import {
   folderRunsInContainer,
   prepareFolderExecution,
   resolveRunCodebase,
+  useReusedWorktree,
   warnOnReusedWorktree,
   type FolderExecution,
 } from './workflow-isolation';
@@ -212,8 +213,8 @@ type RunConversation = Extract<RunDestination, { kind: 'conversation' }>['conver
 export interface RunWorkspace {
   workingCwd: string;
   isolationEnvId: string | undefined;
-  /** Set only when this invocation created the run's branch (#3305). */
-  cutFromCommit: string | undefined;
+  /** The commit and base this invocation cut the run's branch from; empty otherwise (#3305). */
+  cut: Pick<RegisteredWorktree, 'cutFromCommit' | 'resolvedBaseBranch'>;
   ownedWorktree: OwnedWorktree | undefined;
   /**
    * Repo/worktree and folder-in-place both run on the host; the folder-backend seam sets
@@ -295,7 +296,7 @@ export async function prepareForegroundLaunch(
   const workspace: RunWorkspace = {
     workingCwd: cwd,
     isolationEnvId: undefined,
-    cutFromCommit: undefined,
+    cut: {},
     ownedWorktree: undefined,
     execContext: { kind: 'host' },
     container: undefined,
@@ -413,8 +414,7 @@ async function bindAdoptionLane(
       lane,
       codebase.default_cwd
     );
-    workspace.workingCwd = env.working_path;
-    workspace.isolationEnvId = env.id;
+    useReusedWorktree(workspace, env);
     continuation.runsIsolatedCheckout = true;
     // The reuse lane IS the isolation: run in the inherited worktree as-is.
     // Leaving wantsIsolation set would fall through to worktree creation
@@ -628,7 +628,6 @@ async function provisionWorktree(
     options.detachedWorktreeIdentifier ??
     generatedWorktreeIdentifier(request.workflowName, setupRunId(admission));
 
-  // Configure isolation with repo config loader (same as orchestrator)
   configureWorktreeIsolation();
 
   const existingEnv = await reusedBranchWorktree(
@@ -640,8 +639,7 @@ async function provisionWorktree(
   if (existingEnv) {
     await warnOnReusedWorktree(existingEnv, codebase, launch.base, launch.codebaseDefaultBranch);
     await recordWorktreeAdoption(host.records.isolation, existingEnv, codebase.default_cwd);
-    workspace.workingCwd = existingEnv.working_path;
-    workspace.isolationEnvId = existingEnv.id;
+    useReusedWorktree(workspace, existingEnv);
     return;
   }
 
@@ -656,7 +654,7 @@ async function provisionWorktree(
   workspace.workingCwd = created.env.workingPath;
   workspace.isolationEnvId = created.envId;
   workspace.ownedWorktree = created.ownedWorktree;
-  workspace.cutFromCommit = created.cutFromCommit;
+  workspace.cut = created;
   getLog().info({ path: workspace.workingCwd }, 'worktree_created');
 }
 

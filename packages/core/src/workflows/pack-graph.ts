@@ -11,6 +11,7 @@ import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { existsSync } from 'node:fs';
 import {
   buildPackGraph,
+  graphLink,
   nearestPackBindings,
   packWorkflowIdentities,
   packWorkflows,
@@ -31,11 +32,12 @@ import {
 type GraphDeps = BindingDefinitionsDeps &
   Pick<RunEndedStartsDependencies, 'triggersDirectory' | 'projectKeyOf'>;
 
-/** Where an installed file's arrow starts, as the file spells it. */
 /** The link a run-ended file starts its stage over, or null for a same-item start. */
 function installedLink(file: OnBinding): InstalledArrow['linked'] {
-  return 'runEnded' in file ? (file.runEnded.linked ?? null) : null;
+  return 'runEnded' in file ? graphLink(file.runEnded.linked, file.runEnded.inputs) : null;
 }
+
+/** Where an installed file's arrow starts, as the file spells it. */
 
 function installedFrom(file: OnBinding): InstalledArrow['from'] {
   return 'runEnded' in file

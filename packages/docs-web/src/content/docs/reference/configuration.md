@@ -257,7 +257,8 @@ commands:
 
 # Worktree settings
 worktree:
-  baseBranch: main  # Optional: auto-detected from git when not set
+  baseBranch: main  # Optional: auto-detected from git when not set (the remote's
+                    # default branch, or the current branch when there is no remote)
   copyFiles:  # Optional: Gitignored files/dirs to copy into new worktrees.
               # Nothing is copied unless you list it here.
     - .env
@@ -275,6 +276,7 @@ worktree:
                         # Must be relative; no absolute, no `..` segments.
   remote: origin        # Optional: git remote name for fetch/push. Auto-detected
                         # when omitted (origin if it exists, sole remote otherwise).
+                        # A repository with no remote cuts worktrees locally.
 
 # Documentation directory
 docs:
@@ -352,7 +354,7 @@ Set in `~/.archon/config.yaml` (global) or `.archon/config.yaml` (repo-specific)
 
 `.archon/config.yaml` is one of a run's definitions, with the project's workflows (`.archon/workflows`, which also holds in-repository packs), commands (`.archon/commands` and a configured `commands.folder`) and scripts (`.archon/scripts`). A run that a binding starts, or that `archon workflow run` starts with a worktree, reads all of them from the **base branch as fetched when the run starts, with the files uncommitted in the launch checkout laid on top**: modified, deleted, untracked and gitignored files under those paths, each file on its own. Changes committed on the checkout's own branch are not a layer: a file committed there and not changed since is read from the base branch. Both layers go into the run's source capture, outside every checkout. Nothing is copied into the worktree, so a local edit applies to the run and never reaches a commit or pull request it makes. The worktree is cut from the same base commit, so the run's code and its definitions come from one commit.
 
-So a workflow, command, script, pack setting default or model alias that lands on the base branch is used by the next run, without pulling it into your checkout, and your own uncommitted edits still apply. The base branch is the one the worktree is cut from: `--base` or the item's landing branch, else `worktree.baseBranch`, else the project's default branch, on `worktree.remote` or the detected remote.
+So a workflow, command, script, pack setting default or model alias that lands on the base branch is used by the next run, without pulling it into your checkout, and your own uncommitted edits still apply. The base branch is the one the worktree is cut from: `--base` or the item's landing branch, else `worktree.baseBranch`, else the project's default branch, on `worktree.remote` or the detected remote. A repository with no remote has nothing to fetch: the base is the local branch named as above, else the registered checkout's current branch, as it is for the worktree cut from it.
 
 The launch checkout is the directory the run is started from:
 

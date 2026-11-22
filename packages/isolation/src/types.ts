@@ -213,6 +213,18 @@ export function worktreeRegistrationMetadata(
     : { adopted: metadata.adopted, worktree_creation_id: null, worktree_branch_created: false };
 }
 
+/**
+ * Metadata key for the base a created worktree was cut from, so a run that reuses the
+ * worktree reports the same `$BASE_BRANCH` without a remote to detect it from.
+ */
+export const WORKTREE_BASE_BRANCH = 'worktree_base_branch';
+
+/** The base a reused worktree was cut from; undefined for records written before it was kept. */
+export function readWorktreeBaseBranch(metadata: Record<string, unknown>): string | undefined {
+  const base = metadata[WORKTREE_BASE_BRANCH];
+  return typeof base === 'string' && base ? base : undefined;
+}
+
 /** Read the creation proof that worktreeRegistrationMetadata persisted. */
 export function readWorktreeCreationId(metadata: Record<string, unknown>): string | null {
   const id = (metadata as Partial<WorktreeRegistrationMetadata>).worktree_creation_id;
