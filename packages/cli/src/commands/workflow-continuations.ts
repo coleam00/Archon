@@ -431,29 +431,29 @@ async function reportPassError(
  * install's hosts. Continuations go first so a paused run that is due takes a freed slot
  * before a queued new start does, as admission orders them everywhere else. The drain
  * still runs when the continuation scan throws, so a start whose admitter died waits one
- * pass at most.
+ * pass at most. A report that throws becomes the pass's failed result, as before.
  */
 async function wakePass(host: WorkflowHost, json: boolean): Promise<boolean> {
+  // Deferred cleanup runs only after the pass is reported, as `admit` requires.
   const cleanups: (() => Promise<void>)[] = [];
-  let settled: SettledOutcome[] | { error: unknown };
+  let drainErrors: string[] | undefined;
   try {
     const outcomes = await wakeDueWorkflowContinuations(
       host.deps.store,
       new Date(),
       (run, cursor) => admit(host, run, cursor, cleanup => cleanups.push(cleanup))
     );
-    settled = await Promise.all(outcomes.map(settle));
+    const settled = await Promise.all(outcomes.map(settle));
+    drainErrors = await drainPass(host);
+    return await report('wake', settled, json, undefined, drainErrors);
   } catch (error) {
-    settled = { error };
+    // A scan that threw has not drained yet; a report that threw already has.
+    drainErrors ??= await drainPass(host);
+    await reportPassError(error, drainErrors, json);
+    return false;
   } finally {
     await Promise.all(cleanups.map(cleanup => cleanup()));
   }
-  const drainErrors = await drainPass(host);
-  if (!Array.isArray(settled)) {
-    await reportPassError(settled.error, drainErrors, json);
-    return false;
-  }
-  return report('wake', settled, json, undefined, drainErrors);
 }
 
 async function wake(
