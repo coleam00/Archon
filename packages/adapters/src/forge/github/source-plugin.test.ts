@@ -509,7 +509,11 @@ describe('GitHub source plugin observing open waits', () => {
   const review = (id: string, state: string, commit: string) => ({
     kind: 'review' as const,
     id,
-    author: { host: 'github.com', id: '5', login: 'reviewer' },
+    author: { host: 'github.com', id: '5', login: 'reviewer' } as {
+      host: string;
+      id: string;
+      login: string;
+    } | null,
     commit,
     state,
     createdAt: '2026-09-22T10:00:00Z',
@@ -663,6 +667,20 @@ describe('GitHub source plugin observing open waits', () => {
       'observe:review:github.com/owner/repo#7:300:submitted:reviewed:pr-7'
     );
     expect(JSON.stringify(observed.acceptances)).not.toContain('looks good');
+  });
+
+  test('a binding that cannot start on the waited event says why', async () => {
+    const mapsAuthor = binding({
+      ...reviewWake,
+      inputMapping: { reviewer: { source: 'field', field: 'review.author.login' } },
+    });
+    const { observe } = await observer([mapsAuthor]);
+    const { forge } = reader([], [{ ...review('300', 'APPROVED', revision), author: null }]);
+    const observed = await observe({ waits: [reviewWait], forge });
+    expect(observed.acceptances).toEqual([]);
+    expect(observed.unserved).toHaveLength(1);
+    expect(observed.unserved[0]?.reason).toContain("binding 'reviewed' rejects the event");
+    expect(observed.unserved[0]?.reason).toContain('review.author.login');
   });
 
   test('one unreadable commit does not stop the others', async () => {

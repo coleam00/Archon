@@ -100,6 +100,15 @@ function isWebhookSourcePlugin(value: unknown): value is WebhookSourcePlugin {
   );
 }
 
+/** What is wrong with a source configuration, by field for a schema failure. */
+function configProblems(error: unknown): string {
+  if (error instanceof z.ZodError)
+    return error.issues
+      .map(issue => `${issue.path.length ? issue.path.join('.') : '(root)'}: ${issue.message}`)
+      .join('; ');
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function loadWebhookSourcePlugins(
   configPath: string,
   dependencies: WebhookSourceHostDependencies
@@ -109,7 +118,11 @@ export async function loadWebhookSourcePlugins(
     parsed = sourceConfigSchema.parse(JSON.parse(await readFile(configPath, 'utf8')));
   } catch (error) {
     log.error({ err: error as Error, stage: 'config' }, 'webhook_source_load_failed');
-    throw new Error('Webhook source configuration is invalid', { cause: error });
+    // The JSON output of a CLI host shows only this message, so it names what to fix.
+    throw new Error(
+      `Webhook source configuration ${configPath} is invalid: ${configProblems(error)}`,
+      { cause: error }
+    );
   }
   const plugins = new Map<string, WebhookSourcePlugin>();
   const observing: ObservingSource[] = [];
@@ -129,9 +142,12 @@ export async function loadWebhookSourcePlugins(
         { err: error as Error, sourceInstanceId: source.sourceInstanceId, stage: 'import' },
         'webhook_source_load_failed'
       );
-      throw new Error(`Webhook source '${source.sourceInstanceId}' could not be loaded`, {
-        cause: error,
-      });
+      throw new Error(
+        `Webhook source '${source.sourceInstanceId}' could not be loaded: ${configProblems(error)}`,
+        {
+          cause: error,
+        }
+      );
     }
     const factory = (loaded as { default?: unknown }).default;
     if (typeof factory !== 'function') {
@@ -150,9 +166,12 @@ export async function loadWebhookSourcePlugins(
         { err: error as Error, sourceInstanceId: source.sourceInstanceId, stage: 'factory' },
         'webhook_source_load_failed'
       );
-      throw new Error(`Webhook source '${source.sourceInstanceId}' factory failed`, {
-        cause: error,
-      });
+      throw new Error(
+        `Webhook source '${source.sourceInstanceId}' factory failed: ${configProblems(error)}`,
+        {
+          cause: error,
+        }
+      );
     }
     if (!isWebhookSourcePlugin(plugin)) {
       throw new Error(
@@ -390,14 +409,13 @@ export function createItemWaitObserver(input: {
     waits: readonly ObservedItemWait[]
   ): Promise<ObservedSourceReport> => {
     // The forge is asked only about what an open wait names: the item's invariant, held
-    // here at the boundary rather than trusted to each plugin. A pull request is named by
-    // the number that ends the key of an item a wait is on (`pr-7` names 7).
+    // here at the boundary rather than trusted to each plugin. A pull request is named when
+    // its number ends the key of an item a wait is on in that repository. How the number is
+    // read from the key is the binding's own mapping, which only the plugin knows; any
+    // prefix-and-number mapping leaves the number at the end, so this holds for each.
     const commits = new Set(waits.map(wait => JSON.stringify([wait.remote, wait.about])));
-    const pullRequests = new Set(
-      waits.map(wait =>
-        JSON.stringify([wait.remote, /(?:^|[^0-9])([1-9][0-9]*)$/.exec(wait.itemKey)?.[1]])
-      )
-    );
+    const namesPullRequest = (remote: string, number: number): boolean =>
+      waits.some(wait => wait.remote === remote && wait.itemKey.endsWith(String(number)));
     const read = new Set<string>();
     const guarded: SourceForgeReader = {
       commitChecks: async request => {
@@ -409,7 +427,7 @@ export function createItemWaitObserver(input: {
       },
       prReviews: async request => {
         const key = JSON.stringify(['pr', request.remote, String(request.number)]);
-        if (!pullRequests.has(JSON.stringify([request.remote, String(request.number)])))
+        if (!namesPullRequest(request.remote, request.number))
           throw new Error(
             `No open wait is on pull request ${String(request.number)} of '${request.remote}'`
           );

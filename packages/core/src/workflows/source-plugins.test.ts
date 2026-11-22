@@ -101,6 +101,29 @@ describe('webhook source plugin host', () => {
     expect(acceptReceipt).toHaveBeenCalledTimes(1);
   });
 
+  test('an invalid configuration names the file, the field and what it must be', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'archon-webhook-source-'));
+    roots.push(root);
+    const configPath = join(root, 'sources.json');
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        sources: [
+          { sourceInstanceId: 's', module: '/m.ts', config: {}, observe: { everySeconds: 10 } },
+        ],
+      }),
+      'utf8'
+    );
+    const load = loadWebhookSourcePlugins(configPath, {
+      acceptReceipt: async () => ({ receiptId: 'unused', replay: false }),
+      isKnownUser: async () => true,
+      hasDeliveryReceipt: async () => false,
+    });
+    await expect(load).rejects.toThrow(configPath);
+    await expect(load).rejects.toThrow('sources.0.observe.everySeconds');
+  });
+
   test('rejects an acceptance for a different configured source', async () => {
     const { configPath } = await fixture({
       status: 'received',
@@ -312,7 +335,7 @@ async function observingFixture(
   return configPath;
 }
 
-function waitStore(waits: Partial<StoredItemWait>[]): ItemWaitObserverStore {
+function waitStore(waits: Partial<StoredItemWait>[], itemKey = 'pr-7'): ItemWaitObserverStore {
   return {
     listOpenItemWaits: async () =>
       waits.map(wait => ({
@@ -328,7 +351,7 @@ function waitStore(waits: Partial<StoredItemWait>[]): ItemWaitObserverStore {
         closed: null,
         ...wait,
       })),
-    getItem: (async () => ({ key: 'pr-7' })) as never,
+    getItem: (async () => ({ key: itemKey })) as never,
     getWorkflowRun: (async () => ({ codebase_id: 'codebase-1' })) as never,
     getCodebase: (async () => ({ repository_url: REMOTE })) as never,
   };
@@ -387,7 +410,7 @@ describe('observing open item waits', () => {
   });
 
   test('a pull request is read only when an open wait is on the item it names', async () => {
-    const observeNumber = async (prNumber: number) => {
+    const observeNumber = async (prNumber: number, itemKey?: string) => {
       const configPath = await observingFixture({ acceptances: [], prNumber });
       const sources = await loadWebhookSourcePlugins(configPath, {
         acceptReceipt: async () => ({ receiptId: 'unused', replay: false }),
@@ -395,7 +418,11 @@ describe('observing open item waits', () => {
         hasDeliveryReceipt: async () => false,
       });
       const forge = forgeReader();
-      const observer = createItemWaitObserver({ sources, store: waitStore([{}]), forge });
+      const observer = createItemWaitObserver({
+        sources,
+        store: waitStore([{}], itemKey),
+        forge,
+      });
       const [report] = (await observer?.pass(new Date())) ?? [];
       return { report, reads: forge.reads };
     };
@@ -407,6 +434,8 @@ describe('observing open item waits', () => {
     const refused = await observeNumber(8);
     expect(refused.reads).toEqual([]);
     expect(refused.report?.error).toContain('No open wait is on pull request 8');
+    // A mapping whose prefix ends in a digit (`pr2` and 7 make `pr27`) still names 7.
+    expect((await observeNumber(7, 'pr27')).reads).toEqual([{ remote: REMOTE, number: 7 }]);
   });
 
   test('a read the source could not make fails the pass, and what it did read is still admitted', async () => {

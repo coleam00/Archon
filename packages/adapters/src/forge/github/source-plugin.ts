@@ -266,11 +266,23 @@ async function observeWaits(
         unserved.push({ wait, reason: `the wait's repository is not on ${config.host}` });
         continue;
       }
+      const rejections = new Set<string>();
       for (const { key, event } of read.events) {
+        // An event about another commit than the wait's (an older review) is not for it.
+        const field = binding.wake?.about.field;
+        if (field === undefined || readForgeEventField(event, field) !== wait.about) continue;
         const evaluated = evaluateBinding(binding, event);
-        // A state the binding does not start on (a check still running), or one about
-        // another commit than the wait's, would only be recorded as unmatched.
-        if (!('start' in evaluated) || evaluated.start.wake?.about !== wait.about) continue;
+        // The binding matched the event but cannot start on it, such as a mapped field the
+        // event lacks: a webhook would record that reason, so the observation reports it.
+        if ('skipped' in evaluated && evaluated.skipped.status === 'rejected') {
+          const reason = `binding '${binding.bindingId}' rejects the event: ${evaluated.skipped.reason}`;
+          if (!rejections.has(reason)) unserved.push({ wait, reason });
+          rejections.add(reason);
+          continue;
+        }
+        // A state the binding does not start on (a check still running) would only be
+        // recorded as unmatched.
+        if (!('start' in evaluated)) continue;
         acceptances.push({
           receipt: {
             id: randomUUID(),
