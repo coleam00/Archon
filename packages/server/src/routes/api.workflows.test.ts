@@ -1829,6 +1829,42 @@ describe('DELETE /api/workflows/:name', () => {
     }
   });
 
+  test('refuses to save a name that a pack folder and its workflow folder both hold', async () => {
+    const testDir = join(tmpdir(), `wf-pack-folder-twin-${Date.now()}`);
+    await mkdir(join(testDir, 'one'), { recursive: true });
+    await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
+    await writeFile(
+      join(testDir, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'demo-pack',
+        description: 'demo',
+        entrypoints: { one: 'one/one.yaml' },
+      })
+    );
+    const packFile = join(testDir, 'one', 'one.yaml');
+    const flatFile = join(testDir, '.archon', 'workflows', 'one.yaml');
+    const content = 'name: one\ndescription: Before\nnodes: []\n';
+    await writeFile(packFile, content);
+    await writeFile(flatFile, content);
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+      const saved = await app.request(`/api/workflows/one?cwd=${testDir}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ definition: { name: 'one', description: 'After', nodes: [] } }),
+      });
+      expect(saved.status).toBe(500);
+      expect(await readFile(packFile, 'utf-8')).toBe(content);
+      expect(await readFile(flatFile, 'utf-8')).toBe(content);
+    } finally {
+      await removeTempTree(testDir);
+    }
+  });
+
   test('refuses to delete when the name matches a malformed packaged workflow folder', async () => {
     const testDir = join(tmpdir(), `wf-delete-crowded-packaged-${Date.now()}`);
     const workflowsRoot = join(testDir, '.archon', 'workflows');

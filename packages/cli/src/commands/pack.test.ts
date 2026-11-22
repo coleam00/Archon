@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github/source-config';
 import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
@@ -14,6 +14,9 @@ import { readAsksSettledBindings, readRunEndedBindings } from '@archon/core/work
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { packCommand, type PackBindingsOptions } from './pack';
+import { packCopyLines } from './pack-copies';
+import { loadWorkflows } from './workflow-list';
+import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 
 const DECLARATION = `bindings:
@@ -634,5 +637,53 @@ describe('archon pack: a pack folder as the workflow source', () => {
       loaded: [{ source: 'project', key: 'fixture', dir: source }],
       otherCopies: [],
     });
+  });
+});
+
+describe('run-start pack copy lines', () => {
+  /** One installed copy of review-kit, the way `archon plugin add` leaves it. */
+  async function install(owner: string): Promise<void> {
+    const pluginsDir = join(root, 'home', 'plugins');
+    const id = `${owner}/review-kit`;
+    const commit = 'a'.repeat(40);
+    const manifest = {
+      schemaVersion: 1,
+      kind: 'workflow-pack',
+      name: 'review-kit',
+      description: 'd',
+      entrypoints: { review: 'review/review.yaml' },
+    };
+    const tree = packTreePath(pluginsDir, id, commit);
+    await mkdir(join(tree, 'review'), { recursive: true });
+    await writeFile(join(tree, 'archon-plugin.json'), JSON.stringify(manifest));
+    await writeFile(
+      join(tree, 'review', 'review.yaml'),
+      'name: review\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n'
+    );
+    const receipt = receiptPath(pluginsDir, id);
+    await mkdir(dirname(receipt), { recursive: true });
+    await writeFile(
+      receipt,
+      JSON.stringify({
+        schemaVersion: 1,
+        id,
+        manifest,
+        commit,
+        installedAt: new Date(0).toISOString(),
+      })
+    );
+  }
+
+  it("names another owner's installed copy by its own qualified workflow name", async () => {
+    await install('acme');
+    await install('beta');
+    await mkdir(cwd, { recursive: true });
+    const { workflows } = await loadWorkflows(cwd);
+    const selected = workflows.find(entry => entry.workflow.name === 'acme/review-kit:review');
+    if (selected === undefined) throw new Error('acme/review-kit:review was not discovered');
+
+    const lines = await packCopyLines(selected.workflow, workflows, cwd, false);
+
+    expect(lines.join('\n')).toContain("To run it, name 'beta/review-kit:review'.");
   });
 });

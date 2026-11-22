@@ -73,16 +73,30 @@ function howToRun(
   const names = entries
     .filter(e => e.source === copy.source && e.workflow.pack?.key === copy.key)
     .map(e => e.workflow.name);
+  const entry = entryName(workflow);
   if (copy.source === 'installed') {
     const owner = splitInstalledPackKey(copy.key);
     if (owner === null) return '';
-    const qualified = installedWorkflowName(owner, workflow.name);
+    const qualified = installedWorkflowName(owner, entry);
     const drop = explicitSource ? 'drop --workflow-source and ' : '';
     return names.includes(qualified)
       ? `To run it, ${drop}name '${qualified}'.`
       : `It has no workflow '${qualified}'; to see its workflows, ${drop}run 'archon workflow list'.`;
   }
+  if (names.includes(entry)) return `To run it, name '${entry}'.`;
   return names.length > 0 ? `Its workflows include '${names[0]}'.` : '';
+}
+
+/**
+ * The workflow's name within its pack: an installed workflow is named
+ * `<owner>/<pack>:<entry>` (`installedWorkflowName`), every other one by its own name.
+ */
+function entryName(workflow: ResolvedWorkflow): string {
+  const pack = workflow.pack;
+  const owner = pack?.source === 'installed' ? splitInstalledPackKey(pack.key) : null;
+  if (owner === null) return workflow.name;
+  const prefix = installedWorkflowName(owner, '');
+  return workflow.name.startsWith(prefix) ? workflow.name.slice(prefix.length) : workflow.name;
 }
 
 /**

@@ -175,18 +175,24 @@ function singleMatch(matches: PackagedMatches, name: string): RawWorkflowFile | 
 /**
  * A project workflow by name: under the project's workflow folder, or, when the project
  * root is itself a pack folder (`sourcePackFolder`), in that pack, as discovery lists it.
+ * A name both hold is refused, as two packaged matches are: discovery loads neither, and
+ * a save or delete must not pick one.
  */
 export async function findProjectWorkflowAt(
   projectRoot: string,
   name: string
 ): Promise<RawWorkflowFile | null> {
   const found = await findWorkflowAt(join(projectRoot, getWorkflowFolderSearchPaths()[0]), name);
-  if (found !== null) return found;
   const pack = await sourcePackFolder(projectRoot);
-  if (pack === null) return null;
+  if (pack === null) return found;
   const matches: PackagedMatches = { files: [], folderErrors: [] };
   await collectPackMatches(pack.name, pack.dir, name, matches);
-  return singleMatch(matches, name);
+  if (found !== null && matches.files.length > 0) {
+    throw new Error(
+      `Multiple workflows declare the name '${name}': ${found.absolutePath} and ${matches.files[0].absolutePath}`
+    );
+  }
+  return found ?? singleMatch(matches, name);
 }
 
 export async function findWorkflowAt(
