@@ -288,6 +288,28 @@ export function describeSqlItemAskConformance(makeHarness: () => Promise<Harness
     }
   });
 
+  test('an ask may leave no recommendation: accepting one is refused and an option answers it', async () => {
+    const harness = await makeHarness();
+    try {
+      await completeWithAsks(harness, [{ ...ask('Which way?'), recommendation: null }]);
+      const [item] = await openAskItems(harness.store);
+      if (item === undefined || !('ref' in item)) throw new Error('Expected one readable ask');
+      expect('recommendation' in item).toBe(false);
+      const deps = itemDeps(harness);
+      await expect(
+        answerAttentionItem(deps, item.ref, { recommended: true }, operator, 'cli')
+      ).rejects.toThrow(
+        `Ask ${item.ref} has no recommendation to accept. Choose one of its options.`
+      );
+      expect(await openRefs(harness)).toEqual([item.ref]);
+      expect(
+        await answerAttentionItem(deps, item.ref, { choose: ['drop'] }, operator, 'cli')
+      ).toMatchObject({ kind: 'ask_answered', settled: true });
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('answering settles the set once; a repeat changes nothing and a different answer is refused', async () => {
     const harness = await makeHarness();
     try {

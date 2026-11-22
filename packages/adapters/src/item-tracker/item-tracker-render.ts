@@ -195,7 +195,9 @@ export function renderAsk(ask: StoredItemAsk): TrackerComment {
         option => `- \`${option.id}\`: ${line(option.does)} Cost: ${line(option.cost)}`
       ),
       '',
-      `Recommended: \`${recommendation.option}\`. ${line(recommendation.why)}`,
+      recommendation === null
+        ? 'No recommendation: choose an option.'
+        : `Recommended: \`${recommendation.option}\`. ${line(recommendation.why)}`,
       '',
       `Answer with \`archon workflow answer --ref ${ref} --choose <option>\`, or in your own words with \`--choose other --text "<answer>"\`. Withdraw it with \`archon workflow answer --withdraw ${ref}\`.`,
       '',

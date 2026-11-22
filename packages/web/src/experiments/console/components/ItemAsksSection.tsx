@@ -172,6 +172,11 @@ function OpenAsk({
         </p>
       ) : null}
       <AskedIn ask={ask} />
+      {ask.recommendation === undefined ? (
+        <p className="mt-1 text-console-12 text-text-primary">
+          No recommendation. Choose an option.
+        </p>
+      ) : null}
       <AttentionAnswerForm fields={ask} submit={submit} refusal={refusal} />
     </div>
   );

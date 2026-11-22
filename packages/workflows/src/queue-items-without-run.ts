@@ -62,7 +62,14 @@ export async function askQueueItem(
       OTHER_ATTENTION_OPTION,
     ],
     other: true,
-    recommendation: { option: ask.ask.recommendation.option, why: ask.ask.recommendation.why },
+    ...(ask.ask.recommendation === null
+      ? {}
+      : {
+          recommendation: {
+            option: ask.ask.recommendation.option,
+            why: ask.ask.recommendation.why,
+          },
+        }),
     context: ask.ask.context,
     artifacts: ask.ask.artifacts.map(({ type, run_id, path }) => ({ type, run_id, path })),
     askedIn: { runId: ask.runId, workflow: ask.workflowName },

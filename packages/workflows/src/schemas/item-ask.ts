@@ -37,7 +37,8 @@ export const ITEM_ASKS_DESCRIPTION = [
 
 // Every property of the shape is required, so a provider in OpenAI strict mode (Codex),
 // which refuses an optional property, takes it as it is. A list that may be empty stands
-// in for an optional one, and the wait's optional `label` and `confidence` are left out.
+// in for an optional one, a nullable value (the recommendation) stands in for an absent
+// one, and the wait's optional `label` and `confidence` are left out.
 const askOptionSchema = attentionOptionSchema
   .pick({ id: true, does: true })
   .extend({
@@ -91,13 +92,16 @@ const askFields = {
     .pick({ option: true, why: true })
     .extend({
       option: attentionRecommendationSchema.shape.option.describe(
-        'The id of the option you would take. Always one.'
+        'The id of the option you would take.'
       ),
       why: attentionRecommendationSchema.shape.why.describe(
         'Why that option, in a sentence or two. If you are not sure, say what would change your mind.'
       ),
     })
-    .describe('The option you recommend and why.'),
+    .nullable()
+    .describe(
+      'The option you recommend and why, or null when you have no basis to choose between the options: the operator then sees that the ask has none. Do not name an option you would not choose.'
+    ),
   artifacts: z
     .array(askArtifactSchema)
     .describe(
@@ -107,7 +111,7 @@ const askFields = {
 
 /** Why an ask's parts disagree, by path, or nothing: the checks a JSON Schema cannot hold. */
 function refineAsk(
-  ask: { options: readonly { id: string }[]; recommendation: { option: string } },
+  ask: { options: readonly { id: string }[]; recommendation: { option: string } | null },
   ctx: z.RefinementCtx
 ): void {
   const seen = new Set<string>();
@@ -126,11 +130,12 @@ function refineAsk(
       });
     seen.add(option.id);
   }
-  if (!ask.options.some(option => option.id === ask.recommendation.option))
+  const recommended = ask.recommendation?.option;
+  if (recommended !== undefined && !ask.options.some(option => option.id === recommended))
     ctx.addIssue({
       code: 'custom',
       path: ['recommendation', 'option'],
-      message: `names '${ask.recommendation.option}', which is not one of the ask's options`,
+      message: `names '${recommended}', which is not one of the ask's options`,
     });
 }
 
@@ -149,7 +154,7 @@ export const storedItemAskSchema = z
   .looseObject({
     ...askFields,
     options: z.array(askOptionSchema.loose()).min(2),
-    recommendation: attentionRecommendationSchema.loose(),
+    recommendation: attentionRecommendationSchema.loose().nullable(),
   })
   .superRefine(refineAsk);
 export type StoredAsk = z.infer<typeof storedItemAskSchema>;

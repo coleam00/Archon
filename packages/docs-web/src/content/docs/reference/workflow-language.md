@@ -2422,7 +2422,9 @@ none. An ask holds:
 - `context`: what is at stake and why it came up.
 - `options`: at least two, each with a kebab-case `id`, what it `does` and what it `cost`s.
   The id `other` is reserved: every ask also offers it, answered with text.
-- `recommendation`: `{ option, why }`; `option` must name one of the ask's options.
+- `recommendation`: `{ option, why }`, where `option` names one of the ask's options, or
+  `null` when the stage has no basis to choose between them. The key is still required, so a
+  `bash:` or `script:` node writes `"recommendation": null` rather than leaving it out.
 - `artifacts`: [artifact pointers](#a-small-result-that-points-at-a-large-file) the operator
   should read to decide; empty when there are none.
 
@@ -2460,6 +2462,11 @@ What the engine does with them:
   them, next to paused runs, and answered or withdrawn by their ref (`archon workflow answer
   --ref`/`--withdraw`, `POST /api/attention/answer`, `POST /api/attention/withdraw`, or the chat
   tool). Who may answer is the rule of the run that left the ask: its starter, or an admin.
+- **An ask may carry no recommendation.** One whose `recommendation` is `null` shows as having
+  none in `archon workflow attention`, in the console and in the item's tracker comment.
+  `workflow answer --ref <ref> --recommended` on it is refused, and the ask stays open: choose
+  one of its options. An Archon binary from before this field could be `null` reports such an
+  ask as unreadable and leaves it out of its queue; answer it with a binary that knows it.
 - **The run stays while its asks are open.** Deleting a run that left open asks is refused, and
   run cleanup skips it, until each ask is answered or withdrawn: the run's starter decides who
   may answer. Once they are closed the run may go; the item keeps its asks, their answers and
