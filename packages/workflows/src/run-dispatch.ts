@@ -11,6 +11,7 @@ import { hasRunModelOverrides, runOverrideAppliesToRef, selectModelRef } from '.
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from './run-ai-configuration';
 import { isFolderCodebase } from './run-paths';
 import { prepareRunAiConfiguration, type PreparedRunAiConfiguration } from './run-preflight';
+import { runProjectConfigRoot } from './workflow-source/load';
 import type {
   DagNode,
   IncludeDirective,
@@ -350,6 +351,7 @@ async function prepareDispatchAiConfiguration(
     return opts.preparedAiConfiguration;
   }
   return await prepareRunAiConfiguration(deps, workflow, cwd, {
+    configRoot: runProjectConfigRoot(preCreatedRun?.metadata, cwd),
     codebaseId: opts.codebaseId,
     userId: executionUserId,
     runConfig: opts.runConfig,

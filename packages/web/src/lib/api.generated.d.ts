@@ -8222,6 +8222,7 @@ export interface components {
       held: {
         receiptId: string;
         bindingId: string;
+        hostId: string | null;
         workflow: string | null;
         receivedAt: string;
       }[];
@@ -8893,6 +8894,7 @@ export interface components {
         held: {
           receiptId: string;
           bindingId: string;
+          hostId: string | null;
           workflow: string | null;
           receivedAt: string;
         }[];

@@ -95,6 +95,7 @@ describe('trigger check refuses what a fire refuses', () => {
       commands: {},
     }),
     providers: providerRegistry,
+    projectOf: async () => null,
   };
 
   test.each([

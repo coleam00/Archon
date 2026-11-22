@@ -19,12 +19,10 @@ import {
   type OnBinding,
 } from '@archon/core/workflows/run-ended';
 import { asksSettledTriggerCheck } from '@archon/core/workflows/asks-settled';
-import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
-import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
 import {
-  collectCredentialValues,
-  redactCredentialValues,
-} from '@archon/paths/credential-redaction';
+  registeredProjectForPath,
+  registeredProjectKeyForPath,
+} from '@archon/core/services/codebase-checkout-resolver';
 import { observeStartExecutor } from '@archon/core/services/run-attention-watch';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import {
@@ -45,6 +43,7 @@ import {
 import { assertItemKey, readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { CLIAdapter } from '../adapters/cli-adapter';
+import { drainFailureReasons } from '../utils/install-hosts';
 import { writeJsonLine } from '../utils/stdout';
 import {
   claimDetachedRunProcessOwner,
@@ -87,24 +86,6 @@ async function loadFireConfig(path: string): Promise<TriggerConfig> {
 async function assertKnownRunAsUser(host: WorkflowHost, config: TriggerConfig): Promise<void> {
   if (!(await host.records.users.getUserById(config.binding.runAsUserId)))
     throw new Error('Trigger binding names an unknown run-as user.');
-}
-
-/**
- * The messages behind drain failures, for the operator's terminal. The store keeps only
- * the failed stage because configuration and provider errors can carry credentials, so
- * the text is redacted with the same policy as subprocess output before it is shown.
- * Flattens the nested `AggregateError`s the drain builds, which carry no reason of their own.
- */
-export function drainFailureReasons(errors: readonly unknown[]): string {
-  const messages = (error: unknown): string[] =>
-    error instanceof AggregateError
-      ? error.errors.flatMap(messages)
-      : [error instanceof Error ? error.message : String(error)];
-  const credentials = collectCredentialValues(process.env);
-  return errors
-    .flatMap(messages)
-    .map(message => sanitizeCredentials(redactCredentialValues(message, credentials)))
-    .join('; ');
 }
 
 export function drainHost(
@@ -719,6 +700,7 @@ async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOption
     // A check changes nothing: a missing global config.yaml stays missing.
     loadConfig: (cwd: string) => loadConfig(cwd, { readOnly: true }),
     projectKeyOf: (cwd: string) => registeredProjectKeyForPath(cwd, host.records.codebases),
+    projectOf: (cwd: string) => registeredProjectForPath(cwd, host.records.codebases),
   };
   const runEnded = bindings.filter(entry => 'runEnded' in entry);
   const asksSettled = bindings.filter(entry => 'asksSettled' in entry);
@@ -739,7 +721,13 @@ async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOption
     asksSettled: asksSettled.map((entry, index) => listed(entry, asksSettledProblems[index])),
     bindings: await checkFireBindings(deps, schedules),
   };
-  await writeJsonLine({ directory: getTriggersPath(), ...checked });
+  await writeJsonLine({
+    directory: getTriggersPath(),
+    // A standalone check has no item, so it cannot know an item's landing branch.
+    definitions:
+      "Each binding is checked against the definitions a start without an item reads: the binding's base, else its project's default branch, as fetched now, with the launch checkout's uncommitted changes on top. A run on an item checks the bindings it may fire against the definitions it captured, before it starts.",
+    ...checked,
+  });
   const broken = [...checked.runEnded, ...checked.asksSettled, ...checked.bindings].filter(
     entry => entry.problems.length > 0
   ).length;

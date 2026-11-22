@@ -213,14 +213,12 @@ export async function runTrigger({
   const { triggerCommand, spawnAdmitted } = await loadRoute(() => import('../commands/trigger'), {
     database: await usesDatabaseStore(),
   });
-  const { createCliWorkflowHost, cliOwnTriggerHost } = await import('../utils/workflow-host');
-  // A `trigger execute` process serves the host it runs for, so the run it ends admits
-  // that host's next start.
+  const { createCliWorkflowHost } = await import('../utils/workflow-host');
+  // A `trigger execute` process was handed its run by a drain of the host it runs for, so
+  // the run it ends admits that host's next start.
   const host = await createCliWorkflowHost(
     { forgeTrustedEnv },
-    cliOwnTriggerHost(
-      subcommand === 'execute' && typeof values.host === 'string' ? values.host : undefined
-    )
+    subcommand === 'execute' && typeof values.host === 'string' ? values.host : undefined
   );
   await triggerCommand(
     host,

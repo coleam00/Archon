@@ -26,7 +26,10 @@ import { loadConfig } from '@archon/core/config/config-loader';
 import { loadWorkflowRunConfigFile } from '@archon/core/config/run-config';
 import { loadStoreSelection } from '@archon/core/config/store-selection';
 import * as codebaseDb from '@archon/core/db/codebases';
-import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
+import {
+  registeredProjectForPath,
+  registeredProjectKeyForPath,
+} from '@archon/core/services/codebase-checkout-resolver';
 import { readPackGraph } from '@archon/core/workflows/pack-graph';
 import { asksSettledTriggerCheck } from '@archon/core/workflows/asks-settled';
 import {
@@ -502,7 +505,13 @@ async function assertRunEndedChecks(
     // Without the install's codebase records each checkout counts as its own project, so a
     // duplicate of a file already installed, or one in another checkout of the project, is
     // left to `archon trigger check`.
-    { loadConfig, providers: providerRegistry, projectKeyOf: async () => null }
+    {
+      loadConfig,
+      providers: providerRegistry,
+      projectKeyOf: async () => null,
+      // The base is the one a start reads: the binding's, else the registered default.
+      projectOf: cwd => registeredProjectForPath(cwd, codebaseDb),
+    }
   );
   const problems = ended.flatMap(({ id, check }, index) =>
     found[index].map(
@@ -528,7 +537,13 @@ async function assertAsksSettledChecks(
   const found = await asksSettledTriggerCheck(
     asks.map(item => item.check),
     // As for run-ended bindings, a duplicate among installed files is left to `trigger check`.
-    { loadConfig, providers: providerRegistry, projectKeyOf: async () => null }
+    {
+      loadConfig,
+      providers: providerRegistry,
+      projectKeyOf: async () => null,
+      // The base is the one a start reads: the binding's, else the registered default.
+      projectOf: cwd => registeredProjectForPath(cwd, codebaseDb),
+    }
   );
   const problems = asks.flatMap(({ id, check }, index) =>
     found[index].map(
@@ -695,6 +710,7 @@ async function packGraph(packKey: string, options: PackBindingsOptions): Promise
       providers: providerRegistry,
       triggersDirectory: getTriggersPath,
       projectKeyOf: launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb)),
+      projectOf: cwd => registeredProjectForPath(cwd, codebaseDb),
     },
     options.workflowSource === undefined ? {} : { workflowSource: resolve(options.workflowSource) }
   );

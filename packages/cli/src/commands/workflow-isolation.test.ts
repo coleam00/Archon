@@ -12,6 +12,7 @@ import {
   finishStartupWindow,
   createTestWorkflowHost,
   mockRefuseUnappliedStartPoint,
+  mockLayeredDefinitions,
 } from '../test-support/workflow-command-harness';
 import { InvalidCodebaseDefaultCwdError } from '@archon/core/utils/codebase-path';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock, jest } from 'bun:test';
@@ -696,17 +697,9 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
   });
 
   it('should throw when codebase lookup fails (isolation is default)', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const conversationDb = await import('@archon/core/db/conversations');
     const codebaseDb = await import('@archon/core/db/codebases');
 
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
-      errors: [],
-    });
-    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'conv-123',
-    });
+    // A worktree run looks its project up to plan its definitions, before discovery.
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockRejectedValueOnce(
       new Error('ECONNREFUSED')
     );
@@ -1806,6 +1799,45 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
     const lastExecuteArgs = executeSpy.mock.calls.at(-1) as unknown[];
     const opts = lastExecuteArgs[lastExecuteArgs.length - 1] as { baseBranch?: string };
     expect(opts.baseBranch).toBe('develop');
+  });
+
+  it('cuts a run whose definitions came from the base branch at the commit they were read at', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const isolation = await import('@archon/isolation');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/test/path',
+    });
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-123',
+    });
+    mockLayeredDefinitions.definitions = {
+      from: 'base',
+      remote: 'origin',
+      branch: 'dev',
+      commit: 'c'.repeat(40),
+      merge_base: 'c'.repeat(40),
+      checkout: '/test/path',
+      local_files: [],
+    };
+    try {
+      await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {});
+    } finally {
+      mockLayeredDefinitions.definitions = undefined;
+    }
+
+    const provider = (isolation.getIsolationProvider as ReturnType<typeof mock>).mock.results.at(-1)
+      ?.value as { create: ReturnType<typeof mock> } | undefined;
+    expect(provider?.create.mock.calls.at(-1)?.[0]).toMatchObject({
+      startCommit: { commit: 'c'.repeat(40), branch: 'dev' },
+    });
   });
 
   it('rejects --base combined with --no-worktree', async () => {

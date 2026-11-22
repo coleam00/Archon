@@ -60,7 +60,10 @@ import {
   createAsksSettledStarts,
 } from './asks-settled';
 import { createEndedCheckout } from './ended-checkout';
-import { registeredProjectKeyForPath } from '../services/codebase-checkout-resolver';
+import {
+  registeredProjectForPath,
+  registeredProjectKeyForPath,
+} from '../services/codebase-checkout-resolver';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
 import { createGitHubAppAuthProvider } from '../github-auth/auth';
 import { installGitHubCliShim } from '../github-auth/gh-shim-install';
@@ -138,6 +141,7 @@ function collectOAuthCredentialValues(
 }
 
 const launchProjectKeyOf = launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb));
+const launchProjectOf = (cwd: string) => registeredProjectForPath(cwd, codebaseDb);
 
 /**
  * The held binding starts on item `itemId`: those naming its key whose checkout is in its
@@ -151,8 +155,8 @@ async function listHeldItemStarts(itemId: string): Promise<HeldItemStart[]> {
   for (const start of await installHold.listHeldStarts()) {
     if (start.kind !== 'trigger' || start.itemKey !== item.key || start.cwd === null) continue;
     if ((await launchProjectKeyOf(start.cwd)) !== item.projectKey) continue;
-    const { receiptId, bindingId, workflow, receivedAt } = start;
-    held.push({ receiptId, bindingId, workflow, receivedAt });
+    const { receiptId, bindingId, hostId, workflow, receivedAt } = start;
+    held.push({ receiptId, bindingId, hostId, workflow, receivedAt });
   }
   return held;
 }
@@ -409,6 +413,7 @@ export function createWorkflowDeps(
     ...onBindingDeps(id => store.getItem(id)),
     loadConfig: loadMergedConfig,
     providers: providerRegistry,
+    projectOf: launchProjectOf,
   };
   const runEndedPreflight = createRunEndedPreflight(onBindings);
   const asksSettledPreflight = createAsksSettledPreflight(onBindings);

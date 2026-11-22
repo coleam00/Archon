@@ -33,12 +33,16 @@ const CAUSED: SourceReceiptAcceptance = {
 
 describe('the starts a settling answer reports', () => {
   test('a receipt that cannot be read back is reported, naming it, without failing the answer', async () => {
-    const starts = await startsOf([CAUSED], {
-      getStartReceipt: async () => {
-        throw new Error('receipt read unavailable');
+    const starts = await startsOf(
+      [CAUSED],
+      {
+        getStartReceipt: async () => {
+          throw new Error('receipt read unavailable');
+        },
+        getWorkflowRun: async () => null,
       },
-      getWorkflowRun: async () => null,
-    });
+      async () => new Set()
+    );
     expect(starts.json).toEqual({
       startsUnread: { receiptIds: [CAUSED.receipt.id], error: 'receipt read unavailable' },
     });

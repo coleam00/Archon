@@ -153,7 +153,8 @@ describe('workflow run --input-file', () => {
     const launch = ['workflow', 'run', 'take', '--cwd', briefs, '--input-file', 'big=item.txt'];
 
     // Only briefs/item.txt exists: reading <root>/item.txt would refuse the run.
-    const dry = await fx.cli([...launch, '--dry-run']);
+    // No remote to read a base from: a dry run takes the offline path, an explicit source.
+    const dry = await fx.cli([...launch, '--dry-run', '--workflow-source', fx.repo]);
     expect(dry.exitCode, dry.stderr).toBe(0);
 
     // A same-named root file must not win.
