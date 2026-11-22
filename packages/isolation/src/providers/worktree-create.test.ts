@@ -1187,6 +1187,10 @@ describe('base branch and remote', () => {
   });
 
   test('a start commit is cut from as is, with no fetch', async () => {
+    execSpy.mockImplementation(async (_cmd: string, args: string[]) => ({
+      stdout: args.includes('abc123^{commit}') ? 'abc123\n' : '',
+      stderr: '',
+    }));
     const env = await withConfig({}).create({
       ...issueRequest,
       workflowType: 'task',
@@ -1206,8 +1210,9 @@ describe('base branch and remote', () => {
       return syncResult('dev');
     });
     execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-      if (args.includes('cat-file') && !fetched) throw new Error('fatal: not a valid object');
-      return { stdout: '', stderr: '' };
+      // `rev-parse --verify --quiet` prints nothing for a commit this repository lacks.
+      const found = fetched && args.includes('abc123^{commit}');
+      return { stdout: found ? 'abc123\n' : '', stderr: '' };
     });
     const request = {
       ...issueRequest,
@@ -1222,10 +1227,8 @@ describe('base branch and remote', () => {
   });
 
   test('a start commit the fetch does not bring refuses instead of cutting from another', async () => {
-    execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-      if (args.includes('cat-file')) throw new Error('fatal: not a valid object');
-      return { stdout: '', stderr: '' };
-    });
+    // The commit stays missing: `rev-parse --verify --quiet` prints nothing for it.
+    execSpy.mockImplementation(async () => ({ stdout: '', stderr: '' }));
 
     await expect(
       withConfig({}).create({
