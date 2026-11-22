@@ -154,7 +154,8 @@ export function launchOnHiddenDesktop(wrapper: string): number {
 /**
  * The task's entry point. This process's output goes to a console with no window and is
  * lost, so a failure is appended to the job's log, where `schedule status` and the operator
- * look, and the process exits non-zero for Task Scheduler's history.
+ * look. The exit code goes to conhost, which does not pass it on, so Task Scheduler's last
+ * result never shows it: the log is the only record of a launcher failure.
  */
 export function runScheduleLaunch(wrapper: string | undefined): number {
   if (wrapper === undefined || !wrapper.endsWith('.cmd')) {
