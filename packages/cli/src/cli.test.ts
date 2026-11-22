@@ -1875,6 +1875,34 @@ describe('pre-dispatch gates --json error envelope', () => {
     }
   });
 
+  it('lets --item-of reads and writes past the git gate: they act on the run, not the directory', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'archon-item-of-outside-'));
+    try {
+      const forms: [string[], string][] = [
+        [['runs'], 'not_found'],
+        [['link', '--kind', 'part_of', '--to', 'parent'], 'no_item'],
+        [['merged', '--change', 'pr', '--at', '2026-11-02T10:00:00Z'], 'no_item'],
+        [['landing', '--branch', 'feat/x'], 'no_item'],
+      ];
+      for (const [[subcommand, ...rest], error] of forms) {
+        const { envelope } = spawnJsonError([
+          'workflow',
+          subcommand ?? '',
+          '--item-of',
+          'no-such-run',
+          ...rest,
+          '--json',
+          '--cwd',
+          outside,
+        ]);
+        // The command answered for the run; the gate would have refused the directory.
+        expect(envelope()).toMatchObject({ ok: false, error });
+      }
+    } finally {
+      await removeTempTree(outside);
+    }
+  });
+
   it('leaves the default home untouched when the gate opens the registry', async () => {
     // Same command as the case above — the one route here that opens the
     // registry — but with the child's home directory pointed at a scratch tree,

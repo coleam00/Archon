@@ -39,11 +39,14 @@ import {
   declaredInputNames,
   mappedInputs,
   readAsksSettledBindings,
-  startedWorkflowProblems,
   type AsksSettledBinding,
   type RunEndedStartsDependencies,
 } from './run-ended';
-import { selectStartedWorkflow, type StartedWorkflow } from './binding-workflow';
+import {
+  selectStartedWorkflow,
+  startedWorkflowInputProblems,
+  type StartedWorkflow,
+} from './binding-workflow';
 import { itemAnswers, settledAnswer } from './item-answers';
 
 export interface AsksSettledStartsDependencies
@@ -244,7 +247,8 @@ async function withWorktree(
 /**
  * Every problem with an asks-settled binding, read against the workflows of the project it
  * launches in: the asking workflow exists, declares `returns.asks` and every input the
- * binding reads, and the started workflow exists and declares every input it maps. With
+ * binding reads, and the started workflow exists and accepts its inputs as a start would:
+ * `launch.inputs` and the mapped names, none undeclared and no required one missing. With
  * `checkout: "asking-run"`, neither workflow may be pinned in place.
  */
 export async function asksSettledBindingCheck(
@@ -261,7 +265,9 @@ export async function asksSettledBindingCheck(
   return [
     ...askingWorkflowProblems(asksSettled, workflows),
     ...checkoutProblems(asksSettled, started, workflows),
-    ...startedWorkflowProblems(started, asksSettled.inputs),
+    ...startedWorkflowInputProblems(started, binding.launch.inputs, {
+      mapped: Object.keys(asksSettled.inputs ?? {}),
+    }),
   ];
 }
 
