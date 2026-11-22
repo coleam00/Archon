@@ -6,7 +6,16 @@
  * scheduler's CLI.
  */
 import { execFile } from 'node:child_process';
-import { link, mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import {
+  link,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  stat,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { dirname, join, posix, win32 } from 'node:path';
 import { promisify } from 'node:util';
 import { launchdBackend } from './native-schedule-launchd';
@@ -407,10 +416,15 @@ export async function listNativeSchedules(
   const platform = options.platform ?? process.platform;
   const backend = backendFor(platform, archonHome, options);
   if (!backend) return [];
-  // ARCHON_HOME is taken as written, so `/x/home` and `/x/home/` are one install.
+  // ARCHON_HOME is taken as written, so another spelling of the same directory (a trailing
+  // slash, a symlink) is the same install. Compare the directory, not the text.
   const { resolve } = platform === 'win32' ? win32 : posix;
-  const home = resolve(archonHome);
-  return (await backend.installed()).filter(
-    entry => !('archonHome' in entry) || resolve(entry.archonHome) === home
-  );
+  // A home that no longer exists has no real path; its resolved text is all there is.
+  const identity = (path: string): Promise<string> => realpath(path).catch(() => resolve(path));
+  const home = await identity(archonHome);
+  const installed: InstalledSchedule[] = [];
+  for (const entry of await backend.installed())
+    if (!('archonHome' in entry) || (await identity(entry.archonHome)) === home)
+      installed.push(entry);
+  return installed;
 }

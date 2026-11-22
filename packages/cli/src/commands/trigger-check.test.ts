@@ -4,7 +4,7 @@
  * config lives, and reports a start that would be refused for its inputs, reading only.
  */
 import { afterEach, expect, spyOn, test } from 'bun:test';
-import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -189,6 +189,20 @@ test('reports a timer that omits a required input, naming it', async () => {
   await installTimer(path);
 
   expect((await check()).bindings[0]?.problems).toEqual(["Workflow 'stage' requires input 'a'."]);
+});
+
+test('finds a timer when ARCHON_HOME reaches its home through a symlink', async () => {
+  const { root, archonHome, config, installTimer, check } = await fixture();
+  const path = join(root, 'timer.json');
+  await writeFile(path, JSON.stringify(config({})));
+  await installTimer(path);
+  const alias = join(root, 'home-link');
+  await symlink(archonHome, alias);
+  process.env.ARCHON_HOME = alias;
+
+  expect((await check()).bindings).toEqual([
+    expect.objectContaining({ file: path, problems: ["Workflow 'stage' requires input 'a'."] }),
+  ]);
 });
 
 test('reports a timer whose config file is gone, with how to remove it by hand', async () => {
