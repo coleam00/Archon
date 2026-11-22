@@ -30,7 +30,7 @@
  * the pack setting INPUTS_PROTECTED_PATHS.
  */
 
-import { emit, input, recordMerge, refuse, runId as workflowRunId } from 'archon:script';
+import { emit, input, ItemWriteError, recordMerge, refuse, runId as workflowRunId } from 'archon:script';
 import { withBuild } from '../../.shared/build.ts';
 import type { QualifiedPr } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
@@ -233,7 +233,13 @@ function afterMerge(start: MergeStart, settled: Settled, runId: string, at: stri
   try {
     recordMerge({ change: start.url, at, commit: settled.merge_commit });
   } catch (error) {
-    lines.push(`its merge is not on the engine item (${message(error)})`);
+    // A refusal wrote nothing; any other failure leaves the write unknown, so it is not
+    // retried and not reported as missing.
+    lines.push(
+      error instanceof ItemWriteError
+        ? `its merge is not on the engine item (${error.reason})`
+        : `its merge may not be on the engine item: the write could not be confirmed (${message(error)})`
+    );
   }
   try {
     return retriageOpen(start.item, runId, at) ? 'merged_retriage' : 'merged';
