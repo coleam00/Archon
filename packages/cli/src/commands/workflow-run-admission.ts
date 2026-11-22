@@ -1,6 +1,5 @@
 import { rmSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
@@ -8,7 +7,6 @@ import {
   DefinitionSourceError,
   withLayeredDefinitions,
 } from '@archon/core/workflows/definition-source';
-import { checkoutRootAbove } from '@archon/core/workflows/binding-workflow';
 import {
   parseRunModelAssignments,
   type RunModelOverrides,
@@ -47,7 +45,6 @@ import {
   findWorkflowLoadError,
   type ResolvedWorkflow,
   type WorkflowLoadError,
-  type WorkflowSource,
   type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
@@ -55,7 +52,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { readSubrunMetadata } from '@archon/workflows/schemas/run-metadata';
 import { DETACHED_LAUNCH_METADATA_KEY } from '@archon/workflows/store';
 import { loadWorkflows } from './workflow-list';
-import { describeWorkflowSource, packCopyLines } from './pack-copies';
+import { admitFromSource, withSourceContext } from './workflow-run-source-check';
 import { resolveLaunchRunConfig } from './workflow-run-config';
 import { assertInheritedWorkflowCodebase, type WorkflowRunOptions } from './workflow-shared';
 import {
@@ -471,40 +468,6 @@ async function discoverRunWorkflows(
   return { workflowEntries, errors };
 }
 
-/**
- * A fresh run's checks against the source it named, then the report of which pack copy it
- * reads. An explicit --workflow-source that lacks the named workflow would otherwise run
- * another scope's copy while recording the source as its origin (#5826). Commands, scripts
- * and composed workflows may still resolve from other scopes; the named workflow may not.
- */
-async function admitFromSource(
-  request: OwnedRunRequest,
-  workflow: ResolvedWorkflow,
-  workflowEntry: WorkflowWithSource | undefined,
-  workflowEntries: readonly WorkflowWithSource[]
-): Promise<void> {
-  const { cwd, workflowName, options } = request;
-  if (options.discoveryCwd !== undefined && workflowEntry?.source !== 'project') {
-    throw await workflowNotInSourceError(
-      workflowName,
-      options.discoveryCwd,
-      workflowEntry?.source,
-      workflowEntries
-    );
-  }
-  // Which copy of the workflow's pack this run reads, from its live origin. Under --json
-  // it goes to stderr, as parse warnings do, so an agent reading stdout gets only the payload.
-  if (options.quiet && !options.json) return;
-  const print = options.json ? console.error : console.log;
-  const lines = await packCopyLines(
-    workflow,
-    workflowEntries,
-    options.discoveryCwd ?? cwd,
-    options.discoveryCwd !== undefined
-  );
-  for (const line of lines) print(line);
-}
-
 function workflowNotFoundError(
   workflowName: string,
   workflowEntries: readonly WorkflowWithSource[],
@@ -517,49 +480,6 @@ function workflowNotFoundError(
     );
   }
   return unknownWorkflowError(workflowName, workflowEntries);
-}
-
-async function workflowNotInSourceError(
-  workflowName: string,
-  sourceRoot: string,
-  resolvedScope: WorkflowSource | undefined,
-  workflowEntries: readonly WorkflowWithSource[]
-): Promise<Error> {
-  const root = resolve(sourceRoot);
-  const lines = [
-    `Workflow '${workflowName}' is not in --workflow-source ${root}; Archon found it only in ` +
-      `the ${resolvedScope ?? 'another'} scope. Nothing was started.`,
-    `--workflow-source ${root}: ${await describeWorkflowSource(root, workflowEntries)}.`,
-    ...checkoutRootHint(root),
-  ];
-  return new Error(lines.join('\n'));
-}
-
-/**
- * Every refusal under an explicit --workflow-source names what the directory was read as,
- * so a wrong path or a wrong name is visible whether or not the name exists in another scope.
- */
-async function withSourceContext(
-  error: Error,
-  sourceRoot: string | undefined,
-  workflowEntries: readonly WorkflowWithSource[]
-): Promise<Error> {
-  if (sourceRoot === undefined) return error;
-  const root = resolve(sourceRoot);
-  const lines = [
-    error.message,
-    '',
-    `--workflow-source ${root}: ${await describeWorkflowSource(root, workflowEntries)}.`,
-    ...checkoutRootHint(root),
-  ];
-  return new Error(lines.join('\n'));
-}
-
-function checkoutRootHint(root: string): string[] {
-  const checkout = checkoutRootAbove(root);
-  return checkout === undefined
-    ? []
-    : [`--workflow-source takes the checkout root; did you mean ${checkout}?`];
 }
 
 function unknownWorkflowError(

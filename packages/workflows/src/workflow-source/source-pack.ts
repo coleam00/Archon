@@ -145,30 +145,29 @@ async function gitPackFiles(dir: string): Promise<string[]> {
  * deleted in the checkout) is skipped; a directory (a submodule) is listed whole.
  */
 async function listingOf(dir: string, relPaths: readonly string[]): Promise<TreeListing> {
-  const dirs = new Set<string>(['']);
   const files: TreeFile[] = [];
-  const add = (relPath: string, absPath: string, info: { size: number; mtimeMs: number }) => {
-    files.push({ relPath, absPath, size: info.size, mtimeMs: info.mtimeMs });
+  for (const relPath of relPaths) files.push(...(await filesAt(dir, relPath)));
+  const dirs = new Set<string>(['']);
+  for (const { relPath } of files) {
     for (let parent = dirname(relPath); parent !== '.'; parent = dirname(parent)) dirs.add(parent);
-  };
-  for (const relPath of relPaths) {
-    const absPath = join(dir, relPath);
-    let info: Awaited<ReturnType<typeof stat>>;
-    try {
-      info = await stat(absPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      throw error;
-    }
-    if (info.isDirectory()) {
-      const nested = await listTree(absPath);
-      for (const sub of nested.dirs) dirs.add(sub === '' ? relPath : join(relPath, sub));
-      for (const file of nested.files) {
-        if (!isEnvFile(file.relPath)) add(join(relPath, file.relPath), file.absPath, file);
-      }
-      continue;
-    }
-    if (info.isFile()) add(relPath, absPath, info);
   }
   return { dirs: [...dirs], files };
+}
+
+/** The files at one listed path: none when it is gone, every file under a directory. */
+async function filesAt(dir: string, relPath: string): Promise<TreeFile[]> {
+  const absPath = join(dir, relPath);
+  let info: Awaited<ReturnType<typeof stat>>;
+  try {
+    info = await stat(absPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  if (info.isFile()) return [{ relPath, absPath, size: info.size, mtimeMs: info.mtimeMs }];
+  if (!info.isDirectory()) return [];
+  const nested = await listTree(absPath);
+  return nested.files
+    .filter(file => !isEnvFile(file.relPath))
+    .map(file => ({ ...file, relPath: join(relPath, file.relPath) }));
 }
