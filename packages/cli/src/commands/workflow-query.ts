@@ -13,6 +13,7 @@ import {
 } from '@archon/core/operations/attention-queue';
 import { readItem, readItemOfRun } from '@archon/workflows/item-read';
 import { itemReadLines } from './workflow-item-text';
+import { servedHosts } from '../utils/install-hosts';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import { describeInstallHold } from '@archon/workflows/schemas/resource-start';
 import { heldStartLine, readHeldStarts } from './workflow-held-starts';
@@ -628,7 +629,8 @@ async function readItemCommand(
     await writeJsonLine(read);
     return 0;
   }
-  console.log(`\n${itemReadLines(read).join('\n')}\n`);
+  const served = await servedHosts();
+  console.log(`\n${itemReadLines(read, served).join('\n')}\n`);
   return 0;
 }
 
@@ -657,7 +659,8 @@ async function readItemOfRunCommand(
     await writeJsonLine(read);
     return 0;
   }
-  console.log(`\n${itemReadLines(read).join('\n')}\n`);
+  const served = await servedHosts();
+  console.log(`\n${itemReadLines(read, served).join('\n')}\n`);
   return 0;
 }
 

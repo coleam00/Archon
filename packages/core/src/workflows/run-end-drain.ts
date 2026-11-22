@@ -1,13 +1,14 @@
 /**
  * The moment a run ends, the process that ended it starts the starts that end caused, on
- * the host each binding names, and drains its own trigger host when it serves one, so a
- * start queued behind the slot it released is admitted with no other command. A close of
- * an ask that settles its set is followed the same way when the settlement caused starts,
- * under the id of the run that left the asks.
+ * the host each binding names, and drains the hosts it serves, so a start queued behind
+ * the slot it released is admitted with no other command. A close of an ask that settles
+ * its set is followed the same way when the settlement caused starts, under the id of the
+ * run that left the asks.
  *
- * It never drains a host it does not serve beyond its own run's starts: another host's
- * queue is that host's to drain. Nothing here is needed for correctness: the starts are
- * durable, and a crash before this leaves them for their host's next drain.
+ * Which hosts a process serves is the caller's to say (the CLI drains the hosts its
+ * install's trigger files name): another machine's queue is that machine's to drain.
+ * Nothing here is needed for correctness: the starts are durable, and a crash before this
+ * leaves them for their host's next drain.
  */
 import { createLogger } from '@archon/paths';
 import type { IWorkflowStore } from '@archon/workflows/store';

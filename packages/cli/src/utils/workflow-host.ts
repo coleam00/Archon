@@ -6,23 +6,19 @@ import type { IWorkflowStore } from '@archon/workflows/store';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import { trackerExit } from './tracker-exit';
 
-/**
- * The trigger host this process serves, if any: the `--host` a `trigger execute` process
- * runs as, otherwise `ARCHON_TRIGGER_HOST`. Never guessed, because a binding names the
- * host its work executes on.
- */
-export function cliOwnTriggerHost(executeHost?: string): string | undefined {
-  return executeHost ?? (process.env.ARCHON_TRIGGER_HOST?.trim() || undefined);
-}
-
 /** A host that executes workflows: it can start, resume or pause runs. */
 export interface CliWorkflowExecution {
   forgeTrustedEnv: NodeJS.ProcessEnv;
 }
 
+/**
+ * `executorHost` is set only in a `trigger execute --host <hostId>` process: a drain of
+ * that host handed it its run, so its run end drains that host too, beside the hosts the
+ * install's trigger files name. No other process has a host of its own here.
+ */
 export async function createCliWorkflowHost(
   execution?: CliWorkflowExecution,
-  ownTriggerHost = cliOwnTriggerHost()
+  executorHost?: string
 ): Promise<WorkflowHost> {
   const executesWorkflow = execution !== undefined;
   if (execution) await trackerExit.prepare(execution.forgeTrustedEnv);
@@ -30,7 +26,7 @@ export async function createCliWorkflowHost(
   let host: WorkflowHost | undefined;
   const wrapStore = async <S extends IWorkflowStore>(store: S): Promise<S> => {
     const { drainAfterRunEnds } = await import('@archon/core/workflows/run-end-drain');
-    return drainAfterRunEnds(store, await afterRunEnded(() => host, ownTriggerHost));
+    return drainAfterRunEnds(store, await afterRunEnded(() => host, executorHost));
   };
   if ((await loadStoreSelection()) === 'files') {
     if (executesWorkflow) {
@@ -54,34 +50,36 @@ export async function createCliWorkflowHost(
 
 /**
  * After a run this process ended, or a set of asks this process settled: start the starts
- * its completion or settlement wrote, each on the host
- * its binding names, as `trigger fire` starts its receipt; then, when this process serves
- * a trigger host, drain that host so queued work takes the slot the run released. A
- * process that serves no host leaves every other start on a host's queue to that host.
+ * its completion or settlement wrote, each on the host its binding names, as `trigger fire`
+ * starts its receipt; then drain every host this install serves (`drainInstallHosts`), so
+ * a start queued behind the slot the run released is admitted whoever started that run.
  * Each admitted run starts in its own detached `trigger execute` process.
  */
 async function afterRunEnded(
   getHost: () => WorkflowHost | undefined,
-  ownTriggerHost: string | undefined
+  executorHost: string | undefined
 ): Promise<(runId: string, caused: readonly SourceReceiptAcceptance[]) => Promise<void>> {
   const { serializedDrain } = await import('@archon/core/workflows/run-end-drain');
-  // Loaded only when an end has work to start, so a process with none pays nothing.
-  const starting = async () => {
-    const [{ drainResourceStartHost, startReceiptBindings }, { spawnAdmitted }] = await Promise.all(
-      [import('@archon/core/workflows/resource-start-host'), import('./spawn-admitted')]
-    );
-    const asHost = (host: WorkflowHost, hostId: string) => ({
-      ...host,
-      hostId,
-      startAdmitted: (requestId: string) => spawnAdmitted(host, requestId, hostId),
-    });
-    return { drainResourceStartHost, startReceiptBindings, asHost };
+  // Loaded only when an end happens, so a process that ends no run pays nothing.
+  const starting = async (host: WorkflowHost) => {
+    const [{ startReceiptBindings }, { spawnAdmitted }, { drainInstallHosts }] = await Promise.all([
+      import('@archon/core/workflows/resource-start-host'),
+      import('./spawn-admitted'),
+      import('./install-hosts'),
+    ]);
+    const dispatch = (requestId: string, hostId: string) => spawnAdmitted(host, requestId, hostId);
+    return { startReceiptBindings, drainInstallHosts, dispatch };
   };
-  const drainOwn = serializedDrain(async () => {
+  const drainInstall = serializedDrain(async () => {
     const host = getHost();
-    if (!host || ownTriggerHost === undefined) return;
-    const { drainResourceStartHost, asHost } = await starting();
-    await drainResourceStartHost(asHost(host, ownTriggerHost));
+    if (!host) return;
+    const { drainInstallHosts, dispatch } = await starting(host);
+    const { failures } = await drainInstallHosts(host, { executorHost, dispatch });
+    if (failures.length > 0)
+      throw new AggregateError(
+        failures.map(failure => failure.error),
+        "Draining this install's hosts failed"
+      );
   });
   return async (runId, caused) => {
     // Called for every run end this process wrote, from any host it built.
@@ -89,7 +87,7 @@ async function afterRunEnded(
     const host = getHost();
     if (!host) return;
     createLogger('cli.run-end-drain').debug(
-      { workflowRunId: runId, ownTriggerHost, caused: caused.length },
+      { workflowRunId: runId, executorHost, caused: caused.length },
       'run_end_drain'
     );
     const byHost = new Map<string, Set<string>>();
@@ -99,16 +97,19 @@ async function afterRunEnded(
         ids.add(receipt.id);
         byHost.set(binding.hostId, ids);
       }
-    // One host's failure must not keep the others, or this host's drain, from running.
+    // One host's failure must not keep the others, or the install's drain, from running.
     const failures: unknown[] = [];
     if (byHost.size > 0) {
-      const { startReceiptBindings, asHost } = await starting();
+      const { startReceiptBindings, dispatch } = await starting(host);
       for (const [hostId, receiptIds] of byHost)
-        await startReceiptBindings(asHost(host, hostId), receiptIds).catch((error: unknown) => {
+        await startReceiptBindings(
+          { ...host, hostId, startAdmitted: requestId => dispatch(requestId, hostId) },
+          receiptIds
+        ).catch((error: unknown) => {
           failures.push(error);
         });
     }
-    await drainOwn().catch((error: unknown) => {
+    await drainInstall().catch((error: unknown) => {
       failures.push(error);
     });
     if (failures.length > 0)
