@@ -480,3 +480,26 @@ already overwritten by previous resumes cannot be restored exactly by this chang
 Older binaries can still read and write records, but keep their destructive resume behavior
 and do not understand the separate phase clock. Upgrade all executors together before
 relying on creation-time preservation or the new checkout-priority rule.
+
+## A run's files on disk
+
+Besides its row, a run writes three paths under its project's storage root
+(`$ARCHON_HOME/workspaces/<owner>/<repo>`, `_folder/<slug>` or `@cwd/<name>`), each named by
+its run id:
+
+- `artifacts/runs/<run-id>/`: its `$ARTIFACTS_DIR`. Scratch under it is already removed
+  when the run ends.
+- `logs/<run-id>.jsonl`: its log.
+- `workflow-source/runs/<run-id>/`: the workflow source it froze at start.
+
+Deleting a run removes all three, through `archon workflow cleanup <days>` or the Web UI's
+delete. A run that is not deleted keeps them. A path that cannot be removed is reported
+with its error, and the run's row stays deleted.
+
+`archon workflow cleanup --orphans` finds what earlier deletions left: run-id paths, older
+than 6 hours, whose run has no row in the selected store. It lists them with their sizes
+and removes them only with `--yes`. Switching stores keeps the other store's history, and
+its runs would look like orphans here. So `--yes` is refused while this `ARCHON_HOME` holds
+that history: `archon.db` when files are selected, `store/` when a database is selected.
+A PostgreSQL database that is not currently selected cannot be detected. Do not run
+`--orphans --yes` on a home whose runs also live in such a database.

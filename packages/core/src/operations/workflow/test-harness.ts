@@ -141,6 +141,7 @@ export const store: WorkflowOperationsDeps['store'] = {
   persistWorkflowEvent: mockPersistWorkflowEvent,
   signalWorkflowWait: mock(async () => ({ signaled: true })),
   deleteWorkflowRun: mock(async () => undefined),
+  getCodebase: async () => null,
   getWorkflowRun: mockGetWorkflowRun,
   listWorkflowRuns: mockListWorkflowRuns,
   findWorkflowRunsByIdPrefix: async () => [],

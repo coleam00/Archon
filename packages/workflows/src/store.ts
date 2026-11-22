@@ -81,6 +81,9 @@ export interface WorkflowNodeSessionKey {
   provider: string;
 }
 
+/** What a deleted run leaves to locate its files on disk with. */
+export type DeletedWorkflowRun = Pick<WorkflowRun, 'id' | 'output_root' | 'codebase_id'>;
+
 /** Where an install persists workflow state; selected by `store:` in the global config. */
 export const WORKFLOW_STORE_KINDS = ['database', 'files'] as const;
 export type WorkflowStoreKind = (typeof WORKFLOW_STORE_KINDS)[number];
@@ -349,7 +352,12 @@ export interface IWorkflowStore
    * that is no longer open is `refused` with how it closed.
    */
   withdrawItemWaits(runId: string): Promise<ItemWaitsWithdrawResult>;
-  deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
+  /**
+   * Delete terminal runs older than `olderThanDays`, except a run that left asks or waits
+   * open or has a sub-run that has not ended, and return the rows it deleted. The caller
+   * removes their files from disk: the store owns rows, not the paths a run wrote.
+   */
+  deleteOldWorkflowRuns(olderThanDays: number): Promise<{ runs: DeletedWorkflowRun[] }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */
   listWorkflowEvents(
     runId: string,

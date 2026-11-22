@@ -1362,6 +1362,7 @@ describe('manage_run authorization refusal', () => {
           deleteWorkflowNodeSessions: unexpected,
           signalWorkflowWait: unexpected,
           deleteWorkflowRun: unexpected,
+          getCodebase: unexpected,
         },
         hostStore: {
           isolation: {

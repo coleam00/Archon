@@ -67,6 +67,7 @@ mock.module('@archon/core/workflows/sql-host', () => ({
         persistWorkflowEvent: mockPersistWorkflowEvent,
         signalWorkflowWait: (...args) => operationWorkflowDb.signalWorkflowWait(...args),
         deleteWorkflowRun: (...args) => operationWorkflowDb.deleteWorkflowRun(...args),
+        getCodebase: async () => null,
         getWorkflowRun: (...args) => operationWorkflowDb.getWorkflowRun(...args),
         findChildRuns: (...args) => operationWorkflowDb.findChildRuns(...args),
         getRunAncestry: (...args) => operationWorkflowDb.getRunAncestry(...args),

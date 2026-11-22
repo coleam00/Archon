@@ -39,6 +39,7 @@
     "./terminal-record": "./src/terminal-record.ts",
     "./run-terminal-telemetry": "./src/run-terminal-telemetry.ts",
     "./run-scratch": "./src/run-scratch.ts",
+    "./staged-source-ttl": "./src/staged-source-ttl.ts",
     "./workflow-status-read": "./src/workflow-status-read.ts",
     "./terminal-status-write": "./src/terminal-status-write.ts",
     "./deps": "./src/deps.ts",

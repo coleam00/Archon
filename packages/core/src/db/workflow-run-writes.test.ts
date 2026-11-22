@@ -174,19 +174,28 @@ describe('workflow run writes', () => {
   });
 
   describe('deleteOldWorkflowRuns', () => {
-    test('deletes events then runs in one transaction', async () => {
+    test('selects the old runs, then deletes their events and rows by id', async () => {
+      const selected = [
+        { id: 'run-a', output_root: '/home/.archon/workspaces/o/r', codebase_id: 'cb' },
+        { id: 'run-b', output_root: null, codebase_id: null },
+      ];
       mockQuery
+        .mockResolvedValueOnce(createQueryResult(selected, 2)) // SELECT
         .mockResolvedValueOnce(createQueryResult([], 0)) // events DELETE
-        .mockResolvedValueOnce(createQueryResult([], 3)); // runs DELETE
+        .mockResolvedValueOnce(createQueryResult([], 2)); // runs DELETE
 
       const result = await deleteOldWorkflowRuns(30);
 
-      expect(result.count).toBe(3);
-      expect(mockQuery).toHaveBeenCalledTimes(2);
-      const [eventsSql] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(eventsSql).toContain('remote_agent_workflow_events');
-      const [runsSql] = mockQuery.mock.calls[1] as [string, unknown[]];
-      expect(runsSql).toContain("status IN ('completed', 'failed', 'cancelled')");
+      expect(result.runs).toEqual(selected);
+      expect(mockQuery).toHaveBeenCalledTimes(3);
+      const [selectSql] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(selectSql).toContain("status IN ('completed', 'failed', 'cancelled')");
+      const [eventsSql, eventIds] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(eventsSql).toContain('DELETE FROM remote_agent_workflow_events');
+      expect(eventIds).toEqual(['run-a', 'run-b']);
+      const [runsSql, runIds] = mockQuery.mock.calls[2] as [string, unknown[]];
+      expect(runsSql).toContain('DELETE FROM remote_agent_workflow_runs WHERE id IN ($1, $2)');
+      expect(runIds).toEqual(['run-a', 'run-b']);
     });
 
     test('binds the age as a parameter of the dialect cutoff', async () => {
@@ -194,6 +203,7 @@ describe('workflow run writes', () => {
 
       await deleteOldWorkflowRuns(7);
 
+      expect(mockQuery).toHaveBeenCalledTimes(1);
       for (const [sql, params] of mockQuery.mock.calls as [string, unknown[]][]) {
         expect(sql).toContain(
           `COALESCE(active_phase_started_at, started_at) < ${mockPostgresDialect.nowMinusDays(1)}`
@@ -209,7 +219,7 @@ describe('workflow run writes', () => {
     });
 
     test('throws on database error', async () => {
-      mockQuery.mockRejectedValueOnce(new Error('disk full')); // events DELETE fails
+      mockQuery.mockRejectedValueOnce(new Error('disk full')); // SELECT fails
 
       await expect(deleteOldWorkflowRuns(30)).rejects.toThrow(
         'Failed to clean up old workflow runs: disk full'

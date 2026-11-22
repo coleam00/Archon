@@ -13,6 +13,10 @@ import {
   rejection,
 } from './fixtures';
 
+/** The ids a cleanup deleted, sorted so stores that delete in any order compare equal. */
+const deletedIds = async (deleted: ReturnType<IWorkflowStore['deleteOldWorkflowRuns']>) =>
+  (await deleted).runs.map(run => run.id).sort();
+
 export function describeListingConformance(getHarness: () => WorkflowStoreHarness): void {
   describe('listing and sessions', () => {
     let harness: WorkflowStoreHarness;
@@ -290,6 +294,8 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
 
     test('open work excludes adopted failures, adopters are newest first, cleanup deletes only old terminals', async () => {
       const failed = await create(store, { codebase_id: CONFORMANCE_CODEBASE_ID });
+      const outputRoot = '/conformance/workspaces/owner/repo';
+      await store.updateWorkflowRun(failed.id, { output_root: outputRoot });
       await store.failWorkflowRun(failed.id, 'failed');
       const old = new Date(Date.now() - 4 * 86_400_000);
       await harness.backdate(failed.id, { started_at: old });
@@ -313,7 +319,9 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
         provider_session_id: 'keep',
         last_run_id: failed.id,
       });
-      expect(await store.deleteOldWorkflowRuns(2)).toEqual({ count: 1 });
+      expect(await store.deleteOldWorkflowRuns(2)).toEqual({
+        runs: [{ id: failed.id, output_root: outputRoot, codebase_id: CONFORMANCE_CODEBASE_ID }],
+      });
       expect(await store.listWorkflowNodeSessions(scope)).toEqual([
         expect.objectContaining({ provider_session_id: 'keep', last_run_id: null }),
       ]);
@@ -338,7 +346,9 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
       const before = await Promise.all(kept.map(run => store.listWorkflowEvents(run.id)));
       expect(before.every(events => events.length > 0)).toBe(true);
 
-      expect(await store.deleteOldWorkflowRuns(7)).toEqual({ count: 2 });
+      expect(await deletedIds(store.deleteOldWorkflowRuns(7))).toEqual(
+        [endedRoot.id, endedChild.id].sort()
+      );
       for (const run of [endedRoot, endedChild])
         expect(await store.getWorkflowRun(run.id)).toBeNull();
       for (const [index, run] of kept.entries()) {
@@ -349,7 +359,9 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
 
       await finish(grandchild.id);
       await harness.backdate(grandchild.id, { started_at: old, active_phase_started_at: old });
-      expect(await store.deleteOldWorkflowRuns(7)).toEqual({ count: 3 });
+      expect(await deletedIds(store.deleteOldWorkflowRuns(7))).toEqual(
+        [parent.id, child.id, grandchild.id].sort()
+      );
       for (const run of [parent, child, grandchild])
         expect(await store.getWorkflowRun(run.id)).toBeNull();
     });
@@ -402,7 +414,9 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
           }))
         );
         expect(before.every(snapshot => snapshot.events.length > 0)).toBe(true);
-        expect(await store.deleteOldWorkflowRuns(7)).toEqual({ count: 2 });
+        expect(await deletedIds(store.deleteOldWorkflowRuns(7))).toEqual(
+          [oldPhase.id, oldLegacy.id].sort()
+        );
         for (const [index, run] of retained.entries()) {
           expect(await store.getWorkflowRun(run.id)).toEqual(before[index]?.run);
           expect(await store.listWorkflowEvents(run.id)).toEqual(before[index]?.events);

@@ -8,19 +8,14 @@
  * still reads every record a newer one writes.
  */
 import { z } from 'zod';
+import { RUN_ID_PATTERN } from '@archon/paths/archon-paths';
 
 export const metricNameSchema = z
   .string()
   .max(128)
   .regex(/^[a-z0-9_]+(\.[a-z0-9_]+)*$/, 'must be dot-separated lowercase segments of [a-z0-9_]');
 
-/** Run ids are UUIDs, or 32 hex characters on rows written before ids had dashes. */
-const runIdSchema = z
-  .string()
-  .regex(
-    /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/,
-    'must be a run id'
-  );
+const runIdSchema = z.string().regex(RUN_ID_PATTERN, 'must be a run id');
 
 const DIMENSION_KEY_RULE =
   'must be a lowercase letter, then up to 31 lowercase letters, digits or underscores';

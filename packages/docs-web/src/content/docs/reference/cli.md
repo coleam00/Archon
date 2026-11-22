@@ -2183,12 +2183,26 @@ removing a tombstone would allow revision numbers to repeat and a stale replacem
 A run that left asks or waits open on its item is kept, and so is a run with a `workflow:`
 sub-run, at any depth, that has not ended: deleting it would split the run tree the
 [run limit](/reference/configuration/#run-limit) counts as one. A later cleanup removes it
-once they have closed or ended. The command reports both counts.
+once they have closed or ended.
+
+Each deleted run's artifacts directory, log and frozen workflow source are removed with it
+(see [a run's files on disk](/reference/database/#a-runs-files-on-disk)). The command
+reports the runs deleted, the disk space their files took and the state revisions pruned.
+It prints each path it could not remove with the error to stderr and exits 1. The rows
+stay deleted, and a later `--orphans --yes` removes those paths.
 
 ```bash
-archon workflow cleanup        # Default: 7 days
-archon workflow cleanup 30     # Custom threshold
+archon workflow cleanup              # Default: 7 days
+archon workflow cleanup 30           # Custom threshold
+archon workflow cleanup --orphans    # List files of runs deleted earlier
+archon workflow cleanup --orphans --yes
 ```
+
+`--orphans` deletes no rows. It lists run-id paths under every project whose run has no
+row in the selected store, with each size and the total. It skips paths younger than
+6 hours, because a container run's frozen source can exist before its row does. Only
+`--yes` removes the listed paths. `--yes` is refused while this `ARCHON_HOME` also holds
+the other store's history, because those runs have no row here.
 
 ### `workflow reset-sessions`
 
@@ -2850,7 +2864,7 @@ and `--install` selects install scope. The writer is recorded as
 `{kind: "surface", via: "cli"}`: the surface the write came through, not who made it.
 
 `archon workflow cleanup <days>` also prunes old state revisions, keeps each live document's latest
-revision, retains the latest tombstone of deleted documents, and reports both counts.
+revision, retains the latest tombstone of deleted documents, and reports how many it pruned.
 See [Durable state documents](/reference/workflow-language/#durable-state-documents).
 
 ### `metrics [name]`

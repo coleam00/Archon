@@ -143,7 +143,9 @@ test('cleanup deletes old runs without reading any run event log under the lock'
   await Bun.sleep(2);
   const reads = spyOn(commitModule, 'readRunState');
   try {
-    expect(await store.deleteOldWorkflowRuns(0)).toEqual({ count: 1 });
+    expect((await store.deleteOldWorkflowRuns(0)).runs.map(deleted => deleted.id)).toEqual([
+      run.id,
+    ]);
     expect(reads).not.toHaveBeenCalled();
   } finally {
     reads.mockRestore();

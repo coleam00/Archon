@@ -11,6 +11,11 @@ export interface CliWorkflowExecution {
   forgeTrustedEnv: NodeJS.ProcessEnv;
 }
 
+/** Where the file store keeps its history: `<ARCHON_HOME>/store`. */
+export function getFileStoreRoot(): string {
+  return join(getArchonHome(), 'store');
+}
+
 /**
  * `executorHost` is set only in a `trigger execute --host <hostId>` process: a drain of
  * that host handed it its run, so its run end drains that host too, beside the hosts the
@@ -36,7 +41,7 @@ export async function createCliWorkflowHost(
       initializeWorkflowGitHubAppAuth();
     }
     const { createFileWorkflowHost } = await import('@archon/core/workflows/file-host');
-    host = await createFileWorkflowHost(join(getArchonHome(), 'store'), wrapStore);
+    host = await createFileWorkflowHost(getFileStoreRoot(), wrapStore);
     return host;
   }
   const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');

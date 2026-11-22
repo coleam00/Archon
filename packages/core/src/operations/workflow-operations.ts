@@ -10,6 +10,7 @@ import type { RecordSurface } from '@archon/workflows/schemas/record-surface';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { SignalWorkflowWaitRequest } from '../schemas/workflow-run';
+import type { RunFilesReport } from '../services/cleanup/run-files';
 import type { RunActor, RunAction } from './run-authorization';
 import { createOperationContext, type WorkflowOperationsDeps } from './workflow/context';
 import type { GateAnswerOrigin } from './workflow/answer-admission';
@@ -106,7 +107,8 @@ export interface WorkflowOperations {
     request: SignalWorkflowWaitRequest,
     actor: RunActor
   ) => Promise<{ signaled: boolean }>;
-  deleteWorkflowRun: (runId: string, actor: RunActor) => Promise<void>;
+  /** Deletes the row, then removes the run's files; the report names any it left. */
+  deleteWorkflowRun: (runId: string, actor: RunActor) => Promise<RunFilesReport>;
   getWorkflowStatus: (options?: { codebaseId?: string }) => Promise<WorkflowStatusData>;
   resumeWorkflow: (runId: string, actor: RunActor) => Promise<WorkflowRun>;
   abandonWorkflow: (

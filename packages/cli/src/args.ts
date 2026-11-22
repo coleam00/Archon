@@ -64,6 +64,8 @@ export const cliArgOptions: CliArgOptions = {
   scope: { type: 'string' },
   node: { type: 'string' },
   yes: { type: 'boolean' },
+  // `workflow cleanup --orphans`: list, or with --yes remove, files of runs with no row.
+  orphans: { type: 'boolean' },
   force: { type: 'boolean' },
   merged: { type: 'boolean' },
   move: { type: 'boolean' },

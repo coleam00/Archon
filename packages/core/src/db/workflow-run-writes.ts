@@ -17,7 +17,11 @@ import {
   type WorkflowRun,
   type WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
-import { WorkflowRunDeleteRefusedError, liveDescendantsRefusal } from '@archon/workflows/store';
+import {
+  WorkflowRunDeleteRefusedError,
+  liveDescendantsRefusal,
+  type DeletedWorkflowRun,
+} from '@archon/workflows/store';
 import { getDatabase, getDialect, pool } from './connection';
 import { insertWorkflowEvent } from './workflow-events';
 import { getWorkflowRun } from './workflow-run-reads';
@@ -284,11 +288,20 @@ const NO_LIVE_DESCENDANTS = `remote_agent_workflow_runs.id NOT IN (
     SELECT p.id, p.parent_run_id FROM remote_agent_workflow_runs p JOIN up ON p.id = up.parent_run_id)
   SELECT id FROM up)`;
 
+/** Ids per `IN (...)` list: far under SQLite's and PostgreSQL's bound-parameter limits. */
+const DELETE_CHUNK = 500;
+
 /**
  * Delete terminal workflow runs older than the given number of days, except those kept above.
- * Returns the count of deleted runs.
+ * Returns the deleted rows, so the caller can remove their files.
+ *
+ * The SQLite adapter refuses `DELETE ... RETURNING`, so this selects the rows and then
+ * deletes exactly those ids. On SQLite the transaction makes that exact; on PostgreSQL a
+ * sub-run that starts between the two is the gap `NO_LIVE_DESCENDANTS` already accepts.
  */
-export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }> {
+export async function deleteOldWorkflowRuns(
+  olderThanDays: number
+): Promise<{ runs: DeletedWorkflowRun[] }> {
   if (!Number.isInteger(olderThanDays) || olderThanDays < 0) {
     throw new Error(
       `Invalid olderThanDays: ${String(olderThanDays)} (must be a non-negative integer)`
@@ -297,20 +310,8 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
   const cutoff = getDialect().nowMinusDays(1);
   try {
     return await getDatabase().withTransaction(async query => {
-      // Delete events first (FK reference)
-      await query(
-        `DELETE FROM remote_agent_workflow_events WHERE workflow_run_id IN (
-          SELECT id FROM remote_agent_workflow_runs
-          WHERE status IN ('completed', 'failed', 'cancelled')
-            AND started_at < ${cutoff}
-            AND COALESCE(active_phase_started_at, started_at) < ${cutoff}
-            AND ${NO_OPEN_ASKS}
-            AND ${NO_LIVE_DESCENDANTS}
-        )`,
-        [olderThanDays]
-      );
-      const result = await query(
-        `DELETE FROM remote_agent_workflow_runs
+      const selected = await query<DeletedWorkflowRun>(
+        `SELECT id, output_root, codebase_id FROM remote_agent_workflow_runs
          WHERE status IN ('completed', 'failed', 'cancelled')
            AND started_at < ${cutoff}
            AND COALESCE(active_phase_started_at, started_at) < ${cutoff}
@@ -318,7 +319,18 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
            AND ${NO_LIVE_DESCENDANTS}`,
         [olderThanDays]
       );
-      return { count: result.rowCount ?? 0 };
+      const runs = [...selected.rows];
+      for (let start = 0; start < runs.length; start += DELETE_CHUNK) {
+        const ids = runs.slice(start, start + DELETE_CHUNK).map(run => run.id);
+        const list = ids.map((_, index) => `$${String(index + 1)}`).join(', ');
+        // Events first: they reference the run row.
+        await query(
+          `DELETE FROM remote_agent_workflow_events WHERE workflow_run_id IN (${list})`,
+          ids
+        );
+        await query(`DELETE FROM remote_agent_workflow_runs WHERE id IN (${list})`, ids);
+      }
+      return { runs };
     });
   } catch (error) {
     const err = error as Error;

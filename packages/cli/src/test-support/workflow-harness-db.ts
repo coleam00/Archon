@@ -138,7 +138,7 @@ mock.module('@archon/core/db/workflows', () => ({
   listWorkflowRuns: mock(() => Promise.resolve([])),
   listDashboardRuns: mockListDashboardRuns,
   findOpenWorkRuns: mock(() => Promise.resolve([])),
-  deleteOldWorkflowRuns: mock(() => Promise.resolve({ count: 0 })),
+  deleteOldWorkflowRuns: mock(() => Promise.resolve({ runs: [] })),
   deleteWorkflowRun: mock(() => Promise.resolve()),
 }));
 

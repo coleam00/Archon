@@ -166,13 +166,15 @@ export function describeSqlItemAskConformance(makeHarness: () => Promise<Harness
         'UPDATE remote_agent_workflow_runs SET active_phase_started_at = NULL WHERE id = $1',
         [runId]
       );
-      expect(await harness.store.deleteOldWorkflowRuns(1)).toEqual({ count: 0 });
+      expect((await harness.store.deleteOldWorkflowRuns(1)).runs).toEqual([]);
       // Still answerable by its run's rule, and once closed the run deletes as before.
       const [ref] = await openRefs(harness);
       expect(
         await withdrawAttentionItem(itemDeps(harness), ref ?? '', operator, 'cli')
       ).toMatchObject({ kind: 'withdrawn', settled: true });
-      expect(await harness.store.deleteOldWorkflowRuns(1)).toEqual({ count: 1 });
+      expect((await harness.store.deleteOldWorkflowRuns(1)).runs.map(run => run.id)).toEqual([
+        runId,
+      ]);
       expect(await harness.store.getWorkflowRun(runId)).toBeNull();
     } finally {
       await harness.close();
@@ -237,7 +239,9 @@ export function describeSqlItemAskConformance(makeHarness: () => Promise<Harness
         'UPDATE remote_agent_workflow_runs SET active_phase_started_at = NULL WHERE id = $1',
         [swept]
       );
-      expect(await harness.store.deleteOldWorkflowRuns(1)).toEqual({ count: 1 });
+      expect((await harness.store.deleteOldWorkflowRuns(1)).runs.map(run => run.id)).toEqual([
+        swept,
+      ]);
       expect(await harness.store.getWorkflowRun(kept)).toBeNull();
       expect(await harness.store.getWorkflowRun(swept)).toBeNull();
 

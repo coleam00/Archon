@@ -44,6 +44,7 @@ export interface WorkflowOperationsDeps {
     | 'listWorkflowRuns'
     | 'findWorkflowRunsByIdPrefix'
     | 'signalWorkflowWait'
+    | 'getCodebase'
   > &
     RunActionStore;
   hostStore: { isolation: IIsolationStore };
