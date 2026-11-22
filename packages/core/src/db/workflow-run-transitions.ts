@@ -200,6 +200,14 @@ export async function createWorkflowRun(data: WorkflowRunInsert): Promise<Workfl
   }
 }
 
+async function isPending(query: TransactionQuery, id: string): Promise<boolean> {
+  const run = await query<{ status: string }>(
+    'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+    [id]
+  );
+  return run.rows[0]?.status === 'pending';
+}
+
 /**
  * A run whose checkout belongs only to destroyed worktree records, or to any record
  * being removed, cannot start. Cleanup's removal claim commits before its final
@@ -217,11 +225,12 @@ export async function claimPendingWorkflowRun(
   workingPath?: string
 ): Promise<WorkflowRun | null> {
   return getDatabase().withTransaction(async query => {
-    // The run limit goes last, so a start it refuses waits for nothing else.
+    // The run limit goes last, so a start it refuses waits for nothing else. Only a pending run
+    // is about to execute: a start cancelled while it waits learns that from this claim.
     const held =
       (await installHoldRefusal(query, id)) ??
       (await heldItemRefusal(query, id, ['pending'])) ??
-      (await runLimitRefusal(query, id));
+      ((await isPending(query, id)) ? await runLimitRefusal(query, id) : undefined);
     if (held) throw held;
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs

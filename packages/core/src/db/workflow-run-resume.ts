@@ -19,7 +19,7 @@ import {
   WorkflowNotResumableError,
   WorkflowItemHeldError,
   WorkflowResourceBusyError,
-  type RunLimitError,
+  RunLimitError,
   pauseCursorMatches,
   requireOwnerlessLease,
   resumeCursorMatches,
@@ -317,6 +317,9 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
 
   try {
     return await getDatabase().withTransaction(async query => {
+      // A child recovered after its whole tree ended would revive the tree without room.
+      const full = await runLimitRefusal(query, id);
+      if (full) throw full;
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'running',
@@ -357,6 +360,7 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
     });
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Workflow run ')) throw error;
+    if (error instanceof RunLimitError) throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_fan_out_recover_failed');
     throw new Error(`Failed to recover cancelled fan-out run: ${err.message}`);

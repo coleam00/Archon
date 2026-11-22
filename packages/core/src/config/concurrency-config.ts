@@ -4,9 +4,9 @@
  * the install's run limit (`concurrency.runs`).
  *
  * Read fresh at every provider attempt and every resource admission, so changing a number
- * takes effect for the next admission without a restart. Unlike `loadGlobalConfig`, which
- * logs a broken file and carries on with defaults, these readers throw: a limit that
- * silently disappears would let an operator's limit fail open.
+ * takes effect for the next admission without a restart. A broken file or value throws, naming
+ * the file, the key and what each caller refuses: a limit that silently disappeared would let
+ * an operator's limit fail open.
  */
 import { readFile } from 'fs/promises';
 import { z } from 'zod';

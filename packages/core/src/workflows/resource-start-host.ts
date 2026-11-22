@@ -481,7 +481,8 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
     startAdmittedRequest(host, failures, requestId, receiptId);
 
   const queued = await host.deps.store.listQueuedResourceStartsForHost(host.hostId);
-  const drain = async (resource: string): Promise<void> => {
+  const failed = new Set<string>();
+  const drain = async (resource: string): Promise<boolean> => {
     let decisions: ResourceStartDisposition[];
     try {
       decisions = await host.deps.store.drainResourceStarts({ hostId: host.hostId, resource });
@@ -498,7 +499,8 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
         { cause: error }
       );
       for (const receiptId of receiptIds) failures.push({ receiptId, error: failure });
-      return;
+      failed.add(resource);
+      return false;
     }
     for (const decision of decisions) {
       if (decision.status === 'admitted') {
@@ -508,8 +510,16 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
         await start(decision.requestId, receiptIdOfLaunch(launch));
       }
     }
+    return decisions.some(decision => decision.status === 'admitted');
   };
-  for (const resource of queuedDrainResources(queued, failures)) await drain(resource);
+  // Under the run limit a resource's drain stops at the host's next older start on another
+  // resource (`withinRunRoom`), so the pass repeats while it admits anything.
+  const resources = queuedDrainResources(queued, failures);
+  for (let admitted = true; admitted; ) {
+    admitted = false;
+    for (const resource of resources)
+      if (!failed.has(resource) && (await drain(resource))) admitted = true;
+  }
 
   await preparePendingBindings(host, failures);
 
