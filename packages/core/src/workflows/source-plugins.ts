@@ -109,13 +109,11 @@ function configProblems(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export async function loadWebhookSourcePlugins(
-  configPath: string,
-  dependencies: WebhookSourceHostDependencies
-): Promise<WebhookSourcePluginHost> {
-  let parsed: z.infer<typeof sourceConfigSchema>;
+type SourceEntry = z.infer<typeof sourceConfigSchema>['sources'][number];
+
+async function readSourceConfig(configPath: string): Promise<z.infer<typeof sourceConfigSchema>> {
   try {
-    parsed = sourceConfigSchema.parse(JSON.parse(await readFile(configPath, 'utf8')));
+    return sourceConfigSchema.parse(JSON.parse(await readFile(configPath, 'utf8')));
   } catch (error) {
     log.error({ err: error as Error, stage: 'config' }, 'webhook_source_load_failed');
     // The JSON output of a CLI host shows only this message, so it names what to fix.
@@ -124,71 +122,71 @@ export async function loadWebhookSourcePlugins(
       { cause: error }
     );
   }
+}
+
+/** One configured source's plugin: its module imported and its factory run. */
+async function loadSourcePlugin(source: SourceEntry): Promise<WebhookSourcePlugin> {
+  const { sourceInstanceId } = source;
+  if (!isAbsolute(source.module))
+    throw new Error(`Webhook source module for '${sourceInstanceId}' must be absolute`);
+  let loaded: unknown;
+  try {
+    loaded = await import(pathToFileURL(source.module).href);
+  } catch (error) {
+    log.error(
+      { err: error as Error, sourceInstanceId, stage: 'import' },
+      'webhook_source_load_failed'
+    );
+    throw new Error(
+      `Webhook source '${sourceInstanceId}' could not be loaded: ${configProblems(error)}`,
+      { cause: error }
+    );
+  }
+  const factory = (loaded as { default?: unknown }).default;
+  if (typeof factory !== 'function')
+    throw new Error(`Webhook source module for '${sourceInstanceId}' has no default factory`);
+  let plugin: unknown;
+  try {
+    plugin = await (factory as (input: Parameters<WebhookSourcePluginFactory>[0]) => unknown)({
+      sourceInstanceId,
+      config: source.config,
+    });
+  } catch (error) {
+    log.error(
+      { err: error as Error, sourceInstanceId, stage: 'factory' },
+      'webhook_source_load_failed'
+    );
+    throw new Error(
+      `Webhook source '${sourceInstanceId}' factory failed: ${configProblems(error)}`,
+      { cause: error }
+    );
+  }
+  if (!isWebhookSourcePlugin(plugin))
+    throw new Error(`Webhook source module for '${sourceInstanceId}' returned no receiver`);
+  if (source.observe !== undefined && typeof plugin.observe !== 'function')
+    throw new Error(
+      `Webhook source '${sourceInstanceId}' declares observe, but its plugin cannot observe waits`
+    );
+  return plugin;
+}
+
+export async function loadWebhookSourcePlugins(
+  configPath: string,
+  dependencies: WebhookSourceHostDependencies
+): Promise<WebhookSourcePluginHost> {
+  const parsed = await readSourceConfig(configPath);
   const plugins = new Map<string, WebhookSourcePlugin>();
   const observing: ObservingSource[] = [];
 
   for (const source of parsed.sources) {
-    if (plugins.has(source.sourceInstanceId)) {
+    if (plugins.has(source.sourceInstanceId))
       throw new Error(`Duplicate webhook source instance '${source.sourceInstanceId}'`);
-    }
-    if (!isAbsolute(source.module)) {
-      throw new Error(`Webhook source module for '${source.sourceInstanceId}' must be absolute`);
-    }
-    let loaded: unknown;
-    try {
-      loaded = await import(pathToFileURL(source.module).href);
-    } catch (error) {
-      log.error(
-        { err: error as Error, sourceInstanceId: source.sourceInstanceId, stage: 'import' },
-        'webhook_source_load_failed'
-      );
-      throw new Error(
-        `Webhook source '${source.sourceInstanceId}' could not be loaded: ${configProblems(error)}`,
-        {
-          cause: error,
-        }
-      );
-    }
-    const factory = (loaded as { default?: unknown }).default;
-    if (typeof factory !== 'function') {
-      throw new Error(
-        `Webhook source module for '${source.sourceInstanceId}' has no default factory`
-      );
-    }
-    let plugin: unknown;
-    try {
-      plugin = await (factory as (input: Parameters<WebhookSourcePluginFactory>[0]) => unknown)({
-        sourceInstanceId: source.sourceInstanceId,
-        config: source.config,
-      });
-    } catch (error) {
-      log.error(
-        { err: error as Error, sourceInstanceId: source.sourceInstanceId, stage: 'factory' },
-        'webhook_source_load_failed'
-      );
-      throw new Error(
-        `Webhook source '${source.sourceInstanceId}' factory failed: ${configProblems(error)}`,
-        {
-          cause: error,
-        }
-      );
-    }
-    if (!isWebhookSourcePlugin(plugin)) {
-      throw new Error(
-        `Webhook source module for '${source.sourceInstanceId}' returned no receiver`
-      );
-    }
-    if (source.observe !== undefined) {
-      if (typeof plugin.observe !== 'function')
-        throw new Error(
-          `Webhook source '${source.sourceInstanceId}' declares observe, but its plugin cannot observe waits`
-        );
+    plugins.set(source.sourceInstanceId, await loadSourcePlugin(source));
+    if (source.observe !== undefined)
       observing.push({
         sourceInstanceId: source.sourceInstanceId,
         everySeconds: source.observe.everySeconds,
       });
-    }
-    plugins.set(source.sourceInstanceId, plugin);
   }
 
   const pluginFor = (sourceInstanceId: string): WebhookSourcePlugin => {

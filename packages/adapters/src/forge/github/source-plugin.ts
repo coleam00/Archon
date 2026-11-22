@@ -211,14 +211,48 @@ async function observeWaits(
   config: GitHubSourceConfig,
   { waits, forge }: ObserveInput
 ): Promise<SourceObservation> {
-  const unserved: SourceObservation['unserved'] = [];
+  const { targets, unserved } = planTargets(config, waits);
   const failed: SourceObservation['failed'] = [];
+  const acceptances: SourceReceiptAcceptance[] = [];
+  const receivedAt = new Date().toISOString();
+  for (const { target, served } of targets) {
+    let read: Awaited<ReturnType<typeof targetEvents>>;
+    try {
+      read = await targetEvents(target, forge);
+    } catch (error) {
+      // One unreadable target does not stop the others.
+      const reason = error instanceof Error ? error.message : String(error);
+      for (const { wait } of served) failed.push({ wait, reason });
+      continue;
+    }
+    for (const { wait, binding } of served) {
+      if (read.host !== config.host) {
+        unserved.push({ wait, reason: `the wait's repository is not on ${config.host}` });
+        continue;
+      }
+      const result = waitAcceptances(sourceInstanceId, receivedAt, wait, binding, read.events);
+      acceptances.push(...result.acceptances);
+      unserved.push(...result.unserved);
+    }
+  }
+  return { acceptances, unserved, failed };
+}
+
+/** Each read the waits need, with the waits and bindings it serves; and the waits it cannot. */
+function planTargets(
+  config: GitHubSourceConfig,
+  waits: ObserveInput['waits']
+): {
+  targets: {
+    target: ObserveTarget;
+    served: { wait: ObservedWaitRef; binding: GitHubSourceBinding }[];
+  }[];
+  unserved: SourceObservation['unserved'];
+} {
+  const unserved: SourceObservation['unserved'] = [];
   const targets = new Map<
     string,
-    {
-      target: ObserveTarget;
-      served: { wait: ObservedWaitRef; binding: GitHubSourceBinding }[];
-    }
+    { target: ObserveTarget; served: { wait: ObservedWaitRef; binding: GitHubSourceBinding }[] }
   >();
   for (const wait of waits) {
     const ref = {
@@ -249,62 +283,54 @@ async function observeWaits(
       targets.set(key, entry);
     }
   }
+  return { targets: [...targets.values()], unserved };
+}
+
+/** The acceptances one binding makes for one wait from what its target read, or why none. */
+function waitAcceptances(
+  sourceInstanceId: string,
+  receivedAt: string,
+  wait: ObservedWaitRef,
+  binding: GitHubSourceBinding,
+  events: readonly { key: string; event: ForgeEvent }[]
+): { acceptances: SourceReceiptAcceptance[]; unserved: SourceObservation['unserved'] } {
   const acceptances: SourceReceiptAcceptance[] = [];
-  const receivedAt = new Date().toISOString();
-  for (const { target, served } of targets.values()) {
-    let read: Awaited<ReturnType<typeof targetEvents>>;
-    try {
-      read = await targetEvents(target, forge);
-    } catch (error) {
-      // One unreadable target does not stop the others.
-      const reason = error instanceof Error ? error.message : String(error);
-      for (const { wait } of served) failed.push({ wait, reason });
+  const rejections = new Set<string>();
+  const field = binding.wake?.about.field;
+  for (const { key, event } of events) {
+    // An event about another commit than the wait's (an older review) is not for it.
+    if (field === undefined || readForgeEventField(event, field) !== wait.about) continue;
+    const evaluated = evaluateBinding(binding, event);
+    if ('skipped' in evaluated) {
+      // The binding matched the event but cannot start on it, such as a mapped field the
+      // event lacks: a webhook would record that reason, so the observation reports it. A
+      // state it does not select (a check still running) would only be recorded unmatched.
+      if (evaluated.skipped.status === 'rejected')
+        rejections.add(
+          `binding '${binding.bindingId}' rejects the event: ${evaluated.skipped.reason}`
+        );
       continue;
     }
-    for (const { wait, binding } of served) {
-      if (read.host !== config.host) {
-        unserved.push({ wait, reason: `the wait's repository is not on ${config.host}` });
-        continue;
-      }
-      const rejections = new Set<string>();
-      for (const { key, event } of read.events) {
-        // An event about another commit than the wait's (an older review) is not for it.
-        const field = binding.wake?.about.field;
-        if (field === undefined || readForgeEventField(event, field) !== wait.about) continue;
-        const evaluated = evaluateBinding(binding, event);
-        // The binding matched the event but cannot start on it, such as a mapped field the
-        // event lacks: a webhook would record that reason, so the observation reports it.
-        if ('skipped' in evaluated && evaluated.skipped.status === 'rejected') {
-          const reason = `binding '${binding.bindingId}' rejects the event: ${evaluated.skipped.reason}`;
-          if (!rejections.has(reason)) unserved.push({ wait, reason });
-          rejections.add(reason);
-          continue;
-        }
-        // A state the binding does not start on (a check still running) would only be
-        // recorded as unmatched.
-        if (!('start' in evaluated)) continue;
-        acceptances.push({
-          receipt: {
-            id: randomUUID(),
-            sourceInstanceId,
-            // A persisted contract: one delivery per observed state, binding and item. A
-            // later pass that sees the same state is a replay, which never meets a wait, so
-            // each state wakes an item's wait at most once per binding, as its webhook would,
-            // even when the woken stage ends waiting at the same commit again.
-            deliveryId: `observe:${key}:${binding.bindingId}:${wait.itemKey}`,
-            contentDigest: createHash('sha256').update(JSON.stringify(event)).digest('hex'),
-            receivedAt,
-            occurredAt: null,
-            sourceActor: null,
-          },
-          outcome: 'matched',
-          // The observation knows the wait's item, so the start goes to that item only.
-          bindings: [{ ...evaluated.start, itemKey: wait.itemKey }],
-        });
-      }
-    }
+    acceptances.push({
+      receipt: {
+        id: randomUUID(),
+        sourceInstanceId,
+        // A persisted contract: one delivery per observed state, binding and item. A later
+        // pass that sees the same state is a replay, which never meets a wait, so each state
+        // wakes an item's wait at most once per binding, as its webhook would, even when the
+        // woken stage ends waiting at the same commit again.
+        deliveryId: `observe:${key}:${binding.bindingId}:${wait.itemKey}`,
+        contentDigest: createHash('sha256').update(JSON.stringify(event)).digest('hex'),
+        receivedAt,
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched',
+      // The observation knows the wait's item, so the start goes to that item only.
+      bindings: [{ ...evaluated.start, itemKey: wait.itemKey }],
+    });
   }
-  return { acceptances, unserved, failed };
+  return { acceptances, unserved: [...rejections].map(reason => ({ wait, reason })) };
 }
 
 /** Configured source plugins run as trusted operator-installed code. */

@@ -386,20 +386,61 @@ async function engineChanged(loaded: string | undefined, json: boolean): Promise
  * One source's observation, as `wake` reports it. The hosts of the starts it recorded are
  * added to `owed`, which `drainOwed` empties.
  */
-async function reportObserved(
+/** How many starts `receipts` recorded; adds each start's host to `owed`. */
+async function owedStarts(
   host: WorkflowHost,
-  report: ObservedSourceReport,
-  owed: Set<string>,
-  json: boolean
-): Promise<boolean> {
+  receipts: readonly string[],
+  owed: Set<string>
+): Promise<number> {
   let started = 0;
-  for (const receiptId of report.receipts)
+  for (const receiptId of receipts)
     for (const binding of (await host.deps.store.getStartReceipt(receiptId))?.bindings ?? []) {
       // A binding recorded as unmatched or rejected has no host and starts nothing.
       if (!binding.hostId) continue;
       started += 1;
       owed.add(binding.hostId);
     }
+  return started;
+}
+
+/** Says which sources a watch observes and how often, once when it starts. */
+async function announceObserving(
+  observation: WakeObservation | undefined,
+  watch: boolean,
+  json: boolean
+): Promise<void> {
+  if (!watch || !observation) return;
+  const observe = observation.observer.observing.map(({ sourceInstanceId, everySeconds }) => ({
+    source: sourceInstanceId,
+    everySeconds,
+  }));
+  if (json) await writeJsonLine({ ok: true, action: 'wake', observe });
+  else
+    for (const { source, everySeconds } of observe)
+      console.log(`wake: observing source ${source} every ${String(everySeconds)}s`);
+}
+
+/** One observation pass: report each source, then hand on the starts it owes. */
+async function observePass(
+  host: WorkflowHost,
+  observation: WakeObservation | undefined,
+  owed: Set<string>,
+  json: boolean
+): Promise<boolean> {
+  if (!observation) return true;
+  let ok = true;
+  for (const observed of await observation.observer.pass(new Date()))
+    ok = (await reportObserved(host, observed, owed, json)) && ok;
+  return (await drainOwed(host, observation, owed, json)) && ok;
+}
+
+async function reportObserved(
+  host: WorkflowHost,
+  report: ObservedSourceReport,
+  owed: Set<string>,
+  json: boolean
+): Promise<boolean> {
+  const started = await owedStarts(host, report.receipts, owed);
   const { source, waits, reads, conflicts, unserved, error } = report;
   const ok = error === undefined;
   if (json)
@@ -466,16 +507,7 @@ async function wake(
 ): Promise<number> {
   validateFlags(values, ['watch']);
   if (args.length) throw new Error('Usage: archon workflow wake [--watch] [--json]');
-  if (values.watch === true && observation) {
-    const observe = observation.observer.observing.map(({ sourceInstanceId, everySeconds }) => ({
-      source: sourceInstanceId,
-      everySeconds,
-    }));
-    if (json) await writeJsonLine({ ok: true, action: 'wake', observe });
-    else
-      for (const { source, everySeconds } of observe)
-        console.log(`wake: observing source ${source} every ${String(everySeconds)}s`);
-  }
+  await announceObserving(observation, values.watch === true, json);
   let stopped = false;
   let wakeSleep: (() => void) | undefined;
   const stop = (): void => {
@@ -501,12 +533,9 @@ async function wake(
           (run, cursor) => admit(host, run, cursor, cleanup => cleanups.push(cleanup))
         );
         const passOk = await report('wake', await Promise.all(outcomes.map(settle)), json);
-        ok = passOk && ok;
-        if (observation) {
-          for (const observed of await observation.observer.pass(new Date()))
-            ok = (await reportObserved(host, observed, owed, json)) && ok;
-          ok = (await drainOwed(host, observation, owed, json)) && ok;
-        }
+        // Observed after the continuations, whether or not they all succeeded.
+        const observedOk = await observePass(host, observation, owed, json);
+        ok = passOk && observedOk && ok;
       } catch (error) {
         ok = false;
         if (json) await writeJsonLine({ ok: false, action: 'wake', error: errorMessage(error) });
