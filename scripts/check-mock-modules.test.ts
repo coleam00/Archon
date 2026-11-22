@@ -95,6 +95,29 @@ describe('check-mock-modules', () => {
     ]);
   });
 
+  test('a scoped comparison ignores baseline entries outside its scope', () => {
+    const { root } = project("mock.module('./db', () => ({ getRun() {}, deleteRun() {} }));");
+    const { sites } = collectSites(root, [join(root, 'src/a.test.ts')]);
+    const outside: Baseline = {
+      factories: { 'other/b.test.ts': ['./db'] },
+      exports: { 'src/db.ts': ['deleteRun'] },
+    };
+    expect(compareBaseline(sites, outside, ['src'])).toEqual([]);
+    expect(compareBaseline(sites, outside)).toHaveLength(3);
+  });
+
+  test('a scoped comparison still refuses an in-scope site and a stale in-scope entry', () => {
+    const { root } = project(partial);
+    const { sites } = collectSites(root, [join(root, 'src/a.test.ts')]);
+    expect(compareBaseline(sites, EMPTY, ['src'])[0]).toStartWith(
+      "src/a.test.ts:2 mock.module('./db') omits deleteRun;"
+    );
+    const stale = { factories: { 'src/a.test.ts': ['./db', './gone'] }, exports: {} };
+    expect(compareBaseline(sites, stale, ['src'])).toContain(
+      "scripts/mock-module-baseline.json: src/a.test.ts no longer mocks './gone' incompletely"
+    );
+  });
+
   // `bun run lint` reads each tsconfig's files in a child process; these cover that path.
   test('a child process reports the same sites as an in-process read', () => {
     const { root } = project(partial);

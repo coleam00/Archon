@@ -240,9 +240,18 @@ export function packRunnerInputs(
   repo: string,
   extraCandidates: Iterable<string> = []
 ): Set<string> {
+  return rootScriptImports(repo, WORKSPACE_RUNNER_ENTRY_POINTS, extraCandidates);
+}
+
+/** `roots` (root scripts) plus every root script they reach through relative static imports. */
+export function rootScriptImports(
+  repo: string,
+  roots: Iterable<string>,
+  extraCandidates: Iterable<string> = []
+): Set<string> {
   const tracked = trackedFiles(repo, 'scripts');
   const candidates = rootScriptCandidates(tracked, extraCandidates);
-  return withStaticImports(repo, tracked, candidates, WORKSPACE_RUNNER_ENTRY_POINTS);
+  return withStaticImports(repo, tracked, candidates, roots);
 }
 
 /**

@@ -59,8 +59,12 @@ CI is the full validation gate. While working and before you push, run
 `bun run check:changed`. It finds the packages your change touches against the merge base
 with `origin/dev` (`--base <ref>` for another), adds every package that depends on them
 through the manifests, and runs those packages' own `type-check` and `test` scripts, the root
-script and pack projects when the change reaches them, then `bun run lint` and the ratchet.
-It prints the packages it checked and skipped, and `--list` prints only that. A change to
+script and pack projects when the change reaches them, then lint and the ratchet. Lint runs
+the `bun run lint` checks scoped to that set: the `mock.module()` check reads only the
+packages in scope (and `scripts/` when root scripts are), the workflow persistence check runs
+only when core, cli or server is in scope, and the other checks run whole. A change to a lint
+script, the `mock.module()` baseline or a tsconfig runs every lint check whole. It prints the
+packages and lint checks it ran and skipped, and `--list` prints only that. A change to
 the root manifest, the lockfile, CI, shared config or a file it cannot place runs the full
 local set and says why. It leaves to CI the generated files, package boundaries, format, the
 installer, Windows and macOS, and couplings the manifests do not declare. For one test file,

@@ -9,6 +9,7 @@ import {
   type WorkspaceGraph,
   changeScope,
   changedFiles,
+  lintPlan,
 } from './check-changed';
 import { workspaceTestInputs } from './should-run-test-suite';
 
@@ -99,6 +100,45 @@ describe('changeScope', () => {
   test('an unmapped root file checks everything and names the file', () => {
     const scope = changeScope(['packages/leaf/a.ts', 'Dockerfile'], graph, inputs);
     expect(scope.kind === 'everything' && scope.because.join()).toContain('Dockerfile');
+  });
+});
+
+describe('lintPlan', () => {
+  const lintInputs = new Set([
+    'scripts/check-mock-modules.ts',
+    'scripts/mock-module-baseline.json',
+  ]);
+  const plan = (files: string[]) =>
+    lintPlan(changeScope(files, graph, inputs), files, graph, lintInputs);
+  const runs = (files: string[]) =>
+    Object.fromEntries(plan(files).steps.map(step => [step.id, step.run]));
+
+  test('a leaf change scopes mock-modules to the leaf', () => {
+    const lint = plan(['packages/leaf/src/index.ts']);
+    const mock = lint.steps.find(step => step.id === 'check-mock-modules');
+    expect(mock?.args.slice(-2)).toEqual(['--scope', 'packages/leaf']);
+    expect(lint.wholeBecause).toEqual([]);
+  });
+
+  test('a scoped change scopes mock-modules to its dependents and the root scripts', () => {
+    const mock = plan(['packages/base/src/index.ts']).steps.find(
+      step => step.id === 'check-mock-modules'
+    );
+    expect(mock?.note).toBe('packages/base, packages/leaf, packages/mid, scripts');
+  });
+
+  test.each([
+    ['a lint script', 'scripts/check-mock-modules.ts'],
+    ['the mock.module() baseline', 'scripts/mock-module-baseline.json'],
+    ['a package tsconfig', 'packages/leaf/tsconfig.json'],
+  ])('%s runs every lint check whole', (_, file) => {
+    const lint = plan(['packages/leaf/src/index.ts', file]);
+    expect(lint.steps.every(step => step.run === 'whole')).toBe(true);
+    expect(lint.wholeBecause).toEqual([`${file} is a lint input`]);
+  });
+
+  test('a change that reaches everything runs every lint check whole', () => {
+    expect(Object.values(runs(['bun.lock'])).every(run => run === 'whole')).toBe(true);
   });
 });
 
