@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test as bunTest } from 'bun:test';
-import { link, mkdir, mkdtemp, symlink } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { removeTempTree, skipCompiledBinaryTests } from '@archon/paths/test-utils';
 import { discoverPlugins } from './discovery';
 import { compileDiscoveryPlugin } from './fixtures/compile-discovery-plugin';
@@ -164,6 +164,27 @@ test('discovers and runs an independently installed executable outside the sourc
       ]
     );
     expect(failures).toEqual([]);
+  } finally {
+    await removeTempTree(root);
+  }
+});
+
+test('a file on the plugin scan path contributes no plugins and never fails discovery', async () => {
+  // A PATH entry (or plugin dir) that is a regular file — e.g. a binary accidentally
+  // exported into PATH — must be skipped, not crash every forge operation (#local-fix:
+  // seen live as ENOTDIR killing forge plugin discovery for a whole afternoon).
+  const root = await mkdtemp(join(tmpdir(), 'forge-discovery-file-'));
+  try {
+    const healthy = join(root, 'healthy');
+    await mkdir(healthy);
+    await link(compiledFixture, join(healthy, `archon-forge-healthy${exe}`));
+    const pathEntry = join(root, 'not-a-dir');
+    await writeFile(pathEntry, '#!/bin/sh\nexit 0\n');
+    const discovery = await discoverPlugins({
+      config: { pluginDirs: [healthy], scanPath: true },
+      env: { PATH: [pathEntry, healthy].join(delimiter) },
+    });
+    expect(discovery.byHost.has('healthy.example')).toBe(true);
   } finally {
     await removeTempTree(root);
   }

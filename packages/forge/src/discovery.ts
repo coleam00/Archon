@@ -77,7 +77,12 @@ async function scanDirectory(directory: string, source: string): Promise<Candida
   try {
     entries = await readdir(directory);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    const code = (error as NodeJS.ErrnoException).code;
+    // A PATH entry that is a file (or an unreadable path) contributes no plugins:
+    // skip it rather than fail every forge operation on one malformed entry.
+    if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES' || code === 'EPERM') {
+      return [];
+    }
     throw error;
   }
   const candidates: CandidateInspection[] = [];
