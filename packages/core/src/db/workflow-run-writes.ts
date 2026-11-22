@@ -19,7 +19,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { WorkflowRunDeleteRefusedError, liveDescendantsRefusal } from '@archon/workflows/store';
 import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
-import type { TransactionQuery } from './resource-slots';
+import { lockAdmission, type TransactionQuery } from './resource-slots';
 import { insertWorkflowEvent } from './workflow-events';
 import { getWorkflowRun } from './workflow-run-reads';
 import { getLog, lockedRunRow, normalizeMetadata } from './workflow-run-shared';
@@ -299,6 +299,11 @@ async function lockRunTrees(
   seed: string,
   params: unknown[]
 ): Promise<Set<string>> {
+  // Taken before the row locks, as every run-limit decision takes it before it decides. A
+  // sub-run admitted inside a tree must be inserted before this deletion decides, or admitted
+  // after it commits: admitted first and inserted after, under a run the deletion detached
+  // from its tree, it would stand in a tree that never took a place.
+  await lockAdmission(query);
   const locked = new Set<string>();
   for (;;) {
     const pass = await query<{ id: string }>(

@@ -2,9 +2,17 @@
 import { splitAttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
-import { Pool } from 'pg';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Client, Pool } from 'pg';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { resourceStartFixtures } from '@archon/workflows/store-conformance';
-import { WorkflowRunDeleteRefusedError, executionClaim } from '@archon/workflows/store';
+import {
+  RunLimitError,
+  WorkflowRunDeleteRefusedError,
+  executionClaim,
+} from '@archon/workflows/store';
 import { workflowPathPriorityTime } from '@archon/workflows/workflow-path-lock';
 import {
   describeWorkflowStoreConformance,
@@ -41,6 +49,13 @@ import { getSchemaSQL } from './bundled-schema';
 import type { ItemAsk } from '@archon/workflows/schemas/item-ask';
 
 const baseUrl = process.env.ARCHON_TEST_PG_URL;
+/**
+ * A connection held apart from the harness pool, to stage an overlapping transaction. A
+ * `Client` ends only once its socket has closed, so the harness can drop the database after
+ * it. A `Pool` resolves `end()` before its sockets close, and the drop's FORCE then kills a
+ * gate connection still closing, which surfaces as an unhandled error in whatever test runs.
+ */
+const gateClient = (url: string): Client => new Client({ connectionString: url });
 describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   let admin: Pool;
   beforeAll(() => {
@@ -410,7 +425,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   // keep the parent, never split the tree or strip the kept parent's events. The gate holds
   // the overlapping write uncommitted until the deletion is parked behind it.
   const overlaps = {
-    'a sub-run is created': async (gate: Pool, parent: string) => {
+    'a sub-run is created': async (gate: Client, parent: string) => {
       const id = randomUUID();
       await gate.query(
         `INSERT INTO remote_agent_workflow_runs (id, workflow_name, user_message, parent_run_id)
@@ -419,7 +434,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
       );
       return id;
     },
-    'a finished sub-run is resumed': async (gate: Pool, _parent: string, finished: string) => {
+    'a finished sub-run is resumed': async (gate: Client, _parent: string, finished: string) => {
       await gate.query("UPDATE remote_agent_workflow_runs SET status = 'running' WHERE id = $1", [
         finished,
       ]);
@@ -432,9 +447,10 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     )
   )('%s keeps a parent when %s while it runs', async (path, overlap) => {
     const harness = await makeHarness();
-    const gate = new Pool({ connectionString: harness.url, max: 1 });
+    const gate = gateClient(harness.url);
     let gateOpen = false;
     try {
+      await gate.connect();
       const { db, store } = harness;
       const old = new Date(Date.now() - 10 * 86_400_000);
       const parent = await store.createWorkflowRun({ workflow_name: 'parent', user_message: '' });
@@ -498,17 +514,19 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     '%s locks a sub-run created while it waited, so its resume waits for the deletion',
     async path => {
       const harness = await makeHarness();
-      const parentGate = new Pool({ connectionString: harness.url, max: 1 });
-      const eventGate = new Pool({ connectionString: harness.url, max: 1 });
+      const parentGate = gateClient(harness.url);
+      const eventGate = gateClient(harness.url);
       const open = { parentGate: false, eventGate: false };
       try {
+        await parentGate.connect();
+        await eventGate.connect();
         const { db, store } = harness;
         const old = new Date(Date.now() - 10 * 86_400_000);
         const parent = await store.createWorkflowRun({ workflow_name: 'parent', user_message: '' });
         await store.claimPendingWorkflowRun(parent.id);
         await store.completeWorkflowRun(parent.id, { duration_ms: 1 });
         await harness.backdate(parent.id, { started_at: old, active_phase_started_at: old });
-        const pid = async (gate: Pool) =>
+        const pid = async (gate: Client) =>
           (await gate.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid ?? 0;
         // The backend blocked by `blocker`, once there is one; `settled` ends the wait early.
         const blockedBy = async (blocker: number, settled: { done: boolean }) => {
@@ -584,14 +602,90 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
       }
     }
   );
+  // A sub-run admitted inside its tree must not be inserted under a run that a deletion has
+  // meanwhile cut from that tree: it would stand in a tree that never took a place. Here the
+  // deletion of the middle run M is parked after it decided, and a sub-run of M's child D is
+  // created. It must wait for the deletion and then be judged against the tree as it is: D
+  // is a tree of its own that has ended, so it needs room, and the limit has none.
+  test('a sub-run created while its ancestor is deleted is admitted against the tree that remains', async () => {
+    const harness = await makeHarness();
+    const eventGate = gateClient(harness.url);
+    let gateOpen = false;
+    const previousHome = process.env.ARCHON_HOME;
+    const home = await mkdtemp(join(tmpdir(), 'archon-run-limit-home-'));
+    try {
+      await eventGate.connect();
+      process.env.ARCHON_HOME = home;
+      await writeFile(join(home, 'config.yaml'), 'concurrency:\n  runs: 1\n');
+      const { db, store } = harness;
+      const start = async (parent_run_id?: string) => {
+        const run = await store.createWorkflowRun({
+          workflow_name: 'tree',
+          user_message: '',
+          ...(parent_run_id === undefined ? {} : { parent_run_id }),
+        });
+        await store.claimPendingWorkflowRun(run.id);
+        return run.id;
+      };
+      const root = await start();
+      const middle = await start(root);
+      const leaf = await start(middle);
+      await store.completeWorkflowRun(leaf, { duration_ms: 1 });
+      await store.completeWorkflowRun(middle, { duration_ms: 1 });
+      expect(await store.getRunLimit()).toMatchObject({ limit: 1, live: 1 });
+
+      await eventGate.query('BEGIN');
+      gateOpen = true;
+      await eventGate.query(
+        'SELECT id FROM remote_agent_workflow_events WHERE workflow_run_id = $1 FOR UPDATE',
+        [middle]
+      );
+      const gatePid = (await eventGate.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'))
+        .rows[0]?.pid;
+      const blockedBy = async (blocker: number | undefined) => {
+        for (let tries = 0; tries < 200; tries++) {
+          const blocked = await db.query<{ pid: number }>(
+            'SELECT pid FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))',
+            [blocker]
+          );
+          const found = blocked.rows[0]?.pid;
+          if (found !== undefined) return found;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        throw new Error('Expected a backend waiting on the lock');
+      };
+      const { deleteWorkflowRun } = await import('./workflow-run-writes');
+      const deletion = deleteWorkflowRun(middle);
+      const deleter = await blockedBy(gatePid);
+      const creation = store
+        .createWorkflowRun({ workflow_name: 'late', user_message: '', parent_run_id: leaf })
+        .catch((error: unknown) => error);
+      await blockedBy(deleter);
+      await eventGate.query('COMMIT');
+      gateOpen = false;
+      await deletion;
+
+      expect(await creation).toBeInstanceOf(RunLimitError);
+      expect(await store.getWorkflowRun(leaf)).toMatchObject({ parent_run_id: null });
+      expect(await store.getRunLimit()).toMatchObject({ limit: 1, live: 1 });
+    } finally {
+      if (gateOpen) await eventGate.query('ROLLBACK');
+      await eventGate.end();
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+      await removeTempTree(home);
+      await harness.close();
+    }
+  });
   test('two completions of one workflow on one item that overlap leave one open set: the later one', async () => {
     const harness = await makeHarness();
     // Holding the item row FOR UPDATE parks each completion at its ask insert, whose
     // foreign-key check needs the row. Without serialization both are parked after their
     // replace has already run, so neither sees the other's set.
-    const gate = new Pool({ connectionString: harness.url, max: 1 });
+    const gate = gateClient(harness.url);
     let gateOpen = false;
     try {
+      await gate.connect();
       const { db, store } = harness;
       const start = async () => {
         const run = await store.createWorkflowRun({
@@ -681,9 +775,10 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     // not committed. The same delivery arriving now must wait for it and replay; it must
     // not meet the wait opened since (a stage that waited again) for a receipt that is
     // never recorded.
-    const gate = new Pool({ connectionString: harness.url, max: 1 });
+    const gate = gateClient(harness.url);
     let gateOpen = false;
     try {
+      await gate.connect();
       await completeWithWaits(harness, [checks(HEAD)]);
       const project = await projectKey(harness);
       const redelivery = wakeReceipt(HEAD, { deliveryId: 'delivery-a' });
@@ -727,9 +822,10 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     const harness = await makeHarness();
     // Holding the wait's row FOR UPDATE parks both acceptances on it, so they overlap: the
     // one that takes the row second must see the set met and start nothing.
-    const gate = new Pool({ connectionString: harness.url, max: 1 });
+    const gate = gateClient(harness.url);
     let gateOpen = false;
     try {
+      await gate.connect();
       await completeWithWaits(harness, [checks(HEAD)]);
       const project = await projectKey(harness);
       const waiters = async (count: number) => {
