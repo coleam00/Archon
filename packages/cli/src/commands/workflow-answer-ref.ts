@@ -23,7 +23,9 @@ import {
 } from '@archon/workflows/schemas/resource-start';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { cliActor } from '../utils/calling-node';
+import { servedHosts } from '../utils/install-hosts';
 import { writeJsonLine } from '../utils/stdout';
+import { admittedByText } from './workflow-item-text';
 
 export const WORKFLOW_ANSWER_REF_USAGE =
   'Usage: archon workflow answer --ref <ref> [--choose <id>... | --recommended] [--text <text>] [--as <name>] [--json]\n' +
@@ -53,14 +55,25 @@ const NO_STARTS: SettledStarts = { text: '', json: {} };
  */
 async function settledStarts(
   receipts: readonly SourceReceiptAcceptance[],
-  store: AnswerStore
+  store: AnswerStore,
+  readServed: () => Promise<ReadonlySet<string>>
 ): Promise<SettledStarts> {
   const itemKey = receipts.find(accepted => accepted.receipt.itemKey)?.receipt.itemKey ?? '<key>';
   const states = (await Promise.all(receipts.map(accepted => startStates(accepted, store)))).flat();
   const prepared = states.filter(state => state.kind === 'prepared');
+  const served = states.some(state => state.kind === 'waiting')
+    ? await readServed()
+    : new Set<string>();
   const waiting = states.flatMap(state =>
     state.kind === 'waiting'
-      ? [{ receiptId: state.receiptId, bindingId: state.bindingId, hostId: state.hostId }]
+      ? [
+          {
+            receiptId: state.receiptId,
+            bindingId: state.bindingId,
+            hostId: state.hostId,
+            servedHere: state.hostId !== null && served.has(state.hostId),
+          },
+        ]
       : []
   );
   const notStarted = states.flatMap(state =>
@@ -75,9 +88,10 @@ async function settledStarts(
           ` It prepared ${String(prepared.length)} bound stage start(s) on the item; archon workflow runs --item ${itemKey} shows them.`,
         ]
       : []),
-    ...waiting.map(
-      ({ receiptId, hostId }) =>
-        `\nA bound stage waits for the next drain of host '${hostId ?? '<host>'}' (archon trigger drain --host ${hostId ?? '<host>'}); receipt ${receiptId} records it.`
+    ...waiting.map(({ receiptId, hostId }) =>
+      hostId === null
+        ? `\nA bound stage waits, but its binding names no host; receipt ${receiptId} records it (archon trigger inspect ${receiptId}).`
+        : `\nA bound stage waits on host '${hostId}': ${admittedByText(hostId, served)}. Receipt ${receiptId} records it.`
     ),
     ...notStarted.map(
       ({ receiptId, reason }) =>
@@ -263,11 +277,12 @@ function withdrawn(
  */
 export async function startsOf(
   caused: readonly SourceReceiptAcceptance[],
-  store: AnswerStore
+  store: AnswerStore,
+  readServed: () => Promise<ReadonlySet<string>>
 ): Promise<SettledStarts> {
   if (caused.length === 0) return NO_STARTS;
   try {
-    return await settledStarts(caused, store);
+    return await settledStarts(caused, store, readServed);
   } catch (error) {
     const receiptIds = caused.map(accepted => accepted.receipt.id);
     const message = (error as Error).message;
@@ -302,7 +317,7 @@ export async function workflowAnswerRefCommand(
       outcome = withdrawn(
         request.withdraw,
         result,
-        await startsOf(causedBy(result), host.deps.store)
+        await startsOf(causedBy(result), host.deps.store, servedHosts)
       );
     } else {
       const answer: AttentionAnswerRequest = {
@@ -310,7 +325,11 @@ export async function workflowAnswerRefCommand(
         ...(request.text === undefined ? {} : { text: request.text }),
       };
       const result = await answerAttentionItem(deps, request.ref, answer, actor, 'cli');
-      outcome = answered(request.ref, result, await startsOf(causedBy(result), host.deps.store));
+      outcome = answered(
+        request.ref,
+        result,
+        await startsOf(causedBy(result), host.deps.store, servedHosts)
+      );
     }
   } catch (error) {
     outcome = { ok: false, code: 'error', error: (error as Error).message };

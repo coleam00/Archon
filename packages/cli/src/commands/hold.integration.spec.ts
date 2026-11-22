@@ -79,16 +79,18 @@ test('a fire under the hold is listed as held and starts exactly once after the 
   await registerFolder(host.records.codebases, project, 'portable');
   const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
   if (!user) throw new Error('Expected test identity');
-  const config = join(root, 'timer.json');
-  await writeFile(
-    config,
+  // The lift drains the host a trigger file on this install names, and not one named only
+  // by a config kept elsewhere.
+  const triggers = join(root, 'home', 'triggers');
+  await mkdir(triggers, { recursive: true });
+  const triggerFile = (sourceInstanceId: string, bindingId: string, hostId: string) =>
     JSON.stringify({
       version: 1,
-      sourceInstanceId: 'timer',
+      sourceInstanceId,
       binding: {
-        bindingId: 'fired',
+        bindingId,
         bindingRevision: null,
-        hostId: 'host',
+        hostId,
         runAsUserId: user.id,
         resource: 'portable',
         capacity: 1,
@@ -100,8 +102,11 @@ test('a fire under the hold is listed as held and starts exactly once after the 
           isolation: { kind: 'in-place' },
         },
       },
-    })
-  );
+    });
+  const config = join(triggers, 'timer.json');
+  await writeFile(config, triggerFile('timer', 'fired', 'host'));
+  const elsewhere = join(root, 'elsewhere.json');
+  await writeFile(elsewhere, triggerFile('elsewhere', 'fired-elsewhere', 'other-host'));
   const dispatched: string[] = [];
   const dispatch = async (requestId: string): Promise<null> => {
     dispatched.push(requestId);
@@ -115,16 +120,27 @@ test('a fire under the hold is listed as held and starts exactly once after the 
   const [fired] = await jsonLines(() => triggerCommand(host, 'fire', [], { config }, { dispatch }));
   expect(fired).toMatchObject({ hold, bindings: [{ status: 'pending', disposition: null }] });
   const receiptId = (fired as { id: string }).id;
+  const [firedElsewhere] = await jsonLines(() =>
+    triggerCommand(host, 'fire', [], { config: elsewhere }, { dispatch })
+  );
+  const elsewhereId = (firedElsewhere as { id: string }).id;
   expect(dispatched).toEqual([]);
 
+  // Newest receipt first.
   const [listed] = await jsonLines(() => triggerCommand(host, 'list', [], {}, { dispatch }));
-  expect(listed).toEqual([expect.objectContaining({ id: receiptId, hold })]);
+  expect(listed).toEqual([
+    expect.objectContaining({ id: elsewhereId, hold }),
+    expect.objectContaining({ id: receiptId, hold }),
+  ]);
   const [status] = await jsonLines(() =>
     workflowStatusCommand(host, project, { json: true, all: true })
   );
   expect(status).toMatchObject({
     hold,
-    heldStarts: [{ kind: 'trigger', receiptId, bindingId: 'fired', workflow: 'portable' }],
+    heldStarts: [
+      { kind: 'trigger', receiptId, bindingId: 'fired', workflow: 'portable' },
+      { kind: 'trigger', receiptId: elsewhereId, bindingId: 'fired-elsewhere' },
+    ],
   });
 
   const [heldDrain] = await jsonLines(() =>
@@ -134,9 +150,19 @@ test('a fire under the hold is listed as held and starts exactly once after the 
   expect(dispatched).toEqual([]);
 
   const [lifted] = await jsonLines(() => holdCommand(host, 'lift', { json: true }, dispatch));
-  expect(lifted).toEqual({ lifted: hold, drainedHosts: ['host'], failures: [] });
+  expect(lifted).toEqual({
+    lifted: hold,
+    drainedHosts: ['host'],
+    failures: [],
+    elsewhere: ['other-host'],
+  });
   const [after] = await jsonLines(() => triggerCommand(host, 'list', [], {}, { dispatch }));
-  expect(after).toEqual([expect.objectContaining({ id: receiptId, hold: null })]);
+  expect(after).toEqual([
+    expect.objectContaining({ id: elsewhereId, hold: null }),
+    expect.objectContaining({ id: receiptId, hold: null }),
+  ]);
+  // Another machine's start stays for that machine's drain.
+  expect((await host.deps.store.getStartReceipt(elsewhereId))?.bindings[0]?.status).toBe('pending');
   await jsonLines(() => triggerCommand(host, 'drain', [], { host: 'host' }, { dispatch }));
   const disposition = (await host.deps.store.getStartReceipt(receiptId))?.bindings[0]?.disposition;
   if (disposition?.status !== 'admitted') throw new Error('Expected the held start to be admitted');

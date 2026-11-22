@@ -116,6 +116,51 @@ export async function readOnBindings(directory: string): Promise<OnBinding[]> {
   return bindings;
 }
 
+/**
+ * The hosts this install serves: every distinct `binding.hostId` named by a trigger file
+ * in `directory`, whatever its form (`on`, `schedule` or fire-only), in file-name order. A
+ * host known only from queued work in a shared store is another machine's, so it is never
+ * read from the store. A file that does not read is returned as a failure naming it, and
+ * the other files are still read: one broken file must not keep every other host waiting.
+ */
+export async function readTriggerFileHosts(
+  directory: string
+): Promise<{ hostIds: string[]; failures: TriggerFileError[] }> {
+  let names: string[];
+  try {
+    names = (await readdir(directory)).filter(name => name.endsWith('.json')).sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { hostIds: [], failures: [] };
+    throw error;
+  }
+  const hostIds = new Set<string>();
+  const failures: TriggerFileError[] = [];
+  for (const name of names) {
+    const file = join(directory, name);
+    let value: unknown;
+    try {
+      value = JSON.parse(await readFile(file, 'utf8')) as unknown;
+    } catch (error) {
+      failures.push(
+        new TriggerFileError(
+          `Trigger file ${file} is not readable JSON: ${(error as Error).message}`,
+          { cause: error }
+        )
+      );
+      continue;
+    }
+    const parsed = triggerConfigSchema.safeParse(value);
+    if (parsed.success) hostIds.add(parsed.data.binding.hostId);
+    else
+      failures.push(
+        new TriggerFileError(
+          `Trigger file ${file} is invalid: ${parsed.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`
+        )
+      );
+  }
+  return { hostIds: [...hostIds], failures };
+}
+
 /** Every run-ended binding in `directory`; any broken `on` file throws (see `readOnBindings`). */
 export async function readRunEndedBindings(directory: string): Promise<RunEndedBinding[]> {
   return (await readOnBindings(directory)).filter(binding => 'runEnded' in binding);

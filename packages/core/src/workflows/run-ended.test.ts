@@ -9,7 +9,12 @@ import { providerRegistry } from '@archon/providers';
 import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
 import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
-import { createRunEndedPreflight, createRunEndedStarts, launchProjectKey } from './run-ended';
+import {
+  createRunEndedPreflight,
+  createRunEndedStarts,
+  launchProjectKey,
+  readTriggerFileHosts,
+} from './run-ended';
 
 const track = trackTempRoots();
 
@@ -541,5 +546,58 @@ describe('run-ended starts', () => {
     const projectKeyOf = launchProjectKey(async () => ITEM.projectKey);
     expect(await projectKeyOf(present)).toBe(ITEM.projectKey);
     expect(await projectKeyOf(join(present, 'deleted'))).toBeNull();
+  });
+});
+
+describe('the hosts trigger files name', () => {
+  const file = (sourceInstanceId: string, hostId: string, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      version: 1,
+      sourceInstanceId,
+      binding: {
+        bindingId: sourceInstanceId,
+        bindingRevision: null,
+        hostId,
+        runAsUserId: 'user',
+        resource: 'build',
+        overlap: 'queue',
+        launch: {
+          cwd: '/project',
+          workflowName: 'build',
+          inputs: {},
+          isolation: { kind: 'in-place' },
+        },
+      },
+      ...extra,
+    });
+
+  test('are every distinct host, of any form, and a broken file is reported by name beside them', async () => {
+    const directory = track(await mkdtemp(join(tmpdir(), 'archon-trigger-hosts-')));
+    await writeFile(join(directory, 'a-fire.json'), file('fire', 'mac'));
+    await writeFile(
+      join(directory, 'b-timer.json'),
+      file('timer', 'linux', { schedule: { intervalSeconds: 60, runAtLoad: false } })
+    );
+    await writeFile(
+      join(directory, 'c-on.json'),
+      file('on', 'mac', {
+        on: { runEnded: { workflowName: 'plan', outcome: 'planned', inputs: {} } },
+      })
+    );
+    await writeFile(join(directory, 'd-broken.json'), '{ not json');
+    await writeFile(join(directory, 'e-staged.json.tmp'), file('staged', 'staged-host'));
+    const { hostIds, failures } = await readTriggerFileHosts(directory);
+    expect(hostIds).toEqual(['mac', 'linux']);
+    expect(failures.map(failure => failure.message)).toEqual([
+      expect.stringContaining('d-broken.json'),
+    ]);
+  });
+
+  test('are none when the directory does not exist', async () => {
+    const directory = track(await mkdtemp(join(tmpdir(), 'archon-trigger-hosts-')));
+    expect(await readTriggerFileHosts(join(directory, 'missing'))).toEqual({
+      hostIds: [],
+      failures: [],
+    });
   });
 });

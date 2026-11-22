@@ -177,14 +177,15 @@ export const itemSkippedStartSchema = z.object({
 export type ItemSkippedStart = z.infer<typeof itemSkippedStartSchema>;
 
 /**
- * A start on the item that the install hold keeps from admission: a trigger's binding,
- * not yet prepared, so it has no request or run. After the lift it is prepared and
- * admitted, queued or skipped by its binding's `overlap`. `workflow` is null when the
- * stored binding does not read.
+ * A start on the item from a trigger's binding that is not yet prepared, so it has no
+ * request or run. Under the install hold it waits for the lift; otherwise for the next
+ * drain of its host (`hostId`), which prepares it and admits, queues or skips it by its
+ * binding's `overlap`. `workflow` is null when the stored binding does not read.
  */
 export const itemHeldStartSchema = z.object({
   receiptId: z.string(),
   bindingId: z.string(),
+  hostId: z.string().nullable(),
   workflow: z.string().nullable(),
   receivedAt: z.string(),
 });
@@ -298,8 +299,9 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * whole run tree, because a question is often asked inside a child; each names the run
  * that holds it. `queued` are the item's starts still waiting, which have no run yet;
  * `archon trigger withdraw <requestId>` withdraws one. `skipped` are its refused starts.
- * `hold` is the install hold while it is set, else null; `held` are the item's starts it
- * keeps that are not yet `queued`, empty while no hold is set.
+ * `hold` is the install hold while it is set, else null; `held` are the item's trigger
+ * starts not yet prepared into `queued` or a run: kept by the hold while it is set, else
+ * waiting for their host's next drain.
  * `degraded` names each part that could not be read: one of the item's own runs, a paused
  * run the queue could not read (`run_unreadable`, by `runId`), a ruling
  * (`ruling_unreadable`, by `rulingId`), a link (`link_unreadable`, by `linkId`), or the
@@ -692,7 +694,7 @@ export async function assembleItemRead(
   // one that moves on between two reads shows twice, never in neither. An admitted start
   // shows in both queued and runs (its run id is its request id) and is listed once as a run.
   const hold = await source.store.getInstallHold();
-  const held = hold ? await source.store.listHeldItemStarts(item.id) : [];
+  const held = await source.store.listHeldItemStarts(item.id);
   const waiting = await source.store.listQueuedItemStarts(item.id);
   const found = await readItemRuns(source.store, item.projectKey, item.key);
   if (found === null) return null;

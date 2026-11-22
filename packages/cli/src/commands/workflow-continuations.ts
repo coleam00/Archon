@@ -20,6 +20,8 @@ import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { engineFingerprint } from '../utils/engine-fingerprint';
 import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
+import { drainFailureReasons, drainInstallHosts } from '../utils/install-hosts';
+import { cliOwnTriggerHost } from '../utils/workflow-host';
 
 import {
   installNativeSchedule,
@@ -368,6 +370,31 @@ async function engineChanged(loaded: string | undefined, json: boolean): Promise
   return true;
 }
 
+/**
+ * Drain every host this install serves (`drainInstallHosts`), reporting each failure as a
+ * continuation error is reported. Quiet when it succeeds, admitted or not.
+ */
+async function drainPass(host: WorkflowHost, json: boolean): Promise<boolean> {
+  let failures: { hostId?: string; error: unknown }[];
+  try {
+    ({ failures } = await drainInstallHosts(host, {
+      ownHost: cliOwnTriggerHost(),
+      // Loaded only when a start is admitted, so a pass that admits nothing pays nothing.
+      dispatch: async (requestId, hostId) =>
+        (await import('../utils/spawn-admitted')).spawnAdmitted(host, requestId, hostId),
+    }));
+  } catch (error) {
+    failures = [{ error }];
+  }
+  for (const failure of failures) {
+    const where = failure.hostId === undefined ? '' : `draining host ${failure.hostId}: `;
+    const error = `${where}${drainFailureReasons([failure.error])}`;
+    if (json) await writeJsonLine({ ok: false, action: 'wake', error });
+    else console.error(`wake: ${error}`);
+  }
+  return failures.length === 0;
+}
+
 async function wake(
   host: WorkflowHost,
   args: string[],
@@ -391,6 +418,9 @@ async function wake(
       // Checked before every pass, so an update during the sleep never gets
       // another pass on the old engine.
       if (await engineChanged(loaded, json)) return WAKE_ENGINE_CHANGED_EXIT;
+      // The same pass admits starts waiting on this install's hosts, so one whose admitter
+      // died (a run end, or an answer, that crashed after its commit) waits one pass at most.
+      const drained = await drainPass(host, json);
       const cleanups: (() => Promise<void>)[] = [];
       try {
         const outcomes = await wakeDueWorkflowContinuations(
@@ -399,7 +429,7 @@ async function wake(
           (run, cursor) => admit(host, run, cursor, cleanup => cleanups.push(cleanup))
         );
         const passOk = await report('wake', await Promise.all(outcomes.map(settle)), json);
-        ok = passOk && ok;
+        ok = passOk && drained && ok;
       } catch (error) {
         ok = false;
         if (json) await writeJsonLine({ ok: false, action: 'wake', error: errorMessage(error) });

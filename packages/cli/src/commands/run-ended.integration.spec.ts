@@ -41,12 +41,17 @@ interface Fixture {
   /** Start the CLI without waiting for it; the caller awaits `exited`. */
   start: (args: string[]) => { exited: Promise<number> };
   rows: <T>(sql: string) => T[];
+  /**
+   * Write a fire-only trigger config and return its path: outside the triggers directory
+   * by default, so it names no host this install serves; inside it with `installed`.
+   */
   fireConfig: (
     name: string,
     workflowName: string,
     resource: string,
     capacity?: number,
-    hostId?: string
+    hostId?: string,
+    installed?: boolean
   ) => string;
   /**
    * Write a run-ended binding where the ending process reads it; by default it starts
@@ -255,8 +260,10 @@ async function makeFixture(label: string): Promise<Fixture> {
       return { exited: child.exited };
     },
     rows,
-    fireConfig: (name, workflowName, resource, capacity, hostId) => {
-      const path = join(root, `${name}.json`);
+    fireConfig: (name, workflowName, resource, capacity, hostId, installed = false) => {
+      const directory = installed ? join(archonHome, 'triggers') : root;
+      mkdirSync(directory, { recursive: true });
+      const path = join(directory, `${name}.json`);
       writeFileSync(
         path,
         JSON.stringify({
@@ -823,7 +830,7 @@ describe('an asks-settled binding', () => {
     expect(startedLine).toContain(runs[0]?.id.slice(0, 8));
   }, 90_000);
 
-  test('a settlement recorded by a process that does not prepare it waits for its host, whose drain starts it once', async () => {
+  test('a settlement recorded by a process that does not prepare it is shown waiting, and the next wake pass starts it once', async () => {
     const fixture = await makeFixture('asks-recorded-elsewhere');
     fixture.bind('build-after-answers', ASKS_SETTLED, { workflowName: 'build-answers' });
     await fixture.cli([
@@ -874,9 +881,15 @@ await closeDatabase();
     expect(pending()).toEqual([{ host_id: HOST }]);
     expect(fixture.rows<RunRow>(RUNS_SQL).map(run => run.workflow_name)).toEqual(['ask-plan']);
 
-    await fixture.cli(['trigger', 'drain', '--host', HOST]);
-    await fixture.cli(['trigger', 'drain', '--host', HOST]);
-    const runs = await waitFor(() => completedRuns(fixture, 2), 'the build the drain started');
+    // Until a pass admits it, the item read names the start and what will admit it.
+    const text = await fixture.cli(['workflow', 'runs', '--item', 'issue-1']);
+    expect(text).toContain(`waits to be prepared on host ${HOST}`);
+    expect(text).toContain('wake watcher');
+    expect(text).toContain(`archon trigger drain --host ${HOST}`);
+
+    await fixture.cli(['workflow', 'wake']);
+    await fixture.cli(['workflow', 'wake']);
+    const runs = await waitFor(() => completedRuns(fixture, 2), 'the build the wake pass started');
     expect(runs.map(run => run.workflow_name)).toEqual(['ask-plan', 'build-answers']);
     expect(pending()).toEqual([]);
   }, 90_000);
@@ -1257,8 +1270,42 @@ describe('a run end on a trigger host', () => {
     expect(runs).toHaveLength(6);
   }, 90_000);
 
+  test('a hand-started run admits, when it ends, a start queued behind it on a host this install names', async () => {
+    const fixture = await makeFixture('hand-frees');
+    const held = fixture.start(['workflow', 'run', 'held', '--no-worktree']);
+    await waitFor(
+      () => (existsSync(join(fixture.projectRoot, 'held-started')) ? true : undefined),
+      'the held run to take the slot'
+    );
+    const queued = () =>
+      fixture.rows<{ status: string }>(
+        `SELECT status FROM remote_agent_resource_start_requests WHERE host_id = '${HOST}'`
+      );
+    try {
+      await fixture.cli([
+        'trigger',
+        'fire',
+        '--config',
+        fixture.fireConfig('quick', 'quick', 'pool', 1, HOST, true),
+      ]);
+      expect(queued()).toEqual([{ status: 'queued' }]);
+    } finally {
+      writeFileSync(join(fixture.projectRoot, 'release'), '');
+    }
+    expect(await held.exited).toBe(0);
+    // The hand run's process serves no host of its own; its end still drains this one.
+    await waitFor(
+      () => (existsSync(join(fixture.projectRoot, 'quick-ran')) ? true : undefined),
+      'the queued start to run'
+    );
+    expect(queued()).toEqual([{ status: 'admitted' }]);
+  }, 90_000);
+
   test('a hand start takes a free slot even when another host has a start queued on it', async () => {
     const fixture = await makeFixture('free-slot');
+    // The end of the held run drains the host this file names, never one known only from
+    // the store.
+    fixture.bind('build-after-plan', RUN_ENDED);
     const held = fixture.start(['workflow', 'run', 'held', '--no-worktree']);
     await waitFor(
       () => (existsSync(join(fixture.projectRoot, 'held-started')) ? true : undefined),

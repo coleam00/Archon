@@ -20,11 +20,6 @@ import {
 } from '@archon/core/workflows/run-ended';
 import { asksSettledTriggerCheck } from '@archon/core/workflows/asks-settled';
 import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
-import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
-import {
-  collectCredentialValues,
-  redactCredentialValues,
-} from '@archon/paths/credential-redaction';
 import { observeStartExecutor } from '@archon/core/services/run-attention-watch';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import {
@@ -46,6 +41,7 @@ import {
 import { assertItemKey, readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { CLIAdapter } from '../adapters/cli-adapter';
+import { drainFailureReasons } from '../utils/install-hosts';
 import { writeJsonLine } from '../utils/stdout';
 import {
   claimDetachedRunProcessOwner,
@@ -92,24 +88,6 @@ async function loadFireConfig(path: string): Promise<TriggerConfig> {
 async function assertKnownRunAsUser(host: WorkflowHost, config: TriggerConfig): Promise<void> {
   if (!(await host.records.users.getUserById(config.binding.runAsUserId)))
     throw new Error('Trigger binding names an unknown run-as user.');
-}
-
-/**
- * The messages behind drain failures, for the operator's terminal. The store keeps only
- * the failed stage because configuration and provider errors can carry credentials, so
- * the text is redacted with the same policy as subprocess output before it is shown.
- * Flattens the nested `AggregateError`s the drain builds, which carry no reason of their own.
- */
-export function drainFailureReasons(errors: readonly unknown[]): string {
-  const messages = (error: unknown): string[] =>
-    error instanceof AggregateError
-      ? error.errors.flatMap(messages)
-      : [error instanceof Error ? error.message : String(error)];
-  const credentials = collectCredentialValues(process.env);
-  return errors
-    .flatMap(messages)
-    .map(message => sanitizeCredentials(redactCredentialValues(message, credentials)))
-    .join('; ');
 }
 
 export function drainHost(
