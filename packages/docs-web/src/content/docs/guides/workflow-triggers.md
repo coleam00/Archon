@@ -262,6 +262,24 @@ A binding file without `schedule` is fire-only: no clock starts it. A workflow n
 
 `archon trigger schedule install` refuses a fire-only binding, because it has no timer to install. A `schedule` that is present must be complete: a file with an empty or partial `schedule` is invalid, not fire-only.
 
+### When a node starts other work
+
+A node that runs `archon trigger fire`, or starts other work through the CLI, can fail for two reasons that its error does not name.
+
+**`archon` on `PATH` is another install.** The node fails with `Unknown command: trigger`, or another unknown command or flag, while the same command works in your terminal. A node finds `archon` on its own `PATH`, and a scheduled run has the `PATH` recorded when its schedule was [installed](#configure-a-native-schedule), so an older global install, such as an `archon.exe` from an earlier Windows setup, can come before the install running the workflow. Name the install's own CLI instead:
+
+1. In a `runtime: bun` script, call `trigger.fire` from [`archon:script`](/guides/script-nodes/#the-script-api). It already uses the running install's CLI.
+2. Anywhere else, run the argv in `ARCHON_CLI_COMMAND` (see [workflow host integration](/reference/forge/#workflow-host-integration-and-audit)). In a bash node with `jq`: `cli=(); while IFS= read -r arg; do cli+=("$arg"); done < <(jq -r '.[]' <<<"$ARCHON_CLI_COMMAND"); "${cli[@]}" trigger fire --config <file>`.
+3. Otherwise, name the CLI by absolute path.
+
+A container execution receives no `ARCHON_CLI_COMMAND`, so start the work from a node that runs on the host.
+
+**The node's run has no GitHub identity.** This applies only with [per-user GitHub identity](/adapters/github-app-setup/#step-8-optional-enable-per-user-github-identity) on, to a run whose user has not connected a token. Archon scrubs GitHub credentials from that run's nodes, and a CLI a node starts inherits the scrub, as does the work it starts: Archon's env files do not restore it inside a run, and the forge credential lookup reports an empty `GH_TOKEN` as missing rather than asking `gh` for the host's login. A fired start that reads its definitions from the base branch on an HTTPS remote then fails before admission with `Cannot read <ref>, the base branch this run's definitions come from: ...`, because git has no credential helper left to fetch it. SSH remotes still use the host's SSH keys.
+
+The started run itself runs as the binding's `runAsUserId`: its forge check and its nodes get that user's credential, not the calling run's. So connect a token for both users with [`archon auth github`](/reference/cli/#auth-github): the calling run's user, so its nodes are not scrubbed, and the run-as user, or the started run is scrubbed in turn: a workflow that declares forge needs is refused before admission with `credential environment GH_TOKEN or GITHUB_TOKEN is empty`, and others fail at their first GitHub command. [`archon trigger whoami`](#find-your-run-as-user-id) prints the user for your CLI identity.
+
+A node whose run's user has no token cannot yet start work that uses git over HTTPS, even for a connected run-as user: the run it starts inherits the scrubbed git configuration. Issue [6075](https://github.com/coleam00/Archon/issues/6075) tracks this. `ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK=true` is not a fix for one node; it lets every unconnected user's run on the install use the shared token.
+
 ## Put a start on the item its event names
 
 A binding can declare which field of its start's event names the [item](/reference/cli/#items) the run is on, so a run that an event starts belongs to the issue or pull request the event is about. `item` holds the `field` and an optional fixed `prefix`; the key is the prefix followed by the field's value, with a number written in decimal. There is no expression: the engine reads one field and gives the key no other meaning.
