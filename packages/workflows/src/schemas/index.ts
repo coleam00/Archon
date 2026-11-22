@@ -179,6 +179,7 @@ export type { TriggerRule, DagNodeBase, NodeContext } from './dag-node-base';
 export type {
   NodeMcp,
   McpDeclaration,
+  NodeSkill,
   LoopGroupNode,
   LoopGroupNodeConfig,
   DagNode,

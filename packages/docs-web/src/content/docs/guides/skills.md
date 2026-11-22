@@ -206,8 +206,8 @@ skills:
 ```
 
 `{ name, optional: true }` runs the node without that skill and records why when
-the provider cannot load named skills, or when no `SKILL.md` exists in the
-directories that provider searches. The node's `node_started` and terminal rows
+the provider cannot load named skills, or when the skill is absent both from the
+directories that provider searches and from any directory outside them. The node's `node_started` and terminal rows
 record `skills_unavailable` as `{ name, reason }` entries (`provider_unsupported`
 or `not_installed`), and the chat shows one line naming the skill and the reason.
 An installed optional skill is passed like a required one. A skill whose directory
