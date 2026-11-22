@@ -11203,6 +11203,9 @@ export interface components {
               /** @enum {string} */
               holder: 'from' | 'to';
               items?: string;
+              entries: {
+                [key: string]: string;
+              };
             } | null;
             /** @enum {boolean} */
             active: true;
@@ -11235,6 +11238,9 @@ export interface components {
               /** @enum {string} */
               holder: 'from' | 'to';
               items?: string;
+              entries: {
+                [key: string]: string;
+              };
             } | null;
             /** @enum {boolean} */
             active: false;

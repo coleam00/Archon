@@ -61,6 +61,8 @@ function installed(
 }
 
 const partOfOrder = { kind: 'part_of', holder: 'to' } as const;
+/** A link as an installed file's arrow carries it, reading no entries. */
+const noEntries = <T extends object>(link: T) => ({ ...link, entries: {} });
 
 type GraphInput = Parameters<typeof buildPackGraph>[0];
 
@@ -273,7 +275,7 @@ describe('a pack graph', () => {
   test('a linked trigger file is never the declared same-item arrow it shares stages with', () => {
     const graph = graphOf(stages(stage('a', ['ready']), stage('b', ['done'])), {
       declared: { 'b-after-a': runEnded('b', 'a', 'ready') },
-      installed: [{ ...installed('a', 'ready', 'b', 'order'), linked: partOfOrder }],
+      installed: [{ ...installed('a', 'ready', 'b', 'order'), linked: noEntries(partOfOrder) }],
     });
     expect(graph.arrows.map(arrow => [arrow.active, arrow.declared?.binding ?? null])).toEqual([
       [false, 'b-after-a'],
@@ -292,10 +294,10 @@ describe('a pack graph', () => {
       declared: { 'order-after-member': declared },
       installed: [
         installed('a', 'ready', 'b', 'same-item'),
-        { ...installed('a', 'ready', 'b', 'order'), linked: partOfOrder },
+        { ...installed('a', 'ready', 'b', 'order'), linked: noEntries(partOfOrder) },
         {
           ...installed('a', 'ready', 'b', 'depends'),
-          linked: { kind: 'depends_on', holder: 'to' },
+          linked: noEntries({ kind: 'depends_on', holder: 'to' } as const),
         },
       ],
     });
@@ -308,19 +310,33 @@ describe('a pack graph', () => {
     ]);
   });
 
-  test('an arrow shows the items a linked binding names, and only the same items match', () => {
+  test('an arrow shows the items a linked binding names and the inputs read from each entry', () => {
     const named = { ...partOfOrder, items: '/start' };
     const declared = packRunEndedBindingSchema.parse({
       workflow: 'b',
       resource: 'b',
       overlap: 'queue',
       run_ended: { workflow: 'a', outcome: 'ready', linked: named },
+      inputs: { brief: { entry: '/brief' }, parent: { item: 'key' } },
     });
+    const declaredOnly = graphOf(stages(stage('a', ['ready']), stage('b', ['done'])), {
+      declared: { 'order-after-split': declared },
+      installed: [],
+    });
+    // Inactive: what the declaration maps.
+    expect(declaredOnly.arrows.map(arrow => arrow.linked)).toEqual([
+      { ...named, entries: { brief: '/brief' } },
+    ]);
+
     const graph = graphOf(stages(stage('a', ['ready']), stage('b', ['done'])), {
       declared: { 'order-after-split': declared },
       installed: [
-        { ...installed('a', 'ready', 'b', 'every-holder'), linked: partOfOrder },
-        { ...installed('a', 'ready', 'b', 'named'), linked: named },
+        { ...installed('a', 'ready', 'b', 'every-holder'), linked: noEntries(partOfOrder) },
+        // Another entry pointer is still the declared arrow, shown as the file maps it.
+        {
+          ...installed('a', 'ready', 'b', 'named'),
+          linked: { ...named, entries: { brief: '/summary' } },
+        },
       ],
     });
     expect(
@@ -330,8 +346,13 @@ describe('a pack graph', () => {
         arrow.linked,
       ])
     ).toEqual([
-      ['/home/triggers/named.json', 'order-after-split', named],
-      ['/home/triggers/every-holder.json', null, partOfOrder],
+      [
+        '/home/triggers/named.json',
+        'order-after-split',
+        { ...named, entries: { brief: '/summary' } },
+      ],
+      // Without the same items it is not the declared arrow.
+      ['/home/triggers/every-holder.json', null, noEntries(partOfOrder)],
     ]);
   });
 
