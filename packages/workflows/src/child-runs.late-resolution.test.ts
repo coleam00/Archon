@@ -1,11 +1,12 @@
 // @archon-test-isolated
+// @archon-test-windows
 import { makeDeps, makePlatform } from './child-runs/test-utils';
 import { holdsPathLock, InMemoryStore } from './child-runs/test-store';
 import { providerRegistry } from '@archon/providers';
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { tmpdir } from 'os';
 import { executeWorkflow } from './executor';
 import { discoverWorkflows, discoverWorkflowsWithConfig } from './workflow-discovery';
@@ -580,7 +581,7 @@ nodes:
     git('-c', 'user.name=t', '-c', 'user.email=t@t', 'add', '.archon');
     git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'base');
     const commit = git('rev-parse', 'HEAD');
-    const composed = join(cwd, '..', `${cwd.split('/').at(-1)}-composed`);
+    const composed = join(cwd, '..', `${basename(cwd)}-composed`);
     await mkdir(join(composed, '.archon', 'workflows'), { recursive: true });
     const authored = join(cwd, '.archon', 'workflows', 'authored.yaml');
     await writeFile(
