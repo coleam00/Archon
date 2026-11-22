@@ -8,6 +8,7 @@
 import { z } from 'zod';
 import type { IResourceStartStore, StartBindingInspection } from './resource-start-store';
 import { fullRunLimit, type RunLimit } from './schemas/run-limit';
+import { WorkflowStatusReadError } from './workflow-status-read';
 
 /** The older queued start of the same host on another resource that a start waits behind. */
 export const hostQueueWaitSchema = z
@@ -17,12 +18,22 @@ export type HostQueueWait = z.infer<typeof hostQueueWaitSchema>;
 
 type RequestReader = Pick<IResourceStartStore, 'getResourceStartRequest'>;
 
-/** The start queued request `requestId` waits behind for the run limit's room, or null. */
+/**
+ * The start queued request `requestId` waits behind for the run limit's room, or null. A
+ * request whose recorded blocker run has a status this binary cannot read is reported by the
+ * item read as that run unreadable; here it waits behind no start, so the rest still reads.
+ */
 export async function hostQueueWait(
   store: RequestReader,
   requestId: string
 ): Promise<HostQueueWait> {
-  const request = await store.getResourceStartRequest(requestId);
+  let request: Awaited<ReturnType<RequestReader['getResourceStartRequest']>>;
+  try {
+    request = await store.getResourceStartRequest(requestId);
+  } catch (error) {
+    if (error instanceof WorkflowStatusReadError) return null;
+    throw error;
+  }
   if (request?.status !== 'queued' || request.blocker?.kind !== 'request') return null;
   const ahead = await store.getResourceStartRequest(request.blocker.id);
   return ahead?.status === 'queued' &&
