@@ -493,12 +493,17 @@ its run id:
 - `workflow-source/runs/<run-id>/`: the workflow source it froze at start.
 
 Deleting a run removes all three, through `archon workflow cleanup <days>` or the Web UI's
-delete. A run that is not deleted keeps them. A path that cannot be removed is reported
-with its error, and the run's row stays deleted.
+delete. A run that is not deleted keeps them. A run that a run which has not ended
+continues from (`--adopt` or `--supersedes`) is not deleted: an adopter reads the source's
+artifacts as `$ADOPTED_RUN_DIR`. A path that cannot be removed is reported with its error,
+and the run's row stays deleted. Archon removes a path only where it sits on disk under
+`$ARCHON_HOME/workspaces`: when a run directory such as `logs/` links outside it, the path
+is reported and left in place.
 
 `archon workflow cleanup --orphans` finds what earlier deletions left: run-id paths, older
 than 6 hours, whose run has no row in the selected store. It lists them with their sizes
-and removes them only with `--yes`. Switching stores keeps the other store's history, and
+and removes them only with `--yes`. A run directory that links outside the workspace is
+named as skipped and not scanned. Switching stores keeps the other store's history, and
 its runs would look like orphans here. So `--yes` is refused while this `ARCHON_HOME` holds
 that history: `archon.db` when files are selected, `store/` when a database is selected.
 A PostgreSQL database that is not currently selected cannot be detected. Do not run

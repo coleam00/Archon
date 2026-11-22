@@ -307,6 +307,24 @@ export const workflowRunActionResponseSchema = z
   .object({ success: z.boolean(), message: z.string() })
   .openapi('WorkflowRunActionResponse');
 
+/**
+ * DELETE /api/workflows/runs/:runId response. The row is deleted whenever this is returned;
+ * `files` says what of the run's artifacts, log and frozen source is still on disk.
+ */
+export const deleteWorkflowRunResponseSchema = z
+  .object({
+    success: z.boolean(),
+    message: z.string(),
+    files: z.object({
+      removedBytes: z.number(),
+      /** Paths still on disk, with the error that kept each. */
+      failed: z.array(z.object({ path: z.string(), error: z.string() })),
+      /** The run id, when its files could not be located. */
+      unlocated: z.array(z.string()),
+    }),
+  })
+  .openapi('DeleteWorkflowRunResponse');
+
 /** POST /api/workflows/runs/:runId/approve request body. */
 export const approveWorkflowRunBodySchema = z
   .object({ comment: z.string().optional(), expectedGate: expectedApprovalGateSchema.optional() })

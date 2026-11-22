@@ -19,6 +19,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import {
   WorkflowRunDeleteRefusedError,
+  liveAdoptersRefusal,
   liveDescendantsRefusal,
   type DeletedWorkflowRun,
 } from '@archon/workflows/store';
@@ -288,6 +289,15 @@ const NO_LIVE_DESCENDANTS = `remote_agent_workflow_runs.id NOT IN (
     SELECT p.id, p.parent_run_id FROM remote_agent_workflow_runs p JOIN up ON p.id = up.parent_run_id)
   SELECT id FROM up)`;
 
+/**
+ * A run that a run which has not ended continues from is kept: the adopter reads the
+ * source's artifacts as `$ADOPTED_RUN_DIR`, and deleting the source removes them.
+ */
+const NO_LIVE_ADOPTERS = `NOT EXISTS (
+  SELECT 1 FROM remote_agent_workflow_runs adopter
+  WHERE adopter.adopted_from_run_id = remote_agent_workflow_runs.id
+    AND adopter.status NOT IN (${terminalList}))`;
+
 /** Ids per `IN (...)` list: far under SQLite's and PostgreSQL's bound-parameter limits. */
 const DELETE_CHUNK = 500;
 
@@ -316,7 +326,8 @@ export async function deleteOldWorkflowRuns(
            AND started_at < ${cutoff}
            AND COALESCE(active_phase_started_at, started_at) < ${cutoff}
            AND ${NO_OPEN_ASKS}
-           AND ${NO_LIVE_DESCENDANTS}`,
+           AND ${NO_LIVE_DESCENDANTS}
+           AND ${NO_LIVE_ADOPTERS}`,
         [olderThanDays]
       );
       const runs = [...selected.rows];
@@ -345,7 +356,8 @@ export async function deleteOldWorkflowRuns(
  * asks or waits still open: those asks would have no rule for who may answer them and no
  * run to record the answer on, and those waits none for who may withdraw them. Nor one with
  * a sub-run, at any depth, that has not ended: deleting it nulls the sub-run's parent link,
- * which splits the tree `concurrency.runs` counts as one. Every refusal is a
+ * which splits the tree `concurrency.runs` counts as one. Nor one that a run which has not
+ * ended continues from, whose artifacts that run still reads. Every refusal is a
  * `WorkflowRunDeleteRefusedError` whose message names what to do first.
  */
 export async function deleteWorkflowRun(id: string): Promise<void> {
@@ -397,6 +409,18 @@ export async function deleteWorkflowRun(id: string): Promise<void> {
         throw liveDescendantsRefusal(
           id,
           live.rows.map(row => ({ id: String(row.id), status: row.status }))
+        );
+      }
+      const adopters = await query<{ id: string; status: string }>(
+        `SELECT id, status FROM remote_agent_workflow_runs
+          WHERE adopted_from_run_id = $1 AND status NOT IN (${terminalList})
+          ORDER BY started_at, id`,
+        [id]
+      );
+      if (adopters.rows.length > 0) {
+        throw liveAdoptersRefusal(
+          id,
+          adopters.rows.map(row => ({ id: String(row.id), status: row.status }))
         );
       }
       await query('DELETE FROM remote_agent_workflow_events WHERE workflow_run_id = $1', [id]);

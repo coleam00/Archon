@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -147,7 +147,8 @@ test('the orphan sweep lists only old run-id paths without a row, and removes on
   await age([...orphan, ...withRow, foreign], day);
   await age(young, ORPHAN_MIN_AGE_MS - 60_000);
 
-  const listed = await findOrphanRunFiles(host.deps.store);
+  const { orphans: listed, linked } = await findOrphanRunFiles(host.deps.store);
+  expect(linked).toEqual([]);
   expect(listed.map(entry => entry.path).sort()).toEqual([...orphan].sort());
   expect(listed.every(entry => entry.bytes >= 50)).toBe(true);
   for (const path of [...orphan, ...withRow, ...young, foreign])
@@ -157,6 +158,57 @@ test('the orphan sweep lists only old run-id paths without a row, and removes on
   expect(report.failed).toEqual([]);
   for (const path of orphan) expect(existsSync(path)).toBe(false);
   for (const path of [...withRow, ...young, foreign]) expect(existsSync(path)).toBe(true);
+});
+
+test('a run directory linked outside the workspace is neither scanned nor removed from', async () => {
+  const outside = roots(await mkdtemp(join(tmpdir(), 'run-files-outside-')));
+  const external = join(outside, `${id(1)}.jsonl`);
+  await writeFile(external, 'not the workspace');
+  await mkdir(projectRoot, { recursive: true });
+  await symlink(outside, join(projectRoot, 'logs'), 'dir');
+  const day = 24 * 60 * 60 * 1000;
+  await age([external], day);
+
+  const report = await removeRunFiles(
+    [{ id: id(1), output_root: projectRoot, codebase_id: null }],
+    noCodebase
+  );
+  expect(existsSync(external)).toBe(true);
+  expect(report.failed).toEqual([
+    {
+      path: getRunLogPathForRoot(projectRoot, id(1)),
+      error: expect.stringContaining('outside the project workspace'),
+    },
+  ]);
+
+  const host = await createFileWorkflowHost(join(process.env.ARCHON_HOME ?? '', 'store'));
+  const { orphans, linked } = await findOrphanRunFiles(host.deps.store);
+  expect(orphans).toEqual([]);
+  expect(linked.map(entry => entry.path)).toEqual([join(projectRoot, 'logs')]);
+  expect(existsSync(external)).toBe(true);
+});
+
+test('a run that a live run adopted is not deleted, and keeps its files', async () => {
+  const host = await createFileWorkflowHost(join(process.env.ARCHON_HOME ?? '', 'store'));
+  const store = host.deps.store;
+  const source = await store.createWorkflowRun({ workflow_name: 'w', user_message: '' });
+  await store.updateWorkflowRun(source.id, { output_root: projectRoot });
+  await store.claimPendingWorkflowRun(source.id);
+  await store.completeWorkflowRun(source.id, { duration_ms: 1 });
+  const paths = await writeRunFiles(projectRoot, source.id);
+  const adopter = await store.createWorkflowRun({
+    workflow_name: 'w',
+    user_message: '',
+    adopted_from_run_id: source.id,
+  });
+  await store.claimPendingWorkflowRun(adopter.id);
+
+  await expect(host.operations.deleteWorkflowRun(source.id, { kind: 'operator' })).rejects.toThrow(
+    `${adopter.id} (running)`
+  );
+  expect(await store.deleteOldWorkflowRuns(0)).toEqual({ runs: [] });
+  expect(await store.getWorkflowRunStatus(source.id)).toBe('completed');
+  for (const path of paths) expect(existsSync(path)).toBe(true);
 });
 
 test("deleting a run through operations removes the run's files", async () => {

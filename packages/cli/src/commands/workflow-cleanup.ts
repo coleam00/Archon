@@ -17,7 +17,8 @@ import { getLog } from './workflow-shared';
 /** The store this CLI process opened: the file store, or the database `DATABASE_URL` picks. */
 export type CleanupStoreKind = 'files' | 'sqlite' | 'postgresql';
 
-const ORPHANS_RETRY = 'A later `archon workflow cleanup --orphans --yes` removes them.';
+const ORPHANS_RETRY =
+  'Once the cause is fixed, `archon workflow cleanup --orphans --yes` removes them. A path whose directory is outside the project workspace is never removed by Archon.';
 
 export function formatBytes(bytes: number): string {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -109,7 +110,9 @@ export async function workflowOrphanCleanupCommand(
   host: { deps: { store: Pick<IWorkflowStore, 'getWorkflowRun'> } },
   options: { yes: boolean; storeKind: CleanupStoreKind }
 ): Promise<number> {
-  const orphans = await findOrphanRunFiles(host.deps.store);
+  const { orphans, linked } = await findOrphanRunFiles(host.deps.store);
+  for (const { path, linksTo } of linked)
+    console.log(`Skipped ${path}: it is ${linksTo}, outside the project workspace.`);
   if (orphans.length === 0) {
     console.log('No files of deleted runs found.');
     return 0;

@@ -2182,14 +2182,16 @@ selected store (files or database). Every latest revision survives, including to
 removing a tombstone would allow revision numbers to repeat and a stale replacement to overwrite recreated state.
 A run that left asks or waits open on its item is kept, and so is a run with a `workflow:`
 sub-run, at any depth, that has not ended: deleting it would split the run tree the
-[run limit](/reference/configuration/#run-limit) counts as one. A later cleanup removes it
-once they have closed or ended.
+[run limit](/reference/configuration/#run-limit) counts as one. A run that a run which has
+not ended continues from is kept too, because an adopter reads its artifacts. A later
+cleanup removes it once they have closed or ended.
 
 Each deleted run's artifacts directory, log and frozen workflow source are removed with it
 (see [a run's files on disk](/reference/database/#a-runs-files-on-disk)). The command
 reports the runs deleted, the disk space their files took and the state revisions pruned.
 It prints each path it could not remove with the error to stderr and exits 1. The rows
-stay deleted, and a later `--orphans --yes` removes those paths.
+stay deleted, and once the cause is fixed a later `--orphans --yes` removes those paths.
+A path whose directory links outside `$ARCHON_HOME/workspaces` is reported and never removed.
 
 ```bash
 archon workflow cleanup              # Default: 7 days

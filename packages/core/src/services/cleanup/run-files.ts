@@ -7,8 +7,8 @@
  * ones whose row was deleted before anything removed them (`findOrphanRunFiles`).
  */
 import type { Dirent } from 'node:fs';
-import { lstat, readdir, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { lstat, readdir, realpath, rm } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import {
   RUN_ID_PATTERN,
   getArchonWorkspacesPath,
@@ -70,6 +70,27 @@ async function pathBytes(path: string): Promise<number> {
   return total;
 }
 
+/**
+ * Where a run directory (`logs/`, `artifacts/runs/`, `workflow-source/runs/`) really is.
+ * It is `contained` only when it sits on disk where its name says, under the real
+ * workspaces root: an operator may link a storage directory elsewhere, and a link between
+ * the workspaces root and the directory would take removal outside the workspace.
+ * `resolveRunStorageRoot` checks names only, so this is the check that reads the disk.
+ */
+async function containment(dir: string): Promise<'contained' | 'missing' | { linksTo: string }> {
+  const workspaces = getArchonWorkspacesPath();
+  const rel = relative(workspaces, dir);
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return { linksTo: dir };
+  let real: string;
+  try {
+    real = await realpath(dir);
+  } catch (error) {
+    if (isNotFound(error)) return 'missing';
+    throw error;
+  }
+  return real === join(await realpath(workspaces), rel) ? 'contained' : { linksTo: real };
+}
+
 /** Remove each path, adding to `report`; a failure is recorded and the rest continue. */
 async function removePaths(
   paths: readonly string[],
@@ -78,6 +99,15 @@ async function removePaths(
 ): Promise<void> {
   for (const path of paths) {
     try {
+      const where = await containment(dirname(path));
+      if (where === 'missing') continue;
+      if (where !== 'contained') {
+        report.failed.push({
+          path,
+          error: `not removed: its directory is ${where.linksTo}, outside the project workspace`,
+        });
+        continue;
+      }
       const bytes = await pathBytes(path);
       await remove(path);
       report.removedBytes += bytes;
@@ -127,6 +157,12 @@ export interface OrphanRunFile {
   bytes: number;
 }
 
+export interface OrphanRunFiles {
+  orphans: OrphanRunFile[];
+  /** Run directories left unscanned because they link outside the workspace. */
+  linked: { path: string; linksTo: string }[];
+}
+
 /**
  * Younger than this, a run-id path may belong to a run whose row does not exist yet: a
  * container run's frozen source moves to `workflow-source/runs/<id>` before its row is
@@ -155,15 +191,17 @@ async function children(path: string): Promise<Dirent[]> {
 /**
  * Run-id paths under every project's run directories whose id has no row in `store`.
  * Projects sit two levels under the workspaces root (`owner/repo`, `_folder/<slug>`,
- * `@cwd/<name>`); symlinked entries are never followed. A path younger than
+ * `@cwd/<name>`); symlinked entries are never followed, and a run directory that links
+ * outside the workspace is reported in `linked`, not scanned. A path younger than
  * {@link ORPHAN_MIN_AGE_MS} is left out.
  */
 export async function findOrphanRunFiles(
   store: Pick<IWorkflowStore, 'getWorkflowRun'>,
   now: number = Date.now()
-): Promise<OrphanRunFile[]> {
+): Promise<OrphanRunFiles> {
   const workspaces = getArchonWorkspacesPath();
   const found: OrphanRunFile[] = [];
+  const linked: OrphanRunFiles['linked'] = [];
   const known = new Map<string, boolean>();
   const hasRow = async (id: string): Promise<boolean> => {
     let value = known.get(id);
@@ -182,6 +220,12 @@ export async function findOrphanRunFiles(
         [storage.logsDir, name => (name.endsWith('.jsonl') ? name.slice(0, -6) : null)],
       ];
       for (const [parent, idOf] of parents) {
+        const where = await containment(parent);
+        if (where === 'missing') continue;
+        if (where !== 'contained') {
+          linked.push({ path: parent, linksTo: where.linksTo });
+          continue;
+        }
         for (const entry of await children(parent)) {
           if (entry.isSymbolicLink()) continue;
           const id = idOf(entry.name);
@@ -195,7 +239,7 @@ export async function findOrphanRunFiles(
       }
     }
   }
-  return found;
+  return { orphans: found, linked };
 }
 
 /** Remove paths {@link findOrphanRunFiles} listed, reported like {@link removeRunFiles}. */

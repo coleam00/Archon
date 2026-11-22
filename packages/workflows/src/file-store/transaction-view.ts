@@ -495,12 +495,16 @@ export function createTransactionView(
     },
     deleteOldWorkflowRuns: async days => {
       if (!Number.isInteger(days) || days < 0) throw new Error('Invalid olderThanDays');
-      const liveTree = ancestorsOfLiveRuns(runs);
+      const retained = ancestorsOfLiveRuns(runs);
+      // A continuation that has not ended reads its source's artifacts, so the source stays.
+      for (const run of runs.values())
+        if (run.adopted_from_run_id !== null && !isTerminalRunStatus(run.status))
+          retained.add(run.adopted_from_run_id);
       const removed = [...runs.values()]
         .filter(
           run =>
             isTerminalRunStatus(run.status) &&
-            !liveTree.has(run.id) &&
+            !retained.has(run.id) &&
             Math.max(
               run.started_at.getTime(),
               run.active_phase_started_at?.getTime() ?? -Infinity

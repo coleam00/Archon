@@ -292,7 +292,7 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
       expect((await store.listWorkflowRuns({ parentRunIds: [parent.id] })).total).toBe(12);
     });
 
-    test('open work excludes adopted failures, adopters are newest first, cleanup deletes only old terminals', async () => {
+    test('open work excludes adopted failures, adopters are newest first, cleanup keeps a source until its adopters end', async () => {
       const failed = await create(store, { codebase_id: CONFORMANCE_CODEBASE_ID });
       const outputRoot = '/conformance/workspaces/owner/repo';
       await store.updateWorkflowRun(failed.id, { output_root: outputRoot });
@@ -319,16 +319,29 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
         provider_session_id: 'keep',
         last_run_id: failed.id,
       });
-      expect(await store.deleteOldWorkflowRuns(2)).toEqual({
-        runs: [{ id: failed.id, output_root: outputRoot, codebase_id: CONFORMANCE_CODEBASE_ID }],
+      // Pending adopters read the source's artifacts, so it stays until they end.
+      expect(await store.deleteOldWorkflowRuns(2)).toEqual({ runs: [] });
+      expect(await store.getWorkflowRunStatus(failed.id)).toBe('failed');
+      await store.cancelWorkflowRun(first.id);
+      await store.cancelWorkflowRun(second.id);
+      // The backdated adopter is now old and terminal too; the recent one stays.
+      const { runs: deleted } = await store.deleteOldWorkflowRuns(2);
+      expect(deleted.find(run => run.id === failed.id)).toEqual({
+        id: failed.id,
+        output_root: outputRoot,
+        codebase_id: CONFORMANCE_CODEBASE_ID,
       });
+      expect(deleted.map(run => run.id).sort()).toEqual([failed.id, first.id].sort());
       expect(await store.listWorkflowNodeSessions(scope)).toEqual([
         expect.objectContaining({ provider_session_id: 'keep', last_run_id: null }),
       ]);
 
       expect(await store.getWorkflowRun(failed.id)).toBeNull();
       expect(await store.listWorkflowEvents(failed.id)).toEqual([]);
-      expect(await store.getWorkflowRunStatus(first.id)).toBe('pending');
+      expect(await store.getWorkflowRun(second.id)).toMatchObject({
+        status: 'cancelled',
+        adopted_from_run_id: null,
+      });
       expect(await rejection(store.deleteOldWorkflowRuns(-1))).toBeInstanceOf(Error);
     });
     test('cleanup keeps an old tree while a run in it is live and removes it once it ends', async () => {
