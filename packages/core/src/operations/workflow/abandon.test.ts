@@ -1408,6 +1408,9 @@ describe('abandon owned worktrees', () => {
           await fileStore.updateWorkflowRunMetadataIfRunning(child.id, { parent_node_id: null })
         ).toBe(true);
       }
+      // A parent is deleted only once its sub-runs have ended, so the child that abandon and
+      // reset meet after the deletion is one that failed.
+      await fileStore.failWorkflowRun(child.id, 'interrupted');
       await fileStore.cancelWorkflowRun(parent.id);
       await fileStore.deleteWorkflowRun(parent.id);
       expect((await fileStore.getWorkflowRun(child.id))?.parent_run_id).toBeNull();
@@ -1421,9 +1424,6 @@ describe('abandon owned worktrees', () => {
         reclaimContainerEnv: mockReclaimContainerEnv,
         reclaimRunWorktree: reclaim,
       });
-      if (operation === 'reset') {
-        await fileStore.failWorkflowRun(child.id, 'interrupted');
-      }
       const result =
         operation === 'abandon'
           ? await fileOperations.abandonWorkflow(child.id, operator)

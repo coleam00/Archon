@@ -111,3 +111,30 @@ export class ConcurrencyConfigError extends Error {
     this.name = 'ConcurrencyConfigError';
   }
 }
+
+/**
+ * A store refused to delete a workflow run, and nothing was deleted. The message says why
+ * (not found, not terminal, open asks or waits, sub-runs that have not ended) and what the
+ * operator does first, so a caller reports it as given.
+ */
+export class WorkflowRunDeleteRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WorkflowRunDeleteRefusedError';
+  }
+}
+
+/**
+ * The refusal for a run whose sub-runs, at any depth, have not ended. Deleting the run would
+ * cut their parent link, so each would count as a tree of its own under `concurrency.runs`.
+ * Both stores word it the same way.
+ */
+export function liveDescendantsRefusal(
+  runId: string,
+  live: readonly { id: string; status: string }[]
+): WorkflowRunDeleteRefusedError {
+  const runs = live.map(run => `${run.id} (${run.status})`).join(', ');
+  return new WorkflowRunDeleteRefusedError(
+    `Cannot delete workflow run ${runId}: its sub-runs have not ended: ${runs}. Cancel or abandon them (archon workflow cancel|abandon <run-id>), or wait for them to end, then delete it.`
+  );
+}

@@ -323,6 +323,36 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
       expect(await store.getWorkflowRunStatus(first.id)).toBe('pending');
       expect(await rejection(store.deleteOldWorkflowRuns(-1))).toBeInstanceOf(Error);
     });
+    test('cleanup keeps an old tree while a run in it is live and removes it once it ends', async () => {
+      const old = new Date(Date.now() - 10 * 86_400_000);
+      const finish = (id: string) => store.completeWorkflowRun(id, { duration_ms: 1 });
+      const parent = await running(store);
+      const child = await running(store, { parent_run_id: parent.id });
+      const grandchild = await running(store, { parent_run_id: child.id });
+      const endedRoot = await running(store);
+      const endedChild = await running(store, { parent_run_id: endedRoot.id });
+      for (const run of [child, parent, endedChild, endedRoot]) await finish(run.id);
+      for (const run of [parent, child, grandchild, endedRoot, endedChild])
+        await harness.backdate(run.id, { started_at: old, active_phase_started_at: old });
+      const kept = [parent, child];
+      const before = await Promise.all(kept.map(run => store.listWorkflowEvents(run.id)));
+      expect(before.every(events => events.length > 0)).toBe(true);
+
+      expect(await store.deleteOldWorkflowRuns(7)).toEqual({ count: 2 });
+      for (const run of [endedRoot, endedChild])
+        expect(await store.getWorkflowRun(run.id)).toBeNull();
+      for (const [index, run] of kept.entries()) {
+        expect(await store.getWorkflowRunStatus(run.id)).toBe('completed');
+        expect(await store.listWorkflowEvents(run.id)).toEqual(before[index] ?? []);
+      }
+      expect((await store.getWorkflowRun(grandchild.id))?.parent_run_id).toBe(child.id);
+
+      await finish(grandchild.id);
+      await harness.backdate(grandchild.id, { started_at: old, active_phase_started_at: old });
+      expect(await store.deleteOldWorkflowRuns(7)).toEqual({ count: 3 });
+      for (const run of [parent, child, grandchild])
+        expect(await store.getWorkflowRun(run.id)).toBeNull();
+    });
     test.each(['completed', 'failed', 'cancelled'] as const)(
       'cleanup ages %s runs by their latest active phase, including older writers',
       async status => {

@@ -20,7 +20,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import type { IWorkflowStore } from '../store';
-import type { WorkflowRun } from '../schemas/workflow-run';
+import { isTerminalRunStatus, type WorkflowRun } from '../schemas/workflow-run';
+import { WorkflowRunDeleteRefusedError, liveDescendantsRefusal } from '../store/errors';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import {
   workflowNodeSessionSchema,
@@ -459,8 +460,24 @@ export async function createFileWorkflowStore(
       commit(root, 'all', async runs => {
         const run = runs.get(id);
         if (!run) return { result: undefined, changes: {} };
-        if (!['completed', 'failed', 'cancelled'].includes(run.status))
-          throw new Error('Only terminal runs can be deleted');
+        if (!isTerminalRunStatus(run.status))
+          throw new WorkflowRunDeleteRefusedError(
+            `Cannot delete workflow run in '${run.status}' status — cancel it first`
+          );
+        // A sub-run that has not ended, at any depth, keeps its ancestors: deleting one would
+        // cut the tree that `concurrency.runs` counts as one.
+        const live: WorkflowRun[] = [];
+        const seen = new Set([id]);
+        const below = [id];
+        for (let parent = below.pop(); parent !== undefined; parent = below.pop()) {
+          for (const child of runs.values()) {
+            if (child.parent_run_id !== parent || seen.has(child.id)) continue;
+            seen.add(child.id);
+            below.push(child.id);
+            if (!isTerminalRunStatus(child.status)) live.push(child);
+          }
+        }
+        if (live.length > 0) throw liveDescendantsRefusal(id, live);
         const changed = [...runs.values()]
           .filter(row => row.parent_run_id === id || row.adopted_from_run_id === id)
           .map(row => ({

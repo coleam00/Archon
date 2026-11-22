@@ -2180,7 +2180,10 @@ The result reports `signaled` separately from admission and settlement. If the s
 Delete old terminal workflow run records and prune state-document revisions from the
 selected store (files or database). Every latest revision survives, including tombstones:
 removing a tombstone would allow revision numbers to repeat and a stale replacement to overwrite recreated state.
-The command reports both counts.
+A run that left asks or waits open on its item is kept, and so is a run with a `workflow:`
+sub-run, at any depth, that has not ended: deleting it would split the run tree the
+[run limit](/reference/configuration/#run-limit) counts as one. A later cleanup removes it
+once they have closed or ended. The command reports both counts.
 
 ```bash
 archon workflow cleanup        # Default: 7 days
