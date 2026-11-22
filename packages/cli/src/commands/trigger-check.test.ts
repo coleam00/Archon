@@ -218,6 +218,19 @@ test('reports a timer whose config file is gone, with how to remove it by hand',
   expect(broken?.problems[0]).toContain('launchctl bootout gui/501/com.archon.trigger.');
 });
 
+test('reports an invalid timer config inside the triggers directory with how to remove the timer', async () => {
+  const { archonHome, config, installTimer, check } = await fixture();
+  const path = join(archonHome, 'triggers', 'timer.json');
+  await writeFile(path, JSON.stringify(config({ a: 1 })));
+  await installTimer(path);
+  await writeFile(path, JSON.stringify({ ...config({ a: 1 }), schedule: {} }));
+
+  const [broken] = (await check()).bindings;
+  expect(broken).toMatchObject({ file: path, timer: expect.any(String) });
+  expect(broken?.problems[0]).toContain('is invalid: Invalid trigger configuration fields');
+  expect(broken?.problems[0]).toContain('launchctl bootout gui/501/com.archon.trigger.');
+});
+
 test('a fire-only file may leave a required input to --inputs, but not pass an undeclared one', async () => {
   const { archonHome, config, check } = await fixture();
   const path = join(archonHome, 'triggers', 'fire-only.json');

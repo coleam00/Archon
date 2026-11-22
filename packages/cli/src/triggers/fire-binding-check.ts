@@ -94,6 +94,11 @@ function timerConfigPath(programArguments: readonly string[]): string | undefine
   return path === undefined ? undefined : resolve(path);
 }
 
+/** Why every tick of a timer fails when its config file cannot be read as a binding. */
+function brokenTimer(job: InstalledSchedule, configPath: string, why: string): string {
+  return `timer ${job.definition} runs trigger fire --config ${configPath}, which ${why}; every tick fails. Restore the file, or remove the timer by hand: ${job.removeByHand}`;
+}
+
 /** A timer's config file, read as `trigger fire` reads it at each tick. */
 async function readTimerConfig(
   job: InstalledSchedule,
@@ -102,7 +107,7 @@ async function readTimerConfig(
   const broken = (why: string) => ({
     file: configPath,
     timer: job.definition,
-    problem: `timer ${job.definition} runs trigger fire --config ${configPath}, which ${why}; every tick fails. Restore the file, or remove the timer by hand: ${job.removeByHand}`,
+    problem: brokenTimer(job, configPath, why),
   });
   let json: unknown;
   try {
@@ -136,8 +141,12 @@ async function readFireBindingFiles(schedules: NativeScheduleOptions): Promise<F
     // Not a trigger timer: a workflow wake or isolation cleanup job.
     if (configPath === undefined) continue;
     const listed = files.find(entry => entry.file === configPath);
-    if (listed) listed.timer = job.definition;
-    else files.push(await readTimerConfig(job, configPath));
+    if (!listed) files.push(await readTimerConfig(job, configPath));
+    else {
+      listed.timer = job.definition;
+      if ('problem' in listed)
+        listed.problem = brokenTimer(job, configPath, `is invalid: ${listed.problem}`);
+    }
   }
   return files;
 }

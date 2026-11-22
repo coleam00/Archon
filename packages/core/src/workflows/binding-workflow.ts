@@ -130,11 +130,12 @@ export type SuppliedAtStart = { mapped: readonly string[] } | 'at-fire';
  * Why a start of this binding would be refused for its workflow or its inputs, by the
  * validation the start itself runs (`resolveBindingInputs`). Mapped values are known only
  * when the event happens, so they are checked by name: a placeholder stands in for each,
- * and a name that is only a pack setting is left out, its type being checked at the start.
+ * and a name that is only a pack setting is left out, with any launch literal it replaces:
+ * its value, and so its type, is known only at the start.
  * For `'at-fire'` a missing required input is no problem: the fire may pass it.
  */
 export function startedWorkflowInputProblems(
-  started: StartedWorkflow,
+  started: { workflow: Pick<ResolvedWorkflow, 'name' | 'inputs' | 'pack'> } | { refused: string },
   launchInputs: Readonly<Record<string, JsonValue>> | undefined,
   supplied: SuppliedAtStart
 ): string[] {
@@ -142,13 +143,20 @@ export function startedWorkflowInputProblems(
   const { workflow } = started;
   const settings = workflow.pack?.settings ?? {};
   const mapped = supplied === 'at-fire' ? [] : supplied.mapped;
+  const packOnly = (name: string): boolean =>
+    Object.hasOwn(settings, name) && !Object.hasOwn(workflow.inputs ?? {}, name);
   const eventInputs = Object.fromEntries(
-    mapped
-      .filter(name => !Object.hasOwn(settings, name) || Object.hasOwn(workflow.inputs ?? {}, name))
-      .map(name => [name, null])
+    mapped.filter(name => !packOnly(name)).map(name => [name, null])
+  );
+  // An event value replaces a launch literal of the same name at the start, so a mapped
+  // pack setting's literal is never what the start checks.
+  const launch = Object.fromEntries(
+    Object.entries(launchInputs ?? {}).filter(
+      ([name]) => !(packOnly(name) && mapped.includes(name))
+    )
   );
   try {
-    resolveBindingInputs({ launch: { inputs: { ...launchInputs } }, eventInputs }, workflow);
+    resolveBindingInputs({ launch: { inputs: launch }, eventInputs }, workflow);
     return [];
   } catch (error) {
     if (supplied === 'at-fire' && error instanceof BindingMissingInputsError) return [];
