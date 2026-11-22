@@ -52,11 +52,14 @@ import {
 } from '@archon/workflows/schemas/pack-bindings';
 import {
   nearestPackBindings,
+  type PackCopy,
+  packCopies,
   type PackGraph,
   type PackGraphLink,
   packWorkflowName,
   packWorkflows,
 } from '@archon/workflows/pack-graph';
+import { liveSourceRoots } from '@archon/workflows/workflow-source';
 import { writeJsonLine } from '../utils/stdout';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 import type {
@@ -64,6 +67,7 @@ import type {
   RunEndedInputSource,
 } from '@archon/workflows/schemas/binding-input-source';
 import { loadWorkflows } from './workflow-list';
+import { loadedLine, otherCopyLine } from './pack-copies';
 
 export interface PackBindingsOptions {
   /** The checkout the bindings launch in, and where the pack is discovered from. */
@@ -367,18 +371,31 @@ async function exists(path: string): Promise<boolean> {
 
 interface DeclaredPack {
   key: string;
+  copies: Awaited<ReturnType<typeof packCopies>>;
   bindings: Readonly<Record<string, PackBinding>>;
   /** The pack's dispatchable workflow names, as a binding must spell them. */
   workflowNames: readonly string[];
 }
 
-async function findPack(cwd: string, packKey: string): Promise<DeclaredPack> {
-  const workflows = packWorkflows(await loadWorkflows(cwd), packKey, cwd);
+async function findPack(
+  cwd: string,
+  packKey: string,
+  explicitSource: boolean
+): Promise<DeclaredPack> {
+  const discovered = await loadWorkflows(cwd);
+  const workflows = packWorkflows(discovered, packKey, cwd);
+  const copies = await packCopies(discovered, liveSourceRoots(cwd), packKey);
   const bindings = nearestPackBindings(workflows);
   if (bindings === undefined)
-    throw new Error(`Pack '${packKey}' declares no bindings in its .pack/pack.yaml.`);
+    throw new Error(
+      [
+        `Pack '${packKey}' declares no bindings in its .pack/pack.yaml.`,
+        ...copyLines(packKey, copies, cwd, explicitSource),
+      ].join('\n')
+    );
   return {
     key: packKey,
+    copies,
     bindings,
     workflowNames: workflows.map(entry => entry.workflow.name),
   };
@@ -404,6 +421,27 @@ function workflowNameFor(pack: DeclaredPack, id: string, declared: string): stri
       `Binding '${id}' names workflow '${declared}', which pack '${pack.key}' does not provide.`
     );
   return name;
+}
+
+/**
+ * Which copy of the pack was read, and every other copy in reach with how to choose it.
+ * A binding discovered from `--workflow-source` refuses an installed workflow, so with an
+ * explicit source the hint for an installed copy drops the flag.
+ */
+function copyLines(
+  packKey: string,
+  { loaded, otherCopies }: { loaded: readonly PackCopy[]; otherCopies: readonly PackCopy[] },
+  source: string,
+  explicitSource: boolean
+): string[] {
+  const choose = (copy: PackCopy): string =>
+    copy.source === 'installed' && explicitSource
+      ? `Drop --workflow-source and name '${copy.key}' to use it.`
+      : `Name '${copy.key}' to use it.`;
+  return [
+    ...loaded.map(copy => loadedLine(packKey, copy, source)),
+    ...otherCopies.map(copy => `${otherCopyLine(copy, source)} ${choose(copy)}`),
+  ];
 }
 
 /** A POSIX shell word for a path the operator chose, which may hold spaces or quotes. */
@@ -616,7 +654,11 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
   const { repo } = target;
   // A bad run config path fails here, not at the first start that loads it.
   if (target.configSource !== undefined) await loadWorkflowRunConfigFile(target.configSource);
-  const pack = await findPack(target.discoveryCwd ?? target.cwd, packKey);
+  const pack = await findPack(
+    target.discoveryCwd ?? target.cwd,
+    packKey,
+    target.discoveryCwd !== undefined
+  );
   const generated = await generateChecked(pack, selectIds(pack, options.only), target);
   if (!options.force) await assertNothingOverwritten(generated);
 
@@ -631,6 +673,7 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
   if (options.json) {
     await writeJsonLine({
       pack: packKey,
+      ...pack.copies,
       written: generated.map(({ id, kind, path, outcome, option }) => ({
         id,
         kind,
@@ -643,6 +686,12 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
   }
   console.log(
     [
+      ...copyLines(
+        packKey,
+        pack.copies,
+        target.discoveryCwd ?? target.cwd,
+        target.discoveryCwd !== undefined
+      ),
       `Wrote ${generated.length} binding file${generated.length === 1 ? '' : 's'} for ${repo.host}/${repo.path} to ${target.outDir}. Nothing is registered or scheduled yet.`,
       ...nextSteps(generated, target),
     ].join('\n')
@@ -678,8 +727,11 @@ function linkText(link: PackGraphLink): string {
 }
 
 /** The graph as plain lines; `--json` prints the read itself, which is the contract. */
-function graphText(graph: PackGraph): string {
-  const lines = [`Pack '${graph.pack}': ${String(graph.stages.length)} stage(s)`];
+function graphText(graph: PackGraph, source: string, explicitSource: boolean): string {
+  const lines = [
+    ...copyLines(graph.pack, graph, source, explicitSource),
+    `Pack '${graph.pack}': ${String(graph.stages.length)} stage(s)`,
+  ];
   for (const stage of graph.stages) {
     const values = stage.outcome?.values.map(v => v.value).join(', ');
     lines.push(`  ${stage.name}${values === undefined ? ' (no outcome)' : `: ${values}`}`);
@@ -702,8 +754,11 @@ function graphText(graph: PackGraph): string {
 }
 
 async function packGraph(packKey: string, options: PackBindingsOptions): Promise<void> {
+  const cwd = resolve(options.cwd);
+  const workflowSource =
+    options.workflowSource === undefined ? undefined : resolve(options.workflowSource);
   const graph = await readPackGraph(
-    resolve(options.cwd),
+    cwd,
     packKey,
     {
       loadConfig,
@@ -712,10 +767,10 @@ async function packGraph(packKey: string, options: PackBindingsOptions): Promise
       projectKeyOf: launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb)),
       projectOf: cwd => registeredProjectForPath(cwd, codebaseDb),
     },
-    options.workflowSource === undefined ? {} : { workflowSource: resolve(options.workflowSource) }
+    workflowSource === undefined ? {} : { workflowSource }
   );
   if (options.json) await writeJsonLine(graph);
-  else console.log(graphText(graph));
+  else console.log(graphText(graph, workflowSource ?? cwd, workflowSource !== undefined));
 }
 
 export async function packCommand(
