@@ -197,10 +197,10 @@ Commands:
   workflow merged --item <key> --change <ref> --at <ISO>
                              Record that an item's change merged, as the forge reported it. Recorded once:
                              a second report keeps the first
-  workflow landing --item <key> --branch <name>
+  workflow landing --item <key> --branch <name> [--from <start-point>]
                              Record the branch an item's change lands on. Every fresh run on the item, and on
                              an item part_of it that records none, is cut from it and proposes against it.
-                             Recording again replaces it
+                             Recording again replaces it. With --from, first create the branch on the remote
   workflow notice <text>     Inside a workflow node: say what the run did, for whoever watches attention
                              with --notices. Never pauses the run and cannot be answered
   workflow event emit        Emit a workflow event into a run
