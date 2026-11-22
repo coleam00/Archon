@@ -712,3 +712,49 @@ test('watch keeps observing at its interval while a resumed run is still running
     timer.mockRestore();
   }
 });
+
+test('an engine update stops observation too, while a resumed run is still running', async () => {
+  const originalTimeout = globalThis.setTimeout;
+  const timers: {
+    setTimeout(callback: () => void, delay?: number): ReturnType<typeof setTimeout>;
+  } = globalThis;
+  const timer = spyOn(timers, 'setTimeout').mockImplementation((callback: () => void) =>
+    originalTimeout(callback, 0)
+  );
+  let finish!: (value: { success: true; workflowRunId: string }) => void;
+  const settled = new Promise<{ success: true; workflowRunId: string }>(resolve => {
+    finish = resolve;
+  });
+  scan.mockImplementationOnce(async () => [
+    { runId: 'long', kind: 'accepted', run: makeTestWorkflowRun(), settled },
+  ]);
+  const observed = observation([]);
+  let passes = 0;
+  // Archon is updated during the second pass; the resumed run ends a little later.
+  observed.pass.mockImplementation(async () => {
+    passes += 1;
+    if (passes === 2) {
+      fingerprint = 'updated';
+      originalTimeout(() => finish({ success: true, workflowRunId: 'long' }), 30);
+    }
+    return [];
+  });
+  try {
+    expect(
+      await workflowContinuationCommand(
+        host,
+        'wake',
+        [],
+        { json: true, watch: true },
+        async () => observed.value
+      )
+    ).toBe(75);
+    // No observation pass started on the old engine after the update was seen.
+    expect(passes).toBe(2);
+    expect(
+      output.filter(line => (line as { restart?: string }).restart === 'engine changed')
+    ).toHaveLength(1);
+  } finally {
+    timer.mockRestore();
+  }
+});

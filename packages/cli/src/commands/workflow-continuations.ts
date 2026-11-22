@@ -366,10 +366,18 @@ async function loadedEngine(watch: boolean, json: boolean): Promise<string | und
   return undefined;
 }
 
-async function engineChanged(loaded: string | undefined, json: boolean): Promise<boolean> {
-  if (loaded === undefined) return false;
+/** The installed engine, when it is no longer the one this watch loaded. */
+function movedEngine(loaded: string | undefined): { current: string | undefined } | undefined {
+  if (loaded === undefined) return undefined;
   const current = engineFingerprint();
-  if (current === loaded) return false;
+  return current === loaded ? undefined : { current };
+}
+
+async function reportEngineChanged(
+  loaded: string,
+  current: string | undefined,
+  json: boolean
+): Promise<void> {
   if (json) {
     await writeJsonLine({
       ok: true,
@@ -379,7 +387,6 @@ async function engineChanged(loaded: string | undefined, json: boolean): Promise
       current: current ?? null,
     });
   } else console.log(`wake: engine changed (${loaded} -> ${current}), exiting to restart`);
-  return true;
 }
 
 /**
@@ -504,20 +511,40 @@ async function drainOwed(
 interface WakeControl {
   stopped(): boolean;
   sleep(ms: number): Promise<void>;
+  /**
+   * Whether the installed engine changed since the watch loaded it. Either loop checks it
+   * before each pass; the first to see a change reports it once and stops both, so no pass
+   * of either starts on old code.
+   */
+  engineMoved(): Promise<boolean>;
+  /** Whether `engineMoved` has seen a change, without checking again. */
+  moved(): boolean;
 }
 
-/**
- * Observation's own loop. It runs beside the continuation loop, not inside it, because a
- * continuation pass awaits every resumed run to its end: a run that takes twenty minutes
- * must not hold the waits it is not part of for twenty minutes. A one-shot wake observes
- * once.
- */
-/** A stop flag for both loops, and sleeps that a stop ends at once. */
-function wakeControl(): { control: WakeControl; stop: () => void } {
+/** A stop flag for both loops, sleeps that a stop ends at once, and the engine check. */
+function wakeControl(
+  loaded: string | undefined,
+  json: boolean
+): { control: WakeControl; stop: () => void } {
   let stopped = false;
+  let moved = false;
   const sleeps = new Set<() => void>();
+  const stop = (): void => {
+    stopped = true;
+    for (const done of [...sleeps]) done();
+  };
   return {
     control: {
+      engineMoved: async () => {
+        if (moved) return true;
+        const change = movedEngine(loaded);
+        if (loaded === undefined || change === undefined) return false;
+        moved = true;
+        stop();
+        await reportEngineChanged(loaded, change.current, json);
+        return true;
+      },
+      moved: () => moved,
       stopped: () => stopped,
       sleep: ms =>
         new Promise<void>(resolve => {
@@ -530,13 +557,16 @@ function wakeControl(): { control: WakeControl; stop: () => void } {
           sleeps.add(done);
         }),
     },
-    stop: () => {
-      stopped = true;
-      for (const done of [...sleeps]) done();
-    },
+    stop,
   };
 }
 
+/**
+ * Observation's own loop. It runs beside the continuation loop, not inside it, because a
+ * continuation pass awaits every resumed run to its end: a run that takes twenty minutes
+ * must not hold the waits it is not part of for twenty minutes. A one-shot wake observes
+ * once.
+ */
 async function observeLoop(
   host: WorkflowHost,
   observation: WakeObservation | undefined,
@@ -549,6 +579,7 @@ async function observeLoop(
   const owed = new Set<string>();
   let ok = true;
   do {
+    if (await control.engineMoved()) break;
     try {
       ok = (await observePass(host, observation, owed, json)) && ok;
     } catch (error) {
@@ -572,18 +603,18 @@ async function wake(
   validateFlags(values, ['watch']);
   if (args.length) throw new Error('Usage: archon workflow wake [--watch] [--json]');
   await announceObserving(observation, values.watch === true, json);
-  const { control, stop } = wakeControl();
+  const loaded = await loadedEngine(values.watch === true, json);
+  const { control, stop } = wakeControl(loaded, json);
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
   let ok = true;
   let observedOk = true;
   const observing = observeLoop(host, observation, values.watch === true, json, control);
-  const loaded = await loadedEngine(values.watch === true, json);
   try {
     do {
       // Checked before every pass, so an update during the sleep never gets
       // another pass on the old engine.
-      if (await engineChanged(loaded, json)) return WAKE_ENGINE_CHANGED_EXIT;
+      if (await control.engineMoved()) break;
       const cleanups: (() => Promise<void>)[] = [];
       try {
         const outcomes = await wakeDueWorkflowContinuations(
@@ -609,5 +640,11 @@ async function wake(
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
   }
-  return [ok, observedOk].every(Boolean) ? 0 : 1;
+  return wakeExitCode(control.moved(), [ok, observedOk]);
+}
+
+/** 75 when the engine changed under the watch, so its supervisor restarts it; else 0 or 1. */
+function wakeExitCode(engineMoved: boolean, passes: readonly boolean[]): number {
+  if (engineMoved) return WAKE_ENGINE_CHANGED_EXIT;
+  return passes.every(Boolean) ? 0 : 1;
 }
