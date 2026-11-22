@@ -11,6 +11,7 @@ import {
   WORKTREE_REGISTRATION_ID,
   sameWorktreeRegistration,
   worktreeRegistrationMetadata,
+  WORKTREE_BASE_BRANCH,
 } from './types';
 import type {
   IsolationEnvironmentRow,
@@ -111,7 +112,11 @@ export async function registerWorktree(
       working_path: env.workingPath,
       branch_name: env.branchName,
       // The creation provenance keys always win over caller metadata.
-      metadata: { ...record.metadata, ...worktreeRegistrationMetadata(env.metadata) },
+      metadata: {
+        ...record.metadata,
+        ...worktreeRegistrationMetadata(env.metadata),
+        ...(env.resolvedBaseBranch ? { [WORKTREE_BASE_BRANCH]: env.resolvedBaseBranch } : {}),
+      },
     });
   } catch (storeError) {
     const err = storeError instanceof Error ? storeError : new Error(String(storeError));

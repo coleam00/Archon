@@ -221,6 +221,8 @@ const mockDestroyWorktree = mock<ReturnType<typeof Isolation.getIsolationProvide
 const { generatedTaskBranch, VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } =
   await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  checkWorktreeStartable: mock(async () => undefined),
+  readWorktreeBaseBranch: () => undefined,
   generatedTaskBranch,
   refuseUnappliedStartPoint: mock(async () => undefined),
   getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({

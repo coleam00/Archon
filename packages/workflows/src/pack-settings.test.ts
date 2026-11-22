@@ -261,6 +261,10 @@ describe('parsePackDeclaration bindings', () => {
       '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done, linked: { kind: part_of, holder: to } }\n    inputs:\n      d: { item: answers }\n',
       "binding 'plan' input 'd' reads the item's answers, but a linked start is on a holder item",
     ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done, linked: { kind: part_of, holder: to } }\n    inputs:\n      b: { entry: /brief }\n',
+      "binding 'plan' input 'b' reads a linked entry, but only a run-ended binding with linked.items has one per started item",
+    ],
     [timer('    inputs:\n      d: { item: answers }\n'), "reads the item's answers, but only"],
     [
       '  build:\n    workflow: build\n    resource: build\n    overlap: queue\n    asks_settled: { workflow: build, settled: answered }\n    inputs:\n      m: { item: key }\n',
