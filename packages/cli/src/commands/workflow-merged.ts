@@ -52,6 +52,13 @@ async function record(
   return { key, ...recorded };
 }
 
+/** The fixed code of a refusal a caller acts on; any other failure reports its message. */
+function refusalCode(error: unknown): string | undefined {
+  if (error instanceof MergeNotFoundError) return 'not_found';
+  if (error instanceof NoRunItemError) return 'no_item';
+  return undefined;
+}
+
 export async function workflowMergedCommand(
   host: WorkflowHost,
   cwd: string,
@@ -73,12 +80,7 @@ export async function workflowMergedCommand(
     if (json)
       await writeJsonLine({
         ok: false,
-        error:
-          error instanceof MergeNotFoundError
-            ? 'not_found'
-            : error instanceof NoRunItemError
-              ? 'no_item'
-              : message,
+        error: refusalCode(error) ?? message,
       });
     else console.error(`Error: ${message}`);
     return 1;
