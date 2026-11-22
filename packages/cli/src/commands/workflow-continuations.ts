@@ -20,6 +20,7 @@ import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { engineFingerprint } from '../utils/engine-fingerprint';
 import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
+import { drainFailureReasons, drainInstallHosts } from '../utils/install-hosts';
 
 import {
   installNativeSchedule,
@@ -175,13 +176,28 @@ function describeOutcome(outcome: SettledOutcome): string {
   return `${outcome.runId}: ${outcome.kind}${'status' in outcome ? ` (${outcome.status}${observed})` : ''}${'reason' in outcome ? `: ${outcome.reason}` : ''}${'blocker' in outcome ? `: blocked by ${outcome.blocker.kind} ${outcome.blocker.id}` : ''}${'error' in outcome ? `: ${outcome.error}` : ''}${outcome.deferError ? `; deferral failed: ${outcome.deferError}` : ''}`;
 }
 
+/** A pass succeeds when every continuation did and every install host drained. */
+function passSucceeded(outcomes: SettledOutcome[], drainErrors: readonly string[]): boolean {
+  return outcomes.every(successful) && drainErrors.length === 0;
+}
+
+/** The pass result's `drainErrors`, present only when a drain failed. */
+function drainFields(drainErrors: readonly string[]): { drainErrors?: readonly string[] } {
+  return drainErrors.length === 0 ? {} : { drainErrors };
+}
+
+function printDrainErrors(action: string, drainErrors: readonly string[]): void {
+  for (const error of drainErrors) console.error(`${action}: ${error}`);
+}
+
 async function report(
   action: string,
   outcomes: SettledOutcome[],
   json: boolean,
-  signaled?: boolean
+  signaled?: boolean,
+  drainErrors: readonly string[] = []
 ): Promise<boolean> {
-  const ok = outcomes.every(successful);
+  const ok = passSucceeded(outcomes, drainErrors);
   const accepted = outcomes.filter(outcome => outcome.kind === 'accepted').length;
   if (json)
     await writeJsonLine({
@@ -195,12 +211,14 @@ async function report(
           }
         : {}),
       outcomes,
+      ...drainFields(drainErrors),
     });
   else {
     console.log(
       `${action}: ${String(accepted)} continuation(s) accepted${ok ? '' : '; errors reported'}`
     );
     for (const outcome of outcomes) console.log(describeOutcome(outcome));
+    printDrainErrors(action, drainErrors);
     if (signaled && !ok)
       console.error(
         'Signal retained. Retry archon workflow wake after resolving the refusal or failure.'
@@ -368,6 +386,79 @@ async function engineChanged(loaded: string | undefined, json: boolean): Promise
   return true;
 }
 
+/**
+ * Drain every host this install serves (`drainInstallHosts`), returning each failure as
+ * redacted text for the pass's one result.
+ */
+async function drainPass(host: WorkflowHost): Promise<string[]> {
+  let failures: { hostId?: string; error: unknown }[];
+  try {
+    ({ failures } = await drainInstallHosts(host, {
+      // Loaded only when a start is admitted, so a pass that admits nothing pays nothing.
+      dispatch: async (requestId, hostId) =>
+        (await import('../utils/spawn-admitted')).spawnAdmitted(host, requestId, hostId),
+    }));
+  } catch (error) {
+    failures = [{ error }];
+  }
+  return failures.map(
+    failure =>
+      `${failure.hostId === undefined ? '' : `draining host ${failure.hostId}: `}${drainFailureReasons([failure.error])}`
+  );
+}
+
+/** A pass whose continuation scan threw: one failed result, with the pass's drain errors. */
+async function reportPassError(
+  error: unknown,
+  drainErrors: readonly string[],
+  json: boolean
+): Promise<void> {
+  if (json)
+    await writeJsonLine({
+      ok: false,
+      action: 'wake',
+      error: errorMessage(error),
+      ...drainFields(drainErrors),
+    });
+  else {
+    console.error(`wake: ${errorMessage(error)}`);
+    printDrainErrors('wake', drainErrors);
+  }
+}
+
+/**
+ * One wake pass, reported as one result: try to admit the due continuations, then drain
+ * this install's hosts, then await the continuations' settlement. Admission goes first so a
+ * paused run that is due takes a freed slot before a queued new start does, as admission
+ * orders them everywhere else; the drain does not wait for those runs to finish. The drain
+ * still runs when the continuation scan throws, so a start whose admitter died waits one
+ * pass at most. A report that throws becomes the pass's failed result, as before.
+ */
+async function wakePass(host: WorkflowHost, json: boolean): Promise<boolean> {
+  // Deferred cleanup runs only after the pass is reported, as `admit` requires.
+  const cleanups: (() => Promise<void>)[] = [];
+  let drainErrors: string[] | undefined;
+  try {
+    const outcomes = await wakeDueWorkflowContinuations(
+      host.deps.store,
+      new Date(),
+      (run, cursor) => admit(host, run, cursor, cleanup => cleanups.push(cleanup))
+    );
+    // Drained once admission was attempted, before settlement is awaited: a resumed run
+    // may take half an hour, and a queued start must not wait for it to finish.
+    drainErrors = await drainPass(host);
+    const settled = await Promise.all(outcomes.map(settle));
+    return await report('wake', settled, json, undefined, drainErrors);
+  } catch (error) {
+    // A scan that threw has not drained yet; a settlement or report that threw already has.
+    drainErrors ??= await drainPass(host);
+    await reportPassError(error, drainErrors, json);
+    return false;
+  } finally {
+    await Promise.all(cleanups.map(cleanup => cleanup()));
+  }
+}
+
 async function wake(
   host: WorkflowHost,
   args: string[],
@@ -391,22 +482,7 @@ async function wake(
       // Checked before every pass, so an update during the sleep never gets
       // another pass on the old engine.
       if (await engineChanged(loaded, json)) return WAKE_ENGINE_CHANGED_EXIT;
-      const cleanups: (() => Promise<void>)[] = [];
-      try {
-        const outcomes = await wakeDueWorkflowContinuations(
-          host.deps.store,
-          new Date(),
-          (run, cursor) => admit(host, run, cursor, cleanup => cleanups.push(cleanup))
-        );
-        const passOk = await report('wake', await Promise.all(outcomes.map(settle)), json);
-        ok = passOk && ok;
-      } catch (error) {
-        ok = false;
-        if (json) await writeJsonLine({ ok: false, action: 'wake', error: errorMessage(error) });
-        else console.error(`wake: ${errorMessage(error)}`);
-      } finally {
-        await Promise.all(cleanups.map(cleanup => cleanup()));
-      }
+      ok = (await wakePass(host, json)) && ok;
       if (!values.watch || stopped) break;
       await new Promise<void>(resolve => {
         const timer = setTimeout(resolve, 5_000);

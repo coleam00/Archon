@@ -171,6 +171,29 @@ function events(f: Fixture, type: string): number {
 }
 
 describe('cold CLI continuation host', () => {
+  test('a pass whose drain fails prints one failed result naming the trigger file', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-wake-drain-')));
+    roots.push(root);
+    const home = join(root, 'home');
+    mkdirSync(join(home, 'triggers'), { recursive: true });
+    writeFileSync(join(home, 'triggers', 'bad.json'), '{ not json');
+    const f: Fixture = {
+      root,
+      project: root,
+      home,
+      env: { ...process.env, ARCHON_HOME: home, DATABASE_URL: '', LOG_LEVEL: 'silent' },
+    };
+    const output = await runProcess(f, [cli, 'workflow', 'wake', '--json']);
+    expect(output.exitCode).toBe(1);
+    const lines = output.stdout.trim().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? '')).toMatchObject({
+      ok: false,
+      action: 'wake',
+      drainErrors: [expect.stringContaining('bad.json')],
+    });
+  }, 30_000);
+
   test('two fresh processes wake a one-second wait once using captured source', async () => {
     const f = await seed('    wait:\n      duration_ms: 1000');
     const original = row(f);

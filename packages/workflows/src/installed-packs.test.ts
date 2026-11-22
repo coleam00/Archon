@@ -629,9 +629,11 @@ describe('a pack folder given as the source', () => {
       success: true,
       content: 'Scope the change (local).\n',
     });
+    // Script discovery reports paths with forward slashes on every platform.
+    const checkScript = join(folder, 'review', 'scripts', 'check.ts').replaceAll('\\', '/');
     expect(
       [...(await discoverScriptsForCwd(folder)).values()].some(
-        script => script.path === join(folder, 'review', 'scripts', 'check.ts')
+        script => script.path === checkScript
       )
     ).toBe(true);
 

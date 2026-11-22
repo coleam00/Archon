@@ -16,6 +16,7 @@ import {
 } from '@archon/workflows/item-window';
 import { writeJsonLine, writeStderr } from '../utils/stdout';
 import { itemReadLines } from './workflow-item-text';
+import { servedHosts } from '../utils/install-hosts';
 import { inheritedWorkflowCodebase } from './workflow-shared';
 
 export const WORKFLOW_ITEMS_USAGE =
@@ -59,7 +60,8 @@ export async function workflowItemsCommand(
     `\nItems in ${project.name} with a run started from ${page.window.since} to ${page.window.until}:`
   );
   if (page.items.length === 0) console.log('  none');
-  for (const read of page.items) console.log(`\n${itemReadLines(read).join('\n')}`);
+  const served = await servedHosts();
+  for (const read of page.items) console.log(`\n${itemReadLines(read, served).join('\n')}`);
   if (page.next !== null) console.log(`\nMore: archon workflow items --after ${page.next}`);
   console.log('');
   return 0;
