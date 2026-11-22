@@ -9,16 +9,24 @@ import { z } from 'zod';
 import type { HeldStart } from '@archon/workflows/resource-start-store';
 import {
   type InstallHold,
+  type RunLimit,
   resourceStartBindingIntentSchema,
 } from '@archon/workflows/schemas/resource-start';
 import { getDatabase } from './connection';
-import { INSTALL_HOLD_ID, lockAdmission, readInstallHold } from './resource-slots';
+import { INSTALL_HOLD_ID, lockAdmission, readInstallHold, readRunLimit } from './resource-slots';
 import { parseStoredJson, storedWorkflowName } from './resource-starts';
 import { toHydratedTimestamp } from './timestamps';
 
 export async function getInstallHold(): Promise<InstallHold | null> {
   const db = getDatabase();
   return readInstallHold(db.query.bind(db));
+}
+
+/** The run limit and how many runs count against it now; null when no limit is set. */
+export async function getRunLimit(): Promise<RunLimit | null> {
+  const db = getDatabase();
+  const runLimit = await readRunLimit(db.query.bind(db));
+  return runLimit && { limit: runLimit.limit, live: runLimit.live };
 }
 
 export async function setInstallHold(input: {

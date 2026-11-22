@@ -182,7 +182,7 @@ export function createWorkflowStore(): IWorkflowStore {
     liftInstallHold: installHold.liftInstallHold,
     listHeldStarts: installHold.listHeldStarts,
     listHeldItemStarts,
-    getRunLimit: resourceStarts.getRunLimit,
+    getRunLimit: installHold.getRunLimit,
     admitResourceStart: resourceStarts.admitResourceStart,
     admitPendingRun: resourceStarts.admitPendingRun,
     drainResourceStarts: resourceStarts.drainResourceStarts,

@@ -76,19 +76,17 @@ afterEach(async () => {
 describe('run limit', () => {
   test('the start past the limit queues behind the oldest run and is admitted once a run ends', async () => {
     await setRunLimit(2);
-    const first = await bound();
-    await bound();
+    const live = [await bound(), await bound()];
     const third = await bound('pool', 'skip');
-    // Queued, not skipped: `skip` refuses an overlap on the resource, and it has room.
-    expect(third.disposition).toEqual({
-      status: 'queued',
-      requestId: third.id,
-      blocker: { kind: 'run', id: first.id },
-    });
+    // Queued, not skipped: `skip` refuses an overlap on the resource, and it has room. The
+    // blocker is the oldest counted run; two started in the same instant tie on id.
+    expect(third.disposition).toMatchObject({ status: 'queued', blocker: { kind: 'run' } });
+    const blocker = third.disposition.status === 'queued' ? third.disposition.blocker.id : '';
+    expect(live.map(run => run.id)).toContain(blocker);
     expect(await store.getRunLimit()).toEqual({ limit: 2, live: 2 });
     expect(await store.drainResourceStarts({ resource: 'pool', hostId: 'host' })).toEqual([]);
 
-    await end(first.id);
+    await end(live[0]!.id);
     expect(await store.drainResourceStarts({ resource: 'pool', hostId: 'host' })).toMatchObject([
       { status: 'admitted', requestId: third.id },
     ]);

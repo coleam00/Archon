@@ -29,7 +29,6 @@ export type {
 import type {
   PreparedWorkflowLaunch,
   QueuedItemStart,
-  RunLimit,
   ResourceStartBindingIntent,
   ResourceStartDisposition,
   ResourceStartIntent,
@@ -51,8 +50,7 @@ import {
   lockResourceSlot,
   lockResourceSlotForAdmission,
   readInstallHold,
-  readRunLimit,
-  runLimitRefusal,
+  readRunRoom,
   resourceStartOccupancy,
   parseQueuedResourceStart,
   type TransactionQuery as Query,
@@ -122,18 +120,6 @@ function disposition(row: RequestRow): ResourceStartDisposition {
   throw new Error(`Resource start request '${row.id}' has no executable disposition`);
 }
 
-/**
- * The oldest run counting against the run limit while it is full, which a start the limit
- * holds back records as its blocker; null while there is room or no limit is set.
- */
-function runLimitBlocker(
-  runLimit: Awaited<ReturnType<typeof readRunLimit>>
-): ResourceBlocker | null {
-  return runLimit?.oldest !== undefined && runLimit.live >= runLimit.limit
-    ? { kind: 'run', id: runLimit.oldest }
-    : null;
-}
-
 async function admitResourceStartWithQuery(
   query: Query,
   intent: ResourceStartIntent,
@@ -154,10 +140,7 @@ async function admitResourceStartWithQuery(
     intent.hostId,
     itemId
   );
-  // The run limit goes last, so a start it holds back waits for nothing else. Such a start
-  // queues whatever its overlap: `skip` refuses an overlap with the resource's own runs,
-  // and the limit is the install's.
-  const blocker = slotBlocker ?? runLimitBlocker(await readRunLimit(query));
+  const blocker = slotBlocker ?? (await readRunRoom(query)).blocker;
   const status = slotBlocker && intent.overlap === 'skip' ? 'skipped' : 'queued';
   await query(
     `INSERT INTO remote_agent_resource_start_requests
@@ -273,9 +256,8 @@ export async function admitPendingRun(input: {
       itemId == null ? null : String(itemId)
     );
     if (blocker) return blocker;
-    // Thrown, not returned as a blocker: the caller waits for the limit, not the resource.
-    const full = await runLimitRefusal(query);
-    if (full) throw full;
+    const { refusal } = await readRunRoom(query);
+    if (refusal) throw refusal; // the caller waits for the limit, not for a resource
     await query(
       `INSERT INTO remote_agent_resource_start_requests
          (id, resource_key, host_id, overlap_policy, status, launch, admitted_at)
@@ -287,10 +269,7 @@ export async function admitPendingRun(input: {
   });
 }
 
-/**
- * Admit this host's queued requests that fit the slot's free capacity and the run limit's
- * room; none under the install hold.
- */
+/** Admit this host's queued requests that fit the slot and the run limit; none under the hold. */
 export async function drainResourceStarts(options: {
   resource: string;
   hostId: string;
@@ -300,20 +279,12 @@ export async function drainResourceStarts(options: {
     const { capacity } = await lockResourceSlotForAdmission(query, options.resource);
     if (await readInstallHold(query)) return [];
     const slot = await resourceStartOccupancy(query, options.resource, capacity);
-    const runLimit = await readRunLimit(query);
-    const room = runLimit ? Math.max(0, runLimit.limit - runLimit.live) : Infinity;
+    const { room } = await readRunRoom(query);
     const admitted: ResourceStartDisposition[] = [];
     for (const start of drainableStarts(slot, options.hostId).slice(0, room))
       admitted.push(await admitExisting(query, options.resource, start));
     return admitted;
   });
-}
-
-/** The run limit and how many runs count against it now; null when no limit is set. */
-export async function getRunLimit(): Promise<RunLimit | null> {
-  const db = getDatabase();
-  const runLimit = await readRunLimit(db.query.bind(db));
-  return runLimit && { limit: runLimit.limit, live: runLimit.live };
 }
 
 export async function hasStartReceiptForDelivery(

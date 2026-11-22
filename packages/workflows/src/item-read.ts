@@ -300,10 +300,7 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * that holds it. `queued` are the item's starts still waiting, which have no run yet;
  * `archon trigger withdraw <requestId>` withdraws one. `skipped` are its refused starts.
  * `hold` is the install hold while it is set, else null; `held` are the item's starts it
- * keeps that are not yet `queued`, empty while no hold is set. `runLimit` is the install's
- * run limit with how many runs count against it, null when none is set; while it is full
- * (`live >= limit`) every start still waiting, queued or a pending hand start, waits at
- * least for a run to end.
+ * keeps that are not yet `queued`, empty while no hold is set. `runLimit`: see `RunLimit`.
  * `degraded` names each part that could not be read: one of the item's own runs, a paused
  * run the queue could not read (`run_unreadable`, by `runId`), a ruling
  * (`ruling_unreadable`, by `rulingId`), a link (`link_unreadable`, by `linkId`), or the

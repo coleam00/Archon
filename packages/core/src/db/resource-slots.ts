@@ -5,6 +5,7 @@ import {
   recordedResourceCapacity,
   heldCheckouts,
   type ReusableCheckout,
+  type ResourceBlocker,
   type ResourceSlotOccupancy,
   type QueuedStart,
 } from '@archon/workflows/resource-start-store';
@@ -193,7 +194,6 @@ export async function pendingRunLimitRefusal(
   runId: string
 ): Promise<RunLimitError | undefined> {
   if (!(await isUnadmittedPendingRoot(query, runId))) return undefined;
-  await lockAdmission(query);
   return runLimitRefusal(query);
 }
 
@@ -222,12 +222,38 @@ export async function readRunLimit(
   return { limit, live: counted.rows.length, oldest: counted.rows[0]?.id };
 }
 
-/** `RunLimitError` while the run limit is full, read under `lockAdmission`. */
-export async function runLimitRefusal(query: TransactionQuery): Promise<RunLimitError | undefined> {
+/**
+ * What the run limit leaves room for now: how many more runs it admits (`Infinity` without
+ * a limit), and while it is full, the oldest counted run as the blocker a queued start
+ * records and the `RunLimitError` a waiting start gets. Admission checks it after every
+ * other rule, so a start it holds back waits for nothing else, and such a start queues even
+ * under `overlap: skip`, which refuses an overlap on the resource, not on the install.
+ */
+export async function readRunRoom(query: TransactionQuery): Promise<{
+  room: number;
+  blocker: ResourceBlocker | null;
+  refusal: RunLimitError | undefined;
+}> {
   const runLimit = await readRunLimit(query);
-  return runLimit && runLimit.live >= runLimit.limit
-    ? new RunLimitError({ limit: runLimit.limit, live: runLimit.live })
-    : undefined;
+  if (!runLimit) return { room: Infinity, blocker: null, refusal: undefined };
+  const { limit, live, oldest } = runLimit;
+  const room = Math.max(0, limit - live);
+  if (room > 0 || oldest === undefined) return { room, blocker: null, refusal: undefined };
+  return {
+    room,
+    blocker: { kind: 'run', id: oldest },
+    refusal: new RunLimitError({ limit, live }),
+  };
+}
+
+/**
+ * `RunLimitError` while the run limit is full. Takes `lockAdmission` only when a limit is
+ * set, so an install without one decides claims and resumes as it did before.
+ */
+export async function runLimitRefusal(query: TransactionQuery): Promise<RunLimitError | undefined> {
+  if ((await loadRunLimit()) === undefined) return undefined;
+  await lockAdmission(query);
+  return (await readRunRoom(query)).refusal;
 }
 
 /**
