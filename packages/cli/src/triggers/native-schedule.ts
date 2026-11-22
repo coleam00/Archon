@@ -6,7 +6,7 @@
  */
 import { execFile } from 'node:child_process';
 import { link, mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
-import { dirname, join, posix, win32 } from 'node:path';
+import { dirname, posix, win32 } from 'node:path';
 import { promisify } from 'node:util';
 import { launchdBackend } from './native-schedule-launchd';
 import { systemdBackend } from './native-schedule-systemd';
@@ -103,9 +103,16 @@ function scheduleLabel(id: string): string {
   return `${LABEL_PREFIX}${id}`;
 }
 
-/** Every platform writes its job's output to the same place, and status reads it from there. */
-function scheduleLogPath(archonHome: string, label: string): string {
-  return join(archonHome, 'schedules', `${label}.log`);
+/**
+ * Every platform writes its job's output to the same place, and status reads it from there.
+ * The path is joined by the target platform's rules, as the job's other paths are checked.
+ */
+function scheduleLogPath(
+  archonHome: string,
+  label: string,
+  platform: NodeJS.Platform = process.platform
+): string {
+  return (platform === 'win32' ? win32 : posix).join(archonHome, 'schedules', `${label}.log`);
 }
 
 /** Validates against the target platform's path rules, so Windows jobs validate anywhere. */
@@ -132,7 +139,7 @@ export function scheduledJob(
   ) {
     throw new Error('Native schedule intervalSeconds must be a positive integer');
   }
-  return { ...config, label, log: scheduleLogPath(config.archonHome, label) };
+  return { ...config, label, log: scheduleLogPath(config.archonHome, label, platform) };
 }
 
 function defaultRunCommand(): RunCommand {
