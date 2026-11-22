@@ -4,8 +4,6 @@
  * the fact once, and every later item read carries it.
  */
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import { projectRefForCodebase } from '@archon/core/operations/attention-queue';
-import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import {
   itemMergeAtSchema,
   itemMergeChangeSchema,
@@ -14,17 +12,16 @@ import {
 } from '@archon/workflows/schemas/item-merge';
 import { readCallingNode } from '../utils/calling-node';
 import { writeJsonLine } from '../utils/stdout';
-import { inheritedWorkflowCodebase } from './workflow-shared';
+import { type ItemTarget, NoRunItemError, resolveItemTarget } from './item-target';
 
 export const WORKFLOW_MERGED_USAGE =
-  'Usage: archon workflow merged --item <key> --change <ref> --at <ISO> [--commit <sha>] [--json]';
+  'Usage: archon workflow merged --item <key>|--item-of <run-id> --change <ref> --at <ISO> [--commit <sha>] [--json]';
 
-export interface WorkflowMergedRequest {
-  item: string;
+export type WorkflowMergedRequest = ItemTarget & {
   change: string;
   at: string;
   commit?: string;
-}
+};
 
 class MergeNotFoundError extends Error {}
 
@@ -33,29 +30,26 @@ async function record(
   cwd: string,
   request: WorkflowMergedRequest,
   env: NodeJS.ProcessEnv
-): Promise<ItemMergeRecorded> {
+): Promise<{ key: string } & ItemMergeRecorded> {
   if (!itemMergeChangeSchema.safeParse(request.change).success)
     throw new Error('--change must be 1 to 2048 characters.');
   if (!itemMergeAtSchema.safeParse(request.at).success)
     throw new Error('--at must be an ISO time with an offset, such as 2026-11-02T10:00:00Z.');
   if (request.commit !== undefined && !itemMergeCommitSchema.safeParse(request.commit).success)
     throw new Error('--commit must be a full lowercase commit hash.');
-  const codebase =
-    (await inheritedWorkflowCodebase(host)) ??
-    (await findCodebaseForCheckoutPath(cwd, host.records.codebases));
-  if (!codebase) throw new Error('--item names an item in one registered project.');
+  const { projectKey, key } = await resolveItemTarget(host, cwd, request);
   const fromRun = env.WORKFLOW_ID ? readCallingNode(env.WORKFLOW_ID, env) : null;
   const recorded = await host.deps.store.recordItemMerge({
-    projectKey: projectRefForCodebase(codebase).key,
-    key: request.item,
+    projectKey,
+    key,
     change: request.change,
     commit: request.commit ?? null,
     at: request.at,
     via: 'cli',
     fromRun,
   });
-  if (recorded === null) throw new MergeNotFoundError(`No item '${request.item}' in this project.`);
-  return recorded;
+  if (recorded === null) throw new MergeNotFoundError(`No item '${key}' in this project.`);
+  return { key, ...recorded };
 }
 
 export async function workflowMergedCommand(
@@ -66,12 +60,12 @@ export async function workflowMergedCommand(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<number> {
   try {
-    const result = await record(host, cwd, request, env);
+    const { key, ...result } = await record(host, cwd, request, env);
     if (json) await writeJsonLine(result);
-    else if (result.recorded) console.log(`Item ${request.item} recorded as merged.`);
+    else if (result.recorded) console.log(`Item ${key} recorded as merged.`);
     else
       console.log(
-        `Item ${request.item} was already recorded as merged (${result.merge.change}); kept that.`
+        `Item ${key} was already recorded as merged (${result.merge.change}); kept that.`
       );
     return 0;
   } catch (error) {
@@ -79,7 +73,12 @@ export async function workflowMergedCommand(
     if (json)
       await writeJsonLine({
         ok: false,
-        error: error instanceof MergeNotFoundError ? 'not_found' : message,
+        error:
+          error instanceof MergeNotFoundError
+            ? 'not_found'
+            : error instanceof NoRunItemError
+              ? 'no_item'
+              : message,
       });
     else console.error(`Error: ${message}`);
     return 1;

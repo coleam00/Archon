@@ -5,14 +5,7 @@
  * nothing but the declaration file.
  */
 import { afterAll, beforeAll, expect, spyOn, test } from 'bun:test';
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ts from 'typescript';
@@ -201,16 +194,16 @@ test("item reads this run's item, null when the run is on none, and a host failu
   expect((failure as Error).message).toContain('database locked');
 });
 
-test("item writes go on the run's own item and return what the host printed", () => {
+test('item writes name the run, not an item, and return what the host printed', () => {
   process.env.WORKFLOW_ID = 'on-item';
   const sent = (write: () => unknown): unknown[] => {
     expect(write()).toEqual({ answered: expect.any(String) });
     return JSON.parse(readFileSync(join(root, 'write.json'), 'utf8'));
   };
+  const own = ['--item-of', 'on-item'];
   expect(sent(() => linkItem({ kind: 'part_of', to: 'parent' }))).toEqual([
     'link',
-    '--item',
-    'issue-7',
+    ...own,
     '--kind',
     'part_of',
     '--to',
@@ -219,33 +212,29 @@ test("item writes go on the run's own item and return what the host printed", ()
   ]);
   expect(sent(() => linkItem({ kind: 'part_of', from: 'child' }))).toEqual([
     'link',
-    '--item',
-    'child',
+    ...own,
     '--kind',
     'part_of',
-    '--to',
-    'issue-7',
+    '--from',
+    'child',
     '--json',
   ]);
   const at = '2026-11-21T10:00:00Z';
-  expect(
-    sent(() => recordMerge({ change: 'https://forge/pr/7', at, commit: 'a'.repeat(40) }))
-  ).toEqual([
+  const commit = 'a'.repeat(40);
+  expect(sent(() => recordMerge({ change: 'https://forge/pr/7', at, commit }))).toEqual([
     'merged',
-    '--item',
-    'issue-7',
+    ...own,
     '--change',
     'https://forge/pr/7',
     '--at',
     at,
     '--commit',
-    'a'.repeat(40),
+    commit,
     '--json',
   ]);
   expect(sent(() => recordLanding('feature/x'))).toEqual([
     'landing',
-    '--item',
-    'issue-7',
+    ...own,
     '--branch',
     'feature/x',
     '--json',
@@ -258,15 +247,6 @@ test("a refused item write is the typed error with the host's reason", () => {
   expect(refused).toBeInstanceOf(ItemWriteError);
   expect(refused).toBeInstanceOf(HostCommandError);
   expect(refused).toMatchObject({ command: 'workflow link', exitCode: 1, reason: 'not_found' });
-});
-
-test('a run on no item is refused before anything is written', () => {
-  process.env.WORKFLOW_ID = 'no-item';
-  rmSync(join(root, 'write.json'), { force: true });
-  const refused = thrownBy(() => recordLanding('feature/x'));
-  expect(refused).toBeInstanceOf(ItemWriteError);
-  expect(refused).toMatchObject({ reason: 'no_item', exitCode: null });
-  expect(existsSync(join(root, 'write.json'))).toBe(false);
 });
 
 test('items hands its query to the host command and returns the page it printed', () => {

@@ -1409,6 +1409,7 @@ archon workflow link --end <link-id>
 | Flag | Effect |
 | --- | --- |
 | `--item <key>` | The item the link is from, in the project the working directory belongs to, as [`runs --item`](#workflow-runs) finds it |
+| `--item-of <run-id>` | In place of `--item`: the item the run is on (its root run's, for a `workflow:` child), in that item's project whatever the working directory. With `--to` the link is from it; with `--from <key>` it is to it, from that item of the same project |
 | `--kind <kind>` | `depends_on`, `part_of` or `duplicate_of` |
 | `--to <key>` | The item the link points at, in the same project |
 | `--end <link-id>` | End a link instead. The link stays in both items' reads with `ended` set; a link is ended once. Under [`--chat-project-id`](#global-options) the link must be from an item of the selected project; without it the id alone names the link, in any project |
@@ -1424,7 +1425,8 @@ prints the link's id. It exits 1 for a kind outside the three (`error: "unknown_
 a link from an item to itself (`error: "self_link"`), for a directory with no registered
 project, for a link id that names no link (`error: "not_found"`), for one already ended
 (`error: "already_ended"`), and under `--chat-project-id` for one from another project's
-item (`error: "outside_project"`), which stays as it was. Links need the database store.
+item (`error: "outside_project"`), which stays as it was. With `--item-of` it exits 1 for a
+run on no item (`error: "no_item"`) before writing anything. Links need the database store.
 
 ### `workflow items`
 
@@ -1474,6 +1476,7 @@ archon workflow merged --item issue-42 --change https://github.com/acme/web/pull
 | Flag | Effect |
 | --- | --- |
 | `--item <key>` | The item whose change merged, in the project the working directory belongs to |
+| `--item-of <run-id>` | In place of `--item`: the item the run is on (its root run's, for a `workflow:` child), in that item's project whatever the working directory |
 | `--change <ref>` | The merged change as the forge names it, such as its pull request URL; 1 to 2048 characters, never parsed |
 | `--at <ISO>` | When the forge says it merged, with an offset |
 | `--commit <sha>` | The merge commit, a full lowercase hash, when the forge reported one |
@@ -1482,8 +1485,9 @@ archon workflow merged --item issue-42 --change https://github.com/acme/web/pull
 The fact is recorded once. A second report keeps the first and prints it with
 `recorded: false`, so a caller can see a different `change`. Called from inside a workflow
 node, it records the node's run and node as `fromRun`. It exits 1 for a key no run or ruling
-has named in the project (`error: "not_found"`: a merge never creates an item), a malformed
-flag, or a directory with no registered project. Every later item read carries the fact as
+has named in the project (`error: "not_found"`: a merge never creates an item), a run on no
+item under `--item-of` (`error: "no_item"`), a malformed flag, or a directory with no
+registered project. Every later item read carries the fact as
 `merged`. It needs the database store.
 
 ### `workflow landing`
@@ -1502,6 +1506,7 @@ archon workflow link --item issue-42 --kind part_of --to WO-12
 | Flag | Effect |
 | --- | --- |
 | `--item <key>` | The item, in the project the working directory belongs to. A key nothing has named yet writes the item |
+| `--item-of <run-id>` | In place of `--item`: the item the run is on (its root run's, for a `workflow:` child), in that item's project whatever the working directory. A run on no item exits 1 with `error: "no_item"` |
 | `--branch <name>` | The branch it lands on; must be a valid branch name |
 | `--json` | Print `{ branch, recordedAt, fromRun }`, or `{ ok: false, error }` |
 

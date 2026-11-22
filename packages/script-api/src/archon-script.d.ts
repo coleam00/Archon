@@ -3248,12 +3248,11 @@ declare module 'archon:script' {
   }
   /**
    * The host refused an item write and wrote nothing. `reason` is the CLI's `error`: a fixed
-   * code (`not_found`, `self_link`, `unknown_kind`) or its message. It is `no_item` when the
-   * run is on no item, which is refused before anything is written.
+   * code (`no_item` when the run is on no item, `self_link`, `unknown_kind`) or its message.
    */
   export class ItemWriteError extends HostCommandError {
       readonly reason: string;
-      constructor(command: string, exitCode: number | null, reason: string);
+      constructor(command: string, exitCode: number, reason: string);
   }
   /**
    * The host answered that a forge operation failed. `kind` is the typed reason. `mutation`
@@ -3357,7 +3356,7 @@ declare module 'archon:script' {
    * same active link was already recorded. Throws {@link ItemWriteError} on a refusal
    * (`no_item` when the run is on no item), and {@link HostCommandError} when the host gives
    * no answer, in which case the link may or may not have been recorded.
-   * A container run cannot call it, as it cannot call `item()`.
+   * A container run cannot call it, as it has no host CLI.
    */
   export function linkItem(request: ItemLinkRequest): ItemLink & {
       readonly created: boolean;
@@ -3368,7 +3367,7 @@ declare module 'archon:script' {
    * with an offset, `commit` the full merge commit when the forge gave one. Throws
    * {@link ItemWriteError} on a refusal (`no_item` when the run is on no item), and
    * {@link HostCommandError} when the host gives no answer, in which case the merge may or
-   * may not have been recorded. A container run cannot call it, as it cannot call `item()`.
+   * may not have been recorded. A container run cannot call it, as it has no host CLI.
    */
   export function recordMerge(merge: {
       readonly change: string;
@@ -3380,7 +3379,7 @@ declare module 'archon:script' {
    * recording again replaces it. Throws {@link ItemWriteError} on a refusal (`no_item` when
    * the run is on no item), and {@link HostCommandError} when the host gives no answer, in
    * which case the branch may or may not have been recorded.
-   * A container run cannot call it, as it cannot call `item()`.
+   * A container run cannot call it, as it has no host CLI.
    */
   export function recordLanding(branch: string): ItemLanding;
   /**

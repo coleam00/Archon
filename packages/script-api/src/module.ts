@@ -100,13 +100,12 @@ export class HostCommandError extends Error {
 
 /**
  * The host refused an item write and wrote nothing. `reason` is the CLI's `error`: a fixed
- * code (`not_found`, `self_link`, `unknown_kind`) or its message. It is `no_item` when the
- * run is on no item, which is refused before anything is written.
+ * code (`no_item` when the run is on no item, `self_link`, `unknown_kind`) or its message.
  */
 export class ItemWriteError extends HostCommandError {
   constructor(
     command: string,
-    exitCode: number | null,
+    exitCode: number,
     readonly reason: string
   ) {
     super(command, exitCode, reason);
@@ -353,15 +352,12 @@ export function item(): ItemRead | null {
   throw failed('workflow runs --item-of', answer);
 }
 
-/** The key of this run's own item; refused when the run is on none. */
-function ownItemKey(command: string): string {
-  const own = item();
-  if (own === null) throw new ItemWriteError(command, null, 'no_item');
-  return own.item.key;
-}
-
+/**
+ * Write on this run's own item: `--item-of` makes the host resolve the item and its project
+ * from the run, so neither the key nor the script's directory can point elsewhere.
+ */
 function itemWrite(command: string, args: readonly string[]): Record<string, unknown> {
-  const answer = archon(command, [...args, '--json']);
+  const answer = archon(command, ['--item-of', runId(), ...args, '--json']);
   if (answer.code === 0 && isRecord(answer.value)) return answer.value;
   const error = isRecord(answer.value) ? answer.value.error : undefined;
   // Exit 1 with `{ok:false,error}` is the CLI refusing; anything else is no usable answer.
@@ -380,13 +376,11 @@ export type ItemLinkRequest =
  * same active link was already recorded. Throws {@link ItemWriteError} on a refusal
  * (`no_item` when the run is on no item), and {@link HostCommandError} when the host gives
  * no answer, in which case the link may or may not have been recorded.
- * A container run cannot call it, as it cannot call `item()`.
+ * A container run cannot call it, as it has no host CLI.
  */
 export function linkItem(request: ItemLinkRequest): ItemLink & { readonly created: boolean } {
-  const command = 'workflow link';
-  const own = ownItemKey(command);
-  const [from, to] = request.to !== undefined ? [own, request.to] : [request.from, own];
-  return itemWrite(command, ['--item', from, '--kind', request.kind, '--to', to]) as ItemLink & {
+  const end = request.to !== undefined ? ['--to', request.to] : ['--from', request.from];
+  return itemWrite('workflow link', ['--kind', request.kind, ...end]) as ItemLink & {
     readonly created: boolean;
   };
 }
@@ -397,17 +391,16 @@ export function linkItem(request: ItemLinkRequest): ItemLink & { readonly create
  * with an offset, `commit` the full merge commit when the forge gave one. Throws
  * {@link ItemWriteError} on a refusal (`no_item` when the run is on no item), and
  * {@link HostCommandError} when the host gives no answer, in which case the merge may or
- * may not have been recorded. A container run cannot call it, as it cannot call `item()`.
+ * may not have been recorded. A container run cannot call it, as it has no host CLI.
  */
 export function recordMerge(merge: {
   readonly change: string;
   readonly at: string;
   readonly commit?: string | null;
 }): ItemMergeRecorded {
-  const command = 'workflow merged';
-  const args = ['--item', ownItemKey(command), '--change', merge.change, '--at', merge.at];
+  const args = ['--change', merge.change, '--at', merge.at];
   if (typeof merge.commit === 'string') args.push('--commit', merge.commit);
-  return itemWrite(command, args) as ItemMergeRecorded;
+  return itemWrite('workflow merged', args) as ItemMergeRecorded;
 }
 
 /**
@@ -415,11 +408,10 @@ export function recordMerge(merge: {
  * recording again replaces it. Throws {@link ItemWriteError} on a refusal (`no_item` when
  * the run is on no item), and {@link HostCommandError} when the host gives no answer, in
  * which case the branch may or may not have been recorded.
- * A container run cannot call it, as it cannot call `item()`.
+ * A container run cannot call it, as it has no host CLI.
  */
 export function recordLanding(branch: string): ItemLanding {
-  const command = 'workflow landing';
-  return itemWrite(command, ['--item', ownItemKey(command), '--branch', branch]) as ItemLanding;
+  return itemWrite('workflow landing', ['--branch', branch]) as ItemLanding;
 }
 
 /**
