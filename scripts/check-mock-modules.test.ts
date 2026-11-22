@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   type Baseline,
+  collectInChildren,
   collectSites,
   compareBaseline,
   computeBaseline,
@@ -92,5 +93,21 @@ describe('check-mock-modules', () => {
     expect(check(EMPTY)).toEqual([
       "src/a.test.ts:2 mock.module('./gone') does not resolve; a mock of a path nothing imports is dead",
     ]);
+  });
+
+  // `bun run lint` reads each tsconfig's files in a child process; these cover that path.
+  test('a child process reports the same sites as an in-process read', () => {
+    const { root } = project(partial);
+    const files = [join(root, 'src/a.test.ts')];
+    const collected = collectInChildren(root, files);
+    expect(collected.sites.map(site => site.omitted)).toEqual([['deleteRun']]);
+    expect(collected).toEqual(collectSites(root, files));
+  });
+
+  test('a child that fails fails the check instead of reading as no sites', () => {
+    const { root } = project(partial);
+    expect(() => collectInChildren(root, [join(root, 'src/missing.test.ts')])).toThrow(
+      'Reading the mock.module() sites tsconfig.json owns failed (exit 1)'
+    );
   });
 });

@@ -27,6 +27,8 @@ export interface RegisteredWorktree {
   ownedWorktree?: OwnedWorktree;
   /** The commit a newly cut branch started from. */
   cutFromCommit?: string;
+  /** The base the provider cut the branch from, which the run reports as `$BASE_BRANCH`. */
+  resolvedBaseBranch?: string;
 }
 
 /**
@@ -69,5 +71,6 @@ export async function createRegisteredWorktree(
     envId: record.id,
     ...(created ? { ownedWorktree: { envId: record.id, creationId: created.creationId } } : {}),
     ...(created?.cutFromCommit !== undefined ? { cutFromCommit: created.cutFromCommit } : {}),
+    ...(env.resolvedBaseBranch !== undefined ? { resolvedBaseBranch: env.resolvedBaseBranch } : {}),
   };
 }

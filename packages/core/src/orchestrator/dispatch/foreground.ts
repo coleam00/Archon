@@ -93,7 +93,7 @@ export async function dispatchForeground(
       preparedAiConfiguration,
     });
     if (isolation === undefined) return;
-    const { cwd, cutFromCommit, ownedWorktree } = isolation;
+    const { cwd, cutFromCommit, resolvedBaseBranch, ownedWorktree } = isolation;
 
     if (adoptionLane?.kind === 'checkout-branch' && freshCaptured) {
       freshCaptured = {
@@ -124,6 +124,7 @@ export async function dispatchForeground(
         freshCaptured,
         cwd,
         cutFromCommit,
+        resolvedBaseBranch,
         ownedWorktree,
         preparedAiConfiguration,
         setupRun,

@@ -408,7 +408,7 @@ describe('Task Scheduler', () => {
     expect(wrapper).toContain(
       '(cd /d "C:\\Users\\me\\Project (one)" && "C:\\Program Files\\archon\\archon.exe" "trigger" "fire" "--config" "C:\\packs\\a&b 100%%.json" "C:\\trailing\\\\")'
     );
-    expect(wrapper).toContain(`>> "C:\\home${join('/schedules', `${LABEL}.log`)}" 2>&1`);
+    expect(wrapper).toContain(`>> "C:\\home\\schedules\\${LABEL}.log" 2>&1`);
     expect(() =>
       renderTaskWrapper(scheduledJob(windowsJob({ path: 'C:\\"bin' }), 'win32'))
     ).toThrow('double quote');
