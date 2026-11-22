@@ -139,13 +139,15 @@ async function triggerWhoami(host: WorkflowHost): Promise<void> {
  * And `refusedBindings`: its bindings whose preparation failed or was refused, each with
  * the failed boundary and, for a refusal of the pack's forge needs, the reasons and remedies.
  * `hold` is the install hold when the receipt has a start it keeps (a binding not yet
- * prepared, or a queued request), else null.
+ * prepared, or a queued request), else null. `runLimit` is the run limit while one of the
+ * receipt's queued starts waits only for it (`RunLimitState.waiting`), else null.
  */
 async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise<void> {
   const receipts = await host.deps.store.listStartReceipts(
     options.limit === undefined ? undefined : Number(options.limit)
   );
   const hold = await host.deps.store.getInstallHold();
+  const runLimit = await host.deps.store.getRunLimit();
   await writeJsonLine(
     await Promise.all(
       receipts.map(async receipt => {
@@ -162,6 +164,14 @@ async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise
               forgeRefusal,
             })),
           hold: hold && bindings.some(heldBinding) ? hold : null,
+          // The limit is read before the receipt, so a start a drain admitted in between is
+          // still in `waiting`; only one that is still queued waits for it.
+          runLimit: bindings.some(
+            ({ requestStatus, disposition }) =>
+              requestStatus === 'queued' && runLimit?.waiting.includes(disposition?.requestId ?? '')
+          )
+            ? runLimit && { limit: runLimit.limit, live: runLimit.live }
+            : null,
         };
       })
     )

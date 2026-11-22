@@ -49,8 +49,22 @@ mock.module('@archon/core/workflows/continuation-host', () => ({
 mock.module('@archon/core/workflows/continuation-resume', () => ({
   wakeDueWorkflowContinuations: scan,
 }));
+const drain = mock<
+  typeof import('@archon/core/workflows/resource-start-host').drainResourceStartHost
+>(async () => undefined);
+const realResourceStartHost = await import('@archon/core/workflows/resource-start-host');
+// Taken before the module is mocked: the mock replaces the namespace's binding too.
+const realDrain = realResourceStartHost.drainResourceStartHost;
+mock.module('@archon/core/workflows/resource-start-host', () => ({
+  ...realResourceStartHost,
+  drainResourceStartHost: drain,
+}));
+const getStartReceipt = mock(async (id: string) => ({
+  // The second binding was recorded as unmatched: no host, nothing started.
+  bindings: id === 'woken' ? [{ hostId: 'build-host' }, { hostId: null }] : [],
+}));
 const host = {
-  deps: { store: { getWorkflowRun: getRun } },
+  deps: { store: { getWorkflowRun: getRun, getStartReceipt } },
   operations: { signalWorkflowWait: signal },
 } as unknown as import('@archon/core/workflows/host-store').WorkflowHost;
 const writeStdout = mock(async (value: string) => {
@@ -91,6 +105,10 @@ beforeEach(() => {
   signal.mockClear();
   install.mockClear();
   remove.mockClear();
+  drain.mockReset();
+  // The real drain by default, so a pass's own drain of the install's hosts reaches the
+  // store; the observation tests stub it where they hand starts on.
+  drain.mockImplementation(realDrain);
 });
 
 test('empty wake succeeds and rejects fresh execution flags before scanning', async () => {
@@ -542,6 +560,208 @@ test('a failed accepted report still drains cleanup and fails the wake', async (
   expect(await workflowContinuationCommand(host, 'wake', [], { json: true })).toBe(1);
   expect(cleanup).toHaveBeenCalledTimes(1);
   expect(output).toEqual([{ ok: false, action: 'wake', error: 'stdout closed' }]);
+});
+
+function observation(receipts: string[]) {
+  const dispatch = mock(async () => null);
+  const unserved = [
+    {
+      wait: { workflowName: 'host', event: 'review', about: 'abc', itemKey: 'issue-3' },
+      reason: "item 'issue-3' names no pull request under the binding's item mapping",
+    },
+  ];
+  const pass = mock(async () => [
+    { source: 'github', waits: 2, reads: 1, receipts, conflicts: 0, unserved },
+  ]);
+  return {
+    dispatch,
+    pass,
+    unserved,
+    value: {
+      observer: { observing: [{ sourceInstanceId: 'github', everySeconds: 60 }], pass },
+      dispatch,
+    },
+  };
+}
+
+test('watch says what it observes, and starts what an observed wait admitted on its host', async () => {
+  const observed = observation(['woken', 'unmatched']);
+  drain.mockImplementation(async drained => {
+    await drained.startAdmitted('request-1');
+  });
+  scan.mockImplementationOnce(async () => {
+    process.emit('SIGTERM');
+    return [];
+  });
+  expect(
+    await workflowContinuationCommand(
+      host,
+      'wake',
+      [],
+      { json: true, watch: true },
+      async () => observed.value
+    )
+  ).toBe(0);
+  expect(output[0]).toEqual({
+    ok: true,
+    action: 'wake',
+    observe: [{ source: 'github', everySeconds: 60 }],
+  });
+  // The observation loop runs beside the continuation pass, so its line has no fixed place.
+  expect(output.find(line => (line as { action?: string }).action === 'observe')).toEqual({
+    ok: true,
+    action: 'observe',
+    source: 'github',
+    waits: 2,
+    reads: 1,
+    started: 1,
+    conflicts: 0,
+    unserved: observed.unserved,
+  });
+  expect(drain.mock.calls.map(([drained]) => drained.hostId)).toEqual(['build-host']);
+  expect(observed.dispatch).toHaveBeenCalledWith('request-1', 'build-host');
+});
+
+test('a host whose drain failed is drained again on the next pass, with no new observation', async () => {
+  const originalTimeout = globalThis.setTimeout;
+  const timers: {
+    setTimeout(callback: () => void, delay?: number): ReturnType<typeof setTimeout>;
+  } = globalThis;
+  const timer = spyOn(timers, 'setTimeout').mockImplementation((callback: () => void) =>
+    originalTimeout(callback, 0)
+  );
+  const observed = observation(['woken']);
+  // The wait closed when its receipt was recorded, so the next pass observes nothing; the
+  // third observation pass stops the watch.
+  observed.pass
+    .mockImplementationOnce(async () => [
+      { source: 'github', waits: 1, reads: 1, receipts: ['woken'], conflicts: 0, unserved: [] },
+    ])
+    .mockImplementationOnce(async () => [])
+    .mockImplementation(async () => {
+      process.emit('SIGTERM');
+      return [];
+    });
+  drain.mockResolvedValue(undefined);
+  drain.mockRejectedValueOnce(new Error('database unavailable'));
+  try {
+    expect(
+      await workflowContinuationCommand(
+        host,
+        'wake',
+        [],
+        { json: true, watch: true },
+        async () => observed.value
+      )
+    ).toBe(1);
+    expect(output).toContainEqual({
+      ok: false,
+      action: 'observe',
+      drain: 'build-host',
+      error: "host 'build-host' drain failed: database unavailable",
+      hint: 'A running watch retries it on its next pass; otherwise run archon trigger drain --host build-host.',
+    });
+    expect(drain.mock.calls.map(([drained]) => drained.hostId)).toEqual([
+      'build-host',
+      'build-host',
+    ]);
+  } finally {
+    timer.mockRestore();
+  }
+});
+
+test('watch keeps observing at its interval while a resumed run is still running', async () => {
+  const originalTimeout = globalThis.setTimeout;
+  const timers: {
+    setTimeout(callback: () => void, delay?: number): ReturnType<typeof setTimeout>;
+  } = globalThis;
+  const timer = spyOn(timers, 'setTimeout').mockImplementation((callback: () => void) =>
+    originalTimeout(callback, 0)
+  );
+  let finish!: (value: { success: true; workflowRunId: string }) => void;
+  const settled = new Promise<{ success: true; workflowRunId: string }>(resolve => {
+    finish = resolve;
+  });
+  scan.mockImplementationOnce(async () => [
+    { runId: 'long', kind: 'accepted', run: makeTestWorkflowRun(), settled },
+  ]);
+  const observed = observation([]);
+  let passes = 0;
+  // The resumed run ends only once three observation passes have run beside it.
+  observed.pass.mockImplementation(async () => {
+    passes += 1;
+    if (passes === 3) {
+      finish({ success: true, workflowRunId: 'long' });
+      process.emit('SIGTERM');
+    }
+    return [];
+  });
+  try {
+    expect(
+      await workflowContinuationCommand(
+        host,
+        'wake',
+        [],
+        { json: true, watch: true },
+        async () => observed.value
+      )
+    ).toBe(0);
+    expect(passes).toBe(3);
+    expect(output).toContainEqual(
+      expect.objectContaining({
+        action: 'wake',
+        outcomes: [expect.objectContaining({ runId: 'long', status: 'completed' })],
+      })
+    );
+  } finally {
+    timer.mockRestore();
+  }
+});
+
+test('an engine update stops observation too, while a resumed run is still running', async () => {
+  const originalTimeout = globalThis.setTimeout;
+  const timers: {
+    setTimeout(callback: () => void, delay?: number): ReturnType<typeof setTimeout>;
+  } = globalThis;
+  const timer = spyOn(timers, 'setTimeout').mockImplementation((callback: () => void) =>
+    originalTimeout(callback, 0)
+  );
+  let finish!: (value: { success: true; workflowRunId: string }) => void;
+  const settled = new Promise<{ success: true; workflowRunId: string }>(resolve => {
+    finish = resolve;
+  });
+  scan.mockImplementationOnce(async () => [
+    { runId: 'long', kind: 'accepted', run: makeTestWorkflowRun(), settled },
+  ]);
+  const observed = observation([]);
+  let passes = 0;
+  // Archon is updated during the second pass; the resumed run ends a little later.
+  observed.pass.mockImplementation(async () => {
+    passes += 1;
+    if (passes === 2) {
+      fingerprint = 'updated';
+      originalTimeout(() => finish({ success: true, workflowRunId: 'long' }), 30);
+    }
+    return [];
+  });
+  try {
+    expect(
+      await workflowContinuationCommand(
+        host,
+        'wake',
+        [],
+        { json: true, watch: true },
+        async () => observed.value
+      )
+    ).toBe(75);
+    // No observation pass started on the old engine after the update was seen.
+    expect(passes).toBe(2);
+    expect(
+      output.filter(line => (line as { restart?: string }).restart === 'engine changed')
+    ).toHaveLength(1);
+  } finally {
+    timer.mockRestore();
+  }
 });
 
 test('a pass drains the install hosts without waiting for a resumed run to finish', async () => {

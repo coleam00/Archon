@@ -8199,6 +8199,7 @@ export interface components {
           /** @enum {string|null} */
           owner: 'reachable' | 'unreachable' | 'unknown' | null;
         } | null;
+        waitsForRunLimit: boolean;
       }[];
       skipped: {
         requestId: string;
@@ -8225,6 +8226,10 @@ export interface components {
         workflow: string | null;
         receivedAt: string;
       }[];
+      runLimit: {
+        limit: number;
+        live: number;
+      } | null;
       waits: {
         event: string;
         about: string;
@@ -8866,6 +8871,7 @@ export interface components {
             /** @enum {string|null} */
             owner: 'reachable' | 'unreachable' | 'unknown' | null;
           } | null;
+          waitsForRunLimit: boolean;
         }[];
         skipped: {
           requestId: string;
@@ -8892,6 +8898,10 @@ export interface components {
           workflow: string | null;
           receivedAt: string;
         }[];
+        runLimit: {
+          limit: number;
+          live: number;
+        } | null;
         waits: {
           event: string;
           about: string;
@@ -11158,6 +11168,18 @@ export interface components {
     };
     PackGraph: {
       pack: string;
+      loaded: {
+        /** @enum {string} */
+        source: 'project' | 'bundled' | 'global' | 'installed';
+        key: string;
+        dir: string | null;
+      }[];
+      otherCopies: {
+        /** @enum {string} */
+        source: 'project' | 'bundled' | 'global' | 'installed';
+        key: string;
+        dir: string | null;
+      }[];
       stages: {
         name: string;
         returns: string | null;

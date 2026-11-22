@@ -1,7 +1,3 @@
-import type { OAuthCredentials as PiOAuthCredentials } from '@earendil-works/pi-ai/oauth';
-import type { AssertNever } from '@archon/provider-contract';
-import type { SubscriptionOAuthCredentials } from '../../core/src/credentials/subscription-oauth';
-
 type KnownFields<T> = {
   [K in keyof T as string extends K ? never : number extends K ? never : K]: T[K];
 };
@@ -31,9 +27,3 @@ type ValueDrift<L, S> = [L] extends [readonly unknown[]]
               }[keyof KnownFields<L> & keyof KnownFields<S>]
         : 'different value'
     : SameValue<L, S>;
-
-export type SubscriptionTokenConformance = AssertNever<
-  SubscriptionOAuthCredentials extends PiOAuthCredentials
-    ? never
-    : 'incompatible subscription tokens'
->;

@@ -1,4 +1,5 @@
 // @archon-test-isolated
+// @archon-test-windows
 import { runProject } from '@archon/workflows/attention-queue';
 import { watchAttentionQueue } from '@archon/workflows/attention-watch';
 import {
@@ -686,7 +687,9 @@ test("a binding start reads the base branch with the checkout's uncommitted conf
   gitIn(upstream, 'add', '-A');
   gitIn(upstream, 'commit', '-qm', 'old');
   gitIn(upstream, 'push', '-q', 'origin', 'dev');
-  Bun.spawnSync(['git', 'clone', '-q', remote, project]);
+  // Windows runners set core.autocrlf=true, which would check the workflow out with CRLF
+  // and break the byte comparison that proves the checkout was left alone.
+  Bun.spawnSync(['git', 'clone', '-q', '-c', 'core.autocrlf=false', remote, project]);
   // Landed on the base, never pulled into the operator's checkout.
   await writeFile(join(upstream, '.archon/workflows/portable.yaml'), workflow('new'));
   gitIn(upstream, 'commit', '-qam', 'new');
@@ -864,6 +867,85 @@ test('trigger list shows a refused binding with its forge refusal and omits the 
     ]);
   } finally {
     stdout.mockRestore();
+  }
+});
+
+test('trigger list names the run limit on a receipt whose queued start only the limit holds', async () => {
+  const host = hostForTest();
+  const accepted = acceptance(
+    {
+      bindingId: 'queued',
+      bindingRevision: null,
+      hostId: 'host',
+      runAsUserId: 'operator',
+      resource: 'portable',
+      capacity: 1,
+      overlap: 'queue',
+      launch: {
+        cwd: '/portable',
+        workflowName: 'portable',
+        inputs: {},
+        isolation: { kind: 'in-place' },
+      },
+    },
+    'limited'
+  );
+  await host.deps.store.acceptStartReceipt(accepted);
+  // The in-memory store keeps no run limit; stand in for one with a start queued under it,
+  // or admitted by a drain after the limit was read (`admittedSince`).
+  let admittedSince = false;
+  const read = host.deps.store.getStartReceipt.bind(host.deps.store);
+  host.deps.store.getStartReceipt = async id => {
+    const receipt = await read(id);
+    return (
+      receipt && {
+        ...receipt,
+        bindings: receipt.bindings.map(binding => ({
+          ...binding,
+          ...(admittedSince
+            ? {
+                requestStatus: 'admitted' as const,
+                disposition: {
+                  status: 'admitted' as const,
+                  requestId: 'queued-request',
+                  runId: 'queued-request',
+                },
+              }
+            : {
+                requestStatus: 'queued' as const,
+                disposition: {
+                  status: 'queued' as const,
+                  requestId: 'queued-request',
+                  blocker: { kind: 'run' as const, id: 'holder' },
+                },
+              }),
+        })),
+      }
+    );
+  };
+  for (const [waiting, admitted, listed] of [
+    [['queued-request'], false, { limit: 1, live: 1 }],
+    [['another-request'], false, null],
+    [['queued-request'], true, null],
+  ] as const) {
+    host.deps.store.getRunLimit = async () => ({ limit: 1, live: 1, waiting });
+    admittedSince = admitted;
+    const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+      _chunk: unknown,
+      callback?: () => void
+    ) => {
+      callback?.();
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      await triggerCommand(host, 'list', [], {});
+      const [receipt] = JSON.parse(stdout.mock.calls.map(call => String(call[0])).join('')) as {
+        runLimit: unknown;
+      }[];
+      expect(receipt?.runLimit).toEqual(listed);
+    } finally {
+      stdout.mockRestore();
+    }
   }
 });
 

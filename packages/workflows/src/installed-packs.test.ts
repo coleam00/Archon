@@ -11,7 +11,7 @@ import { providerRegistry, claudeDescriptor } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { readHomeMcpDirectory } from './compiled-command';
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { access, cp, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
@@ -23,9 +23,12 @@ import { loadCommandPrompt } from './load-command-prompt';
 import { discoverScriptsForCwd } from './script-discovery';
 import { resolveContinuationWorkflow } from './run-source';
 import { resolveFanOutChildDefinition } from './dag/nodes/compose-fan-out/compose-fan-out';
+import { packCopies, packWorkflows } from './pack-graph';
 import {
   captureWorkflowSource,
   capturedSourceRoots,
+  liveSourceRoots,
+  packDirectory,
   resolveChildInstalledPacks,
   type WorkflowSourceCapture,
 } from './workflow-source';
@@ -578,6 +581,237 @@ describe('installed pack boundaries', () => {
 });
 
 /** A run row that recorded `capture` as its source. */
+describe('a pack folder given as the source', () => {
+  /** A pack author's checkout of review-kit: the pack's own files, manifest at the root. */
+  async function packFolder(marker: string): Promise<string> {
+    const kit = reviewKit(COMMIT_B, marker);
+    const dir = join(dirname(project), 'review-kit-checkout');
+    for (const [path, content] of Object.entries({
+      ...kit.files,
+      'archon-plugin.json': JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: kit.name,
+        description: 'fixture pack',
+        entrypoints: kit.entrypoints,
+      }),
+    })) {
+      await mkdir(dirname(join(dir, path)), { recursive: true });
+      await writeFile(join(dir, path), content);
+    }
+    return dir;
+  }
+  const discoverFrom = (source: string): ReturnType<typeof discoverWorkflowsWithConfig> =>
+    discoverWorkflowsWithConfig(source, loadConfig, providerRegistry);
+
+  test('is the project pack that runs, live and from its capture, beside the installed copy', async () => {
+    await install(reviewKit(COMMIT_A, 'installed'));
+    const folder = await packFolder('local');
+
+    const live = await discoverFrom(folder);
+    const local = live.workflows.find(entry => entry.workflow.name === 'code-review');
+    expect(local?.source).toBe('project');
+    expect(local?.workflow.pack?.key).toBe('review-kit');
+    expect(local?.workflow.description).toBe('Review a change (local)');
+    // The installed copy is still in reach under its own name and bytes.
+    const installed = live.workflows.find(entry => entry.workflow.name === REVIEW);
+    expect(installed?.workflow.description).toBe('Review a change (installed)');
+
+    // Commands and scripts of the local pack resolve from the folder.
+    expect(
+      await packDirectory(liveSourceRoots(folder), { source: 'project', key: 'review-kit' })
+    ).toBe(folder);
+    const scope = local?.workflow.nodes.find(node => node.id === 'scope');
+    if (!scope || !isAgentNode(scope) || scope.source.kind !== 'command') {
+      throw new Error('scope is a command node');
+    }
+    expect(await loadCommandPrompt(deps, folder, scope.source.name)).toEqual({
+      success: true,
+      content: 'Scope the change (local).\n',
+    });
+    // Script discovery reports paths with forward slashes on every platform.
+    const checkScript = join(folder, 'review', 'scripts', 'check.ts').replaceAll('\\', '/');
+    expect(
+      [...(await discoverScriptsForCwd(folder)).values()].some(
+        script => script.path === checkScript
+      )
+    ).toBe(true);
+
+    // A run freezes the folder and resumes on those bytes. The folder's `.archon/.env` is
+    // project secrets, not pack source, and stays out of the capture.
+    await mkdir(join(folder, '.archon'), { recursive: true });
+    await writeFile(join(folder, '.archon', '.env'), 'SECRET=1\n');
+    const capture = await captureWorkflowSource({
+      sourceRoot: folder,
+      captureRoot: join(home, 'runs', 'run-1'),
+    });
+    await expect(access(join(capture.anchor.root, 'project', '.archon', '.env'))).rejects.toThrow();
+    await writeFile(join(folder, 'review', 'commands', 'scope.md'), 'Edited after start.\n');
+    const resumed = await resolveContinuationWorkflow(
+      deps,
+      runWith(capture, 'code-review'),
+      folder
+    );
+    expect(resumed?.workflow.pack).toMatchObject({ key: 'review-kit', source: 'project' });
+    expect(
+      await loadCommandPrompt(deps, folder, scope.source.name, undefined, resumed?.roots)
+    ).toEqual({ success: true, content: 'Scope the change (local).\n' });
+  });
+
+  test('names the copy it read and the other copy, and how to name each', async () => {
+    await install(reviewKit());
+    const folder = await packFolder('local');
+    const discovered = await discoverFrom(folder);
+    const roots = liveSourceRoots(folder);
+    const installedDir = packTreePath(join(home, 'plugins'), ID, COMMIT_A);
+
+    expect(await packCopies(discovered, roots, 'review-kit')).toEqual({
+      loaded: [{ source: 'project', key: 'review-kit', dir: folder }],
+      otherCopies: [{ source: 'installed', key: 'acme.review-kit', dir: installedDir }],
+    });
+    expect(await packCopies(discovered, roots, 'acme.review-kit')).toEqual({
+      loaded: [{ source: 'installed', key: 'acme.review-kit', dir: installedDir }],
+      otherCopies: [{ source: 'project', key: 'review-kit', dir: folder }],
+    });
+    // From a project without the folder, asking for the bare name points at the installed key.
+    expect(() => packWorkflows(discovered, 'review-kit', folder)).not.toThrow();
+    expect(() => packWorkflows(discovered, 'acme.review-kit', folder)).not.toThrow();
+    const elsewhere = await discover();
+    expect(() => packWorkflows(elsewhere, 'review-kit', project)).toThrow(
+      "Pack 'review-kit' is in reach as 'acme.review-kit' (installed); name 'acme.review-kit' to use it."
+    );
+  });
+
+  /** A pack folder holding `files`, with a manifest naming it `name`. */
+  async function rawPackFolder(name: string, files: Record<string, string>): Promise<string> {
+    const dir = join(dirname(project), `${name}-checkout`);
+    for (const [path, content] of Object.entries({
+      ...files,
+      'archon-plugin.json': JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name,
+        description: 'fixture pack',
+        entrypoints: { one: 'one/workflow.yaml' },
+      }),
+    })) {
+      await mkdir(dirname(join(dir, path)), { recursive: true });
+      await writeFile(join(dir, path), content);
+    }
+    return dir;
+  }
+  const flow = (name: string): string =>
+    `name: ${name}\ndescription: d\nnodes:\n  - id: a\n    bash: echo ${name}\n`;
+
+  test('two workflow files with one filename fail live as they fail from the capture', async () => {
+    const folder = await rawPackFolder('twin-kit', {
+      'one/workflow.yaml': flow('one'),
+      'two/workflow.yaml': flow('two'),
+    });
+    const collision = expect.stringContaining('Workflow filename collision');
+    const live = await discoverFrom(folder);
+    expect(live.workflows.some(entry => entry.workflow.pack?.key === 'twin-kit')).toBe(false);
+    expect(live.errors.map(error => error.error)).toContainEqual(collision);
+
+    const capture = await captureWorkflowSource({
+      sourceRoot: folder,
+      captureRoot: join(home, 'runs', 'run-1'),
+    });
+    const captured = await discoverWorkflowsWithConfig(
+      folder,
+      loadConfig,
+      providerRegistry,
+      capturedSourceRoots(capture.anchor)
+    );
+    expect(captured.workflows.some(entry => entry.workflow.pack?.key === 'twin-kit')).toBe(false);
+    expect(captured.errors.map(error => error.error)).toContainEqual(collision);
+  });
+
+  test('a pack named like a reserved project folder loads live and from its capture', async () => {
+    for (const name of ['defaults', 'fixtures']) {
+      const folder = await rawPackFolder(name, { 'one/workflow.yaml': flow('one') });
+      const ownWorkflow = (result: Awaited<ReturnType<typeof discoverFrom>>): unknown =>
+        result.workflows.find(entry => entry.workflow.name === 'one')?.workflow.pack;
+      expect(ownWorkflow(await discoverFrom(folder))).toMatchObject({
+        key: name,
+        source: 'project',
+      });
+
+      const capture = await captureWorkflowSource({
+        sourceRoot: folder,
+        captureRoot: join(home, 'runs', name),
+      });
+      const captured = await discoverWorkflowsWithConfig(
+        folder,
+        loadConfig,
+        providerRegistry,
+        capturedSourceRoots(capture.anchor)
+      );
+      expect(ownWorkflow(captured)).toMatchObject({ key: name, source: 'project' });
+    }
+  });
+
+  test('a folder that also holds a nested copy of its pack loads neither copy', async () => {
+    const folder = await packFolder('local');
+    const nested = join(folder, '.archon', 'workflows', 'review-kit', 'review');
+    await mkdir(nested, { recursive: true });
+    await cp(join(folder, 'review'), nested, { recursive: true });
+    await writeFile(join(folder, '.archon', 'workflows', 'other.yaml'), flow('other'));
+    const neither = expect.stringContaining('Neither copy is loaded');
+    const reads = (result: Awaited<ReturnType<typeof discoverFrom>>) => ({
+      pack: result.workflows.some(entry => entry.workflow.pack?.key === 'review-kit'),
+      other: result.workflows.some(entry => entry.workflow.name === 'other'),
+      errors: result.errors.map(error => error.error),
+    });
+    const live = reads(await discoverFrom(folder));
+    expect(live).toMatchObject({ pack: false, other: true });
+    expect(live.errors).toContainEqual(neither);
+
+    // The capture does not refuse: its run reads the same error, and the rest still starts.
+    const capture = await captureWorkflowSource({
+      sourceRoot: folder,
+      captureRoot: join(home, 'runs', 'run-1'),
+    });
+    const captured = reads(
+      await discoverWorkflowsWithConfig(
+        folder,
+        loadConfig,
+        providerRegistry,
+        capturedSourceRoots(capture.anchor)
+      )
+    );
+    expect(captured).toMatchObject({ pack: false, other: true });
+    expect(captured.errors).toContainEqual(neither);
+  });
+
+  test('a capture from a git checkout of a pack holds what an install would, and no .env', async () => {
+    const folder = await packFolder('local');
+    await writeFile(join(folder, '.gitignore'), 'node_modules/\nbuild/\n');
+    await mkdir(join(folder, 'node_modules', 'dep'), { recursive: true });
+    await writeFile(join(folder, 'node_modules', 'dep', 'index.js'), 'ignored\n');
+    await mkdir(join(folder, 'build'), { recursive: true });
+    await writeFile(join(folder, 'build', 'out.txt'), 'ignored\n');
+    await writeFile(join(folder, '.env'), 'SECRET=1\n');
+    await writeFile(join(folder, 'review', '.env.local'), 'SECRET=1\n');
+    await mkdir(join(folder, 'policy'), { recursive: true });
+    await writeFile(join(folder, 'policy', 'build.md'), 'untracked, not ignored\n');
+    Bun.spawnSync(['git', 'init', '-q'], { cwd: folder });
+    Bun.spawnSync(['git', 'add', 'archon-plugin.json', 'review'], { cwd: folder });
+
+    const capture = await captureWorkflowSource({
+      sourceRoot: folder,
+      captureRoot: join(home, 'runs', 'run-1'),
+    });
+    const frozen = join(capture.anchor.root, 'project');
+    for (const kept of ['archon-plugin.json', 'review/code-review.yaml', 'policy/build.md']) {
+      await access(join(frozen, kept));
+    }
+    for (const left of ['node_modules', 'build', '.env', 'review/.env.local']) {
+      await expect(access(join(frozen, left))).rejects.toThrow();
+    }
+  });
+});
+
 function runWith(
   capture: WorkflowSourceCapture,
   workflowName: string

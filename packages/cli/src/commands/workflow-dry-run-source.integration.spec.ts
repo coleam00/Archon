@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
 import { dryRunResultSchema, type DryRunResult } from '@archon/workflows/dry-run';
 import { workflowRunCommand } from './workflow-run-owned';
 import { captureWorkflowCommand } from '../test-support/command';
@@ -132,6 +133,108 @@ describe('workflow run --dry-run --workflow-source', () => {
     });
 
     expect(result.status, result.output).toBe(0);
+    const db = new Database(join(fx.home, 'archon.db'), { readonly: true });
+    try {
+      const rows = db
+        .query<{ metadata: string }, []>('SELECT metadata FROM remote_agent_workflow_runs')
+        .all();
+      expect(rows.map(row => JSON.parse(row.metadata).dispatch?.source)).toEqual(['project']);
+    } finally {
+      db.close();
+    }
+  });
+
+  /** A pack author's checkout: the pack's manifest at the root, no `.archon/` layout. */
+  function writePackFolder(fx: Fixture, nodes: string): void {
+    write(
+      join(fx.source, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'demo-pack',
+        description: 'demo',
+        entrypoints: { probe: 'probe/probe.yaml' },
+      })
+    );
+    write(
+      join(fx.source, 'probe', 'probe.yaml'),
+      `name: probe\ndescription: probe\nnodes:\n${nodes}`
+    );
+    write(join(fx.source, 'probe', 'commands', 'probe.md'), 'Probe the target.\n');
+  }
+
+  test("reads a pack folder given as the source as that pack, with the pack's command", async () => {
+    const fx = fixture();
+    writePackFolder(fx, '  - id: probe\n    command: probe\n');
+
+    const result = await dryRun(fx, 'probe');
+
+    expect(result.trace.find(entry => entry.nodeId === 'probe')?.reason).toBeUndefined();
+    expect(result.outcome).toBe('completed');
+  });
+
+  /** The same pack installed as `acme/demo-pack`, the way `archon plugin add` leaves it. */
+  function installDemoPack(fx: Fixture): void {
+    const pluginsDir = join(fx.home, 'plugins');
+    const id = 'acme/demo-pack';
+    const commit = 'a'.repeat(40);
+    const manifest = {
+      schemaVersion: 1,
+      kind: 'workflow-pack',
+      name: 'demo-pack',
+      description: 'demo',
+      entrypoints: { probe: 'probe/probe.yaml' },
+    };
+    const tree = packTreePath(pluginsDir, id, commit);
+    write(join(tree, 'archon-plugin.json'), JSON.stringify(manifest));
+    write(
+      join(tree, 'probe', 'probe.yaml'),
+      'name: probe\ndescription: installed\nnodes:\n  - id: probe\n    bash: echo installed\n'
+    );
+    write(
+      receiptPath(pluginsDir, id),
+      JSON.stringify({
+        schemaVersion: 1,
+        id,
+        manifest,
+        commit,
+        installedAt: new Date(0).toISOString(),
+      })
+    );
+  }
+
+  test('a captured run of a pack folder source names the copy it ran and the installed one', async () => {
+    const fx = fixture();
+    writePackFolder(fx, '  - id: probe\n    bash: echo local-6034\n');
+    installDemoPack(fx);
+
+    // Under --json the copy report goes to stderr; stdout carries only the run's payload.
+    const stdoutWrite = spyOn(process.stdout, 'write').mockImplementation(((
+      _chunk: string | Uint8Array,
+      ...rest: unknown[]
+    ) => {
+      (rest.find(arg => typeof arg === 'function') as (() => void) | undefined)?.();
+      return true;
+    }) as typeof process.stdout.write);
+    let result: Awaited<ReturnType<typeof captureWorkflowCommand>>;
+    try {
+      result = await captureWorkflowCommand(fx.home, async host => {
+        await workflowRunCommand(host, fx.target, 'probe', '', {
+          discoveryCwd: fx.source,
+          noWorktree: true,
+          folder: true,
+          json: true,
+        });
+      });
+    } finally {
+      stdoutWrite.mockRestore();
+    }
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.stderr).toContain(`Pack 'demo-pack' loaded from ${fx.source}`);
+    expect(result.stderr).toContain(
+      "To run it, drop --workflow-source and name 'acme/demo-pack:probe'."
+    );
     const db = new Database(join(fx.home, 'archon.db'), { readonly: true });
     try {
       const rows = db

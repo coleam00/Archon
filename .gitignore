@@ -13,6 +13,7 @@ build/
 # Node.js
 node_modules/
 dist/
+.tsbuild/
 coverage/
 *.log
 npm-debug.log*

@@ -68,7 +68,8 @@
     "husky": "^9.1.7",
     "pino-pretty": "^13",
     "saxes": "^6.0.0",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "typescript-native": "npm:typescript@7.0.2"
   },
   "engines": {
     "bun": "1.4.5"

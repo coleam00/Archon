@@ -20,6 +20,7 @@
     "./router": "./src/router.ts",
     "./workflow-path-lock": "./src/workflow-path-lock.ts",
     "./resource-start-store": "./src/resource-start-store.ts",
+    "./host-start-decision": "./src/host-start-decision.ts",
     "./store": "./src/store.ts",
     "./attention-queue": "./src/attention-queue.ts",
     "./queue-items-without-run": "./src/queue-items-without-run.ts",
@@ -92,8 +93,7 @@
     "./state-document-conformance": "./src/state-document-conformance.ts"
   },
   "scripts": {
-    "test": "bun run ../../scripts/package-tests.ts",
-    "type-check": "bun x tsc --noEmit"
+    "test": "bun run ../../scripts/package-tests.ts"
   },
   "dependencies": {
     "@archon/forge": "workspace:*",

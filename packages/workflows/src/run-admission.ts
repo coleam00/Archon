@@ -27,13 +27,25 @@ import type { CheckoutSharedEventData } from './schemas/workflow-event';
 import { ContinuedItemProjectError, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { refusePendingStart } from './start-refusal';
-import { holdWorkflowResource, installHold, itemHold, waitForTurn } from './resource-hold';
+import {
+  holdWorkflowResource,
+  installHold,
+  itemHold,
+  refuseStart,
+  runLimitHold,
+  waitForTurn,
+} from './resource-hold';
 import {
   refuseResultInputsWithoutItem,
   resolveResultInputs,
   unsuppliedResultInputs,
 } from './run-result';
-import { InstallHeldError, WorkflowItemHeldError } from './store/errors';
+import {
+  ConcurrencyConfigError,
+  InstallHeldError,
+  RunLimitError,
+  WorkflowItemHeldError,
+} from './store/errors';
 import { workflowPathPriorityTime } from './workflow-path-lock';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -339,6 +351,12 @@ async function claimPendingRun(
         if (error instanceof WorkflowItemHeldError)
           return { held: itemHold(error.itemKey, error.holderRunId, error.workflow) };
         if (error instanceof InstallHeldError) return { held: installHold(error.hold) };
+        if (error instanceof RunLimitError) return { held: runLimitHold(error.runLimit) };
+        // The claim refused before writing anything, so the start is refused with the fix.
+        if (error instanceof ConcurrencyConfigError)
+          return {
+            done: await refuseStart(deps, platform, conversationId, workflowRun, error.message),
+          };
         claim.error = error;
       }
       return { done: undefined };

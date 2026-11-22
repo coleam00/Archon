@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import ts from 'typescript';
 
 /**
  * The bundled packs' deterministic scripts are validated where they live:
@@ -33,8 +33,10 @@ function trackedPackScripts(): string[] {
 }
 
 function includedByOwningProject(): string[] {
-  const include = (JSON.parse(readFileSync(PACK_TSCONFIG, 'utf-8')) as { include: string[] })
-    .include;
+  // tsconfig files are JSONC, so read it the way the compiler does.
+  const { config, error } = ts.readConfigFile(PACK_TSCONFIG, ts.sys.readFile);
+  if (error) throw new Error(ts.flattenDiagnosticMessageText(error.messageText, '\n'));
+  const include = (config as { include: string[] }).include;
   const matched = new Set<string>();
   for (const pattern of include) {
     for (const path of new Bun.Glob(pattern).scanSync({ cwd: PACKS_ROOT, dot: true })) {

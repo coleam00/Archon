@@ -7,6 +7,10 @@
  */
 import { expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { listAttentionQueue } from '@archon/workflows/attention-queue';
 import type { ItemWait } from '@archon/workflows/schemas/item-wait';
 import type {
@@ -15,6 +19,7 @@ import type {
 } from '@archon/workflows/schemas/resource-start';
 import { CONFORMANCE_CODEBASE_ID } from '@archon/workflows/store-conformance';
 import { withdrawAttentionItem } from '../operations/attention-items';
+import { createItemWaitObserver, loadWebhookSourcePlugins } from '../workflows/source-plugins';
 import { itemDeps, operator, type Harness } from './item-asks.conformance';
 
 export const HEAD = 'a'.repeat(40);
@@ -102,6 +107,11 @@ export function wakeReceipt(
     outcome: 'matched',
     bindings: [binding],
   };
+}
+
+async function acceptStartReceiptFor(receipt: SourceReceiptAcceptance, project: string | null) {
+  const { acceptStartReceipt } = await import('./start-receipt-writes');
+  return acceptStartReceipt(receipt, async () => project);
 }
 
 export async function accept(
@@ -217,6 +227,91 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
         ],
       });
     } finally {
+      await harness.close();
+    }
+  });
+
+  test('an observed check wakes its wait once, however often the same state is observed', async () => {
+    const harness = await makeHarness();
+    const root = await mkdtemp(join(tmpdir(), 'archon-observed-wake-'));
+    try {
+      const remote = 'https://github.com/acme/widgets.git';
+      await harness.db.query(
+        'UPDATE remote_agent_codebases SET repository_url = $1 WHERE id = $2',
+        [remote, CONFORMANCE_CODEBASE_ID]
+      );
+      const waiting = await completeWithWaits(harness, [checks(HEAD)]);
+      const project = await projectKey(harness);
+      // A source that, like the GitHub plugin, makes one delivery per observed check state.
+      const modulePath = join(root, 'source.ts');
+      const configPath = join(root, 'sources.json');
+      await writeFile(
+        modulePath,
+        `export default ({ config }) => ({
+  receive: async () => ({ status: 'rejected', reason: 'unauthenticated' }),
+  observe: async ({ waits, forge }) => {
+    for (const wait of waits) await forge.commitChecks({ remote: wait.remote, revision: wait.about });
+    return { acceptances: [{ ...config, receipt: { ...config.receipt, id: crypto.randomUUID() } }], unserved: [], failed: [] };
+  },
+});\n`
+      );
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          version: 1,
+          sources: [
+            {
+              sourceInstanceId: 'github',
+              module: modulePath,
+              // As the plugin makes it: one binding, on the wait's item.
+              config: wakeReceipt(HEAD, {
+                deliveryId: 'observe:check:77:completed:success:next-stage:pr-7',
+                item: 'pr-7',
+              }),
+              observe: { everySeconds: 15 },
+            },
+          ],
+        })
+      );
+      const sources = await loadWebhookSourcePlugins(configPath, {
+        acceptReceipt: input => acceptStartReceiptFor(input, project),
+        isKnownUser: async () => true,
+        hasDeliveryReceipt: (source, delivery) =>
+          harness.store.hasStartReceiptForDelivery(source, delivery),
+      });
+      const reads: string[] = [];
+      const observer = createItemWaitObserver({
+        sources,
+        store: harness.store,
+        forge: {
+          commitChecks: async request => {
+            reads.push(`${request.remote}@${request.revision}`);
+            return {} as never;
+          },
+          prReviews: async () => {
+            throw new Error('No review is read for a check wait');
+          },
+        },
+      });
+      const at = (seconds: number) => new Date(Date.parse('2026-01-01T00:00:00Z') + seconds * 1000);
+
+      const [first] = (await observer?.pass(at(0))) ?? [];
+      expect(reads).toEqual([`${remote}@${HEAD}`]);
+      expect(first?.receipts).toHaveLength(1);
+      expect(await readReceipt(harness, first?.receipts[0] ?? '')).toMatchObject({
+        outcome: 'matched',
+        bindings: [{ status: 'pending', itemKey: 'pr-7', waited: { runId: waiting } }],
+      });
+      expect(await harness.store.listOpenItemWaits()).toEqual([]);
+
+      // The woken stage ends waiting at the same commit; the check it was woken by is the
+      // same delivery when observed again, a replay, and does not wake it twice.
+      await completeWithWaits(harness, [checks(HEAD)]);
+      const [again] = (await observer?.pass(at(15))) ?? [];
+      expect(again).toMatchObject({ waits: 1, reads: 1, receipts: [] });
+      expect(await harness.store.listOpenItemWaits()).toHaveLength(1);
+    } finally {
+      await removeTempTree(root);
       await harness.close();
     }
   });

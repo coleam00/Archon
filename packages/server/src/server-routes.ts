@@ -16,7 +16,7 @@ import {
   registerGithubWebhookRoute,
   registerWebhookSourceRoutes,
 } from './routes/webhooks';
-import type { WebhookSourcePluginHost } from './services/webhook-source-plugins';
+import type { WebhookSourcePluginHost } from '@archon/core/workflows/source-plugins';
 import { parseGitCredentialPath } from './github-auth-bootstrap';
 import { getAuth, getSignupMode, isArchonOwnedAuthPath } from './auth';
 import type { PlatformAdapters } from './platform-adapters';
