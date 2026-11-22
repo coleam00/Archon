@@ -379,18 +379,19 @@ function mockingFiles(root: string): string[] {
  * returns all of it when it exits. A child that fails fails the whole check: a group that
  * crashed must never read as a group with no sites.
  */
-function collectInChildren(root: string, files: readonly string[]): Collected {
+export function collectInChildren(root: string, files: readonly string[]): Collected {
   const parts = [...groupByConfig(root, files)].map(([config, group]) => {
+    const input: GroupInput = { root, files: group };
     const child = Bun.spawnSync([process.execPath, 'run', import.meta.path, '--group', config], {
       cwd: root,
-      stdin: Buffer.from(JSON.stringify(group)),
+      stdin: Buffer.from(JSON.stringify(input)),
       stdout: 'pipe',
-      stderr: 'inherit',
+      stderr: 'pipe',
     });
     const name = toPosix(relative(root, config));
     if (child.exitCode !== 0) {
       throw new Error(
-        `Reading the mock.module() sites ${name} owns failed (${child.signalCode ?? `exit ${child.exitCode}`}).`
+        `Reading the mock.module() sites ${name} owns failed (${child.signalCode ?? `exit ${child.exitCode}`}):\n${child.stderr.toString()}`
       );
     }
     try {
@@ -402,10 +403,15 @@ function collectInChildren(root: string, files: readonly string[]): Collected {
   return mergeCollected(parts);
 }
 
+interface GroupInput {
+  root: string;
+  files: string[];
+}
+
 function runGroup(config: string): void {
-  const files = JSON.parse(readFileSync(0, 'utf8')) as string[];
+  const { root, files } = JSON.parse(readFileSync(0, 'utf8')) as GroupInput;
   // No process.exit after this write: Bun drops buffered stdout past 128 KiB on exit.
-  process.stdout.write(JSON.stringify(collectGroup(REPO_ROOT, config, files)));
+  process.stdout.write(JSON.stringify(collectGroup(root, config, files)));
 }
 
 function main(): void {
