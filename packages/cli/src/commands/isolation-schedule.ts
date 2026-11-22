@@ -4,6 +4,7 @@
  */
 import { createHash } from 'node:crypto';
 import { getArchonHome } from '@archon/paths';
+import { envPath } from '@archon/paths/env-path';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
@@ -31,7 +32,7 @@ export function isolationCleanupScheduleConfig(
     programArguments: [...cliProgramArguments(), 'isolation', 'cleanup', '--merged'],
     workingDirectory: archonHome,
     archonHome,
-    path: env.PATH ?? '',
+    path: envPath(env) ?? '',
     schedule: { intervalSeconds, runAtLoad: true },
     output: 'log',
     removeCommand: 'archon isolation cleanup schedule remove',

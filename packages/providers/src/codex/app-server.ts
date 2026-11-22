@@ -24,6 +24,7 @@ import type { ServerNotification } from './protocol/ServerNotification';
 import type { ServerRequest } from './protocol/ServerRequest';
 import type { CodexBinary } from './binary-resolver';
 import { terminateTree } from '@archon/paths/plugin-process';
+import { envPathKey } from '@archon/paths/env-path';
 
 const TOOL_CALL_METHOD = 'item/tool/call';
 
@@ -159,11 +160,6 @@ export async function settlesWithin(promise: Promise<unknown>, ms: number): Prom
   return result;
 }
 
-/** The env key that holds PATH: `Path` on Windows when the parent spelled it so. */
-function pathKey(env: Record<string, string>): string {
-  return Object.keys(env).find(key => key.toUpperCase() === 'PATH') ?? 'PATH';
-}
-
 function parseObjectFrame(line: string): Record<string, unknown> {
   const parsed: unknown = JSON.parse(line);
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -281,7 +277,7 @@ export class AppServerConnection {
   ): AppServerConnection {
     const childEnv = { ...env };
     if (binary.pathDirs.length > 0) {
-      const key = pathKey(childEnv);
+      const key = envPathKey(childEnv);
       childEnv[key] = [...binary.pathDirs, childEnv[key]].filter(Boolean).join(delimiter);
     }
     const child = spawner(binary.path, ['app-server', ...args], {

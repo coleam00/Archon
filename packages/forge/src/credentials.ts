@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { envPath } from '@archon/paths/env-path';
 import { GH_DOTCOM_TOKEN_KEYS, GH_ENTERPRISE_TOKEN_KEYS } from '@archon/paths/github-token-env';
 
 const execFileAsync = promisify(execFile);
@@ -53,7 +54,9 @@ async function readGhCredential(
     const { stdout } = await execFileAsync('gh', ['auth', 'token', '--hostname', host], {
       env: {
         ...hostEnv,
-        PATH: hostEnv.PATH ?? '',
+        // Written as `PATH`: POSIX execFile resolves `gh` only from that key, and on
+        // Windows a spread `Path` holds the same value.
+        PATH: envPath(hostEnv) ?? '',
         ...Object.fromEntries(GH_ENTERPRISE_TOKEN_KEYS.map(key => [key, ''])),
         ...Object.fromEntries(
           GH_DOTCOM_TOKEN_KEYS.map(key => [key, refreshApp ? credentialEnv[key] : ''])
