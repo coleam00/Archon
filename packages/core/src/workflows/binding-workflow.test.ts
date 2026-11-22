@@ -95,6 +95,7 @@ describe('trigger check refuses what a fire refuses', () => {
       commands: {},
     }),
     providers: providerRegistry,
+    projectOf: async () => null,
   };
 
   test.each([
@@ -159,4 +160,44 @@ describe('trigger check refuses what a fire refuses', () => {
         );
     }
   );
+
+  test('a run-ended binding is checked as a start would be: launch.inputs and the mapped names', async () => {
+    const root = track(await mkdtemp(join(tmpdir(), 'archon-binding-inputs-')));
+    const workflowsDir = join(root, '.archon', 'workflows');
+    await mkdir(workflowsDir, { recursive: true });
+    await writeFile(
+      join(workflowsDir, 'build.yaml'),
+      'name: build\ndescription: build\ninputs:\n  plan: { required: true }\n  issue: { required: true }\nnodes:\n  - id: one\n    bash: echo one\n'
+    );
+    const check = (inputs: Record<string, string>, mapped: string[]) =>
+      runEndedBindingCheck(
+        {
+          file: 'b.json',
+          sourceInstanceId: 'b',
+          binding: {
+            bindingId: 'b',
+            bindingRevision: null,
+            hostId: 'host',
+            runAsUserId: 'operator',
+            resource: 'r',
+            overlap: 'queue' as const,
+            launch: { cwd: root, workflowName: 'build', inputs, isolation: { kind: 'default' } },
+          },
+          runEnded: {
+            workflowName: 'plan',
+            outcome: 'ready',
+            inputs: Object.fromEntries(mapped.map(name => [name, { input: name }])),
+          },
+        },
+        deps
+      );
+
+    expect(await check({ issue: '1', stale: 'x' }, ['plan'])).toContainEqual(
+      expect.stringContaining("does not declare input 'stale'")
+    );
+    expect(await check({}, ['plan'])).toContainEqual("Workflow 'build' requires input 'issue'.");
+    expect(await check({ issue: '1' }, ['plan'])).not.toContainEqual(
+      expect.stringContaining("'build'")
+    );
+  });
 });

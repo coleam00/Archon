@@ -11199,6 +11199,16 @@ export interface components {
                   option?: string;
                 };
             to: string;
+            linked: {
+              /** @enum {string} */
+              kind: 'depends_on' | 'part_of' | 'duplicate_of';
+              /** @enum {string} */
+              holder: 'from' | 'to';
+              items?: string;
+              entries: {
+                [key: string]: string;
+              };
+            } | null;
             /** @enum {boolean} */
             active: true;
             declared: {
@@ -11224,6 +11234,16 @@ export interface components {
                   option?: string;
                 };
             to: string;
+            linked: {
+              /** @enum {string} */
+              kind: 'depends_on' | 'part_of' | 'duplicate_of';
+              /** @enum {string} */
+              holder: 'from' | 'to';
+              items?: string;
+              entries: {
+                [key: string]: string;
+              };
+            } | null;
             /** @enum {boolean} */
             active: false;
             declared: {

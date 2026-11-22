@@ -18,7 +18,12 @@ import type { PackBinding } from './schemas/pack-bindings';
 import { kindedPackBinding } from './schemas/pack-bindings';
 import { loopBodyStepNamePrefix, resolvedBodyNodes } from './graph-plan';
 import { isComposeFanOutNode, isLoopGroupNode } from './schemas/node-guards';
-import { asksSettledTriggerSchema, type RunEndedLinked } from './schemas/resource-start';
+import { readsLinkedEntry } from './schemas/binding-input-source';
+import {
+  asksSettledTriggerSchema,
+  runEndedLinkedSchema,
+  type RunEndedLinked,
+} from './schemas/resource-start';
 import type {
   ResolvedWorkflow,
   WorkflowLoadResult,
@@ -85,10 +90,36 @@ const arrowFromSchema = z.union([
 ]);
 export type PackGraphArrowFrom = z.infer<typeof arrowFromSchema>;
 
+/**
+ * The link an arrow starts its stage over: `on.runEnded.linked`, with the result list
+ * naming the items when it has `items`, and `entries`, each input of the started stage
+ * that reads the started item's own entry of that list, by its entry pointer.
+ */
+const arrowLinkSchema = z.object({
+  ...runEndedLinkedSchema.shape,
+  entries: z.record(z.string(), z.string()),
+});
+export type PackGraphLink = z.infer<typeof arrowLinkSchema>;
+
+/** The arrow's link from a binding's `linked` and its inputs, or null without `linked`. */
+export function graphLink(
+  linked: RunEndedLinked | undefined,
+  inputs: Readonly<Record<string, unknown>> | undefined
+): PackGraphLink | null {
+  if (linked === undefined) return null;
+  const entries: Record<string, string> = {};
+  for (const [target, source] of Object.entries(inputs ?? {}))
+    if (typeof source === 'object' && source !== null && readsLinkedEntry(source))
+      entries[target] = source.entry;
+  return { ...linked, entries };
+}
+
 const arrowEndsSchema = {
   from: arrowFromSchema,
   /** The workflow the arrow starts; it may be outside the pack. */
   to: z.string(),
+  /** The link the arrow starts its stage over, or null when it starts on the ended run's own item. */
+  linked: arrowLinkSchema.nullable(),
 };
 const declaredSourceSchema = z.object({
   binding: z.string(),
@@ -247,10 +278,11 @@ export interface InstalledArrow {
   from: PackGraphArrowFrom;
   launchWorkflow: string;
   /**
-   * The link the file starts its stage over (`on.runEnded.linked`), or null when it starts
-   * on the ended run's own item. It matches only a declared arrow with the same link.
+   * The link the file starts its stage over (`on.runEnded.linked`, see `graphLink`), or
+   * null when it starts on the ended run's own item. It matches only a declared arrow with
+   * the same link.
    */
-  linked: RunEndedLinked | null;
+  linked: PackGraphLink | null;
   problems: readonly string[];
 }
 
@@ -348,11 +380,14 @@ interface DeclaredArrow {
   binding: { binding: string; problems: string[] };
   from: PackGraphArrowFrom;
   to: string;
-  linked: RunEndedLinked | null;
+  linked: PackGraphLink | null;
 }
 
-const sameLink = (a: RunEndedLinked | null, b: RunEndedLinked | null): boolean =>
-  a === null || b === null ? a === b : a.kind === b.kind && a.holder === b.holder;
+// Which inputs read an entry is the file's input mapping, which never parts two arrows.
+const sameLink = (a: PackGraphLink | null, b: PackGraphLink | null): boolean =>
+  a === null || b === null
+    ? a === b
+    : a.kind === b.kind && a.holder === b.holder && a.items === b.items;
 
 function declaredArrows(input: GraphInput): DeclaredArrow[] {
   const names = input.stages.map(stage => stage.name);
@@ -389,7 +424,7 @@ function declaredArrows(input: GraphInput): DeclaredArrow[] {
       binding: { binding: id, problems: [...problems] },
       from: { stage, outcome: value },
       to,
-      linked: linked ?? null,
+      linked: graphLink(linked, kinded.binding.inputs),
     }));
   });
 }
@@ -402,7 +437,7 @@ function graphArrows(input: GraphInput): PackGraphArrow[] {
   const arrows: PackGraphArrow[] = [];
   const matched = new Set<InstalledArrow>();
   for (const { binding, from, to, linked } of declaredArrows(input)) {
-    const ends = { from, to };
+    const ends = { from, to, linked };
     const files = input.installed.filter(
       entry =>
         sameLink(entry.linked, linked) &&
@@ -415,6 +450,8 @@ function graphArrows(input: GraphInput): PackGraphArrow[] {
       matched.add(entry);
       arrows.push({
         ...ends,
+        // What the installed file maps is what its starts receive.
+        linked: entry.linked,
         active: true,
         declared: binding,
         installed: installedSource(entry),
@@ -426,6 +463,7 @@ function graphArrows(input: GraphInput): PackGraphArrow[] {
     arrows.push({
       from: entry.from,
       to: entry.launchWorkflow,
+      linked: entry.linked,
       active: true,
       declared: null,
       installed: installedSource(entry),

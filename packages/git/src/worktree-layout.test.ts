@@ -96,12 +96,13 @@ describe('git utilities', () => {
       });
     });
 
-    test('ignores invalid codebaseName and falls back to _local/<basename>', () => {
+    test('a bare codebaseName falls back to _local/<basename> without a warning', () => {
       const result = git.getWorktreeBase(repo('/local/repo'), 'invalid-no-slash');
       expect(result).toEqual({
         base: join(homedir(), '.archon', 'workspaces', '_local', 'repo', 'worktrees'),
         layout: 'workspace-scoped',
       });
+      expect(mockLogger.warn).not.toHaveBeenCalled();
     });
 
     test('ignores SSH-URL-shaped codebaseName (contains ":" / "@") and falls back to _local', () => {

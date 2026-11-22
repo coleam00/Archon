@@ -10,7 +10,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ts from 'typescript';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { ForgeError, forge, HostCommandError, item, items, notice, state, trigger } from './module';
+import {
+  ForgeError,
+  forge,
+  HostCommandError,
+  ItemWriteError,
+  item,
+  items,
+  linkItem,
+  notice,
+  recordLanding,
+  recordMerge,
+  state,
+  trigger,
+} from './module';
 import { scriptApiDeclaration } from './text';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-script-api-')));
@@ -54,6 +67,10 @@ if (command === 'forge') {
 } else if (command === 'workflow' && sub === 'items') {
   if (args.includes('broken')) answer({ ok: false, error: 'after is not a cursor this read returned' }, 1);
   else answer({ window: { since: 'a', until: 'b' }, items: [], next: null, args: args.slice(2) });
+} else if (command === 'workflow' && ['link', 'merged', 'landing'].includes(sub)) {
+  writeFileSync(${JSON.stringify(join(root, 'write.json'))}, JSON.stringify(args.slice(1)));
+  if (args.includes('missing')) answer({ ok: false, error: 'not_found' }, 1);
+  else answer({ answered: sub });
 } else if (command === 'trigger') {
   const inputs = readFileSync(args[args.indexOf('--inputs') + 1]!, 'utf8');
   writeFileSync(${JSON.stringify(join(root, 'trigger.json'))}, JSON.stringify(args.slice(2, -2)));
@@ -177,6 +194,61 @@ test("item reads this run's item, null when the run is on none, and a host failu
   expect((failure as Error).message).toContain('database locked');
 });
 
+test('item writes name the run, not an item, and return what the host printed', () => {
+  process.env.WORKFLOW_ID = 'on-item';
+  const sent = (write: () => unknown): unknown[] => {
+    expect(write()).toEqual({ answered: expect.any(String) });
+    return JSON.parse(readFileSync(join(root, 'write.json'), 'utf8'));
+  };
+  const own = ['--item-of', 'on-item'];
+  expect(sent(() => linkItem({ kind: 'part_of', to: 'parent' }))).toEqual([
+    'link',
+    ...own,
+    '--kind',
+    'part_of',
+    '--to',
+    'parent',
+    '--json',
+  ]);
+  expect(sent(() => linkItem({ kind: 'part_of', from: 'child' }))).toEqual([
+    'link',
+    ...own,
+    '--kind',
+    'part_of',
+    '--from',
+    'child',
+    '--json',
+  ]);
+  const at = '2026-11-21T10:00:00Z';
+  const commit = 'a'.repeat(40);
+  expect(sent(() => recordMerge({ change: 'https://forge/pr/7', at, commit }))).toEqual([
+    'merged',
+    ...own,
+    '--change',
+    'https://forge/pr/7',
+    '--at',
+    at,
+    '--commit',
+    commit,
+    '--json',
+  ]);
+  expect(sent(() => recordLanding('feature/x'))).toEqual([
+    'landing',
+    ...own,
+    '--branch',
+    'feature/x',
+    '--json',
+  ]);
+});
+
+test("a refused item write is the typed error with the host's reason", () => {
+  process.env.WORKFLOW_ID = 'on-item';
+  const refused = thrownBy(() => linkItem({ kind: 'depends_on', to: 'missing' }));
+  expect(refused).toBeInstanceOf(ItemWriteError);
+  expect(refused).toBeInstanceOf(HostCommandError);
+  expect(refused).toMatchObject({ command: 'workflow link', exitCode: 1, reason: 'not_found' });
+});
+
 test('items hands its query to the host command and returns the page it printed', () => {
   expect(items({ since: '7d', limit: 50 })).toEqual({
     window: { since: 'a', until: 'b' },
@@ -200,7 +272,7 @@ test('the declaration alone type-checks a script against the forge and state con
   writeFileSync(declaration, scriptApiDeclaration);
   writeFileSync(
     script,
-    `import { ForgeError, forge, input, item, outcomes, state, trigger } from 'archon:script';
+    `import { ForgeError, ItemWriteError, forge, input, item, linkItem, outcomes, recordLanding, recordMerge, state, trigger } from 'archon:script';
 const repo = { host: 'forge.example', path: 'team/repo' };
 const view = forge('pr.view', { selector: { kind: 'number', ref: { repo, number: 7 } } });
 export const head: string | undefined = view?.pr.head;
@@ -222,6 +294,14 @@ export const conflict: 'revision_moved' | 'lease_held' | 'lease_not_held' | numb
 state.put('queue/a', {});
 export const states: string[] = outcomes().nodes.map(node => node.state);
 export const started: string | undefined = trigger.fire('binding.json').disposition?.requestId;
+export const created: boolean = linkItem({ kind: 'part_of', to: 'parent' }).created;
+// @ts-expect-error a link names one other end, not both
+linkItem({ kind: 'part_of', to: 'a', from: 'b' });
+export const first: string = recordMerge({ change: 'pr', at: 'now' }).merge.change;
+export const lands: string = recordLanding('feature/x').branch;
+export function refusal(error: unknown): string | undefined {
+  return error instanceof ItemWriteError ? error.reason : undefined;
+}
 export const rulings: string[] = (item()?.answers ?? []).flatMap(answer =>
   answer.kind === 'ruling' && answer.withdrawn === null ? [answer.text] : []
 );

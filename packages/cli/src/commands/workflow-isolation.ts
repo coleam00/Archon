@@ -17,9 +17,11 @@ import {
   type ExecutionContext,
   type IsolationEnvironmentRow,
   type PreparedEnv,
+  readWorktreeBaseBranch,
 } from '@archon/isolation';
 import * as git from '@archon/git';
 import type { LaunchBase } from './workflow-run-config';
+import type { RunWorkspace } from './workflow-run-launch';
 import { mkdir } from 'node:fs/promises';
 import { loadRepoConfig } from '@archon/core/config/config-loader';
 import type { OverlayMode } from '@archon/workflows/container-context';
@@ -276,14 +278,27 @@ export async function resolveRunCodebase(
  * instead of resolving `cwd` a second way. `codebase` is null when nothing is registered
  * yet; `repoRoot` and the canonical `cwd` are what registration needs after that.
  */
-export async function findLaunchCodebase(
+export function findLaunchCodebase(
   host: WorkflowHost,
   cwd: string,
   options: RunCodebaseOptions
-): Promise<{ codebase: Codebase | null; repoRoot: string | null; cwd: string }> {
-  const canonicalCwd = await canonicalizeProjectPath(cwd);
-  return { ...(await findRunCodebase(host, canonicalCwd, options)), cwd: canonicalCwd };
+): Promise<LaunchCodebase> {
+  // One answer per invocation: selection reads it to plan the run's definitions, and the
+  // launch reads it again to register and isolate, before anything registers the project.
+  const cached = launchLookups.get(options);
+  if (cached?.cwd === cwd) return cached.found;
+  const found = (async () => {
+    const canonicalCwd = await canonicalizeProjectPath(cwd);
+    return { ...(await findRunCodebase(host, canonicalCwd, options)), cwd: canonicalCwd };
+  })();
+  launchLookups.set(options, { cwd, found });
+  // A failed lookup is not remembered, so a retry asks again.
+  found.catch(() => launchLookups.delete(options));
+  return found;
 }
+
+type LaunchCodebase = { codebase: Codebase | null; repoRoot: string | null; cwd: string };
+const launchLookups = new WeakMap<object, { cwd: string; found: Promise<LaunchCodebase> }>();
 
 type RunCodebaseOptions = Pick<
   WorkflowRunOptions,
@@ -619,6 +634,20 @@ async function containerMounts(
   // inside the container, so a path means one thing on either side of the
   // boundary.
   return { sourceMount: preparedSource.anchor.root, artifactsMount: artifactsDir };
+}
+
+/**
+ * Run in a worktree this launch reuses (`--branch` again, or `--adopt`). Its record keeps
+ * the base it was cut from, which the run reports as `$BASE_BRANCH`: without a remote
+ * there is nothing else to detect it from.
+ */
+export function useReusedWorktree(
+  workspace: Pick<RunWorkspace, 'workingCwd' | 'isolationEnvId' | 'cut'>,
+  env: IsolationEnvironmentRow
+): void {
+  workspace.workingCwd = env.working_path;
+  workspace.isolationEnvId = env.id;
+  workspace.cut = { resolvedBaseBranch: readWorktreeBaseBranch(env.metadata) };
 }
 
 /**

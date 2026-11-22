@@ -11,6 +11,7 @@ import { hasRunModelOverrides, runOverrideAppliesToRef, selectModelRef } from '.
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from './run-ai-configuration';
 import { isFolderCodebase } from './run-paths';
 import { prepareRunAiConfiguration, type PreparedRunAiConfiguration } from './run-preflight';
+import { runProjectConfigRoot } from './workflow-source/load';
 import type {
   DagNode,
   IncludeDirective,
@@ -350,6 +351,7 @@ async function prepareDispatchAiConfiguration(
     return opts.preparedAiConfiguration;
   }
   return await prepareRunAiConfiguration(deps, workflow, cwd, {
+    configRoot: runProjectConfigRoot(preCreatedRun?.metadata, cwd),
     codebaseId: opts.codebaseId,
     userId: executionUserId,
     runConfig: opts.runConfig,
@@ -388,9 +390,9 @@ async function resolveBaseBranch(
   try {
     const repoPath = toRepoPath(cwd);
     const remote = config.remote?.trim() || (await getDefaultRemote(repoPath));
-    // No remote to detect from is the normal state of a local repository. Like a folder
-    // project, $BASE_BRANCH stays unresolved; a worktree run refuses earlier, when it
-    // cannot choose a remote to cut from.
+    // No remote to detect from is the normal state of a local repository. A CLI or trigger
+    // worktree run already has its base from creation (`resolvedBaseBranch` above);
+    // otherwise, like a folder project, $BASE_BRANCH stays unresolved.
     if (!remote) return '';
     return await getDefaultBranch(repoPath, remote);
   } catch (error) {

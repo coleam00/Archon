@@ -876,7 +876,18 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
     try {
       const result = spawnSync(
         process.execPath,
-        [CLI_ENTRY, 'workflow', 'run', 'x', '--dry-run', '--internal-detached-run-config', payload],
+        [
+          CLI_ENTRY,
+          'workflow',
+          'run',
+          'x',
+          '--dry-run',
+          // The offline path: a dry run reads an explicit source as it is.
+          '--workflow-source',
+          repo,
+          '--internal-detached-run-config',
+          payload,
+        ],
         {
           cwd: repo,
           encoding: 'utf8',
@@ -1864,6 +1875,34 @@ describe('pre-dispatch gates --json error envelope', () => {
     }
   });
 
+  it('lets --item-of reads and writes past the git gate: they act on the run, not the directory', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'archon-item-of-outside-'));
+    try {
+      const forms: [string[], string][] = [
+        [['runs'], 'not_found'],
+        [['link', '--kind', 'part_of', '--to', 'parent'], 'no_item'],
+        [['merged', '--change', 'pr', '--at', '2026-11-02T10:00:00Z'], 'no_item'],
+        [['landing', '--branch', 'feat/x'], 'no_item'],
+      ];
+      for (const [[subcommand, ...rest], error] of forms) {
+        const { envelope } = spawnJsonError([
+          'workflow',
+          subcommand ?? '',
+          '--item-of',
+          'no-such-run',
+          ...rest,
+          '--json',
+          '--cwd',
+          outside,
+        ]);
+        // The command answered for the run; the gate would have refused the directory.
+        expect(envelope()).toMatchObject({ ok: false, error });
+      }
+    } finally {
+      await removeTempTree(outside);
+    }
+  });
+
   it('leaves the default home untouched when the gate opens the registry', async () => {
     // Same command as the case above — the one route here that opens the
     // registry — but with the child's home directory pointed at a scratch tree,
@@ -2792,7 +2831,8 @@ it.each([true, false])(
               ['validate', 'commands'],
             ]
           : []),
-        ['workflow', 'run', 'probe', '--dry-run', '--default-stubs'],
+        // Without a registry a dry run names its source, as a real start needs the registry.
+        ['workflow', 'run', 'probe', '--dry-run', '--default-stubs', '--workflow-source', repo],
         ['workflow', 'test', 'probe'],
       ]) {
         const result = spawnSync(process.execPath, [CLI_ENTRY, ...args], {

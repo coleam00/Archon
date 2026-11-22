@@ -540,8 +540,8 @@ declare module 'archon:script' {
           readonly number: number;
         };
         readonly head_revision: string;
-        readonly default_branch: string;
-        readonly default_revision: string;
+        readonly base_branch: string;
+        readonly base_revision: string;
         readonly behind: number;
         readonly mergeable: 'clean' | 'conflict' | 'unknown';
         readonly merge_commit: string | null;
@@ -3121,6 +3121,72 @@ declare module 'archon:script' {
     readonly next: string | null;
   };
 
+  /** A link between two items, as the engine records it; `ended` is null while it is active. */
+  export type ItemLink = {
+    readonly id: string;
+    readonly kind: 'depends_on' | 'part_of' | 'duplicate_of';
+    readonly from: {
+      readonly id: string;
+      readonly projectKey: string;
+      readonly key: string;
+    };
+    readonly to: {
+      readonly id: string;
+      readonly projectKey: string;
+      readonly key: string;
+    };
+    readonly at: string;
+    readonly via: string;
+    readonly by: {
+      readonly declared: string;
+    } | {
+      readonly userId: string;
+    } | null;
+    readonly fromRun: {
+      readonly runId: string;
+      readonly nodePath: string;
+    } | null;
+    readonly ended: {
+      readonly at: string;
+      readonly via: string;
+      readonly by: {
+        readonly declared: string;
+      } | {
+        readonly userId: string;
+      } | null;
+      readonly fromRun: {
+        readonly runId: string;
+        readonly nodePath: string;
+      } | null;
+    } | null;
+  };
+
+  /** `recorded` is false when the item already carried a merge; `merge` is then the first. */
+  export type ItemMergeRecorded = {
+    readonly merge: {
+      readonly change: string;
+      readonly commit: string | null;
+      readonly at: string;
+      readonly recordedAt: string;
+      readonly via: string;
+      readonly fromRun: {
+        readonly runId: string;
+        readonly nodePath: string;
+      } | null;
+    };
+    readonly recorded: boolean;
+  };
+
+  /** The branch an item's change lands on. */
+  export type ItemLanding = {
+    readonly branch: string;
+    readonly recordedAt: string;
+    readonly fromRun: {
+      readonly runId: string;
+      readonly nodePath: string;
+    } | null;
+  };
+
   /** The admission a fired trigger binding got. */
   export type StartDisposition = {
     readonly status: 'admitted';
@@ -3181,6 +3247,14 @@ declare module 'archon:script' {
       constructor(
       /** The command without its arguments, such as `forge pr.view` or `state put`. */
       command: string, exitCode: number | null, detail: string);
+  }
+  /**
+   * The host refused an item write and wrote nothing. `reason` is the CLI's `error`: a fixed
+   * code (`no_item` when the run is on no item, `self_link`, `unknown_kind`) or its message.
+   */
+  export class ItemWriteError extends HostCommandError {
+      readonly reason: string;
+      constructor(command: string, exitCode: number, reason: string);
   }
   /**
    * The host answered that a forge operation failed. `kind` is the typed reason. `mutation`
@@ -3268,6 +3342,48 @@ declare module 'archon:script' {
    * A container run cannot call it, as it cannot call `state`.
    */
   export function item(): ItemRead | null;
+  /** One end of a link: the run's own item is the other. Exactly one of `to` and `from`. */
+  export type ItemLinkRequest = {
+      readonly kind: ItemLink['kind'];
+      readonly to: string;
+      readonly from?: never;
+  } | {
+      readonly kind: ItemLink['kind'];
+      readonly from: string;
+      readonly to?: never;
+  };
+  /**
+   * Record a link (`archon workflow link`) from this run's own item, the one `item()` reads,
+   * to the item `to` names, or to it from the item `from` names. `created` is false when the
+   * same active link was already recorded. Throws {@link ItemWriteError} on a refusal
+   * (`no_item` when the run is on no item), and {@link HostCommandError} when the host gives
+   * no answer, in which case the link may or may not have been recorded.
+   * A container run cannot call it, as it has no host CLI.
+   */
+  export function linkItem(request: ItemLinkRequest): ItemLink & {
+      readonly created: boolean;
+  };
+  /**
+   * Record that this run's own item's change merged (`archon workflow merged`), as the forge
+   * reported it: `change` names the change, such as a pull request URL, `at` is an ISO time
+   * with an offset, `commit` the full merge commit when the forge gave one. Throws
+   * {@link ItemWriteError} on a refusal (`no_item` when the run is on no item), and
+   * {@link HostCommandError} when the host gives no answer, in which case the merge may or
+   * may not have been recorded. A container run cannot call it, as it has no host CLI.
+   */
+  export function recordMerge(merge: {
+      readonly change: string;
+      readonly at: string;
+      readonly commit?: string | null;
+  }): ItemMergeRecorded;
+  /**
+   * Record the branch this run's own item's change lands on (`archon workflow landing`);
+   * recording again replaces it. Throws {@link ItemWriteError} on a refusal (`no_item` when
+   * the run is on no item), and {@link HostCommandError} when the host gives no answer, in
+   * which case the branch may or may not have been recorded.
+   * A container run cannot call it, as it has no host CLI.
+   */
+  export function recordLanding(branch: string): ItemLanding;
   /**
    * A page of this project's items with a run started in a window (`archon workflow
    * items`), each read as `item()` reads one, with all its runs. `since` and `until` take

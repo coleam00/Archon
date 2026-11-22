@@ -4,11 +4,14 @@
  */
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
-import type {
-  NativeScheduleOptions,
-  RunCommand,
-  ScheduleBackend,
-  ScheduledJob,
+import {
+  installedLabels,
+  readInstalled,
+  type InstalledJob,
+  type NativeScheduleOptions,
+  type RunCommand,
+  type ScheduleBackend,
+  type ScheduledJob,
 } from './native-schedule';
 
 const SCHTASKS = 'schtasks.exe';
@@ -64,6 +67,27 @@ export function renderTaskWrapper(job: ScheduledJob): string {
     `(cd /d ${cmdArgument(job.workingDirectory)} && ${command}) ${output}`,
     '',
   ].join('\r\n');
+}
+
+/** The inverse of `cmdArgument`, given the text between its quotes. */
+function cmdArgumentValue(quoted: string): string {
+  return quoted.replace(/(\\+)$/, run => run.slice(run.length / 2)).replaceAll('%%', '%');
+}
+
+/** The inverse of `renderTaskWrapper` for what check needs; undefined for any other file. */
+export function readTaskWrapper(wrapper: string): InstalledJob | undefined {
+  const lines = wrapper.split('\r\n');
+  const home = lines
+    .map(line => /^set "ARCHON_HOME=(.*)"$/.exec(line)?.[1])
+    .find(value => value !== undefined);
+  const command = lines
+    .map(line => /^\(cd \/d "[^"]*" && (.*)\) (?:>> "[^"]*" 2>&1|>nul 2>&1)$/.exec(line)?.[1])
+    .find(value => value !== undefined);
+  if (home === undefined || command === undefined) return undefined;
+  return {
+    archonHome: home.replaceAll('%%', '%'),
+    programArguments: [...command.matchAll(/"([^"]*)"/g)].map(match => cmdArgumentValue(match[1])),
+  };
 }
 
 export function renderTaskDefinition(job: ScheduledJob, userId: string): string {
@@ -171,5 +195,13 @@ export function taskSchedulerBackend(
     unregister: async label => {
       if (await isRegistered(label)) await deleteTask(label);
     },
+    installed: async () =>
+      readInstalled(
+        await installedLabels(join(archonHome, 'schedules'), '.cmd'),
+        label => wrapperPath(archonHome, label),
+        readTaskWrapper,
+        label =>
+          `${SCHTASKS} /Delete /TN ${taskName(label)} /F, then delete ${definitionPath(archonHome, label)} and ${wrapperPath(archonHome, label)}`
+      ),
   };
 }

@@ -19,7 +19,6 @@
  * run-ended hand-off, which refuses a branch that moved off the recorded commit.
  */
 import { existsSync } from 'node:fs';
-import type { WorkflowDeps } from '@archon/workflows/deps';
 import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import { chosenAskOption, type StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import {
@@ -33,18 +32,21 @@ import {
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { readAsksResult, readSubrunMetadata } from '@archon/workflows/schemas/run-metadata';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { discoverBindingWorkflows, type BindingDefinitionsDeps } from './definition-source';
 import {
   bindingProjectKey,
   bindingReceipt,
   declaredInputNames,
   mappedInputs,
   readAsksSettledBindings,
-  startedWorkflowProblems,
   type AsksSettledBinding,
   type RunEndedStartsDependencies,
 } from './run-ended';
-import { selectStartedWorkflow, type StartedWorkflow } from './binding-workflow';
+import {
+  selectStartedWorkflow,
+  startedWorkflowInputProblems,
+  type StartedWorkflow,
+} from './binding-workflow';
 import { itemAnswers, settledAnswer } from './item-answers';
 
 export interface AsksSettledStartsDependencies
@@ -245,24 +247,27 @@ async function withWorktree(
 /**
  * Every problem with an asks-settled binding, read against the workflows of the project it
  * launches in: the asking workflow exists, declares `returns.asks` and every input the
- * binding reads, and the started workflow exists and declares every input it maps. With
+ * binding reads, and the started workflow exists and accepts its inputs as a start would:
+ * `launch.inputs` and the mapped names, none undeclared and no required one missing. With
  * `checkout: "asking-run"`, neither workflow may be pinned in place.
  */
 export async function asksSettledBindingCheck(
   { binding, asksSettled }: AsksSettledBinding,
-  deps: Pick<WorkflowDeps, 'loadConfig' | 'providers'>
+  deps: BindingDefinitionsDeps,
+  /** The run starting now whose end or asks may fire the binding; see `discoverBindingWorkflows`. */
+  launchRun?: Pick<WorkflowRun, 'metadata'>
 ): Promise<string[]> {
-  const discovered = await discoverWorkflowsWithConfig(
-    binding.launch.discoveryCwd ?? binding.launch.cwd,
-    deps.loadConfig,
-    deps.providers
-  );
+  const read = await discoverBindingWorkflows(binding.launch, deps, launchRun);
+  if ('refused' in read) return [read.refused];
+  const { discovered } = read;
   const workflows = discovered.workflows.map(found => found.workflow);
   const started = selectStartedWorkflow(binding.launch, discovered);
   return [
     ...askingWorkflowProblems(asksSettled, workflows),
     ...checkoutProblems(asksSettled, started, workflows),
-    ...startedWorkflowProblems(started, asksSettled.inputs),
+    ...startedWorkflowInputProblems(started, binding.launch.inputs, {
+      mapped: Object.keys(asksSettled.inputs ?? {}),
+    }),
   ];
 }
 
@@ -318,8 +323,7 @@ function askingWorkflowProblems(
  */
 export async function asksSettledTriggerCheck(
   bindings: readonly AsksSettledBinding[],
-  deps: Pick<WorkflowDeps, 'loadConfig' | 'providers'> &
-    Pick<RunEndedStartsDependencies, 'projectKeyOf'>
+  deps: BindingDefinitionsDeps & Pick<RunEndedStartsDependencies, 'projectKeyOf'>
 ): Promise<string[][]> {
   const problems: string[][] = [];
   const stages: string[][] = [];
@@ -411,7 +415,7 @@ function sharingFiles(
  */
 export function createAsksSettledPreflight(
   dependencies: Omit<RunEndedStartsDependencies, 'now' | 'endedCheckout' | 'listItemAsks'> &
-    Pick<WorkflowDeps, 'loadConfig' | 'providers'>
+    BindingDefinitionsDeps
 ): (run: WorkflowRun) => Promise<void> {
   return async run => {
     if (!run.item_id) return;
@@ -423,7 +427,8 @@ export function createAsksSettledPreflight(
     if (!item) throw new Error(`Run '${run.id}' names item '${run.item_id}', which is missing`);
     for (const candidate of candidates) {
       if ((await bindingProjectKey(candidate, dependencies)) !== item.projectKey) continue;
-      const problems = await asksSettledBindingCheck(candidate, dependencies);
+      // Checked against the definitions this run executes.
+      const problems = await asksSettledBindingCheck(candidate, dependencies, run);
       if (problems.length > 0)
         throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
     }

@@ -47,7 +47,5 @@ export interface ItemMergeReport {
 }
 
 /** `recorded` is false when the item already carried a merge; `merge` is then the first. */
-export interface ItemMergeRecorded {
-  merge: ItemMerge;
-  recorded: boolean;
-}
+export const itemMergeRecordedSchema = z.object({ merge: itemMergeSchema, recorded: z.boolean() });
+export type ItemMergeRecorded = z.infer<typeof itemMergeRecordedSchema>;

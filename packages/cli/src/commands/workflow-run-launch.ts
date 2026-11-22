@@ -49,6 +49,7 @@ import {
   folderRunsInContainer,
   prepareFolderExecution,
   resolveRunCodebase,
+  useReusedWorktree,
   warnOnReusedWorktree,
   type FolderExecution,
 } from './workflow-isolation';
@@ -67,6 +68,7 @@ import {
   type OwnedRunRequest,
 } from './workflow-run-admission';
 import { resolveLaunchBase, type LaunchBase } from './workflow-run-config';
+import { definitionsStartCommit } from './workflow-run-definitions';
 
 /**
  * Preflight before handing execution to a detached child. Refusals must reach the
@@ -111,7 +113,7 @@ export async function launchDetachedOwnedRun(
   if (declaration && 'lane' in declaration) admission.aiConfigurationRun = declaration.adoptedRun;
   // The item's landing branch is checked here so a missing one refuses before `Started`;
   // the child resolves it again when it cuts the worktree.
-  await resolveLaunchBase(host, options.item, admission, detachCodebase, declaration);
+  const base = await resolveLaunchBase(host, options.item, admission, detachCodebase, declaration);
   const adoptionLane = declaration && 'lane' in declaration ? declaration.lane : undefined;
   await refuseDetachedWorkspace(request, admission, adoptionLane, detachCodebase, detachIsFolder);
   const prepared = await prepareLaneAiConfiguration(
@@ -124,7 +126,8 @@ export async function launchDetachedOwnedRun(
       admission.workflow,
       detachCodebase,
       admission.continuationRun
-    )
+    ),
+    base
   );
 
   await launchDetachedRun({
@@ -210,8 +213,8 @@ type RunConversation = Extract<RunDestination, { kind: 'conversation' }>['conver
 export interface RunWorkspace {
   workingCwd: string;
   isolationEnvId: string | undefined;
-  /** Set only when this invocation created the run's branch (#3305). */
-  cutFromCommit: string | undefined;
+  /** The commit and base this invocation cut the run's branch from; empty otherwise (#3305). */
+  cut: Pick<RegisteredWorktree, 'cutFromCommit' | 'resolvedBaseBranch'>;
   ownedWorktree: OwnedWorktree | undefined;
   /**
    * Repo/worktree and folder-in-place both run on the host; the folder-backend seam sets
@@ -293,7 +296,7 @@ export async function prepareForegroundLaunch(
   const workspace: RunWorkspace = {
     workingCwd: cwd,
     isolationEnvId: undefined,
-    cutFromCommit: undefined,
+    cut: {},
     ownedWorktree: undefined,
     execContext: { kind: 'host' },
     container: undefined,
@@ -324,7 +327,8 @@ export async function prepareForegroundLaunch(
     request,
     admission,
     foregroundLaneConfig(continuation, codebase, workspace),
-    await runExecutesInContainer(host, options, admission.workflow, codebase, resumable)
+    await runExecutesInContainer(host, options, admission.workflow, codebase, resumable),
+    base
   );
 
   const isFolderCodebase = codebase?.kind === 'folder';
@@ -410,8 +414,7 @@ async function bindAdoptionLane(
       lane,
       codebase.default_cwd
     );
-    workspace.workingCwd = env.working_path;
-    workspace.isolationEnvId = env.id;
+    useReusedWorktree(workspace, env);
     continuation.runsIsolatedCheckout = true;
     // The reuse lane IS the isolation: run in the inherited worktree as-is.
     // Leaving wantsIsolation set would fall through to worktree creation
@@ -625,7 +628,6 @@ async function provisionWorktree(
     options.detachedWorktreeIdentifier ??
     generatedWorktreeIdentifier(request.workflowName, setupRunId(admission));
 
-  // Configure isolation with repo config loader (same as orchestrator)
   configureWorktreeIsolation();
 
   const existingEnv = await reusedBranchWorktree(
@@ -637,8 +639,7 @@ async function provisionWorktree(
   if (existingEnv) {
     await warnOnReusedWorktree(existingEnv, codebase, launch.base, launch.codebaseDefaultBranch);
     await recordWorktreeAdoption(host.records.isolation, existingEnv, codebase.default_cwd);
-    workspace.workingCwd = existingEnv.working_path;
-    workspace.isolationEnvId = existingEnv.id;
+    useReusedWorktree(workspace, existingEnv);
     return;
   }
 
@@ -653,7 +654,7 @@ async function provisionWorktree(
   workspace.workingCwd = created.env.workingPath;
   workspace.isolationEnvId = created.envId;
   workspace.ownedWorktree = created.ownedWorktree;
-  workspace.cutFromCommit = created.cutFromCommit;
+  workspace.cut = created;
   getLog().info({ path: workspace.workingCwd }, 'worktree_created');
 }
 
@@ -702,6 +703,7 @@ async function createRunWorktree(
       taskBranch: worktreeTaskBranch(options, launch.continuation.adoptedTaskBranch),
       baseBranch: codebaseDefaultBranch ? git.toBranchName(codebaseDefaultBranch) : undefined,
       baseOverride: launch.base ? git.toBranchName(launch.base.branch) : undefined,
+      ...definitionsStartCommit(admission.preparedSource),
       codebaseId: codebase.id,
       // owner/repo name lets resolveOwnerRepo use the registered identity
       // instead of the _local/<basename> path fallback (#2022, #2227)

@@ -7,11 +7,11 @@
  * `GET /api/packs/{pack}/graph` both read it here.
  */
 import { loadStoreSelection } from '../config/store-selection';
-import type { WorkflowDeps } from '@archon/workflows/deps';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { existsSync } from 'node:fs';
 import {
   buildPackGraph,
+  graphLink,
   nearestPackBindings,
   packWorkflowIdentities,
   packWorkflows,
@@ -20,6 +20,7 @@ import {
 } from '@archon/workflows/pack-graph';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { asksSettledBindingCheck } from './asks-settled';
+import type { BindingDefinitionsDeps } from './definition-source';
 import {
   bindingProjectKey,
   readOnBindings,
@@ -28,14 +29,15 @@ import {
   type RunEndedStartsDependencies,
 } from './run-ended';
 
-type GraphDeps = Pick<WorkflowDeps, 'loadConfig' | 'providers'> &
+type GraphDeps = BindingDefinitionsDeps &
   Pick<RunEndedStartsDependencies, 'triggersDirectory' | 'projectKeyOf'>;
 
-/** Where an installed file's arrow starts, as the file spells it. */
 /** The link a run-ended file starts its stage over, or null for a same-item start. */
 function installedLink(file: OnBinding): InstalledArrow['linked'] {
-  return 'runEnded' in file ? (file.runEnded.linked ?? null) : null;
+  return 'runEnded' in file ? graphLink(file.runEnded.linked, file.runEnded.inputs) : null;
 }
+
+/** Where an installed file's arrow starts, as the file spells it. */
 
 function installedFrom(file: OnBinding): InstalledArrow['from'] {
   return 'runEnded' in file

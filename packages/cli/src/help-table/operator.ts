@@ -150,7 +150,7 @@ export const operatorHelp: HelpGroup = {
       command: 'trigger',
       subcommand: 'check',
       spec: 'trigger check',
-      description: 'List the run-ended bindings in ARCHON_HOME/triggers and check them',
+      description: 'Check every trigger binding and installed timer against the workflow it starts',
     },
     {
       command: 'trigger',

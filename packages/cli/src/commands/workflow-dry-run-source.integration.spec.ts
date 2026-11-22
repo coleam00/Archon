@@ -207,3 +207,101 @@ describe('workflow run --dry-run --workflow-source', () => {
     expect(result.outcome).toBe('completed');
   });
 });
+
+describe('the definitions of a run on a git checkout', () => {
+  function git(cwd: string, ...args: string[]): void {
+    const done = Bun.spawnSync(['git', '-C', cwd, ...args]);
+    if (done.exitCode !== 0) throw new Error(done.stderr.toString());
+  }
+  const commit = (cwd: string, message: string) =>
+    git(cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qam', message);
+  const sample = (node: string) =>
+    `name: sample\ndescription: sample\nnodes:\n  - id: ${node}\n    bash: echo ${node}\n`;
+
+  /** A remote with `main`, a clone of it as the target, and a second clone landing on it. */
+  function landedFixture(): { fx: Fixture; upstream: string } {
+    const fx = fixture();
+    const remote = join(fx.source, 'remote.git');
+    Bun.spawnSync(['git', 'init', '-q', '--bare', '--initial-branch=main', remote]);
+    const upstream = join(fx.source, 'upstream');
+    Bun.spawnSync(['git', 'clone', '-q', remote, upstream]);
+    write(join(upstream, '.archon', 'workflows', 'sample.yaml'), sample('old'));
+    git(upstream, 'add', '-A');
+    commit(upstream, 'old');
+    git(upstream, 'push', '-q', 'origin', 'main');
+    return { fx, upstream };
+  }
+
+  test('a dry run refuses definitions changed both locally and on the base, as the start does', async () => {
+    const { fx, upstream } = landedFixture();
+    await removeTempTree(fx.target);
+    Bun.spawnSync(['git', 'clone', '-q', join(fx.source, 'remote.git'), fx.target]);
+    write(join(upstream, '.archon', 'workflows', 'sample.yaml'), sample('landed'));
+    commit(upstream, 'landed');
+    git(upstream, 'push', '-q', 'origin', 'main');
+    write(join(fx.target, '.archon', 'workflows', 'sample.yaml'), sample('local'));
+
+    const result = await captureWorkflowCommand(fx.home, async host => {
+      await workflowRunCommand(host, fx.target, 'sample', '', { dryRun: true, defaultStubs: true });
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain('.archon/workflows/sample.yaml: uncommitted in');
+  });
+
+  test("a dry run reads the registered project's default branch, as the start does", async () => {
+    const { fx, upstream } = landedFixture();
+    git(upstream, 'switch', '-qc', 'dev');
+    write(join(upstream, '.archon', 'workflows', 'sample.yaml'), sample('dev'));
+    commit(upstream, 'dev');
+    git(upstream, 'push', '-q', 'origin', 'dev');
+    await removeTempTree(fx.target);
+    Bun.spawnSync(['git', 'clone', '-q', join(fx.source, 'remote.git'), fx.target]);
+    await captureWorkflowCommand(fx.home, async host => {
+      const { registerRepository } = await import('@archon/core/handlers/clone');
+      await registerRepository(host.records.codebases, fx.target, { baseBranch: 'dev' });
+    });
+
+    const result = await dryRun(fx, 'sample', null);
+
+    expect(result.trace.map(entry => entry.nodeId)).toEqual(['dev']);
+  });
+
+  test('a dry run traces the workflow landed on the base, as the real run would', async () => {
+    const fx = fixture();
+    const remote = join(fx.source, 'remote.git');
+    Bun.spawnSync(['git', 'init', '-q', '--bare', '--initial-branch=main', remote]);
+    const upstream = join(fx.source, 'upstream');
+    Bun.spawnSync(['git', 'clone', '-q', remote, upstream]);
+    write(join(upstream, '.archon', 'workflows', 'sample.yaml'), sample('old'));
+    git(upstream, 'add', '-A');
+    commit(upstream, 'old');
+    git(upstream, 'push', '-q', 'origin', 'main');
+    await removeTempTree(fx.target);
+    Bun.spawnSync(['git', 'clone', '-q', remote, fx.target]);
+    write(join(upstream, '.archon', 'workflows', 'sample.yaml'), sample('landed'));
+    commit(upstream, 'landed');
+    git(upstream, 'push', '-q', 'origin', 'main');
+
+    const result = await dryRun(fx, 'sample', null);
+
+    expect(result.trace.map(entry => entry.nodeId)).toEqual(['landed']);
+  });
+
+  test('a workflow pinned in place runs on a checkout with no remote', async () => {
+    const fx = fixture();
+    git(fx.target, 'init', '-q');
+    write(
+      join(fx.target, '.archon', 'workflows', 'inplace.yaml'),
+      'name: inplace\ndescription: in place\nworktree:\n  enabled: false\nnodes:\n  - id: one\n    bash: echo in-place\n'
+    );
+    git(fx.target, 'add', '-A');
+    commit(fx.target, 'base');
+
+    const result = await captureWorkflowCommand(fx.home, async host => {
+      await workflowRunCommand(host, fx.target, 'inplace', '', {});
+    });
+
+    expect(result.status, result.output).toBe(0);
+  });
+});
