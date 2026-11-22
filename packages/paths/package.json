@@ -31,8 +31,7 @@
     "./source-commit": "./src/source-commit.ts"
   },
   "scripts": {
-    "test": "bun run ../../scripts/package-tests.ts",
-    "type-check": "bun x tsc --noEmit"
+    "test": "bun run ../../scripts/package-tests.ts"
   },
   "dependencies": {
     "dotenv": "^17",

@@ -7,8 +7,10 @@ import {
   type ClassifierInputs,
   ROOT,
   type WorkspaceGraph,
+  type ScopedChange,
   changeScope,
   changedFiles,
+  scopedTypeChecks,
 } from './check-changed';
 import { workspaceTestInputs } from './should-run-test-suite';
 
@@ -99,6 +101,47 @@ describe('changeScope', () => {
   test('an unmapped root file checks everything and names the file', () => {
     const scope = changeScope(['packages/leaf/a.ts', 'Dockerfile'], graph, inputs);
     expect(scope.kind === 'everything' && scope.because.join()).toContain('Dockerfile');
+  });
+});
+
+describe('scopedTypeChecks', () => {
+  // Real manifests: a package with a tsconfig joins the build, docs-web runs its own script.
+  const packages = [
+    { name: '@archon/core', path: 'packages/core' },
+    { name: '@archon/docs-web', path: 'packages/docs-web', scripts: { 'type-check': 'x' } },
+  ];
+  const scope = (rootScripts: boolean, pack: boolean): ScopedChange => ({
+    kind: 'scoped',
+    packages: new Map(),
+    rootScripts,
+    pack,
+    unchecked: [],
+  });
+  const projects = (rootScripts: boolean, pack: boolean) => {
+    const [build, ...own] = scopedTypeChecks(scope(rootScripts, pack), packages);
+    return {
+      built: build.command.filter(argument => argument.endsWith('tsconfig.json')),
+      own: own.map(task => task.name),
+    };
+  };
+
+  test('builds the scoped packages, and runs a package with its own script after the build', () => {
+    expect(projects(false, false)).toEqual({
+      built: ['packages/core/tsconfig.json'],
+      own: ['@archon/docs-web'],
+    });
+  });
+
+  test('adds the root scripts project for root scripts and the pack projects for the pack', () => {
+    expect(projects(true, false).built).toEqual([
+      'packages/core/tsconfig.json',
+      'scripts/tsconfig.json',
+    ]);
+    expect(projects(false, true).built).toEqual([
+      'packages/core/tsconfig.json',
+      '.archon/scripts/tsconfig.json',
+      '.archon/workflows/tsconfig.json',
+    ]);
   });
 });
 

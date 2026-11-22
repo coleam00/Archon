@@ -14,7 +14,6 @@
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
-    "type-check": "bun x tsc --noEmit",
     "build:github-plugin": "bun build --compile ./src/forge/github/plugin.ts --outfile ./dist/archon-forge-github",
     "build:github-source-plugin": "bun build ./src/forge/github/source-plugin.ts --target=bun --outfile=dist/github-source-plugin.mjs"
   },

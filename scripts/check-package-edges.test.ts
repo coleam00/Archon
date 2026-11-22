@@ -15,6 +15,7 @@ import {
   findEdgeViolations,
   findLayeringViolations,
   findPackBoundaryViolations,
+  findReferenceViolations,
   type Layering,
   type PackageManifest,
   PACKAGE_LAYERING,
@@ -453,15 +454,65 @@ describe('package layering', () => {
   });
 });
 
+describe('tsconfig references', () => {
+  const root: PackageManifest = {
+    path: 'package.json',
+    devDependencies: { '@archon/contract': 'workspace:*' },
+  };
+
+  test('accepts references the owning manifest declares, from a package or a root project', () => {
+    expect(
+      findReferenceViolations(
+        [
+          {
+            path: 'packages/engine/tsconfig.json',
+            references: ['packages/contract', 'packages/providers'],
+          },
+          { path: 'scripts/tsconfig.json', references: ['packages/contract'] },
+        ],
+        manifests(),
+        root
+      )
+    ).toEqual([]);
+  });
+
+  test('rejects a reference its manifest does not declare, and one that is not a package', () => {
+    expect(
+      findReferenceViolations(
+        [
+          { path: 'packages/contract/tsconfig.json', references: ['packages/engine'] },
+          { path: 'scripts/tsconfig.json', references: ['packages/providers', 'scripts'] },
+        ],
+        manifests(),
+        root
+      )
+    ).toEqual([
+      {
+        file: 'packages/contract/tsconfig.json',
+        message:
+          'references packages/engine, but packages/contract/package.json does not declare @archon/engine',
+      },
+      {
+        file: 'scripts/tsconfig.json',
+        message:
+          'references packages/providers, but package.json does not declare @archon/providers',
+      },
+      {
+        file: 'scripts/tsconfig.json',
+        message: 'references scripts, which is not a workspace package',
+      },
+    ]);
+  });
+});
+
 const trackTempRoot = trackTempRoots();
 
 test('the package-edge command rejects a forbidden manifest dependency', () => {
   const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'package-edge-command-')));
   mkdirSync(join(root, 'scripts'));
-  copyFileSync(
-    join(import.meta.dir, 'check-package-edges.ts'),
-    join(root, 'scripts/check-package-edges.ts')
-  );
+  for (const script of ['check-package-edges.ts', 'type-check.ts'])
+    copyFileSync(join(import.meta.dir, script), join(root, 'scripts', script));
+  writeFileSync(join(root, 'package.json'), '{}');
   symlinkSync(resolve(import.meta.dir, '../node_modules'), join(root, 'node_modules'), 'junction');
   writeFileSync(join(root, '.gitignore'), 'node_modules/\n');
   const git = Bun.spawnSync(['git', 'init', '--quiet'], {

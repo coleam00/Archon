@@ -389,33 +389,15 @@ describe('compiler test inventory', () => {
     }
   }
 
-  test("core's normal TypeScript project includes test files", () => {
-    expectProgramToInclude('core', [
-      join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
-    ]);
-  });
-
-  test("adapters' normal TypeScript project includes its own and imported core test files", () => {
-    expectProgramToInclude('adapters', [
-      join(REPO_ROOT, 'packages', 'adapters', 'src', 'forge', 'github', 'adapter.test.ts'),
-      join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
-    ]);
-  });
-
-  test("server's normal TypeScript project includes its own, core, and adapter test files", () => {
-    expectProgramToInclude('server', [
-      join(REPO_ROOT, 'packages', 'server', 'src', 'routes', 'api.health.test.ts'),
-      join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
-      join(REPO_ROOT, 'packages', 'adapters', 'src', 'forge', 'github', 'adapter.test.ts'),
-    ]);
-  });
-
-  test("cli's normal TypeScript project includes its own, core, adapter, and server test files", () => {
-    expectProgramToInclude('cli', [
-      join(REPO_ROOT, 'packages', 'cli', 'src', 'cli.test.ts'),
-      join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
-      join(REPO_ROOT, 'packages', 'adapters', 'src', 'forge', 'github', 'adapter.test.ts'),
-      join(REPO_ROOT, 'packages', 'server', 'src', 'routes', 'api.health.test.ts'),
-    ]);
-  });
+  // Each package's own project checks its tests; a dependent reads only its declarations.
+  for (const [packageName, testFile] of [
+    ['core', 'src/utils/conversation-lock.test.ts'],
+    ['adapters', 'src/forge/github/adapter.test.ts'],
+    ['server', 'src/routes/api.health.test.ts'],
+    ['cli', 'src/cli.test.ts'],
+  ] as const) {
+    test(`${packageName}'s normal TypeScript project includes its test files`, () => {
+      expectProgramToInclude(packageName, [join(REPO_ROOT, 'packages', packageName, testFile)]);
+    });
+  }
 });

@@ -442,12 +442,12 @@ describe('isolationCompleteCommand', () => {
   it.each([false, true])('refuses ambiguous branches even with force=%s', async force => {
     mockListActive.mockResolvedValueOnce([
       mockEnv,
-      {
+      makeEnvironment({
         ...mockEnv,
         id: 'other-env',
         codebase_id: 'other-codebase',
         codebase_default_cwd: '/other/repo',
-      },
+      }),
     ]);
 
     await expect(isolationCompleteCommand(['feature-branch'], { force })).rejects.toThrow(

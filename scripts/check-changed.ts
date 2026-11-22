@@ -13,10 +13,11 @@ import {
   REPO_ROOT,
   ROOT_TSC_PROJECTS,
   type TypeCheckTask,
-  packageTask,
+  type WorkspaceManifest,
+  packageCheck,
   reportTypeChecks,
-  rootProjectTask,
   runTypeChecks,
+  typeCheckTasks,
   workspacePackages,
 } from './type-check';
 import { VALIDATE_CHECKS } from './validate';
@@ -28,9 +29,10 @@ import { VALIDATE_CHECKS } from './validate';
  *
  * The scope comes from the package manifests (`workspace:` dependencies) and from CI's own change
  * classifier in `should-run-test-suite.ts`, so a file that CI treats as prose or as a reason to
- * run every job is treated the same way here. Steps run commands their owners already have: each
- * package's own `type-check` and `test` scripts, and the `validate.ts` checks by id for lint, the
- * ratchet, the type-check and the root and pack tests.
+ * run every job is treated the same way here. Steps run commands their owners already have: one
+ * `tsc -b` over the scoped projects from `type-check.ts` (which also brings their dependencies up
+ * to date from cache), each package's own `test` script, and the `validate.ts` checks by id for
+ * lint, the ratchet, the type-check and the root and pack tests.
  */
 
 /** The root manifest as a graph node: its devDependencies name workspace packages. */
@@ -280,11 +282,27 @@ function command(label: string, args: readonly string[], cwd = REPO_ROOT): Step 
   };
 }
 
+/** The type-check tasks for a scoped change: its packages, plus the root projects it reaches. */
+export function scopedTypeChecks(
+  scope: ScopedChange,
+  packages: readonly WorkspaceManifest[]
+): TypeCheckTask[] {
+  const checks = packages.flatMap(manifest => packageCheck(manifest) ?? []);
+  return typeCheckTasks(
+    [
+      ...checks.flatMap(check => (check.kind === 'project' ? [check.path] : [])),
+      ...(scope.rootScripts ? ['scripts/tsconfig.json'] : []),
+      ...(scope.pack ? ROOT_TSC_PROJECTS.filter(p => p.startsWith('.archon/')) : []),
+    ],
+    checks.flatMap(check => (check.kind === 'script' ? [check.task] : []))
+  );
+}
+
 function typeCheckStep(tasks: TypeCheckTask[]): Step {
   return {
     label: 'type-check',
     run: async () => {
-      console.log(`\n=== type-check (${tasks.map(task => task.name).join(', ')}) ===`);
+      console.log('\n=== type-check ===');
       return reportTypeChecks(await runTypeChecks(tasks), tasks.length);
     },
   };
@@ -311,13 +329,7 @@ function steps(scope: ChangeScope, base: string): Step[] {
     ];
   }
   const packages = workspacePackages().filter(manifest => scope.packages.has(manifest.name));
-  const tasks = [
-    ...packages.flatMap(manifest => packageTask(manifest) ?? []),
-    ...(scope.rootScripts ? [rootProjectTask('scripts/tsconfig.json')] : []),
-    ...(scope.pack
-      ? ROOT_TSC_PROJECTS.filter(p => p.startsWith('.archon/')).map(p => rootProjectTask(p))
-      : []),
-  ];
+  const tasks = scopedTypeChecks(scope, packages);
   // One package's test groups at a time keeps peak memory near a single package's.
   const tests = [
     ...packages
