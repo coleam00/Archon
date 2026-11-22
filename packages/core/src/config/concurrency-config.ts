@@ -1,6 +1,7 @@
 /**
  * The concurrency numbers in `~/.archon/config.yaml`: provider caps
- * (`provider-concurrency.ts`) and resource capacities (`concurrency.resources.<resource>`).
+ * (`provider-concurrency.ts`), resource capacities (`concurrency.resources.<resource>`) and
+ * the install's run limit (`concurrency.runs`).
  *
  * Read fresh at every provider attempt and every resource admission, so changing a number
  * takes effect for the next admission without a restart. Unlike `loadGlobalConfig`, which
@@ -68,4 +69,14 @@ const resourcesSchema = z.looseObject({
 export async function loadResourceCapacities(): Promise<ReadonlyMap<string, number>> {
   const config = await readConcurrencyConfig(resourcesSchema, 'Resource admissions');
   return new Map(Object.entries(config.concurrency?.resources ?? {}));
+}
+
+const runsSchema = z.looseObject({
+  concurrency: z.looseObject({ runs: z.number().int().min(1).nullish() }).nullish(),
+});
+
+/** How many top-level runs the install executes at once; undefined when no limit is set. */
+export async function loadRunLimit(): Promise<number | undefined> {
+  const config = await readConcurrencyConfig(runsSchema, 'Run admissions');
+  return config.concurrency?.runs ?? undefined;
 }

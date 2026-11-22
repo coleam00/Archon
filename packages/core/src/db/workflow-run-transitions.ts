@@ -43,7 +43,12 @@ import type { NodeFailureKind } from '@archon/workflows/schemas/node-execution';
 import type { IDatabase } from './adapters/types';
 import { getDatabase, getDialect } from './connection';
 import { lockConversationOwnership } from './conversation-ownership';
-import { heldItemRefusal, installHoldRefusal, type TransactionQuery } from './resource-slots';
+import {
+  heldItemRefusal,
+  installHoldRefusal,
+  pendingRunLimitRefusal,
+  type TransactionQuery,
+} from './resource-slots';
 import { continuedItem, ensureItem } from './items';
 import { insertWorkflowEvent } from './workflow-events';
 import { assertPublicConversation, ensureWorkflowOriginAnchor } from './workflow-origin-anchor';
@@ -212,8 +217,11 @@ export async function claimPendingWorkflowRun(
   workingPath?: string
 ): Promise<WorkflowRun | null> {
   return getDatabase().withTransaction(async query => {
+    // The run limit goes last, so a start it refuses waits for nothing else.
     const held =
-      (await installHoldRefusal(query, id)) ?? (await heldItemRefusal(query, id, ['pending']));
+      (await installHoldRefusal(query, id)) ??
+      (await heldItemRefusal(query, id, ['pending'])) ??
+      (await pendingRunLimitRefusal(query, id));
     if (held) throw held;
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs

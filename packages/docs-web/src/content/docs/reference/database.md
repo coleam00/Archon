@@ -91,7 +91,8 @@ waits; a refused early resume records nothing.
 Failed-run resume respects live holders, those waiting runs and queued requests.
 
 The server refuses file storage because its routes read SQL. Provider concurrency caps
-(`concurrency.providers`) require `store: database` and fail at startup.
+(`concurrency.providers`) and the run limit (`concurrency.runs`) require `store: database`
+and fail at startup.
 Per-user GitHub identity (`GITHUB_APP_ID` with `TOKEN_ENCRYPTION_KEY`) fails at startup under
 file storage, because files hold no user tokens and a run would otherwise use the shared
 token. A GitHub App without `TOKEN_ENCRYPTION_KEY` works. Per-user provider credential

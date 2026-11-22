@@ -401,7 +401,8 @@ export interface IWorkflowStore
    * owner (`currentExecutionOwner`). A store with items throws `WorkflowItemHeldError`,
    * writing nothing, while another run of the run's workflow holds its item (`holdsItem`).
    * A store with the install hold throws `InstallHeldError`, writing nothing, while the hold
-   * is set and nothing admitted the run (a top-level run with no start request).
+   * is set and nothing admitted the run (a top-level run with no start request). A store
+   * with the run limit throws `RunLimitError` for such a run while the limit is full.
    */
   claimPendingWorkflowRun(id: string, workingPath?: string): Promise<WorkflowRun | null>;
   /**
@@ -514,7 +515,9 @@ export interface IWorkflowStore
    * while the host retries (`resumeRefusal`).
    *
    * A failed run on an item resumes only while no other run of its workflow holds that
-   * item; otherwise it stays failed and `WorkflowItemHeldError` is thrown.
+   * item; otherwise it stays failed and `WorkflowItemHeldError` is thrown. A failed
+   * top-level run is new work under the run limit: a store with the limit throws
+   * `RunLimitError` while it is full. A paused run is never held back by it.
    */
   resumeWorkflowRun(id: string, cursor?: ResumeClaimCursor): Promise<WorkflowRun>;
   /**

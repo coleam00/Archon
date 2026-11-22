@@ -4,7 +4,7 @@
  * and its refused starts, links, open questions, and answers with rulings, each oldest
  * first. Built from the same `ItemRead` that `--json` prints.
  */
-import { describeInstallHold } from '@archon/workflows/schemas/resource-start';
+import { describeInstallHold, describeRunLimit } from '@archon/workflows/schemas/resource-start';
 import type {
   ItemAnswer,
   ItemHeldBehind,
@@ -175,6 +175,10 @@ function startSectionLines(read: ItemRead): string[] {
   if (read.hold)
     lines.push(
       `  New runs are held on this install (${describeInstallHold(read.hold)}); nothing starts until archon hold lift.`
+    );
+  if (read.runLimit && read.runLimit.live >= read.runLimit.limit)
+    lines.push(
+      `  The run limit is full (${describeRunLimit(read.runLimit)}); nothing new starts until a run ends.`
     );
   for (const start of read.held) lines.push(heldLine(start));
   if (read.queued.length === 0 && read.held.length === 0) lines.push('  none');

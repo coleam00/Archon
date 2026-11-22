@@ -2,7 +2,7 @@
  * A run of a workflow that declares `resource:` takes a slot on it before it is claimed,
  * however the run was started. A hand start waits here for its slot, and at its claim for
  * its item (`waitForTurn`). While the install hold is set, a hand start waits for the lift
- * at whichever of the two comes first.
+ * at whichever of the two comes first, and while the run limit is full, for a run to end.
  */
 import { createLogger } from '@archon/paths';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
@@ -13,10 +13,12 @@ import {
   ADMISSION_CHECKOUT_GUARD_METADATA_KEY,
   DEFAULT_RESOURCE_CAPACITY,
   describeInstallHold,
+  describeRunLimit,
   type InstallHold,
   type PreparedWorkflowLaunch,
+  type RunLimit,
 } from './schemas/resource-start';
-import { InstallHeldError } from './store/errors';
+import { InstallHeldError, RunLimitError } from './store/errors';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -60,6 +62,16 @@ export function installHold(hold: InstallHold): StartHold {
     waiting: `the install hold (${by}). The run starts when the hold is lifted.`,
     refusal: `New runs are held on this install (${by}); the start does not wait.`,
     log: { installHoldSetAt: hold.setAt },
+  };
+}
+
+/** The hold of a start that the install's full run limit keeps from admission. */
+export function runLimitHold(runLimit: RunLimit): StartHold {
+  const at = describeRunLimit(runLimit);
+  return {
+    waiting: `the run limit (${at}). The run starts when a run ends.`,
+    refusal: `The run limit is full (${at}); the start does not wait.`,
+    log: { runLimit: runLimit.limit, liveRuns: runLimit.live },
   };
 }
 
@@ -217,6 +229,7 @@ export async function holdWorkflowResource(
         blocker = await deps.store.admitPendingRun({ resource, capacity, launch });
       } catch (error) {
         if (error instanceof InstallHeldError) return { held: installHold(error.hold) };
+        if (error instanceof RunLimitError) return { held: runLimitHold(error.runLimit) };
         return { done: await endResourceWait(deps, workflowRun, resource, error, refuse) };
       }
       if (!blocker) return { done: undefined };

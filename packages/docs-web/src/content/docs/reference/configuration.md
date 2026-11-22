@@ -145,6 +145,9 @@ concurrency:
   # See "Resource capacity" below.
   # resources:
   #   build: 5
+  # Optional number of top-level runs this install executes at once; unset = no limit.
+  # See "Run limit" below.
+  # runs: 6
 
 # Live tool attention and the provider-limit wait are both on by default.
 workflows:
@@ -197,6 +200,19 @@ The other blocks, `tiers`, `aliases`, `workflows`, `streaming`, `attentionNotice
 ## Resource capacity
 
 `concurrency.resources.<resource>: N` sets how many runs may hold a resource at once, for a workflow that declares `resource:` and for trigger bindings. It wins over the capacity a start declares (a binding's `capacity`, or a workflow's `resource: { name, capacity }` for a hand start or a binding that sets none), which wins over the engine default of 1. Admission re-reads it at every start, drain and resume, so a change applies to the next admission, and lowering it never ends a run that holds a slot. A value that is not a positive integer, or a config file that cannot be parsed, refuses resource admissions with an error naming the problem. See [Choose a resource, capacity, and overlap policy](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy).
+
+## Run limit
+
+`concurrency.runs: N` sets how many top-level workflow runs the install executes at once, whatever their workflow, resource, binding or project. Without it there is no limit. Set it to what the machine can carry: a resource's capacity limits one stage, and only this number limits the machine.
+
+- **What counts.** A top-level run counts while it is `running`, and while it is admitted and waiting for its executor to claim it, so a drain cannot admit past the limit while its starts boot. Hand starts count: `archon workflow run`, chat, API and web starts are checked when they are claimed, or at resource admission when their workflow declares `resource:`. A `workflow:` sub-run runs inside its root's count and is never held back by it. A paused run does not count. A run whose process died still counts until it is resumed or abandoned, because Archon cannot tell it from a run that is still working.
+- **With resource capacity.** A start needs a free slot on its resource and room under the limit. The limit is checked last, in the same admission decision, so a start never holds a slot while it waits for the other. A start the limit holds back queues even when its binding has `overlap: skip`: `skip` refuses an overlap on the resource, and the resource has room.
+- **Waiting.** A queued start is admitted by the next drain of its host after a run ends: the server's scheduler pass, the ending process's own trigger host, or a scheduled trigger pass. A host drain offers the room to its oldest queued start first, across resources. A hand start waits in the process that started it, prints `Waiting for the run limit`, and starts when a run ends; with `--no-wait` it is refused. A resume of a failed run is refused while the limit is full and the run stays failed. [`workflow runs --item`](/reference/cli/#workflow-runs) and [`trigger list`](/reference/cli/#trigger) say when the limit is full.
+- **Not strict order.** Room that frees goes to whichever start asks first. A hand start polls about once a second, and a new trigger start is decided as it arrives, so either can take the room before a queued start of another resource is drained. Within one resource, queued starts keep their order.
+- **Changes apply immediately.** The number is re-read at every admission. Lowering it never stops a running run; new starts wait until enough runs end. A paused run that continues is not held back, so the count can pass the limit for a while.
+- **Strict.** A value that is not a positive integer, or a config file that cannot be parsed, refuses every new run with an error naming the problem, instead of running without a limit.
+- **One install, one number.** The count covers every Archon process sharing this database. On SQLite that is one machine. Machines that share one PostgreSQL database share one limit.
+- **Database storage only.** `store: files` refuses `concurrency.runs` at startup.
 
 ## Run-scoped configuration
 

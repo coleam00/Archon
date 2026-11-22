@@ -204,6 +204,7 @@ const source: ItemReadSource = {
     listSkippedItemStarts: async () => [],
     listQueuedItemStarts: async () => [],
     getInstallHold: async () => null,
+    getRunLimit: async () => null,
     listHeldItemStarts: async () => [],
     getStartReceipt: async id =>
       id === SECOND_RECEIPT
@@ -413,6 +414,7 @@ describe('reading an item', () => {
       queued: [],
       skipped: [],
       hold: null,
+      runLimit: null,
       held: [],
       waits: [],
       questions: [],

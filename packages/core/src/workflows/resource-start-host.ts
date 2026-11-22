@@ -576,6 +576,11 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
   }
 }
 
+/**
+ * The resources to drain, in the order their first queued request appears. A store with the
+ * run limit lists requests oldest first, so a freed run slot goes to the oldest waiting start
+ * of this host whatever its resource; within a resource the queue keeps FIFO.
+ */
 function queuedDrainResources(
   queued: readonly QueuedResourceStartInspection[],
   failures: ResourceStartDrainFailure[]

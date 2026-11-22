@@ -279,6 +279,21 @@ export function describeInstallHold(hold: InstallHold): string {
   return `set by ${hold.setBy} at ${hold.setAt}`;
 }
 
+/**
+ * The install's run limit (`concurrency.runs`) and how many top-level runs count against it
+ * now: running, or admitted and not yet claimed. Full when `live >= limit`; every new start
+ * then waits for a run to end.
+ */
+export const runLimitSchema = z.object({
+  limit: z.number().int().positive(),
+  live: z.number().int().nonnegative(),
+});
+export type RunLimit = z.infer<typeof runLimitSchema>;
+
+export function describeRunLimit(limit: RunLimit): string {
+  return `${String(limit.live)} of ${String(limit.limit)} runs at once on this install`;
+}
+
 export const resourceStartRequestStatusSchema = z.union([
   ...resourceStartDispositionSchema.options.map(option => option.shape.status),
   z.literal('withdrawn'),

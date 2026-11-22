@@ -19,6 +19,7 @@ import {
   WorkflowNotResumableError,
   WorkflowItemHeldError,
   WorkflowResourceBusyError,
+  type RunLimitError,
   pauseCursorMatches,
   requireOwnerlessLease,
   resumeCursorMatches,
@@ -29,10 +30,12 @@ import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import {
   addResourceSlotHolder,
   heldItemRefusal,
+  lockAdmission,
   lockResourceSlot,
   lockResourceSlotForAdmission,
   removeResourceSlotHolder,
   resourceStartOccupancy,
+  runLimitRefusal,
   type TransactionQuery,
 } from './resource-slots';
 import { insertWorkflowEvent } from './workflow-events';
@@ -74,7 +77,7 @@ export async function listResumableRunsByParentConversation(
   }
 }
 
-type PriorRunRow = Pick<WorkflowRunRow, 'status' | 'metadata'> & {
+type PriorRunRow = Pick<WorkflowRunRow, 'status' | 'metadata' | 'parent_run_id'> & {
   resource_key?: string | null;
   item_id?: string | null;
 };
@@ -88,7 +91,7 @@ async function lockPriorRun(query: TransactionQuery, id: string): Promise<PriorR
     await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
   }
   const priorRows = await query<PriorRunRow>(
-    `SELECT w.status, w.metadata, q.resource_key, w.item_id
+    `SELECT w.status, w.metadata, w.parent_run_id, q.resource_key, w.item_id
        FROM remote_agent_workflow_runs w
        LEFT JOIN remote_agent_resource_start_requests q
          ON q.id = w.id AND q.status = 'admitted'
@@ -244,7 +247,7 @@ export async function resumeWorkflowRun(
   requireOwnerlessLease(id, cursor);
   let updateResult:
     | { rowCount: 0 }
-    | { busy: WorkflowResourceBusyError | WorkflowItemHeldError }
+    | { busy: WorkflowResourceBusyError | WorkflowItemHeldError | RunLimitError }
     | { admitted: WorkflowRun };
   try {
     updateResult = await getDatabase().withTransaction(async query => {
@@ -256,6 +259,13 @@ export async function resumeWorkflowRun(
           ? await heldItemRefusal(query, id, ['failed'])
           : undefined;
       if (held) return { busy: held };
+      // A failed root's claim ended, so its resume is new work under the run limit. Checked
+      // before the slot is taken: this refusal must leave nothing behind.
+      if (prior.status === 'failed' && prior.parent_run_id == null) {
+        await lockAdmission(query);
+        const full = await runLimitRefusal(query);
+        if (full) return { busy: full };
+      }
       const busy = await claimResourceSlot(query, id, prior, cursor);
       if (busy) return { busy };
       const admitted = await casResumeRun(query, id, prior, cursor);

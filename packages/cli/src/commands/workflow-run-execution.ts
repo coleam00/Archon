@@ -7,6 +7,7 @@ import {
 } from '@archon/workflows/engine-port';
 import {
   leasedResumeCursor,
+  RunLimitError,
   WorkflowItemHeldError,
   WorkflowResourceBusyError,
 } from '@archon/workflows/store';
@@ -354,8 +355,13 @@ async function resumeRun(
       ...(prepareAdmitted ? { prepareExecution: prepareAdmitted } : {}),
     });
   } catch (error) {
-    // The run is intact; only its resource or its item is busy, so say that and nothing else.
-    if (error instanceof WorkflowResourceBusyError || error instanceof WorkflowItemHeldError)
+    // The run is intact; only its resource, its item or the run limit is busy, so say that
+    // and nothing else.
+    if (
+      error instanceof WorkflowResourceBusyError ||
+      error instanceof WorkflowItemHeldError ||
+      error instanceof RunLimitError
+    )
       throw new Error(`Cannot resume workflow '${workflowName}' now: ${error.message}`, {
         cause: error,
       });

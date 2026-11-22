@@ -11,6 +11,7 @@ import type { AwaitingExecution, StartExecutorObservation } from './schemas/star
 import type {
   ForgeRefusal,
   InstallHold,
+  RunLimit,
   PreparedWorkflowLaunch,
   QueuedItemStart,
   ResourceStartBindingIntent,
@@ -608,6 +609,11 @@ export interface IResourceStartStore {
   listHeldStarts(): Promise<HeldStart[]>;
   /** The unprepared binding starts on item `itemId`. A store without items returns none. */
   listHeldItemStarts(itemId: string): Promise<HeldItemStart[]>;
+  /**
+   * The install's run limit (`concurrency.runs`) with how many runs count against it now;
+   * null when none is set. A store without the limit reports none.
+   */
+  getRunLimit(): Promise<RunLimit | null>;
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
   /**
    * Admit an existing pending run that no binding started onto `resource` now, or return
@@ -671,6 +677,11 @@ export interface IResourceStartStore {
    * the store cannot read is reported `run_unreadable`. A store without items returns none.
    */
   listWaitedItemHolders(): Promise<AttentionRead<WorkflowRun>[]>;
+  /**
+   * This host's queued requests, in queue order within each resource. Across resources a
+   * store with the run limit lists them oldest first, so a host drain offers the limit's
+   * room to the oldest waiting start.
+   */
   listQueuedResourceStartsForHost(hostId: string): Promise<QueuedResourceStartInspection[]>;
   /** The starts on item `itemId` whose status is `queued`, in queue order. */
   listQueuedItemStarts(itemId: string): Promise<QueuedItemStart[]>;

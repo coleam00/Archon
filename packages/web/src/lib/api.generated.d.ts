@@ -8224,6 +8224,10 @@ export interface components {
         workflow: string | null;
         receivedAt: string;
       }[];
+      runLimit: {
+        limit: number;
+        live: number;
+      } | null;
       waits: {
         event: string;
         about: string;
@@ -8890,6 +8894,10 @@ export interface components {
           workflow: string | null;
           receivedAt: string;
         }[];
+        runLimit: {
+          limit: number;
+          live: number;
+        } | null;
         waits: {
           event: string;
           about: string;

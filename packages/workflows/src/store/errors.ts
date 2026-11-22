@@ -1,5 +1,10 @@
 import type { ResourceBlocker } from '../resource-start-store';
-import { describeInstallHold, type InstallHold } from '../schemas/resource-start';
+import {
+  describeInstallHold,
+  describeRunLimit,
+  type InstallHold,
+  type RunLimit,
+} from '../schemas/resource-start';
 
 /** Only a zero-row pause CAS produces this error; storage failures must propagate. */
 export class WorkflowRunPauseConflictError extends Error {
@@ -79,5 +84,18 @@ export class InstallHeldError extends Error {
   constructor(public readonly hold: InstallHold) {
     super(`New runs are held on this install (${describeInstallHold(hold)}).`);
     this.name = 'InstallHeldError';
+  }
+}
+
+/**
+ * The install's run limit (`concurrency.runs`) is full, so no new top-level run is admitted
+ * now. Thrown by `admitPendingRun`, by `claimPendingWorkflowRun` for a top-level run nothing
+ * admitted, and by `resumeWorkflowRun` for a failed run; nothing was written. A hand start
+ * that gets it waits and asks again, or is refused under `--no-wait`.
+ */
+export class RunLimitError extends Error {
+  constructor(public readonly runLimit: RunLimit) {
+    super(`The run limit is full (${describeRunLimit(runLimit)}).`);
+    this.name = 'RunLimitError';
   }
 }

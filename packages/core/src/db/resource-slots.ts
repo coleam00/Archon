@@ -12,9 +12,10 @@ import {
   preparedWorkflowLaunchSchema,
   type InstallHold,
   type PreparedWorkflowLaunch,
+  type RunLimit,
 } from '@archon/workflows/schemas/resource-start';
 import { itemHolder, itemHolders, type ItemRunRow } from '@archon/workflows/item-hold';
-import { InstallHeldError, WorkflowItemHeldError } from '@archon/workflows/store';
+import { InstallHeldError, RunLimitError, WorkflowItemHeldError } from '@archon/workflows/store';
 import { toHydratedTimestamp } from './timestamps';
 /**
  * Keyed resource slots: a durable counting lock with typed holders.
@@ -38,7 +39,7 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   type WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
-import { loadResourceCapacities } from '../config/concurrency-config';
+import { loadResourceCapacities, loadRunLimit } from '../config/concurrency-config';
 import { getDatabase, getDatabaseType, getDialect } from './connection';
 import { parseJsonObject } from './workflow-run-normalization';
 import { getLog } from './workflow-run-shared';
@@ -156,6 +157,17 @@ export async function readInstallHold(query: TransactionQuery): Promise<InstallH
   return row ? { setBy: row.set_by, setAt: toHydratedTimestamp(row.set_at).toISOString() } : null;
 }
 
+/** Whether `runId` is a pending top-level run that nothing admitted: it has no start request. */
+async function isUnadmittedPendingRoot(query: TransactionQuery, runId: string): Promise<boolean> {
+  const unadmitted = await query(
+    `SELECT 1 FROM remote_agent_workflow_runs w
+      WHERE w.id = $1 AND w.status = 'pending' AND w.parent_run_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = w.id)`,
+    [runId]
+  );
+  return unadmitted.rows.length > 0;
+}
+
 /**
  * The refusal for claiming pending run `runId` while the hold is set, when nothing admitted
  * the run: a top-level run with no start request. A run admitted before the hold, and a
@@ -165,16 +177,57 @@ export async function installHoldRefusal(
   query: TransactionQuery,
   runId: string
 ): Promise<InstallHeldError | undefined> {
-  const unadmitted = await query(
-    `SELECT 1 FROM remote_agent_workflow_runs w
-      WHERE w.id = $1 AND w.status = 'pending' AND w.parent_run_id IS NULL
-        AND NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = w.id)`,
-    [runId]
-  );
-  if (unadmitted.rows.length === 0) return undefined;
+  if (!(await isUnadmittedPendingRoot(query, runId))) return undefined;
   await lockAdmission(query);
   const hold = await readInstallHold(query);
   return hold ? new InstallHeldError(hold) : undefined;
+}
+
+/**
+ * The refusal for claiming pending run `runId` while the run limit is full, for the same
+ * runs `installHoldRefusal` checks. A run admitted through a resource start was counted
+ * when it was admitted, so its claim is never refused here.
+ */
+export async function pendingRunLimitRefusal(
+  query: TransactionQuery,
+  runId: string
+): Promise<RunLimitError | undefined> {
+  if (!(await isUnadmittedPendingRoot(query, runId))) return undefined;
+  await lockAdmission(query);
+  return runLimitRefusal(query);
+}
+
+/**
+ * The run limit (`concurrency.runs`) and the top-level runs that count against it, oldest
+ * first: those running, and those admitted that no executor has claimed yet, so a drain
+ * cannot admit past the limit while its starts boot. A child runs inside its root's count:
+ * counting it would deadlock a root at the limit that waits on its child. A paused run
+ * executes nothing and does not count. Null when no limit is set. Read under
+ * `lockAdmission` by every admission point, so the config is read fresh each time.
+ */
+export async function readRunLimit(
+  query: TransactionQuery
+): Promise<(RunLimit & { oldest: string | undefined }) | null> {
+  const limit = await loadRunLimit();
+  if (limit === undefined) return null;
+  const counted = await query<{ id: string }>(
+    `SELECT w.id FROM remote_agent_workflow_runs w
+      WHERE w.parent_run_id IS NULL
+        AND (w.status = 'running' OR (w.status = 'pending' AND EXISTS (
+          SELECT 1 FROM remote_agent_resource_start_requests q
+           WHERE q.id = w.id AND q.status = 'admitted'
+        )))
+      ORDER BY w.started_at, w.id`
+  );
+  return { limit, live: counted.rows.length, oldest: counted.rows[0]?.id };
+}
+
+/** `RunLimitError` while the run limit is full, read under `lockAdmission`. */
+export async function runLimitRefusal(query: TransactionQuery): Promise<RunLimitError | undefined> {
+  const runLimit = await readRunLimit(query);
+  return runLimit && runLimit.live >= runLimit.limit
+    ? new RunLimitError({ limit: runLimit.limit, live: runLimit.live })
+    : undefined;
 }
 
 /**

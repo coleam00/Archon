@@ -63,6 +63,7 @@ import { awaitingExecutionSchema } from './schemas/start-executor';
 import {
   installHoldSchema,
   queuedItemStartSchema,
+  runLimitSchema,
   type QueuedItemStart,
   readResourceStartReceiptId,
   startCause,
@@ -299,7 +300,10 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * that holds it. `queued` are the item's starts still waiting, which have no run yet;
  * `archon trigger withdraw <requestId>` withdraws one. `skipped` are its refused starts.
  * `hold` is the install hold while it is set, else null; `held` are the item's starts it
- * keeps that are not yet `queued`, empty while no hold is set.
+ * keeps that are not yet `queued`, empty while no hold is set. `runLimit` is the install's
+ * run limit with how many runs count against it, null when none is set; while it is full
+ * (`live >= limit`) every start still waiting, queued or a pending hand start, waits at
+ * least for a run to end.
  * `degraded` names each part that could not be read: one of the item's own runs, a paused
  * run the queue could not read (`run_unreadable`, by `runId`), a ruling
  * (`ruling_unreadable`, by `rulingId`), a link (`link_unreadable`, by `linkId`), or the
@@ -321,6 +325,7 @@ export const itemReadSchema = z.object({
   skipped: z.array(itemSkippedStartSchema),
   hold: installHoldSchema.nullable(),
   held: z.array(itemHeldStartSchema),
+  runLimit: runLimitSchema.nullable(),
   waits: z.array(itemOpenWaitSchema),
   questions: z.array(attentionQueueItemSchema),
   answers: z.array(itemAnswerSchema),
@@ -357,6 +362,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'listSkippedItemStarts'
       | 'getInstallHold'
       | 'listHeldItemStarts'
+      | 'getRunLimit'
     >;
   /** Observes an awaiting start's executor; without it, the start reads `unknown`. */
   startExecutor?: StartExecutorObserver;
@@ -753,6 +759,7 @@ export async function assembleItemRead(
     skipped,
     hold,
     held,
+    runLimit: await source.store.getRunLimit(),
     waits: (await source.store.listOpenItemWaits(found.item.id)).map(wait => ({
       event: wait.event,
       about: wait.about,
