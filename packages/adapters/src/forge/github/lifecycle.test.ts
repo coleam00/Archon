@@ -924,11 +924,16 @@ describe('GitHub pull request close', () => {
 
   test('closes an open pull request with one state update and nothing else', async () => {
     const github = fakeGitHub();
-    const bodies: unknown[] = [];
+    const writes: unknown[] = [];
     const response = await handleGithubOperation(request, {
       token: 'token',
       fetch: async (input, init) => {
-        if (init?.method && init.method !== 'GET') bodies.push(JSON.parse(String(init.body)));
+        if (init?.method && init.method !== 'GET')
+          writes.push({
+            url: String(input),
+            method: init.method,
+            body: JSON.parse(String(init.body)),
+          });
         return github.fetch(input, init);
       },
     });
@@ -940,9 +945,9 @@ describe('GitHub pull request close', () => {
       },
     });
     // No merge, no branch deletion, no comment: one PATCH to the pull request.
-    const writes = github.calls.filter(call => call.method !== 'GET');
-    expect(writes).toEqual([{ url: expect.stringMatching(/\/pulls\/7$/), method: 'PATCH' }]);
-    expect(bodies).toEqual([{ state: 'closed' }]);
+    expect(writes).toEqual([
+      { url: expect.stringMatching(/\/pulls\/7$/), method: 'PATCH', body: { state: 'closed' } },
+    ]);
   });
 
   test.each([
@@ -968,6 +973,31 @@ describe('GitHub pull request close', () => {
     expect(await run(request, fakeGitHub({ lose: true }))).toMatchObject({
       ok: false,
       mutation: { op: 'pr.close', outcome: 'verification_failed', observed: { state: 'open' } },
+    });
+  });
+
+  test.each([
+    [403, 'authorization'],
+    [503, 'unavailable'],
+  ] as const)('a read-back that fails with HTTP %i keeps its cause', async (status, kind) => {
+    const github = fakeGitHub();
+    let patched = false;
+    const response = await handleGithubOperation(request, {
+      token: 'token',
+      fetch: async (input, init) => {
+        if (init?.method === 'PATCH') patched = true;
+        else if (patched) return json({}, status);
+        return github.fetch(input, init);
+      },
+    });
+    expect(response).toMatchObject({
+      ok: false,
+      error: { kind, status },
+      mutation: {
+        op: 'pr.close',
+        outcome: 'verification_failed',
+        leaveBehind: 'the pull request may be closed',
+      },
     });
   });
 });

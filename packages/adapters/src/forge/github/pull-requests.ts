@@ -11,7 +11,14 @@ import {
   type ForgeResponse,
 } from '@archon/forge/operations';
 import type { PrRef, RepoRef } from '@archon/forge';
-import { GitHubError, githubRequest, location, repositoryPath, type Fetch } from './api';
+import {
+  GitHubError,
+  githubErrorDetail,
+  githubRequest,
+  location,
+  repositoryPath,
+  type Fetch,
+} from './api';
 import { authorField, userSchema } from './actor';
 import { applied, failure, refused, unknown, unverified, type Submit } from './mutation-outcome';
 
@@ -304,8 +311,13 @@ export async function closePullRequest(
   let after: Pull;
   try {
     after = await readPull(fetchImpl, token, request.ref);
-  } catch {
-    return unverified(request, 'Closed pull request could not be read back', leaveBehind);
+  } catch (cause) {
+    const error = githubErrorDetail(cause);
+    return unverified(
+      request,
+      { ...error, message: `Closed pull request could not be read back: ${error.message}` },
+      leaveBehind
+    );
   }
   // prRecord reads a merged pull request as merged, so a merge that raced the
   // close cannot pass as closed.
