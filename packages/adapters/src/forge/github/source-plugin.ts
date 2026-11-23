@@ -202,9 +202,10 @@ async function targetEvents(
 /**
  * The events a webhook would have delivered for the state each open wait names, as
  * acceptances of the bindings that wake those waits. Only a binding that wakes a wait is
- * evaluated: observing must not start a binding nobody waits on, which would also start
- * twice on an install that receives webhooks too. Each acceptance is for one binding and
- * the wait's item, so a wait that opens later on another item, or for another binding,
+ * evaluated here: observing checks and reviews must not start a binding nobody waits on,
+ * which would also start twice on an install that receives webhooks too. (Label bindings
+ * start without a wait; `observeLabels` handles them.) Each acceptance is for one binding
+ * and the wait's item, so a wait that opens later on another item, or for another binding,
  * is a new delivery and not a replay of one made before it existed.
  */
 async function observeWaits(
