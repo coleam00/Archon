@@ -122,3 +122,14 @@ export function readCompletedOutcome(
     ? { kind: 'invalid', error: `${subject} ${outcome.invalid}` }
     : { kind: 'outcome', outcome };
 }
+
+/**
+ * Whether `value` is one of the outcomes the workflow declares final (`returns.final`):
+ * after it the run's item needs nothing more, so it is never reported stopped.
+ */
+export function isFinalOutcome(
+  workflow: Pick<WorkflowDefinition, 'result'>,
+  value: string
+): boolean {
+  return workflow.result?.final?.includes(value) ?? false;
+}

@@ -15,6 +15,7 @@ import type { StartedExecutor } from '@archon/core/workflows/start-executor';
 import {
   getTriggersPath,
   readOnBindings,
+  runEndedStops,
   runEndedTriggerCheck,
   type OnBinding,
 } from '@archon/core/workflows/run-ended';
@@ -689,7 +690,8 @@ async function installTimer(
  * starts, by the same check. It also reports what no run is refused for: a missing
  * `launch.cwd`, a run-ended binding that starts the workflow that ended, and two files that
  * start the same stage. Every other binding, including installed timers' config files
- * wherever they live, is listed under `bindings` (see `checkFireBindings`).
+ * wherever they live, is listed under `bindings` (see `checkFireBindings`). `stops` lists
+ * the outcomes after which an item would stop (see `runEndedStops`); it fails nothing.
  */
 async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOptions): Promise<void> {
   const bindings = await readOnBindings(getTriggersPath());
@@ -730,6 +732,10 @@ async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOption
     definitions:
       "Each binding is checked against the definitions a start without an item reads: the binding's base, else its project's default branch, as fetched now, with the launch checkout's uncommitted changes on top. A run on an item checks the bindings it may fire against the definitions it captured, before it starts.",
     ...checked,
+    // Not a problem: the exit status ignores it, and attention lists such an item.
+    stopsExplained:
+      'Outcomes of the workflows these files name that are not final (returns.final), that no run-ended file binds, and whose workflow can leave no ask or wait. A run on an item that ends in one stops the item, and `archon workflow attention` lists it as stopped.',
+    stops: await runEndedStops(bindings, deps),
   });
   const broken = [...checked.runEnded, ...checked.asksSettled, ...checked.bindings].filter(
     entry => entry.problems.length > 0

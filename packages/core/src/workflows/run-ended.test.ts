@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -14,6 +14,7 @@ import {
   createRunEndedStarts,
   launchProjectKey,
   readTriggerFileHosts,
+  runEndedStops,
 } from './run-ended';
 
 /** No project is registered in these tests. */
@@ -701,5 +702,61 @@ describe('the hosts trigger files name', () => {
       hostIds: [],
       failures: [],
     });
+  });
+});
+
+describe('the outcomes after which an item stops', () => {
+  test('are those of a named workflow that are neither final, bound, nor able to leave an ask', async () => {
+    const root = track(await mkdtemp(join(tmpdir(), 'archon-run-ended-stops-')));
+    const workflows = join(root, '.archon', 'workflows');
+    await mkdir(workflows, { recursive: true });
+    const stage = (name: string, returns: string): string =>
+      `name: ${name}\ndescription: ${name}\nreturns: ${returns}\nnodes:\n  - id: result\n    bash: echo '{}'\n    output_format:\n      type: object\n      properties:\n        stage: { type: string, enum: [approve, replan, landed] }\n      required: [stage]\n`;
+    await writeFile(
+      join(workflows, 'deliver.yaml'),
+      stage('deliver', '{ node: result, outcome: stage, final: [landed] }')
+    );
+    await writeFile(
+      join(workflows, 'review.yaml'),
+      stage('review', '{ node: result, outcome: stage, asks: asks }')
+    );
+    const binding = {
+      bindingId: 'b',
+      bindingRevision: null,
+      hostId: 'host',
+      runAsUserId: 'operator',
+      resource: 'r',
+      overlap: 'queue' as const,
+      launch: {
+        cwd: root,
+        workflowName: 'review',
+        inputs: {},
+        isolation: { kind: 'default' as const },
+      },
+    };
+
+    const stops = await runEndedStops(
+      [
+        {
+          file: 'b.json',
+          sourceInstanceId: 'b',
+          binding,
+          runEnded: { workflowName: 'deliver', outcome: 'approve' },
+        },
+      ],
+      {
+        loadConfig: async () => ({
+          assistant: 'claude' as const,
+          assistants: { claude: {}, codex: {} },
+          commands: {},
+        }),
+        providers: providerRegistry,
+        projectOf: async () => null,
+        projectKeyOf: async () => 'acme/widgets',
+      }
+    );
+
+    // `approve` is bound and `landed` final; `review` can leave an ask.
+    expect(stops).toEqual([{ project: 'acme/widgets', workflow: 'deliver', outcome: 'replan' }]);
   });
 });

@@ -2094,3 +2094,114 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
     expect(store.completeWorkflowRun.mock.calls[0]?.[3]).toBeUndefined();
   });
 });
+
+describe('executeDagWorkflow -- a run whose end starts nothing stops its item (#6108)', () => {
+  let testDir: string;
+
+  const anAsk = {
+    question: 'Replan or drop?',
+    context: 'The plan no longer fits.',
+    options: [
+      { id: 'replan', does: 'Plan it again.', cost: 'A round.' },
+      { id: 'drop', does: 'Drop it.', cost: 'The work is lost.' },
+    ],
+    recommendation: null,
+    artifacts: [],
+  };
+
+  const run = async (
+    store: MockWorkflowStore,
+    value: Record<string, unknown>,
+    options: {
+      asks?: boolean;
+      workflowRun?: WorkflowRun;
+      receipts?: readonly SourceReceiptAcceptance[];
+    } = {}
+  ): Promise<void> => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: JSON.stringify(value) };
+      yield { type: 'result', sessionId: 'stop-session', structuredOutput: value };
+    });
+    await executeDagWorkflow(
+      dagOptions({
+        deps: {
+          ...createMockDeps(store),
+          runEndedStarts: async () => ({ receipts: options.receipts ?? [], linked: [] }),
+        },
+        conversationId: 'conv-stop',
+        cwd: testDir,
+        workflow: {
+          name: 'deliver',
+          nodes: [
+            {
+              id: 'result',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'decide' },
+              output_format: {
+                type: 'object',
+                properties: {
+                  stage: { type: 'string', enum: ['approve', 'replan', 'landed'] },
+                  why: { type: 'string' },
+                },
+                required: ['stage'],
+              },
+            },
+          ],
+          returns: 'result',
+          result: {
+            outcome: 'stage',
+            final: ['landed'],
+            summary: 'why',
+            ...(options.asks === true ? { asks: 'asks' } : {}),
+          },
+        },
+        workflowRun: options.workflowRun ?? makeWorkflowRun('stop-run', { item_id: 'item-1' }),
+      })
+    );
+  };
+
+  /** The metadata the one completion write merged. */
+  const completedMetadata = (store: MockWorkflowStore): Record<string, unknown> | undefined => {
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    return store.completeWorkflowRun.mock.calls[0]?.[2];
+  };
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-stop-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+  });
+
+  afterEach(async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'DAG AI response' };
+      yield { type: 'result', sessionId: 'dag-session-id' };
+    });
+    await removeTempTree(testDir);
+  });
+
+  it('records the stop with its declared summary when the outcome is not final and nothing follows', async () => {
+    const store = createMockStore();
+    await run(store, { stage: 'replan', why: '  The plan missed the schema change.  ' });
+
+    expect(completedMetadata(store)?.item_stopped).toEqual({
+      summary: 'The plan missed the schema change.',
+    });
+  });
+
+  it.each([
+    ['ended in a final outcome', { stage: 'landed', why: 'merged' }, {}],
+    ['left an ask', { stage: 'replan', why: 'x', asks: [anAsk] }, { asks: true }],
+    [
+      'started the next stage',
+      { stage: 'replan', why: 'x' },
+      { receipts: [{ receipt: { id: 'r' } } as unknown as SourceReceiptAcceptance] },
+    ],
+    ['is on no item', { stage: 'replan', why: 'x' }, { workflowRun: makeWorkflowRun('stop-run') }],
+  ] as const)('records no stop for a run that %s', async (_, value, options) => {
+    const store = createMockStore();
+    await run(store, value, options);
+
+    expect(completedMetadata(store)).not.toHaveProperty('item_stopped');
+  });
+});

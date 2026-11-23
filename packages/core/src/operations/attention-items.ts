@@ -66,7 +66,7 @@ export type AttentionItemAnswerResult =
       kind: 'takes_no_answer';
       item: Extract<
         AttentionQueueItem,
-        { kind: 'usage_limit' | 'unreadable' | 'owner_lost' | 'overdue_wait' }
+        { kind: 'usage_limit' | 'unreadable' | 'owner_lost' | 'overdue_wait' | 'stopped' }
       >;
     }
   /**
@@ -166,8 +166,10 @@ export async function answerAttentionItem(
   const { item } = read;
   const permission = await answerPermission(deps, item, actor);
   if (permission.kind === 'refused') return { kind: 'unknown' };
-  // An overdue wait is closed by its event, a new run of its workflow, or a withdrawal.
-  if (item.kind === 'overdue_wait') return { kind: 'takes_no_answer', item };
+  // An overdue wait is closed by its event, a new run of its workflow, or a withdrawal;
+  // a stopped item by any new run on the item.
+  if (item.kind === 'overdue_wait' || item.kind === 'stopped')
+    return { kind: 'takes_no_answer', item };
   if (!isHeldByRun(item)) return { kind: 'unknown' };
   const holder = permission.run;
   if (read.kind === 'moved') return read;

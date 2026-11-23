@@ -26,6 +26,7 @@ import {
 import { describeSqlItemAskStartConformance } from './item-ask-starts.conformance';
 import { describeSqlItemAskConformance } from './item-asks.conformance';
 import { describeSqlRunDeleteConformance } from './workflow-run-delete.conformance';
+import { describeSqlItemStopConformance } from './item-stops.conformance';
 import {
   HEAD,
   accept,
@@ -405,6 +406,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   });
   describeSqlItemAskConformance(makeHarness);
   describeSqlItemWaitConformance(makeHarness);
+  describeSqlItemStopConformance(makeHarness);
   describeSqlItemAskStartConformance(makeHarness);
   describeSqlRunDeleteConformance(makeHarness);
   test('age cleanup does not delete a run that resumes while cleanup selects it', async () => {

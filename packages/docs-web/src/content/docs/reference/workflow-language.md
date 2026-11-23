@@ -2367,7 +2367,7 @@ nodes:
   and still resolve as `$INPUTS.<name>` / `INPUTS_<UPPER_SNAKE>`, they are simply never checked
   against a declaration, because there isn't one.
 - **`returns:`**: the **node id** whose output IS the workflow's result, written
-  `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field> }`. It selects by id, so it works for any node type
+  `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field>, waits?: <field>, final?: [<outcome>], summary?: <field> }`. It selects by id, so it works for any node type
   and even a **non-sink** node (a node other nodes depend on). For an `include:` block,
   `$blk.output` resolves to the `returns:` node; `depends_on: [blk]` still waits on every
   terminal node. For a `workflow:` sub-run child, the child's terminal output (threaded back as
@@ -2407,6 +2407,42 @@ nodes:
 
 - **`returns.waits`**: a property of the `returns:` node's output, defined and required by the engine, that holds what
   the run's item now waits for outside Archon. See [Waits](#waits-what-an-item-waits-for-outside-archon).
+
+- **`returns.final`**: the outcomes after which the run's item needs nothing more, such as a
+  landed change. Each entry is a value `returns.outcome` can take: one of its `enum` values, or
+  `succeeded` or `failed` for the boolean form. It needs `returns.outcome`, and a value the
+  outcome cannot take or one listed twice fails the workflow at load.
+
+  It decides when an item has stopped. A top-level run on an item stops the item when it
+  completes with an outcome that is not final, its end starts nothing (no
+  [run-ended binding](/guides/workflow-triggers/) starts from that outcome), and it leaves no
+  ask and no wait. Nothing follows such a run, so
+  [`archon workflow attention`](/reference/cli/#workflow-attention) lists the item as
+  `stopped` until another run on the item starts, or ends after it. A run on no item, a run
+  that ended in a final outcome, and a run that left an ask or a wait stop nothing. A
+  workflow that declares no `final` has none, so every unbound outcome stops its item.
+
+- **`returns.summary`**: a string property of the `returns:` node's output that the attention
+  queue shows, as one line, on a `stopped` item: why the stage stopped. The node's
+  `output_format` must declare it with `type: string`; it need not be required, and a run that
+  leaves it out shows none. It is read only because it is declared here, never because a
+  property is called `summary`, and it changes nothing about the run.
+
+```yaml
+returns: { node: result, outcome: stage, final: [landed], summary: why }
+nodes:
+  - id: result
+    prompt: Say where the change stands.
+    output_format:
+      type: object
+      properties:
+        stage: { type: string, enum: [approve, replan, landed] }
+        why: { type: string }
+      required: [stage]
+```
+
+A run of this workflow that ends `landed` stops nothing. One that ends `replan` with no
+binding for it and no ask lists its item as `stopped` with `why` as the summary.
 
 An included workflow's outcome declaration never becomes the composer's outcome, and a
 `workflow:` child owns its outcome on its own run row; neither propagates implicitly to a parent.

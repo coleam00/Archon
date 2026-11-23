@@ -316,11 +316,13 @@ const returnsObjectSchema = z.strictObject({
   outcome: z.string().trim().min(1).optional(),
   asks: z.string().trim().min(1).optional(),
   waits: z.string().trim().min(1).optional(),
+  final: z.array(z.string().trim().min(1)).min(1).optional(),
+  summary: z.string().trim().min(1).optional(),
 });
 
 /**
  * Parse optional returns: the node id whose output IS this workflow's result (#2470),
- * as `returns: <id>` or `returns: { node: <id>, outcome?, asks?, waits? }`. Every part the
+ * as `returns: <id>` or `returns: { node: <id>, outcome?, asks?, waits?, final?, summary? }`. Every part the
  * engine reads from that output is a key of the object form, never a sibling field and
  * never inferred from a name. An unknown key is refused rather than dropped: dropping
  * one would silently ignore a declared contract. A present but invalid value is refused
@@ -345,10 +347,10 @@ export function parseReturns(
   if (!parsed.success) {
     getLog().debug({ filename, value: raw }, 'invalid_workflow_returns_value_rejected');
     return {
-      error: `Invalid 'returns': expected the non-empty id of a top-level node whose output is this workflow's result, or { node: <id>, outcome?: <field>, asks?: <field>, waits?: <field> } (${z.prettifyError(parsed.error)})`,
+      error: `Invalid 'returns': expected the non-empty id of a top-level node whose output is this workflow's result, or { node: <id>, outcome?: <field>, asks?: <field>, waits?: <field>, final?: [<outcome>], summary?: <field> } (${z.prettifyError(parsed.error)})`,
     };
   }
-  const { node, outcome, asks, waits } = parsed.data;
+  const { node, outcome, asks, waits, final, summary } = parsed.data;
   if (!dagNodes.some(n => n.id === node)) {
     return {
       error: `Workflow declares returns: '${node}' but no top-level node has that id`,
@@ -358,6 +360,8 @@ export function parseReturns(
     ...(outcome === undefined ? {} : { outcome }),
     ...(asks === undefined ? {} : { asks }),
     ...(waits === undefined ? {} : { waits }),
+    ...(final === undefined ? {} : { final }),
+    ...(summary === undefined ? {} : { summary }),
   };
   return { value: { node, result: Object.keys(result).length === 0 ? undefined : result } };
 }

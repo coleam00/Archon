@@ -25,6 +25,7 @@ import * as itemMergesDb from '../db/item-merges';
 import * as itemLandingsDb from '../db/item-landings';
 import * as itemAsksDb from '../db/item-asks';
 import * as itemWaitsDb from '../db/item-waits';
+import * as itemStopsDb from '../db/item-stops';
 import * as workflowDb from '../db/workflows';
 import * as resourceStarts from '../db/resource-starts';
 import { acceptStartReceipt } from '../db/start-receipt-writes';
@@ -233,6 +234,7 @@ export function createWorkflowStore(): IWorkflowStore {
       itemAsksDb.withdrawItemAsk(input, await asksSettledStarts(input.askId)),
     listOpenItemWaits: itemWaitsDb.listOpenItemWaits,
     withdrawItemWaits: itemWaitsDb.withdrawItemWaits,
+    listStoppedItemRuns: itemStopsDb.listStoppedItemRuns,
     findAdoptingRuns: workflowDb.findAdoptingRuns,
     deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,
     getWorkflowEventHead: async () => sqlCursor(await workflowEventDb.getWorkflowEventHead()),

@@ -2526,6 +2526,28 @@ declare module 'archon:script' {
         readonly about: string;
       }>;
       readonly deadline: string;
+    } | {
+      readonly kind: 'stopped';
+      readonly ref: string;
+      readonly project: {
+        readonly key: string;
+        readonly codebaseId: string | null;
+        readonly name: string;
+      } | null;
+      readonly item?: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      };
+      readonly revision: number;
+      readonly labels: Readonly<Record<string, string>>;
+      readonly pausedAt: string | null;
+      readonly stoppedIn: {
+        readonly runId: string;
+        readonly workflow: string;
+        readonly outcome: string;
+      };
+      readonly summary: string | null;
     }>;
     readonly answers: ReadonlyArray<{
       readonly kind: 'attention';
@@ -3062,6 +3084,28 @@ declare module 'archon:script' {
           readonly about: string;
         }>;
         readonly deadline: string;
+      } | {
+        readonly kind: 'stopped';
+        readonly ref: string;
+        readonly project: {
+          readonly key: string;
+          readonly codebaseId: string | null;
+          readonly name: string;
+        } | null;
+        readonly item?: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        };
+        readonly revision: number;
+        readonly labels: Readonly<Record<string, string>>;
+        readonly pausedAt: string | null;
+        readonly stoppedIn: {
+          readonly runId: string;
+          readonly workflow: string;
+          readonly outcome: string;
+        };
+        readonly summary: string | null;
       }>;
       readonly answers: ReadonlyArray<{
         readonly kind: 'attention';

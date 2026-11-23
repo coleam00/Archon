@@ -428,6 +428,14 @@ While a start waits it has no run yet. `archon workflow runs --item <key>` lists
 
 Run-ended bindings need the database store, as items do. With `store: files`, `archon trigger check` refuses any run-ended file, and such a file never fires: the file store refuses every run on an item, and a run with no item causes nothing.
 
+### When nothing follows a run
+
+A run on an item can end where nothing starts: no binding starts from its outcome. If it also left no [ask](#start-a-stage-again-when-its-asks-are-answered) and no wait, nothing will move the item again. The engine records that in the write that completes the run, and `archon workflow attention` lists the item as `stopped`, with the stage, the outcome it ended in and the summary the workflow declares in [`returns.summary`](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs). The item takes no answer. It stays listed until another run on the item starts, or ends after this one; a run started by hand on the item closes it.
+
+An outcome after which the item is done, such as a landed change, is not a stop. List it in [`returns.final`](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs) and a run that ends in it is not listed. Whether a binding started something is decided once, when the run completes: a file added to the triggers directory later does not clear an item that already stopped.
+
+`archon trigger check` lists, under `stops`, each outcome after which an item would stop: an outcome of a workflow its files name that is not final, that no run-ended file in the project binds, of a workflow that declares neither `returns.asks` nor `returns.waits`. It is a report, not a problem: it does not change the exit status.
+
 ### See how a pack's stages connect
 
 `archon pack graph <pack> --json`, or `GET /api/packs/{pack}/graph?codebaseId=<id>`, reads a pack's stages and the arrows between them for one project: a run that ended with an outcome, or the settling of the asks a run left. A drawing, a console view or an agent can build from it alone. A pack with stages `plan`, `build` and `ship`, whose `.pack/pack.yaml` declares `build-after-plan` and `ship-after-build`, with only the first file copied into the triggers directory:
@@ -445,8 +453,8 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
         "field": "outcome",
         "form": "enum",
         "values": [
-          { "value": "planned", "startsNothing": false },
-          { "value": "blocked", "startsNothing": true }
+          { "value": "planned", "startsNothing": false, "final": false },
+          { "value": "blocked", "startsNothing": true, "final": false }
         ]
       },
       "asks": true,
@@ -462,8 +470,8 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
         "field": "outcome",
         "form": "enum",
         "values": [
-          { "value": "built", "startsNothing": true },
-          { "value": "stuck", "startsNothing": true }
+          { "value": "built", "startsNothing": true, "final": false },
+          { "value": "stuck", "startsNothing": true, "final": false }
         ]
       },
       "asks": false,
@@ -516,7 +524,7 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
 - An arrow is `active` when a trigger file launches it in this project. A declared arrow with no file is reported with `active: false`, not left out. `to` may be a workflow outside the pack. An active arrow's `installed.problems` is what `archon trigger check` reports as the check a run gets before it starts: when it is not empty, every run of `from.stage` on an item is refused before it starts, so the arrow starts nothing until the file is fixed. A file whose `launch.cwd` no longer exists is in no project, so the end of a run never starts it; it is shown with that problem because which project it was meant for cannot be known.
 - A declared binding that names a workflow which is not a stage as the pack loaded keeps the name as written, and its `declared.problems` says so. When that stage failed to load, its load error is in `discoveryErrors`; the rest of the graph is still read.
 - An arrow from an [asks-settled binding](#start-a-stage-again-when-its-asks-are-answered) has `from: { "stage", "settled" }` in place of `outcome`, where `settled` is the binding's `answered`, `withdrawn` or `any`, and `option` when the binding names one ([options](#start-a-different-stage-for-each-option)); a pack binding that lists several options is one arrow per option. It starts nothing for an outcome, so it does not change `startsNothing`.
-- `startsNothing` marks an outcome no active arrow without problems leaves. With `asks: false` such an outcome ends in silence; whether that is right is the pack's call.
+- `startsNothing` marks an outcome no active arrow without problems leaves, and `final` one the stage lists in [`returns.final`](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs): after it the item needs nothing more. A run on an item that ends in an outcome that starts nothing and is not final, leaving no ask or wait, [stops the item](#when-nothing-follows-a-run), which `archon workflow attention` lists.
 - `discoveryErrors` lists every workflow that failed to load from the source the pack was read from. A stage that failed is missing from `stages`, so a non-empty list means the graph may be incomplete.
 - `loaded` is the copy of the pack the graph was read from, `{ source, key, dir }`, and `otherCopies` every other copy of the same pack in reach under another key, such as an installed `acme.factory` beside a project `factory`. Asking for that key reads that copy. `dir` is `null` for a bundled pack a compiled binary reads from its embedded bytes.
 - When the pack's workflows are not in the checkout, pass `--workflow-source <dir>` (`workflowSource=` on the API), the directory a binding's `launch.discoveryCwd` names. It may be [the pack's own folder](/reference/cli/#a-pack-folder-as-the-source). The arrows are still those of the checkout's project.

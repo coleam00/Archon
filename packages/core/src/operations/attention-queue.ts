@@ -14,6 +14,8 @@ import {
   type WaitItemStore,
   openAskItems,
   type AskItemStore,
+  stoppedItems,
+  type StoppedItemStore,
 } from '@archon/workflows/queue-items-without-run';
 import { stateProjectKeySchema } from '@archon/workflows/state-document-store';
 import type { Codebase } from '../schemas/codebase';
@@ -27,7 +29,8 @@ import type { IWorkflowHostStore } from '../workflows/host-store';
  * The queue's source on a host, keeping the store's type so a reader that needs more of
  * the store (`readItem`) takes the same source. A run's branch is the newest isolation record for its
  * checkout path; a paused run holds that path, so no later checkout can have taken it.
- * The items no run holds are the open asks completed runs left and their overdue waits. An item holder's owner is
+ * The items no run holds are the open asks completed runs left, their overdue waits and the
+ * items they stopped. An item holder's owner is
  * observed by the rule `workflow wait` uses (`observeRunOwner`), so the queue lists a
  * holder whose owner is gone and an item read says so; observing never changes the run.
  * A pending admitted start's executor is observed by `observeStartExecutor`, so an item
@@ -37,6 +40,7 @@ export function attentionQueueSource<
   Store extends AttentionQueueSource['store'] &
     AskItemStore &
     WaitItemStore &
+    StoppedItemStore &
     Pick<IWorkflowStore, 'listWaitedItemHolders'>,
 >(
   store: Store,
@@ -47,6 +51,7 @@ export function attentionQueueSource<
     itemsWithoutRun: async () => [
       ...(await openAskItems(store)),
       ...(await overdueWaitItems(store)),
+      ...(await stoppedItems(store)),
     ],
     branchOf: async run =>
       run.codebase_id === null || run.working_path === null

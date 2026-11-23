@@ -12,7 +12,7 @@
  * started the next.
  */
 import { z } from 'zod';
-import { declaredOutcome, outcomeValues } from './completed-outcome';
+import { declaredOutcome, isFinalOutcome, outcomeValues } from './completed-outcome';
 import { readComposedMeta } from './compiled-command';
 import type { PackBinding } from './schemas/pack-bindings';
 import { kindedPackBinding } from './schemas/pack-bindings';
@@ -70,6 +70,8 @@ const packGraphStageSchema = z.object({
            * is the pack's call.
            */
           startsNothing: z.boolean(),
+          /** The stage declares this outcome final (`returns.final`): its item needs nothing more. */
+          final: z.boolean(),
         })
       ),
     })
@@ -566,6 +568,7 @@ function graphStage(stage: Stage, started: ReadonlySet<string>): PackGraph['stag
       values: values.map(value => ({
         value,
         startsNothing: !started.has(arrowKey({ stage: stage.name, outcome: value }, '')),
+        final: isFinalOutcome(stage, value),
       })),
     };
   }

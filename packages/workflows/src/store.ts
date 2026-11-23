@@ -350,6 +350,13 @@ export interface IWorkflowStore
    * that is no longer open is `refused` with how it closed.
    */
   withdrawItemWaits(runId: string): Promise<ItemWaitsWithdrawResult>;
+  /**
+   * The completed runs that stopped their item (`readItemStopped`) and are still its last
+   * run: another run on the item that is not terminal, or that ended after this one, ends
+   * the stop. Oldest stop first, with a degraded report for each unreadable row. A store
+   * without items has none.
+   */
+  listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[]>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ runs: DeletedWorkflowRun[] }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */
   listWorkflowEvents(

@@ -741,7 +741,10 @@ function graphText(graph: PackGraph, source: string, explicitSource: boolean): s
   const nothing = graph.stages.flatMap(stage =>
     (stage.outcome?.values ?? [])
       .filter(v => v.startsNothing)
-      .map(v => `  ${stage.name}:${v.value}${stage.asks ? '' : ' (no asks: ends in silence)'}`)
+      .map(
+        v =>
+          `  ${stage.name}:${v.value}${v.final ? ' (final)' : stage.asks ? '' : ' (no asks: the item stops, and attention lists it)'}`
+      )
   );
   if (nothing.length > 0) lines.push('', 'Outcomes that start nothing:', ...nothing);
   if (graph.discoveryErrors.length > 0)

@@ -168,7 +168,9 @@ describe('a pack graph', () => {
       [{ stage: 'a', settled: 'withdrawn' }, 'b', false],
     ]);
     // An asks arrow starts on answers, not on an outcome.
-    expect(graph.stages[0]?.outcome?.values).toEqual([{ value: 'ready', startsNothing: true }]);
+    expect(graph.stages[0]?.outcome?.values).toEqual([
+      { value: 'ready', startsNothing: true, final: false },
+    ]);
   });
 
   test('an asks binding that lists options is one arrow per option, each matched by its own file', () => {
@@ -217,7 +219,7 @@ describe('a pack graph', () => {
       [{ stage: 'a', settled: 'answered' }, true],
     ]);
     expect(graph.stages[0]?.outcome?.values).toEqual([
-      { value: 'asks:answered', startsNothing: true },
+      { value: 'asks:answered', startsNothing: true, final: false },
     ]);
   });
 
@@ -269,7 +271,9 @@ describe('a pack graph', () => {
         },
       },
     ]);
-    expect(graph.stages[0]?.outcome?.values).toEqual([{ value: 'ready', startsNothing: false }]);
+    expect(graph.stages[0]?.outcome?.values).toEqual([
+      { value: 'ready', startsNothing: false, final: false },
+    ]);
   });
 
   test('a linked trigger file is never the declared same-item arrow it shares stages with', () => {
@@ -365,7 +369,9 @@ describe('a pack graph', () => {
       active: true,
       installed: { problems: ["input 'x' reads 'y'"] },
     });
-    expect(graph.stages[0]?.outcome?.values).toEqual([{ value: 'ready', startsNothing: true }]);
+    expect(graph.stages[0]?.outcome?.values).toEqual([
+      { value: 'ready', startsNothing: true, final: false },
+    ]);
   });
 
   test('a stage that returns an include reads its outcome and nodes through the block', () => {
@@ -396,8 +402,8 @@ describe('a pack graph', () => {
       field: 'outcome',
       form: 'enum',
       values: [
-        { value: 'approve', startsNothing: true },
-        { value: 'reject', startsNothing: true },
+        { value: 'approve', startsNothing: true, final: false },
+        { value: 'reject', startsNothing: true, final: false },
       ],
     });
     const blocks = [{ include: 'check', workflow: 'review' }];
@@ -507,8 +513,8 @@ describe('a pack graph', () => {
       field: 'green',
       form: 'boolean',
       values: [
-        { value: 'succeeded', startsNothing: false },
-        { value: 'failed', startsNothing: true },
+        { value: 'succeeded', startsNothing: false, final: false },
+        { value: 'failed', startsNothing: true, final: false },
       ],
     });
   });

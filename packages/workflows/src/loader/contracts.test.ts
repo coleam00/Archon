@@ -612,6 +612,62 @@ nodes:
   });
 });
 
+describe('workflow result contract: returns.final and returns.summary', () => {
+  const parse = (
+    declaration: string,
+    properties = `stage: { type: string, enum: [approve, replan, landed] }
+        why: { type: string }`,
+    required = 'stage'
+  ): ParseResult =>
+    parseWorkflow(
+      `
+name: deliver
+description: delivers a change
+${declaration}
+nodes:
+  - id: result
+    prompt: report
+    output_format:
+      type: object
+      properties:
+        ${properties}
+      required: [${required}]
+`,
+      'deliver.yaml'
+    );
+
+  it('loads final outcomes of an enum and a declared string summary', () => {
+    const { workflow, error } = parse(
+      'returns: { node: result, outcome: stage, final: [landed], summary: why }'
+    );
+    expect(error).toBeNull();
+    expect(workflow?.result).toEqual({ outcome: 'stage', final: ['landed'], summary: 'why' });
+  });
+
+  it('takes the boolean form by its outcome names', () => {
+    const { error } = parse(
+      'returns: { node: result, outcome: green, final: [succeeded] }',
+      'green: { type: boolean }',
+      'green'
+    );
+    expect(error).toBeNull();
+  });
+
+  it.each([
+    ['a value the outcome cannot take', 'outcome: stage, final: [merged]', "names 'merged'"],
+    ['a value named twice', 'outcome: stage, final: [landed, landed]', "'landed' twice"],
+    ['final without an outcome', 'final: [landed]', 'needs returns.outcome'],
+    ['an undeclared summary', 'outcome: stage, summary: reason', "returns.summary: 'reason'"],
+    [
+      'a summary that is not a string',
+      'outcome: stage, summary: stage',
+      "returns.summary: 'stage'",
+    ],
+  ])('refuses %s', (_, declaration, message) => {
+    expect(parse(`returns: { node: result, ${declaration} }`).error?.error).toContain(message);
+  });
+});
+
 describe('output_format compiles at load time (#2453)', () => {
   it('rejects output_format on a workflow: node, naming the child returns: node as the owner', () => {
     const { workflow, error } = parseWorkflow(
