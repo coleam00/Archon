@@ -1146,6 +1146,8 @@ The source reports a label binding it does not observe, with the reason: a bindi
 
 Your forge plugin must support `workitem.label.added`. An installed plugin released before it answers `unsupported_op`, and each pass reports that failure for the binding.
 
+When you upgrade Archon, rebuild the GitHub source plugin as [above](#configure-github-event-starts), copy it over the module your configuration names, and restart the observing process (`archon serve` or `workflow wake --watch`), which loads the module once when it starts. A GitHub source plugin built before pull requests were observed reads label events without saying whether the item is an issue or a pull request, and the engine refuses each such read as an item the list did not return; each pass reports the refusal for the binding. A configuration whose `module` is `source-plugin.ts` in the same source checkout the engine runs from needs no rebuild, only the restart.
+
 ## Start workflows from any signed webhook
 
 The Standard Webhooks source plugin accepts the published [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md) `v1` HMAC-SHA256 scheme. It requires `webhook-id`, `webhook-timestamp`, and `webhook-signature`; vendor-specific signatures, `svix-*` aliases, and asymmetric signatures are unsupported. Every authenticated delivery with valid JSON evaluates every configured binding. Configure the sender to send only the events you need.
