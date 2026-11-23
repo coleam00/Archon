@@ -261,6 +261,14 @@ function attentionChoiceProblem(
 }
 
 /**
+ * Why an answer to a message wait is refused, or undefined when it is not:
+ * a message wait cannot be answered with blank text.
+ */
+function messageTextProblem(form: AttentionForm, text: string): string | undefined {
+  return form === 'message' && text.trim() === '' ? 'needs text.' : undefined;
+}
+
+/**
  * Why an answer choosing the reserved `other` option is refused, or undefined when it is
  * not: on a wait declared with `other: true`, that choice must carry text.
  */
@@ -282,9 +290,11 @@ export function attentionAnswerProblem(
   wait: AttentionDeclaration & { other?: boolean },
   answer: { choose: readonly string[]; text: string }
 ): string | undefined {
+  const form = attentionForm(wait);
   const declared = attentionOptions(wait).map(option => option.id);
   return (
-    attentionChoiceProblem(attentionForm(wait), declared, answer.choose) ??
+    attentionChoiceProblem(form, declared, answer.choose) ??
+    messageTextProblem(form, answer.text) ??
     otherTextProblem(wait.other, answer.choose, answer.text)
   );
 }

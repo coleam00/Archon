@@ -143,6 +143,8 @@ describe('answering an attention wait', () => {
 
   const refusals = [
     ['message', { choose: ['a'] }, 'takes only text'],
+    ['message', { choose: [] }, 'needs text'],
+    ['message', { choose: [], text: '   ' }, 'needs text'],
     ['approval', { choose: ['maybe'] }, "does not declare option 'maybe'"],
     ['approval', { choose: [] }, 'takes exactly one option'],
     ['select', { choose: ['c'] }, "does not declare option 'c'"],
@@ -151,7 +153,9 @@ describe('answering an attention wait', () => {
     ['multi_select', { choose: ['a', 'a'] }, 'takes each option at most once'],
   ] as const;
   for (const [form, request, problem] of refusals) {
-    test(`a ${form} wait refuses ${JSON.stringify(request.choose)}`, async () => {
+    const textLabel =
+      'text' in request ? ` with text ${JSON.stringify((request as { text?: string }).text)}` : '';
+    test(`a ${form} wait refuses ${JSON.stringify(request.choose)}${textLabel}`, async () => {
       await setup();
       const id = await paused(form);
       await expect(operations.answerWorkflow(id, request, operator, cli)).rejects.toThrow(problem);
