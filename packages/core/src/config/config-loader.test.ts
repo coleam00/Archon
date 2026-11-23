@@ -372,7 +372,7 @@ workflows:
 
     test('loads linked files', async () => {
       mockFsReadFile.mockResolvedValue(
-        'worktree:\n  copyFiles: [".env"]\n  linkFiles: [".serena/cache"]'
+        'worktree:\n  copyFiles: [".env", ".serena/cache-index"]\n  linkFiles: [".serena/cache"]'
       );
       expect((await loadRepoConfig('/repo')).worktree?.linkFiles).toEqual(['.serena/cache']);
     });
@@ -383,6 +383,8 @@ workflows:
       'linkFiles: [" "]',
       'copyFiles: [".cache/"]\n  linkFiles: [".cache"]',
       'copyFiles: [".cache"]\n  linkFiles: ["./.cache"]',
+      'copyFiles: [".cache"]\n  linkFiles: [".cache/shared"]',
+      'copyFiles: [".cache/shared"]\n  linkFiles: [".cache"]',
     ])('rejects invalid linked files: %s', async setting => {
       mockFsReadFile.mockResolvedValue(`worktree:\n  ${setting}`);
       await expect(loadRepoConfig('/repo')).rejects.toThrow('worktree.linkFiles');

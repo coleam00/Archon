@@ -1,4 +1,4 @@
-import { normalize, sep } from 'path';
+import { normalize } from 'path';
 
 import type { WorktreeCreateConfig } from './types';
 
@@ -25,21 +25,30 @@ export function validateWorktreeConfig(config: WorktreeCreateConfig | null | und
   ) {
     throw new Error('worktree.linkFiles must be an array of non-empty path strings');
   }
-  // A path both copied and linked has no single meaning: the copy lands first and
-  // the link then finds the destination taken, so the operator silently gets a copy.
-  const copied = new Set(
-    Array.isArray(config?.copyFiles) ? config.copyFiles.map(comparablePath) : []
-  );
-  const both = linkFiles.filter(entry => copied.has(comparablePath(entry)));
-  if (both.length > 0) {
+  // A path both copied and linked has no single meaning. Copying runs first, so a
+  // copy at, inside or above a linked path puts a real directory where the link
+  // belongs, and the link step then finds the destination taken: the operator
+  // silently gets a copy.
+  const copied = Array.isArray(config?.copyFiles) ? config.copyFiles.map(pathSegments) : [];
+  const conflicts = linkFiles.filter(entry => {
+    const linked = pathSegments(entry);
+    return copied.some(copy => startsWith(copy, linked) || startsWith(linked, copy));
+  });
+  if (conflicts.length > 0) {
     throw new Error(
-      `worktree.linkFiles and worktree.copyFiles both list ${both.join(', ')}; keep each path in one list`
+      `worktree.linkFiles lists ${conflicts.join(', ')}, which overlaps a worktree.copyFiles path (the same path, inside it or containing it); keep each path in one list`
     );
   }
 }
 
-function comparablePath(entry: unknown): string {
-  if (typeof entry !== 'string') return '';
-  const normalized = normalize(entry.trim());
-  return normalized.endsWith(sep) && normalized.length > 1 ? normalized.slice(0, -1) : normalized;
+function pathSegments(entry: unknown): string[] {
+  if (typeof entry !== 'string') return [];
+  return normalize(entry.trim())
+    .split(/[\\/]/)
+    .filter(segment => segment !== '' && segment !== '.');
+}
+
+/** Whether `path` is `prefix` or lies below it. An empty path (not a string) matches nothing. */
+function startsWith(path: string[], prefix: string[]): boolean {
+  return prefix.length > 0 && prefix.every((segment, index) => path[index] === segment);
 }

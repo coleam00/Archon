@@ -518,11 +518,11 @@ worktree:
 - A path that already exists in the new worktree (a checked-out path, an earlier link) is left as it is and logged.
 - Links are made after `copyFiles` and before `postCreate`, so setup commands write through them.
 - Per-entry failures and path-traversal attempts are logged and skipped; worktree creation goes on, as with `copyFiles`.
-- A path may not appear in both `copyFiles` and `linkFiles`, and every entry must be a non-empty string. Either mistake fails config loading with an error naming the config file.
+- A `linkFiles` path may not also be in `copyFiles`, inside a copied path, or contain one (copying runs first and would put a real directory where the link belongs). Every entry must be a non-empty string. Either mistake fails config loading with an error naming the config file.
 - Destroying a worktree removes the link, not the canonical content.
 - On Windows a directory is linked with a junction, which needs no elevated rights. Linking a file needs symlink rights (Developer Mode or an elevated shell).
 
-`linkFiles` is the one `worktree.*` key that can also be set install-wide in `~/.archon/config.yaml`, for a cache that every project keeps at the same path. A project that sets `worktree.linkFiles` in its own `.archon/config.yaml` replaces the global list rather than adding to it; `linkFiles: []` turns linking off for that project. When the global list names a path the project lists in `copyFiles`, worktree creation fails and the error names both files. `linkFiles` applies to worktree isolation only; container isolation does not use it.
+`linkFiles` is the one `worktree.*` key that can also be set install-wide in `~/.archon/config.yaml`, for a cache that every project keeps at the same path. A project that sets `worktree.linkFiles` in its own `.archon/config.yaml` replaces the global list rather than adding to it; `linkFiles: []` turns linking off for that project. When the global list overlaps a path the project lists in `copyFiles`, worktree creation fails and the error names both files. `linkFiles` applies to worktree isolation only; container isolation does not use it.
 
 **Defaults behavior:** The app's bundled default commands and workflows are loaded at runtime and merged with repo-specific ones. Repo commands/workflows override app defaults by name. Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` to disable runtime loading.
 
