@@ -227,22 +227,6 @@ archon metrics sdlc.tests_unprotective
 
 **What it produces**: Metric records on the node's output. Each judged pull request costs one judge run on the `large` tier. It changes no code.
 
-#### `archon-review-eval`
-
-One sample of the review bench, which measures a change to the review itself: a prompt, a lens or a model. The bench plants known defects into real merged changes and runs the shipped review and the simplify pass on each, in a sealed checkout with no later history, so a lens can find a defect only by reading the change. A separate judge run (`archon-review-eval-judge`, on the `large` tier) scores what each lens found.
-
-**When to use it**: You changed the review or want to compare models on it. The workflow is not meant to be run by hand: the bench script in the pack's source launches it, once per sample. It needs a source checkout of the pack and a case set, which the Archon repository keeps at `.archon/sdlc/eval/review/set.json`.
-
-```bash
-bun .archon/workflows/sdlc/review-eval/scripts/bench.ts run \
-  --set .archon/sdlc/eval/review/set.json --batch <case> \
-  --version <version.yaml> --judge <spec> --out <dir>
-```
-
-Each `--version` file names a label, the pack commit to run and the provider and model for each tier; pass several to compare them. `--judge` is the model that scores the samples. `--samples` repeats each case.
-
-**What it produces**: One line per sample in the output directory and a page per case comparing the versions, with each sample's cost. Every sample costs one full review run and one judge run. It records no metric and changes no code.
-
 ## Continuing a stage that ended not ready
 
 `archon-ship`, `archon-triage`, `archon-plan`, `archon-deliver` and `archon-review` never pause for a person when you run them yourself. Each ends with its outcome as the run's result. `archon workflow get <run-id>` shows whether it got there; `archon workflow get <run-id> --json` carries the stage's typed outcome, ready (delivered, for `archon-ship`) or not, in `terminal_record.returns.value`, and `archon workflow artifacts <run-id>` lists the reports that say why. To take one further, start it again in the same checkout with the original item and your note as the message, or repeat the `--input` that named the item, since a message that is only the note becomes the work:
@@ -274,7 +258,6 @@ archon workflow run archon-deliver --adopt <run-id> "#142: the flaky test is out
 | `archon-metrics-prs` | Count factory PRs, their merge rate and review rounds | No | No |
 | `archon-metrics-test-value` | Count factory tests that protect nothing on their own merits | No | No |
 | `archon-metrics-test-value-calibrate` | Score the test-value judge against hand labels | No | No |
-| `archon-review-eval` | One sample of the review bench (launched by the bench script) | No | No |
 
 ## Workflows that no longer ship
 

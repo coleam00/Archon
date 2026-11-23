@@ -8,35 +8,12 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
-import { nodeCostScope } from '../packages/workflows/src/node-record-serialization';
-import { EFFORT_LEVELS } from '../packages/workflows/src/schemas/effort';
-import {
-  type ModelAliasPreset,
-  modelAliasPresetSchema,
-  TIER_NAMES,
-} from '../packages/workflows/src/schemas/model-binding';
-import {
-  executionBindingSchema,
-  executionSpendSchema,
-  nodeExecutionMetadataSchema,
-  unavailableMeasurementSchema,
-} from '../packages/workflows/src/schemas/node-execution';
 import { workflowRunStatusSchema } from '../packages/workflows/src/schemas/run-status';
 import { isStateLeaseHolderLive } from '../packages/workflows/src/state-document-store';
 import { validateStructuredOutput } from '../packages/workflows/src/structured-output';
 import { fakeLeaseLive } from '../.archon/scripts/__tests__/fixtures/fake-lease';
 import { PACK, PR } from '../.archon/scripts/__tests__/deliver-checks-harness';
-import {
-  agentBinding,
-  artifactsOf,
-  EFFORTS,
-  reportsOwnSpend,
-  spendOf,
-  TIERS,
-  type TierBinding,
-} from '../.archon/workflows/sdlc/review-eval/scripts/runs';
 import type { Closure } from '../.archon/workflows/sdlc/.shared/close';
 import { parseQualifiedPr } from '../.archon/workflows/sdlc/.shared/identity';
 import { SIZE_LABEL, TYPE_LABEL } from '../.archon/workflows/sdlc/.shared/labels';
@@ -191,89 +168,5 @@ describe('claims', () => {
       expect(fakeLeaseLive(status)).toBe(isStateLeaseHolderLive(status));
     // A run the store no longer has: deleted, so its lease has ended.
     expect(fakeLeaseLive(undefined)).toBe(isStateLeaseHolderLive(null));
-  });
-});
-
-describe('the review bench', () => {
-  test('a version names every tier and effort the engine binds, in a shape its alias preset accepts', () => {
-    expect([...TIERS]).toEqual([...TIER_NAMES]);
-    expect([...EFFORTS]).toEqual([...EFFORT_LEVELS]);
-    const binding: TierBinding = { provider: 'claude', model: 'opus', effort: 'high' };
-    expect(modelAliasPresetSchema.parse(binding)).toEqual({
-      provider: 'claude',
-      model: 'opus',
-      effort: 'high',
-    });
-    const fromEngine = (preset: ModelAliasPreset): TierBinding => preset;
-    expect(fromEngine({ provider: 'codex', model: 'gpt' })).toEqual({
-      provider: 'codex',
-      model: 'gpt',
-    });
-  });
-
-  const unmeasured = { source: 'unavailable', reason: 'not_reported' } as const;
-  const spend = (fields: object) =>
-    executionSpendSchema.parse({ stopReason: unmeasured, numTurns: unmeasured, ...fields });
-
-  test('a row counts as own spend exactly when the engine says so, legacy roll-ups included', () => {
-    const rows = [
-      ...nodeExecutionMetadataSchema.shape.accounting.options.map(accounting => ({ accounting })),
-      {},
-      { aggregate: true },
-      { aggregate: false },
-    ];
-    expect(rows.map(reportsOwnSpend)).toEqual(rows.map(row => nodeCostScope(row) === 'own'));
-  });
-
-  test('every unavailable reason, a floor cost and a resolved model read as the engine writes them', () => {
-    for (const reason of unavailableMeasurementSchema.shape.reason.options) {
-      const none = { source: 'unavailable', reason };
-      const known = reason === 'not_applicable';
-      expect(spendOf([spend({ tokens: none, costUsd: none })])).toEqual({
-        cost_usd: known ? 0 : null,
-        cost_partial: false,
-        tokens: known ? { input: 0, output: 0 } : null,
-      });
-    }
-    const floor = spend({
-      tokens: { source: 'provider', value: { input: 3, output: 1, cacheRead: 2 } },
-      costUsd: { source: 'provider', value: 1.5, partial: true },
-    });
-    expect(spendOf([floor])).toEqual({
-      cost_usd: 1.5,
-      cost_partial: true,
-      tokens: { input: 3, output: 1 },
-    });
-
-    const binding = executionBindingSchema.parse({
-      provider: 'claude',
-      tier: 'large',
-      effort: 'high',
-      model: { requested: 'opus', resolved: { source: 'provider', value: 'claude-opus' } },
-    });
-    expect(
-      agentBinding({
-        nodeId: 'review__code',
-        state: 'completed',
-        kind: 'agent',
-        binding,
-        attempts: [],
-      })
-    ).toEqual({ provider: 'claude', tier: 'large', requested: 'opus', resolved: 'claude-opus' });
-  });
-
-  test('a run is read from the artifacts directory the engine writes', () => {
-    const detail = { id: 'r1', output_root: '/home/me/.archon/workspaces/o/r' } as const;
-    expect(
-      artifactsOf({
-        ...detail,
-        status: 'completed',
-        started_at: '',
-        completed_at: null,
-        base_branch: 'dev',
-        aliases: {},
-        nodes: [],
-      })
-    ).toBe(getRunArtifactsDirForRoot(detail.output_root, detail.id));
   });
 });

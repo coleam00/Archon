@@ -26,6 +26,7 @@ import {
   hostCli,
   type TrackerComment,
   type TrackerIssue,
+  type TrackerSubject,
   labelWrites,
   packScriptRunner,
   PR,
@@ -293,7 +294,7 @@ interface Event {
   readonly issueLabels?: readonly string[];
   readonly statuses?: Record<string, string>;
   readonly state?: 'open' | 'closed';
-  readonly stateReason?: string;
+  readonly stateReason?: TrackerSubject['state_reason'];
   readonly writeLost?: boolean;
   /** Other issues on the tracker, such as the original a duplicate links to. */
   readonly others?: readonly TrackerIssue[];
@@ -580,7 +581,7 @@ describe('the intake scripts', () => {
     const at = install();
     const event = { runId: 'run-1', others: [ORIGINAL] };
     const decided = facts(at, event).output;
-    const closed = { ...event, state: 'closed' as const, stateReason: 'duplicate' };
+    const closed = { ...event, state: 'closed' as const, stateReason: 'duplicate' as const };
     const repeated = outcome(at, closed, decided, DUPLICATE_VERDICT);
     expect({ code: repeated.code, stderr: repeated.stderr }).toEqual({ code: 0, stderr: '' });
     expect([...repeated.closes, ...repeated.comments]).toEqual([]);
@@ -591,7 +592,7 @@ describe('the intake scripts', () => {
     const at = install();
     const event = { runId: 'run-1', others: [ORIGINAL] };
     const decided = facts(at, event).output;
-    const closed = { ...event, state: 'closed' as const, stateReason: 'not_planned' };
+    const closed = { ...event, state: 'closed' as const, stateReason: 'not_planned' as const };
     const applied = outcome(at, closed, decided, DUPLICATE_VERDICT);
     expect(applied.code).not.toBe(0);
     expect(applied.stderr).toContain('already closed for another reason');
