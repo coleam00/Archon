@@ -13,20 +13,19 @@ import {
   resourceStartFixtures,
   type WorkflowStoreHarness,
 } from '@archon/workflows/store-conformance';
-import type { IDatabase } from './adapters/types';
 
 const LIMIT = { name: 'check', starts: 3, resetOn: 'plan' };
 
-type Harness = WorkflowStoreHarness & { db: IDatabase };
+type Harness = WorkflowStoreHarness;
 type LimitFields = Pick<ResourceStartBindingIntent, 'limit' | 'grants'>;
 
 /**
- * Starts on items through the real receipt, preparation and admission path. SQLite keeps
- * whole seconds and a start admitted in the same second as a reset counts after it, so a
- * test ages the admissions it means to come before a reset (`age`).
+ * Starts on items through the real receipt, preparation and admission path. Nothing here
+ * edits a timestamp: these run within one second, so on SQLite a start and the reset after
+ * it share a timestamp, and the count must still order them.
  */
 function starts(harness: Harness) {
-  const { store, db } = harness;
+  const { store } = harness;
   const { launch } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
   const start = async (itemKey: string | undefined, fields: LimitFields) => {
     const identity = { receiptId: randomUUID(), bindingId: 'binding', ownerId: 'owner' };
@@ -81,12 +80,8 @@ function starts(harness: Harness) {
     await finish(run.id);
     return { runId: run.id, itemId: run.item_id ?? '' };
   };
-  const age = () =>
-    db.query(
-      "UPDATE remote_agent_resource_start_requests SET admitted_at = '2020-01-01 00:00:00' WHERE admitted_at IS NOT NULL"
-    );
   const standing = async (itemId: string) => (await store.readItemStartLimits(itemId)).limits[0];
-  return { start, finish, admitted, plan, age, standing };
+  return { start, finish, admitted, plan, standing };
 }
 
 export function describeSqlStartLimitConformance(makeHarness: () => Promise<Harness>): void {
@@ -94,7 +89,7 @@ export function describeSqlStartLimitConformance(makeHarness: () => Promise<Harn
     const harness = await makeHarness();
     try {
       const { store } = harness;
-      const { start, admitted, plan, age, standing } = starts(harness);
+      const { start, admitted, plan, standing } = starts(harness);
       const itemId = async (key: string) =>
         (
           await store.createWorkflowRun({
@@ -137,7 +132,6 @@ export function describeSqlStartLimitConformance(makeHarness: () => Promise<Harn
 
       // The reset workflow completing on the item starts the count again, grants included,
       // and cleaning that run up before any later start does not bring the rounds back.
-      await age();
       const reset = await plan('a');
       const since = (await standing(a))?.since;
       expect(since).not.toBeNull();
@@ -161,13 +155,12 @@ export function describeSqlStartLimitConformance(makeHarness: () => Promise<Harn
     const harness = await makeHarness();
     try {
       const { store } = harness;
-      const { start, finish, admitted, plan, age, standing } = starts(harness);
+      const { start, finish, admitted, plan, standing } = starts(harness);
       // The first start holds the resource, so the second waits behind it.
       const first = (await start('r', { limit: LIMIT })).result;
       const waiting = (await start('r', { limit: LIMIT })).result;
       if (first?.status !== 'admitted' || waiting?.status !== 'queued')
         throw new Error('Expected one admitted start and one queued');
-      await age();
       const { itemId } = await plan('r');
       // Only the waiting start is in the new count: it is promised, and it runs after the reset.
       expect(await standing(itemId)).toMatchObject({ used: 1, left: 2 });
@@ -179,6 +172,24 @@ export function describeSqlStartLimitConformance(makeHarness: () => Promise<Harn
       await admitted('r');
       await admitted('r');
       expect((await start('r', { limit: LIMIT })).result?.status).toBe('refused');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a reset right after a start leaves the full allowance, and a grant before it is spent', async () => {
+    const harness = await makeHarness();
+    try {
+      const { start, admitted, plan, standing } = starts(harness);
+      // A start, then a grant, then the reset, with no time passing between them.
+      await admitted('s');
+      await admitted('s', { grants: 'check' });
+      const { itemId } = await plan('s');
+      expect(await standing(itemId)).toMatchObject({ granted: 0, used: 0, left: 3 });
+      await admitted('s');
+      await admitted('s');
+      await admitted('s');
+      expect((await start('s', { limit: LIMIT })).result?.status).toBe('refused');
     } finally {
       await harness.close();
     }

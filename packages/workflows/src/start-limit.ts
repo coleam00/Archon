@@ -5,16 +5,14 @@
  *
  * The count is derived from the item's start requests, never kept as a counter. A request
  * a limited binding made records the limit it counted under; a request a granting binding
- * made records the name of the limit it raised. The count runs `since` the limit's last
- * reset: the latest completion of its `resetOn` workflow on the item, which the store
- * also records apart from the run row so run cleanup cannot undo it.
+ * made records the name of the limit it raised. The count runs from the limit's last reset
+ * (`StartLimitReset`), the latest completion of its `resetOn` workflow on the item, which
+ * the store records in event order: a request is after the reset when its queue position
+ * is above the reset's, or when it was still waiting in the queue at the reset, and so runs
+ * after it. Time is not compared, so a start and a reset in the same second still order.
  *
- * A queued start always counts: it is a start already promised, and the queue admits it
- * later without asking again, whenever that is. An admitted start or grant counts when it
- * was admitted at or after `since`, so a start that waited in the queue across a reset
- * counts in the new count once it runs. Times compare at the store's precision; SQLite
- * keeps whole seconds, so a start admitted in the same second as a reset counts after it,
- * which can refuse one start early but never lets one through late.
+ * Queued and admitted starts count; a queued start is a start already promised, and the
+ * queue admits it later without asking again. A grant counts once its start is admitted.
  */
 import { z } from 'zod';
 import { startLimitSchema, type StartLimit } from './schemas/resource-start';
@@ -27,12 +25,24 @@ export const storedStartLimitSchema = z.object(startLimitSchema.shape);
 
 /** One start request on the item, as the count reads it. */
 export interface StartLimitRow {
+  id: string;
+  /** The request's queue position: the order requests were written in. */
+  position: number;
   status: 'queued' | 'admitted' | 'skipped' | 'withdrawn';
-  /** When the request was admitted (ISO), or null while it was not. */
-  admittedAt: string | null;
   counted: StartLimit | null;
   /** The name of the limit this start raised, or null. */
   grant: string | null;
+}
+
+/**
+ * A reset of a limit on an item: when its workflow completed (`at`, for display), the
+ * highest request queue position written before it, and the item's limit requests still
+ * queued then.
+ */
+export interface StartLimitReset {
+  at: string;
+  afterPosition: number;
+  queuedIds: readonly string[];
 }
 
 /**
@@ -51,27 +61,30 @@ export const startLimitStandingSchema = z.object({
 });
 export type StartLimitStanding = z.infer<typeof startLimitStandingSchema>;
 
-function admittedSince(row: StartLimitRow, since: string | null): boolean {
-  if (row.status !== 'admitted' || row.admittedAt === null) return false;
-  return since === null || Date.parse(row.admittedAt) >= Date.parse(since);
+function afterReset(row: StartLimitRow, reset: StartLimitReset | null): boolean {
+  return reset === null || row.position > reset.afterPosition || reset.queuedIds.includes(row.id);
 }
 
-/** Where `limit` stands on an item with start requests `rows`, counting since `since`. */
+/** Where `limit` stands on an item with start requests `rows`, counting from `reset`. */
 export function startLimitStanding(
   limit: StartLimit,
   rows: readonly StartLimitRow[],
-  since: string | null
+  reset: StartLimitReset | null
 ): StartLimitStanding {
   const used = rows.filter(
     row =>
-      row.counted?.name === limit.name && (row.status === 'queued' || admittedSince(row, since))
+      row.counted?.name === limit.name &&
+      (row.status === 'queued' || row.status === 'admitted') &&
+      afterReset(row, reset)
   ).length;
-  const granted = rows.filter(row => row.grant === limit.name && admittedSince(row, since)).length;
+  const granted = rows.filter(
+    row => row.grant === limit.name && row.status === 'admitted' && afterReset(row, reset)
+  ).length;
   return {
     name: limit.name,
     starts: limit.starts,
     resetOn: limit.resetOn ?? null,
-    since,
+    since: reset?.at ?? null,
     granted,
     used,
     left: Math.max(0, limit.starts + granted - used),

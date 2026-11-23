@@ -830,21 +830,23 @@ async function namedItem(
 
 interface StartLimitRequestRow {
   id: string;
+  queue_position: number | string;
   status: StartLimitRow['status'];
-  admitted_at: string | Date | null;
   start_limit: unknown;
   grants_limit: unknown;
 }
 
-const startLimitRowsSql = `SELECT id, status, admitted_at, start_limit, grants_limit
+const startLimitRowsSql = `SELECT id, queue_position, status, start_limit, grants_limit
        FROM remote_agent_resource_start_requests
       WHERE item_id = $1 AND (start_limit IS NOT NULL OR grants_limit IS NOT NULL)
       ORDER BY queue_position`;
 
 function startLimitRow(row: StartLimitRequestRow): StartLimitRow {
   return {
+    id: String(row.id),
+    // PostgreSQL returns a BIGSERIAL as a string.
+    position: Number(row.queue_position),
     status: row.status,
-    admittedAt: row.admitted_at == null ? null : toHydratedTimestamp(row.admitted_at).toISOString(),
     counted:
       row.start_limit == null
         ? null

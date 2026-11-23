@@ -910,16 +910,19 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_asks (
 );
 
 -- Start-limit resets (#6109): a run completed on an item that has a start limit or a grant,
--- recorded in the write that completes it. A limit whose resetOn names the workflow starts
--- its count again from reset_at. Kept apart from the run row, which run cleanup deletes, so
--- deleting the run does not bring earlier rounds back. Rows are only inserted.
+-- recorded under the admission lock in the write that completes it. A limit whose resetOn
+-- names the workflow counts only the starts after it: requests with a queue_position above
+-- after_position, and those in queued_ids (a JSON array), which were still waiting at the
+-- reset and run after it. Event order, not time, so a reset in the same second as a start is
+-- exact. Kept apart from the run row, which run cleanup deletes. Rows are only inserted.
 CREATE TABLE IF NOT EXISTS remote_agent_start_limit_resets (
+  id BIGSERIAL PRIMARY KEY,
   item_id UUID NOT NULL REFERENCES remote_agent_items(id),
   workflow_name TEXT NOT NULL,
-  reset_at TIMESTAMP WITH TIME ZONE NOT NULL
+  reset_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  after_position BIGINT NOT NULL,
+  queued_ids TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_start_limit_resets_item
-  ON remote_agent_start_limit_resets(item_id, workflow_name);
 
 -- Waits: what a completed run said its item now waits for outside Archon (returns.waits).
 -- A row opens in the write that completes the run and closes once: met by an accepted
@@ -983,6 +986,10 @@ ALTER TABLE remote_agent_workflow_node_sessions ADD COLUMN IF NOT EXISTS model T
 --
 -- Guarded by packages/core/src/db/migration-statement-order.test.ts and
 -- exercised against real PostgreSQL upgrades by scripts/check-schema-upgrades.ts.
+
+-- Start-limit resets: the latest reset of a workflow on an item
+CREATE INDEX IF NOT EXISTS idx_start_limit_resets_item
+  ON remote_agent_start_limit_resets(item_id, workflow_name);
 
 -- Item rulings
 CREATE INDEX IF NOT EXISTS idx_item_rulings_item_id

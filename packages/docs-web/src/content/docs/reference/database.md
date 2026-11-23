@@ -376,10 +376,11 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Prepared launches are versioned. Version 2 carries the run's `origin`; version 1 launches queued by older binaries are still admitted, with their conversation and user read as the origin. Older binaries cannot read version 2, so before downgrading, drain or withdraw any queued or admitted request whose run has not started
   - `queue_position` orders waiting requests; optional receipt and binding linkage preserves source provenance
   - Nullable `item_id` references the item a start named, resolved when the binding is prepared, so a start that waits for capacity already has its item. The run takes it at admission
-  - Nullable `start_limit` (JSON, read tolerantly since more than one binary reads it) and `grants_limit` (a limit name) record the start limit a binding start counted under and the limit it granted. A binding's start limit on an item is derived from these rows, their `status` and `admitted_at`, at admission and in the item read; it is never kept as a counter. Rows are never deleted
+  - Nullable `start_limit` (JSON, read tolerantly since more than one binary reads it) and `grants_limit` (a limit name) record the start limit a binding start counted under and the limit it granted. A binding's start limit on an item is derived from these rows, their `status` and `queue_position`, at admission and in the item read; it is never kept as a counter. Rows are never deleted
 
 - **`remote_agent_start_limit_resets`** - When a start limit on an item last reset
-  - One row per run that completed on an item that has a start limit or a grant: `item_id`, the run's `workflow_name` and its completion as `reset_at`, written in the transaction that completes the run. A limit whose `resetOn` names that workflow counts from the latest `reset_at`
+  - One row per run that completed on an item that has a start limit or a grant, written under the admission lock in the transaction that completes the run: `item_id`, the run's `workflow_name`, its completion as `reset_at` (for display), `after_position`, the highest request `queue_position` at that moment, and `queued_ids`, a JSON array of the item's limit requests still queued then
+  - A limit whose `resetOn` names that workflow counts, from its latest row (highest `id`), only requests above `after_position` or listed in `queued_ids`. Event order, not time, so a start and a reset in the same second still order
   - Kept apart from the run row so run cleanup does not bring earlier rounds back. Rows are only inserted
 
 - **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login
