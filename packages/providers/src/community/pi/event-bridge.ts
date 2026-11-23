@@ -463,6 +463,27 @@ export interface BridgeNotifier {
 }
 
 /**
+ * How long teardown waits for an interrupted prompt to stop. Pi writes the interrupted
+ * assistant message to the session on `message_end`, before `abort()` resolves, and
+ * `dispose()` disconnects that writer; waiting keeps the reply in the session a later turn
+ * resumes. Bounded because a wedged session never answers `abort()` (#1561).
+ */
+const ABORT_SETTLE_MS = 2_000;
+
+/** Whether `promise` settled within `ms`. */
+async function settlesWithin(promise: Promise<void>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const settled = await Promise.race([
+    promise.then(() => true),
+    new Promise<boolean>(resolve => {
+      timer = setTimeout(() => resolve(false), ms);
+    }),
+  ]);
+  clearTimeout(timer);
+  return settled;
+}
+
+/**
  * Bridge a Pi `AgentSession` into Archon's `AsyncGenerator<MessageChunk>` contract.
  *
  * Behavior:
@@ -470,8 +491,10 @@ export interface BridgeNotifier {
  *  - yield the session id first, then mapped events in order
  *  - complete on successful `session.prompt()` resolution
  *  - throw on `session.prompt()` rejection, listener errors, or attributed extension errors
- *  - forward `abortSignal` to `session.abort()` fire-and-forget, and throw on abort
- *    even when the session never answers it
+ *  - forward `abortSignal` to `session.abort()`, and throw on abort even when the
+ *    session never answers it
+ *  - before disposing, give an interrupted prompt up to `ABORT_SETTLE_MS` to stop, so Pi
+ *    stores the partial reply the caller already saw
  *  - always `dispose()` the session to avoid listener accumulation
  */
 export async function* bridgeSession(
@@ -635,8 +658,9 @@ export async function* bridgeSession(
     }
   });
 
+  let aborting: Promise<void> | undefined;
   const onAbort = (): void => {
-    void session.abort().catch((err: unknown) => {
+    aborting ??= session.abort().catch((err: unknown) => {
       // Abort is best-effort — failures are recoverable via the dispose()
       // call in the `finally` below. But log at debug so a regression in
       // Pi's abort path doesn't silently disappear.
@@ -666,24 +690,26 @@ export async function* bridgeSession(
     onAbort();
   });
 
-  const promptPromise =
-    extensionFailed || abortSignal?.aborted
-      ? Promise.resolve()
-      : session.prompt(prompt).then(
-          () => {
-            if (sawAgentEnd) {
-              flushPending();
-              queue.push({
-                kind: 'chunk',
-                chunk: buildResultChunk(promptMessages, promptSideCalls),
-              });
-            }
-            queue.push({ kind: 'done' });
-          },
-          (err: unknown) => {
-            queue.push({ kind: 'error', error: err as Error });
+  let promptRunning = !(extensionFailed || abortSignal?.aborted);
+  const promptPromise = !promptRunning
+    ? Promise.resolve()
+    : session.prompt(prompt).then(
+        () => {
+          promptRunning = false;
+          if (sawAgentEnd) {
+            flushPending();
+            queue.push({
+              kind: 'chunk',
+              chunk: buildResultChunk(promptMessages, promptSideCalls),
+            });
           }
-        );
+          queue.push({ kind: 'done' });
+        },
+        (err: unknown) => {
+          promptRunning = false;
+          queue.push({ kind: 'error', error: err as Error });
+        }
+      );
 
   const finishResult = (terminal: ResultChunk): ResultChunk => {
     extensionTurn?.throwIfFailed();
@@ -711,6 +737,11 @@ export async function* bridgeSession(
     unsubscribe();
     if (abortSignal) {
       abortSignal.removeEventListener('abort', onAbortSignal);
+    }
+    // A caller that stops reading without a signal interrupts the prompt the same way.
+    if (promptRunning) onAbort();
+    if (aborting && !(await settlesWithin(aborting, ABORT_SETTLE_MS))) {
+      getLog().warn({ waitedMs: ABORT_SETTLE_MS }, 'pi.event-bridge.abort_unanswered');
     }
     try {
       session.dispose();

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, jest, test } from 'bun:test';
 import type {
   AgentSession,
   AgentSessionEvent,
@@ -817,7 +817,8 @@ describe('bridgeSession cleanup', () => {
     expect(disposeCount).toBe(1);
   });
 
-  // A wedged session answers abort() with nothing: prompt() never settles, no event arrives.
+  // A wedged session answers abort() with nothing: prompt() never settles, no event
+  // arrives, and abort(), which waits for the session to go idle, never resolves.
   test('an aborted caller on a session that ignores abort still ends and disposes it', async () => {
     let disposeCount = 0;
     const session = {
@@ -827,16 +828,23 @@ describe('bridgeSession cleanup', () => {
         disposeCount++;
       },
       subscribe: () => () => {},
-      abort: async () => {},
+      abort: () => new Promise<void>(() => undefined),
     } as unknown as AgentSession;
     const controller = new AbortController();
+    jest.useFakeTimers();
+    try {
+      const pending = bridgeSession(session, 'prompt', controller.signal).next();
+      pending.catch(() => undefined);
+      controller.abort();
+      // Teardown waits a bounded time for the abort; let it start waiting, then run out.
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      jest.advanceTimersByTime(60_000);
 
-    const pending = bridgeSession(session, 'prompt', controller.signal).next();
-    controller.abort();
-    const stuck = new Promise<'stuck'>(resolve => setTimeout(() => resolve('stuck'), 1000));
-
-    await expect(Promise.race([pending, stuck])).rejects.toThrow('Query aborted');
-    expect(disposeCount).toBe(1);
+      await expect(pending).rejects.toThrow('Query aborted');
+      expect(disposeCount).toBe(1);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test('a caller aborted before the bridge starts never sends the prompt', async () => {

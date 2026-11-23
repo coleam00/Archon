@@ -188,6 +188,9 @@
       "src/community/pi/structured-output-tool.integration.test.ts"
     ],
     [
+      "src/community/pi/stop-resume.integration.test.ts"
+    ],
+    [
       "src/community/pi/provider-lazy-load.test.ts"
     ],
     [
