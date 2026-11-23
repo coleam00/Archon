@@ -18,6 +18,12 @@ import { getLog } from './workflow-shared';
 /** The store this CLI process opened: the file store, or the database `DATABASE_URL` picks. */
 export type CleanupStoreKind = 'files' | 'sqlite' | 'postgresql';
 
+async function selectedStoreKind(): Promise<CleanupStoreKind> {
+  const { loadStoreSelection } = await import('@archon/core/config/store-selection');
+  if ((await loadStoreSelection()) === 'files') return 'files';
+  return (await import('@archon/core/db/connection')).getDatabaseType();
+}
+
 /**
  * The retry hint after a failed removal. `--orphans` waits until a path is
  * `ORPHAN_MIN_AGE_MS` past its last change, and a removal that failed part way has just
@@ -119,7 +125,7 @@ async function otherStoreHistory(kind: CleanupStoreKind): Promise<string | undef
  */
 export async function workflowOrphanCleanupCommand(
   host: { deps: { store: Pick<IWorkflowStore, 'getWorkflowRun'> } },
-  options: { yes: boolean; storeKind: CleanupStoreKind }
+  options: { yes: boolean; storeKind?: CleanupStoreKind }
 ): Promise<number> {
   const { orphans, linked, deferred } = await findOrphanRunFiles(host.deps.store);
   for (const { path, linksTo } of linked)
@@ -141,7 +147,7 @@ export async function workflowOrphanCleanupCommand(
     console.log('Nothing was removed. Run again with --yes to remove them.');
     return 0;
   }
-  const other = await otherStoreHistory(options.storeKind);
+  const other = await otherStoreHistory(options.storeKind ?? (await selectedStoreKind()));
   if (other) {
     console.error(
       `Refusing to remove: this ARCHON_HOME also holds ${other}. Its runs have no row in the ` +

@@ -306,8 +306,12 @@ const DELETE_CHUNK = 500;
  * Returns the deleted rows, so the caller can remove their files.
  *
  * The SQLite adapter refuses `DELETE ... RETURNING`, so this selects the rows and then
- * deletes exactly those ids. On SQLite the transaction makes that exact; on PostgreSQL a
- * sub-run that starts between the two is the gap `NO_LIVE_DESCENDANTS` already accepts.
+ * deletes exactly those ids. The select must lock what it returns: on PostgreSQL a run that
+ * resumes between the select and the delete would otherwise be deleted while running, and
+ * its files removed. `FOR UPDATE` makes such a resume wait for this transaction, and a resume
+ * that committed first leaves its row failing the status check, so it is not selected.
+ * SQLite needs no lock: a write committed after this transaction read reruns it from the
+ * start. A sub-run that starts in between is the gap `NO_LIVE_DESCENDANTS` already accepts.
  */
 export async function deleteOldWorkflowRuns(
   olderThanDays: number
@@ -327,7 +331,7 @@ export async function deleteOldWorkflowRuns(
            AND COALESCE(active_phase_started_at, started_at) < ${cutoff}
            AND ${NO_OPEN_ASKS}
            AND ${NO_LIVE_DESCENDANTS}
-           AND ${NO_LIVE_ADOPTERS}`,
+           AND ${NO_LIVE_ADOPTERS}${getDialect().rowLock()}`,
         [olderThanDays]
       );
       const runs = [...selected.rows];

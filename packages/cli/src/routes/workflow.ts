@@ -570,18 +570,10 @@ async function runWorkflowAttentionLabel(route: WorkflowRoute): Promise<number> 
 
 export async function runWorkflowCleanup(route: WorkflowRoute): Promise<number> {
   const daysArg = route.positionals[2];
-  if (route.values.orphans) {
-    if (daysArg !== undefined)
-      return await fail(route.json, 'Usage: archon workflow cleanup --orphans [--yes]');
-    const database = await usesDatabaseStore();
-    const storeKind = database
-      ? (await import('@archon/core/db/connection')).getDatabaseType()
-      : 'files';
-    return await route.commands.workflowOrphanCleanupCommand(route.host, {
-      yes: route.values.yes === true,
-      storeKind,
-    });
-  }
+  if (route.values.orphans)
+    return daysArg === undefined
+      ? await route.commands.workflowOrphanCleanupCommand(route.host, { yes: !!route.values.yes })
+      : await fail(route.json, 'Usage: archon workflow cleanup --orphans [--yes]');
   const days = daysArg ? Number(daysArg) : 7;
   if (Number.isNaN(days) || days < 0) {
     return await fail(

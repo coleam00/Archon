@@ -201,10 +201,7 @@ export async function findOrphanRunFiles(
   store: Pick<IWorkflowStore, 'getWorkflowRun'>,
   now: number = Date.now()
 ): Promise<OrphanRunFiles> {
-  const workspaces = getArchonWorkspacesPath();
-  const found: OrphanRunFile[] = [];
-  const linked: OrphanRunFiles['linked'] = [];
-  const deferred: OrphanRunFiles['deferred'] = { count: 0, readyAt: null };
+  const result: OrphanRunFiles = { orphans: [], linked: [], deferred: { count: 0, readyAt: null } };
   const known = new Map<string, boolean>();
   const hasRow = async (id: string): Promise<boolean> => {
     let value = known.get(id);
@@ -214,41 +211,59 @@ export async function findOrphanRunFiles(
     }
     return value;
   };
+  for (const { parent, idOf } of await runDirectories()) {
+    const where = await containment(parent);
+    if (where === 'missing') continue;
+    if (where === 'contained') await scanRunDirectory(parent, idOf, hasRow, now, result);
+    else result.linked.push({ path: parent, linksTo: where.linksTo });
+  }
+  return result;
+}
+
+/** The run id a run directory's entry is named for, or null when it is not a run's. */
+type RunIdOf = (name: string) => string | null;
+
+/** Every project's three run directories, two levels under the workspaces root. */
+async function runDirectories(): Promise<{ parent: string; idOf: RunIdOf }[]> {
+  const workspaces = getArchonWorkspacesPath();
+  const found: { parent: string; idOf: RunIdOf }[] = [];
+  const named: RunIdOf = name => name;
+  const log: RunIdOf = name => (name.endsWith('.jsonl') ? name.slice(0, -6) : null);
   for (const owner of await directories(workspaces)) {
     for (const project of await directories(join(workspaces, owner.name))) {
       const storage = getStoragePathsForRoot(join(workspaces, owner.name, project.name));
-      const parents: [string, (name: string) => string | null][] = [
-        [join(storage.artifactsRoot, 'runs'), name => name],
-        [join(storage.workflowSourceRoot, 'runs'), name => name],
-        [storage.logsDir, name => (name.endsWith('.jsonl') ? name.slice(0, -6) : null)],
-      ];
-      for (const [parent, idOf] of parents) {
-        const where = await containment(parent);
-        if (where === 'missing') continue;
-        if (where !== 'contained') {
-          linked.push({ path: parent, linksTo: where.linksTo });
-          continue;
-        }
-        for (const entry of await children(parent)) {
-          if (entry.isSymbolicLink()) continue;
-          const id = idOf(entry.name);
-          if (id === null || !RUN_ID_PATTERN.test(id)) continue;
-          const path = join(parent, entry.name);
-          if (await hasRow(id)) continue;
-          const info = await lstat(path);
-          if (now - info.mtimeMs < ORPHAN_MIN_AGE_MS) {
-            const ready = info.mtimeMs + ORPHAN_MIN_AGE_MS;
-            deferred.count++;
-            if (deferred.readyAt === null || ready > deferred.readyAt.getTime())
-              deferred.readyAt = new Date(ready);
-            continue;
-          }
-          found.push({ path, bytes: await pathBytes(path) });
-        }
-      }
+      found.push(
+        { parent: join(storage.artifactsRoot, 'runs'), idOf: named },
+        { parent: join(storage.workflowSourceRoot, 'runs'), idOf: named },
+        { parent: storage.logsDir, idOf: log }
+      );
     }
   }
-  return { orphans: found, linked, deferred };
+  return found;
+}
+
+/** Add one run directory's entries with no row to `result`, as orphans or deferred. */
+async function scanRunDirectory(
+  parent: string,
+  idOf: RunIdOf,
+  hasRow: (id: string) => Promise<boolean>,
+  now: number,
+  result: OrphanRunFiles
+): Promise<void> {
+  for (const entry of await children(parent)) {
+    const id = entry.isSymbolicLink() ? null : idOf(entry.name);
+    if (id === null || !RUN_ID_PATTERN.test(id) || (await hasRow(id))) continue;
+    const path = join(parent, entry.name);
+    const changed = (await lstat(path)).mtimeMs;
+    if (now - changed >= ORPHAN_MIN_AGE_MS) {
+      result.orphans.push({ path, bytes: await pathBytes(path) });
+      continue;
+    }
+    const ready = changed + ORPHAN_MIN_AGE_MS;
+    result.deferred.count++;
+    if (result.deferred.readyAt === null || ready > result.deferred.readyAt.getTime())
+      result.deferred.readyAt = new Date(ready);
+  }
 }
 
 /** Remove paths {@link findOrphanRunFiles} listed, reported like {@link removeRunFiles}. */
