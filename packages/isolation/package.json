@@ -31,7 +31,8 @@
       "src/providers/worktree-queries.test.ts"
     ],
     [
-      "src/providers/worktree-real-git.test.ts"
+      "src/providers/worktree-real-git.test.ts",
+      "src/worktree-link.test.ts"
     ],
     [
       "src/errors.test.ts",

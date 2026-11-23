@@ -150,7 +150,8 @@ worktree:
 Rules worth knowing before suggesting entries:
 
 - **Repo scope only.** `worktree` is read from `<repo>/.archon/config.yaml`.
-  Putting it in `~/.archon/config.yaml` parses and does nothing.
+  Putting it in `~/.archon/config.yaml` parses and does nothing, except
+  `worktree.linkFiles` (below).
 - **Copy the real gitignored file, never a tracked template.** Suggesting
   `.env.example` is wrong twice: a worktree already has it, and materialising a
   placeholder `.env` makes a server start against fake credentials instead of
@@ -165,6 +166,15 @@ Rules worth knowing before suggesting entries:
 Other common entries: `.vscode/`, `.claude/`, and local-only fixture or plans
 directories. Full semantics, including path-traversal rejection and the
 `worktree.path` interaction, are in `/reference/configuration/`.
+
+Large caches can be linked instead of copied. `worktree.linkFiles` makes each
+listed path a symlink to the canonical repo, so every worktree shares one
+directory. Shared means concurrent runs write the same data: suggest it only for
+data whose tool tolerates that. Ignore the path without a trailing slash
+(`.serena/cache`, not `.serena/cache/`): git sees a symlink as a file, and Archon
+removes a link git would not ignore. `linkFiles` may also be set in `~/.archon/config.yaml`
+for every project; a project's own `linkFiles` replaces that list, and `[]` turns
+it off.
 
 Prefer the typed commands over hand-editing when they exist — they validate:
 

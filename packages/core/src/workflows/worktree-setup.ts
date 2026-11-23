@@ -1,14 +1,17 @@
 import type { resolveWorkflowGithubEnvironment } from '@archon/workflows/run-credential-env';
 import { WORKFLOW_SOURCE_METADATA_KEY } from '@archon/workflows/schemas/workflow-run';
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import {
   configureIsolation,
+  validateWorktreeConfig,
   WorktreePostCreateError,
+  type WorktreeCreateConfig,
   type WorktreeSetupExecutor,
   type WorktreeSetupInput,
 } from '@archon/isolation';
 import { resolveBashPath } from '@archon/git';
-import { createLogger } from '@archon/paths';
+import { createLogger, getArchonConfigPath } from '@archon/paths';
 import {
   collectCredentialValues,
   redactCredentialValues,
@@ -25,7 +28,7 @@ import type { CapturedSourceOwner, PreparedWorkflowSource } from '@archon/workfl
 import type { WorkflowEnvironment, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorktreeSetupEvent } from '@archon/workflows/schemas/worktree-setup';
-import { loadConfig, loadRepoConfig } from '../config/config-loader';
+import { loadConfig, loadGlobalConfig, loadRepoConfig } from '../config/config-loader';
 import { getCodebaseEnvVars } from '../db/env-vars';
 
 export type WorktreeSetupDeps = Parameters<typeof resolveWorkflowGithubEnvironment>[0] & {
@@ -263,10 +266,31 @@ export const executeStandaloneWorktreeSetup: WorktreeSetupExecutor = async input
 };
 
 export function configureWorktreeIsolation(): void {
-  configureIsolation(
-    async repoPath => (await loadRepoConfig(repoPath)).worktree ?? null,
-    executeStandaloneWorktreeSetup
-  );
+  configureIsolation(loadWorktreeConfig, executeStandaloneWorktreeSetup);
+}
+
+/**
+ * The repo's `worktree` block, with the global `worktree.linkFiles` filling in when the
+ * repo sets none. A repo list replaces the global one; `linkFiles: []` opts a repo out.
+ */
+export async function loadWorktreeConfig(repoPath: string): Promise<WorktreeCreateConfig | null> {
+  const [global, repo] = await Promise.all([loadGlobalConfig(), loadRepoConfig(repoPath)]);
+  const linkFiles = global.worktree?.linkFiles;
+  if (linkFiles === undefined || repo.worktree?.linkFiles !== undefined) {
+    return repo.worktree ?? null;
+  }
+  const merged = { ...repo.worktree, linkFiles };
+  try {
+    validateWorktreeConfig(merged);
+  } catch (error) {
+    // The repo file alone was valid, so the conflict is with the global list.
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `${detail} (linkFiles comes from ${getArchonConfigPath()}; set worktree.linkFiles in ${join(repoPath, '.archon', 'config.yaml')} to override it)`,
+      { cause: error }
+    );
+  }
+  return merged;
 }
 
 export async function retainSetupRunSource(

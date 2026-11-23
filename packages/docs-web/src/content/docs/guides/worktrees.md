@@ -38,12 +38,13 @@ Prepare dependencies and generated files before agents start, in the repository'
 ```yaml
 worktree:
   copyFiles: ['.env']
+  linkFiles: ['.serena/cache']  # shared by every worktree through a symlink
   postCreate:
     - bun install --frozen-lockfile
   postCreateTimeout: 300000     # per command, in milliseconds
 ```
 
-Commands run in order in the new checkout, after submodules and copied files. A command that exits nonzero, times out or cannot start stops worktree creation, and the error reports the exit code or timeout with the command's output. Both a healthy Archon-registered worktree and a usable existing checkout at the configured target path are reused without running setup again. Setup should provision the checkout, not leave a server running. Copied `.env` files are not loaded automatically. See [Configuration](/reference/configuration/) for every `worktree` option.
+Commands run in order in the new checkout, after submodules and copied files. A command that exits nonzero, times out or cannot start stops worktree creation, and the error reports the exit code or timeout with the command's output. Both a healthy Archon-registered worktree and a usable existing checkout at the configured target path are reused without running setup again. Setup should provision the checkout, not leave a server running. Copied `.env` files are not loaded automatically. A large git-ignored cache can be linked instead of copied, but every worktree then writes the same directory; see [linked files](/reference/configuration/#worktree-linked-files-worktreelinkfiles) for the trade-off and the ignore-pattern rule. See [Configuration](/reference/configuration/) for every `worktree` option.
 
 ## Inspect and clean up
 

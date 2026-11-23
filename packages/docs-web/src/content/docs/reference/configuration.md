@@ -168,6 +168,12 @@ tiers:
 aliases:
   '@reasoning': { provider: claude, model: opus, effort: max }
 
+# Paths every project's worktrees share through a symlink, unless the project
+# sets its own worktree.linkFiles. The only worktree key read from this file.
+worktree:
+  linkFiles:
+    - .serena/cache
+
 ```
 
 The `tiers:` block above is no longer hand-edit-only -- you can also set the `small`/`medium`/`large` presets from the console **AI Settings** -> **Model Tiers** panel, or from the CLI with [`archon ai tier set`](/reference/cli/#ai). Connecting your own provider API key or subscription is covered in [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
@@ -282,6 +288,9 @@ worktree:
     - .env
     - .vscode               # Copy entire directory
     - plans/                # Local plans not committed to the team repo
+  linkFiles:  # Optional: Gitignored paths every worktree shares through a symlink
+              # to the canonical repo, instead of a copy. See below.
+    - .serena/cache
   initSubmodules: true  # Optional: default true — auto-detects .gitmodules and runs
                         # `git submodule update --init --recursive`. Set false to opt out.
   postCreate:          # Optional: sequential setup commands for newly created checkouts
@@ -408,7 +417,7 @@ A path given as an input, such as a policy file, is not a definition: an agent r
 
 Some repo settings are read at launch from fixed places rather than the launch checkout:
 
-- **`worktree.*`** (`baseBranch`, `remote`, `path`, `copyFiles`, `initSubmodules`, `postCreate`, `postCreateTimeout`) is read from the project's registered checkout as it is, when Archon finds the base branch and when it creates the worktree. Registration also reads `worktree.remote` from the checkout being registered to select its remote, even for runs using `--no-worktree`.
+- **`worktree.*`** (`baseBranch`, `remote`, `path`, `copyFiles`, `linkFiles`, `initSubmodules`, `postCreate`, `postCreateTimeout`) is read from the project's registered checkout as it is, when Archon finds the base branch and when it creates the worktree. Registration also reads `worktree.remote` from the checkout being registered to select its remote, even for runs using `--no-worktree`.
 - **Workflow-source settings** (`defaults.loadDefaultWorkflows`, `defaults.loadDefaultCommands`, `commands.folder`) are read from the run's definitions when it captures its source (the base branch with local changes, the checkout, or `--workflow-source`), and are recorded with that capture.
 
 To change the configuration a run uses:
@@ -419,7 +428,7 @@ To change the configuration a run uses:
 
 ### Worktree provisioning
 
-`worktree.postCreate` runs sequentially through `bash -c` in the new worktree root, after submodule initialization and `copyFiles`, before the checkout becomes available. It also runs when Archon creates a checkout of an existing branch. Reusing or adopting a checkout already on disk skips provisioning. Commands use ordinary shell expansion; workflow variables and node outputs are unavailable. Put setup logic in a script.
+`worktree.postCreate` runs sequentially through `bash -c` in the new worktree root, after submodule initialization, `copyFiles` and `linkFiles`, before the checkout becomes available. It also runs when Archon creates a checkout of an existing branch. Reusing or adopting a checkout already on disk skips provisioning. Commands use ordinary shell expansion; workflow variables and node outputs are unavailable. Put setup logic in a script.
 
 Each command has a timeout of `worktree.postCreateTimeout` milliseconds (default `300000`) and receives empty stdin. POSIX setup has no controlling terminal, so commands cannot prompt through `/dev/tty`. On macOS and Linux each command owns a process group. Archon ends the whole group at the timeout, when the command exits (success included), or when its owning Archon process ends, including Ctrl-C, detached-owner cancel/abandon, server exit, and SIGKILL. Background jobs in that group are ended too. Archon confirms the group is gone before completing setup or reporting failure for rollback. A process that starts its own session or group (`setsid`, a daemon), or a service started outside the group (`docker compose up -d`), escapes this cleanup. Use setup to provision a checkout, not to leave a server running.
 
@@ -483,6 +492,37 @@ worktree:
 - Path-traversal attempts (entries resolving outside the repo root, or absolute paths on a different drive) are rejected — the entry is logged and skipped.
 
 **Interaction with `worktree.path`:** The copy step runs identically (and is still a no-op with no `copyFiles`) whether worktrees live under `~/.archon/workspaces/<owner>/<repo>/worktrees/` (default) or inside the repo at `<repoRoot>/<worktree.path>/` (repo-local). Both layouts get the same gitignored-file treatment.
+
+### Worktree linked files (`worktree.linkFiles`)
+
+`copyFiles` gives each worktree its own copy. For a large cache, log, or metadata directory that copy wastes disk, slows worktree creation, and leaves every worktree to warm its own. `worktree.linkFiles` makes each listed path in a new worktree a symlink to the same path in the canonical repo, so every worktree uses one directory.
+
+```yaml
+worktree:
+  copyFiles:
+    - .claude/settings.local.json   # small file, a copy is fine
+  linkFiles:
+    - .serena/cache
+    - .entire/logs
+    - .entire/metadata
+```
+
+**Shared state.** Every worktree and the canonical checkout read and write the same linked directory. Two runs writing the same cache at once can corrupt it or see each other's data, and deleting the content from any worktree deletes it for all of them. Link only data whose tool tolerates several concurrent writers, and copy the rest.
+
+**The path must be ignored as a file.** Git sees a symlink as a file, so an ignore pattern with a trailing slash (`.serena/cache/`) matches the canonical directory but not the link. Write the pattern without the slash (`.serena/cache`), or ignore a parent directory (`.serena/`). After creating each link Archon asks git whether it is ignored. A link git would show in `git status` is removed and logged as a warning, because an agent that commits everything would otherwise commit an absolute symlink into the repository.
+
+**Semantics:**
+
+- Each entry is a path relative to the repo root; a trailing slash is ignored. The link points at the absolute path of the same entry in the canonical repo.
+- An entry missing from the canonical repo is created there as an empty directory first, so the first run's tool writes into the shared directory. List a file only if it already exists.
+- A path that already exists in the new worktree (a checked-out path, an earlier link) is left as it is and logged.
+- Links are made after `copyFiles` and before `postCreate`, so setup commands write through them.
+- Per-entry failures and path-traversal attempts are logged and skipped; worktree creation goes on, as with `copyFiles`.
+- A `linkFiles` path may not also be in `copyFiles`, inside a copied path, or contain one (copying runs first and would put a real directory where the link belongs). Every entry must be a non-empty string. Either mistake fails config loading with an error naming the config file.
+- Destroying a worktree removes the link, not the canonical content.
+- On Windows a directory is linked with a junction, which needs no elevated rights. Linking a file needs symlink rights (Developer Mode or an elevated shell).
+
+`linkFiles` is the one `worktree.*` key that can also be set install-wide in `~/.archon/config.yaml`, for a cache that every project keeps at the same path. A project that sets `worktree.linkFiles` in its own `.archon/config.yaml` replaces the global list rather than adding to it; `linkFiles: []` turns linking off for that project. When the global list overlaps a path the project lists in `copyFiles`, worktree creation fails and the error names both files. `linkFiles` applies to worktree isolation only; container isolation does not use it.
 
 **Defaults behavior:** The app's bundled default commands and workflows are loaded at runtime and merged with repo-specific ones. Repo commands/workflows override app defaults by name. Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` to disable runtime loading.
 

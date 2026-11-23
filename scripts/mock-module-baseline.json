@@ -2740,7 +2740,6 @@
       "registerWorktree",
       "resolveFolderBackend",
       "resolveRepoLocalOverride",
-      "validateWorktreePostCreate",
       "worktreeRegistrationMetadata"
     ],
     "packages/paths/src/cli-command.ts": ["archonCliInvocation"],

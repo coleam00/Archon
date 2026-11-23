@@ -10,6 +10,7 @@ import {
   rawAliasesConfigSchema,
   rawTiersConfigSchema,
 } from '@archon/workflows/schemas/model-binding';
+import { validateWorktreeConfig } from '@archon/isolation';
 import { createLogger } from '@archon/paths';
 import {
   attentionNoticeRoutesSchema,
@@ -219,4 +220,23 @@ export function validateGlobalConfigBlocks(parsed: unknown, configPath: string):
   validateAttentionNoticesConfig(parsed, configPath);
   validateItemTrackerConfig(parsed, configPath);
   validateConversationConcurrencyConfig(parsed, configPath);
+  validateGlobalWorktreeConfig(parsed, configPath);
+}
+
+/** The global `worktree` block carries `linkFiles` only; other keys stay repo-scoped. */
+function validateGlobalWorktreeConfig(parsed: unknown, configPath: string): void {
+  if (!isConfigRecord(parsed) || parsed.worktree == null) return;
+  if (!isConfigRecord(parsed.worktree)) {
+    throw new InvalidConfigError(
+      'Invalid worktree config',
+      configPath,
+      "'worktree' must be an object."
+    );
+  }
+  try {
+    validateWorktreeConfig({ linkFiles: parsed.worktree.linkFiles as string[] | undefined });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new InvalidConfigError('Invalid worktree config', configPath, detail, { cause: error });
+  }
 }
