@@ -183,11 +183,10 @@ async function resolveRunPacks(
   startInputs: Record<string, JsonValue> | undefined;
 }> {
   if (isContinuation) {
-    const { pack, pack_workflow, inputs_resolved } = recordedDispatch ?? {};
+    const { pack, inputs_resolved } = recordedDispatch ?? {};
     return {
       metadata: {
         ...(pack !== undefined ? { pack } : {}),
-        ...(pack_workflow !== undefined ? { pack_workflow } : {}),
         ...(inputs_resolved !== undefined ? { inputs_resolved } : {}),
       },
       startInputs: undefined,
