@@ -205,15 +205,18 @@ skills:
     optional: true
 ```
 
-`{ name, optional: true }` runs the node without that skill and records why when
-the provider cannot load named skills, or when the skill is absent both from the
-directories that provider searches and from any directory outside them. The node's `node_started` and terminal rows
+`{ name, optional: true }` checks for a skill at agent-node execution. It skips
+the skill if the provider cannot load named skills, or if neither of these is
+present: a `SKILL.md` in an enabled root or a matching directory in another
+known root. The node's `node_started` and terminal rows
 record `skills_unavailable` as `{ name, reason }` entries (`provider_unsupported`
 or `not_installed`), and the chat shows one line naming the skill and the reason.
 An installed optional skill is passed like a required one. A skill whose directory
 exists outside the directories that provider searches is still passed, so the
-provider's existing unreachable-skill error still fires. A required name is always
-passed, including one that is on no directory.
+provider's existing unreachable-skill error still fires. For Claude built-in or
+plugin-qualified skills that have no standalone `SKILL.md`, use a required
+name so Claude can resolve it. The optional check cannot confirm those names.
+`workflow test` uses stubs and does not emit these run-time diagnostics.
 
 A list that contains a required name still fails the run before it starts on a
 provider without the skills capability. An all-optional list does not: the node

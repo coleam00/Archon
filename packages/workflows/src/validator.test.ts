@@ -1686,12 +1686,11 @@ describe('validateWorkflowResources — skills search roots', () => {
     const workflow = makeWorkflow(
       'test',
       [
-        {
+        dagNodeSchema.parse({
           id: 'step1',
-          kind: 'agent',
-          source: { kind: 'inline', prompt: 'do work' },
+          prompt: 'do work',
           skills: [{ name: 'playwright-cli', optional: true }],
-        } as unknown as DagNode,
+        }),
       ],
       'claude'
     );
@@ -1704,12 +1703,11 @@ describe('validateWorkflowResources — skills search roots', () => {
     const workflow = makeWorkflow(
       'test',
       [
-        {
+        dagNodeSchema.parse({
           id: 'step1',
-          kind: 'agent',
-          source: { kind: 'inline', prompt: 'do work' },
+          prompt: 'do work',
           skills: [{ name: 'playwright-cli', optional: true }],
-        } as unknown as DagNode,
+        }),
       ],
       'codex'
     );
@@ -1722,12 +1720,11 @@ describe('validateWorkflowResources — skills search roots', () => {
     const workflow = makeWorkflow(
       'test',
       [
-        {
+        dagNodeSchema.parse({
           id: 'step1',
-          kind: 'agent',
-          source: { kind: 'inline', prompt: 'do work' },
+          prompt: 'do work',
           skills: ['code-review', { name: 'playwright-cli', optional: true }],
-        } as unknown as DagNode,
+        }),
       ],
       'codex'
     );
@@ -1742,12 +1739,11 @@ describe('validateWorkflowResources — skills search roots', () => {
     const workflow = makeWorkflow(
       'test',
       [
-        {
+        dagNodeSchema.parse({
           id: 'step1',
-          kind: 'agent',
-          source: { kind: 'inline', prompt: 'do work' },
+          prompt: 'do work',
           skills: [{ name: 'playwright-cli', optional: true }],
-        } as unknown as DagNode,
+        }),
       ],
       'claude'
     );

@@ -118,7 +118,7 @@ export function mcpDeclaration(mcp: NodeMcp | undefined): McpDeclaration | undef
 /**
  * One `skills:` entry: a name the node requires, or `{ name, optional: true }` for a
  * skill the node runs without when its provider cannot load skills or no SKILL.md
- * exists in the directories that provider searches. Strict so a misspelled key fails
+ * exists in the known skill roots. Strict so a misspelled key fails
  * the load instead of silently meaning required. Only `optional: true` is optional.
  */
 export const nodeSkillSchema = z.union([
