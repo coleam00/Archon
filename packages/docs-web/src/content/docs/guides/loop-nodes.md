@@ -38,7 +38,8 @@ nodes:
       type: object
       properties:
         done: { type: boolean }
-      required: [done]
+        summary: { type: string }
+      required: [done, summary]
     loop:
       prompt: |
         Read the PRD and implement the next unfinished story.
@@ -48,6 +49,7 @@ nodes:
         User request: $USER_MESSAGE
 
         Report done as true only when every story is implemented.
+        In summary, list the stories implemented so far, as the PRD records them.
       until_field: done
       max_iterations: 10
       fresh_context: true
@@ -55,7 +57,7 @@ nodes:
   - id: report
     depends_on: [implement]
     prompt: |
-      Summarize what was implemented: $implement.output
+      Summarize what was implemented: $implement.output.summary
 ```
 
 ## How It Works
