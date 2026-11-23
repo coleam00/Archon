@@ -492,8 +492,9 @@ its run id:
 - `logs/<run-id>.jsonl`: its log.
 - `workflow-source/runs/<run-id>/`: the workflow source it froze at start.
 
-Deleting a run removes all three, through `archon workflow cleanup <days>` or the Web UI's
-delete. A run that is not deleted keeps them. A run that a run which has not ended
+Deleting a run removes all three, through `archon workflow cleanup <days>` or
+[`DELETE /api/workflows/runs/{runId}`](/reference/api/), which returns any path it left in
+`files.failed`. A run that is not deleted keeps them. A run that a run which has not ended
 continues from (`--adopt` or `--supersedes`) is not deleted: an adopter reads the source's
 artifacts as `$ADOPTED_RUN_DIR`. A path that cannot be removed is reported with its error,
 and the run's row stays deleted. Archon removes a path only where it sits on disk under

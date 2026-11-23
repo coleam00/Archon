@@ -21,13 +21,9 @@ import {
 import { STAGED_SOURCE_TTL_MS } from '@archon/workflows/staged-source-ttl';
 import type { DeletedWorkflowRun, IWorkflowStore } from '@archon/workflows/store';
 
-export interface RunFilesReport {
-  removedBytes: number;
-  /** Paths that are still on disk, with the error that kept them. */
-  failed: { path: string; error: string }[];
-  /** Runs whose files cannot be located: no trusted root, or an id that is not a run id. */
-  unlocated: string[];
-}
+import type { RunFilesReport } from '../../schemas/run-files';
+
+export type { RunFilesReport };
 
 /** Removes one path and everything under it; injected by tests to fail a removal. */
 export type RemovePath = (path: string) => Promise<void>;

@@ -234,18 +234,19 @@ describe('workflow run writes', () => {
         .mockResolvedValueOnce(createQueryResult([{ open: 0 }])) // open asks guard
         .mockResolvedValueOnce(createQueryResult([{ open: 0 }])) // open waits guard
         .mockResolvedValueOnce(createQueryResult([])) // live descendants guard
+        .mockResolvedValueOnce(createQueryResult([])) // live adopters guard
         .mockResolvedValueOnce(createQueryResult([], 1)) // events DELETE
         .mockResolvedValueOnce(createQueryResult([], 1)); // run DELETE
 
       await deleteWorkflowRun('run-123');
 
-      expect(mockQuery).toHaveBeenCalledTimes(6);
+      expect(mockQuery).toHaveBeenCalledTimes(7);
       const [selectSql] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(selectSql).toContain('SELECT status');
-      const [eventsSql] = mockQuery.mock.calls[4] as [string, unknown[]];
-      expect(eventsSql).toContain('remote_agent_workflow_events');
-      const [runsSql] = mockQuery.mock.calls[5] as [string, unknown[]];
-      expect(runsSql).toContain('remote_agent_workflow_runs');
+      const [eventsSql] = mockQuery.mock.calls[5] as [string, unknown[]];
+      expect(eventsSql).toContain('DELETE FROM remote_agent_workflow_events');
+      const [runsSql] = mockQuery.mock.calls[6] as [string, unknown[]];
+      expect(runsSql).toContain('DELETE FROM remote_agent_workflow_runs');
     });
 
     test('throws "not found" when run does not exist', async () => {

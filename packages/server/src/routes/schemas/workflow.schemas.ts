@@ -1,3 +1,4 @@
+import { runFilesReportSchema } from '@archon/core/schemas/run-files';
 import { attentionDegradedSchema } from '@archon/workflows/schemas/attention-degraded';
 import { operatorPauseSchema } from '@archon/workflows/schemas/operator-pause';
 import {
@@ -315,13 +316,7 @@ export const deleteWorkflowRunResponseSchema = z
   .object({
     success: z.boolean(),
     message: z.string(),
-    files: z.object({
-      removedBytes: z.number(),
-      /** Paths still on disk, with the error that kept each. */
-      failed: z.array(z.object({ path: z.string(), error: z.string() })),
-      /** The run id, when its files could not be located. */
-      unlocated: z.array(z.string()),
-    }),
+    files: runFilesReportSchema,
   })
   .openapi('DeleteWorkflowRunResponse');
 
