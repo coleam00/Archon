@@ -295,17 +295,21 @@ export class WebAdapter implements IPlatformAdapter {
     await this.transport.emit(conversationId, lockEvent);
   }
 
+  /** Whether the conversation's last emitted lock event was `locked: true`. */
+  isConversationLocked(conversationId: string): boolean {
+    return this.lockedConversations.has(conversationId);
+  }
+
   /**
    * The conversation's lock state as of its last lock event, as one `conversation_lock`
    * event. A stream that opens or reconnects mid-turn writes it first, so the client
    * knows a reply is still running even though the turn's earlier events were delivered.
-   * Lock events still buffered for the stream replay after it and end in the same state.
    */
   lockSnapshotEvent(conversationId: string): string {
     return JSON.stringify({
       type: 'conversation_lock',
       conversationId,
-      locked: this.lockedConversations.has(conversationId),
+      locked: this.isConversationLocked(conversationId),
       timestamp: Date.now(),
     });
   }

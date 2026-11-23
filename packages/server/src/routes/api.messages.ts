@@ -256,13 +256,20 @@ export function registerMessageRoutes(
       await stream.writeSSE({
         data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
       });
-      // Read before the stream registers: a lock event emitted after this read is
-      // buffered for the stream and replays after the snapshot.
+      // The lock state a reconnecting client resumes from. Written before the stream
+      // registers, so buffered events replay after it.
+      const lockedAtOpen = webAdapter.isConversationLocked(conversationId);
       await stream.writeSSE({ data: webAdapter.lockSnapshotEvent(conversationId) });
 
       const writer = checkedSSEWriter(stream);
       webAdapter.registerStream(conversationId, writer);
       getLog().debug({ conversationId }, 'sse_stream_opened');
+      // A lock event emitted during that write may have gone to the stream this one
+      // replaces. From registration on, events reach this stream, so re-send the state
+      // through the ordered transport when it moved meanwhile.
+      if (webAdapter.isConversationLocked(conversationId) !== lockedAtOpen) {
+        await webAdapter.emitSSE(conversationId, webAdapter.lockSnapshotEvent(conversationId));
+      }
 
       stream.onAbort(() => {
         getLog().debug({ conversationId }, 'sse_client_disconnected');

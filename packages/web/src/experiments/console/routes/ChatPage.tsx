@@ -138,7 +138,12 @@ export function ChatPage(): ReactElement {
     }
     setBusy(false);
   }, []);
-  useConversationSSE(activeConvId, onLockChange);
+  // A stream that closed for good reports no more locks, so the last one it reported
+  // stops counting and the settle timer and cap decide again.
+  const onStreamClosed = useCallback((): void => {
+    serverLockedRef.current = false;
+  }, []);
+  useConversationSSE(activeConvId, onLockChange, onStreamClosed);
 
   // Derive turn state from the trailing message: a user message means a reply
   // is pending; once an assistant reply lands and stays stable for SETTLE_MS the
@@ -181,8 +186,9 @@ export function ChatPage(): ReactElement {
     if (!busy || activeConvId === null) return;
     busySinceRef.current = Date.now();
     const id = setInterval(() => {
-      // The cap guards against a turn nobody reports on; a lock the server holds is
-      // a report, and the stream's lock snapshot on reconnect corrects a stale one.
+      // The cap guards against a turn nobody reports on. A lock the server holds is a
+      // report: a reconnect's lock snapshot corrects a stale one, and a stream that
+      // closed for good drops it (onStreamClosed).
       if (Date.now() - busySinceRef.current > MAX_WAIT_MS && !serverLockedRef.current) {
         setBusy(false);
         return;

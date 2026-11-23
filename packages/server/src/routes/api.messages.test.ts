@@ -837,6 +837,69 @@ describe('SSE lock snapshot', () => {
       transport.stop();
     }
   });
+
+  test('a reply that ends while a replacement stream writes its snapshot still reaches it', async () => {
+    const transport = new SSETransport();
+    const adapter = new WebAdapter(
+      transport,
+      new MessagePersistence((id, event) => transport.emit(id, event)),
+      new WorkflowEventBridge(transport)
+    );
+    const { app } = makeApp(adapter);
+    const waits: ReturnType<typeof Promise.withResolvers<void>>[] = [];
+    const sleep = spyOn(SSEStreamingApi.prototype, 'sleep').mockImplementation(() => {
+      const wait = Promise.withResolvers<void>();
+      waits.push(wait);
+      return wait.promise;
+    });
+    const readers: Pick<ReadableStreamDefaultReader<Uint8Array>, 'read' | 'cancel'>[] = [];
+    async function open(): Promise<(typeof readers)[number]> {
+      const response = await app.request('/api/stream/web-test-abc');
+      if (!response.body) throw new Error('Missing SSE response body');
+      const reader = response.body.getReader();
+      readers.push(reader);
+      return reader;
+    }
+    /** Everything the stream has delivered once nothing more arrives. */
+    async function drained(reader: (typeof readers)[number]): Promise<string> {
+      let text = '';
+      for (;;) {
+        const next = await Promise.race([
+          reader.read(),
+          new Promise<null>(resolve => setTimeout(() => resolve(null), 50)),
+        ]);
+        if (next === null || next.done) return text;
+        text += new TextDecoder().decode(next.value);
+      }
+    }
+    const realWrite = SSEStreamingApi.prototype.writeSSE;
+    const write = spyOn(SSEStreamingApi.prototype, 'writeSSE');
+    try {
+      await drained(await open());
+      await adapter.emitLockEvent('web-test-abc', true);
+      // The reply ends exactly while the reconnecting stream writes its locked snapshot,
+      // so the unlock event is delivered to the stream being replaced.
+      let ended = false;
+      write.mockImplementation(async function (this: SSEStreamingApi, message) {
+        if (!ended && typeof message.data === 'string' && message.data.includes('"locked":true')) {
+          ended = true;
+          await adapter.emitLockEvent('web-test-abc', false);
+        }
+        return realWrite.call(this, message);
+      });
+      const replacement = await drained(await open());
+      expect(ended).toBe(true);
+      const locks = [...replacement.matchAll(/"locked":(true|false)/g)].map(m => m[1]);
+      expect(locks.at(-1)).toBe('false');
+    } finally {
+      write.mockRestore();
+      for (const reader of readers) await reader.cancel().catch(() => undefined);
+      for (const wait of waits) wait.reject(new Error('cancel'));
+      for (let i = 0; i < 40; i++) await Promise.resolve();
+      sleep.mockRestore();
+      transport.stop();
+    }
+  });
 });
 
 describe('SSE heartbeat lifecycle', () => {

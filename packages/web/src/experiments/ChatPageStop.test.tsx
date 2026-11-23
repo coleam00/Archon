@@ -25,6 +25,11 @@ class FakeEventSource {
   emit(event: object): void {
     this.onmessage?.({ data: JSON.stringify(event) });
   }
+  /** The browser gave up on the stream: no reconnect follows. */
+  closeForGood(): void {
+    this.readyState = FakeEventSource.CLOSED;
+    this.onerror?.();
+  }
 }
 
 const globals = {
@@ -119,7 +124,7 @@ function stopButton(): HTMLButtonElement | undefined {
   );
 }
 
-test('Stop stays while the server holds the turn, calls cancel, and goes when the turn ends', async () => {
+async function openChat(): Promise<void> {
   jest.useFakeTimers();
   router = createMemoryRouter([{ path: '/console/p/:projectId/chat', element: <ChatPage /> }], {
     initialEntries: ['/console/p/project-1/chat'],
@@ -127,6 +132,10 @@ test('Stop stays while the server holds the turn, calls cancel, and goes when th
   root = createRoot(container);
   await act(async () => root?.render(<RouterProvider router={router} />));
   expect(FakeEventSource.last?.url).toContain(`/api/stream/${CONV}`);
+}
+
+test('Stop stays while the server holds the turn, calls cancel, and goes when the turn ends', async () => {
+  await openChat();
 
   await act(async () => FakeEventSource.last?.emit({ type: 'conversation_lock', locked: true }));
   expect(stopButton()).toBeDefined();
@@ -140,5 +149,15 @@ test('Stop stays while the server holds the turn, calls cancel, and goes when th
   expect(requests).toContain(`POST /api/conversations/${CONV}/cancel`);
 
   await act(async () => FakeEventSource.last?.emit({ type: 'conversation_lock', locked: false }));
+  expect(stopButton()).toBeUndefined();
+});
+
+test('a stream that closes for good no longer holds the composer busy', async () => {
+  await openChat();
+  await act(async () => FakeEventSource.last?.emit({ type: 'conversation_lock', locked: true }));
+  expect(stopButton()).toBeDefined();
+
+  await act(async () => FakeEventSource.last?.closeForGood());
+  await act(async () => jest.advanceTimersByTime(310_000));
   expect(stopButton()).toBeUndefined();
 });
