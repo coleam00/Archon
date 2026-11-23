@@ -428,6 +428,7 @@ declare module 'archon:script' {
           readonly kind: 'issue' | 'pr';
           readonly url: string;
           readonly state: 'open' | 'closed';
+          readonly updatedAt?: string;
         }>;
       };
     };

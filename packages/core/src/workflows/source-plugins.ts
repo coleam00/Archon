@@ -451,7 +451,8 @@ export interface ObservedSourceReport {
   labels: number;
   /**
    * The forge reads the source made: a commit's checks, a pull request's reviews, a label's
-   * open items, or when a label was added to one issue, each.
+   * open items, or when a label was added to one issue, each. An add answered from what this
+   * process remembers of an unchanged issue is not a read.
    */
   reads: number;
   /** Receipts first recorded by this pass; a replay of an earlier pass is not one. */
@@ -487,6 +488,16 @@ export function createItemWaitObserver(input: {
   const { sources, store, forge } = input;
   if (sources.observing.length === 0) return undefined;
   const lastObserved = new Map<string, number>();
+  // The forge's last answer to when a label was added to an issue, with the issue's
+  // `updatedAt` from the list it was read for. A later label add bumps `updatedAt`, so an
+  // unchanged value means the answer is unchanged: replaying it rebuilds the same delivery,
+  // which admission records as a replay. Only this process remembers, so its first pass
+  // still reads every listed issue. Entries leave when their issue leaves the list or changes.
+  // Keyed by source, repository and label, then by issue number.
+  const labelAddedMemo = new Map<
+    string,
+    Map<number, { updatedAt: string; answer: Awaited<ReturnType<SourceForgeReader['labelAdded']>> }>
+  >();
   // Each unserved wait is logged once per process, not on every pass.
   const warned = new Set<string>();
   let running = false;
@@ -545,8 +556,11 @@ export function createItemWaitObserver(input: {
     const labelReads = new Set(
       source.labels.map(entry => JSON.stringify([entry.repo.host, entry.repo.path, entry.label]))
     );
-    const listed = new Set<string>();
+    // The issues each label list returned in this pass, by number, with their `updatedAt`.
+    const listed = new Map<string, Map<number, string | undefined>>();
     const read = new Set<string>();
+    const listKey = (host: string, path: string, label: string): string =>
+      JSON.stringify([source.sourceInstanceId, host, path, label]);
     const guarded: SourceForgeReader = {
       commitChecks: async request => {
         const key = JSON.stringify(['commit', request.remote, request.revision]);
@@ -573,24 +587,42 @@ export function createItemWaitObserver(input: {
           );
         read.add(JSON.stringify(['label', host, path, request.label]));
         const result = await forge.issuesWithLabel({ repo: { host, path }, label: request.label });
+        const key = listKey(host, path, request.label);
+        const issues = listed.get(key) ?? new Map<number, string | undefined>();
         for (const item of result.items)
-          if (item.kind === 'issue')
-            listed.add(JSON.stringify([host, path, request.label, item.ref.number]));
+          if (item.kind === 'issue') issues.set(item.ref.number, item.updatedAt);
+        listed.set(key, issues);
+        const memo = labelAddedMemo.get(key);
+        if (memo !== undefined)
+          for (const [number, entry] of memo)
+            if (issues.get(number) !== entry.updatedAt) memo.delete(number);
         return result;
       },
       labelAdded: async request => {
         const { host, path } = request.repo;
-        const issue = JSON.stringify([host, path, request.label, request.number]);
-        if (!listed.has(issue))
+        const key = listKey(host, path, request.label);
+        const issues = listed.get(key);
+        if (issues?.has(request.number) !== true)
           throw new Error(
             `Issue ${String(request.number)} of '${host}/${path}' was not listed with label '${request.label}' in this pass`
           );
+        // A remembered answer is not a forge read, so it does not count in `reads`.
+        const updatedAt = issues.get(request.number);
+        const remembered = labelAddedMemo.get(key)?.get(request.number);
+        if (updatedAt !== undefined && remembered?.updatedAt === updatedAt)
+          return remembered.answer;
         read.add(JSON.stringify(['label-added', host, path, request.label, request.number]));
-        return forge.labelAdded({
+        const answer = await forge.labelAdded({
           repo: { host, path },
           number: request.number,
           label: request.label,
         });
+        if (updatedAt !== undefined) {
+          const memo = labelAddedMemo.get(key) ?? new Map();
+          memo.set(request.number, { updatedAt, answer });
+          labelAddedMemo.set(key, memo);
+        }
+        return answer;
       },
     };
     const report = (

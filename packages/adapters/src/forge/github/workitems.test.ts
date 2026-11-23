@@ -535,6 +535,7 @@ test('listing by label returns open issues and pull requests across pages', asyn
     body: null,
     state: 'open',
     labels: labels.map(name => ({ name })),
+    updated_at: `2026-01-01T00:00:${String(number % 60).padStart(2, '0')}Z`,
     ...extra,
   });
   const pageOne = Array.from({ length: 100 }, (_, index) => row(index + 1, ['queued']));
@@ -563,6 +564,7 @@ test('listing by label returns open issues and pull requests across pages', asyn
     kind: 'pr',
     url: 'https://github.com/owner/repo/issues/101',
     state: 'open',
+    updatedAt: '2026-01-01T00:00:41Z',
   });
   expect(items.filter(item => item.kind === 'issue')).toHaveLength(100);
   expect(urls.map(url => url.searchParams.get('page'))).toEqual(['1', '2']);

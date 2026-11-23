@@ -706,8 +706,15 @@ async function labelFixture(
   return configPath;
 }
 
-/** A forge with open issues carrying the label, each with its latest label-added event id. */
-function labelForge(issues: Map<number, string>, failing = new Set<number>()) {
+/**
+ * A forge with open issues carrying the label, each with its latest label-added event id.
+ * An issue in `updated` is listed with that `updatedAt`; any other is listed without one.
+ */
+function labelForge(
+  issues: Map<number, string>,
+  failing = new Set<number>(),
+  updated = new Map<number, string>()
+) {
   const reads: string[] = [];
   return {
     ...forgeReader(),
@@ -722,6 +729,7 @@ function labelForge(issues: Map<number, string>, failing = new Set<number>()) {
           kind: 'issue' as const,
           url: `https://github.com/owner/repo/issues/${String(number)}`,
           state: 'open' as const,
+          ...(updated.has(number) ? { updatedAt: updated.get(number) } : {}),
         })),
       };
     },
@@ -897,6 +905,114 @@ describe('observing label bindings', () => {
     expect(store.receipts.has('observe:label-seen:binding-2:github.com/owner/repo:urgent')).toBe(
       true
     );
+  });
+
+  test('a pass reads only the issues whose updatedAt changed since the last pass', async () => {
+    const store = receiptStore();
+    const sources = await loadWebhookSourcePlugins(await labelFixture(), store.dependencies);
+    const issues = new Map([
+      [5, 'event-1'],
+      [6, 'event-2'],
+      [7, 'event-3'],
+    ]);
+    const updated = new Map([
+      [5, '2026-01-01T00:00:01Z'],
+      [6, '2026-01-01T00:00:02Z'],
+      [7, '2026-01-01T00:00:03Z'],
+    ]);
+    const forge = labelForge(issues, new Set(), updated);
+    const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
+    let now = Date.parse('2026-01-01T00:00:00.000Z');
+    const pass = async () => {
+      forge.reads.length = 0;
+      const [report] = (await observer?.pass(new Date(now))) ?? [];
+      now += 15_000;
+      return { report, reads: [...forge.reads] };
+    };
+
+    expect((await pass()).reads).toEqual(['list factory', 'added 5', 'added 6', 'added 7']);
+
+    // Nothing changed: only the list is read.
+    const unchanged = await pass();
+    expect(unchanged.reads).toEqual(['list factory']);
+    expect(unchanged.report).toMatchObject({ reads: 1, receipts: [] });
+
+    // Issue 6 is relabelled and issue 8 labelled while the host sleeps for an hour.
+    issues.set(6, 'event-4');
+    updated.set(6, '2026-01-01T00:30:00Z');
+    issues.set(8, 'event-5');
+    updated.set(8, '2026-01-01T00:40:00Z');
+    now += 3_600_000;
+    const woke = await pass();
+    expect(woke.reads).toEqual(['list factory', 'added 6', 'added 8']);
+    expect(woke.report?.receipts).toEqual([
+      'observe:label:6:event-4:binding-1',
+      'observe:label:8:event-5:binding-1',
+    ]);
+    expect(await pass()).toMatchObject({ reads: ['list factory'], report: { receipts: [] } });
+  });
+
+  test('an issue listed without updatedAt is read on every pass', async () => {
+    const sources = await loadWebhookSourcePlugins(
+      await labelFixture(),
+      receiptStore().dependencies
+    );
+    const forge = labelForge(new Map([[5, 'event-1']]));
+    const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
+    const start = Date.parse('2026-01-01T00:00:00.000Z');
+    await observer?.pass(new Date(start));
+    await observer?.pass(new Date(start + 15_000));
+    expect(forge.reads).toEqual(['list factory', 'added 5', 'list factory', 'added 5']);
+  });
+
+  test('a remembered add whose admission failed starts on the next unchanged pass', async () => {
+    let userKnown = true;
+    const store = receiptStore(() => userKnown);
+    const sources = await loadWebhookSourcePlugins(await labelFixture(), store.dependencies);
+    const issues = new Map([[5, 'event-1']]);
+    const updated = new Map([[5, '2026-01-01T00:00:01Z']]);
+    const forge = labelForge(issues, new Set(), updated);
+    const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
+    const start = Date.parse('2026-01-01T00:00:00.000Z');
+    await observer?.pass(new Date(start));
+
+    issues.set(6, 'event-2');
+    updated.set(6, '2026-01-01T00:00:10Z');
+    userKnown = false;
+    const [failed] = (await observer?.pass(new Date(start + 15_000))) ?? [];
+    expect(failed?.error).toContain('unknown run-as user');
+
+    userKnown = true;
+    forge.reads.length = 0;
+    const [retried] = (await observer?.pass(new Date(start + 30_000))) ?? [];
+    expect(forge.reads).toEqual(['list factory']);
+    expect(retried?.receipts).toEqual(['observe:label:6:event-2:binding-1']);
+  });
+
+  test('a restarted observer reads each issue once, and an add already recorded starts nothing', async () => {
+    const store = receiptStore();
+    const issues = new Map([[5, 'event-1']]);
+    const updated = new Map([[5, '2026-01-01T00:00:01Z']]);
+    const observer = async () =>
+      createItemWaitObserver({
+        sources: await loadWebhookSourcePlugins(await labelFixture(), store.dependencies),
+        store: waitStore([]),
+        forge,
+      });
+    const forge = labelForge(issues, new Set(), updated);
+    const start = Date.parse('2026-01-01T00:00:00.000Z');
+    const first = await observer();
+    await first?.pass(new Date(start));
+    issues.set(6, 'event-2');
+    updated.set(6, '2026-01-01T00:00:10Z');
+    expect((await first?.pass(new Date(start + 15_000)))?.[0]?.receipts).toEqual([
+      'observe:label:6:event-2:binding-1',
+    ]);
+
+    forge.reads.length = 0;
+    const [restarted] = (await (await observer())?.pass(new Date(start + 30_000))) ?? [];
+    expect(forge.reads).toEqual(['list factory', 'added 5', 'added 6']);
+    expect(restarted?.receipts).toEqual([]);
   });
 
   test('a source with only label bindings it cannot observe is reported, and reads nothing', async () => {
