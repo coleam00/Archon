@@ -23,7 +23,6 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { spawn } from 'node:child_process';
-import { appendFileSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
@@ -151,10 +150,19 @@ async function installPlugins(marketplaceFile: string): Promise<void> {
     const userHook = hooks.find(hook => hook.pluginId === null);
     if (!userHook) throw new Error('the user hook is not listed');
     userHookKey = userHook.key;
-    const trust = hooks.map(
-      hook => `[hooks.state.${toml(hook.key)}]\ntrusted_hash = ${toml(hook.currentHash)}\n`
-    );
-    appendFileSync(join(home, 'config.toml'), `\n${trust.join('\n')}`);
+    // Through Codex's own config write: a plugin hook's hash is an opaque value Codex
+    // splits into its declaration and content approvals when it persists it.
+    await connection.request('config/batchWrite', {
+      edits: [
+        {
+          keyPath: 'hooks.state',
+          value: Object.fromEntries(
+            hooks.map(hook => [hook.key, { trusted_hash: hook.currentHash }])
+          ),
+          mergeStrategy: 'upsert',
+        },
+      ],
+    });
   } finally {
     await connection.shutdown(3000);
   }
@@ -289,15 +297,20 @@ afterEach(async () => {
 /**
  * Codex keys the user hook's trust by the path of the hooks.json that holds it, so a copy
  * of the template trusts its own. The copy sits beside the template, so its key is the
- * template's with the directory name swapped, in whatever path form Codex wrote.
+ * template's with the directory name swapped. Codex wrote the template's trust in its own
+ * TOML quoting, which need not match JSON escaping (a Windows path's backslashes), so the
+ * template's entry is read through a parser and the copy's is appended as its own table.
  */
 function trustCopiedUserHook(config: string, copy: string): string {
   const at = userHookKey.lastIndexOf(TEMPLATE_DIR);
-  if (at < 0 || !config.includes(toml(userHookKey))) {
+  const state = (Bun.TOML.parse(config) as { hooks?: { state?: Record<string, unknown> } }).hooks
+    ?.state?.[userHookKey] as { trusted_hash?: unknown } | undefined;
+  const hash = state?.trusted_hash;
+  if (at < 0 || typeof hash !== 'string') {
     throw new Error(`Cannot find the template's user hook trust key ${userHookKey}`);
   }
   const copyKey = `${userHookKey.slice(0, at)}${basename(copy)}${userHookKey.slice(at + TEMPLATE_DIR.length)}`;
-  return config.replace(toml(userHookKey), toml(copyKey));
+  return `${config}\n[hooks.state.${toml(copyKey)}]\ntrusted_hash = ${toml(hash)}\n`;
 }
 
 /** A run `runRequest` started that has not finished. */

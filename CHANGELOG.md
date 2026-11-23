@@ -69,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Bun is 1.4.5 across development, CI and Docker images. (#6006)
+- The bundled Codex is 0.171.0, so a Codex node can select `gpt-6.2-sol` on a ChatGPT login. A model Codex reports as not found (`modelNotFound`) now fails as `misconfigured` and is not retried. (#6123)
 - A start without `--branch` names its worktree and branch from its run id (`archon/task-<workflow>-<run id>`, shortened with a digest past 50 characters) in place of the start time. Two starts of one workflow in the same millisecond used to derive one name, and one of them failed at `git worktree add` (#5649).
 - `assistants.pi.maxConcurrent` is enforced only by provider admission, which re-reads it from `~/.archon/config.yaml` at every attempt, so a change takes effect without a restart. The Pi provider's own in-process semaphore, which kept the first value a process saw, is removed (#5726).
 - When worktree setup fails and the path is not provably this start's own, the error no longer says to remove it. A path that carries another start's setup lock is reported as that start's, with its setup attempt id; before, the message told the operator to remove what could be a running start's checkout (#5649).

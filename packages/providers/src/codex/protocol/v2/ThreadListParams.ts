@@ -7,6 +7,14 @@ import type { ThreadSourceKind } from "./ThreadSourceKind";
 
 export type ThreadListParams = {
 /**
+ * Include persistent threads attached to a parent when searching by title.
+ */
+includeAttachedThreads?: boolean,
+/**
+ * Show local history visible to the current ChatGPT account. Defaults to false.
+ */
+currentAccountOnly?: boolean,
+/**
  * Opaque pagination cursor returned by a previous call.
  */
 cursor?: string | null,
@@ -14,6 +22,12 @@ cursor?: string | null,
  * Optional page size; defaults to a reasonable server-side value.
  */
 limit?: number | null,
+/**
+ * Restrict results to up to 100 thread IDs before pagination. Omit or send null
+ * for unrestricted results. An empty list matches nothing. Exclusions still apply.
+ * Repeat the same IDs on each page. The local store uses indexed metadata for this filter.
+ */
+includedThreadIds?: Array<string> | null,
 /**
  * Thread IDs to exclude before applying the result limit. Up to 100
  * entries; invalid IDs or a larger list are rejected, never truncated.
@@ -65,9 +79,8 @@ projectId?: string | null,
  */
 cwd?: string | Array<string> | null,
 /**
- * If true, return from the state DB without scanning JSONL rollouts to
- * repair thread metadata. Omitted or false preserves scan-and-repair
- * behavior.
+ * If true, the local store returns indexed metadata without scanning JSONL rollouts
+ * for repairs. Requests with `includedThreadIds` always use indexed metadata.
  */
 useStateDbOnly?: boolean,
 /**
@@ -82,4 +95,10 @@ parentThreadId?: string | null,
  * Optional ancestor thread filter. Returns spawned descendants at any depth, excluding the
  * ancestor itself. Mutually exclusive with `parentThreadId`.
  */
-ancestorThreadId?: string | null, };
+ancestorThreadId?: string | null,
+/**
+ * Return only persistent threads attached to this thread, including empty threads.
+ * Mutually exclusive with parentThreadId and ancestorThreadId.
+ * Omitting this filter keeps attached threads hidden from ordinary listings.
+ */
+attachedToThreadId?: string | null, };
