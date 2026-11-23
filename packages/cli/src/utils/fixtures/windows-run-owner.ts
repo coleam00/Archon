@@ -146,10 +146,11 @@ if (mode === 'relay' || mode === 'relay-approve') {
         if (!existsSync(join(dir, 'exit'))) return;
         clearInterval(timer);
         if (mode === 'orphan-exit') process.exit(0);
-        // `spawnAdmitted` reads only the request's status and checkout.
+        // `spawnAdmitted` reads only the request's status, its checkout, and the user the
+        // run started for, which this run has none of.
         const admitted = {
           status: 'admitted',
-          launch: { execution: { cwd: dir } },
+          launch: { execution: { cwd: dir }, run: {} },
         } as unknown as ResourceStartRequestInspection;
         // The request id carries `<dir>`'s name so the spec's cleanup can find the executor.
         void spawnAdmitted(
