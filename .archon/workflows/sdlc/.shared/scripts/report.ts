@@ -23,8 +23,6 @@ import { nullableJson, typedOutputs } from '../inputs.ts';
 import { FAILED_SUMMARY, failedPublication } from '../report.ts';
 
 const flag = input('flag');
-if (flag !== 'ready' && flag !== 'delivered') throw new Error(`report: flag must be ready or delivered, not "${flag}"`);
-
 const outcome = nullableJson(input('outcome'));
 emit(
   outcome ?? {
