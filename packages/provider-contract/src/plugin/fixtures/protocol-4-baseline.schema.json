@@ -15,6 +15,7 @@
             "rate_limited",
             "overloaded",
             "transient",
+            "schema_unmet",
             "unknown"
           ]
         },
@@ -59,6 +60,48 @@
         },
         "cost": {
           "type": "number"
+        },
+        "calls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "responseId": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "input": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "output": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "cacheRead": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "cacheWrite": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": ["input", "output"]
+          }
+        },
+        "callsPartial": {
+          "type": "boolean",
+          "const": true
         }
       },
       "required": ["input", "output"]
@@ -125,6 +168,20 @@
         }
       }
     },
+    "ProviderSession": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "session"
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["type", "sessionId"]
+    },
     "ProviderSettled": {
       "type": "object",
       "properties": {
@@ -146,6 +203,9 @@
           "type": "boolean"
         },
         "sessionFork": {
+          "type": "boolean"
+        },
+        "turnMessages": {
           "type": "boolean"
         },
         "mcp": {
@@ -198,6 +258,10 @@
               "const": false
             }
           ]
+        },
+        "structuredOutputCorrection": {
+          "type": "string",
+          "enum": ["fresh-session", "same-session"]
         },
         "requiresAllPropertiesRequired": {
           "type": "boolean"
@@ -528,6 +592,9 @@
           "$ref": "#/$defs/ProviderEvent"
         },
         {
+          "$ref": "#/$defs/ProviderSession"
+        },
+        {
           "type": "object",
           "properties": {
             "sessionId": {
@@ -830,7 +897,7 @@
       "properties": {
         "protocol": {
           "type": "number",
-          "const": 3
+          "const": 4
         },
         "id": {
           "type": "string",
@@ -1223,7 +1290,7 @@
                   "properties": {
                     "protocol": {
                       "type": "number",
-                      "const": 3
+                      "const": 4
                     }
                   },
                   "required": ["protocol"]
@@ -1357,6 +1424,20 @@
         }
       },
       "required": ["sessionId"]
+    },
+    "ProviderTurnMessageNotification": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["sessionId", "text"]
     },
     "ProviderChunkNotification": {
       "type": "object",

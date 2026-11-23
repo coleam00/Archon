@@ -467,7 +467,7 @@ export interface BridgeNotifier {
  *
  * Behavior:
  *  - subscribe before calling prompt, unsubscribe in finally
- *  - yield mapped events in order
+ *  - yield the session id first, then mapped events in order
  *  - complete on successful `session.prompt()` resolution
  *  - throw on `session.prompt()` rejection, listener errors, or attributed extension errors
  *  - forward `abortSignal` to `session.abort()` fire-and-forget, and throw on abort
@@ -483,6 +483,11 @@ export async function* bridgeSession(
   extensionTurn?: PiExtensionTurn
 ): AsyncGenerator<MessageChunk> {
   const queue = new AsyncQueue<BridgeQueueItem>();
+  // The session exists before the prompt runs, so it is named first, as the result will name
+  // it. Queued rather than yielded so an aborted caller still gets no chunk.
+  if (session.sessionId) {
+    queue.push({ kind: 'chunk', chunk: { type: 'session', sessionId: session.sessionId } });
+  }
 
   type TextChunk = Extract<MessageChunk, { type: 'agent_message_chunk' | 'agent_thought_chunk' }>;
   let pending: TextChunk | undefined;

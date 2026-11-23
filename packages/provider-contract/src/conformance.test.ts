@@ -37,6 +37,7 @@ const conforming: ProviderFailureCase = {
 const settlingTurn: ProviderTurnCase = {
   name: 'background work',
   run: turn(
+    { type: 'session', sessionId: 'session-1' },
     { type: 'result', sessionId: 'session-1' },
     { type: 'state_update', state: 'running' },
     { type: 'result', sessionId: 'session-1' },
@@ -342,6 +343,34 @@ describe('event vocabulary conformance', () => {
         { type: 'settled' },
       ],
       'tool turn: rule 4, subtask t is still open at settled',
+    ],
+    [
+      'a session announced twice',
+      [
+        { type: 'session', sessionId: 'session-1' },
+        { type: 'session', sessionId: 'session-1' },
+        { type: 'result', sessionId: 'session-1' },
+        { type: 'settled' },
+      ],
+      'tool turn: rule 5, session is announced twice',
+    ],
+    [
+      'a session announced after a result',
+      [
+        { type: 'result', sessionId: 'session-1' },
+        { type: 'session', sessionId: 'session-1' },
+        { type: 'settled' },
+      ],
+      'tool turn: rule 5, session is announced after a result',
+    ],
+    [
+      'a result that names another session than the announced one',
+      [
+        { type: 'session', sessionId: 'session-1' },
+        { type: 'result', sessionId: 'session-2' },
+        { type: 'settled' },
+      ],
+      'tool turn: rule 5, a result names session session-2, not the announced session-1',
     ],
     [
       'a subtask that runs again after it completed',
@@ -708,6 +737,27 @@ describe('session fork conformance', () => {
         forkTurn: { ...forkTurn, run: turn({ type: 'result', ...result }, { type: 'settled' }) },
       })
     ).toEqual([violation]);
+  });
+
+  test('a fork whose session chunk names the source is a violation', async () => {
+    expect(
+      await runProviderConformance({
+        capabilities: forking,
+        failureCases: [conforming],
+        turns: [settlingTurn],
+        forkTurn: {
+          ...forkTurn,
+          run: turn(
+            { type: 'session', sessionId: 'session-1' },
+            { type: 'result', sessionId: 'fork-1', resumed: true },
+            { type: 'settled' }
+          ),
+        },
+      })
+    ).toEqual([
+      'fork turn: rule 5, a result names session fork-1, not the announced session-1',
+      'fork turn: the session chunk names the source session, not a fork',
+    ]);
   });
 
   test('a provider that declares sessionFork must supply a fork turn', async () => {
