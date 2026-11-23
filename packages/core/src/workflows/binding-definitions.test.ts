@@ -66,15 +66,18 @@ function privateProject(): { checkout: string; reads: () => string[] } {
   git(checkout, 'push', '-q', 'origin', 'dev');
   const record = join(root, 'remote-reads');
   writeFileSync(record, '');
+  // git runs uploadpack through sh, which strips the backslashes from a Windows path;
+  // Git for Windows' sh accepts D:/... instead.
+  const shPath = (path: string): string => path.replaceAll('\\', '/');
   const uploadPack = join(root, 'upload-pack');
   writeFileSync(
     uploadPack,
-    `#!/bin/sh\nprintf 'token=%s\\n' "$GH_TOKEN" >> '${record}'\n` +
+    `#!/bin/sh\nprintf 'token=%s\\n' "$GH_TOKEN" >> '${shPath(record)}'\n` +
       `[ "$GH_TOKEN" = ghu_runas ] || { echo 'repository not found' >&2; exit 1; }\n` +
       'exec git-upload-pack "$@"\n'
   );
   chmodSync(uploadPack, 0o755);
-  git(checkout, 'config', 'remote.origin.uploadpack', uploadPack);
+  git(checkout, 'config', 'remote.origin.uploadpack', shPath(uploadPack));
   return { checkout, reads: () => readFileSync(record, 'utf8').split('\n').filter(Boolean) };
 }
 
