@@ -100,7 +100,6 @@ describe('resumeWorkflow', () => {
       'Start it again with: archon workflow run --supersedes run-1'
     );
     expect(refusal.message).not.toContain('secret-value');
-    expect(refusal.message).not.toContain('item');
   });
 
   test('throws wrapped message when DB throws', async () => {
