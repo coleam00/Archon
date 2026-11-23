@@ -106,7 +106,7 @@ export type ItemHeldBehind = z.infer<typeof itemHeldBehindSchema>;
 
 export const itemRunSchema = z.object({
   id: z.string(),
-  /** The name the run started under: `owner/plugin:<name>` for an installed pack's workflow. */
+  /** The name the run started under: `owner/plugin:<entrypoint>` for an installed pack's workflow. */
   workflow: z.string(),
   /** Match a run of your own pack by `pack.workflow`; null outside a pack or on older runs. */
   pack: runPackSchema.nullable(),

@@ -3,11 +3,12 @@
  * contract: the workflow's own inputs, or its pack's settings checked against their types.
  */
 import { describe, expect, test } from 'bun:test';
-import type { WorkflowPack } from '@archon/workflows/schemas/pack-settings';
+import type { WorkflowPackMember } from '@archon/workflows/schemas/pack-settings';
 import { resolveBindingInputs, startedWorkflowInputProblems } from './binding-workflow';
 
-const pack: WorkflowPack = {
+const pack: WorkflowPackMember = {
   key: 'alpha',
+  workflow: 'packed',
   source: 'project',
   settings: { strict: { type: 'bool' }, forge: { type: 'enum', values: ['gh', 'glab'] } },
 };

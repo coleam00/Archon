@@ -321,7 +321,12 @@ console.log(JSON.stringify({ operationId: input.operationId, ok: true, result: {
         },
         {
           name: 'deliver',
-          pack: { key: 'factory', source: 'project', forge: { operations: ['pr.view'] } },
+          pack: {
+            key: 'factory',
+            workflow: 'deliver',
+            source: 'project',
+            forge: { operations: ['pr.view'] },
+          },
         },
         {
           config: {

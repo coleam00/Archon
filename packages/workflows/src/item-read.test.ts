@@ -454,23 +454,36 @@ describe('reading an item', () => {
     });
   });
 
-  test('a run names its workflow within its pack the same for a project and an installed copy', async () => {
+  test('a run reads the pack and in-pack name its dispatch recorded, not its public name', async () => {
     const dispatched = (pack: string, source: string) => ({
-      [RUN_DISPATCH_METADATA_KEY]: { base_branch: 'dev', pack, source },
+      [RUN_DISPATCH_METADATA_KEY]: {
+        base_branch: 'dev',
+        pack,
+        pack_workflow: 'stage-check',
+        source,
+      },
     });
     const project = run('project', {
       workflow_name: 'stage-check',
       metadata: dispatched('archon-software-factory', 'project'),
     });
+    // An entrypoint may publish the workflow under another name than its `name:`.
     const installed = run('installed', {
-      workflow_name: 'acme/archon-software-factory:stage-check',
+      workflow_name: 'acme/archon-software-factory:check',
       metadata: dispatched('acme.archon-software-factory', 'installed'),
+    });
+    // Recorded by an older build: a pack but no in-pack name, which is not guessed.
+    const older = run('older', {
+      workflow_name: 'stage-check',
+      metadata: {
+        [RUN_DISPATCH_METADATA_KEY]: { base_branch: 'dev', pack: 'archon-software-factory' },
+      },
     });
     const packed: ItemReadSource = {
       ...source,
       store: {
         ...source.store,
-        getItemRuns: async () => ({ item, runs: [project, installed], descendantIds: [] }),
+        getItemRuns: async () => ({ item, runs: [project, installed, older], descendantIds: [] }),
       },
     };
     const read = await readItem(packed, item.projectKey, item.key);
@@ -480,9 +493,10 @@ describe('reading an item', () => {
         pack: { key: 'archon-software-factory', workflow: 'stage-check' },
       },
       {
-        workflow: 'acme/archon-software-factory:stage-check',
+        workflow: 'acme/archon-software-factory:check',
         pack: { key: 'acme.archon-software-factory', workflow: 'stage-check' },
       },
+      { workflow: 'stage-check', pack: null },
     ]);
   });
 

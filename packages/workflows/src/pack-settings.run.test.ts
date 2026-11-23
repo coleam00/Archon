@@ -681,7 +681,11 @@ nodes:
 
     expect(result.success).toBe(true);
     const child = runNamed(store, 'beta-child');
-    expect(dispatchOf(child)).toMatchObject({ pack: 'beta', source: 'project' });
+    expect(dispatchOf(child)).toMatchObject({
+      pack: 'beta',
+      pack_workflow: 'beta-child',
+      source: 'project',
+    });
     expect(nodeOutput(store, child?.id, 'emit')).toContain('child-tone=beta-project');
     expect(dispatchOf(runNamed(store, 'alpha-parent'))?.pack).toBe('alpha');
   });

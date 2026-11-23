@@ -386,6 +386,7 @@ describe('discovery carries the pack', () => {
     const byName = new Map(workflows.map(w => [w.workflow.name, w.workflow]));
     expect(byName.get('packed')?.pack).toEqual({
       key: 'alpha',
+      workflow: 'packed',
       source: 'project',
       settings: { tone: { type: 'string', default: 'calm' } },
     });

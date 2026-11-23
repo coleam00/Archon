@@ -1724,16 +1724,29 @@ ended link stays with `ended` set, and the engine acts on no link. Like
 `state`, it runs on the host: a container-isolated node cannot call it.
 
 Each run's `workflow` is the name it was started under. For a workflow in a pack in the
-project that is the bare name (`stage-check`); for the same pack installed with
-`archon plugin add` it is `owner/plugin:stage-check`. `pack` holds the run's pack `key` (the
-folder name for a project pack, `owner.plugin` for an installed one) and the `workflow`'s
-name within that pack, which is the same for both copies. It is `null` for a workflow
-outside a pack and for runs recorded before the engine kept a run's pack. To find the runs
-of a workflow of your own pack, compare `pack.workflow` rather than splitting `workflow`:
+project that is its `name:` (`stage-check`); for the same pack installed with
+`archon plugin add` it is `owner/plugin:<entrypoint>`, where the entrypoint is the name the
+pack's manifest publishes, which may differ from `name:`. `pack` holds the run's pack `key`
+(the folder name for a project pack, `owner.plugin` for an installed one) and `workflow`,
+the workflow's `name:` within that pack, which is the same for both copies. It is `null`
+for a workflow outside a pack and for runs recorded before the engine kept a run's pack and
+in-pack name.
+
+`pack.workflow` is local to its pack: another pack's runs on the same item may share the
+name. To find the runs of a workflow of your own pack, compare both values, taking your
+pack's `key` from your own run's row rather than writing it in, since it differs between
+the project copy and an installed one:
 
 ```ts
-const checks = (item()?.runs ?? []).filter(run => run.pack?.workflow === 'stage-check');
+const runs = item()?.runs ?? [];
+const own = runs.find(run => run.id === runId())?.pack;
+const checks = runs.filter(
+  run => run.pack?.key === own?.key && run.pack?.workflow === 'stage-check'
+);
 ```
+
+A `workflow:` child's own run is not on the item, so a child finds no row there; pass it
+what it needs from its parent.
 
 ### Reading an earlier run's result
 

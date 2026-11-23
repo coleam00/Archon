@@ -352,7 +352,7 @@ function buildWorkflowDefinition(
   pack: WorkflowPack | undefined
 ): WorkflowDefinition {
   return {
-    ...(pack !== undefined ? { pack } : {}),
+    ...(pack !== undefined ? { pack: { ...pack, workflow: header.name } } : {}),
     name: header.name,
     description: header.description,
     provider: fields.provider,

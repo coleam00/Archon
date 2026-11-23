@@ -179,14 +179,15 @@ async function resolveRunPacks(
   isContinuation: boolean,
   recordedDispatch: RunDispatchMetadata | undefined
 ): Promise<{
-  metadata: Pick<RunDispatchMetadata, 'pack' | 'inputs_resolved'>;
+  metadata: Pick<RunDispatchMetadata, 'pack' | 'pack_workflow' | 'inputs_resolved'>;
   startInputs: Record<string, JsonValue> | undefined;
 }> {
   if (isContinuation) {
-    const { pack, inputs_resolved } = recordedDispatch ?? {};
+    const { pack, pack_workflow, inputs_resolved } = recordedDispatch ?? {};
     return {
       metadata: {
         ...(pack !== undefined ? { pack } : {}),
+        ...(pack_workflow !== undefined ? { pack_workflow } : {}),
         ...(inputs_resolved !== undefined ? { inputs_resolved } : {}),
       },
       startInputs: undefined,
@@ -200,7 +201,9 @@ async function resolveRunPacks(
   const { inputs } = await resolveRunStartInputs(cwd, workflow, supplied);
   return {
     metadata: {
-      ...(workflow.pack !== undefined ? { pack: workflow.pack.key } : {}),
+      ...(workflow.pack !== undefined
+        ? { pack: workflow.pack.key, pack_workflow: workflow.pack.workflow }
+        : {}),
       inputs_resolved: true,
     },
     startInputs: inputs,

@@ -10,7 +10,7 @@ import {
   type ForgeCheck,
   type RunForgeAccessSite,
 } from './run-forge-access';
-import type { WorkflowPack } from './schemas/pack-settings';
+import type { WorkflowPackMember } from './schemas/pack-settings';
 
 const trackTempRoot = trackTempRoots();
 
@@ -25,9 +25,14 @@ function checkout(remotes: Record<string, string>): string {
 
 const noGithub = { store: { getCodebase: async () => null } };
 
-const declaring: { name: string; pack: WorkflowPack } = {
+const declaring: { name: string; pack: WorkflowPackMember } = {
   name: 'deliver',
-  pack: { key: 'factory', source: 'project', forge: { operations: ['pr.view'] } },
+  pack: {
+    key: 'factory',
+    workflow: 'deliver',
+    source: 'project',
+    forge: { operations: ['pr.view'] },
+  },
 };
 const prepared = { config: { envVars: {} }, executionUserId: undefined };
 
@@ -69,7 +74,7 @@ afterEach(() => {
 describe('assertRunForgeAccess', () => {
   test('a pack that declares no forge needs is never checked', async () => {
     const check = mock<ForgeCheck>(async () => undefined);
-    const noForge = { name: 'w', pack: { key: 'p', source: 'project' } } as const;
+    const noForge = { name: 'w', pack: { key: 'p', workflow: 'w', source: 'project' } } as const;
     await assertRunForgeAccess(noGithub, noForge, prepared, site('/nonexistent'), check);
     await assertRunForgeAccess(noGithub, { name: 'w' }, prepared, site('/nonexistent'), check);
     expect(check).not.toHaveBeenCalled();
@@ -181,7 +186,7 @@ describe('assertRunForgeAccess', () => {
   });
 
   describe('a pack that names its repository by inputs', () => {
-    const naming: { name: string; pack: WorkflowPack } = {
+    const naming: { name: string; pack: WorkflowPackMember } = {
       name: 'merge-queue',
       pack: {
         ...declaring.pack,

@@ -429,6 +429,12 @@ export const runDispatchMetadataSchema = z.object({
    */
   pack: z.string().min(1).optional(),
   /**
+   * The workflow's name within that pack: its authored `name:`, the same for a project copy
+   * and an installed copy (`WorkflowPackMember.workflow`). Recorded with `pack`; absent on
+   * rows from older builds.
+   */
+  pack_workflow: z.string().min(1).optional(),
+  /**
    * Written by every fresh run: the row's `inputs` are the run's complete, fixed `$INPUTS`
    * (pack settings, declared defaults, supplied values), so a resume layers no declared
    * defaults over them. Absent on rows from older builds.
