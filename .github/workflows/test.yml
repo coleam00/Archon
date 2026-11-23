@@ -584,9 +584,19 @@ jobs:
     # getLiveRunOwningEnv (cleanup's lock query) only executes here, against a
     # real server: an untyped parameter compared against text and UUID columns
     # in one OR parses fine on SQLite and would reach every Postgres install.
+    #
+    # These tests assert behaviour across stores, never durability, so the job keeps
+    # their writes off the runner's root disk: temp (the file store's root) goes to
+    # tmpfs through TMPDIR, and the server's data directory is a tmpfs mount. The
+    # durable fsyncs stalled single cheap tests for 1-5 s on a shared runner: in the
+    # attempt that timed out (2026-11-22) the median conformance test took 10 ms and
+    # eleven took over 1 s. Evidence on coleam00/Archon issue 6086. The mount path is
+    # PGDATA in the postgres 17 image; from 18 the image keeps data elsewhere.
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      TMPDIR: /dev/shm
     services:
       postgres:
         image: postgres:17-alpine
@@ -595,6 +605,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
+          --tmpfs /var/lib/postgresql/data
           --health-cmd pg_isready
           --health-interval 5s
           --health-timeout 5s
