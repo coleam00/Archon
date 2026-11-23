@@ -366,6 +366,7 @@ async function readDeclaredMcpStatuses(
 export async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   const { connection } = request;
   const threadId = await openThread(request);
+  yield { type: 'session', sessionId: threadId };
   const declared = Object.keys(declaredServers(request.threadParams.config ?? {}));
   yield* requireMcpConnections(
     declared,

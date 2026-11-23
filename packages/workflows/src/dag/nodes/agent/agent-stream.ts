@@ -39,6 +39,7 @@ import {
   type StructuredOutputPass,
   providerReportedFailure,
   assertResultBeforeSettlement,
+  isProviderEvent,
 } from '../../ai-turn';
 
 /** What every stream pass of one agent attempt reads and never changes. */
@@ -191,7 +192,7 @@ export async function runStreamPass(
       const tickNow = Date.now();
 
       if (msg.type === 'result') recordResult(pc, state, pass, msg);
-      else if (msg.type !== 'settled') await providerEvents.handle(msg);
+      else if (isProviderEvent(msg)) await providerEvents.handle(msg);
       const stopped = await shouldStopStream();
       if (msg.type === 'result' && (!stopped || state.cutOff)) throwOnResultError(pc, msg);
       if (stopped) break;

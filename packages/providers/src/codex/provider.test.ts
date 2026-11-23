@@ -84,7 +84,10 @@ async function run(
   return chunks;
 }
 
-/** The chunks before `settled`, which has its own checks. */
+/**
+ * The chunks between the opening `session` and `settled`, which have their own checks. A
+ * turn that fails before it settles keeps its whole stream.
+ */
 async function streamOf(
   script: FakeTurnScript,
   options?: SendQueryOptions
@@ -94,8 +97,9 @@ async function streamOf(
     expect(chunks.some(chunk => chunk.type === 'settled')).toBe(false);
     return chunks;
   }
+  expect(chunks[0]).toEqual({ type: 'session', sessionId: THREAD_ID });
   expect(chunks.at(-1)).toEqual({ type: 'settled' });
-  return chunks.slice(0, -1);
+  return chunks.slice(1, -1);
 }
 
 type CollabItem = Extract<ThreadItem, { type: 'collabAgentToolCall' }>;
@@ -215,7 +219,7 @@ describe('CodexProvider', () => {
           for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
         };
         await expect(collect()).rejects.toThrow('cleanup refused');
-        expect(chunks.map(chunk => chunk.type)).toEqual(['result']);
+        expect(chunks.map(chunk => chunk.type)).toEqual(['session', 'result']);
         expect(mockLogger.error).toHaveBeenCalledWith(
           expect.objectContaining({
             err: expect.objectContaining({ message: expect.stringContaining('cleanup refused') }),
@@ -814,7 +818,13 @@ describe('CodexProvider', () => {
           'started',
           status === 'declined' ? 'stopped' : status,
         ]);
-        expect(chunks.map(c => c.type)).toEqual(['subtask', 'subtask', 'result', 'settled']);
+        expect(chunks.map(c => c.type)).toEqual([
+          'session',
+          'subtask',
+          'subtask',
+          'result',
+          'settled',
+        ]);
         expect(chunks.at(-1)).toEqual({ type: 'settled' });
       }
     );
@@ -833,8 +843,8 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
         if (chunk.type === 'result' && chunk.failure) break;
       }
-      expect(chunks.map(c => c.type)).toEqual(['subtask', 'subtask', 'result']);
-      expect(chunks[1]).toMatchObject({ status: 'completed' });
+      expect(chunks.map(c => c.type)).toEqual(['session', 'subtask', 'subtask', 'result']);
+      expect(chunks[2]).toMatchObject({ status: 'completed' });
       expect(resultOf(chunks).failure?.evidence).toContain('parent failed');
       expect(server.processes[0].stdinEnded).toBe(true);
     });
@@ -859,7 +869,7 @@ describe('CodexProvider', () => {
         }
       };
       await expect(consume()).rejects.toThrow('Query aborted');
-      expect(chunks.map(c => c.type)).toEqual(['subtask', 'result']);
+      expect(chunks.map(c => c.type)).toEqual(['session', 'subtask', 'result']);
       expect(server.processes[0].stdinEnded).toBe(true);
     });
 
@@ -869,7 +879,7 @@ describe('CodexProvider', () => {
       const server = createFakeAppServer(() => ({ exitsAfterStdinCloseMs: 100 }));
       const chunks = await run(new CodexProvider(server, 20));
       expect(server.processes[0].signals).toEqual([]);
-      expect(chunks.map(c => c.type)).toEqual(['result', 'settled']);
+      expect(chunks.map(c => c.type)).toEqual(['session', 'result', 'settled']);
     });
 
     test('an abnormal process exit after the final notification is not a settle', async () => {
@@ -878,7 +888,7 @@ describe('CodexProvider', () => {
         exitCode: 137,
       });
       const chunks = await run(provider);
-      expect(chunks.map(c => c.type)).toEqual(['result']);
+      expect(chunks.map(c => c.type)).toEqual(['session', 'result']);
       expect(server.processes[0].signals).toEqual([]);
       expect(mockLogger.error).toHaveBeenCalledWith(
         expect.objectContaining({ lifecycle: 'process_abnormal_exit' }),
@@ -896,8 +906,8 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
         if (chunk.type === 'result') server.processes[0].exit(137);
       }
-      expect(chunks.map(c => c.type)).toEqual(['subtask', 'result']);
-      expect(chunks[0]).toMatchObject({ status: 'started' });
+      expect(chunks.map(c => c.type)).toEqual(['session', 'subtask', 'result']);
+      expect(chunks[1]).toMatchObject({ status: 'started' });
       expect(server.processes[0].stdinEnded).toBe(false);
     });
   });
@@ -2749,8 +2759,8 @@ describe('CodexProvider', () => {
       }
 
       expect(error?.message).toBe('Query aborted');
-      expect(chunks.map(c => c.type)).toEqual(['tool_call', 'tool_call_update']);
-      expect(chunks[1]).toMatchObject({ toolCallId: 'cmd-1', status: 'cancelled' });
+      expect(chunks.map(c => c.type)).toEqual(['session', 'tool_call', 'tool_call_update']);
+      expect(chunks[2]).toMatchObject({ toolCallId: 'cmd-1', status: 'cancelled' });
       const process0 = server.processes[0];
       expect(paramsOf(server, 'turn/interrupt')).toEqual({ threadId: THREAD_ID, turnId: TURN_ID });
       expect(process0.stdinEnded).toBe(true);

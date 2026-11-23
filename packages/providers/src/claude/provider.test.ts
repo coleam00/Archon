@@ -441,6 +441,24 @@ describe('message stream', () => {
     ]);
   });
 
+  test('names the session from the first init, once per query, before its MCP status', async () => {
+    const chunks = await streamOf(
+      {
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sid',
+        mcp_servers: [{ name: 'github', status: 'connected' }],
+      },
+      // A wake turn of the same query sends init again.
+      { type: 'system', subtype: 'init', session_id: 'sid', mcp_servers: [] }
+    );
+
+    expect(chunks).toEqual([
+      { type: 'session', sessionId: 'sid' },
+      { type: 'mcp_server_status', server: 'github', status: 'connected' },
+    ]);
+  });
+
   test('reports compaction when it starts and when its boundary lands', async () => {
     const chunks = await streamOf(
       { type: 'system', subtype: 'status', status: 'compacting' },
@@ -3365,6 +3383,7 @@ describe('provider contract', () => {
         {
           name: 'plain turn',
           run: turn([
+            { type: 'system', subtype: 'init', session_id: 's', mcp_servers: [] },
             { type: 'result', subtype: 'success', is_error: false, session_id: 's' },
             { type: 'system', subtype: 'session_state_changed', state: 'idle' },
           ]),
@@ -3500,7 +3519,10 @@ describe('provider contract', () => {
         name: 'forked session',
         source: 's',
         run: () => {
-          sdkYields({ type: 'result', subtype: 'success', is_error: false, session_id: 's-fork' });
+          sdkYields(
+            { type: 'system', subtype: 'init', session_id: 's-fork', mcp_servers: [] },
+            { type: 'result', subtype: 'success', is_error: false, session_id: 's-fork' }
+          );
           return client.sendQuery('test', '/workspace', 's', { forkSession: true });
         },
       },

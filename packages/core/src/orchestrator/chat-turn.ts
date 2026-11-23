@@ -140,6 +140,16 @@ function turnChunks(input: ChatTurnInput): ReturnType<typeof withStaleResumeRetr
 }
 
 /**
+ * Stores the session a provider announces before its result, the moment it arrives, so a
+ * turn stopped or failed before any `result` still leaves the conversation resumable.
+ * A later `result` overrides it through `sessionIdAfterResult`; a stale-resume retry
+ * clears it before the fresh attempt announces its own.
+ */
+async function persistAnnouncedSession(input: ChatTurnInput, sessionId: string): Promise<void> {
+  await tryPersistSessionId(input.session.id, sessionId);
+}
+
+/**
  * The provider session id to persist after a `result` chunk. Any `error_during_execution`
  * result clears the stored id, so the next message starts fresh rather than resuming a
  * session that may be broken. A stale resume the provider confirmed never reaches here:
@@ -165,6 +175,7 @@ async function sessionIdAfterResult(
     return undefined;
   }
   if (msg.sessionId) return msg.sessionId;
+  // A result without an id leaves the stored one, including a session announced earlier.
   return current;
 }
 
@@ -354,6 +365,9 @@ async function streamReply(input: ChatTurnInput) {
         await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
         break;
       }
+      case 'session':
+        await persistAnnouncedSession(input, msg.sessionId);
+        break;
       case 'result': {
         turn.result = {
           ...addResultUsage(turn.result ?? {}, msg),
@@ -439,6 +453,9 @@ async function collectBatchChunks(input: ChatTurnInput) {
       case 'warning':
         // A warning surfaces as it arrives, not batched into the reply.
         await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
+        break;
+      case 'session':
+        await persistAnnouncedSession(input, msg.sessionId);
         break;
       case 'result':
         turn.result = {
