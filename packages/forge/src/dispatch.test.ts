@@ -17,6 +17,7 @@ test.each(['github.com', 'ghes.example.test'])(
       env: {},
     });
     const plugin = discovery.plugins[0];
+    let bareHostClaim: { selected: typeof discovery; repo: RepoRef; resolved: RepoRef } | undefined;
     for (const claims of [[host], [`${host}:443`], [host, `${host}:443`]]) {
       const selected = {
         ...discovery,
@@ -42,19 +43,25 @@ test.each(['github.com', 'ghes.example.test'])(
       )
         throw new Error('Expected repository');
       expect(result.response.result.value.repo).toEqual(repo);
-      const qualified = await dispatchForge(
-        {
-          operationId: 'qualified-compat',
-          op: 'repo.labels.list',
-          repo: JSON.parse(JSON.stringify(result.response.result.value.repo)),
-        },
-        { discovery: selected, env: {} }
-      );
-      expect(qualified.response).toMatchObject({
-        ok: true,
-        result: { op: 'repo.labels.list', value: { repo, labels: [] } },
-      });
+      if (repo.hostClaim)
+        bareHostClaim = { selected, repo, resolved: result.response.result.value.repo };
     }
+    // One qualified round-trip, on the hostClaim repo: it is the only shape whose
+    // operation must strip :443 to find the bare-host claim. The other shapes
+    // resolve straight to the host:443 claim.
+    if (!bareHostClaim) throw new Error('Expected a hostClaim repository');
+    const qualified = await dispatchForge(
+      {
+        operationId: 'qualified-compat',
+        op: 'repo.labels.list',
+        repo: JSON.parse(JSON.stringify(bareHostClaim.resolved)),
+      },
+      { discovery: bareHostClaim.selected, env: {} }
+    );
+    expect(qualified.response).toMatchObject({
+      ok: true,
+      result: { op: 'repo.labels.list', value: { repo: bareHostClaim.repo, labels: [] } },
+    });
   }
 );
 
