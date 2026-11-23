@@ -19,6 +19,7 @@ import {
 import type { Codebase } from '../schemas/codebase';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { resolveWorkflowGithubEnvironment } from '@archon/workflows/run-credential-env';
 import {
   bindingDefinitionsPlan,
   baseRefName,
@@ -45,8 +46,18 @@ export async function captureBindingDefinitions(
       sourceRoot: plan.root,
       definitions: plan.definitions,
     });
+  // The base is fetched as the binding's run-as user, not as the process that fires it:
+  // a node whose own run is scrubbed can start work for a connected user, and an
+  // unconnected run-as user gets the scrub, so nothing reaches the host login.
+  const { envVars } = await resolveWorkflowGithubEnvironment(
+    host.deps,
+    codebase,
+    intent.runAsUserId,
+    { envVars: {} }
+  );
+  const input = { ...plan.input, fetchEnv: { ...process.env, ...envVars } };
   try {
-    return await withLayeredDefinitions(plan.input, composed =>
+    return await withLayeredDefinitions(input, composed =>
       prepareWorkflowSource(host.deps, {
         sourceRoot: composed.root,
         origin: cwd,

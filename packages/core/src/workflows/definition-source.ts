@@ -66,6 +66,12 @@ export interface LayeredDefinitionsInput {
   baseOverride?: string;
   /** The registered project's default branch. */
   defaultBranch?: string;
+  /**
+   * The environment the base fetch authenticates with; this process's env when unset.
+   * A binding start sets it to its run-as user's GitHub environment, so the fetch never
+   * borrows the caller's credential, nor its scrub.
+   */
+  fetchEnv?: NodeJS.ProcessEnv;
 }
 
 export interface ComposedDefinitions {
@@ -251,6 +257,7 @@ async function fetchBase(
     if (remote !== undefined)
       await fetchWithRetry(repo, [remote, `+refs/heads/${branch}:refs/remotes/${ref}`], {
         timeout: FETCH_TIMEOUT_MS,
+        env: input.fetchEnv,
       });
     const local = remote === undefined ? `refs/heads/${ref}` : `refs/remotes/${ref}`;
     const commit = (
