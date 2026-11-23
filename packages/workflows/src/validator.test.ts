@@ -2435,6 +2435,34 @@ describe('validateWorkflowResources — provider resolution', () => {
     expect(() => resolveNodeModel(draft, scope, models, aiProfile)).not.toThrow();
   });
 
+  test('loop_group children use the group provider or report their own missing provider', async () => {
+    for (const provider of ['claude', undefined]) {
+      const workflow = makeWorkflow('test', [
+        dagNodeSchema.parse({
+          id: 'group',
+          provider,
+          loop_group: {
+            until_bash: 'exit 0',
+            max_iterations: 1,
+            nodes: [{ id: 'draft', prompt: 'Write the change.' }],
+          },
+        }),
+      ]);
+      const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry);
+
+      expect(providerIssues(issues)).toEqual(
+        provider === 'claude'
+          ? []
+          : [
+              expect.objectContaining({
+                nodeId: 'draft',
+                message: expect.stringContaining('No default provider'),
+              }),
+            ]
+      );
+    }
+  });
+
   test('a resolvable tier or alias needs no default', async () => {
     const workflow = makeWorkflow('test', [
       prompt('tiered', { model: 'medium' }),
