@@ -39,6 +39,8 @@ import { serializeNodeStateRecord } from '@archon/workflows/node-record-serializ
 import type { NodeStateRecord } from '@archon/workflows/schemas/node-execution';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { workflowRunCommand } from './workflow-run-owned';
+import { presentRunResult } from './workflow-run-output';
+import { deadlineWaitCursor } from '@archon/workflows/store';
 import { resolveCliExitCode, WorkflowRunFailedError } from '../utils/workflow-exit-code';
 
 const trackTempRootsForOutput = trackTempRoots();
@@ -114,8 +116,8 @@ describe('workflowRunCommand — progress rendering', () => {
     const { executeWorkflow } = require('@archon/workflows/executor');
     const workflowDb = require('@archon/core/db/workflows');
     (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce(execution);
-    // A handed-off or paused run is never read back: neither can carry an outcome.
-    const readsRun = !('handedOff' in execution) && !('paused' in execution);
+    // Paused runs are read for their pause, never for an authored outcome.
+    const readsRun = !('handedOff' in execution);
     if (readsRun) {
       (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
         id: execution.workflowRunId,
@@ -139,6 +141,41 @@ describe('workflowRunCommand — progress rendering', () => {
       expect(workflowDb.getWorkflowRun.mock.calls.length - readsBefore).toBe(readsRun ? 1 : 0);
     }
   }
+
+  async function runPauseFixture(
+    metadata: Record<string, unknown> | Error | null,
+    byOperator = false
+  ): Promise<string> {
+    setupWorkflowMocks();
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-ask',
+      paused: true,
+      ...(byOperator ? { byOperator: true } : {}),
+    });
+    const { mockWorkflowRun } = await import('../../../core/src/test/mocks/workflow-run');
+    const host = createTestWorkflowHost();
+    host.deps.releaseRunResources = undefined;
+    host.deps.store.getWorkflowRun = async () => {
+      if (metadata instanceof Error) throw metadata;
+      return metadata === null
+        ? null
+        : { ...mockWorkflowRun, id: 'run-ask', status: 'paused', metadata };
+    };
+    await workflowRunCommand(host, '/test/path', 'plan', 'hello', {});
+    return consoleSpy.mock.calls.flat().join('\n');
+  }
+
+  const attentionWait = {
+    owner: 'node',
+    nodeId: 'question',
+    kind: 'attention',
+    waitingSince: '2026-11-22T10:00:00.000Z',
+    pauseId: 'ask-1',
+    form: 'message',
+    message: 'Which destination should receive the report?',
+  } as const;
 
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
@@ -482,20 +519,182 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(mockLogger.warn).not.toHaveBeenCalled();
   });
 
-  it('does not look up the run for an approval pause', async () => {
-    setupWorkflowMocks();
-    const { executeWorkflow } = require('@archon/workflows/executor');
-    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
-      success: true,
-      workflowRunId: 'run-paused',
-      paused: true,
+  it('reports an attention pause as an ask with its answer command', async () => {
+    const text = await runPauseFixture({ pause_cause: 'wait', wait: attentionWait });
+    expect(text).toContain('waiting for an answer');
+    expect(text).toContain('archon workflow attention run-ask');
+    expect(text).toContain('archon workflow approve run-ask <your answer>');
+    expect(text).not.toContain('waiting for approval');
+    expect(text).not.toContain('Usage');
+    expect(text).not.toContain('Authored outcome');
+  });
+
+  it.each([undefined, 'approval'] as const)('reports an approval gate (type=%s)', async type => {
+    const text = await runPauseFixture({
+      pause_cause: 'gate',
+      approval: { nodeId: 'review', message: 'Ready to proceed?', pauseId: 'gate-1', type },
     });
-    const workflowDb = require('@archon/core/db/workflows');
-    const lookup = workflowDb.getWorkflowRun as ReturnType<typeof mock>;
-    const readsBefore = lookup.mock.calls.length;
-    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
-    expect(lookup.mock.calls.length).toBe(readsBefore);
-    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Usage');
+    expect(text).toContain('waiting for approval');
+    expect(text).toContain('archon workflow approve run-ask --occurrence gate-1 [comment]');
+    expect(text).toContain('archon workflow attention run-ask');
+    expect(text).not.toContain('interactive input');
+  });
+
+  it('reports the recorded interactive-loop gate as input with a feedback command', async () => {
+    const text = await runPauseFixture({
+      pause_cause: 'gate',
+      approval: {
+        nodeId: 'revise',
+        message: 'Give feedback for the next iteration',
+        pauseId: 'loop-1',
+        type: 'interactive_loop',
+        iteration: 2,
+        sessionId: null,
+        completionSignaled: false,
+        signaledOutput: null,
+        signaledStructuredOutput: null,
+        iterationOutput: 'Draft report',
+        signaledTokens: null,
+        signaledCostUsd: null,
+        commandSnapshot: 'Revise the report',
+      },
+    });
+    expect(text).toContain('waiting for interactive input');
+    expect(text).toContain('archon workflow approve run-ask --occurrence loop-1 <your feedback>');
+    expect(text).not.toContain('waiting for approval');
+  });
+
+  it.each([
+    { form: 'approval', command: 'archon workflow approve run-ask [text]' },
+    { form: 'select', command: 'archon workflow respond run-ask email [text]' },
+    {
+      form: 'multi_select',
+      command: 'archon workflow answer run-ask --occurrence ask-1 --choose <id>',
+    },
+  ] as const)(
+    'uses the existing answer command for an attention $form',
+    async ({ form, command }) => {
+      const text = await runPauseFixture({
+        wait: {
+          ...attentionWait,
+          form,
+          options: [{ id: 'email', does: 'Send the report by email' }],
+        },
+      });
+      expect(text).toContain('waiting for an answer');
+      expect(text).toContain(command);
+      expect(text).not.toContain('waiting for approval');
+    }
+  );
+
+  it('gives legacy attention waits their usable resume command', async () => {
+    const { pauseId: _pauseId, form: _form, ...legacyWait } = attentionWait;
+    const text = await runPauseFixture({ wait: legacyWait });
+    expect(text).toContain('waiting for an answer');
+    expect(text).toContain('archon workflow resume run-ask');
+    expect(text).not.toContain('archon workflow approve');
+    expect(text).not.toContain('archon workflow answer');
+  });
+
+  it.each(['operator', 'source_release'] as const)(
+    'does not treat historical wait and gate metadata as the current %s pause',
+    async pauseCause => {
+      const text = await runPauseFixture({
+        pause_cause: pauseCause,
+        ...(pauseCause === 'source_release'
+          ? { source_release: { nodeId: 'next', releasedAt: '2026-11-22T10:00:00.000Z' } }
+          : {}),
+        wait: attentionWait,
+        approval: { nodeId: 'old-review', message: 'Old gate', type: 'interactive_loop' },
+      });
+      expect(text).not.toContain('waiting for approval');
+      expect(text).not.toContain('waiting for an answer');
+      expect(text).not.toContain('interactive input');
+      if (pauseCause === 'operator') {
+        expect(text).toContain('paused by an operator');
+        expect(text).toContain('archon workflow resume run-ask');
+      } else expect(text).toContain('archon workflow get run-ask');
+    }
+  );
+
+  it('preserves an explicit operator pause even when its row is unavailable', async () => {
+    const text = await runPauseFixture(new Error('row must not be read'), true);
+    expect(text).toContain('paused by an operator');
+    expect(text).toContain('archon workflow resume run-ask');
+    expect(mockLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: 'missing row', metadata: null },
+    { name: 'read failure', metadata: new Error('pause read failed') },
+    { name: 'missing metadata', metadata: {} },
+    { name: 'malformed gate', metadata: { approval: { nodeId: 'review' } } },
+    { name: 'malformed wait', metadata: { wait: { kind: 'attention' } } },
+    {
+      name: 'unknown gate',
+      metadata: { approval: { nodeId: 'review', message: 'Unrecognized gate', type: 'future' } },
+    },
+  ])('does not invent approval when pause metadata is $name', async ({ metadata }) => {
+    const text = await runPauseFixture(metadata);
+    expect(text).toContain('Workflow paused');
+    expect(text).toContain('archon workflow get run-ask');
+    expect(text).not.toContain('waiting for approval');
+    expect(text).not.toContain('waiting for an answer');
+    expect(text).not.toContain('waiting for interactive input');
+    if (metadata instanceof Error)
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ err: metadata, workflowRunId: 'run-ask' }),
+        'cli.workflow_summary_lookup_failed'
+      );
+  });
+
+  it.each(['attention', 'approval'] as const)(
+    'does not ask again for an answered %s pause',
+    async kind => {
+      const text = await runPauseFixture(
+        kind === 'attention'
+          ? { wait: { ...attentionWait, answer: { text: 'Email' } } }
+          : { approval: { nodeId: 'review', message: 'Ready?', resolved: 'approved' } }
+      );
+      expect(text).not.toContain('waiting for an answer');
+      expect(text).not.toContain('waiting for approval');
+      expect(text).toContain('archon workflow get run-ask');
+    }
+  );
+
+  it('keeps the durable wait cursor and its original destination', async () => {
+    const { mockWorkflowRun } = await import('../../../core/src/test/mocks/workflow-run');
+    const { CLIAdapter } = await import('../adapters/cli-adapter');
+    const wait = {
+      owner: 'node',
+      nodeId: 'delay',
+      kind: 'time',
+      waitingSince: '2026-11-22T10:00:00.000Z',
+      resumeAt: '2026-11-22T11:00:00.000Z',
+      pauseId: 'delay-1',
+    } as const;
+    const run = { ...mockWorkflowRun, status: 'paused' as const, metadata: { wait } };
+    const host = createTestWorkflowHost();
+    host.deps.store.getWorkflowRun = mock(async () => run);
+    const cursor = deadlineWaitCursor(wait);
+    const destination = { kind: 'headless' as const, correlationId: 'original-destination' };
+    const continuation = await presentRunResult({
+      host,
+      workflow: resolveWorkflow({ name: 'delay', description: 'Wait', nodes: [] }),
+      result: { success: true, workflowRunId: run.id, paused: true, waitCursor: cursor },
+      adapter: new CLIAdapter(),
+      conversationId: 'original-conversation',
+      destination,
+      detachedProcessOwner: false,
+    });
+    expect(continuation).toEqual({
+      run,
+      wait: { stepName: 'delay', cursor, signaled: false },
+      destination,
+    });
+    expect(host.deps.store.getWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(consoleSpy.mock.calls.flat().join('\n')).toContain("waiting for 'delay' until");
+    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('waiting for approval');
   });
 
   const completionUsageCases = [
@@ -1437,8 +1636,8 @@ describe('workflowRunCommand — dispatch and result cards', () => {
       );
       expect(resultCalls).toHaveLength(0);
 
-      // Confirm paused message was printed
-      expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow paused — waiting for approval.');
+      // No pause metadata was recorded by this executor fixture.
+      expect(consoleSpy.mock.calls.flat().join('\n')).toContain('Workflow paused');
     } finally {
       consoleSpy.mockRestore();
     }

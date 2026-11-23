@@ -12,8 +12,15 @@ import { readNodeEmitterEvent } from '@archon/workflows/node-event-write';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { deadlineWaitCursor, resumeCursorMatches } from '@archon/workflows/store';
 import type { ResolvedWorkflow, WorkflowExecutionResult } from '@archon/workflows/schemas/workflow';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import {
+  isApprovalContext,
+  runAttention,
+  type WorkflowRun,
+} from '@archon/workflows/schemas/workflow-run';
+import { isOperatorPaused } from '@archon/workflows/schemas/pause-cause';
+import { attentionAnswerLines } from '@archon/workflows/deps';
 import type { CLIAdapter } from '../adapters/cli-adapter';
+import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { WorkflowRunFailedError } from '../utils/workflow-exit-code';
 import { formatRunUsage } from './workflow-usage';
 import { formatSkipCause } from './workflow-node-summaries';
@@ -182,11 +189,11 @@ export async function presentRunResult(
       return presentDurableWait(host, result.workflowRunId, result.waitCursor, destination);
     }
     // A paused run has no outcome: it is written only when the run completes.
-    console.log(
-      result.byOperator
-        ? `\nWorkflow paused by an operator. Resume: archon workflow resume ${result.workflowRunId}`
-        : '\nWorkflow paused — waiting for approval.'
-    );
+    if (result.byOperator)
+      console.log(
+        `\nWorkflow paused by an operator. Resume: archon workflow resume ${result.workflowRunId}`
+      );
+    else printPausedRun(run, result.workflowRunId);
   } else if (result.success) {
     // Surface workflow result to Web UI as a result card (mirrors the background dispatch
     // result message in core's orchestrator/dispatch/background-run.ts).
@@ -211,6 +218,45 @@ export async function presentRunResult(
   return undefined;
 }
 
+function printPausedRun(run: WorkflowRun | null, runId: string): void {
+  if (run !== null && isOperatorPaused(run)) {
+    console.log(`\nWorkflow paused by an operator. Resume: archon workflow resume ${runId}`);
+    return;
+  }
+  const attention = run === null ? null : runAttention(run);
+  if (attention?.kind === 'attention') {
+    console.log('\nWorkflow paused — waiting for an answer to its ask.');
+    console.log(`  Read the full question: archon workflow attention ${runId}`);
+    for (const line of attentionAnswerLines(CLI_WORKFLOW_SURFACE, attention))
+      console.log(`  ${line}`);
+    return;
+  }
+  if (attention?.kind === 'awaiting_response') {
+    const approval = run?.metadata.approval;
+    const interactive = isApprovalContext(approval) && approval.type === 'interactive_loop';
+    console.log(
+      interactive
+        ? '\nWorkflow paused — waiting for interactive input.'
+        : '\nWorkflow paused — waiting for approval.'
+    );
+    console.log(`  Read the gate: archon workflow attention ${runId}`);
+    console.log(
+      `  Respond: archon workflow approve ${runId} --occurrence ${attention.occurrence} ` +
+        (interactive ? '<your feedback>' : '[comment]') +
+        ', or reject or respond <decision> the same way.'
+    );
+    return;
+  }
+  // An unavailable row or unclassified pause must not invent an approval request.
+  const detail =
+    attention?.kind === 'unreadable'
+      ? ` — ${attention.detail}`
+      : run === null
+        ? ' — persisted pause details unavailable'
+        : '';
+  console.log(`\nWorkflow paused${detail}. Inspect: archon workflow get ${runId}`);
+}
+
 /** Why the run failed, with this surface's way to name an item when that was refused. */
 function failureReason(result: Extract<WorkflowExecutionResult, { success: false }>): string {
   return 'continuedItemRefused' in result ? `${result.error} ${NAME_ITEM_HINT}` : result.error;
@@ -231,7 +277,12 @@ async function readRunForPresentation(
   host: WorkflowHost,
   result: WorkflowExecutionResult
 ): Promise<WorkflowRun | null> {
-  if (result.success && 'paused' in result && result.paused) return null;
+  if (
+    result.success &&
+    'paused' in result &&
+    (result.waitCursor !== undefined || result.byOperator)
+  )
+    return null;
   const { workflowRunId } = result;
   if (workflowRunId === undefined) return null;
   try {
