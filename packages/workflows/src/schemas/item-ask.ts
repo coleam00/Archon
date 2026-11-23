@@ -1,9 +1,16 @@
 /**
  * An ask: a decision a completed run leaves for an operator, opened on the run's item when
  * the run completes (`returns: { node, asks: <property> }`). This module owns its shape and
- * the descriptions the model reads with it. The loader adds `ITEM_ASKS_JSON_SCHEMA` to the
- * returns node's `output_format`, so no workflow restates it, and providers deliver its
- * descriptions with the rest of the output schema: they are an ask's tool description.
+ * the descriptions the model reads with it. The loader adds the asks JSON Schema
+ * (`itemAsksJsonSchema`) to the returns node's `output_format`, so no workflow restates it,
+ * and providers deliver its descriptions with the rest of the output schema: they are an
+ * ask's tool description.
+ *
+ * A workflow may declare the one set of options every ask it leaves offers
+ * (`returns: { ..., options: [...] }`), because an answer's option id routes what starts
+ * next. The model then writes no options: its schema has none, and its recommendation is
+ * limited to the declared ids. The engine puts the declared options into each ask when the
+ * run completes, so a stored ask has the same shape either way.
  *
  * The option and recommendation derive from the schemas a `wait: attention` node uses. What
  * an ask adds is a context, a cost per option and artifact links.
@@ -13,11 +20,10 @@ import { artifactPointerSchema } from './artifact-pointer';
 import { type ItemAct, itemActFields } from './item-act';
 import type { SourceReceiptAcceptance } from './resource-start';
 import { attentionAnswerSchema } from './run-wait';
-import {
-  attentionOptionSchema,
-  attentionRecommendationSchema,
-  OTHER_ATTENTION_OPTION,
-} from './wait-node';
+import { askOptionSchema, type DeclaredAskOption, refineOptionIds } from './ask-option';
+import { attentionRecommendationSchema, OTHER_ATTENTION_OPTION } from './wait-node';
+
+export { declaredAskOptionsSchema, type DeclaredAskOption } from './ask-option';
 
 /** What the asks property is for, read by the model as the property's description. */
 export const ITEM_ASKS_DESCRIPTION = [
@@ -35,27 +41,6 @@ export const ITEM_ASKS_DESCRIPTION = [
   'Leave the list empty when there is nothing to decide.',
 ].join(' ');
 
-// Every property of the shape is required, so a provider in OpenAI strict mode (Codex),
-// which refuses an optional property, takes it as it is. A list that may be empty stands
-// in for an optional one, a nullable value (the recommendation) stands in for an absent
-// one, and the wait's optional `label` and `confidence` are left out.
-const askOptionSchema = attentionOptionSchema
-  .pick({ id: true, does: true })
-  .extend({
-    id: attentionOptionSchema.shape.id.describe(
-      "The option's id: kebab-case, one token (e.g. 'keep-the-flag'). The answer names it."
-    ),
-    does: z
-      .string()
-      .min(1)
-      .describe('What choosing this option does: the change or action that follows from it.'),
-    cost: z
-      .string()
-      .min(1)
-      .describe('What this option costs: what is given up, what breaks, what has to follow.'),
-  })
-  .describe('One real choice. An option nobody would pick is not an option.');
-
 // The pointer shape, with what each field holds for the model that writes it.
 const askArtifactSchema = artifactPointerSchema
   .extend({
@@ -68,6 +53,22 @@ const askArtifactSchema = artifactPointerSchema
     ),
   })
   .describe('A file this run wrote under its artifacts directory.');
+
+/** The recommendation an ask carries, with `option` limited by the schema given. */
+function recommendationSchema<O extends z.ZodType<string>>(option: O) {
+  return attentionRecommendationSchema
+    .pick({ option: true, why: true })
+    .extend({
+      option,
+      why: attentionRecommendationSchema.shape.why.describe(
+        'Why that option, in a sentence or two. If you are not sure, say what would change your mind.'
+      ),
+    })
+    .nullable()
+    .describe(
+      'The option you recommend and why, or null when you have no basis to choose between the options: the operator then sees that the ask has none. Do not name an option you would not choose.'
+    );
+}
 
 const askFields = {
   question: z
@@ -88,20 +89,9 @@ const askFields = {
     .describe(
       `Two to four real choices. The id '${OTHER_ATTENTION_OPTION.id}' is reserved: every ask also offers it, answered with text.`
     ),
-  recommendation: attentionRecommendationSchema
-    .pick({ option: true, why: true })
-    .extend({
-      option: attentionRecommendationSchema.shape.option.describe(
-        'The id of the option you would take.'
-      ),
-      why: attentionRecommendationSchema.shape.why.describe(
-        'Why that option, in a sentence or two. If you are not sure, say what would change your mind.'
-      ),
-    })
-    .nullable()
-    .describe(
-      'The option you recommend and why, or null when you have no basis to choose between the options: the operator then sees that the ask has none. Do not name an option you would not choose.'
-    ),
+  recommendation: recommendationSchema(
+    attentionRecommendationSchema.shape.option.describe('The id of the option you would take.')
+  ),
   artifacts: z
     .array(askArtifactSchema)
     .describe(
@@ -114,22 +104,7 @@ function refineAsk(
   ask: { options: readonly { id: string }[]; recommendation: { option: string } | null },
   ctx: z.RefinementCtx
 ): void {
-  const seen = new Set<string>();
-  for (const [index, option] of ask.options.entries()) {
-    if (option.id === OTHER_ATTENTION_OPTION.id)
-      ctx.addIssue({
-        code: 'custom',
-        path: ['options', index, 'id'],
-        message: `'${OTHER_ATTENTION_OPTION.id}' is reserved: every ask offers it`,
-      });
-    else if (seen.has(option.id))
-      ctx.addIssue({
-        code: 'custom',
-        path: ['options', index, 'id'],
-        message: `'${option.id}' is declared more than once`,
-      });
-    seen.add(option.id);
-  }
+  refineOptionIds(ask.options, ctx, ['options']);
   const recommended = ask.recommendation?.option;
   if (recommended !== undefined && !ask.options.some(option => option.id === recommended))
     ctx.addIssue({
@@ -160,25 +135,77 @@ export const storedItemAskSchema = z
 export type StoredAsk = z.infer<typeof storedItemAskSchema>;
 
 /**
- * The JSON Schema of the asks property, with its descriptions, added to the returns node's
- * `output_format`. Built once; readers take a copy (`itemAsksJsonSchema`).
+ * The asks property's value when the workflow declares its options: each ask has no
+ * options of its own, and its recommendation names a declared id or is null. The option
+ * list in the recommendation's description is what the model reads to choose.
  */
-const ITEM_ASKS_JSON_SCHEMA: Readonly<Record<string, unknown>> = (() => {
-  const { $schema: _dialect, ...schema } = z.toJSONSchema(itemAsksSchema, { io: 'input' });
-  return schema;
-})();
+function declaredItemAsksSchema(options: readonly DeclaredAskOption[]) {
+  const offered = options
+    .map(option => `'${option.id}': ${option.does} (cost: ${option.cost})`)
+    .join('; ');
+  const { options: _options, ...fields } = askFields;
+  return z
+    .array(
+      z.strictObject({
+        ...fields,
+        recommendation: recommendationSchema(
+          z
+            .enum(options.map(option => option.id))
+            .describe(`The id of the option you would take. Every ask offers: ${offered}.`)
+        ),
+      })
+    )
+    .describe(
+      `${ITEM_ASKS_DESCRIPTION} This workflow declares the options every ask offers, so write none: recommend one by its id.`
+    );
+}
 
-/** A fresh copy of the asks property's JSON Schema, so no two nodes share one object. */
-export function itemAsksJsonSchema(): Record<string, unknown> {
+/** A JSON Schema of the asks property without zod's dialect key. */
+function asksJsonSchema(schema: z.ZodType): Record<string, unknown> {
+  const { $schema: _dialect, ...json } = z.toJSONSchema(schema, { io: 'input' });
+  return json;
+}
+
+/** The asks property's JSON Schema for a workflow that declares no options. Built once. */
+const ITEM_ASKS_JSON_SCHEMA: Readonly<Record<string, unknown>> = asksJsonSchema(itemAsksSchema);
+
+/**
+ * A fresh JSON Schema of the asks property, added to the returns node's `output_format`, so
+ * no two nodes share one object. With declared options it is built from them; the same
+ * options always build an equal schema, which the load-time contract compares.
+ */
+export function itemAsksJsonSchema(
+  options?: readonly DeclaredAskOption[]
+): Record<string, unknown> {
+  if (options !== undefined) return asksJsonSchema(declaredItemAsksSchema(options));
   return structuredClone(ITEM_ASKS_JSON_SCHEMA) as Record<string, unknown>;
 }
 
-/** `value` as a list of asks, or why it is not one, naming the first problem's path. */
+/**
+ * `value` as a list of asks, or why it is not one, naming the first problem's path. With
+ * declared options, `value` is read as the model writes it then and each ask gets them.
+ */
 export function parseItemAsks(
-  value: unknown
+  value: unknown,
+  options?: readonly DeclaredAskOption[]
 ): { readonly asks: ItemAsk[] } | { readonly problem: string } {
-  const parsed = itemAsksSchema.safeParse(value);
-  if (parsed.success) return { asks: parsed.data };
+  if (options === undefined) return asksOrProblem(itemAsksSchema.safeParse(value), asks => asks);
+  return asksOrProblem(declaredItemAsksSchema(options).safeParse(value), asks =>
+    asks.map(({ question, context, recommendation, artifacts }) => ({
+      question,
+      context,
+      options: options.map(option => ({ ...option })),
+      recommendation,
+      artifacts,
+    }))
+  );
+}
+
+function asksOrProblem<T>(
+  parsed: z.ZodSafeParseResult<T>,
+  toAsks: (data: T) => ItemAsk[]
+): { readonly asks: ItemAsk[] } | { readonly problem: string } {
+  if (parsed.success) return { asks: toAsks(parsed.data) };
   const issue = parsed.error.issues[0];
   if (issue === undefined) return { problem: 'is not a list of asks' };
   const path = issue.path

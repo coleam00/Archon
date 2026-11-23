@@ -49,6 +49,28 @@ function leavesAsks(name: string, later = 'true'): string {
   );
 }
 
+/** A workflow that declares its options; its returns node writes asks without any. */
+function declaresOptions(name: string, recommended: string): string {
+  const value = JSON.stringify({
+    asks: [
+      {
+        question: 'Land it?',
+        context: 'The review found nothing.',
+        recommendation: { option: recommended, why: 'It is done.' },
+        artifacts: [],
+      },
+    ],
+  });
+  return (
+    `name: ${name}\ndescription: Declares its options.\nmutates_checkout: false\n` +
+    'returns:\n  node: decide\n  asks: asks\n  options:\n' +
+    '    - { id: send-back, does: The builder continues., cost: A round. }\n' +
+    '    - { id: take-as-is, does: The change goes on as it is., cost: Nothing more is built. }\n' +
+    `nodes:\n  - id: decide\n    bash: |\n      echo '${value}'\n` +
+    '    output_format:\n      type: object\n      properties: {}\n'
+  );
+}
+
 interface Fixture {
   projectRoot: string;
   archonHome: string;
@@ -62,6 +84,8 @@ async function makeFixture(): Promise<Fixture> {
   mkdirSync(workflows, { recursive: true });
   writeFileSync(join(workflows, 'leave-asks.yaml'), leavesAsks('leave-asks'));
   writeFileSync(join(workflows, 'leave-asks-fails.yaml'), leavesAsks('leave-asks-fails', 'exit 1'));
+  writeFileSync(join(workflows, 'declared.yaml'), declaresOptions('declared', 'take-as-is'));
+  writeFileSync(join(workflows, 'declared-stray.yaml'), declaresOptions('declared-stray', 'drop'));
   expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
   return { projectRoot, archonHome: join(root, 'home') };
 }
@@ -137,7 +161,7 @@ interface ListedItem {
   message: string;
   item?: { key: string };
   askedIn?: { runId: string; workflow: string };
-  options: { id: string; cost?: string }[];
+  options: { id: string; does?: string; cost?: string }[];
 }
 
 async function listed(fixture: Fixture): Promise<ListedItem[]> {
@@ -324,4 +348,28 @@ test('a workflow that declares asks is refused at start without an item', async 
     (await runCli(fixture, ['workflow', 'runs', '--all', '--json'])).stdout
   ) as { runs: { status: string }[] };
   expect(runs.runs.map(stored => stored.status)).toEqual(['cancelled', 'cancelled']);
+}, 120_000);
+
+test('the asks of a workflow that declares its options carry them; a recommendation outside them fails the node', async () => {
+  const fixture = await makeFixture();
+  expect((await run(fixture, 'declared', 'issue-3')).exitCode).toBe(0);
+  const [item, ...others] = await listed(fixture);
+  expect(others).toEqual([]);
+  expect(item?.message).toBe('Land it?');
+  expect(item?.options).toEqual([
+    expect.objectContaining({ id: 'send-back', does: 'The builder continues.', cost: 'A round.' }),
+    expect.objectContaining({
+      id: 'take-as-is',
+      does: 'The change goes on as it is.',
+      cost: 'Nothing more is built.',
+    }),
+    expect.objectContaining({ id: 'other' }),
+  ]);
+
+  const stray = await run(fixture, 'declared-stray', 'issue-4');
+  expect(stray.exitCode).not.toBe(0);
+  expect(`${stray.stdout}${stray.stderr}`).toContain(
+    'must be equal to one of the allowed values (send-back, take-as-is)'
+  );
+  expect((await listed(fixture)).map(listedItem => listedItem.item?.key)).toEqual(['issue-3']);
 }, 120_000);

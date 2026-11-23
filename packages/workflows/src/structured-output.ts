@@ -150,7 +150,11 @@ function formatSchemaErrors(errors: ErrorObject[] | null | undefined): string[] 
     const path = e.instancePath && e.instancePath.length > 0 ? e.instancePath : '(root)';
     const detail = e.params?.missingProperty
       ? `${e.message} ('${String(e.params.missingProperty)}')`
-      : (e.message ?? 'invalid');
+      : e.params?.additionalProperty
+        ? `${e.message} ('${String(e.params.additionalProperty)}')`
+        : Array.isArray(e.params?.allowedValues)
+          ? `${e.message} (${(e.params.allowedValues as unknown[]).map(String).join(', ')})`
+          : (e.message ?? 'invalid');
     return `${path}: ${detail}`;
   });
 }

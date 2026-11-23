@@ -9,6 +9,7 @@ import { findPreparedStrictSchemaIssues } from '@archon/provider-contract';
 import { itemAsksJsonSchema, parseItemAsks } from '../schemas/item-ask';
 import { itemWaitsJsonSchema } from '../schemas/item-wait';
 import { validateWorkflowResultContract } from './contracts';
+import { validateStructuredOutput } from '../structured-output';
 
 // Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
 clearRegistry();
@@ -561,6 +562,95 @@ nodes:${node}
           prompt: author a result`
     );
     expect(error?.error).toContain("returns.asks: 'asks' cannot select loop_group node 'group'");
+  });
+});
+
+describe('workflow result contract: returns.options', () => {
+  const OPTIONS = `[
+      { id: send-back, does: The builder continues., cost: A round. },
+      { id: take-as-is, does: The change goes on as it is., cost: Nothing more is built. }
+    ]`;
+  const parse = (returns: string): ParseResult =>
+    parseWorkflow(
+      `
+name: declares-options
+description: every ask offers the same options
+returns: ${returns}
+nodes:
+  - id: decide
+    prompt: decide
+    output_format:
+      type: object
+      properties:
+        summary: { type: string }
+`,
+      'declares-options.yaml'
+    );
+  const ask = {
+    question: 'Which way?',
+    context: 'Nothing settles it.',
+    recommendation: { option: 'take-as-is', why: 'It is done.' },
+    artifacts: [],
+  };
+
+  it('gives the agent a schema with no options and a recommendation limited to the declared ids', () => {
+    const { workflow, error } = parse(`{ node: decide, asks: asks, options: ${OPTIONS} }`);
+    expect(error).toBeNull();
+    if (workflow === null) throw new Error('Expected the workflow to load');
+    const declared = workflow.result?.options ?? [];
+    expect(declared.map(option => option.id)).toEqual(['send-back', 'take-as-is']);
+    const resolved = resolveWorkflow(workflow);
+    expect(validateWorkflowResultContract(resolved)).toBeNull();
+    const schema = resolved.nodes.find(node => node.id === 'decide')?.output_format;
+    if (schema === undefined) throw new Error('Expected an output_format');
+    expect(findPreparedStrictSchemaIssues(itemAsksJsonSchema(declared))).toEqual([]);
+
+    const check = (asks: unknown[]) => validateStructuredOutput({ summary: 's', asks }, schema);
+    const errors = (asks: unknown[]) => {
+      const result = check(asks);
+      return result.valid ? [] : result.errors;
+    };
+    expect(check([ask])).toEqual({ valid: true });
+    expect(check([{ ...ask, recommendation: null }])).toEqual({ valid: true });
+    expect(errors([{ ...ask, recommendation: { option: 'drop', why: 'x' } }])).toContainEqual(
+      '/asks/0/recommendation/option: must be equal to one of the allowed values (send-back, take-as-is)'
+    );
+    expect(errors([{ ...ask, options: declared }])).toContainEqual(
+      "/asks/0: must NOT have additional properties ('options')"
+    );
+
+    // At run end each ask gets the declared options, with does and cost from the YAML.
+    expect(parseItemAsks([ask], declared)).toEqual({
+      asks: [{ ...ask, options: declared }],
+    });
+  });
+
+  it.each([
+    ['without asks', `{ node: decide, options: ${OPTIONS} }`, 'declare returns.asks too'],
+    [
+      'with one option',
+      '{ node: decide, asks: asks, options: [{ id: land, does: d, cost: c }] }',
+      "Invalid 'returns'",
+    ],
+    [
+      'with an id twice',
+      '{ node: decide, asks: asks, options: [{ id: land, does: d, cost: c }, { id: land, does: d, cost: c }] }',
+      "'land' is declared more than once",
+    ],
+    [
+      'with the reserved other',
+      '{ node: decide, asks: asks, options: [{ id: land, does: d, cost: c }, { id: other, does: d, cost: c }] }',
+      "'other' is reserved",
+    ],
+    [
+      'with an option missing its cost',
+      '{ node: decide, asks: asks, options: [{ id: land, does: d }, { id: drop, does: d, cost: c }] }',
+      "Invalid 'returns'",
+    ],
+  ])('refuses options %s', (_case, returns, message) => {
+    const { workflow, error } = parse(returns);
+    expect(workflow).toBeNull();
+    expect(error?.error).toContain(message);
   });
 });
 
