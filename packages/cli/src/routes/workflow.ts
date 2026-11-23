@@ -21,17 +21,12 @@ export async function runWorkflowContinuation(
   subcommand: 'wake' | 'signal'
 ): Promise<number> {
   // `workflow wake schedule` installs an OS timer and never opens the store or a provider.
-  if (subcommand === 'wake' && positionals[2] === 'schedule') {
-    const { workflowWakeScheduleCommand } = await loadRoute(
-      () => import('../commands/wake-schedule'),
-      { providers: false }
-    );
-    return await workflowWakeScheduleCommand(positionals.slice(2), values);
-  }
-  const { workflowContinuationCommand } = await loadRoute(
+  const wakeSchedule = subcommand === 'wake' && positionals[2] === 'schedule';
+  const { workflowContinuationCommand, workflowWakeScheduleCommand } = await loadRoute(
     () => import('../commands/workflow-continuations'),
-    { database: await usesDatabaseStore() }
+    wakeSchedule ? { providers: false } : { database: await usesDatabaseStore() }
   );
+  if (wakeSchedule) return await workflowWakeScheduleCommand(positionals.slice(2), values);
   const { createCliWorkflowHost } = await import('../utils/workflow-host');
   const host = await createCliWorkflowHost({ forgeTrustedEnv });
   // Loaded only when wake asks for it, so `signal` never loads the source plugins.

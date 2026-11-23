@@ -306,6 +306,8 @@ test('names the observing sources nothing watches with the fix, and the watcher 
       ],
     })
   );
+  delete process.env.ARCHON_WEBHOOK_SOURCES;
+  expect((await check()).observing).toBeUndefined();
   process.env.ARCHON_WEBHOOK_SOURCES = sources;
   const observed = [
     {

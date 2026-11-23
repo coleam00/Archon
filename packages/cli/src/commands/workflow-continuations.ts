@@ -717,3 +717,6 @@ function wakeExitCode(engineMoved: boolean, passes: readonly boolean[]): number 
   if (engineMoved) return WAKE_ENGINE_CHANGED_EXIT;
   return passes.every(Boolean) ? 0 : 1;
 }
+
+/** Routed here by `workflow wake schedule`; it lives apart so `trigger check` can read the job. */
+export { workflowWakeScheduleCommand } from './wake-schedule';
