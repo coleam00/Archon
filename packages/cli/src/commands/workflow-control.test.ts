@@ -310,7 +310,7 @@ describe('workflowResumeCommand', () => {
     });
 
     await expect(workflowResumeCommand(createTestWorkflowHost(), 'run-no-path')).rejects.toThrow(
-      'Start it again with: archon workflow run implement --supersedes run-no-path'
+      'Start it again with: archon workflow run --supersedes run-no-path'
     );
   });
 

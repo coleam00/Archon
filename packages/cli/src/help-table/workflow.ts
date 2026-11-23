@@ -25,7 +25,8 @@ export const workflowHelp: HelpGroup = {
       command: 'workflow',
       subcommand: 'run',
       spec: 'workflow run <name> [msg]',
-      description: 'Run a workflow with optional message',
+      description:
+        'Run a workflow with optional message\nWith no name, --supersedes <run-id> starts that run again from its record',
     },
     {
       command: 'workflow',

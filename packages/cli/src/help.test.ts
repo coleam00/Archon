@@ -154,6 +154,7 @@ Commands:
                              List compact workflow descriptions
                              Use <name> --full for one exact description
   workflow run <name> [msg]  Run a workflow with optional message
+                             With no name, --supersedes <run-id> starts that run again from its record
   workflow status            Show running/paused workflows for this project
   workflow runs              List recent runs (all statuses) for this project
   workflow get <run-id>      Show detail for a single run (any status)

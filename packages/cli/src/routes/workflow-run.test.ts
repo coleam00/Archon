@@ -9,6 +9,7 @@ import { join, sep } from 'node:path';
 import { RUN_PROJECT_CONFLICT_FLAGS } from '../dispatch-guards';
 import * as commands from '../commands/workflow';
 import { captureWorkflowCommand } from '../test-support/command';
+import { makeContinuationRun } from '../test-support/workflow-continuation-fixture';
 import { runWorkflowRun } from './workflow-run';
 
 const roots: string[] = [];
@@ -43,6 +44,9 @@ type InvocationOptions = {
   explicitSource?: boolean;
   sourceFile?: boolean;
   claimBeforeFailure?: boolean;
+  positionals?: string[];
+  /** Runs on the host before the route; its result joins the route's values. */
+  prepare?: (host: WorkflowHost) => Promise<Record<string, unknown>>;
 };
 
 async function createDetachedRows(host: WorkflowHost, options: InvocationOptions) {
@@ -127,15 +131,17 @@ async function invoke(
       return options.missing ? null : (rows.find(row => row.id === id) ?? null);
     });
     try {
+      const prepared = options.prepare ? await options.prepare(host) : {};
       exitCode = await runWorkflowRun({
         host,
         commands: { ...commands, workflowRunCommand: run },
         values: {
           ...values,
+          ...prepared,
           ...(options.explicitSource ? { 'workflow-source': join(home, 'source') } : {}),
           ...(handedOver ? { 'internal-detached-run-id': handedOver.id } : {}),
         },
-        positionals: ['workflow', 'run', 'probe', 'message'],
+        positionals: options.positionals ?? ['workflow', 'run', 'probe', 'message'],
         command: 'workflow',
         subcommand: 'run',
         cwd: '/launch/subdir',
@@ -434,3 +440,85 @@ test.each(['source', 'project'])(
     expect(result.storedRun?.metadata.stop_reason).toBeUndefined();
   }
 );
+
+const failedRun = (metadata: Record<string, unknown>): WorkflowRun =>
+  makeContinuationRun({
+    id: '0b1ee8da-1111-2222-3333-444455556666',
+    workflow_name: '@probe',
+    codebase_id: repo.id,
+    status: 'failed',
+    user_message: 'the message',
+    metadata,
+    working_path: null,
+    item_id: 'item-row',
+  });
+
+/** `workflow run --supersedes <id>` with no name, against a failed run with this metadata. */
+function restart(metadata: Record<string, unknown>, values: Record<string, unknown> = {}) {
+  const failed = failedRun(metadata);
+  return invoke({ project: repo.id, ...values }, [repo], {
+    positionals: ['workflow', 'run'],
+    prepare: async host => {
+      spyOn(host.deps.store, 'getWorkflowRun').mockImplementation(async id =>
+        id === failed.id ? failed : null
+      );
+      spyOn(host.deps.store, 'getItem').mockImplementation(async () => ({
+        id: 'item-row',
+        projectKey: 'acme/app',
+        key: 'item-7',
+      }));
+      return { supersedes: failed.id };
+    },
+  });
+}
+
+const handoff = (lane: 'continue' | 'copy') => ({
+  checkout_handoff: {
+    runId: 'landed-run',
+    branch: 'archon/task-landed',
+    commit: 'a'.repeat(40),
+    lane,
+  },
+});
+
+test('without a workflow name, --supersedes starts the run from its record', async () => {
+  const result = await restart({ inputs: { note: "it's $x" } });
+  expect(result.exitCode, result.output).toBe(0);
+  const call = result.run.mock.calls[0];
+  expect(call?.slice(1, 4)).toEqual(['/launch', '@probe', 'the message']);
+  expect(call?.[4]).toMatchObject({
+    supersedesRunId: failedRun({}).id,
+    adoptRunId: undefined,
+    fromBranch: undefined,
+    inputs: ["note=it's $x"],
+  });
+});
+
+test('without a workflow name, a continue hand-off restarts as adoption of the hand-off run on the same item', async () => {
+  const result = await restart(handoff('continue'));
+  expect(result.exitCode, result.output).toBe(0);
+  expect(result.run.mock.calls[0]?.[4]).toMatchObject({
+    adoptRunId: 'landed-run',
+    supersedesRunId: undefined,
+    item: 'item-7',
+  });
+});
+
+test('without a workflow name, a copy hand-off restarts on a fresh worktree at its commit', async () => {
+  const result = await restart(handoff('copy'));
+  expect(result.exitCode, result.output).toBe(0);
+  expect(result.run.mock.calls[0]?.[4]).toMatchObject({
+    supersedesRunId: failedRun({}).id,
+    fromBranch: 'a'.repeat(40),
+  });
+});
+
+test.each([
+  ['input', ['note=other']],
+  ['detach', true],
+])('without a workflow name, --supersedes refuses --%s', async (flag, value) => {
+  const result = await restart({}, { [flag]: value });
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain(`--${flag}`);
+  expect(result.run).not.toHaveBeenCalled();
+});
