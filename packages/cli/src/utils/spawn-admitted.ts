@@ -21,6 +21,11 @@ import { startTriggerExecutor, TriggerExecutorRelayError } from './run-job-escap
  * that user, never as whoever spawned it: a node whose own run is scrubbed can hand off a
  * start for a connected user. The handoff marker keeps Archon's env files from replacing
  * that identity when the executor loads them.
+ *
+ * The token rides GH_TOKEN alone, which gh and the run's git helper read. In the
+ * executor's own env, GITHUB_TOKEN is install configuration: next to App credentials it
+ * reads as PAT mode and the executor refuses to start. So it is emptied, which also keeps
+ * a spawner's own token from reaching the run. Nodes set both keys for themselves.
  */
 export async function spawnAdmitted(
   host: {
@@ -35,7 +40,9 @@ export async function spawnAdmitted(
   if (request?.status !== 'admitted') throw new Error('The admitted start request is unavailable.');
   const identity = await resolveUserGithubIdentityEnv(host.deps, request.launch.run.origin?.userId);
   const identityHandoff =
-    Object.keys(identity).length > 0 ? { ...identity, [RUN_GITHUB_IDENTITY_HANDOFF_ENV]: '1' } : {};
+    Object.keys(identity).length > 0
+      ? { ...identity, GITHUB_TOKEN: '', [RUN_GITHUB_IDENTITY_HANDOFF_ENV]: '1' }
+      : {};
   const logDirectory = join(getArchonHome(), 'logs');
   await mkdir(logDirectory, { recursive: true });
   let pid: number | undefined;
