@@ -13,7 +13,6 @@ import {
   itemPullRequest,
 } from '../../workflows/sdlc/.shared/build';
 import { reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
-import { mergeWaits } from '../../workflows/sdlc/.shared/merge';
 import { state } from 'archon:script';
 import {
   newWorkItem,
@@ -77,21 +76,19 @@ function triaged(overrides: Partial<WorkItem> = {}, build?: BuildRecord): WorkIt
 }
 
 const QUESTION: BuildAsk = {
-  question: [
-    'Issue 7: relax the one-gate constraint, or park the item?',
-    'Relaxing it delivers the outcome; keeping it leaves the stop unreachable. Evidence: plan.md open question 1.',
-    'https://ghe.example.com/example/repo/pull/42',
-  ].join('\n\n'),
+  question: 'Issue 7: relax the one-gate constraint, or park the item?',
+  context: 'Relaxing it delivers the outcome; keeping it leaves the stop unreachable. Evidence: plan.md open question 1.',
   options: [
     {
       id: 'relax',
-      label: 'Relax it',
       does: 'continues with gates downstream',
-      value: { effect: 'continue', ruling: 'Synthesis and publish may gate on head_matches too.' },
+      cost: 'downstream nodes gate too',
+      effect: 'continue',
+      ruling: 'Synthesis and publish may gate on head_matches too.',
     },
-    { id: 'park', label: 'Park it', does: 'stops working the item', value: { effect: 'park', ruling: '' } },
+    { id: 'park', does: 'stops working the item', cost: 'the stop stays unreachable', effect: 'park', ruling: '' },
   ],
-  recommendation: { option: 'relax', why: 'the outcome needs downstream gates', confidence: 'medium' },
+  recommendation: { option: 'relax', why: 'the outcome needs downstream gates' },
 };
 
 describe('the build record', () => {
@@ -212,7 +209,7 @@ const PICK_SCRIPTS = new Set(['start', 'handoff', 'blocked', 'retriage', 'fire']
 
 function run(
   at: Install,
-  script: 'start' | 'facts' | 'handoff' | 'blocked' | 'apply' | 'checkout' | 'ruling' | 'retriage' | 'fire',
+  script: 'start' | 'facts' | 'handoff' | 'blocked' | 'apply' | 'checkout' | 'retriage' | 'fire',
   inputs: Record<string, string>,
   options: {
     issue?: TrackerSubject;
@@ -556,7 +553,7 @@ describe('the build queue scripts', () => {
         INPUTS_ANSWER: 'null',
       })
     );
-    expect(applied).toMatchObject({ decision: 'parked', question: '' });
+    expect(applied).toMatchObject({ decision: 'parked', asks: [] });
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'parked', rounds: [] } } });
   }, 60_000);
 
@@ -565,7 +562,7 @@ describe('the build queue scripts', () => {
     seed(at, triaged());
     const calls = callLog();
     const applied = run(at, 'apply', { ...applyInputs(CONTINUE), ARCHON_CALL_LOG: calls });
-    expect(ok(applied)).toMatchObject({ decision: 'continue', question: '', options: [], asked: null });
+    expect(ok(applied)).toMatchObject({ decision: 'continue', asks: [], asked: null });
     expect(notices(calls)).toEqual([{ text: 'Issue 7: another round; R1 is correctable', labels: ['stage=build', 'kind=continued', 'item=7'] }]);
     const doc = stored(at).value;
     expect(doc).toMatchObject({
@@ -622,22 +619,6 @@ describe('the build queue scripts', () => {
     expect((stored(at).value as WorkItem).facts.build?.rounds[0]?.validation).toEqual({ head: 'b'.repeat(40), passed: true });
   }, 60_000);
 
-  test("an ask hands the wait the agent's question, options and recommendation unchanged, with its labels", () => {
-    const at = install();
-    seed(at, triaged());
-    const applied = ok(run(at, 'apply', applyInputs(ASK)));
-    expect(applied).toEqual({
-      decision: 'asked',
-      summary: expect.stringContaining('Issue 7: asked.') as unknown,
-      ...QUESTION,
-      class: 'stop',
-      item: '7',
-      pr: '42',
-      asked: { ask: QUESTION, brief: 'continue PR 42 under the ruling', by: 'stop' },
-    });
-    expect(stored(at).value).toMatchObject({ facts: { build: { status: 'asking', brief: '', decisions: [{ decision: 'ask stop' }] } } });
-  }, 60_000);
-
   const PUSH = { push: { repo: PR.repo, number: PR.number } };
 
   function expectPushed(at: Install, applied: Record<string, unknown>): void {
@@ -658,7 +639,7 @@ describe('the build queue scripts', () => {
     const at = install();
     seed(at, triaged());
     const applied = ok(run(at, 'apply', applyInputs({ ...ASK, ...PUSH })));
-    expect(applied).toMatchObject({ decision: 'asked', class: 'stop' });
+    expect(applied).toMatchObject({ decision: 'asked', asked: { by: 'stop' } });
     expectPushed(at, applied);
   }, 60_000);
 
@@ -668,7 +649,7 @@ describe('the build queue scripts', () => {
     const done = { decision: 'done', brief: '', ...PUSH, reason: 'Ready at the head and CI green', ask: null };
     const calls = callLog();
     const applied = ok(run(at, 'apply', { ...applyInputs(done), ARCHON_CALL_LOG: calls }));
-    expect(applied).toMatchObject({ decision: 'ready', question: '', asked: null });
+    expect(applied).toMatchObject({ decision: 'ready', asks: [], asked: null });
     expect(notices(calls)).toEqual([
       { text: 'Issue 7: PR 42 is Ready and waits for the merge queue', labels: ['stage=build', 'kind=ready', 'item=7', 'pr=42'] },
     ]);
@@ -688,96 +669,6 @@ describe('the build queue scripts', () => {
     });
     expect(applied.code).not.toBe(0);
     expect(applied.stderr).toContain('is closed; nothing is pushed');
-    expect(stored(at).revision).toBe(before);
-  }, 60_000);
-
-  const ASKED = JSON.stringify({ ask: QUESTION, brief: 'continue PR 42 under the ruling', by: 'stop' });
-
-  test("a maintainer's choice is written into the issue body as a dated scope section, and the next launch starts from it", () => {
-    const at = install();
-    seed(at, triaged({}, record({ status: 'asking', brief: '' })));
-    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
-    const ruled = run(at, 'ruling', {
-      INPUTS_ITEM: JSON.stringify(SUBJECT),
-      INPUTS_ASKED: ASKED,
-      INPUTS_DECISION: 'relax',
-      INPUTS_TEXT: 'Only for this item.',
-      ARCHON_CALL_LOG: calls,
-    });
-    const output = ok(ruled);
-    expect(output.summary).toContain('its next round starts once this run ends');
-    const heading = output.section as string;
-    expect(heading).toMatch(/^Current scope \(maintainer ruling on the build queue's question on a stopped run, \d{4}-\d{2}-\d{2}\)$/);
-    expect(ruled.bodies).toEqual([
-      `The contract.\n\n\n## ${heading}\n\nSynthesis and publish may gate on head_matches too.\n\nThe maintainer's words: Only for this item.\n`,
-    ]);
-    const build = stored(at).value?.facts.build;
-    expect(stored(at).value?.claim).toBeNull();
-    expect(build).toMatchObject({ status: 'next', decisions: [{ decision: 'answered: continue', answer: { choice: 'relax', text: 'Only for this item.' } }] });
-    expect(build?.brief).toContain('continue PR 42 under the ruling');
-    expect(build?.brief).toContain(heading);
-  }, 60_000);
-
-  test("an `other` answer, which names no option, writes the person's text as the ruling and continues the item", () => {
-    const at = install();
-    seed(at, triaged({}, record({ status: 'asking', brief: '' })));
-    const ruled = run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: ASKED, INPUTS_DECISION: 'other', INPUTS_TEXT: 'Split it in two.' });
-    expect(ok(ruled)).toMatchObject({ decision: 'continue' });
-    expect(ruled.bodies[0]).toContain("The maintainer's words: Split it in two.");
-    expect(stored(at).value).toMatchObject({
-      claim: null,
-      facts: { build: { status: 'next', decisions: [{ decision: 'answered: continue', answer: { choice: 'other', text: 'Split it in two.' } }] } },
-    });
-  }, 60_000);
-
-  test('a park with no ruling and no words writes no section and stops working the item', () => {
-    const at = install();
-    seed(at, triaged({}, record({ status: 'asking', brief: '' })));
-    const ruled = run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: ASKED, INPUTS_DECISION: 'park', INPUTS_TEXT: '' });
-    expect(ok(ruled)).toMatchObject({ decision: 'parked', section: '' });
-    // With nothing asked, the node hands on apply's decision as the run's outcome.
-    expect(ok(run(at, 'ruling', { INPUTS_ASKED: 'null', INPUTS_APPLIED: 'ready', INPUTS_DECISION: '', INPUTS_TEXT: '' }))).toMatchObject({ decision: 'ready' });
-    expect(ruled.bodies).toEqual([]);
-    expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'parked', brief: '' } } });
-  }, 60_000);
-
-  const READY = { id: 'operator-finishes', label: 'Done by hand', does: 'hands the PR on', value: { effect: 'ready' as const, ruling: '' } };
-  const READY_ASKED = JSON.stringify({ ask: { ...QUESTION, options: [...QUESTION.options, READY] }, brief: 'b', by: 'stop' });
-
-  test('a ready answer releases the item to the merge queue with the PR triage named', () => {
-    const at = install();
-    seed(at, triaged({ facts: { triage: { ...TRIAGE, pull_request: 42 } } }, record({ status: 'asking', brief: '' })));
-    expect(ok(run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: READY_ASKED, INPUTS_DECISION: 'operator-finishes', INPUTS_TEXT: '' })).decision).toBe('ready');
-    const doc = stored(at).value as WorkItem;
-    expect(doc).toMatchObject({ claim: null, facts: { build: { status: 'ready' } } });
-    expect(buildWaits(doc)).toBe(false);
-    expect(mergeWaits(doc)).toBe(true);
-  }, 60_000);
-
-  test('a ready answer on an item with no pull request is refused before the issue body or the work item changes', () => {
-    const at = install();
-    seed(at, triaged({}, record({ status: 'asking', brief: '' })));
-    const before = stored(at);
-    const asked = JSON.stringify({ ask: { ...QUESTION, options: [...QUESTION.options, { ...READY, value: { ...READY.value, ruling: 'Done by hand.' } }] }, brief: 'b', by: 'stop' });
-    const ruled = run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: asked, INPUTS_DECISION: 'operator-finishes', INPUTS_TEXT: '' });
-    expect(ruled.code).not.toBe(0);
-    expect(ruled.stderr).toContain('has no pull request');
-    expect(ruled.bodies).toEqual([]);
-    expect(stored(at)).toEqual(before);
-  }, 60_000);
-
-  test('a section that does not read back records nothing', () => {
-    const at = install();
-    seed(at, triaged({}, record({ status: 'asking', brief: '' })));
-    const before = stored(at).revision;
-    const lost = run(
-      at,
-      'ruling',
-      { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: ASKED, INPUTS_DECISION: 'relax', INPUTS_TEXT: '' },
-      { writeLost: true }
-    );
-    expect(lost.code).not.toBe(0);
-    expect(lost.stderr).toContain('workitem.edit-body verification_failed');
     expect(stored(at).revision).toBe(before);
   }, 60_000);
 });

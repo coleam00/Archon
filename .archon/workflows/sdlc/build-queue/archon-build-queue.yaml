@@ -8,8 +8,9 @@ description: |
   check the change caused, ready without another round; one agent answers how that round
   ended; and after several rounds that each found new defects, one agent decides whether
   to ask the scope question instead of running another. A clear case acts on its own.
-  Anything unclear pauses as one attention item whose answer is a declared option; the
-  ruling is written into the issue body as a dated "Current scope" section. Every
+  Anything unclear ends the run with one ask on the item, and the answer starts the
+  next run through the `build-after-answer` binding: that run writes the ruling into
+  the issue body as a dated "Current scope" section before any agent reads it. Every
   decision is recorded on the item's work item.
 
   Use when: a trigger binding the operator installed starts it (see
@@ -39,9 +40,20 @@ inputs:
     description: >-
       After this many rounds since the item's scope last changed, the answer to a round
       that ends wanting another also judges whether the rounds converge.
+  decisions:
+    default: ""
+    description: >-
+      The settled answer to the ask a run of this workflow left on the item, as the
+      asks-settled binding passes it (`{ answers: true }`). Empty on any other start.
+  asked:
+    default: ""
+    description: >-
+      What that run asked (`{ result: /asked }`): the brief a continue starts from and
+      each option's effect and ruling. Empty on any other start.
 
-# How the run left the item: `ready`, `continue` or `parked`, after a person's answer too.
-returns: { node: ruling, outcome: decision }
+# How the run left the item: `ready`, `continue`, `parked`, or `asked` with its ask open
+# on the item.
+returns: { node: apply, outcome: decision, asks: asks }
 
 nodes:
   # Reads the item and writes the issue's body to build/issue.md, so every agent reads
@@ -52,7 +64,8 @@ nodes:
     output_format:
       type: object
       properties:
-        path: { type: string, enum: [closed, route] }
+        # `answered`: the run applied a ready or park answer, and nothing else follows.
+        path: { type: string, enum: [closed, answered, route] }
         item:
           type: object
           properties:
@@ -88,7 +101,14 @@ nodes:
         branch: { type: string }
         # The related work intake's triage found, for a round that plans.
         related: { type: array, items: { type: object } }
-      required: [path, item, url, read_at, record, brief, rounds, at_cap, pull_request, continues, branch, related]
+        # On the answered path, how the answer left the item; null otherwise.
+        answered:
+          type: [object, 'null']
+          properties:
+            decision: { type: string, enum: [ready, parked] }
+            summary: { type: string }
+          required: [decision, summary]
+      required: [path, item, url, read_at, record, brief, rounds, at_cap, pull_request, continues, branch, related, answered]
 
   # Routes the item and writes the brief the round starts from. The prompt names the
   # UI check policy's browser tool for a bug that needs a browser. It is not a `skills:` entry:
@@ -127,40 +147,36 @@ nodes:
         # choice launches.
         brief: { type: string, pattern: '\S' }
         reason: { type: string, pattern: '\S' }
-        # On ask, the wait's own fields as the person reads them; null otherwise. Each
-        # option's value is what the queue does when it is chosen.
+        # On ask, the question; null otherwise. Apply leaves it on the item as an ask,
+        # which the engine checks when the run completes. `effect` and `ruling` are the
+        # queue's own and stay off the ask: what the next run does on that option.
         ask: &ask
           type: [object, 'null']
           additionalProperties: false
           properties:
             question: { type: string, pattern: '\S' }
+            context: { type: string, pattern: '\S' }
             options:
               type: array
-              minItems: 1
+              minItems: 2
               items:
                 type: object
                 additionalProperties: false
                 properties:
                   id: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
-                  label: { type: string, pattern: '\S' }
                   does: { type: string, pattern: '\S' }
-                  value:
-                    type: object
-                    additionalProperties: false
-                    properties:
-                      effect: { type: string, enum: [continue, ready, park] }
-                      ruling: { type: string }
-                    required: [effect, ruling]
-                required: [id, label, does, value]
+                  cost: { type: string, pattern: '\S' }
+                  effect: { type: string, enum: [continue, ready, park] }
+                  ruling: { type: string }
+                required: [id, does, cost, effect, ruling]
             recommendation:
               type: object
               additionalProperties: false
               properties:
                 option: { type: string }
                 why: { type: string, pattern: '\S' }
-                confidence: { type: string, enum: [low, medium, high] }
-              required: [option, why, confidence]
-          required: [question, options, recommendation]
+              required: [option, why]
+          required: [question, context, options, recommendation]
       required: [decision, route, continues, ready_head, brief, reason, ask]
 
   # A round that continues a pull request (route's declaration) starts from that pull
@@ -258,7 +274,8 @@ nodes:
       required: [decision, brief, push, reason, ask_class, ask]
 
   # Checks the decision, performs the writes it declared and reads each one back:
-  # the push, then the work item.
+  # the push, then the work item. An ask is left on the item as the run's `asks`, and the
+  # run ends; it holds no place while the question waits.
   - id: apply
     script: apply
     runtime: bun
@@ -268,6 +285,7 @@ nodes:
       path: "$facts.output.path"
       item: { from: "$facts.output.item" }
       read_at: "$facts.output.read_at"
+      answered: { from: "$facts.output.answered" }
       pull_request: { from: "$facts.output.pull_request" }
       route: { from: "$route.output", if_skipped: null }
       ending: { from: "$ship.output", if_skipped: null }
@@ -281,64 +299,8 @@ nodes:
       properties:
         decision: { type: string, enum: [parked, ready, continue, asked] }
         summary: { type: string }
-        # The ask's question, options and recommendation, as the deciding agent wrote
-        # them: empty, none and null when nothing is asked.
-        question: { type: string }
-        options:
-          type: array
-          items:
-            type: object
-            properties:
-              id: { type: string }
-              label: { type: string }
-              does: { type: string }
-              value: { type: object }
-            required: [id, label, does, value]
-        recommendation: { type: [object, 'null'] }
-        class: { type: string, enum: ['', route, stop, scope] }
-        # The ask's subject labels: the issue number, and its pull request's or empty.
-        item: { type: string }
-        pr: { type: string }
-        # What the ruling node needs: the ask, the brief a continue option launches and
-        # which decision asked; null when nothing is asked.
+        # What the start the answer causes needs besides the answer: the brief a
+        # continue starts from, which decision asked, and each option's effect and
+        # ruling. Null when nothing is asked.
         asked: { type: [object, 'null'] }
-      required: [decision, summary, question, options, recommendation, class, item, pr, asked]
-
-  # A paused run gives its resource slot back, so another issue can build while this
-  # one waits. It still holds its item: no second run builds the issue meanwhile.
-  - id: ask
-    depends_on: [apply]
-    when: "$apply.output.question != ''"
-    wait:
-      attention: "$apply.output.question"
-      form: select
-      options: "$apply.output.options"
-      other: true
-      recommendation: "$apply.output.recommendation"
-      labels:
-        stage: build
-        kind: "$apply.output.class"
-        item: "$apply.output.item"
-        pr: "$apply.output.pr"
-
-  # Runs in every run, so the run's outcome is one node's: with nothing asked it hands
-  # on apply's decision, and after an ask it acts on the answer.
-  - id: ruling
-    script: ruling
-    runtime: bun
-    depends_on: [facts, apply, ask]
-    trigger_rule: none_failed_min_one_success
-    with:
-      item: { from: "$facts.output.item" }
-      read_at: "$facts.output.read_at"
-      applied: "$apply.output.decision"
-      asked: { from: "$apply.output.asked" }
-      decision: { from: "$ask.output.decision", if_skipped: "" }
-      text: { from: "$ask.output.text", if_skipped: "" }
-    output_format:
-      type: object
-      properties:
-        decision: { type: string, enum: [continue, ready, parked] }
-        section: { type: string }
-        summary: { type: string }
-      required: [decision, section, summary]
+      required: [decision, summary, asked]

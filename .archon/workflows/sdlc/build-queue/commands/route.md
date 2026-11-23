@@ -37,6 +37,6 @@ On ask, `brief` is what the next run starts from if the maintainer chooses to co
 
 ## The question
 
-`ask` is set only on ask; null on launch or ready. Write it as `attention.md` says. Say in the `question` that an `other` answer's text is written into the issue body as the ruling, and the next round works from it. An option's `effect` is `continue` (launches the next run from the brief), `ready` (hands the pull request to the merge queue as it stands, such as one the maintainer finishes by hand) or `park` (stops the queue working the item until a re-triage).
+`ask` is set only on ask; null on launch or ready. Write it as `attention.md` says. It is left on the issue's item and this run ends; the answer starts the next run. Say in the `context` that an `other` answer's text is written into the issue body as the ruling, and the next round works from it. An option's `effect` is `continue` (launches the next run from the brief), `ready` (hands the pull request to the merge queue as it stands, such as one the maintainer finishes by hand) or `park` (stops the queue working the item until a re-triage).
 
 Declare `reason`: one line a maintainer can check.

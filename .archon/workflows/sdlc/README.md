@@ -326,12 +326,17 @@ archon workflow respond <run-id> <choice> "why"                       # a paused
 archon workflow answer --ref ask:<id> --choose <option> --text "why"   # an ask a finished run left on its item
 ```
 
-The build queue pauses its run on a question. The merge stage ends its run and leaves
-the question on the issue's item, and the answer starts the stage again through the
-`merge-after-answer` binding (step 10). Its ask always has three options: `merge`
+The build queue and the merge stage end their run and leave the question on the issue's
+item, so no run waits for you. A build answer starts the issue's next build run through
+the `build-after-answer` binding (step 10). Its options are the agent's, each one either
+continuing the work with a ruling, handing the pull request to the merge stage as it
+stands, or parking the item; an answer with text and no option continues with the text
+as the ruling. A merge answer starts the stage again through the `merge-after-answer`
+binding. Its ask always has three options: `merge`
 approves the pull request at the head that was asked about, `return` sends it back to
 the build queue with the answer's text as what to change, and `park` stops work on it.
-An answer with text and no option starts nothing. A parked pull request comes back when
+A merge answer with text and no option starts nothing. A withdrawn ask starts nothing
+either, and leaves the item asking. A parked pull request comes back when
 you start the merge stage on its item by hand: `archon trigger fire --config <the
 merge-queue binding file> --item issue-42`.
 
@@ -365,6 +370,9 @@ recommends under `bindings:` in `.pack/pack.yaml`:
 - `build-queue` starts one build run for one issue. Nothing schedules it: the next three
   bindings fire it or start the same workflow.
 - `build-after-intake` starts an issue's first build round when its intake run ends.
+- `build-after-answer` starts the issue's next build run when the build queue's
+  question is answered. That run writes the ruling into the issue body and records the
+  answer before any agent reads the issue, then runs the round on a continue.
 - `build-pick` starts a build for every waiting issue on a schedule, and
   `build-pick-after-build` does when a build run ends, so a freed slot and a next round
   do not wait for the schedule.
@@ -387,7 +395,7 @@ archon pack bindings sdlc \
   --run-as <the id whoami printed> \
   --cwd /path/to/the/clone \
   --out /path/for/binding/files \
-  --only intake,build-queue,build-after-intake,build-pick,build-pick-after-build,merge-queue,merge-after-build,merge-after-checks,merge-after-answer,build-after-merge-return,merge-pick,discoveries
+  --only intake,build-queue,build-after-intake,build-after-answer,build-pick,build-pick-after-build,merge-queue,merge-after-build,merge-after-checks,merge-after-answer,build-after-merge-return,merge-pick,discoveries
 ```
 
 `--host` is the id of the execution host that starts the runs: a name you choose for
@@ -688,8 +696,8 @@ whose decision names no policy carries none of it.
 Each stage a person runs is one workflow, and a workflow that composes a stage includes
 that same file. A stage ends with its typed outcome as the run's result: whether it got
 there, and the report says why not. A stage that fails fails the run at the failed
-node. The composer owns what follows a stage's ending and asks through its own
-attention item when it needs a person, as the build queue does. A workflow that
+node. The composer owns what follows a stage's ending and, when it needs a person,
+ends with an ask on its item, as the build queue does. A workflow that
 includes `archon-deliver` keeps running after a failed delivery, because the report
 node completes either way, so it gates what follows on `$deliver.output.ready`.
 
