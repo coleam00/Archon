@@ -398,6 +398,18 @@ export async function inspectNativeSchedule(
   return { path: paths[0], registered: await backend.isRegistered(label), log, lastRunAt };
 }
 
+/**
+ * The file that defines the job, whether or not it exists, without asking the scheduler;
+ * `undefined` on a host Archon has no scheduler for.
+ */
+export function nativeScheduleDefinition(
+  target: NativeScheduleTarget,
+  options: NativeScheduleOptions = {}
+): string | undefined {
+  const backend = backendFor(options.platform ?? process.platform, target.archonHome, options);
+  return backend?.filePaths(scheduleLabel(target.id))[0];
+}
+
 /** Removes the job and the files install created; keeps the log. `false` when not installed. */
 export async function removeNativeSchedule(
   target: NativeScheduleTarget,

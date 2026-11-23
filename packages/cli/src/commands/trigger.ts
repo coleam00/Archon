@@ -689,7 +689,8 @@ async function installTimer(
  * starts, by the same check. It also reports what no run is refused for: a missing
  * `launch.cwd`, a run-ended binding that starts the workflow that ended, and two files that
  * start the same stage. Every other binding, including installed timers' config files
- * wherever they live, is listed under `bindings` (see `checkFireBindings`).
+ * wherever they live, is listed under `bindings` (`checkFireBindings`); sources that observe,
+ * under `observing` (`observingReport`).
  */
 async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOptions): Promise<void> {
   const bindings = await readOnBindings(getTriggersPath());
@@ -730,6 +731,7 @@ async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOption
     definitions:
       "Each binding is checked against the definitions a start without an item reads: the binding's base, else its project's default branch, as fetched now, with the launch checkout's uncommitted changes on top. A run on an item checks the bindings it may fire against the definitions it captured, before it starts.",
     ...checked,
+    observing: await (await import('./wake-observation')).observingReport(host, schedules),
   });
   const broken = [...checked.runEnded, ...checked.asksSettled, ...checked.bindings].filter(
     entry => entry.problems.length > 0

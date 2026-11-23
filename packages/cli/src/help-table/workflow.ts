@@ -175,10 +175,24 @@ export const workflowHelp: HelpGroup = {
             'exit 75 when Archon is updated, for the supervisor to restart',
         },
         { spec: '--json', description: 'One JSON document per pass' },
-        { spec: 'schedule install|remove', description: 'Manage a macOS wake timer' },
+        {
+          spec: '--sources <file>',
+          description:
+            'The ARCHON_WEBHOOK_SOURCES file for this process only; install records\n' +
+            "the installing shell's ARCHON_WEBHOOK_SOURCES in the job this way",
+        },
+        {
+          spec: 'schedule install|remove|status',
+          description:
+            "Manage this install's wake --watch job (launchd, systemd user timer,\n" +
+            'or Task Scheduler); status says whether it is installed and loaded,\n' +
+            "and how the job's watch ended its last pass",
+        },
         {
           spec: '--interval <seconds>',
-          description: 'Timer interval (positive integer, default: 5)',
+          description:
+            'install only: seconds before an exited watch starts again (default: 5;\n' +
+            'Windows: whole minutes, default 60)',
         },
       ],
     },
