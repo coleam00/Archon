@@ -34,6 +34,11 @@ nodes:
 
   - id: implement
     depends_on: [setup]
+    output_format:
+      type: object
+      properties:
+        done: { type: boolean }
+      required: [done]
     loop:
       prompt: |
         Read the PRD and implement the next unfinished story.
@@ -42,8 +47,8 @@ nodes:
         Setup context: $setup.output
         User request: $USER_MESSAGE
 
-        When all stories are done, output: <promise>COMPLETE</promise>
-      until: COMPLETE
+        Report done as true only when every story is implemented.
+      until_field: done
       max_iterations: 10
       fresh_context: true
 
@@ -629,12 +634,12 @@ description: Implement, test, and review until tests pass
 nodes:
   - id: fix-loop
     loop_group:
-      until: TESTS_PASS        # completion signal in the body's terminal output
+      until_bash: 'result=$test.output; [ "$result" = green ]'  # read the body's test node
       max_iterations: 5
       fresh_context: false      # false (default) = body AI sessions continue across iterations
       nodes:                    # sealed sub-DAG body — repeats as a unit
         - id: implement
-          prompt: Fix the failing tests. Emit TESTS_PASS only when all pass.
+          prompt: Fix the failing tests.
           depends_on: []
         - id: test
           bash: |
@@ -645,7 +650,7 @@ nodes:
             fi
           depends_on: [implement]
         - id: review
-          prompt: Summarize the result; echo TESTS_PASS if tests are green.
+          prompt: "Summarize this pass. The tests were $test.output."
           depends_on: [test]
 ```
 
