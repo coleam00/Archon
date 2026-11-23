@@ -38,6 +38,7 @@ import {
 } from './item-waits.conformance';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
 import { getSchemaSQL } from './bundled-schema';
+import { endPgPool } from '../test/end-pg-pool';
 import type { ItemAsk } from '@archon/workflows/schemas/item-ask';
 
 const baseUrl = process.env.ARCHON_TEST_PG_URL;
@@ -444,7 +445,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
       expect(await store.listWorkflowEvents(run.id)).toEqual(events);
     } finally {
       if (gateOpen) await gate.query('ROLLBACK');
-      await gate.end();
+      await endPgPool(gate);
       await harness.close();
     }
   });
@@ -535,7 +536,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
       ]);
     } finally {
       if (gateOpen) await gate.query('ROLLBACK');
-      await gate.end();
+      await endPgPool(gate);
       await harness.close();
     }
   });
@@ -582,7 +583,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
       expect((await harness.store.listOpenItemWaits()).map(wait => wait.about)).toEqual([HEAD]);
     } finally {
       if (gateOpen) await gate.query('ROLLBACK');
-      await gate.end();
+      await endPgPool(gate);
       await harness.close();
     }
   });
@@ -623,7 +624,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
       expect(outcomes.sort()).toEqual(['matched', 'unmatched']);
     } finally {
       if (gateOpen) await gate.query('ROLLBACK');
-      await gate.end();
+      await endPgPool(gate);
       await harness.close();
     }
   });
