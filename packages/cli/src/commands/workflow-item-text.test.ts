@@ -11,6 +11,7 @@ const read: ItemRead = {
     {
       id: 'run-done-1',
       workflow: 'deliver',
+      pack: null,
       status: 'completed',
       outcome: 'succeeded',
       startedAt: '2026-11-01T09:00:00.000Z',

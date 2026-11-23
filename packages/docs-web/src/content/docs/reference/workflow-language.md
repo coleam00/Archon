@@ -1723,6 +1723,18 @@ holds every link from or to the item, each with its `direction` and the `other` 
 ended link stays with `ended` set, and the engine acts on no link. Like
 `state`, it runs on the host: a container-isolated node cannot call it.
 
+Each run's `workflow` is the name it was started under. For a workflow in a pack in the
+project that is the bare name (`stage-check`); for the same pack installed with
+`archon plugin add` it is `owner/plugin:stage-check`. `pack` holds the run's pack `key` (the
+folder name for a project pack, `owner.plugin` for an installed one) and the `workflow`'s
+name within that pack, which is the same for both copies. It is `null` for a workflow
+outside a pack and for runs recorded before the engine kept a run's pack. To find the runs
+of a workflow of your own pack, compare `pack.workflow` rather than splitting `workflow`:
+
+```ts
+const checks = (item()?.runs ?? []).filter(run => run.pack?.workflow === 'stage-check');
+```
+
 ### Reading an earlier run's result
 
 A stage that needs what an earlier run on its item returned declares it as an input, naming

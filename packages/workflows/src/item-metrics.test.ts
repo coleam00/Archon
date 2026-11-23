@@ -7,6 +7,7 @@ function run(workflow: string, startedAt: string, outcome: string | null = null)
   return {
     id: `${workflow}-${startedAt}`,
     workflow,
+    pack: null,
     status: 'completed',
     outcome,
     startedAt,

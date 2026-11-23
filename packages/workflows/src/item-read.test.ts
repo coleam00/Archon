@@ -8,6 +8,7 @@ import type { StoredItemAsk } from './schemas/item-ask';
 import type { ItemLink } from './schemas/item-link';
 import type { ItemRuling } from './schemas/item-ruling';
 import type { WorkflowEventRow } from './schemas/workflow-event';
+import { RUN_DISPATCH_METADATA_KEY } from './schemas/run-metadata';
 import type { WorkflowItem, WorkflowRun } from './schemas/workflow-run';
 
 const item: WorkflowItem = { id: 'item-row', projectKey: 'acme/web', key: 'issue-7' };
@@ -294,6 +295,7 @@ describe('reading an item', () => {
       {
         id: 'first',
         workflow: 'deliver',
+        pack: null,
         status: 'completed',
         outcome: 'built',
         startedAt: '2026-11-01T09:00:00.000Z',
@@ -309,6 +311,7 @@ describe('reading an item', () => {
       {
         id: 'second',
         workflow: 'deliver',
+        pack: null,
         status: 'running',
         outcome: null,
         startedAt: '2026-11-01T11:00:00.000Z',
@@ -449,6 +452,38 @@ describe('reading an item', () => {
       links: [],
       degraded: [],
     });
+  });
+
+  test('a run names its workflow within its pack the same for a project and an installed copy', async () => {
+    const dispatched = (pack: string, source: string) => ({
+      [RUN_DISPATCH_METADATA_KEY]: { base_branch: 'dev', pack, source },
+    });
+    const project = run('project', {
+      workflow_name: 'stage-check',
+      metadata: dispatched('archon-software-factory', 'project'),
+    });
+    const installed = run('installed', {
+      workflow_name: 'acme/archon-software-factory:stage-check',
+      metadata: dispatched('acme.archon-software-factory', 'installed'),
+    });
+    const packed: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        getItemRuns: async () => ({ item, runs: [project, installed], descendantIds: [] }),
+      },
+    };
+    const read = await readItem(packed, item.projectKey, item.key);
+    expect(read?.runs.map(({ workflow, pack }) => ({ workflow, pack }))).toEqual([
+      {
+        workflow: 'stage-check',
+        pack: { key: 'archon-software-factory', workflow: 'stage-check' },
+      },
+      {
+        workflow: 'acme/archon-software-factory:stage-check',
+        pack: { key: 'acme.archon-software-factory', workflow: 'stage-check' },
+      },
+    ]);
   });
 
   test('a start admitted while the item is read is listed once, as a run', async () => {

@@ -8101,6 +8101,10 @@ export interface components {
       runs: {
         id: string;
         workflow: string;
+        pack: {
+          key: string;
+          workflow: string;
+        } | null;
         /** @enum {string} */
         status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
         outcome: string | null;
@@ -8773,6 +8777,10 @@ export interface components {
         runs: {
           id: string;
           workflow: string;
+          pack: {
+            key: string;
+            workflow: string;
+          } | null;
           /** @enum {string} */
           status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
           outcome: string | null;

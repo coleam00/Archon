@@ -64,6 +64,18 @@ export function installedWorkflowName(
   return `${pack.owner}/${pack.name}:${name}`;
 }
 
+/**
+ * The name `workflowName` has within the installed pack `packKey`: what is left after the
+ * {@link installedWorkflowName} prefix. Null when the key is not an installed pack key or
+ * the name does not carry that pack's prefix.
+ */
+export function nameWithinInstalledPack(packKey: string, workflowName: string): string | null {
+  const pack = splitInstalledPackKey(packKey);
+  if (pack === null) return null;
+  const prefix = installedWorkflowName(pack, '');
+  return workflowName.startsWith(prefix) ? workflowName.slice(prefix.length) : null;
+}
+
 async function readPackManifest(dir: string): Promise<WorkflowPackManifest> {
   const file = join(dir, PLUGIN_MANIFEST_FILE);
   let raw: unknown;
