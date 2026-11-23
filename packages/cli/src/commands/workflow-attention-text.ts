@@ -144,20 +144,30 @@ function overdueWaitLines(item: Extract<AttentionQueueItem, { kind: 'overdue_wai
   ];
 }
 
+/** A path as one shell word: quoted only when it holds a character a shell would split on. */
+const shellWord = (text: string): string =>
+  /^[\w@%+=:,./-]+$/u.test(text) ? text : `'${text.replaceAll("'", `'\\''`)}'`;
+
 /**
  * What a stopped item says: the stage, the outcome it ended in and its summary, and the
- * commands that read the item and move it. A new run on the item closes it.
+ * commands that read the item and move it, each working from any directory: the item is
+ * read through its run, and a start names the project's checkout. A new run closes it.
  */
 function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string[] {
   const { runId, workflow, outcome } = item.stoppedIn;
   const lines = [`${workflow} ended as '${outcome}'; nothing started and it left no ask`];
   if (item.summary !== null) lines.push(`summary: ${oneLine(item.summary)}`);
-  lines.push(`show the run: ${command(`get ${runId}`)}`);
-  if (item.item !== undefined)
+  lines.push(
+    `show the run: ${command(`get ${runId}`)}`,
+    `read the item: ${command(`runs --item-of ${runId}`)}`
+  );
+  if (item.item !== undefined) {
+    const cwd = item.checkout === null ? '' : ` --cwd ${shellWord(item.checkout)}`;
+    const start = command(`run <workflow> --item ${item.item.key}${cwd}`);
     lines.push(
-      `read the item: ${command(`runs --item ${item.item.key}`)}`,
-      `run a stage on it, which closes this: ${command(`run <workflow> --item ${item.item.key}`)}`
+      `run a stage on it, which closes this: ${start}${item.checkout === null ? ", from the item's project" : ''}`
     );
+  }
   return lines;
 }
 

@@ -13,7 +13,7 @@ import {
   startedWorkflowInputProblems,
   type SuppliedAtStart,
 } from '@archon/core/workflows/binding-workflow';
-import { getTriggersPath } from '@archon/core/workflows/run-ended';
+import { getTriggersPath, type OnBindingFile } from '@archon/core/workflows/run-ended';
 import { triggerConfigSchema, type TriggerConfig } from '@archon/workflows/schemas/resource-start';
 import {
   discoverBindingWorkflows,
@@ -177,12 +177,14 @@ async function fireBindingProblems(
  * Every binding without `on`, checked as a start of it would be. A timer's job runs
  * `trigger fire --config` alone, with no `--inputs`, so a timer, or a file with `schedule`,
  * must supply every required input itself; a fire-only file may leave one to `--inputs`.
+ * `readable` is each binding that could be read, for the reports that read what it starts.
  */
 export async function checkFireBindings(
   deps: BindingDefinitionsDeps,
   schedules: NativeScheduleOptions
-): Promise<CheckedFireBinding[]> {
+): Promise<{ checked: CheckedFireBinding[]; readable: OnBindingFile[] }> {
   const checked: CheckedFireBinding[] = [];
+  const readable: OnBindingFile[] = [];
   for (const entry of await readFireBindingFiles(schedules)) {
     const base = { file: entry.file, timer: entry.timer };
     if ('problem' in entry) {
@@ -200,6 +202,11 @@ export async function checkFireBindings(
     }
     const { config } = entry;
     const { launch } = config.binding;
+    readable.push({
+      file: entry.file,
+      sourceInstanceId: config.sourceInstanceId,
+      binding: config.binding,
+    });
     const timer = config.schedule !== undefined || entry.timer !== null;
     checked.push({
       ...base,
@@ -212,5 +219,5 @@ export async function checkFireBindings(
       problems: await fireBindingProblems(deps, config, timer ? { mapped: [] } : 'at-fire'),
     });
   }
-  return checked;
+  return { checked, readable };
 }

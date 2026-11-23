@@ -11,9 +11,11 @@ import { isAttentionDegraded, type AttentionRead } from './schemas/attention-deg
 import {
   askItemRef,
   projectRef,
+  projectRefForRun,
   runProject,
   waitItemRef,
   type AskQueueItem,
+  type AttentionQueueItemSources,
   type AttentionQueueItemWithoutRun,
   type CodebaseCache,
   type OverdueWaitQueueItem,
@@ -177,16 +179,23 @@ export async function stoppedQueueItem(
   const stopped = readItemStopped(run.metadata);
   if (stopped === undefined || run.item_id === null || run.completed_outcome === null) return null;
   const item = await store.getItem(run.item_id);
+  let codebase: AttentionQueueItemSources['codebase'] = null;
+  if (run.codebase_id !== null) {
+    const read = codebases.get(run.codebase_id) ?? store.getCodebase(run.codebase_id);
+    codebases.set(run.codebase_id, read);
+    codebase = await read;
+  }
   return {
     kind: 'stopped',
     ref: stoppedItemRef(run.id),
-    project: await runProject({ store }, run, codebases),
+    project: projectRefForRun(run, codebase),
     ...(item === null ? {} : { item }),
     revision: 1,
     labels: {},
     pausedAt: run.completed_at?.toISOString() ?? null,
     stoppedIn: { runId: run.id, workflow: run.workflow_name, outcome: run.completed_outcome },
     summary: stopped.summary,
+    checkout: codebase?.default_cwd ?? null,
   };
 }
 

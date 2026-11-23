@@ -21,10 +21,14 @@ function decide(values: string[]) {
   };
 }
 
-function stage(name: string, values: string[], asks = false) {
+function stage(name: string, values: string[], asks = false, waits = false) {
   return wf(name, [decide(values)], {
     returns: 'decide',
-    result: { outcome: 'outcome', ...(asks ? { asks: 'asks' } : {}) },
+    result: {
+      outcome: 'outcome',
+      ...(asks ? { asks: 'asks' } : {}),
+      ...(waits ? { waits: 'waits' } : {}),
+    },
   });
 }
 
@@ -95,7 +99,7 @@ describe('a pack graph', () => {
       stages(
         stage('a', ['ready', 'park']),
         stage('b', ['done', 'stuck'], true),
-        stage('c', ['shipped'])
+        stage('c', ['shipped'], false, true)
       ),
       {
         declared: {
@@ -130,12 +134,13 @@ describe('a pack graph', () => {
       graph.stages.map(s => [
         s.name,
         s.asks,
+        s.waits,
         s.outcome?.values.filter(v => v.startsNothing).map(v => v.value),
       ])
     ).toEqual([
-      ['a', false, ['park']],
-      ['b', true, ['done', 'stuck']],
-      ['c', false, ['shipped']],
+      ['a', false, false, ['park']],
+      ['b', true, false, ['done', 'stuck']],
+      ['c', false, true, ['shipped']],
     ]);
   });
 

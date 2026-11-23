@@ -721,10 +721,11 @@ async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOption
     cwd: entry.binding.launch.cwd,
     problems: problems ?? [],
   });
+  const fire = await checkFireBindings(deps, schedules);
   const checked = {
     runEnded: runEnded.map((entry, index) => listed(entry, runEndedProblems[index])),
     asksSettled: asksSettled.map((entry, index) => listed(entry, asksSettledProblems[index])),
-    bindings: await checkFireBindings(deps, schedules),
+    bindings: fire.checked,
   };
   await writeJsonLine({
     directory: getTriggersPath(),
@@ -734,8 +735,8 @@ async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOption
     ...checked,
     // Not a problem: the exit status ignores it, and attention lists such an item.
     stopsExplained:
-      'Outcomes of the workflows these files name that are not final (returns.final), that no run-ended file binds, and whose workflow can leave no ask or wait. A run on an item that ends in one stops the item, and `archon workflow attention` lists it as stopped.',
-    stops: await runEndedStops(bindings, deps),
+      'Outcomes of the workflows the bindings above name, started by any of them or ended or asking in an on binding, that are not final (returns.final), that no run-ended file binds, and whose workflow can leave no ask or wait. A run on an item that ends in one stops the item, and `archon workflow attention` lists it as stopped.',
+    stops: await runEndedStops([...bindings, ...fire.readable], deps),
   });
   const broken = [...checked.runEnded, ...checked.asksSettled, ...checked.bindings].filter(
     entry => entry.problems.length > 0

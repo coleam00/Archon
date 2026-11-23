@@ -198,6 +198,11 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     stoppedIn: z.object({ runId: z.string(), workflow: z.string(), outcome: z.string() }),
     /** The run's declared `returns.summary`, or null when it declares or gave none. */
     summary: z.string().nullable(),
+    /**
+     * The project's checkout, the directory a start on the item runs from (`--cwd`); null
+     * when the run has no registered project.
+     */
+    checkout: z.string().nullable(),
   }),
 ]);
 export type AttentionQueueItem = z.infer<typeof attentionQueueItemSchema>;

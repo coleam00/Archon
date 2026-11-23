@@ -78,6 +78,8 @@ const packGraphStageSchema = z.object({
     .nullable(),
   /** The stage declares `result.asks`, so a run can end leaving questions on its item. */
   asks: z.boolean(),
+  /** The stage declares `result.waits`, so a run can end leaving its item waiting on an event. */
+  waits: z.boolean(),
   nodes: z.array(packGraphNodeSchema),
 });
 
@@ -577,6 +579,7 @@ function graphStage(stage: Stage, started: ReadonlySet<string>): PackGraph['stag
     returns: stage.returns ?? null,
     outcome,
     asks: stage.result?.asks !== undefined,
+    waits: stage.result?.waits !== undefined,
     nodes: stageNodes(stage),
   };
 }

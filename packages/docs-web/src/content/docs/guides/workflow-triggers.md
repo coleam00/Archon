@@ -430,11 +430,11 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
 
 ### When nothing follows a run
 
-A run on an item can end where nothing starts: no binding starts from its outcome. If it also left no [ask](#start-a-stage-again-when-its-asks-are-answered) and no wait, nothing will move the item again. The engine records that in the write that completes the run, and `archon workflow attention` lists the item as `stopped`, with the stage, the outcome it ended in and the summary the workflow declares in [`returns.summary`](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs). The item takes no answer. It stays listed until another run on the item starts, or ends after this one; a run started by hand on the item closes it.
+A run on an item can end where nothing starts: no binding starts from its outcome. If it also left no [ask](#start-a-stage-again-when-its-asks-are-answered) and no wait, nothing will move the item again. The engine records that in the write that completes the run, and `archon workflow attention` lists the item as `stopped`, with the stage, the outcome it ended in and the summary the workflow declares in [`returns.summary`](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs). The item takes no answer. It stays listed until another run starts on the item, in whatever status; a run started by hand on the item closes it.
 
 An outcome after which the item is done, such as a landed change, is not a stop. List it in [`returns.final`](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs) and a run that ends in it is not listed. Whether a binding started something is decided once, when the run completes: a file added to the triggers directory later does not clear an item that already stopped.
 
-`archon trigger check` lists, under `stops`, each outcome after which an item would stop: an outcome of a workflow its files name that is not final, that no run-ended file in the project binds, of a workflow that declares neither `returns.asks` nor `returns.waits`. It is a report, not a problem: it does not change the exit status.
+`archon trigger check` lists, under `stops`, each outcome after which an item would stop: an outcome of a workflow a binding names (ended, asking, or started by any binding, including a fire-only file or an installed timer) that is not final, that no run-ended file in the project binds, of a workflow that declares neither `returns.asks` nor `returns.waits`. It is a report, not a problem: it does not change the exit status.
 
 ### See how a pack's stages connect
 
@@ -458,6 +458,7 @@ An outcome after which the item is done, such as a landed change, is not a stop.
         ]
       },
       "asks": true,
+      "waits": false,
       "nodes": [
         { "id": "read", "kind": "agent", "dependsOn": [], "loopGroup": null, "blocks": [], "fanOut": null },
         { "id": "decide", "kind": "agent", "dependsOn": ["read"], "loopGroup": null, "blocks": [], "fanOut": null }
@@ -475,6 +476,7 @@ An outcome after which the item is done, such as a landed change, is not a stop.
         ]
       },
       "asks": false,
+      "waits": false,
       "nodes": [
         { "id": "rounds", "kind": "loop_group", "dependsOn": [], "loopGroup": null, "blocks": [], "fanOut": null },
         { "id": "rounds.implement", "kind": "agent", "dependsOn": [], "loopGroup": "rounds", "blocks": [], "fanOut": null },
@@ -489,7 +491,7 @@ An outcome after which the item is done, such as a landed change, is not a stop.
         { "id": "verdict", "kind": "exec", "dependsOn": ["rounds"], "loopGroup": null, "blocks": [], "fanOut": null }
       ]
     },
-    { "name": "ship", "returns": null, "outcome": null, "asks": false, "nodes": [] }
+    { "name": "ship", "returns": null, "outcome": null, "asks": false, "waits": false, "nodes": [] }
   ],
   "arrows": [
     {
@@ -524,6 +526,7 @@ An outcome after which the item is done, such as a landed change, is not a stop.
 - An arrow is `active` when a trigger file launches it in this project. A declared arrow with no file is reported with `active: false`, not left out. `to` may be a workflow outside the pack. An active arrow's `installed.problems` is what `archon trigger check` reports as the check a run gets before it starts: when it is not empty, every run of `from.stage` on an item is refused before it starts, so the arrow starts nothing until the file is fixed. A file whose `launch.cwd` no longer exists is in no project, so the end of a run never starts it; it is shown with that problem because which project it was meant for cannot be known.
 - A declared binding that names a workflow which is not a stage as the pack loaded keeps the name as written, and its `declared.problems` says so. When that stage failed to load, its load error is in `discoveryErrors`; the rest of the graph is still read.
 - An arrow from an [asks-settled binding](#start-a-stage-again-when-its-asks-are-answered) has `from: { "stage", "settled" }` in place of `outcome`, where `settled` is the binding's `answered`, `withdrawn` or `any`, and `option` when the binding names one ([options](#start-a-different-stage-for-each-option)); a pack binding that lists several options is one arrow per option. It starts nothing for an outcome, so it does not change `startsNothing`.
+- `waits` says the stage declares `returns.waits`, as `asks` says it declares `returns.asks`.
 - `startsNothing` marks an outcome no active arrow without problems leaves, and `final` one the stage lists in [`returns.final`](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs): after it the item needs nothing more. A run on an item that ends in an outcome that starts nothing and is not final, leaving no ask or wait, [stops the item](#when-nothing-follows-a-run), which `archon workflow attention` lists.
 - `discoveryErrors` lists every workflow that failed to load from the source the pack was read from. A stage that failed is missing from `stages`, so a non-empty list means the graph may be incomplete.
 - `loaded` is the copy of the pack the graph was read from, `{ source, key, dir }`, and `otherCopies` every other copy of the same pack in reach under another key, such as an installed `acme.factory` beside a project `factory`. Asking for that key reads that copy. `dir` is `null` for a bundled pack a compiled binary reads from its embedded bytes.

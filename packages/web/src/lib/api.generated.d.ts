@@ -7861,6 +7861,7 @@ export interface components {
             outcome: string;
           };
           summary: string | null;
+          checkout: string | null;
         };
     AttentionQueueCountsResponse: {
       counts: components['schemas']['AttentionQueueCounts'];
@@ -8219,6 +8220,7 @@ export interface components {
               outcome: string;
             };
             summary: string | null;
+            checkout: string | null;
           }
         | unknown;
     };
@@ -8682,6 +8684,7 @@ export interface components {
               outcome: string;
             };
             summary: string | null;
+            checkout: string | null;
           }
       )[];
       answers: (
@@ -9391,6 +9394,7 @@ export interface components {
                 outcome: string;
               };
               summary: string | null;
+              checkout: string | null;
             }
         )[];
         answers: (
@@ -10003,6 +10007,7 @@ export interface components {
                   outcome: string;
                 };
                 summary: string | null;
+                checkout: string | null;
               };
         }
       | (
@@ -11440,6 +11445,7 @@ export interface components {
           }[];
         } | null;
         asks: boolean;
+        waits: boolean;
         nodes: {
           id: string;
           kind: string;

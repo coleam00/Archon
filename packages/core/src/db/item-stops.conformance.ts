@@ -2,7 +2,8 @@
  * Conformance for stopped items on the SQL stores, run by the SQLite and PostgreSQL
  * integration tests: a completed run that recorded a stop (`itemStoppedMetadata`) puts its
  * item in the attention queue as `stopped` while it is the item's last run, the item takes
- * no answer, and any later run on the item, whatever its status, takes it out.
+ * no answer, and any later run on the item, whatever its status, takes it out. The runs
+ * follow each other at once, as fast stages do, so on SQLite they share one second.
  */
 import { expect, test } from 'bun:test';
 import { listAttentionQueue, readAttentionQueueItemByRef } from '@archon/workflows/attention-queue';
@@ -11,27 +12,33 @@ import { CONFORMANCE_CODEBASE_ID } from '@archon/workflows/store-conformance';
 import { answerAttentionItem } from '../operations/attention-items';
 import { itemDeps, operator, type Harness } from './item-asks.conformance';
 
-/** Start a run of `workflow` on item `pr-7`, claimed so it is running. */
-async function startOnItem(harness: Harness, workflow: string): Promise<string> {
+/** Create a run of `workflow` on item `pr-7`. */
+async function createOnItem(harness: Harness, workflow: string): Promise<string> {
   const run = await harness.store.createWorkflowRun({
     workflow_name: workflow,
     user_message: '',
     codebase_id: CONFORMANCE_CODEBASE_ID,
     item_key: 'pr-7',
   });
-  await harness.store.claimPendingWorkflowRun(run.id);
   return run.id;
 }
 
-/**
- * Move a run's end into the past, as time passing would: SQLite keeps end times to the
- * second, so two ends in one test would otherwise tie and fall to the id.
- */
-async function endedAt(harness: Harness, runId: string, at: string): Promise<void> {
-  await harness.db.query('UPDATE remote_agent_workflow_runs SET completed_at = $2 WHERE id = $1', [
-    runId,
-    at,
-  ]);
+/** Run `workflow` on item `pr-7` to completion with `outcome`, recording a stop when `stop`. */
+async function completeOnItem(
+  harness: Harness,
+  workflow: string,
+  outcome: string,
+  stop?: string
+): Promise<string> {
+  const id = await createOnItem(harness, workflow);
+  await harness.store.claimPendingWorkflowRun(id);
+  await harness.store.completeWorkflowRun(
+    id,
+    { duration_ms: 1 },
+    stop === undefined ? undefined : itemStoppedMetadata(stop),
+    { outcome: { kind: 'enum', value: outcome } }
+  );
+  return id;
 }
 
 export function describeSqlItemStopConformance(makeHarness: () => Promise<Harness>): void {
@@ -44,20 +51,14 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
           item => 'kind' in item && item.kind === 'stopped'
         );
 
-      // A completion that recorded no stop lists nothing.
-      const landed = await startOnItem(harness, 'deliver');
-      await harness.store.completeWorkflowRun(landed, { duration_ms: 1 }, undefined, {
-        outcome: { kind: 'enum', value: 'landed' },
-      });
+      // A completion that recorded no stop lists nothing, and an older run does not hide a stop.
+      await completeOnItem(harness, 'deliver', 'landed');
       expect(await stopped()).toEqual([]);
-      await endedAt(harness, landed, '2020-01-01 00:00:00');
-
-      const ended = await startOnItem(harness, 'deliver');
-      await harness.store.completeWorkflowRun(
-        ended,
-        { duration_ms: 1 },
-        itemStoppedMetadata('The plan missed the schema change.'),
-        { outcome: { kind: 'enum', value: 'replan' } }
+      const ended = await completeOnItem(
+        harness,
+        'deliver',
+        'replan',
+        'The plan missed the schema change.'
       );
       const [item] = await stopped();
       expect(item).toMatchObject({
@@ -66,6 +67,7 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
         item: { key: 'pr-7' },
         stoppedIn: { runId: ended, workflow: 'deliver', outcome: 'replan' },
         summary: 'The plan missed the schema change.',
+        checkout: '/conformance',
         pausedAt: expect.any(String),
       });
       if (item === undefined || !('ref' in item)) throw new Error('No stopped item');
@@ -74,18 +76,32 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
       ).toMatchObject({ kind: 'takes_no_answer' });
 
       // A later run on the item, still pending, takes it out; so does its end.
-      const next = await harness.store.createWorkflowRun({
-        workflow_name: 'plan',
-        user_message: '',
-        codebase_id: CONFORMANCE_CODEBASE_ID,
-        item_key: 'pr-7',
-      });
+      const next = await createOnItem(harness, 'plan');
       expect(await stopped()).toEqual([]);
       expect(await readAttentionQueueItemByRef(deps.queue, item.ref)).toEqual({ kind: 'none' });
-      await endedAt(harness, ended, '2020-01-02 00:00:00');
-      await harness.store.claimPendingWorkflowRun(next.id);
-      await harness.store.failWorkflowRun(next.id, 'boom');
+      await harness.store.claimPendingWorkflowRun(next);
+      await harness.store.completeWorkflowRun(next, { duration_ms: 1 }, undefined, {
+        outcome: { kind: 'enum', value: 'landed' },
+      });
       expect(await stopped()).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('of two stops on an item only the later run is listed', async () => {
+    const harness = await makeHarness();
+    try {
+      const deps = itemDeps(harness);
+      // Repeated so a tie broken by random ids would show; insertion order breaks it truly.
+      for (let round = 0; round < 5; round++) {
+        await completeOnItem(harness, 'deliver', 'replan', 'first');
+        const later = await completeOnItem(harness, 'review', 'blocked', 'second');
+        const listed = (await listAttentionQueue(deps.queue)).filter(
+          item => 'kind' in item && item.kind === 'stopped'
+        );
+        expect(listed).toMatchObject([{ stoppedIn: { runId: later }, summary: 'second' }]);
+      }
     } finally {
       await harness.close();
     }

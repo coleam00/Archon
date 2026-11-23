@@ -743,7 +743,7 @@ function graphText(graph: PackGraph, source: string, explicitSource: boolean): s
       .filter(v => v.startsNothing)
       .map(
         v =>
-          `  ${stage.name}:${v.value}${v.final ? ' (final)' : stage.asks ? '' : ' (no asks: the item stops, and attention lists it)'}`
+          `  ${stage.name}:${v.value}${v.final ? ' (final)' : stage.asks || stage.waits ? '' : ' (no asks or waits: the item stops, and attention lists it)'}`
       )
   );
   if (nothing.length > 0) lines.push('', 'Outcomes that start nothing:', ...nothing);

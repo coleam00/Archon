@@ -5,24 +5,19 @@
  */
 import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import { ITEM_STOPPED_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
-import {
-  TERMINAL_WORKFLOW_STATUSES,
-  type WorkflowRun,
-} from '@archon/workflows/schemas/workflow-run';
-import { getDialect, pool } from './connection';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { getDatabaseType, getDialect, pool } from './connection';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import { getLog } from './workflow-run-shared';
 
 /**
  * The completed runs that stopped their item and are still its last run (see
- * `IWorkflowStore.listStoppedItemRuns`). Another run on the item ends the stop when it is
- * not terminal (pending, running or paused, so the item is moving) or ended after this
- * one. End time, not start time, orders terminal runs: SQLite keeps both to the second,
- * and a run that started earlier but ended later is the item's last. The id breaks a tie,
- * so of two runs that ended in one second exactly one is the last.
+ * `IWorkflowStore.listStoppedItemRuns`). Runs on an item are ordered as `getItemRuns` orders
+ * them: by start time, and on SQLite, which records it to the second, by insertion order
+ * within a second. Any run after this one, in any status, ends the stop.
  */
 export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[]> {
-  const terminal = TERMINAL_WORKFLOW_STATUSES.map((_, i) => `$${String(i + 1)}`).join(', ');
+  const tie = getDatabaseType() === 'sqlite' ? 'rowid' : 'id';
   const result = await pool.query<WorkflowRunRow>(
     `SELECT r.*, CAST(r.origin AS TEXT) AS origin
      FROM remote_agent_workflow_runs r
@@ -31,12 +26,10 @@ export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[
        AND NOT EXISTS (
          SELECT 1 FROM remote_agent_workflow_runs n
          WHERE n.item_id = r.item_id AND n.id <> r.id
-           AND (n.status NOT IN (${terminal})
-             OR n.completed_at > r.completed_at
-             OR (n.completed_at = r.completed_at AND n.id > r.id))
+           AND (n.started_at > r.started_at
+             OR (n.started_at = r.started_at AND n.${tie} > r.${tie}))
        )
-     ORDER BY r.completed_at, r.id`,
-    [...TERMINAL_WORKFLOW_STATUSES]
+     ORDER BY r.started_at, r.${tie}`
   );
   const runs: AttentionRead<WorkflowRun>[] = [];
   for (const row of result.rows) {

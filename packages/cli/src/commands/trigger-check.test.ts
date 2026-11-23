@@ -259,3 +259,22 @@ test('a fire-only file may leave a required input to --inputs, but not pass an u
     expect.stringContaining("does not declare input 'b'"),
   ]);
 });
+
+test('reports the outcomes after which a stage a fire-only file starts would stop its item', async () => {
+  const { root, archonHome, config, check } = await fixture();
+  // The fixture's stage, with an outcome nothing binds and no asks, waits or final.
+  await writeFile(
+    join(root, 'project', '.archon', 'workflows', 'stage.yaml'),
+    'name: stage\ndescription: A stage\ninputs:\n  a: { required: true }\nreturns: { node: one, outcome: stage }\nnodes:\n  - id: one\n    bash: echo \'{"stage":"replan"}\'\n    output_format:\n      type: object\n      properties:\n        stage: { type: string, enum: [replan] }\n      required: [stage]\n'
+  );
+  await writeFile(
+    join(archonHome, 'triggers', 'fire-only.json'),
+    JSON.stringify(config({}, false))
+  );
+
+  const checked = (await check()) as unknown as { stops: { workflow: string; outcome: string }[] };
+
+  expect(checked.stops).toEqual([
+    expect.objectContaining({ workflow: 'stage', outcome: 'replan' }),
+  ]);
+});

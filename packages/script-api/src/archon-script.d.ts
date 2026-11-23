@@ -2548,6 +2548,7 @@ declare module 'archon:script' {
         readonly outcome: string;
       };
       readonly summary: string | null;
+      readonly checkout: string | null;
     }>;
     readonly answers: ReadonlyArray<{
       readonly kind: 'attention';
@@ -3106,6 +3107,7 @@ declare module 'archon:script' {
           readonly outcome: string;
         };
         readonly summary: string | null;
+        readonly checkout: string | null;
       }>;
       readonly answers: ReadonlyArray<{
         readonly kind: 'attention';

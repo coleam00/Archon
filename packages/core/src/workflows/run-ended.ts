@@ -74,8 +74,8 @@ export class TriggerFileError extends Error {
   }
 }
 
-/** A trigger file with `on`: what every form shares. */
-interface OnBindingFile {
+/** A trigger file's binding: what every form shares, with `on` or without. */
+export interface OnBindingFile {
   file: string;
   sourceInstanceId: string;
   binding: TriggerConfig['binding'];
@@ -760,14 +760,18 @@ export interface RunEndedStop {
  * launch in: each value a workflow's declared outcome can take that is not final
  * (`returns.final`), that no run-ended file in the project binds, and whose workflow
  * declares neither `returns.asks` nor `returns.waits`, so nothing follows it. The workflows
- * read are the ones the files name, ended, asking or started; a workflow no file names is
- * not read. A report, not a problem: the attention queue lists the item when it stops.
+ * read are the ones the bindings name, ended, asking or started, including the workflows a
+ * binding without `on` (fire-only or timer) starts; a workflow no binding names is not read.
+ * A report, not a problem: the attention queue lists the item when it stops.
  */
 export async function runEndedStops(
-  bindings: readonly OnBinding[],
+  bindings: readonly (OnBinding | OnBindingFile)[],
   deps: BindingDefinitionsDeps & Pick<RunEndedStartsDependencies, 'projectKeyOf'>
 ): Promise<RunEndedStop[]> {
-  const projects = new Map<string, { first: OnBinding; named: Set<string>; bound: Set<string> }>();
+  const projects = new Map<
+    string,
+    { first: OnBindingFile; named: Set<string>; bound: Set<string> }
+  >();
   for (const candidate of bindings) {
     // A binding whose checkout is gone never starts; `runEndedTriggerCheck` reports it.
     if (!existsSync(candidate.binding.launch.cwd)) continue;
@@ -780,7 +784,7 @@ export async function runEndedStops(
       entry.bound.add(
         JSON.stringify([candidate.runEnded.workflowName, candidate.runEnded.outcome])
       );
-    } else entry.named.add(candidate.asksSettled.workflowName);
+    } else if ('asksSettled' in candidate) entry.named.add(candidate.asksSettled.workflowName);
   }
   const stops: RunEndedStop[] = [];
   for (const [project, { first, named, bound }] of projects) {
