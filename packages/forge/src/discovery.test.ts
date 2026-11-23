@@ -169,10 +169,9 @@ test('discovers and runs an independently installed executable outside the sourc
   }
 });
 
-test('a file on the plugin scan path contributes no plugins and never fails discovery', async () => {
-  // A PATH entry (or plugin dir) that is a regular file — e.g. a binary accidentally
-  // exported into PATH — must be skipped, not crash every forge operation (#local-fix:
-  // seen live as ENOTDIR killing forge plugin discovery for a whole afternoon).
+test('a file on PATH contributes no plugins and never fails discovery', async () => {
+  // A PATH entry that is a regular file, such as a binary exported into PATH in place of
+  // its directory, is skipped: one such entry must not fail every forge operation.
   const root = await mkdtemp(join(tmpdir(), 'forge-discovery-file-'));
   try {
     const healthy = join(root, 'healthy');
@@ -185,6 +184,19 @@ test('a file on the plugin scan path contributes no plugins and never fails disc
       env: { PATH: [pathEntry, healthy].join(delimiter) },
     });
     expect(discovery.byHost.has('healthy.example')).toBe(true);
+  } finally {
+    await removeTempTree(root);
+  }
+});
+
+test('a configured plugin directory that cannot be read fails discovery and names it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'forge-discovery-file-'));
+  try {
+    const notADirectory = join(root, 'not-a-dir');
+    await writeFile(notADirectory, '');
+    await expect(
+      discoverPlugins({ config: { pluginDirs: [notADirectory], scanPath: false }, env: {} })
+    ).rejects.toThrow(notADirectory);
   } finally {
     await removeTempTree(root);
   }

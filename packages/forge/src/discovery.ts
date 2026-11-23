@@ -77,10 +77,19 @@ async function scanDirectory(directory: string, source: string): Promise<Candida
     entries = await readdir(directory);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    // A PATH entry that is a file (or an unreadable path) contributes no plugins:
-    // skip it rather than fail every forge operation on one malformed entry.
-    if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES' || code === 'EPERM') {
-      return [];
+    if (code === 'ENOENT') return [];
+    const unreadable = code === 'ENOTDIR' || code === 'EACCES' || code === 'EPERM';
+    // A PATH entry nobody chose as a plugin source may be a file or unreadable. It holds
+    // no plugins, and one such entry must not fail every forge operation.
+    if (unreadable && source !== 'plugin-dir') return [];
+    // A plugin directory the operator configured is their choice: say which one cannot
+    // be read rather than find no plugins in it.
+    if (unreadable) {
+      throw new PluginDiscoveryError(
+        'process_failed',
+        `forge plugin directory ${directory} cannot be read (${code})`,
+        { cause: error }
+      );
     }
     throw error;
   }
