@@ -23,6 +23,13 @@ import type { WorkflowWaitResult } from '../schemas/wait-node';
 import { attentionAskRecord } from './attention-writes';
 import type { NodeStateEventInput, ObservabilityEventInput } from './event-types';
 
+/**
+ * A run `deleteOldWorkflowRuns` deleted: enough to locate its files on disk. The caller
+ * removes them; the store owns rows, not the paths a run wrote. A run that left asks or
+ * waits open, has a sub-run or adopter that has not ended, is kept and not returned.
+ */
+export type DeletedWorkflowRun = Pick<WorkflowRun, 'id' | 'output_root' | 'codebase_id'>;
+
 /** Durable wait outcome committed atomically with consumption of its active cursor. */
 export interface WorkflowWaitCompletion {
   execution?: NodeExecutionRecord;

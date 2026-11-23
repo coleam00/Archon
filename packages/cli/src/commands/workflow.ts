@@ -14,6 +14,7 @@ import { writeStdout } from '../utils/stdout';
 import { getLog, resolveRunIdArg } from './workflow-shared';
 
 export { workflowRunCommand } from './workflow-run-owned';
+export { workflowCleanupCommand, workflowOrphanCleanupCommand } from './workflow-cleanup';
 export {
   WorkflowListLookupError,
   workflowGetCommand,
@@ -92,33 +93,6 @@ export async function workflowResetSessionsCommand(
     const err = error as Error;
     getLog().error({ err, workflowName, ...options }, 'cli.workflow_reset_sessions_failed');
     throw new Error(`Failed to reset workflow sessions: ${err.message}`);
-  }
-}
-
-/**
- * Delete terminal workflow runs older than the given number of days.
- */
-export async function workflowCleanupCommand(host: WorkflowHost, days: number): Promise<void> {
-  let deleted: number | undefined;
-  try {
-    const { count } = await host.deps.store.deleteOldWorkflowRuns(days);
-    deleted = count;
-    const { count: revisions } = await host.deps.store.pruneStateRevisions(days);
-    console.log(`Pruned ${revisions} state revision(s) older than ${days} days.`);
-    if (count === 0) {
-      console.log(`No workflow runs older than ${days} days to clean up.`);
-    } else {
-      console.log(`Deleted ${count} workflow run(s) older than ${days} days.`);
-    }
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, days, deleted }, 'cli.workflow_cleanup_failed');
-    if (deleted !== undefined)
-      throw new Error(
-        `Deleted ${deleted} workflow run(s) older than ${days} days, but failed to prune state revisions: ${err.message}`,
-        { cause: error }
-      );
-    throw new Error(`Failed to clean up workflow history: ${err.message}`, { cause: error });
   }
 }
 

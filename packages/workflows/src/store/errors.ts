@@ -125,6 +125,21 @@ export class WorkflowRunDeleteRefusedError extends Error {
 }
 
 /**
+ * The refusal for a run that a run which has not ended continues from
+ * (`adopted_from_run_id`). An adopter reads the source's artifacts as `$ADOPTED_RUN_DIR`
+ * until it ends, and deleting the source removes them. Both stores word it the same way.
+ */
+export function liveAdoptersRefusal(
+  runId: string,
+  adopters: readonly { id: string; status: string }[]
+): WorkflowRunDeleteRefusedError {
+  const runs = adopters.map(run => `${run.id} (${run.status})`).join(', ');
+  return new WorkflowRunDeleteRefusedError(
+    `Cannot delete workflow run ${runId}: runs that continue from it have not ended: ${runs}. They read its artifacts. Wait for them to end, or cancel or abandon them, then delete it.`
+  );
+}
+
+/**
  * The refusal for a run whose sub-runs, at any depth, have not ended. Deleting the run would
  * cut their parent link, so each would count as a tree of its own under `concurrency.runs`.
  * Both stores word it the same way.

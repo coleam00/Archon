@@ -17,7 +17,12 @@ import {
   type WorkflowRun,
   type WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
-import { WorkflowRunDeleteRefusedError, liveDescendantsRefusal } from '@archon/workflows/store';
+import {
+  WorkflowRunDeleteRefusedError,
+  liveAdoptersRefusal,
+  liveDescendantsRefusal,
+  type DeletedWorkflowRun,
+} from '@archon/workflows/store';
 import { getDatabase, getDialect, pool } from './connection';
 import { insertWorkflowEvent } from './workflow-events';
 import { getWorkflowRun } from './workflow-run-reads';
@@ -285,10 +290,32 @@ const NO_LIVE_DESCENDANTS = `remote_agent_workflow_runs.id NOT IN (
   SELECT id FROM up)`;
 
 /**
- * Delete terminal workflow runs older than the given number of days, except those kept above.
- * Returns the count of deleted runs.
+ * A run that a run which has not ended continues from is kept: the adopter reads the
+ * source's artifacts as `$ADOPTED_RUN_DIR`, and deleting the source removes them.
  */
-export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }> {
+const NO_LIVE_ADOPTERS = `NOT EXISTS (
+  SELECT 1 FROM remote_agent_workflow_runs adopter
+  WHERE adopter.adopted_from_run_id = remote_agent_workflow_runs.id
+    AND adopter.status NOT IN (${terminalList}))`;
+
+/** Ids per `IN (...)` list: far under SQLite's and PostgreSQL's bound-parameter limits. */
+const DELETE_CHUNK = 500;
+
+/**
+ * Delete terminal workflow runs older than the given number of days, except those kept above.
+ * Returns the deleted rows, so the caller can remove their files.
+ *
+ * The SQLite adapter refuses `DELETE ... RETURNING`, so this selects the rows and then
+ * deletes exactly those ids. The select must lock what it returns: on PostgreSQL a run that
+ * resumes between the select and the delete would otherwise be deleted while running, and
+ * its files removed. `FOR UPDATE` makes such a resume wait for this transaction, and a resume
+ * that committed first leaves its row failing the status check, so it is not selected.
+ * SQLite needs no lock: a write committed after this transaction read reruns it from the
+ * start. A sub-run that starts in between is the gap `NO_LIVE_DESCENDANTS` already accepts.
+ */
+export async function deleteOldWorkflowRuns(
+  olderThanDays: number
+): Promise<{ runs: DeletedWorkflowRun[] }> {
   if (!Number.isInteger(olderThanDays) || olderThanDays < 0) {
     throw new Error(
       `Invalid olderThanDays: ${String(olderThanDays)} (must be a non-negative integer)`
@@ -297,28 +324,28 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
   const cutoff = getDialect().nowMinusDays(1);
   try {
     return await getDatabase().withTransaction(async query => {
-      // Delete events first (FK reference)
-      await query(
-        `DELETE FROM remote_agent_workflow_events WHERE workflow_run_id IN (
-          SELECT id FROM remote_agent_workflow_runs
-          WHERE status IN ('completed', 'failed', 'cancelled')
-            AND started_at < ${cutoff}
-            AND COALESCE(active_phase_started_at, started_at) < ${cutoff}
-            AND ${NO_OPEN_ASKS}
-            AND ${NO_LIVE_DESCENDANTS}
-        )`,
-        [olderThanDays]
-      );
-      const result = await query(
-        `DELETE FROM remote_agent_workflow_runs
+      const selected = await query<DeletedWorkflowRun>(
+        `SELECT id, output_root, codebase_id FROM remote_agent_workflow_runs
          WHERE status IN ('completed', 'failed', 'cancelled')
            AND started_at < ${cutoff}
            AND COALESCE(active_phase_started_at, started_at) < ${cutoff}
            AND ${NO_OPEN_ASKS}
-           AND ${NO_LIVE_DESCENDANTS}`,
+           AND ${NO_LIVE_DESCENDANTS}
+           AND ${NO_LIVE_ADOPTERS}${getDialect().rowLock()}`,
         [olderThanDays]
       );
-      return { count: result.rowCount ?? 0 };
+      const runs = [...selected.rows];
+      for (let start = 0; start < runs.length; start += DELETE_CHUNK) {
+        const ids = runs.slice(start, start + DELETE_CHUNK).map(run => run.id);
+        const list = ids.map((_, index) => `$${String(index + 1)}`).join(', ');
+        // Events first: they reference the run row.
+        await query(
+          `DELETE FROM remote_agent_workflow_events WHERE workflow_run_id IN (${list})`,
+          ids
+        );
+        await query(`DELETE FROM remote_agent_workflow_runs WHERE id IN (${list})`, ids);
+      }
+      return { runs };
     });
   } catch (error) {
     const err = error as Error;
@@ -333,7 +360,8 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
  * asks or waits still open: those asks would have no rule for who may answer them and no
  * run to record the answer on, and those waits none for who may withdraw them. Nor one with
  * a sub-run, at any depth, that has not ended: deleting it nulls the sub-run's parent link,
- * which splits the tree `concurrency.runs` counts as one. Every refusal is a
+ * which splits the tree `concurrency.runs` counts as one. Nor one that a run which has not
+ * ended continues from, whose artifacts that run still reads. Every refusal is a
  * `WorkflowRunDeleteRefusedError` whose message names what to do first.
  */
 export async function deleteWorkflowRun(id: string): Promise<void> {
@@ -385,6 +413,18 @@ export async function deleteWorkflowRun(id: string): Promise<void> {
         throw liveDescendantsRefusal(
           id,
           live.rows.map(row => ({ id: String(row.id), status: row.status }))
+        );
+      }
+      const adopters = await query<{ id: string; status: string }>(
+        `SELECT id, status FROM remote_agent_workflow_runs
+          WHERE adopted_from_run_id = $1 AND status NOT IN (${terminalList})
+          ORDER BY started_at, id`,
+        [id]
+      );
+      if (adopters.rows.length > 0) {
+        throw liveAdoptersRefusal(
+          id,
+          adopters.rows.map(row => ({ id: String(row.id), status: row.status }))
         );
       }
       await query('DELETE FROM remote_agent_workflow_events WHERE workflow_run_id = $1', [id]);

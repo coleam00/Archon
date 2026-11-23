@@ -21,7 +21,11 @@ import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import type { IWorkflowStore } from '../store';
 import { isTerminalRunStatus, type WorkflowRun } from '../schemas/workflow-run';
-import { WorkflowRunDeleteRefusedError, liveDescendantsRefusal } from '../store/errors';
+import {
+  WorkflowRunDeleteRefusedError,
+  liveAdoptersRefusal,
+  liveDescendantsRefusal,
+} from '../store/errors';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import {
   workflowNodeSessionSchema,
@@ -478,6 +482,11 @@ export async function createFileWorkflowStore(
           }
         }
         if (live.length > 0) throw liveDescendantsRefusal(id, live);
+        // A continuation that has not ended reads this run's artifacts.
+        const adopters = [...runs.values()].filter(
+          row => row.adopted_from_run_id === id && !isTerminalRunStatus(row.status)
+        );
+        if (adopters.length > 0) throw liveAdoptersRefusal(id, adopters);
         const changed = [...runs.values()]
           .filter(row => row.parent_run_id === id || row.adopted_from_run_id === id)
           .map(row => ({

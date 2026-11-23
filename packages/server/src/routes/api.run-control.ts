@@ -35,6 +35,7 @@ import {
   resetWorkflowNodeSessionsQuerySchema,
   resetWorkflowNodeSessionsResponseSchema,
   workflowRunActionResponseSchema,
+  deleteWorkflowRunResponseSchema,
 } from './schemas/workflow.schemas';
 
 const cancelWorkflowRunRoute = createRoute({
@@ -129,12 +130,12 @@ const deleteWorkflowRunRoute = createRoute({
   method: 'delete',
   path: '/api/workflows/runs/{runId}',
   tags: ['Workflows'],
-  summary: 'Delete a workflow run and its events',
+  summary: 'Delete a workflow run, its events and its files',
   request: { params: z.object({ runId: z.string() }) },
   responses: {
     200: {
-      content: { 'application/json': { schema: workflowRunActionResponseSchema } },
-      description: 'Deleted',
+      content: { 'application/json': { schema: deleteWorkflowRunResponseSchema } },
+      description: 'Deleted; files lists any of its paths still on disk',
     },
     400: jsonError('Bad request'),
     403: jsonError('Run action forbidden'),
@@ -355,8 +356,17 @@ export function registerRunCleanupRoutes(
           `Cannot delete workflow in '${run.status}' status — cancel it first`
         );
       }
-      await deleteWorkflowRun(runId, actor);
-      return c.json({ success: true, message: `Deleted workflow run: ${run.workflow_name}` });
+      const files = await deleteWorkflowRun(runId, actor);
+      const failed = files.failed.length;
+      const message =
+        failed === 0
+          ? `Deleted workflow run: ${run.workflow_name}`
+          : `Deleted workflow run: ${run.workflow_name}, but ${String(failed)} of its file path(s) could not be removed (see files.failed). Once the cause is fixed, archon workflow cleanup --orphans --yes removes them, once each is 6 hours past its last change.`;
+      return c.json({
+        success: true,
+        message,
+        files,
+      });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
       if (error instanceof WorkflowRunDeleteRefusedError) return apiError(c, 400, error.message);

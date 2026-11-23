@@ -17,6 +17,14 @@ import {
 import type { ProjectStorageKey } from './project-paths';
 
 /**
+ * A run id: a UUID, or 32 hex characters on SQLite rows written before ids had dashes.
+ * The one shape a run's on-disk paths are keyed by, so a name that does not match it was
+ * not made for a run.
+ */
+export const RUN_ID_PATTERN =
+  /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+
+/**
  * Get the artifacts directory for a specific workflow run.
  * Returns: ~/.archon/workspaces/owner/repo/artifacts/runs/{id}/
  */

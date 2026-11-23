@@ -41,7 +41,7 @@ These commands are handled deterministically by the orchestrator — they always
 | `/workflow approve <id> [comment]` | Answer `approve` to a paused run: an attention wait, or a deprecated approval gate (deprecated interactive-loop gates: no comment on a signal-bearing gate = accept & complete; a comment runs another iteration) |
 | `/workflow reject <id> [reason]` | Answer `reject` to a paused run (attention wait or deprecated approval gate). Rejecting an attention wait continues the run with `decision: reject` |
 | `/workflow run <name> [args]` | Run a workflow directly |
-| `/workflow cleanup [days]` | CLI only -- delete old run records (default: 7 days) |
+| `/workflow cleanup [days]` | CLI only -- delete old runs and their files (default: 7 days) |
 
 > **Note:** Workflows are YAML files in `.archon/workflows/`
 

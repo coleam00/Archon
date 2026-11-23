@@ -22,6 +22,7 @@ import type { RunActor } from '../run-authorization';
 import { hostname } from 'node:os';
 import { getLog, type OperationContext } from './context';
 import { rootRunIdOf } from './teardown';
+import { removeRunFiles, type RunFilesReport } from '../../services/cleanup/run-files';
 
 export interface WorkflowStatusData {
   runs: DashboardWorkflowRun[];
@@ -76,16 +77,28 @@ export async function signalWorkflowWait(
   return ctx.store.signalWorkflowWait(runId, wait, payload);
 }
 
+/**
+ * Delete a terminal run's row, then its files. A file that cannot be removed is logged with
+ * its path and returned in the report; the row stays deleted, and
+ * `archon workflow cleanup --orphans` removes the file later.
+ */
 export async function deleteWorkflowRun(
   ctx: OperationContext,
   runId: string,
   actor: RunActor
-): Promise<void> {
+): Promise<RunFilesReport> {
   const run = await ctx.getRunOrThrow(runId, 'operations.workflow_delete_lookup_failed');
   await ctx.assertMayAct(run, actor, 'delete');
   if (!TERMINAL_WORKFLOW_STATUSES.includes(run.status))
     throw new Error(`Cannot delete workflow in '${run.status}' status — cancel it first`);
   await ctx.store.deleteWorkflowRun(runId);
+  const report = await removeRunFiles([run], ctx.store);
+  if (report.failed.length > 0 || report.unlocated.length > 0)
+    getLog().warn(
+      { runId, failed: report.failed, unlocated: report.unlocated },
+      'operations.workflow_run_files_remove_failed'
+    );
+  return report;
 }
 
 /** List running and paused workflow runs, optionally scoped to one codebase. */

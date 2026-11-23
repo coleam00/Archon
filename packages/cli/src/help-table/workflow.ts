@@ -485,7 +485,19 @@ export const workflowHelp: HelpGroup = {
       command: 'workflow',
       subcommand: 'cleanup',
       spec: 'workflow cleanup [days]',
-      description: 'Delete terminal runs older than N days (default: 7)',
+      description:
+        'Delete terminal runs older than N days (default: 7) with their artifacts, logs and frozen sources',
+      scopedFlags: [
+        {
+          spec: '--orphans',
+          description:
+            'Instead, list files of runs that have no row (deleted earlier), older than 6 hours',
+        },
+        {
+          spec: '--yes',
+          description: 'With --orphans, remove the listed files',
+        },
+      ],
     },
   ],
 };

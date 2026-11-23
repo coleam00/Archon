@@ -1,7 +1,7 @@
 /**
  * Conformance for deleting one run on the SQL stores, run by the SQLite and PostgreSQL
- * integration tests: a run with a sub-run that has not ended, at any depth, is refused, and
- * deletes as before once that sub-run ends.
+ * integration tests: a run with a sub-run that has not ended, at any depth, or with a
+ * continuation that has not ended, is refused, and deletes as before once that run ends.
  */
 import { expect, test } from 'bun:test';
 import { WorkflowRunDeleteRefusedError } from '@archon/workflows/store';
@@ -41,6 +41,33 @@ export function describeSqlRunDeleteConformance(
       await deleteWorkflowRun(parent);
       expect(await store.getWorkflowRun(parent)).toBeNull();
       expect((await store.getWorkflowRun(child))?.parent_run_id).toBeNull();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a finished run is not deleted while a run that adopted it is live', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const source = await store.createWorkflowRun({ workflow_name: 'source', user_message: '' });
+      await store.claimPendingWorkflowRun(source.id);
+      await store.completeWorkflowRun(source.id, { duration_ms: 1 });
+      const adopter = await store.createWorkflowRun({
+        workflow_name: 'adopter',
+        user_message: '',
+        adopted_from_run_id: source.id,
+      });
+      await store.claimPendingWorkflowRun(adopter.id);
+      const { deleteWorkflowRun } = await import('./workflow-run-writes');
+      const refused = await deleteWorkflowRun(source.id).catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(WorkflowRunDeleteRefusedError);
+      expect((refused as Error).message).toContain(`${adopter.id} (running)`);
+      expect(await store.getWorkflowRunStatus(source.id)).toBe('completed');
+
+      await store.completeWorkflowRun(adopter.id, { duration_ms: 1 });
+      await deleteWorkflowRun(source.id);
+      expect(await store.getWorkflowRun(source.id)).toBeNull();
     } finally {
       await harness.close();
     }

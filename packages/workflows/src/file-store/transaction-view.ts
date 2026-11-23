@@ -495,20 +495,24 @@ export function createTransactionView(
     },
     deleteOldWorkflowRuns: async days => {
       if (!Number.isInteger(days) || days < 0) throw new Error('Invalid olderThanDays');
-      const liveTree = ancestorsOfLiveRuns(runs);
-      const ids = [...runs.values()]
+      const retained = ancestorsOfLiveRuns(runs);
+      // A continuation that has not ended reads its source's artifacts, so the source stays.
+      for (const run of runs.values())
+        if (run.adopted_from_run_id !== null && !isTerminalRunStatus(run.status))
+          retained.add(run.adopted_from_run_id);
+      const removed = [...runs.values()]
         .filter(
           run =>
             isTerminalRunStatus(run.status) &&
-            !liveTree.has(run.id) &&
+            !retained.has(run.id) &&
             Math.max(
               run.started_at.getTime(),
               run.active_phase_started_at?.getTime() ?? -Infinity
             ) <
               Date.now() - days * 86_400_000
         )
-        .map(run => run.id);
-      const deleted = new Set(ids);
+        .map(({ id, output_root, codebase_id }) => ({ id, output_root, codebase_id }));
+      const deleted = new Set(removed.map(run => run.id));
       for (const id of deleted) runs.delete(id);
       const kept = events.filter(event => !deleted.has(event.workflow_run_id));
       events.splice(0, events.length, ...kept);
@@ -517,7 +521,7 @@ export function createTransactionView(
         if (run.adopted_from_run_id !== null && deleted.has(run.adopted_from_run_id))
           run.adopted_from_run_id = null;
       }
-      return { count: ids.length };
+      return { runs: removed };
     },
     resolveAndCancelApprovalGate: async (id, gateEvents, cancellation, expected) => {
       const run = structuredClone(runs.get(id));

@@ -3378,7 +3378,7 @@ export interface paths {
     };
     put?: never;
     post?: never;
-    /** Delete a workflow run and its events */
+    /** Delete a workflow run, its events and its files */
     delete: {
       parameters: {
         query?: never;
@@ -3390,13 +3390,13 @@ export interface paths {
       };
       requestBody?: never;
       responses: {
-        /** @description Deleted */
+        /** @description Deleted; files lists any of its paths still on disk */
         200: {
           headers: {
             [name: string]: unknown;
           };
           content: {
-            'application/json': components['schemas']['WorkflowRunActionResponse'];
+            'application/json': components['schemas']['DeleteWorkflowRunResponse'];
           };
         };
         /** @description Bad request */
@@ -10060,6 +10060,18 @@ export interface components {
       recommended?: true;
       text?: string;
       as?: string;
+    };
+    DeleteWorkflowRunResponse: {
+      success: boolean;
+      message: string;
+      files: {
+        removedBytes: number;
+        failed: {
+          path: string;
+          error: string;
+        }[];
+        unlocated: string[];
+      };
     };
     ResetWorkflowNodeSessionsResponse: {
       success: boolean;

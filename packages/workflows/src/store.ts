@@ -55,6 +55,7 @@ import type {
 import type { DagResumeSnapshot } from './store/resume-snapshot';
 import type { WorkflowRunFailureOptions } from './workflow-run-failure';
 import type {
+  DeletedWorkflowRun,
   FanOutCancelReason,
   OperatorPauseRequest,
   SourceReleaseWrite,
@@ -349,7 +350,7 @@ export interface IWorkflowStore
    * that is no longer open is `refused` with how it closed.
    */
   withdrawItemWaits(runId: string): Promise<ItemWaitsWithdrawResult>;
-  deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
+  deleteOldWorkflowRuns(olderThanDays: number): Promise<{ runs: DeletedWorkflowRun[] }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */
   listWorkflowEvents(
     runId: string,

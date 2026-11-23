@@ -921,6 +921,33 @@ describe('DELETE /api/workflows/runs/:runId', () => {
     expect(mockDeleteWorkflowRun).toHaveBeenCalledWith('run-uuid-4');
   });
 
+  test('reports the file paths it could not remove beside the deleted row', async () => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_COMPLETED_RUN);
+    const runFiles = await import('@archon/core/services/cleanup/run-files');
+    const failed = [{ path: '/archon/workspaces/o/r/logs/x.jsonl', error: 'EACCES: denied' }];
+    const removal = spyOn(runFiles, 'removeRunFiles').mockResolvedValueOnce({
+      removedBytes: 10,
+      failed,
+      unlocated: [],
+    });
+    try {
+      const { app } = makeApp();
+      const response = await app.request('/api/workflows/runs/run-uuid-2', { method: 'DELETE' });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        success: boolean;
+        message: string;
+        files: { failed: unknown[] };
+      };
+      expect(body.success).toBe(true);
+      expect(body.files.failed).toEqual(failed);
+      expect(body.message).toContain('1 of its file path(s) could not be removed');
+      expect(mockDeleteWorkflowRun).toHaveBeenCalledWith('run-uuid-2');
+    } finally {
+      removal.mockRestore();
+    }
+  });
+
   test("returns 400 with the store's reason when the store refuses the delete", async () => {
     mockGetWorkflowRun.mockResolvedValue(MOCK_COMPLETED_RUN);
     const reason =

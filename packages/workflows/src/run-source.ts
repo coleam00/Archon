@@ -41,6 +41,7 @@ import {
   type WorkflowSourceManifest,
   type WorkflowSourceRoots,
 } from './workflow-source';
+import { STAGED_SOURCE_TTL_MS } from './staged-source-ttl';
 
 // Re-exported so callers driving the capture-first sequence need only this module.
 
@@ -83,16 +84,6 @@ export interface PreparedWorkflowSource {
   /** Where the project definitions came from; recorded on the run beside the capture. */
   definitions?: RunDefinitions;
 }
-
-/**
- * How long an unadopted staging directory survives before it is reclaimed.
- *
- * Generous on purpose: it must comfortably exceed the gap between capturing and adopting,
- * which spans discovery, isolation, and — for `--detach` — a child process starting. Not a
- * timeout on anything; adoption MOVES the capture out of staging, so anything still here
- * after this long belongs to no run.
- */
-const STAGED_SOURCE_TTL_MS = 6 * 60 * 60 * 1000;
 
 /**
  * Reclaim staging directories no run ever adopted.

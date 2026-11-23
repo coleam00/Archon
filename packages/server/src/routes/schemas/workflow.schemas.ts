@@ -1,3 +1,4 @@
+import { runFilesReportSchema } from '@archon/core/schemas/run-files';
 import { attentionDegradedSchema } from '@archon/workflows/schemas/attention-degraded';
 import { operatorPauseSchema } from '@archon/workflows/schemas/operator-pause';
 import {
@@ -306,6 +307,18 @@ export const cancelWorkflowRunResponseSchema = z
 export const workflowRunActionResponseSchema = z
   .object({ success: z.boolean(), message: z.string() })
   .openapi('WorkflowRunActionResponse');
+
+/**
+ * DELETE /api/workflows/runs/:runId response. The row is deleted whenever this is returned;
+ * `files` says what of the run's artifacts, log and frozen source is still on disk.
+ */
+export const deleteWorkflowRunResponseSchema = z
+  .object({
+    success: z.boolean(),
+    message: z.string(),
+    files: runFilesReportSchema,
+  })
+  .openapi('DeleteWorkflowRunResponse');
 
 /** POST /api/workflows/runs/:runId/approve request body. */
 export const approveWorkflowRunBodySchema = z
