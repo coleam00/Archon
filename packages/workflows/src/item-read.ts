@@ -108,7 +108,7 @@ export const itemRunSchema = z.object({
   id: z.string(),
   /** The name the run started under: `owner/plugin:<entrypoint>` for an installed pack's workflow. */
   workflow: z.string(),
-  /** Match a run of your own pack by `pack.workflow`; null outside a pack or on older runs. */
+  /** Match your own pack's runs by `pack.key` and `pack.workflow`; null outside a pack or on older runs. */
   pack: runPackSchema.nullable(),
   status: workflowRunStatusSchema,
   /** The outcome the run completed with, of either form; null until it completes. */
