@@ -1,6 +1,7 @@
 // @archon-test-isolated
 // @archon-test-windows
 import { afterAll, expect, mock, test } from 'bun:test';
+import { generateKeyPairSync } from 'node:crypto';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { createServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -22,7 +23,15 @@ afterAll(() => {
   else process.env.ARCHON_HOME = archonHome;
 });
 
-function admittedIn(cwd: string) {
+function admittedIn(
+  cwd: string,
+  github: {
+    userId?: string;
+    isPerUserGitHubEnabled?: () => boolean;
+    getUserGithubToken?: (userId: string) => Promise<string | undefined>;
+  } = {}
+) {
+  const { userId, ...githubDeps } = github;
   const request: ResourceStartRequestInspection = {
     id: 'request',
     resource: 'build',
@@ -40,11 +49,12 @@ function admittedIn(cwd: string) {
         codebase_id: 'c',
         user_message: '',
         metadata: {},
+        ...(userId ? { origin: { userId } } : {}),
       },
       execution: { cwd, conversationId: 'conversation', isolation: { kind: 'in-place' } },
     },
   };
-  return { deps: { store: { getResourceStartRequest: async () => request } } };
+  return { deps: { store: { getResourceStartRequest: async () => request }, ...githubDeps } };
 }
 
 test('the hand-off names the process it started', async () => {
@@ -63,6 +73,99 @@ test('the hand-off names the process it started', async () => {
   }
   expect(executor).toEqual({ pid: Number(written) });
 });
+
+interface ExecutorIdentity {
+  ghToken: string;
+  githubToken: string;
+  helpers: string;
+  handoff: string;
+  /** What App-mode startup made of the executor's env: 'app', or its error. */
+  bootstrap: string;
+}
+
+/** The GitHub identity the executor started with, and whether App-mode startup accepts it. */
+async function executorIdentity(
+  root: string,
+  host: ReturnType<typeof admittedIn>
+): Promise<ExecutorIdentity> {
+  const script = join(root, 'executor.ts');
+  const config = join(import.meta.dir, '..', '..', '..', 'core', 'src', 'github-auth', 'config.ts');
+  await writeFile(
+    script,
+    `const { loadGitHubAppConfig } = await import(${JSON.stringify(config)});
+let bootstrap = 'app';
+try { if (!loadGitHubAppConfig(process.env)) bootstrap = 'none'; } catch (error) { bootstrap = String(error); }
+const env = process.env;
+await Bun.write('identity.json', JSON.stringify({ ghToken: env.GH_TOKEN ?? '', githubToken: env.GITHUB_TOKEN ?? '',
+  helpers: env.GIT_CONFIG_PARAMETERS ?? '', handoff: env.ARCHON_RUN_GITHUB_IDENTITY ?? '', bootstrap }));
+`
+  );
+  program = [process.execPath, script];
+  await spawnAdmitted(host, 'request', 'host');
+  let written = '';
+  for (let attempt = 0; attempt < 400 && written === ''; attempt++) {
+    written = await readFile(join(root, 'identity.json'), 'utf8').catch(() => '');
+    if (written === '') await Bun.sleep(25);
+  }
+  return JSON.parse(written) as ExecutorIdentity;
+}
+
+test("the executor carries the run's user's GitHub identity, not the spawner's, and starts in App mode", async () => {
+  const keys = [
+    'GH_TOKEN',
+    'GITHUB_TOKEN',
+    'GIT_CONFIG_PARAMETERS',
+    'GITHUB_APP_ID',
+    'GITHUB_APP_PRIVATE_KEY',
+    'WEBHOOK_SECRET',
+  ] as const;
+  const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  try {
+    // Per-user GitHub runs on an App install: the executor starts with App credentials.
+    process.env.GITHUB_APP_ID = '123';
+    process.env.GITHUB_APP_PRIVATE_KEY = generateKeyPairSync('rsa', { modulusLength: 2048 })
+      .privateKey.export({ type: 'pkcs1', format: 'pem' })
+      .toString();
+    process.env.WEBHOOK_SECRET = 'secret';
+    const perUser = {
+      isPerUserGitHubEnabled: () => true,
+      getUserGithubToken: async (userId: string) =>
+        userId === 'connected' ? 'ghu_runas' : undefined,
+    };
+
+    // Spawned from a scrubbed node: the run's connected user gets their token and git helper.
+    process.env.GH_TOKEN = '';
+    process.env.GITHUB_TOKEN = '';
+    process.env.GIT_CONFIG_PARAMETERS = "'credential.helper='";
+    const root = track(await mkdtemp(join(tmpdir(), 'spawn-admitted-')));
+    process.env.ARCHON_HOME = root;
+    const connected = await executorIdentity(
+      root,
+      admittedIn(root, { userId: 'connected', ...perUser })
+    );
+    expect(connected).toMatchObject({ ghToken: 'ghu_runas', githubToken: '', handoff: '1' });
+    expect(connected.helpers).toContain("'credential.https://github.com.helper='");
+    expect(connected.bootstrap).toBe('app');
+
+    // Spawned from a node that holds its own user's token: an unconnected run-as user is
+    // scrubbed, not lent it.
+    process.env.GH_TOKEN = 'ghu_caller';
+    process.env.GITHUB_TOKEN = 'ghu_caller';
+    const other = track(await mkdtemp(join(tmpdir(), 'spawn-admitted-')));
+    process.env.ARCHON_HOME = other;
+    const unconnected = await executorIdentity(
+      other,
+      admittedIn(other, { userId: 'unconnected', ...perUser })
+    );
+    expect(unconnected).toMatchObject({ ghToken: '', githubToken: '', bootstrap: 'app' });
+    expect(unconnected.helpers).toEndWith("'credential.helper='");
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) Reflect.deleteProperty(process.env, key);
+      else process.env[key] = value;
+    }
+  }
+}, 30_000);
 
 test('a hand-off that cannot start its process rejects', async () => {
   const root = track(await mkdtemp(join(tmpdir(), 'spawn-admitted-')));

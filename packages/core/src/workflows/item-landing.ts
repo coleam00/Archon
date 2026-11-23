@@ -84,9 +84,10 @@ async function landingRemote(
 async function advertisedBranches(
   repoPath: RepoPath,
   remote: string,
-  refuse: (problem: string, options?: ErrorOptions) => Error
+  refuse: (problem: string, options?: ErrorOptions) => Error,
+  env?: NodeJS.ProcessEnv
 ): Promise<string[]> {
-  const advertised = await inspectRemoteBranches({ kind: 'local', repoPath, remote });
+  const advertised = await inspectRemoteBranches({ kind: 'local', repoPath, remote, env });
   if (advertised.status === 'unavailable')
     throw refuse(
       `remote '${remote}' could not be read: ${advertised.evidence}`,
@@ -98,11 +99,13 @@ async function advertisedBranches(
 /**
  * Resolve where a run on `item` lands and check that the branch is on the remote. Null
  * when nothing records a branch, so the run takes its base as it would without an item.
+ * `env` is what the remote read authenticates with; this process's env when unset.
  */
 export async function resolveRunLanding(
   store: Pick<IWorkflowStore, 'getItemLanding' | 'listItemLinks'>,
   codebase: Pick<Codebase, 'kind' | 'name' | 'default_cwd'>,
-  item: WorkflowItem
+  item: WorkflowItem,
+  env?: NodeJS.ProcessEnv
 ): Promise<ResolvedItemLanding | null> {
   const landing = await resolveItemLanding(store, item);
   if (landing === null) return null;
@@ -110,7 +113,7 @@ export async function resolveRunLanding(
   const refuse = (problem: string, options?: ErrorOptions) =>
     new LandingBranchRefusedError(`${subject}, but ${problem}. The run is refused.`, options);
   const { repoPath, remote } = await landingRemote(codebase, refuse);
-  const branches = await advertisedBranches(repoPath, remote, refuse);
+  const branches = await advertisedBranches(repoPath, remote, refuse, env);
   if (!branches.includes(landing.branch)) {
     const owner = landing.from.kind === 'own' ? item.key : landing.from.item.key;
     throw new LandingBranchRefusedError(

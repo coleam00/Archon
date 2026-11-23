@@ -44,7 +44,7 @@ function getLog(): ReturnType<typeof createLogger> {
 export async function fetchWithRetry(
   repoPath: RepoPath,
   fetchArgs: string[],
-  options: { timeout: number }
+  options: { timeout: number; env?: NodeJS.ProcessEnv }
 ): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     try {

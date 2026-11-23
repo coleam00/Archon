@@ -66,6 +66,13 @@ export interface LayeredDefinitionsInput {
   baseOverride?: string;
   /** The registered project's default branch. */
   defaultBranch?: string;
+  /**
+   * The environment the base's remote reads (default-branch detection and the fetch)
+   * authenticate with; this process's env when unset. A binding start sets it to its
+   * run-as user's GitHub environment, so they never borrow the caller's credential, nor
+   * its scrub. Local reads stay on this process's env.
+   */
+  remoteEnv?: NodeJS.ProcessEnv;
 }
 
 export interface ComposedDefinitions {
@@ -185,7 +192,9 @@ export async function resolveDefinitionsBase(
     if (base.remote === undefined) return base;
     return {
       remote: base.remote,
-      branch: base.branch ?? (await getDefaultBranch(toRepoPath(input.checkout), base.remote)),
+      branch:
+        base.branch ??
+        (await getDefaultBranch(toRepoPath(input.checkout), base.remote, input.remoteEnv)),
     };
   } catch (error) {
     throw new DefinitionSourceError(
@@ -251,6 +260,7 @@ async function fetchBase(
     if (remote !== undefined)
       await fetchWithRetry(repo, [remote, `+refs/heads/${branch}:refs/remotes/${ref}`], {
         timeout: FETCH_TIMEOUT_MS,
+        env: input.remoteEnv,
       });
     const local = remote === undefined ? `refs/heads/${ref}` : `refs/remotes/${ref}`;
     const commit = (

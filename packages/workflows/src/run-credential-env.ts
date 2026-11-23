@@ -158,6 +158,28 @@ function resolveGithubCliShimEnv(
 }
 
 /**
+ * A user's GitHub identity overrides (see {@link resolveGithubTokenOverrides}): their token
+ * and git helper, the scrub when they have none, or `{}` with per-user GitHub off or no
+ * user. A token lookup that fails resolves as no token, so it scrubs.
+ */
+export async function resolveUserGithubIdentityEnv(
+  deps: Pick<WorkflowDeps, 'isPerUserGitHubEnabled' | 'getUserGithubToken'>,
+  userId: string | undefined
+): Promise<Record<string, string>> {
+  const perUserEnabled = deps.isPerUserGitHubEnabled?.() ?? false;
+  if (!perUserEnabled) return {};
+  let userToken: string | undefined;
+  if (userId && deps.getUserGithubToken) {
+    try {
+      userToken = await deps.getUserGithubToken(userId);
+    } catch (err) {
+      getLog().warn({ err: err as Error, userId }, 'workflow.user_github_token_resolve_failed');
+    }
+  }
+  return resolveGithubTokenOverrides(perUserEnabled, userId, userToken);
+}
+
+/**
  * Resolve per-user GitHub credentials and commit author for a run. When per-user mode is on
  * and the run has an originating user, this routes `gh`/`git push` through the
  * user's personal token — or scrubs the org/bot token when they haven't
@@ -170,17 +192,10 @@ async function resolveUserGithubEnvForWorkflow(
 ): Promise<{ env: Record<string, string>; protectedKeys: string[] }> {
   const perUserEnabled = deps.isPerUserGitHubEnabled?.() ?? false;
   if (!perUserEnabled) return { env: {}, protectedKeys: [] };
-  let userToken: string | undefined;
-  if (userId && deps.getUserGithubToken) {
-    try {
-      userToken = await deps.getUserGithubToken(userId);
-    } catch (err) {
-      getLog().warn({ err: err as Error, userId }, 'workflow.user_github_token_resolve_failed');
-    }
-  }
-  const env = resolveGithubTokenOverrides(perUserEnabled, userId, userToken);
-  // The scrub's GH_CONFIG_DIR and GIT_CONFIG_PARAMETERS redirect config; they are not
-  // secrets. Protecting them would redact their values from every node's output.
+  const env = await resolveUserGithubIdentityEnv(deps, userId);
+  // GH_CONFIG_DIR and GIT_CONFIG_PARAMETERS redirect config (the scrub's, or a connected
+  // user's git helper, which reads GH_TOKEN at run time); they are not secrets.
+  // Protecting them would redact their values from every node's output.
   const protectedKeys = Object.keys(env).filter(key => GITHUB_TOKEN_KEYS.includes(key));
   if (userId && deps.getUserGithubAuthor) {
     const author = await deps.getUserGithubAuthor(userId);

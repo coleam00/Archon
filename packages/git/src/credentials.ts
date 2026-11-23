@@ -9,12 +9,13 @@ const ENV_CREDENTIAL_HELPER =
 
 export function gitCredentialOptions(
   httpUrl: URL | null,
-  credentials?: CloneCredentials
+  credentials?: CloneCredentials,
+  baseEnv: NodeJS.ProcessEnv = process.env
 ): { args: string[]; env: NodeJS.ProcessEnv } {
   if (credentials && !httpUrl)
     throw new Error('Authenticated git requests require an HTTP(S) repository URL');
   const args: string[] = [];
-  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+  const env: NodeJS.ProcessEnv = { ...baseEnv, GIT_TERMINAL_PROMPT: '0' };
   delete env.ARCHON_GIT_USERNAME;
   delete env.ARCHON_GIT_PASSWORD;
   if (credentials && httpUrl) {
