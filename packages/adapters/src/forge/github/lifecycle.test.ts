@@ -918,3 +918,56 @@ test('a mutation GitHub answers 502 is sent once and keeps its unknown outcome',
   });
   expect(github.calls.filter(call => call.method === 'PATCH')).toHaveLength(1);
 });
+
+describe('GitHub pull request close', () => {
+  const request = { operationId: 'close', op: 'pr.close', ref } satisfies ForgeMutationRequest;
+
+  test('closes an open pull request with one state update and nothing else', async () => {
+    const github = fakeGitHub();
+    const bodies: unknown[] = [];
+    const response = await handleGithubOperation(request, {
+      token: 'token',
+      fetch: async (input, init) => {
+        if (init?.method && init.method !== 'GET') bodies.push(JSON.parse(String(init.body)));
+        return github.fetch(input, init);
+      },
+    });
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        op: 'pr.close',
+        value: { outcome: 'applied', changed: true, pr: { state: 'closed' } },
+      },
+    });
+    // No merge, no branch deletion, no comment: one PATCH to the pull request.
+    const writes = github.calls.filter(call => call.method !== 'GET');
+    expect(writes).toEqual([{ url: expect.stringMatching(/\/pulls\/7$/), method: 'PATCH' }]);
+    expect(bodies).toEqual([{ state: 'closed' }]);
+  });
+
+  test.each([
+    [
+      false,
+      { ok: true, result: { op: 'pr.close', value: { changed: false, pr: { state: 'closed' } } } },
+    ],
+    [
+      true,
+      {
+        ok: false,
+        error: { kind: 'conflict' },
+        mutation: { op: 'pr.close', outcome: 'refused', observed: { state: 'merged' } },
+      },
+    ],
+  ] as const)('a closed pull request (merged=%s) is not written', async (merged, expected) => {
+    const github = fakeGitHub({ pull: pull({ state: 'closed', merged }) });
+    expect(await run(request, github)).toMatchObject(expected);
+    expect(github.calls.every(call => call.method === 'GET')).toBe(true);
+  });
+
+  test('a read-back that is still open is not reported as closed', async () => {
+    expect(await run(request, fakeGitHub({ lose: true }))).toMatchObject({
+      ok: false,
+      mutation: { op: 'pr.close', outcome: 'verification_failed', observed: { state: 'open' } },
+    });
+  });
+});

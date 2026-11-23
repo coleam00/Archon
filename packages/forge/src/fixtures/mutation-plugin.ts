@@ -30,6 +30,7 @@ const OPS = [
   'pr.edit-body',
   'pr.ready',
   'pr.draft',
+  'pr.close',
   'comment.upsert',
   'pr.merge',
   'checks.rerun',
@@ -194,6 +195,7 @@ else {
       return answer(repo, { pr: { ...pr, head_revision: 'another-revision' } });
     if (input.op === 'pr.ready' || input.op === 'pr.draft')
       return answer(ref, { pr: { ...pr, is_draft: !pr.is_draft } });
+    if (input.op === 'pr.close') return answer(ref, { pr });
     if (input.op === 'comment.upsert')
       return answer(ref, { comment: { ...comment, bodyDigest: digest('something else') } });
     if (input.op === 'workitem.comment.upsert')
@@ -347,6 +349,7 @@ else {
     'pr.create': () => answer(repo, { pr }),
     'pr.ready': () => answer(ref, { pr }),
     'pr.draft': () => answer(ref, { pr }),
+    'pr.close': () => answer(ref, { pr: { ...pr, state: 'closed' } }),
     'comment.upsert': () => answer(ref, { comment }),
     'workitem.comment.upsert': () => answer(ref, { workitem: subject, comment }),
     'workitem.close': () =>
