@@ -238,6 +238,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
           ? turn.accountResponse
           : ({
               workspaceRouting: null,
+              userId: null,
               account: turn.account ?? null,
               requiresOpenaiAuth: turn.requiresOpenaiAuth ?? true,
             } satisfies GetAccountResponse);
@@ -399,6 +400,7 @@ function threadOf(id: string): Thread {
     daybreakEnabled: null,
     forkedFromId: null,
     parentThreadId: null,
+    attachedToThreadId: null,
     preview: '',
     ephemeral: false,
     section: null,
@@ -476,6 +478,7 @@ function configReadResponse(servers: string[]): ConfigReadResponse {
       forced_chatgpt_workspace_id: null,
       forced_login_method: null,
       web_search: null,
+      client_search_provider: null,
       tools: null,
       instructions: null,
       developer_instructions: null,
@@ -563,6 +566,7 @@ function mcpStatusResponse(pages: ServerStatus[][], index: number): ListMcpServe
       serverInfo: null,
       serverCapabilities: null,
       tools: {},
+      toolListMeta: null,
       toolsError: server.toolsError ?? null,
       resources: [],
       resourceTemplates: [],
@@ -626,6 +630,7 @@ export function itemCompleted(
 export function agentMessage(text: string, id = 'msg-1'): ServerNotification {
   return itemCompleted({
     type: 'agentMessage',
+    moderation: null,
     id,
     text,
     phase: null,
@@ -673,6 +678,7 @@ export function mcpToolCall(
     type: 'mcpToolCall',
     id,
     server,
+    environmentId: null,
     tool,
     status,
     arguments: args,

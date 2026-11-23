@@ -754,6 +754,7 @@ describe('CodexProvider', () => {
             itemCompleted(
               {
                 type: 'agentMessage',
+                moderation: null,
                 id: 'child-reply',
                 text: 'child answer',
                 phase: null,
@@ -2215,6 +2216,7 @@ describe('CodexProvider', () => {
         method: 'mcpServer/startupStatus/updated',
         params: {
           threadId: extra.threadId === undefined ? THREAD_ID : extra.threadId,
+          environmentId: null,
           name,
           status,
           error: extra.error ?? null,

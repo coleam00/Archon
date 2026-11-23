@@ -18,7 +18,12 @@ import type { Spawner } from './app-server';
 import * as pluginProcess from '@archon/paths/plugin-process';
 
 const trackTempRoot = trackTempRoots();
-const account = { type: 'chatgpt', email: 'fixture@example.test', planType: 'pro' } as const;
+const account = {
+  type: 'chatgpt',
+  email: 'fixture@example.test',
+  planType: 'pro',
+  workspaceName: null,
+} as const;
 
 function loginFixture() {
   const home = trackTempRoot(mkdtempSync(join(tmpdir(), 'codex-recheck-')));
