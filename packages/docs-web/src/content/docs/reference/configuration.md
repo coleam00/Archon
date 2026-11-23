@@ -289,7 +289,8 @@ worktree:
     - .vscode               # Copy entire directory
     - plans/                # Local plans not committed to the team repo
   linkFiles:  # Optional: Gitignored paths every worktree shares through a symlink
-              # to the canonical repo, instead of a copy. See below.
+              # to the canonical repo, instead of a copy. Refused on
+              # Windows. See below.
     - .serena/cache
   initSubmodules: true  # Optional: default true — auto-detects .gitmodules and runs
                         # `git submodule update --init --recursive`. Set false to opt out.
@@ -520,7 +521,7 @@ worktree:
 - Per-entry failures and path-traversal attempts are logged and skipped; worktree creation goes on, as with `copyFiles`.
 - A `linkFiles` path may not also be in `copyFiles`, inside a copied path, or contain one (copying runs first and would put a real directory where the link belongs). Every entry must be a non-empty string. Either mistake fails config loading with an error naming the config file.
 - Destroying a worktree removes the link, not the canonical content.
-- On Windows a directory is linked with a junction, which needs no elevated rights. Linking a file needs symlink rights (Developer Mode or an elevated shell).
+- Windows refuses `linkFiles`: worktree creation fails with an error that says so, before any git work. Without elevated rights the only directory link Windows offers is a junction, and Git for Windows treats a junction as a real directory, so `git worktree remove` or a `git clean -fdx` in the worktree would walk into it and delete the shared content in the canonical repo. Use `copyFiles` there, or set `linkFiles: []` in the project to turn off a global list.
 
 `linkFiles` is the one `worktree.*` key that can also be set install-wide in `~/.archon/config.yaml`, for a cache that every project keeps at the same path. A project that sets `worktree.linkFiles` in its own `.archon/config.yaml` replaces the global list rather than adding to it; `linkFiles: []` turns linking off for that project. When the global list overlaps a path the project lists in `copyFiles`, worktree creation fails and the error names both files. `linkFiles` applies to worktree isolation only; container isolation does not use it.
 

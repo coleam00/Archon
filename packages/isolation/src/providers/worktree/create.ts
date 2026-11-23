@@ -23,7 +23,7 @@ import { isInsideArchonWorkspaces } from '@archon/paths';
 import { validateWorktreeConfig } from '../../worktree-config';
 import { IsolationFailure, MissingProjectDirectoryError } from '../../errors';
 import { copyWorktreeFiles } from '../../worktree-copy';
-import { linkWorktreeFiles } from '../../worktree-link';
+import { assertLinkFilesSupported, linkWorktreeFiles } from '../../worktree-link';
 import type {
   IsolationRequest,
   RepoConfigLoader,
@@ -84,6 +84,9 @@ export async function createWorktreeEnvironment(
 
   const repoConfig = await loadRepoConfig(request.canonicalRepoPath, loadConfig);
   validateWorktreeConfig(repoConfig);
+  // Here, not in validateWorktreeConfig: core's global config load calls that,
+  // and a Windows refusal there would stop every config load.
+  assertLinkFilesSupported(repoConfig?.linkFiles);
   if (repoConfig?.postCreate?.length && !setupExecutor) {
     throw new Error('worktree.postCreate requires a worktree setup executor');
   }

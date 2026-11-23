@@ -174,7 +174,8 @@ data whose tool tolerates that. Ignore the path without a trailing slash
 (`.serena/cache`, not `.serena/cache/`): git sees a symlink as a file, and Archon
 removes a link git would not ignore. `linkFiles` may also be set in `~/.archon/config.yaml`
 for every project; a project's own `linkFiles` replaces that list, and `[]` turns
-it off.
+it off. Windows refuses `linkFiles` (a junction is a real directory to git, so
+removing the worktree would delete the shared content); use `copyFiles` there.
 
 Prefer the typed commands over hand-editing when they exist — they validate:
 

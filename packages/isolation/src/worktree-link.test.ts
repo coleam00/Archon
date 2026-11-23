@@ -7,7 +7,7 @@ import { execFileAsync } from '@archon/git';
 import { setLogLevel } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 
-import { linkWorktreeFiles } from './worktree-link';
+import { assertLinkFilesSupported, linkWorktreeFiles } from './worktree-link';
 
 setLogLevel('silent');
 
@@ -30,7 +30,17 @@ beforeEach(async () => {
   await mkdir(canonical);
 });
 
-describe('linkWorktreeFiles', () => {
+test('linkFiles is refused on Windows only, and an empty list is not', () => {
+  expect(() => assertLinkFilesSupported(['.cache'], 'win32')).toThrow(
+    'worktree.linkFiles is not supported on Windows'
+  );
+  expect(() => assertLinkFilesSupported([], 'win32')).not.toThrow();
+  expect(() => assertLinkFilesSupported(undefined, 'win32')).not.toThrow();
+  expect(() => assertLinkFilesSupported(['.cache'], 'linux')).not.toThrow();
+});
+
+// POSIX symlink semantics; Windows never links (assertLinkFilesSupported).
+describe.skipIf(process.platform === 'win32')('linkWorktreeFiles', () => {
   test('links an ignored path to the canonical repo, creating a missing source, and is idempotent', async () => {
     await writeFile(join(worktree, '.gitignore'), '.serena/cache\n');
 

@@ -91,7 +91,7 @@ Compares `store.countActiveByCodebase()` against `maxWorktrees` (default 25). If
 **4. Copy and link configured files**
 - Copies only the paths listed in `.archon/config.yaml` `worktree.copyFiles` (`worktree-copy.ts`); nothing is copied by default
 - Entries are plain paths: source and destination are identical, no rename syntax
-- Then symlinks each `worktree.linkFiles` path (the repo list, else the global one; merged in core `loadWorktreeConfig`) to the canonical repo (`worktree-link.ts`), creating a missing source as a directory, leaving an existing destination alone, and removing a link `git check-ignore` does not ignore
+- Then symlinks each `worktree.linkFiles` path (the repo list, else the global one; merged in core `loadWorktreeConfig`) to the canonical repo (`worktree-link.ts`), creating a missing source as a directory, leaving an existing destination alone, and removing a link `git check-ignore` does not ignore. On Windows, creation refuses a non-empty `linkFiles` before any git work (`assertLinkFilesSupported`): a junction is a real directory to git, so removing or cleaning the worktree would delete the canonical content
 - Path traversal blocked for both (security check via `isPathWithinRoot()`)
 - `worktree.postCreate` runs after both
 

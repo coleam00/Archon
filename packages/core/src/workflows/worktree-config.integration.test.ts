@@ -69,11 +69,15 @@ async function createWorktree(): Promise<string> {
   return created.workingPath;
 }
 
-test('global worktree.linkFiles links a project that sets none', async () => {
-  const worktree = await createWorktree();
-  expect((await lstat(join(worktree, '.cache'))).isSymbolicLink()).toBe(true);
-  expect(await realpath(join(worktree, '.cache'))).toBe(join(repo, '.cache'));
-});
+// Windows refuses linkFiles; the isolation package tests the refusal.
+test.skipIf(process.platform === 'win32')(
+  'global worktree.linkFiles links a project that sets none',
+  async () => {
+    const worktree = await createWorktree();
+    expect((await lstat(join(worktree, '.cache'))).isSymbolicLink()).toBe(true);
+    expect(await realpath(join(worktree, '.cache'))).toBe(join(repo, '.cache'));
+  }
+);
 
 test("a project's own worktree.linkFiles replaces the global list", async () => {
   await mkdir(join(repo, '.archon'));
