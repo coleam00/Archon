@@ -409,6 +409,64 @@ describe('the build queue scripts', () => {
     expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: null, continues: null, branch: 'build/7-an-issue-run-1' });
   }, 60_000);
 
+  describe('an answer to the ask', () => {
+    const ASKED = JSON.stringify({ brief: 'continue PR 42 under the ruling', by: 'stop', options: QUESTION.options.map(({ id, effect, ruling }) => ({ id, effect, ruling })) });
+    const answered = (id: string | null, does: string, text: string) =>
+      JSON.stringify([
+        {
+          question: QUESTION.question,
+          closedAs: 'answered',
+          answer: id === null ? { text } : { decision: id, text },
+          option: id === null ? null : { id, does },
+          by: 'm',
+          via: 'cli',
+          at: AT,
+        },
+      ]);
+    const asking = () => triaged({}, record({ status: 'asking', brief: '' }));
+
+    test('writes the ruling and the words as a dated scope section, records the answer, and runs the round from it', () => {
+      const at = install();
+      seed(at, asking());
+      const result = run(at, 'facts', { INPUTS_DECISIONS: answered('relax', 'continues with gates downstream', 'Only for this item.'), INPUTS_ASKED: ASKED });
+      const facts = ok(result);
+      expect(result.bodies).toHaveLength(1);
+      expect(result.bodies[0]).toMatch(/## Current scope \(maintainer ruling on the build queue's question on a stopped run, \d{4}-\d{2}-\d{2}\)\n\nSynthesis and publish may gate on head_matches too\.\n\nThe maintainer's words: Only for this item\.\n$/);
+      expect(facts).toMatchObject({ path: 'route', answered: null });
+      expect(facts.brief).toContain('continue PR 42 under the ruling');
+      expect(stored(at).value?.facts.build).toMatchObject({ status: 'next', decisions: [{ decision: 'answered: continue', answer: { choice: 'relax', text: 'Only for this item.' } }] });
+    }, 60_000);
+
+    test.each([
+      ['`other`', 'other'],
+      ['no option', null],
+    ])("an answer choosing %s continues with the maintainer's text as the ruling, and refuses without text", (_, id) => {
+      const at = install();
+      seed(at, asking());
+      const before = stored(at);
+      const empty = run(at, 'facts', { INPUTS_DECISIONS: answered(id, 'Say what to do instead.', ' '), INPUTS_ASKED: ASKED });
+      expect(empty.code).not.toBe(0);
+      expect(empty.stderr).toContain('gave no text to continue from');
+      expect(stored(at)).toEqual(before);
+      const result = run(at, 'facts', { INPUTS_DECISIONS: answered(id, 'Say what to do instead.', 'Split it in two.'), INPUTS_ASKED: ASKED });
+      expect(ok(result)).toMatchObject({ path: 'route' });
+      expect(result.bodies[0]).toContain("The maintainer's words: Split it in two.");
+      expect(stored(at).value?.facts.build).toMatchObject({ status: 'next', decisions: [{ decision: 'answered: continue', answer: { choice: 'other' } }] });
+    }, 60_000);
+
+    test('a ready answer on an item with no pull request is refused before the issue body or the work item changes', () => {
+      const at = install();
+      seed(at, asking());
+      const before = stored(at);
+      const asked = JSON.stringify({ brief: 'b', by: 'stop', options: [{ id: 'by-hand', effect: 'ready', ruling: 'Done by hand.' }] });
+      const result = run(at, 'facts', { INPUTS_DECISIONS: answered('by-hand', 'hands the PR on', ''), INPUTS_ASKED: asked });
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain('has no pull request');
+      expect(result.bodies).toEqual([]);
+      expect(stored(at)).toEqual(before);
+    }, 60_000);
+  });
+
   test("a round's recorded pull request URL from another repository is refused, not guessed around", () => {
     const at = install();
     const { pr_number: _, ...legacy } = round('r1', AT);

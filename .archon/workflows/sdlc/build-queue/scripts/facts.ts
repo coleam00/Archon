@@ -23,6 +23,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   type AskedBy,
+  type BuildAsked,
   type BuildEffect,
   type BuildRound,
   buildBranch,
@@ -108,13 +109,6 @@ interface SettledAsk {
   readonly option: { readonly id: string; readonly does: string } | null;
 }
 
-/** What the asking run's apply recorded as `asked` in its result. */
-interface Asked {
-  readonly brief: string;
-  readonly by: AskedBy;
-  readonly options: readonly { readonly id: string; readonly effect: BuildEffect; readonly ruling: string }[];
-}
-
 const STATUS = { continue: 'next', ready: 'ready', park: 'parked' } as const;
 
 const ABOUT: Record<AskedBy, string> = {
@@ -123,32 +117,41 @@ const ABOUT: Record<AskedBy, string> = {
   scope: "the build queue's scope question",
 };
 
+/** The option an answer chose and its effect; no option reads as `other`, which needs text. */
+function chosenOption(asked: BuildAsked, picked: SettledAsk['option'], words: string) {
+  const chosen = picked ?? { id: 'other', does: 'Continue with what the answer says.' };
+  if (chosen.id === 'other' && words === '') throw new Error('the answer chose no option and gave no text to continue from');
+  const option = chosen.id === 'other' ? { id: chosen.id, effect: 'continue' as const, ruling: '' } : asked.options.find(candidate => candidate.id === chosen.id);
+  if (option === undefined) throw new Error(`the answer chose "${chosen.id}", which the asking run did not offer`);
+  return { chosen, option };
+}
+
 /**
  * Apply the answer this run was started with, or return null when it was started
  * without one. The effect is read from the chosen option's id, never from the answer's
  * text. `other`, the option every ask offers, means: continue, with the text as the ruling.
+ * An answer that names no option (the answer shape admits text alone) means the same.
  */
 function applyAnswer(number: number, at: string): { readonly effect: BuildEffect; readonly doc: WorkItem } | null {
   const settled = nullableJson(input('decisions')) as readonly SettledAsk[] | null;
   if (settled === null) return null;
-  const asked = nullableJson(input('asked')) as Asked | null;
+  const asked = nullableJson(input('asked')) as BuildAsked | null;
   const answered = settled.find(entry => entry.closedAs === 'answered');
-  if (answered?.option == null || asked === null) throw new Error('the run was started with no answered option or no asking result');
+  if (answered === undefined || asked === null) throw new Error('the run was started with no answered ask or no asking result');
+  const words = answered.answer?.text.trim() ?? '';
+  const { chosen, option } = chosenOption(asked, answered.option, words);
+  const id = chosen.id;
   const doc = readWorkItem(number);
   if (doc?.facts.build?.status !== 'asking') throw new Error(`issue ${String(number)} is not asking: its answer is not applied`);
-  const id = answered.option.id;
-  const option = id === 'other' ? { id, effect: 'continue' as const, ruling: '' } : asked.options.find(candidate => candidate.id === id);
-  if (option === undefined) throw new Error(`the answer chose "${id}", which the asking run did not offer`);
   const item = doc.subject;
   if (option.effect === 'ready' && itemPullRequest(doc.facts.build.rounds, doc.facts.triage, item.repo) === null) {
     throw new Error(`the ready choice "${id}" hands nothing to the merge queue: issue ${String(number)} has no pull request`);
   }
-  const words = answered.answer?.text.trim() ?? '';
   const ruling = [option.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`].filter(part => part !== '').join('\n\n');
   const heading = ruling === '' ? '' : rulingHeading(at, ABOUT[asked.by]);
   if (ruling !== '') appendSection(item, heading, ruling);
   const section = heading === '' ? '' : ` The ruling is the issue body's "${heading}" section, which is part of the contract.`;
-  const does = answered.option.does;
+  const { does } = chosen;
   const written = updateWorkItem(item, current =>
     withBuild(current, {
       at,

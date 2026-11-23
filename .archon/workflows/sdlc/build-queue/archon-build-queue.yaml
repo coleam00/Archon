@@ -302,5 +302,20 @@ nodes:
         # What the start the answer causes needs besides the answer: the brief a
         # continue starts from, which decision asked, and each option's effect and
         # ruling. Null when nothing is asked.
-        asked: { type: [object, 'null'] }
+        asked:
+          type: [object, 'null']
+          properties:
+            brief: { type: string }
+            # Which decision asked: route's, or answer's `ask_class`.
+            by: { type: string, enum: [route, stop, scope] }
+            options:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: string }
+                  effect: { type: string, enum: [continue, ready, park] }
+                  ruling: { type: string }
+                required: [id, effect, ruling]
+          required: [brief, by, options]
       required: [decision, summary, asked]

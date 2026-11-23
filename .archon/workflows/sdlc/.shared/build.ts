@@ -33,8 +33,14 @@ export type BuildAsk = NonNullable<NodeOutput<'archon-build-queue', 'route'>['as
  */
 export type BuildEffect = BuildAsk['options'][number]['effect'];
 
-/** Which decision raised an ask: its `kind` label, which the YAML also declares. */
-export type AskedBy = 'route' | 'stop' | 'scope';
+/**
+ * What an asking run hands the run its answer starts, as archon-build-queue.yaml declares
+ * apply's `asked`: the brief, which decision asked, and each option's effect and ruling.
+ */
+export type BuildAsked = NonNullable<NodeOutput<'archon-build-queue', 'apply'>['asked']>;
+
+/** Which decision raised an ask. */
+export type AskedBy = BuildAsked['by'];
 
 /** The stages a triaged item can be launched from: a READY verdict's routes. */
 export const LAUNCH_STAGES = [
