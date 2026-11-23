@@ -246,7 +246,7 @@ nodes:
     expect(bundled?.workflow.nodes.map(node => readHomeMcpDirectory(node))).toEqual([undefined]);
   });
 
-  test('an installed pack is keyed owner.<manifest name>, not by its install path', async () => {
+  test('an installed pack is keyed owner.<manifest name>, and its workflows keep their authored names in it', async () => {
     const kit = reviewKit();
     await install({
       ...kit,
@@ -259,8 +259,12 @@ nodes:
       source: 'installed',
       settings: { depth: { type: 'string', default: 'shallow' } },
     };
-    expect(review?.workflow.pack).toEqual(expected);
-    expect(support?.find(entry => entry.workflow.name === HELPER)?.workflow.pack).toEqual(expected);
+    // The `review` entrypoint publishes `name: code-review`; within the pack it stays that.
+    expect(review?.workflow.pack).toEqual({ ...expected, workflow: 'code-review' });
+    expect(support?.find(entry => entry.workflow.name === HELPER)?.workflow.pack).toEqual({
+      ...expected,
+      workflow: 'helper',
+    });
   });
 
   test('entrypoints are dispatchable as owner/plugin:entrypoint; support workflows only compose', async () => {

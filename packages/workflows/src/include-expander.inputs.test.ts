@@ -1,3 +1,4 @@
+import type { WorkflowPack } from './schemas';
 import { describe, test, expect } from 'bun:test';
 import { expandWorkflowIncludes } from './include-expander';
 import {
@@ -717,7 +718,7 @@ describe("expandWorkflowIncludes — an included block's raw reads of its pack s
 // From its own pack, a block reads the run's settings as it does run directly: each read
 // setting its includer does not pass is forwarded as the includer's own `$INPUTS.<name>`.
 describe('expandWorkflowIncludes — a block included from its own pack reads its settings', () => {
-  const packOf = (key: string): NonNullable<Parameters<typeof wf>[2]>['pack'] => ({
+  const packOf = (key: string): WorkflowPack => ({
     key,
     source: 'project',
     settings: { tone: { type: 'string' }, mood: { type: 'string' } },

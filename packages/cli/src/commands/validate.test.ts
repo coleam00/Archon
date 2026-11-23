@@ -72,6 +72,7 @@ describe('validateWorkflowsCommand', () => {
     });
     entry.workflow.pack = {
       key: 'example',
+      workflow: entry.workflow.name,
       source: 'project',
       settings: {
         ci: { type: 'enum', values: ['forge', 'none'] },
@@ -117,7 +118,7 @@ describe('validateWorkflowsCommand', () => {
         reviewers: { type: 'list' },
       },
     } as const;
-    entry.workflow.pack = pack;
+    entry.workflow.pack = { ...pack, workflow: entry.workflow.name };
     for (const kind of ['array', 'mapping']) {
       const settings = Object.keys(pack.settings).map(name => {
         const value = kind === 'array' ? `[*${name}]` : `{self: *${name}}`;
@@ -186,6 +187,7 @@ describe('validateWorkflowsCommand', () => {
     const entry = discoverPackWorkflow();
     entry.workflow.pack = {
       key: 'example',
+      workflow: entry.workflow.name,
       source: 'project',
       forge: { operations: ['pr.view', 'made.up'] },
     };

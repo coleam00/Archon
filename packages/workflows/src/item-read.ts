@@ -80,6 +80,7 @@ import { itemHolder, itemHolders } from './item-hold';
 import { runOwnerObservationSchema } from './schemas/workflow-run-listing';
 import { readCompletedRunResult, resultCommitOf } from './run-result';
 import { getTerminalRecord } from './terminal-record';
+import { runPack, runPackSchema } from './run-pack';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -105,7 +106,10 @@ export type ItemHeldBehind = z.infer<typeof itemHeldBehindSchema>;
 
 export const itemRunSchema = z.object({
   id: z.string(),
+  /** The name the run started under: `owner/plugin:<entrypoint>` for an installed pack's workflow. */
   workflow: z.string(),
+  /** Match your own pack's runs by `pack.key` and `pack.workflow`; null outside a pack or on older runs. */
+  pack: runPackSchema.nullable(),
   status: workflowRunStatusSchema,
   /** The outcome the run completed with, of either form; null until it completes. */
   outcome: z.string().nullable(),
@@ -410,6 +414,7 @@ async function itemRun(
   return {
     id: run.id,
     workflow: run.workflow_name,
+    pack: runPack(run),
     status: run.status,
     outcome: displayedRunOutcome(run),
     startedAt: run.started_at.toISOString(),

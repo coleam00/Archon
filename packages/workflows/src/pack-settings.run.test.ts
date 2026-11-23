@@ -16,6 +16,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { executeWorkflow } from './executor';
+import { resolveWorkflow } from './graph-plan';
 import { hydrateResumableRun } from './run-resume';
 import { discoverWorkflows } from './workflow-discovery';
 import type { WorkflowDeps } from './deps';
@@ -252,7 +253,7 @@ nodes:
     expect(String(row?.metadata?.error)).toContain(join('.archon', 'packs', 'alpha.yaml'));
   });
 
-  it('keeps the settings a run started with across a resume, even after the project file changes', async () => {
+  it('keeps the settings and in-pack name a run started with across a resume, even after the project file changes', async () => {
     await writePackDeclaration('alpha', 'inputs:\n  tone:\n    default: plain\n');
     await writeProjectSettings('alpha', 'settings:\n  tone: before\n');
     await writePackWorkflow(
@@ -271,6 +272,13 @@ nodes:
 `
     );
 
+    // Published under another name than its `name:`, as an installed entrypoint alias is.
+    const gated = await discover('gated');
+    const published = resolveWorkflow({
+      ...gated,
+      name: 'acme/alpha:hold',
+      nodes: [...gated.nodes],
+    });
     const store = new InMemoryStore();
     const { deps, prompts } = recordingDeps(store);
     await executeWorkflow(
@@ -278,13 +286,14 @@ nodes:
       makePlatform(),
       'conv-plat',
       cwd,
-      await discover('gated'),
+      published,
       'goal',
       { conversationId: 'conv-db' },
       { baseBranch: 'main' }
     );
-    const run = runNamed(store, 'gated');
+    const run = runNamed(store, 'acme/alpha:hold');
     expect(run?.status).toBe('paused');
+    expect(dispatchOf(run)).toMatchObject({ pack: 'alpha', pack_workflow: 'gated' });
 
     await writeProjectSettings('alpha', 'settings:\n  tone: after\n');
     store.approveGate(run!.id);
@@ -295,7 +304,7 @@ nodes:
       makePlatform(),
       'conv-plat',
       cwd,
-      await discover('gated'),
+      published,
       run!.user_message,
       { conversationId: 'conv-db' },
       { ...hydrated! }
@@ -305,7 +314,10 @@ nodes:
     expect(resumed?.status).toBe('completed');
     expect(prompts.some(p => p.includes('tone is before'))).toBe(true);
     expect(prompts.some(p => p.includes('tone is after'))).toBe(false);
-    expect(dispatchOf(resumed ?? undefined)?.pack).toBe('alpha');
+    expect(dispatchOf(resumed ?? undefined)).toMatchObject({
+      pack: 'alpha',
+      pack_workflow: 'gated',
+    });
   });
 });
 
@@ -681,7 +693,11 @@ nodes:
 
     expect(result.success).toBe(true);
     const child = runNamed(store, 'beta-child');
-    expect(dispatchOf(child)).toMatchObject({ pack: 'beta', source: 'project' });
+    expect(dispatchOf(child)).toMatchObject({
+      pack: 'beta',
+      pack_workflow: 'beta-child',
+      source: 'project',
+    });
     expect(nodeOutput(store, child?.id, 'emit')).toContain('child-tone=beta-project');
     expect(dispatchOf(runNamed(store, 'alpha-parent'))?.pack).toBe('alpha');
   });

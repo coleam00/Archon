@@ -277,6 +277,7 @@ describe('workflow run forge refusal', () => {
       // Only discovery sets a pack, so the fixture attaches the declaration it would read.
       entry.workflow.pack = {
         key: 'factory',
+        workflow: entry.workflow.name,
         source: 'project',
         forge: { operations: ['pr.view'] },
       };

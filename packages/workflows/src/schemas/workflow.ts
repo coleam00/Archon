@@ -18,7 +18,7 @@ import { jsonValueSchema } from '../output-ref';
 import { workflowResourceSchema } from './resource-name';
 import { rejectRetiredThinking, type EffortLevel } from './effort';
 import { modelRefSchema, type WorkflowModelRef } from './model-binding';
-import type { WorkflowPack } from './pack-settings';
+import type { WorkflowPackMember } from './pack-settings';
 
 // ---------------------------------------------------------------------------
 // Shared enum schemas
@@ -329,7 +329,7 @@ export const workflowDefinitionSchema = z.preprocess(
  */
 export type WorkflowDefinition = z.infer<typeof workflowDefinitionSchema> & {
   prompt?: never;
-  pack?: WorkflowPack;
+  pack?: WorkflowPackMember;
 };
 
 /** Static execution plan attached after include expansion and graph validation. */

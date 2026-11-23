@@ -75,6 +75,15 @@ export interface WorkflowPack {
 }
 
 /**
+ * A workflow's pack, with `workflow`, its authored `name:`. That is how the pack's own
+ * files and bindings name it, and it stays the same when an installed pack's catalog
+ * publishes the workflow as `owner/plugin:<entrypoint>`, whose entrypoint may differ.
+ */
+export interface WorkflowPackMember extends WorkflowPack {
+  readonly workflow: string;
+}
+
+/**
  * The authored `forge:` block: the capability tokens the pack calls, each an operation
  * name or a finer token a plugin advertises, such as `resolve:subject`. `repository`
  * names the two workflow inputs that carry the repository a run acts on; a run that sets
