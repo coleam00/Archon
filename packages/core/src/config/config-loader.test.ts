@@ -200,6 +200,15 @@ concurrency:
     });
 
     test.each([
+      'worktree: [.cache]',
+      'worktree:\n  linkFiles: .cache',
+      'worktree:\n  linkFiles: [" "]',
+    ])('rejects invalid global worktree.linkFiles: %s', async setting => {
+      mockFsReadFile.mockResolvedValue(setting);
+      await expect(loadGlobalConfig()).rejects.toThrow('Invalid worktree config');
+    });
+
+    test.each([
       ['tiers', 'medium'],
       ['aliases', "'@deep'"],
     ] as const)(
@@ -373,6 +382,7 @@ workflows:
       'linkFiles: [42]',
       'linkFiles: [" "]',
       'copyFiles: [".cache/"]\n  linkFiles: [".cache"]',
+      'copyFiles: [".cache"]\n  linkFiles: ["./.cache"]',
     ])('rejects invalid linked files: %s', async setting => {
       mockFsReadFile.mockResolvedValue(`worktree:\n  ${setting}`);
       await expect(loadRepoConfig('/repo')).rejects.toThrow('worktree.linkFiles');

@@ -168,6 +168,12 @@ tiers:
 aliases:
   '@reasoning': { provider: claude, model: opus, effort: max }
 
+# Paths every project's worktrees share through a symlink, unless the project
+# sets its own worktree.linkFiles. The only worktree key read from this file.
+worktree:
+  linkFiles:
+    - .serena/cache
+
 ```
 
 The `tiers:` block above is no longer hand-edit-only -- you can also set the `small`/`medium`/`large` presets from the console **AI Settings** -> **Model Tiers** panel, or from the CLI with [`archon ai tier set`](/reference/cli/#ai). Connecting your own provider API key or subscription is covered in [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
@@ -512,11 +518,11 @@ worktree:
 - A path that already exists in the new worktree (a checked-out path, an earlier link) is left as it is and logged.
 - Links are made after `copyFiles` and before `postCreate`, so setup commands write through them.
 - Per-entry failures and path-traversal attempts are logged and skipped; worktree creation goes on, as with `copyFiles`.
-- A path may not appear in both `copyFiles` and `linkFiles`, and every entry must be a non-empty string. Either mistake fails config loading with an error naming `.archon/config.yaml`.
+- A path may not appear in both `copyFiles` and `linkFiles`, and every entry must be a non-empty string. Either mistake fails config loading with an error naming the config file.
 - Destroying a worktree removes the link, not the canonical content.
 - On Windows a directory is linked with a junction, which needs no elevated rights. Linking a file needs symlink rights (Developer Mode or an elevated shell).
 
-Like the other `worktree.*` keys, `linkFiles` is read from the repo's own `.archon/config.yaml` and has no effect in `~/.archon/config.yaml`. It applies to worktree isolation only; container isolation does not use it.
+`linkFiles` is the one `worktree.*` key that can also be set install-wide in `~/.archon/config.yaml`, for a cache that every project keeps at the same path. A project that sets `worktree.linkFiles` in its own `.archon/config.yaml` replaces the global list rather than adding to it; `linkFiles: []` turns linking off for that project. When the global list names a path the project lists in `copyFiles`, worktree creation fails and the error names both files. `linkFiles` applies to worktree isolation only; container isolation does not use it.
 
 **Defaults behavior:** The app's bundled default commands and workflows are loaded at runtime and merged with repo-specific ones. Repo commands/workflows override app defaults by name. Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` to disable runtime loading.
 

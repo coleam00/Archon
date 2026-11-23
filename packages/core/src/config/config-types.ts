@@ -245,6 +245,12 @@ export interface GlobalConfig {
   itemTracker?: ItemTrackerConfig;
 
   /**
+   * Install-wide worktree defaults. Only `linkFiles` is honoured here; it applies to
+   * every project whose `.archon/config.yaml` does not set its own `worktree.linkFiles`.
+   */
+  worktree?: Pick<WorktreeCreateConfig, 'linkFiles'>;
+
+  /**
    * Concurrency limits
    */
   concurrency?: {
