@@ -1,7 +1,7 @@
 import type { WorkflowResumeOptions } from '@archon/workflows/engine-port';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
-import { existsSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
 import { resumeWorkflowContinuation } from '@archon/core/workflows/continuation-host';
@@ -328,16 +328,30 @@ async function loadedEngine(watch: boolean, json: boolean): Promise<string | und
   return undefined;
 }
 
+/** The wake job's definition file as this watch found it: its path and the file's identity. */
+interface FollowedWakeJob {
+  path: string;
+  identity: string;
+}
+
+/** Which file is at `path` now; a file written again in its place is another one. */
+function fileIdentity(path: string): string | undefined {
+  const found = statSync(path, { throwIfNoEntry: false });
+  return found && `${String(found.ino)}:${String(found.mtimeMs)}:${String(found.ctimeMs)}`;
+}
+
 /**
- * The wake job's definition file, when the job is installed as this watch starts. Removing
- * the job deletes it, and the watch stops: no scheduler stops a running watcher on remove
- * except launchd, so without this a removed job's watcher would run on. A watch started
- * with no job installed has nothing to follow and never stops for this.
+ * The wake job's definition file, when the job is installed as this watch starts. Only
+ * launchd stops a running watcher when its job is removed, so the watch stops itself once
+ * that file is gone or is another file: `remove` deletes it, and an `install` after a
+ * `remove` writes a new one, even before this watch next looks. A watch started with no job
+ * installed has nothing to follow and never stops for this.
  */
-function followedWakeJob(watch: boolean): string | undefined {
+function followedWakeJob(watch: boolean): FollowedWakeJob | undefined {
   if (!watch) return undefined;
-  const definition = nativeScheduleDefinition(workflowWakeScheduleTarget());
-  return definition !== undefined && existsSync(definition) ? definition : undefined;
+  const path = nativeScheduleDefinition(workflowWakeScheduleTarget());
+  const identity = path === undefined ? undefined : fileIdentity(path);
+  return path === undefined || identity === undefined ? undefined : { path, identity };
 }
 
 /** The installed engine, when it is no longer the one this watch loaded. */
@@ -498,14 +512,14 @@ interface WakeControl {
   engineMoved(): Promise<boolean>;
   /** Whether `engineMoved` has seen a change, without checking again. */
   moved(): boolean;
-  /** Whether the wake job this watch follows was removed; reported and stopped as above. */
+  /** Whether the wake job this watch follows was removed or replaced; reported and stopped as above. */
   jobRemoved(): Promise<boolean>;
 }
 
 /** A stop flag for both loops, sleeps that a stop ends at once, and the engine check. */
 function wakeControl(
   loaded: string | undefined,
-  job: string | undefined,
+  job: FollowedWakeJob | undefined,
   json: boolean
 ): { control: WakeControl; stop: () => void } {
   let stopped = false;
@@ -530,12 +544,15 @@ function wakeControl(
       moved: () => moved,
       jobRemoved: async () => {
         if (removed) return true;
-        if (job === undefined || existsSync(job)) return false;
+        if (job === undefined) return false;
+        const now = fileIdentity(job.path);
+        if (now === job.identity) return false;
         removed = true;
         stop();
+        const reason = now === undefined ? 'job removed' : 'job replaced';
         if (json)
-          await writeJsonLine({ ok: true, action: 'wake', stop: 'job removed', definition: job });
-        else console.log(`wake: the wake job was removed (${job}), stopping`);
+          await writeJsonLine({ ok: true, action: 'wake', stop: reason, definition: job.path });
+        else console.log(`wake: ${reason} (${job.path}), stopping`);
         return true;
       },
       stopped: () => stopped,

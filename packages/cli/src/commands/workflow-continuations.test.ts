@@ -1,6 +1,6 @@
 import { beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { mkdtemp, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, unlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -336,11 +336,17 @@ test('schedule installs on Windows with a one-minute default and status reports 
     ).toBe(1);
   }));
 
-test('a watch following the wake job stops once the job is removed', async () => {
+test.each([
+  ['removed', 'job removed'],
+  ['removed and installed again before the next pass', 'job replaced'],
+])('a watch following the wake job stops once the job is %s', async (what, reason) => {
   const directory = await mkdtemp(join(tmpdir(), 'archon-wake-job-'));
   try {
-    wakeJobDefinition = join(directory, 'job.plist');
-    await writeFile(wakeJobDefinition, '');
+    const definition = join(directory, 'job.plist');
+    wakeJobDefinition = definition;
+    await writeFile(definition, 'job');
+    // Installed a while ago, as a job the watch follows always is.
+    await utimes(definition, new Date(0), new Date(0));
     const originalTimeout = globalThis.setTimeout;
     const timers: {
       setTimeout(callback: () => void, delay?: number): ReturnType<typeof setTimeout>;
@@ -349,10 +355,12 @@ test('a watch following the wake job stops once the job is removed', async () =>
       originalTimeout(callback, 0)
     );
     scan.mockImplementationOnce(async () => {
-      await unlink(wakeJobDefinition as string);
+      await unlink(definition);
+      // The same contents at the same path: only the file's identity tells them apart.
+      if (reason === 'job replaced') await writeFile(definition, 'job');
       return [];
     });
-    // Ends the loop if the check misses the removal, so the failure is an assertion, not a hang.
+    // Ends the loop if the check misses the change, so the failure is an assertion, not a hang.
     scan.mockImplementationOnce(async () => {
       process.emit('SIGTERM');
       return [];
@@ -364,13 +372,8 @@ test('a watch following the wake job stops once the job is removed', async () =>
     } finally {
       timer.mockRestore();
     }
-    expect(scan).toHaveBeenCalledTimes(1);
-    expect(output.at(-1)).toEqual({
-      ok: true,
-      action: 'wake',
-      stop: 'job removed',
-      definition: wakeJobDefinition,
-    });
+    expect(scan, what).toHaveBeenCalledTimes(1);
+    expect(output.at(-1)).toEqual({ ok: true, action: 'wake', stop: reason, definition });
   } finally {
     await removeTempTree(directory);
   }

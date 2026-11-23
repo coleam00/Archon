@@ -671,6 +671,15 @@ describe('workflow wake native schedule', () => {
       const generated = workflowWakeScheduleConfig(5);
       const originalId = generated.id;
       expect(workflowWakeScheduleConfig(10).id).toBe(originalId);
+      // A second install on the machine gets its own job.
+      const home = process.env.ARCHON_HOME;
+      process.env.ARCHON_HOME = await scratchDirectory();
+      try {
+        expect(workflowWakeScheduleConfig(5).id).not.toBe(originalId);
+      } finally {
+        if (home === undefined) delete process.env.ARCHON_HOME;
+        else process.env.ARCHON_HOME = home;
+      }
       expect(generated.programArguments.slice(-4)).toEqual([
         'workflow',
         'wake',
