@@ -166,6 +166,13 @@ Other common entries: `.vscode/`, `.claude/`, and local-only fixture or plans
 directories. Full semantics, including path-traversal rejection and the
 `worktree.path` interaction, are in `/reference/configuration/`.
 
+Large caches can be linked instead of copied. `worktree.linkFiles` makes each
+listed path a symlink to the canonical repo, so every worktree shares one
+directory. Shared means concurrent runs write the same data: suggest it only for
+data whose tool tolerates that. Ignore the path without a trailing slash
+(`.serena/cache`, not `.serena/cache/`): git sees a symlink as a file, and Archon
+removes a link git would not ignore.
+
 Prefer the typed commands over hand-editing when they exist — they validate:
 
 ```bash

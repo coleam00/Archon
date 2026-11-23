@@ -107,7 +107,7 @@ export {
 } from './worktree-copy';
 export type { CopyFileEntry } from './worktree-copy';
 
-export { validateWorktreePostCreate } from './post-create-config';
+export { validateWorktreeConfig } from './worktree-config';
 export type { WorktreeSetupExecutor, WorktreeSetupInput } from './types';
 export { WorktreePostCreateError } from './errors';
 

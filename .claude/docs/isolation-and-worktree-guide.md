@@ -88,11 +88,12 @@ Compares `store.countActiveByCodebase()` against `maxWorktrees` (default 25). If
 - For all others: `git worktree add path -b branchName origin/{baseBranch}`
 - Before creation: `cleanOrphanDirectoryIfExists()` removes stale non-worktree directories
 
-**4. Copy configured files**
-- Default: always copies `.archon/` directory
-- User config: additional paths from `.archon/config.yaml` `worktree.copyFiles`
-- Supports `"source -> destination"` arrow syntax
-- Path traversal blocked (security check via `isPathWithinRoot()`)
+**4. Copy and link configured files**
+- Copies only the paths listed in `.archon/config.yaml` `worktree.copyFiles` (`worktree-copy.ts`); nothing is copied by default
+- Entries are plain paths: source and destination are identical, no rename syntax
+- Then symlinks each `worktree.linkFiles` path to the canonical repo (`worktree-link.ts`), creating a missing source as a directory, leaving an existing destination alone, and removing a link `git check-ignore` does not ignore
+- Path traversal blocked for both (security check via `isPathWithinRoot()`)
+- `worktree.postCreate` runs after both
 
 ---
 

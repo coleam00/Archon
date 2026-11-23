@@ -20,9 +20,10 @@ import {
 } from '@archon/git';
 import type { BranchName, RepoPath } from '@archon/git';
 import { isInsideArchonWorkspaces } from '@archon/paths';
-import { validateWorktreePostCreate } from '../../post-create-config';
+import { validateWorktreeConfig } from '../../worktree-config';
 import { IsolationFailure, MissingProjectDirectoryError } from '../../errors';
 import { copyWorktreeFiles } from '../../worktree-copy';
+import { linkWorktreeFiles } from '../../worktree-link';
 import type {
   IsolationRequest,
   RepoConfigLoader,
@@ -82,7 +83,7 @@ export async function createWorktreeEnvironment(
   }
 
   const repoConfig = await loadRepoConfig(request.canonicalRepoPath, loadConfig);
-  validateWorktreePostCreate(repoConfig);
+  validateWorktreeConfig(repoConfig);
   if (repoConfig?.postCreate?.length && !setupExecutor) {
     throw new Error('worktree.postCreate requires a worktree setup executor');
   }
@@ -344,6 +345,8 @@ async function finishWorktreeSetup(
   }
 
   await copyConfiguredFiles(repoPath, worktreePath, worktreeConfig?.copyFiles ?? []);
+  // Before postCreate, so a setup command (a cache warm-up) writes into the shared path.
+  await linkConfiguredFiles(repoPath, worktreePath, worktreeConfig?.linkFiles ?? []);
 
   if (worktreeConfig?.postCreate?.length && setupExecutor) {
     await setupExecutor({
@@ -660,6 +663,23 @@ async function copyConfiguredFiles(
     // Should not happen as copyWorktreeFiles handles errors internally,
     // but guard against unexpected errors
     getLog().error({ err: error, worktreePath }, 'worktree_file_copy_failed');
+  }
+}
+
+/** Link `worktree.linkFiles`; `linkWorktreeFiles` logs each entry it could not link. */
+async function linkConfiguredFiles(
+  canonicalRepoPath: string,
+  worktreePath: string,
+  configuredFiles: string[]
+): Promise<void> {
+  const linkFiles = [...new Set(configuredFiles)];
+  if (linkFiles.length === 0) return;
+  const linked = await linkWorktreeFiles(canonicalRepoPath, worktreePath, linkFiles);
+  if (linked.length < linkFiles.length) {
+    getLog().warn(
+      { worktreePath, linkedCount: linked.length, attemptedCount: linkFiles.length },
+      'worktree_file_link_partial'
+    );
   }
 }
 

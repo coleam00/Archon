@@ -361,6 +361,23 @@ workflows:
       await expect(loadRepoConfig('/repo')).rejects.toThrow('worktree.postCreate');
     });
 
+    test('loads linked files', async () => {
+      mockFsReadFile.mockResolvedValue(
+        'worktree:\n  copyFiles: [".env"]\n  linkFiles: [".serena/cache"]'
+      );
+      expect((await loadRepoConfig('/repo')).worktree?.linkFiles).toEqual(['.serena/cache']);
+    });
+
+    test.each([
+      'linkFiles: .serena/cache',
+      'linkFiles: [42]',
+      'linkFiles: [" "]',
+      'copyFiles: [".cache/"]\n  linkFiles: [".cache"]',
+    ])('rejects invalid linked files: %s', async setting => {
+      mockFsReadFile.mockResolvedValue(`worktree:\n  ${setting}`);
+      await expect(loadRepoConfig('/repo')).rejects.toThrow('worktree.linkFiles');
+    });
+
     test('loads from .archon/config.yaml', async () => {
       mockFsReadFile.mockResolvedValue('assistant: codex');
 

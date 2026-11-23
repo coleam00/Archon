@@ -430,6 +430,13 @@ export interface WorktreeCreateConfig {
   baseBranch?: string;
   copyFiles?: string[];
   /**
+   * Repo-relative git-ignored paths that each new worktree gets as a symlink to
+   * the same path in the canonical repo, instead of a copy. Every worktree and
+   * the canonical checkout share the linked content. A missing entry is created
+   * in the canonical repo as an empty directory first.
+   */
+  linkFiles?: string[];
+  /**
    * Initialize git submodules in the worktree. Defaults to enabled — a worktree
    * with uninitialized submodules is a silent broken state for monorepos.
    * Set to `false` to opt out. No-op when `.gitmodules` is absent.
