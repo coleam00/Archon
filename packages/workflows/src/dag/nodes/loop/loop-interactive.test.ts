@@ -1095,6 +1095,61 @@ describe('interactive loop node', () => {
     expect(mockSendQueryDag).not.toHaveBeenCalled();
   });
 
+  it('keeps the sandbox on the suspended attempt that a bare approval completes', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: '<promise>APPROVED</promise>' };
+      yield { type: 'result', sessionId: 'sandbox-session' };
+    });
+    const deps = createMockDeps();
+    const sandbox = { filesystem: { denyWrite: [testDir] } };
+    const workflow = {
+      name: 'sandbox-approval',
+      sandbox: { filesystem: { denyWrite: ['$RUN_WORKTREE'] } },
+      nodes: [
+        {
+          id: 'refine',
+          kind: 'loop',
+          loop: {
+            prompt: 'Review.',
+            until: 'APPROVED',
+            fresh_context: false,
+            max_iterations: 2,
+            interactive: true,
+            gate_message: 'Review?',
+          },
+        },
+      ],
+    } satisfies Parameters<typeof dagOptions>[0]['workflow'];
+    const runId = 'sandbox-approval';
+    const options = { deps, cwd: testDir, workflow, platform: createMockPlatform() };
+
+    await executeDagWorkflow(dagOptions({ ...options, workflowRun: makeWorkflowRun(runId) }));
+
+    const gate = deps.store.pauseWorkflowRun.mock.calls[0]?.[1];
+    expect(gate?.completionSignaled).toBe(true);
+    expect(mockSendQueryDag.mock.calls[0]?.[3]?.nodeConfig?.sandbox).toEqual(sandbox);
+    const paused = persistedEvents(deps.store).find(event => event.event_type === 'node_suspended');
+    expect(paused).toBeDefined();
+    const pausedRecord = paused && readNodeRecordEvent({ ...paused, data: paused.data ?? {} });
+    expect(pausedRecord?.data.sandbox).toEqual(sandbox);
+    expect(pausedRecord?.metadata?.attempt.id).toBeDefined();
+
+    await executeDagWorkflow(
+      dagOptions({
+        ...options,
+        workflowRun: makeWorkflowRun(runId, {
+          metadata: { approval: gate, loop_user_input: 'Approved', loop_feedback_given: false },
+        }),
+      })
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    const done = persistedEvents(deps.store).find(event => event.event_type === 'node_completed');
+    expect(done).toBeDefined();
+    const doneRecord = done && readNodeRecordEvent({ ...done, data: done.data ?? {} });
+    expect(doneRecord?.metadata?.attempt.id).toBe(pausedRecord?.metadata?.attempt.id);
+  });
+
   it('iterates at resume when feedback was given, even on a signal-bearing gate (#2074 C)', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'Re-checked X. <promise>APPROVED</promise>' };

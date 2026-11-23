@@ -291,7 +291,7 @@ The ladder is the union of every provider's vocabulary. Codex accepts all eight 
 
 **systemPrompt** replaces Claude's `claude_code` preset. Codex includes the instructions in the user prompt, and Copilot appends them to its foundation prompt.
 
-**sandbox** adds OS-level filesystem and network restrictions to the Claude subprocess, on top of worktree isolation:
+**sandbox** adds OS-level filesystem and network restrictions to Claude's sandboxed shell commands. It does not replace permissions for native file tools.
 
 ```yaml
 - id: untrusted-code-analysis
@@ -306,6 +306,8 @@ The ladder is the union of every provider's vocabulary. Codex accepts all eight 
 ```
 
 Archon type-checks the keys shown here and hands any other Claude sandbox setting, at any level of the block, to Claude as written. Archon does not catch a misspelled key.
+
+In a host run, sandbox strings can refer to `$RUN_WORKTREE` (the node's run directory), `$GIT_COMMON_DIR` (the repository's shared Git directory), and `$MAIN_CHECKOUT` (its primary checkout). For example, set `denyWrite: ['$RUN_WORKTREE', '$GIT_COMMON_DIR', '$MAIN_CHECKOUT']` to pass those paths to Claude's shell sandbox. A Git path that cannot be resolved fails the node before the provider is called. Use `archon workflow get <run> --json --verbose` to inspect the resolved settings; their presence does not prove OS enforcement.
 
 **settingSources** controls which filesystem setting sources a capable provider discovers. For Claude these are the project's `CLAUDE.md` and `.claude/` skills, commands and agents, and the user-level `~/.claude/`. For skills it controls eligibility, not activation: `skills:` selects the exact active set, and each declared skill must exist under an enabled source. Fewer sources give a leaner context and a faster node start:
 

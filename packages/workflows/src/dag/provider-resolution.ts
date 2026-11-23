@@ -7,7 +7,7 @@ import {
   requireProvider,
   isEffortRung,
 } from '@archon/provider-contract';
-import { getCanonicalRepoPath, getGitCheckoutIdentity } from '@archon/git';
+import { findRepoRoot, getCanonicalRepoPath, getGitCheckoutIdentity } from '@archon/git';
 import {
   type ModelAliasPreset,
   type PresetEffortRejection,
@@ -231,11 +231,9 @@ export async function resolveNodeProviderAndModel(
 
   const aiFields = resolveNodeAiFields(node, workflowLevelOptions, resolveAiText);
   const baseOptions = baseQueryOptions(ctx, node, model, aiFields);
-  const sandbox = await resolveNodeSandbox(
-    node.sandbox ?? workflowLevelOptions.sandbox,
-    ctx,
-    node.id
-  );
+  const sandbox = caps.sandbox
+    ? await resolveNodeSandbox(node.sandbox ?? workflowLevelOptions.sandbox, ctx, node.id)
+    : undefined;
   const nodeConfig = buildNodeConfig(
     node,
     workflowLevelOptions,
@@ -542,7 +540,9 @@ async function resolveNodeSandbox(
   }
   if (sandboxHas(texts, 'MAIN_CHECKOUT')) {
     try {
-      mainCheckout = await getCanonicalRepoPath(ctx.cwd);
+      const root = await findRepoRoot(ctx.cwd);
+      if (root === null) throw new Error('Not in a Git checkout');
+      mainCheckout = await getCanonicalRepoPath(root);
     } catch (error) {
       throw sandboxPathError(nodeId, '$MAIN_CHECKOUT', ctx.cwd, error);
     }

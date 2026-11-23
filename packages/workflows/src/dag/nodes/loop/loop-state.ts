@@ -137,7 +137,11 @@ export async function failLoopNode(
         numTurns: state.numTurns,
         resolvedModel: state.resolvedModel?.id,
         sessionId: state.sessionId,
-        diagnostics: { ...extras.data, loopIterations: extras.loopIterations },
+        diagnostics: {
+          ...execution.diagnostics,
+          ...extras.data,
+          loopIterations: extras.loopIterations,
+        },
       }
     )
   );

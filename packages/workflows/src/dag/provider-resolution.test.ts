@@ -2,7 +2,7 @@
 import { describe, beforeEach, afterEach, it, mock, expect, type Mock } from 'bun:test';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, mkdir, writeFile } from 'fs/promises';
+import { mkdtemp, mkdir, realpath, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { getCanonicalRepoPath, getGitCheckoutIdentity } from '@archon/git';
@@ -979,6 +979,116 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     expect(mockSendQueryDag).not.toHaveBeenCalled();
     const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
     expect(String(failed?.data?.error)).toContain('$MAIN_CHECKOUT');
+  });
+
+  it('rejects a sandbox main checkout reference in a non-Git folder', async () => {
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflow: {
+          name: 'sandbox-folder',
+          nodes: [
+            {
+              id: 'step1',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'review' },
+              sandbox: { filesystem: { denyWrite: ['$MAIN_CHECKOUT'] } },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
+    expect(String(failed?.data?.error)).toContain('$MAIN_CHECKOUT');
+  });
+
+  it('warns and ignores a sandbox on Codex without resolving its Git paths', async () => {
+    const platform = createMockPlatform();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform,
+        cwd: testDir,
+        workflowProvider: 'codex',
+        config: { ...minimalConfig, assistant: 'codex' },
+        workflow: {
+          name: 'sandbox-unsupported',
+          sandbox: { filesystem: { denyWrite: ['$MAIN_CHECKOUT'] } },
+          nodes: [{ id: 'step1', kind: 'agent', source: { kind: 'inline', prompt: 'review' } }],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(mockSendQueryDag.mock.calls[0]?.[3]?.nodeConfig?.sandbox).toBeUndefined();
+    expect(deliveredMessages(platform)).toContain(
+      "Warning: Node 'step1' uses sandbox but codex doesn't support it — this will be ignored."
+    );
+  });
+
+  it('records inherited loop sandbox paths from a linked checkout subdirectory', async () => {
+    const repo = join(await realpath(testDir), 'repo');
+    const worktree = join(await realpath(testDir), 'linked');
+    const cwd = join(worktree, 'src');
+    await mkdir(repo);
+    await git(repo, 'init', '-q');
+    await git(
+      repo,
+      '-c',
+      'user.email=t@example.com',
+      '-c',
+      'user.name=t',
+      'commit',
+      '--allow-empty',
+      '-qm',
+      'init'
+    );
+    await git(repo, 'worktree', 'add', '-q', '--detach', worktree, 'HEAD');
+    await mkdir(cwd);
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'COMPLETE' };
+      yield { type: 'result', sessionId: 'dag-session-id' };
+    });
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd,
+        workflow: {
+          name: 'sandbox-loop',
+          sandbox: { filesystem: { denyWrite: ['$MAIN_CHECKOUT', '$GIT_COMMON_DIR'] } },
+          nodes: [
+            {
+              id: 'step1',
+              kind: 'loop',
+              loop: {
+                prompt: 'review',
+                until: 'COMPLETE',
+                max_iterations: 1,
+                fresh_context: false,
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+
+    const expected = { filesystem: { denyWrite: [repo, join(repo, '.git')] } };
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(mockSendQueryDag.mock.calls[0]?.[3]?.nodeConfig?.sandbox).toEqual(expected);
+    const completed = persistedEvents(store).find(event => event.event_type === 'node_completed');
+    expect(completed).toBeDefined();
+    expect(
+      readNodeRecordEvent({ ...completed!, data: completed!.data ?? {} })?.data.sandbox
+    ).toEqual(expected);
   });
 
   it('keeps a resolved path that itself contains a sandbox token', async () => {

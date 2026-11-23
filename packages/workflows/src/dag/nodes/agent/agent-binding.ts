@@ -3,12 +3,7 @@ import type { IAgentProvider, ProviderCapabilities } from '@archon/provider-cont
 import { type NodeExecutionRecord } from '../../../schemas/node-execution';
 import { recordNodeState } from '../../../node-event-write';
 import { isSourceReadFailure } from '../../../workflow-source';
-import {
-  sandboxSettingsSchema,
-  type AgentNode,
-  type EffortLevel,
-  type SandboxSettings,
-} from '../../../schemas';
+import type { AgentNode, EffortLevel } from '../../../schemas';
 import { readHomeMcpDirectory } from '../../../compiled-command';
 import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { type TierName } from '../../../model-validation';
@@ -17,16 +12,12 @@ import { assertNodeSourceReadable, RunSourceUnreadableError } from '../../node-s
 import {
   beginExecution,
   observeNodeCheckout,
+  recordedSandbox,
   type RunLayersContext,
   type SessionResumeIntent,
 } from '../../run-context';
 import { isInsideAny } from '../../checkout-guard';
 import { resolveNodeMcp, type NodeMcpResolution } from '../../provider-resolution';
-
-function recordedSandbox(value: unknown): SandboxSettings | undefined {
-  if (!sandboxSettingsSchema.safeParse(value).success) return undefined;
-  return value as SandboxSettings;
-}
 
 /** The provider, model and session an agent attempt was dispatched with. */
 export interface AgentBindingRequest {

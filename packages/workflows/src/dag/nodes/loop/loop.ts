@@ -38,6 +38,7 @@ import {
   aiNodeEnvironment,
   beginExecution,
   observeNodeCheckout,
+  recordedSandbox,
   type RunLayersContext,
   type SessionCheckpoint,
 } from '../../run-context';
@@ -200,6 +201,8 @@ export async function executeLoopNode(
     effort: resolvedEffort,
     capabilities,
   });
+  const sandbox = recordedSandbox(resolvedOptions?.nodeConfig?.sandbox);
+  if (sandbox !== undefined) execution.diagnostics = { ...execution.diagnostics, sandbox };
   state.execution = execution;
   ctx.currentExecution = execution;
   const iterationEnv = { ...resolvedOptions?.env, ...aiNodeEnvironment(ctx, execution) };

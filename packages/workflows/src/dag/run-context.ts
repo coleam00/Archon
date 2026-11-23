@@ -24,7 +24,12 @@ import type {
   WorkflowNodeSession,
   WorkflowRun,
 } from '../schemas';
-import { isNodeContextResume, isNodeContextSame, type NodeContext } from '../schemas';
+import {
+  isNodeContextResume,
+  isNodeContextSame,
+  sandboxSettingsSchema,
+  type NodeContext,
+} from '../schemas';
 import type { DagResumeSnapshot, PersistedNodeOutput, PriorFailedNode } from '../store';
 import type { RunBudgetLedger } from '../run-budget';
 import type { ModelAliasPreset, ResolvedAiProfile, TierName } from '../model-validation';
@@ -281,6 +286,11 @@ export interface RunLayersContext extends RunInputs, RunDerived {
    * (top-level exec nodes have no loop user input).
    */
   bodyLoopUserInput?: string;
+}
+
+export function recordedSandbox(value: unknown): SandboxSettings | undefined {
+  const result = sandboxSettingsSchema.safeParse(value);
+  return result.success ? result.data : undefined;
 }
 
 /**

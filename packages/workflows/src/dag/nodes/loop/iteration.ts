@@ -514,6 +514,7 @@ export async function completeLoop(
         resolvedModel: state.resolvedModel?.id,
         sessionId: state.sessionId,
         diagnostics: {
+          ...state.execution.diagnostics,
           loopIterations: i,
           ...(exhaustedAt !== undefined ? { maxIterations: exhaustedAt } : {}),
           ...(state.backgroundTasksIncomplete.size > 0
@@ -542,7 +543,7 @@ async function suppressLoopGate(
       numTurns: state.numTurns,
       resolvedModel: state.resolvedModel?.id,
       sessionId: state.sessionId,
-      diagnostics: { loopIterations: iteration },
+      diagnostics: { ...state.execution.diagnostics, loopIterations: iteration },
     }
   );
   // Skipped lifecycle rows settle the invocation; the accounting fold reads spend
@@ -573,7 +574,7 @@ async function pauseAtLoopGate(
       numTurns: state.numTurns,
       resolvedModel: state.resolvedModel?.id,
       sessionId: state.sessionId,
-      diagnostics: { loopIterations: i },
+      diagnostics: { ...state.execution.diagnostics, loopIterations: i },
     }
   );
   const approvalContext: ApprovalContext = {

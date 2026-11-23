@@ -224,6 +224,7 @@ function nextNodeSummary(
         state: 'running',
         startedAt: existing?.startedAt,
         ...executionFields(execution),
+        ...sandboxFields(record.data.sandbox),
       };
     case 'node_completed':
       return {
@@ -233,7 +234,12 @@ function nextNodeSummary(
         durationMs: nodeDurationMs(record, createdAt, startTime),
         ...outputFields(record.data),
         ...fanOutFields(record.data.fan_out_outcome),
-        ...sandboxFields(record.data.sandbox),
+        ...sandboxFields(
+          record.data.sandbox ??
+            (execution !== undefined && existing?.execution?.attempt.id === execution.attempt.id
+              ? existing.sandbox
+              : undefined)
+        ),
         ...executionFields(execution),
       };
     case 'node_failed':

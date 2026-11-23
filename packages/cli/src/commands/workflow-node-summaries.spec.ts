@@ -8,6 +8,12 @@ import { describe, expect, it, spyOn } from 'bun:test';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
 import {
+  finishNodeExecution,
+  newNodeInvocation,
+  startNodeExecution,
+} from '@archon/workflows/node-execution';
+import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
+import {
   formatSkipCause,
   NODE_SUMMARY_EVENT_TYPES,
   buildNodeSummaries,
@@ -46,6 +52,50 @@ describe('buildNodeSummaries', () => {
       }),
     ]);
     expect(summary?.sandbox).toEqual(sandbox);
+  });
+
+  it('keeps the suspended attempt sandbox through completion without a new attempt', () => {
+    const now = '2026-11-22T10:00:00.000Z';
+    const sandbox = { filesystem: { denyWrite: ['/scratch/repo/.git'] } };
+    const start = startNodeExecution({
+      runId: 'run-prior-success',
+      path: 'step',
+      node: {
+        id: 'step',
+        kind: 'loop',
+        loop: { prompt: 'review', until: 'DONE', fresh_context: false, max_iterations: 1 },
+      },
+      invocation: newNodeInvocation([], now),
+      now,
+    });
+    const suspended = serializeNodeStateRecord(
+      finishNodeExecution(
+        start,
+        { status: 'suspended', point: 'interactive_loop' },
+        {
+          diagnostics: { sandbox },
+        }
+      )
+    );
+    const completed = serializeNodeStateRecord(finishNodeExecution(start, { status: 'completed' }));
+    const rows = [
+      event('pause', 'node_suspended', 'step', now, suspended.data),
+      event('done', 'node_completed', 'step', now, completed.data),
+    ];
+    expect(buildNodeSummaries(rows.slice(0, 1))[0]?.sandbox).toEqual(sandbox);
+    expect(buildNodeSummaries(rows)[0]?.sandbox).toEqual(sandbox);
+    const retried = serializeNodeStateRecord(
+      finishNodeExecution(
+        { ...start, attempt: { ...start.attempt, id: 'new-attempt' } },
+        {
+          status: 'completed',
+        }
+      )
+    );
+    expect(
+      buildNodeSummaries([rows[0]!, event('retry', 'node_completed', 'step', now, retried.data)])[0]
+        ?.sandbox
+    ).toBeUndefined();
   });
 
   it('renders include provenance while retaining legacy cause wording', () => {
