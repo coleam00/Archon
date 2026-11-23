@@ -1,6 +1,6 @@
 import { readCheckoutHandoff } from '@archon/workflows/schemas/resource-start';
 import {
-  readSubrunMetadata,
+  SUBRUN_METADATA_KEYS,
   readWorkflowSourceState,
 } from '@archon/workflows/schemas/run-metadata';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -52,12 +52,18 @@ export function restartOfRun(run: WorkflowRun): RunRestart {
 }
 
 /**
- * The inputs recorded on a run's row as text. A CLI launch and a binding start both write
- * the canonical text map, so a non-string value means the row was written some other way.
+ * The inputs recorded on a run's row, as the canonical text map under `metadata.inputs`.
+ * Every start writes that map, also when it records logical values beside it in
+ * `inputs_values` (a binding start's number or boolean), and a CLI start takes its inputs
+ * as text, so the text map is what a detached child and a restart pass on. A non-string
+ * value there means the row was written some other way.
  */
 export function recordedLaunchInputs(row: WorkflowRun): Record<string, string> | undefined {
-  const recorded = readSubrunMetadata(row.metadata).inputs;
+  const recorded = row.metadata[SUBRUN_METADATA_KEYS.inputs];
   if (recorded === undefined) return undefined;
+  if (typeof recorded !== 'object' || recorded === null || Array.isArray(recorded)) {
+    throw new Error(`Cannot execute run '${row.id}': its recorded inputs are not a map.`);
+  }
   const inputs: Record<string, string> = {};
   for (const [name, value] of Object.entries(recorded)) {
     if (typeof value !== 'string') {

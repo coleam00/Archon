@@ -9,6 +9,7 @@ import { join, sep } from 'node:path';
 import { RUN_PROJECT_CONFLICT_FLAGS } from '../dispatch-guards';
 import * as commands from '../commands/workflow';
 import { captureWorkflowCommand } from '../test-support/command';
+import { runInputsMetadata } from '@archon/workflows/schemas/run-metadata';
 import { makeContinuationRun } from '../test-support/workflow-continuation-fixture';
 import { runWorkflowRun } from './workflow-run';
 
@@ -492,6 +493,12 @@ test('without a workflow name, --supersedes starts the run from its record', asy
     fromBranch: undefined,
     inputs: ["note=it's $x"],
   });
+});
+
+test('without a workflow name, --supersedes passes a recorded number or boolean as its text', async () => {
+  const result = await restart(runInputsMetadata({ count: 12, enabled: true, note: 'x' }));
+  expect(result.exitCode, result.output).toBe(0);
+  expect(result.run.mock.calls[0]?.[4]?.inputs).toEqual(['count=12', 'enabled=true', 'note=x']);
 });
 
 test('without a workflow name, a continue hand-off restarts as adoption of the hand-off run on the same item', async () => {
