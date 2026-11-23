@@ -281,8 +281,7 @@ export function assertAuthoredStubSatisfiesSchema(node: DagNode, stub: DryRunStu
       value = JSON.parse(stub);
     } catch {
       throw new Error(
-        `Stub for node '${node.id}' declares output_format but is not one JSON document: ` +
-          stub.slice(0, 120)
+        `Stub for node '${node.id}' declares output_format but is not one JSON document`
       );
     }
   }
@@ -297,10 +296,7 @@ export function assertAuthoredStubSatisfiesSchema(node: DagNode, stub: DryRunStu
     );
   }
   if (!validation.valid) {
-    throw new Error(
-      `Stub for node '${node.id}' does not satisfy its output_format: ` +
-        validation.errors.join('; ')
-    );
+    throw new Error(`Stub for node '${node.id}' does not satisfy its output_format`);
   }
 }
 

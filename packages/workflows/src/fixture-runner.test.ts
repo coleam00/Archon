@@ -476,6 +476,53 @@ describe('runFixtures', () => {
     expect(json).not.toContain('payload-marker');
   });
 
+  it.each([
+    ['schema failure', 'completed', 'does not satisfy its output_format'],
+    ['schema failure', 'failed', 'does not satisfy its output_format'],
+    ['malformed JSON', 'completed', 'is not one JSON document'],
+    ['malformed JSON', 'failed', 'is not one JSON document'],
+  ] as const)(
+    'reports a %s without stub contents under expect: %s',
+    async (kind, expected, category) => {
+      const nodeId = 'node-a';
+      const leaked = 'SYNTHETIC_SECRET/abc';
+      const workflowYaml = [
+        'name: test-wf',
+        'description: stubbed verdict',
+        'nodes:',
+        '  - id: node-a',
+        '    prompt: verdict',
+        '    output_format:',
+        '      type: object',
+        '      additionalProperties:',
+        '        type: string',
+      ].join('\n');
+      const { cwd } = writeTempProject({
+        workflowYaml,
+        fixtureName: kind === 'schema failure' ? 'schema' : 'malformed',
+        body: Bun.YAML.stringify({
+          fixture:
+            expected === 'failed'
+              ? { expect: 'failed', 'fail-node': nodeId }
+              : { expect: 'completed' },
+          [nodeId]: kind === 'schema failure' ? { [leaked]: 1 } : leaked,
+        }),
+      });
+      const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
+      const result = report.results[0];
+      expect(result.expect).toBe(expected);
+      expect(result.outcome).toBe('failed');
+      expect(result.pass).toBe(result.outcome === expected);
+      expect(result.nodeFailures?.[0]?.nodeId).toBe(nodeId);
+      for (const output of [formatFixtureReport(report), JSON.stringify(report)]) {
+        expect(output).not.toContain(leaked);
+        expect(output).not.toContain('SYNTHETIC_SECRET~1abc');
+        expect(output).toContain(nodeId);
+        expect(output).toContain(category);
+      }
+    }
+  );
+
   it('keeps a passing fixture free of the trace', async () => {
     const { cwd } = writeTempProject({ body: STUB_FIXTURE });
     const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
