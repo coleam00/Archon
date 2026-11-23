@@ -549,7 +549,7 @@ export async function handleGithubWorkItemList(
     fetchImpl,
     token,
     `${root}/repos/${path}/issues?state=open&labels=${encodeURIComponent(request.label)}`,
-    raw => z.array(issueSchema).parse(raw)
+    raw => z.array(issueSchema.extend({ updated_at: z.iso.datetime({ offset: true }) })).parse(raw)
   );
   return {
     operationId: request.operationId,
@@ -562,7 +562,7 @@ export async function handleGithubWorkItemList(
         // GitHub matches label names case-insensitively; the seam's names are exact.
         items: items
           .filter(item => item.labels.some(label => label.name === request.label))
-          .map(item => itemRecord(request.repo, item)),
+          .map(item => ({ ...itemRecord(request.repo, item), updatedAt: item.updated_at })),
       },
     },
   };

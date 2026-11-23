@@ -546,10 +546,19 @@ const prViewResultSchema = prViewSchema.superRefine(({ pr, timestamps }, ctx) =>
       path: ['timestamps'],
     });
 });
+/**
+ * `updatedAt` is the forge's time of the item's last change. A label added later changes
+ * it, so an observer that sees it unchanged need not read the item's label events again;
+ * without it, the observer reads them on every pass. Optional, so a plugin released before
+ * it still answers.
+ */
+const workItemListItemSchema = subjectRecordSchema.extend({
+  updatedAt: z.iso.datetime({ offset: true }).optional(),
+});
 export const workItemListSchema = z.object({
   repo: repoRefSchema,
   label: text,
-  items: z.array(subjectRecordSchema),
+  items: z.array(workItemListItemSchema),
 });
 /** `added` is null when the forge records no add of the label, such as one never added. */
 export const workItemLabelAddedSchema = z.object({
