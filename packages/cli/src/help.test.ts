@@ -154,6 +154,7 @@ Commands:
                              List compact workflow descriptions
                              Use <name> --full for one exact description
   workflow run <name> [msg]  Run a workflow with optional message
+                             With no name, --supersedes <run-id> starts that run again from its record
   workflow status            Show running/paused workflows for this project
   workflow runs              List recent runs (all statuses) for this project
   workflow get <run-id>      Show detail for a single run (any status)
@@ -280,7 +281,8 @@ Options:
   --config <path>            Load a sparse YAML config layer for one fresh workflow run
   --config-from-run <run-id> Start a fresh run with the run config another run was started with
   --adopt <run-id>           Start a new run adopting a terminal run's worktree/branch + artifacts ($ADOPTED_RUN_DIR)
-  --supersedes <run-id>      Record this fresh run as replacing the prior run's open item (no lane inheritance)
+  --supersedes <run-id>      Record this fresh run as replacing the prior run's open item; with a workflow name, no lane inheritance.
+                             With no name, start that run again from its record: workflow, source, inputs and checkout hand-off
   --dry-run                  Simulate workflow DAG control flow without creating a run or contacting a provider
   --stubs <path>             YAML node-output map for --dry-run
   --stubs-init <path>        Write a dry-run stub scaffold and exit; omits child workflows.

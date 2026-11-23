@@ -80,78 +80,26 @@ describe('resumeWorkflow', () => {
     );
   });
 
-  const handoff = (lane: 'continue' | 'copy') => ({
-    checkout_handoff: {
-      runId: 'landed-run',
-      branch: 'archon/task-landed',
-      commit: 'a'.repeat(40),
-      lane,
-    },
-  });
-  const explicitSource = (root: string) => ({
-    workflow_source: {
-      version: 1,
-      root: '/archon/runs/run-1/source',
-      origin: root,
-      captured_at: '2026-11-22T00:00:00.000Z',
-      digest: 'digest',
-      file_count: 1,
-      byte_count: 1,
-      definitions: { from: 'source', root },
-    },
-  });
-  test.each([
-    ['a start', {}, 'archon workflow run test-workflow --supersedes run-1'],
-    [
-      'a stage that continues an ended run',
-      handoff('continue'),
-      'archon workflow run test-workflow --adopt landed-run',
-    ],
-    [
-      'a read-only stage on its own copy of an ended run',
-      handoff('copy'),
-      `archon workflow run test-workflow --supersedes run-1 --from ${'a'.repeat(40)}`,
-    ],
-    [
-      'a start read from an explicit source',
-      explicitSource("/Users/O'Brien/my src"),
-      `archon workflow run test-workflow --supersedes run-1 --workflow-source "/Users/O'Brien/my src"`,
-    ],
-    [
-      'a start read from a source no double quotes can hold',
-      explicitSource('/work/$pack'),
-      "archon workflow run test-workflow --supersedes run-1 --workflow-source '/work/$pack'",
-    ],
-  ])(
-    '%s that failed before its checkout was prepared is refused with the command that starts it again',
-    async (_kind, metadata, command) => {
-      mockGetWorkflowRun.mockResolvedValueOnce(
-        makePausedRun({
-          status: 'failed',
-          working_path: null,
-          metadata: { ...metadata, inputs: { item: 'secret-value', pr: '42' } },
-        })
-      );
-
-      const error = await resumeWorkflow('run-1', operator).catch((e: unknown) => e);
-
-      expect(error).toBeInstanceOf(ResumeRefusedError);
-      const refusal = error as InstanceType<typeof ResumeRefusedError>;
-      expect(refusal.reason).toBe('not_resumable');
-      expect(refusal.message).toContain(`Start it again with: ${command} It was started`);
-      expect(refusal.message).toContain('inputs item, pr; pass each with --input <name>=<value>');
-      expect(refusal.message).not.toContain('secret-value');
-    }
-  );
-
-  test('a workflow name with a space stays one argument in the restart command', async () => {
+  test('a run that failed before its checkout was prepared is refused with the line that restarts it', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(
-      makePausedRun({ status: 'failed', working_path: null, workflow_name: 'daily check' })
+      makePausedRun({
+        status: 'failed',
+        working_path: null,
+        workflow_name: "@it's $pack",
+        metadata: { inputs: { item: 'secret-value' } },
+      })
     );
 
-    await expect(resumeWorkflow('run-1', operator)).rejects.toThrow(
-      'Start it again with: archon workflow run "daily check" --supersedes run-1'
+    const error = await resumeWorkflow('run-1', operator).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ResumeRefusedError);
+    const refusal = error as InstanceType<typeof ResumeRefusedError>;
+    expect(refusal.reason).toBe('not_resumable');
+    // Only the run id: nothing in the line needs quoting in any shell.
+    expect(refusal.message).toEndWith(
+      'Start it again with: archon workflow run --supersedes run-1'
     );
+    expect(refusal.message).not.toContain('secret-value');
   });
 
   test('throws wrapped message when DB throws', async () => {

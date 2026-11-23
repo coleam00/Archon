@@ -49,7 +49,7 @@ import {
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { readSubrunMetadata } from '@archon/workflows/schemas/run-metadata';
+import { recordedLaunchInputs } from './workflow-run-restart';
 import { DETACHED_LAUNCH_METADATA_KEY } from '@archon/workflows/store';
 import { loadWorkflows } from './workflow-list';
 import { admitFromSource, withSourceContext } from './workflow-run-source-check';
@@ -599,24 +599,6 @@ export async function readSuppliedInputs(
     }
   }
   return Object.keys(supplied).length > 0 ? supplied : undefined;
-}
-
-/**
- * The inputs a detached launcher recorded on the row it handed its child. The launcher
- * writes the supplied map as text (`workflow-detach.ts`), so a non-string value means the
- * row was not written by a CLI launch.
- */
-function recordedLaunchInputs(row: WorkflowRun): Record<string, string> | undefined {
-  const recorded = readSubrunMetadata(row.metadata).inputs;
-  if (recorded === undefined) return undefined;
-  const inputs: Record<string, string> = {};
-  for (const [name, value] of Object.entries(recorded)) {
-    if (typeof value !== 'string') {
-      throw new Error(`Cannot execute run '${row.id}': its recorded input '${name}' is not text.`);
-    }
-    inputs[name] = value;
-  }
-  return inputs;
 }
 
 /**
