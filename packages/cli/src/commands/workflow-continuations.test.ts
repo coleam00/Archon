@@ -428,10 +428,18 @@ test('the wake job carries the sources file the installing shell names', () =>
       await withHome(home, undefined, async () => {
         expect(await workflowWakeScheduleCommand(['schedule', 'install'], { json: true })).toBe(0);
       });
-      const [withSources, without] = install.mock.calls.map(call => call[0].programArguments);
+      // The documented setup, the file in ARCHON_HOME's env file, renders the job as before.
+      await writeFile(join(home, '.env'), 'ARCHON_WEBHOOK_SOURCES=/srv/sources.json\n');
+      await withHome(home, '/srv/sources.json', async () => {
+        expect(await workflowWakeScheduleCommand(['schedule', 'install'], { json: true })).toBe(0);
+      });
+      const [withSources, without, fromEnvFile] = install.mock.calls.map(
+        call => call[0].programArguments
+      );
       // Resolved where install ran, since the job starts in ARCHON_HOME.
       expect(withSources?.slice(-2)).toEqual(['--sources', resolve('relative-sources.json')]);
       expect(without?.slice(-4)).toEqual(['workflow', 'wake', '--watch', '--json']);
+      expect(fromEnvFile).toEqual(without);
     } finally {
       await removeTempTree(home);
     }
@@ -495,6 +503,34 @@ test('a watch following the wake job records its last pass, and status reports a
     expect(
       (await readdir(join(home, 'schedules'))).filter(name => name.endsWith('.last-pass.json'))
     ).toEqual([]);
+  } finally {
+    await removeTempTree(home);
+  }
+});
+
+test('a watch the job started that fails before its first pass records the failure', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'archon-wake-start-failure-'));
+  try {
+    await mkdir(join(home, 'schedules'));
+    const definition = join(home, 'schedules', 'job.xml');
+    await writeFile(definition, 'job');
+    wakeJobDefinition = definition;
+    await withHome(home, undefined, async () => {
+      expect(
+        await workflowContinuationCommand(host, 'wake', [], { json: true, watch: true }, () =>
+          Promise.reject(new Error('sources file is not valid JSON'))
+        )
+      ).toBe(1);
+    });
+    const record = (await readdir(join(home, 'schedules'))).find(name =>
+      name.endsWith('.last-pass.json')
+    );
+    expect(JSON.parse(await readFile(join(home, 'schedules', record ?? ''), 'utf8'))).toMatchObject(
+      {
+        ok: false,
+        lastFailure: { errors: ['sources file is not valid JSON'] },
+      }
+    );
   } finally {
     await removeTempTree(home);
   }

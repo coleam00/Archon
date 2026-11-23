@@ -1,7 +1,6 @@
 import type { WorkflowResumeOptions } from '@archon/workflows/engine-port';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
-import { statSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
 import { resumeWorkflowContinuation } from '@archon/core/workflows/continuation-host';
@@ -23,13 +22,13 @@ import { validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
 import { drainFailureReasons, drainInstallHosts } from '../utils/install-hosts';
 
-import { nativeScheduleDefinition } from '../triggers/native-schedule';
 import {
-  wakeLastPassPath,
-  workflowWakeScheduleTarget,
-  writeWakeLastPass,
-  type WakeLastPass,
-} from './wake-schedule';
+  followedWakeJob,
+  lastPassRecorder,
+  recordWakeStartFailure,
+  wakeJobChange,
+  type FollowedWakeJob,
+} from './wake-job';
 
 function writeJsonLine(value: unknown): Promise<void> {
   return writeStdout(`${JSON.stringify(value)}\n`);
@@ -246,6 +245,8 @@ export async function workflowContinuationCommand(
       process.env.ARCHON_WEBHOOK_SOURCES = values.sources.trim();
     return await wake(host, args, values, json, await observation?.());
   } catch (error) {
+    if (action === 'wake' && values.watch === true)
+      await recordWakeStartFailure(errorMessage(error));
     if (json)
       await writeJsonLine({ ok: false, action, signaled: false, error: errorMessage(error) });
     else console.error(errorMessage(error));
@@ -336,73 +337,6 @@ async function loadedEngine(watch: boolean, json: boolean): Promise<string | und
   if (json) await writeJsonLine({ ok: true, action: 'wake', engine: 'unknown' });
   else console.error('wake: engine unknown; restart the watcher after updating Archon');
   return undefined;
-}
-
-/**
- * The wake job's definition file as this watch found it: its path and the file's identity.
- * `sources` is the sources file the watch loaded, when it names one, so an edit to it
- * restarts the watcher on the new configuration; `lastPass` is where each pass is recorded.
- */
-interface FollowedWakeJob {
-  path: string;
-  identity: string;
-  sources?: { path: string; identity: string | undefined };
-  lastPass: string;
-}
-
-/** Which file is at `path` now; a file written again in its place is another one. */
-function fileIdentity(path: string): string | undefined {
-  const found = statSync(path, { throwIfNoEntry: false });
-  return found && `${String(found.ino)}:${String(found.mtimeMs)}:${String(found.ctimeMs)}`;
-}
-
-/**
- * The wake job's definition file, when the job is installed as this watch starts. Only
- * launchd stops a running watcher when its job is removed, so the watch stops itself once
- * that file is gone or is another file: `remove` deletes it, and an `install` after a
- * `remove` writes a new one, even before this watch next looks. A watch started with no job
- * installed has nothing to follow and never stops for this.
- */
-function followedWakeJob(watch: boolean): FollowedWakeJob | undefined {
-  if (!watch) return undefined;
-  const target = workflowWakeScheduleTarget();
-  const path = nativeScheduleDefinition(target);
-  const identity = path === undefined ? undefined : fileIdentity(path);
-  if (path === undefined || identity === undefined) return undefined;
-  const sources = process.env.ARCHON_WEBHOOK_SOURCES?.trim();
-  return {
-    path,
-    identity,
-    ...(sources ? { sources: { path: sources, identity: fileIdentity(sources) } } : {}),
-    lastPass: wakeLastPassPath(target),
-  };
-}
-
-/**
- * Records each loop's latest pass for the installed job, which discards the watch's output:
- * `wake schedule status` and `trigger check` read it. Nothing is recorded by a watch that
- * follows no job. A record that cannot be written never fails the pass.
- */
-function lastPassRecorder(
-  job: FollowedWakeJob | undefined
-): (part: 'wake' | 'observe', ok: boolean, errors: readonly string[]) => Promise<void> {
-  const parts: WakeLastPass['parts'] = {};
-  let lastFailure: WakeLastPass['lastFailure'];
-  return async (part, ok, errors) => {
-    if (job === undefined) return;
-    const at = new Date().toISOString();
-    parts[part] = { at, ok, errors: [...errors] };
-    if (!ok) lastFailure = { at, errors: [...errors] };
-    const pass: WakeLastPass = {
-      at,
-      pid: process.pid,
-      ok: Object.values(parts).every(entry => entry?.ok !== false),
-      parts,
-      ...(lastFailure ? { lastFailure } : {}),
-      ...(job.sources ? { sources: job.sources.path } : {}),
-    };
-    await writeWakeLastPass(job.lastPass, pass).catch(() => undefined);
-  };
 }
 
 /** The installed engine, when it is no longer the one this watch loaded. */
@@ -604,20 +538,11 @@ function wakeControl(
       moved: () => moved,
       jobRemoved: async () => {
         if (removed) return true;
-        if (job === undefined) return false;
-        const now = fileIdentity(job.path);
-        const sourcesNow = job.sources && fileIdentity(job.sources.path);
-        const sourcesChanged = job.sources !== undefined && sourcesNow !== job.sources.identity;
-        if (now === job.identity && !sourcesChanged) return false;
+        const change = job && wakeJobChange(job);
+        if (change === undefined) return false;
         removed = true;
         stop();
-        const reason =
-          now === undefined
-            ? 'job removed'
-            : now !== job.identity
-              ? 'job replaced'
-              : 'sources changed';
-        const definition = reason === 'sources changed' ? job.sources?.path : job.path;
+        const { reason, definition } = change;
         if (json) await writeJsonLine({ ok: true, action: 'wake', stop: reason, definition });
         else console.log(`wake: ${reason} (${definition}), stopping`);
         return true;

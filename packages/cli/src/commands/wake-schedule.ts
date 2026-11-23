@@ -10,6 +10,7 @@
  * exited, for any reason, is started again.
  */
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { getArchonHome } from '@archon/paths';
@@ -40,16 +41,33 @@ export function workflowWakeScheduleTarget(): NativeScheduleTarget {
   };
 }
 
+/**
+ * Whether the install's own env file sets ARCHON_WEBHOOK_SOURCES. The watch the job starts
+ * reads that file, so the job needs no `--sources` of its own, and a job installed that way
+ * renders exactly as it did before `--sources` existed.
+ */
+function homeEnvNamesSources(archonHome: string): boolean {
+  let contents: string;
+  try {
+    contents = readFileSync(join(archonHome, '.env'), 'utf8');
+  } catch {
+    return false;
+  }
+  return /^\s*(?:export\s+)?ARCHON_WEBHOOK_SOURCES\s*=\s*\S/m.test(contents);
+}
+
 export function workflowWakeScheduleConfig(
   intervalSeconds = defaultWakeIntervalSeconds()
 ): NativeScheduleConfig {
   const { id, archonHome } = workflowWakeScheduleTarget();
   const [executable, ...prefix] = cliProgramArguments();
-  // The job sets only ARCHON_HOME and PATH, so the sources file this shell names travels as
-  // an argument. Otherwise the job could read it only from ARCHON_HOME/.env, which every
+  // The job sets only ARCHON_HOME and PATH, so a sources file only this shell names travels
+  // as an argument. Otherwise the job could read it only from ARCHON_HOME/.env, which every
   // process on the install loads, a server included, and which wins over a process's own
   // environment, so a server sharing the home could not leave observing to the job.
-  const sources = process.env.ARCHON_WEBHOOK_SOURCES?.trim();
+  const sources = homeEnvNamesSources(archonHome)
+    ? undefined
+    : process.env.ARCHON_WEBHOOK_SOURCES?.trim();
   return {
     id,
     programArguments: [
@@ -127,7 +145,7 @@ export function describeWakeLastPass(pass: WakeLastPass): string {
         )
       )}.`;
   if (pass.ok && pass.lastFailure)
-    return `${last} It failed a pass at ${pass.lastFailure.at}: ${failureText(pass.lastFailure.errors)}. A start that pass could not record is not retried until the watcher restarts.`;
+    return `${last} It failed a pass at ${pass.lastFailure.at}: ${failureText(pass.lastFailure.errors)}. A start that pass could not record may not be tried again until the watcher restarts.`;
   return last;
 }
 
