@@ -1247,7 +1247,7 @@ name: process-order
 description: Record an order reported by a poll script.
 mutates_checkout: false
 inputs:
-  order_id: { type: string, required: true }
+  order_id: { required: true }
 nodes:
   - id: record
     bash: printf '%s\n' "$INPUTS_ORDER_ID" > "$ARTIFACTS_DIR/order.txt"

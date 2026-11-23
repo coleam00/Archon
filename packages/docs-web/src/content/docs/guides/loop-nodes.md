@@ -34,6 +34,12 @@ nodes:
 
   - id: implement
     depends_on: [setup]
+    output_format:
+      type: object
+      properties:
+        done: { type: boolean }
+        summary: { type: string }
+      required: [done, summary]
     loop:
       prompt: |
         Read the PRD and implement the next unfinished story.
@@ -42,15 +48,16 @@ nodes:
         Setup context: $setup.output
         User request: $USER_MESSAGE
 
-        When all stories are done, output: <promise>COMPLETE</promise>
-      until: COMPLETE
+        Report done as true only when every story is implemented.
+        In summary, list the stories implemented so far, as the PRD records them.
+      until_field: done
       max_iterations: 10
       fresh_context: true
 
   - id: report
     depends_on: [implement]
     prompt: |
-      Summarize what was implemented: $implement.output
+      Summarize what was implemented: $implement.output.summary
 ```
 
 ## How It Works
@@ -93,7 +100,7 @@ Declaring more than one is fine and means "whichever fires first ends it".
     # command: <name>       # Alternative to `prompt`: package-local or shared command name,
     #                       # loaded once per run and reused for every iteration.
     #                       # Never combine with `prompt` — the loader rejects both together.
-    until: COMPLETE         # Prose completion signal.
+    until: COMPLETE         # Deprecated prose completion signal.
     max_iterations: 10      # Required. Bounds autonomous iterations; reaching it unmet fails the node.
     on_exhausted: fail      # Optional. `complete` ends an exhausted loop with its last output.
     fresh_context: true     # Optional. Default: false.
@@ -166,9 +173,14 @@ as do all the iteration semantics (`until`, `until_bash`, `max_iterations`,
 - id: implement
   model: opus
   depends_on: [generate-prd]
+  output_format:
+    type: object
+    properties:
+      done: { type: boolean }
+    required: [done]
   loop:
     command: archon-ralph-implement   # resolved repo → home → bundled (see precedence above)
-    until: COMPLETE
+    until_field: done
     max_iterations: 15
     fresh_context: true
 ```
@@ -235,7 +247,7 @@ field for `$group.output.<field>` to resolve:
 ```yaml
 - id: rounds
   loop_group:
-    until_bash: 'test "$round.output.done" = "true"'
+    until_bash: 'done=$round.output.done; test "$done" = true'
     max_iterations: 4
     on_exhausted: complete
     nodes:
@@ -419,7 +431,7 @@ which is the existing way to express the same thing.
 # loop_group equivalent — no new field needed
 loop_group:
   max_iterations: 10
-  until_bash: '[ $decide.output.done = "true" ]'
+  until_bash: 'done=$decide.output.done; [ "$done" = true ]'
   nodes:
     - id: decide
       output_format:
@@ -440,15 +452,20 @@ The prompt tells the agent it has no memory and must bootstrap from files.
 - id: implement
   depends_on: [setup]
   idle_timeout: 600000
+  output_format:
+    type: object
+    properties:
+      done: { type: boolean }
+    required: [done]
   loop:
     prompt: |
       You are in a FRESH session — no memory of previous iterations.
       Read the PRD tracking file to find the next unfinished story.
       Implement it, validate, commit, update tracking.
-      When all stories are done: <promise>COMPLETE</promise>
+      Report done: true once every story is done.
 
       Project context: $setup.output
-    until: COMPLETE
+    until_field: done
     max_iterations: 15
     fresh_context: true
 ```
@@ -474,16 +491,14 @@ iteration's output via `$LOOP_PREV_OUTPUT`:
       Previous iteration output (empty on first pass):
       $LOOP_PREV_OUTPUT
 
-      Use the above to focus your fixes. When all checks pass output:
-      <promise>QA_PASS</promise>
-    until: QA_PASS
+      Use the above to focus your fixes.
+    until_bash: "bun run validate"
     fresh_context: true
     max_iterations: 3
 ```
 
 In a continuous run, the first iteration sees `$LOOP_PREV_OUTPUT` substituted
-to an empty string; iterations 2+ see the previous iteration's cleaned output
-(after `<promise>` tags are stripped).
+to an empty string; iterations 2+ see the previous iteration's output.
 
 ### Accumulating context
 
@@ -492,12 +507,17 @@ refinement where remembering previous attempts matters.
 
 ```yaml
 - id: refine
+  output_format:
+    type: object
+    properties:
+      done: { type: boolean }
+    required: [done]
   loop:
     prompt: |
       Review the current implementation and improve it.
       Run validation after each change.
-      When validation passes with zero issues: <promise>DONE</promise>
-    until: DONE
+      Report done: true once validation passes with zero issues.
+    until_field: done
     max_iterations: 5
     fresh_context: false
 ```
@@ -511,23 +531,28 @@ Combine LLM work with a deterministic completion check:
 
 ```yaml
 - id: fix-tests
+  output_format:
+    type: object
+    properties:
+      done: { type: boolean }
+    required: [done]
   loop:
     prompt: |
       Run the test suite. Read the failures. Fix them one at a time.
-      If all tests pass: <promise>TESTS_PASS</promise>
-    until: TESTS_PASS
+      Report done: true once all tests pass.
+    until_field: done
     max_iterations: 8
     until_bash: "bun run test"
     fresh_context: false
 ```
 
-The loop ends either when the AI signals completion or when the bash check
+The loop ends either when the AI reports completion or when the bash check
 succeeds — whichever comes first.
 
-**No channel vetoes another.** They are OR'd, so an AI that emits `TESTS_PASS`
+**No channel vetoes another.** They are OR'd, so an AI that reports `done: true`
 while tests still fail ends the loop anyway — the bash check never gets to disagree. If the tests
-are the real exit criterion, say so by dropping `until` and the sentence that
-teaches the model to emit it:
+are the real exit criterion, say so by dropping `until_field` and the instruction that
+asks the model to report it:
 
 ```yaml
 - id: fix-tests
@@ -604,8 +629,8 @@ nodes:
       max_attempts: 1
       delay_ms: 0
     loop:
-      prompt: "Complete the task and output <promise>DONE</promise>"
-      until: DONE
+      prompt: "Make the failing tests pass."
+      until_bash: "bun run test"
       max_iterations: 5
 ```
 
@@ -629,12 +654,12 @@ description: Implement, test, and review until tests pass
 nodes:
   - id: fix-loop
     loop_group:
-      until: TESTS_PASS        # completion signal in the body's terminal output
+      until_bash: 'result=$test.output; [ "$result" = green ]'  # read the body's test node
       max_iterations: 5
       fresh_context: false      # false (default) = body AI sessions continue across iterations
       nodes:                    # sealed sub-DAG body — repeats as a unit
         - id: implement
-          prompt: Fix the failing tests. Emit TESTS_PASS only when all pass.
+          prompt: Fix the failing tests.
           depends_on: []
         - id: test
           bash: |
@@ -645,7 +670,7 @@ nodes:
             fi
           depends_on: [implement]
         - id: review
-          prompt: Summarize the result; echo TESTS_PASS if tests are green.
+          prompt: "Summarize this pass. The tests were $test.output."
           depends_on: [test]
 ```
 
@@ -787,7 +812,7 @@ runtime-resolved graph:
 ```yaml
 - id: converge
   loop_group:
-    until_bash: test $review.output.ready = "true"
+    until_bash: 'ready=$review.output.ready; test "$ready" = true'
     max_iterations: 5
     nodes:
       - id: review
@@ -813,7 +838,7 @@ nodes:
     loop_group:
       # The terminal node's own verdict ends the loop; nothing here emits a
       # prose sentinel, so `until:` would run to max_iterations on a green run.
-      until_bash: test $test.output = "green"
+      until_bash: 'result=$test.output; [ "$result" = green ]'
       max_iterations: 5
       nodes:
         - id: implement
@@ -904,7 +929,7 @@ nodes:
     loop_group:
       max_iterations: 3
       fresh_context: true
-      until_bash: 'test $review.output.done = true'
+      until_bash: 'done=$review.output.done; test "$done" = true'
       nodes:
         - id: owner
           context: { resume: implement }
@@ -990,7 +1015,7 @@ nodes:
   - id: rounds
     loop_group:
       max_iterations: 3
-      until_bash: 'test $work.output.done = true'
+      until_bash: 'done=$work.output.done; test "$done" = true'
       nodes:
         - id: work
           prompt: Review the change, write review.md, and report what you did.
