@@ -12,7 +12,7 @@ import { STEP_IDLE_TIMEOUT_MS } from '../../../utils/idle-timeout';
 import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { type TierName } from '../../../model-validation';
 import { getLog } from '../../log';
-import { loadNodeCommandPrompt } from '../../node-source';
+import { loadNodeCommandPrompt, RunSourceUnreadableError } from '../../node-source';
 import {
   aiNodeEnvironment,
   type RunLayersContext,
@@ -176,7 +176,7 @@ export async function executeAgentNode(
     workloadStarted = true;
     result = await runToolWorkload(pc, state, prompt.prompt, session, tools);
   } catch (error) {
-    if (tools?.recordingError) throw tools.recordingError;
+    rethrowToolInterruption(tools, error);
     const cancelled = wasUserCancelled(abortController, state, tools);
     const failure = attemptFailure(
       error as Error,
@@ -242,6 +242,14 @@ export async function executeAgentNode(
 
 type ScriptTools = Awaited<ReturnType<typeof createScriptTools>>;
 
+function rethrowToolInterruption(tools: ScriptTools | undefined, error?: unknown): void {
+  if (tools?.recordingError) throw tools.recordingError;
+  if (!tools?.unknownWrite) {
+    if (error instanceof RunSourceUnreadableError) throw error;
+    if (tools?.sourceError) throw tools.sourceError;
+  }
+}
+
 async function prepareAttemptTools(pc: AgentPassContext, execution: AgentBinding['execution']) {
   if (!pc.node.tools) return undefined;
   if (!pc.capabilities.nativeTools)
@@ -251,6 +259,7 @@ async function prepareAttemptTools(pc: AgentPassContext, execution: AgentBinding
     pc.queryOptions.nativeTools = [...(pc.queryOptions.nativeTools ?? []), ...tools.nativeTools];
     return tools;
   } catch (error) {
+    if (error instanceof RunSourceUnreadableError) throw error;
     throw new NodeFailure('config', (error as Error).message);
   }
 }
@@ -268,7 +277,7 @@ async function runToolWorkload(
   } finally {
     await tools?.stop();
   }
-  if (tools?.recordingError) throw tools.recordingError;
+  rethrowToolInterruption(tools);
   if (tools?.unknownWrite) {
     const error = `Tool write outcome unknown: ${tools.unknownWrite}`;
     if (result.state === 'failed') return { ...result, error, failureKind: 'unknown' };

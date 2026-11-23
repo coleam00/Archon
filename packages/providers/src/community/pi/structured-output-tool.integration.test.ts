@@ -27,13 +27,13 @@ import {
   SessionManager,
   SettingsManager,
   type ResourceLoader,
-  type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 
-import type { MessageChunk } from '../../types';
+import type { MessageChunk, NativeTool } from '../../types';
 import { bridgeSession } from './event-bridge';
 import { createStructuredOutputTool } from './structured-output-tool';
 import { buildPiNativeToolDefinitions } from './native-tools';
+import { buildDefaultPiTools } from './options-translator';
 
 const scratch = mkdtempSync(join(tmpdir(), 'archon-pi-structured-output-'));
 afterAll(async () => {
@@ -77,14 +77,17 @@ const answer = { decision: 'done', count: 2 };
 /** Run one prompt through the tool and the bridge; report the result and model calls. */
 async function runTurn(
   steps: FauxResponseStep[],
-  extraTools: ToolDefinition[] = []
+  nativeTools: NativeTool[] = [],
+  outputSchema: Record<string, unknown> | null = schema
 ): Promise<{
   result: Extract<MessageChunk, { type: 'result' }> | undefined;
   modelCalls: number;
+  text: string;
 }> {
   faux.setResponses(steps);
   const callsBefore = faux.state.callCount;
-  const tool = createStructuredOutputTool(schema);
+  const tool = outputSchema ? createStructuredOutputTool(outputSchema) : undefined;
+  const extraTools = buildPiNativeToolDefinitions(nativeTools, tool ? [tool.definition] : []);
   const { session } = await createAgentSession({
     cwd: scratch,
     agentDir: scratch,
@@ -97,20 +100,26 @@ async function runTurn(
       compaction: { enabled: false },
       retry: { enabled: false },
     }),
-    customTools: [tool.definition, ...extraTools],
+    customTools: [
+      ...buildDefaultPiTools(scratch, undefined, undefined),
+      ...extraTools,
+      ...(tool ? [tool.definition] : []),
+    ],
     noTools: 'builtin',
   });
-  tool.capFailedCalls(session);
+  tool?.capFailedCalls(session);
   let result: Extract<MessageChunk, { type: 'result' }> | undefined;
-  for await (const chunk of bridgeSession(session, 'prompt', undefined, tool.output)) {
+  let text = '';
+  for await (const chunk of bridgeSession(session, 'prompt', undefined, tool?.output)) {
     if (chunk.type === 'result') result = chunk;
+    if (chunk.type === 'agent_message_chunk') text += chunk.text;
   }
-  return { result, modelCalls: faux.state.callCount - callsBefore };
+  return { result, modelCalls: faux.state.callCount - callsBefore, text };
 }
 
 test('native tools reject invalid raw parameters before Pi normalizes them', async () => {
   const seen: unknown[] = [];
-  const tools = buildPiNativeToolDefinitions([
+  const tools: NativeTool[] = [
     {
       name: 'lookup',
       description: 'Look up an item',
@@ -127,7 +136,7 @@ test('native tools reject invalid raw parameters before Pi normalizes them', asy
         return 'ok';
       },
     },
-  ]);
+  ];
   const { result } = await runTurn(
     [
       fauxAssistantMessage([fauxToolCall('lookup', { count: '7' })], { stopReason: 'toolUse' }),
@@ -141,6 +150,92 @@ test('native tools reject invalid raw parameters before Pi normalizes them', asy
   );
   expect(result?.structuredOutput).toEqual(answer);
   expect(seen).toEqual([{ count: 8 }]);
+});
+
+test('a declared structured-output collision fails before the real Pi loop dispatches', async () => {
+  let handlerCalls = 0;
+  const callsBefore = faux.state.callCount;
+  const turn = runTurn(
+    [fauxAssistantMessage([fauxToolCall('structured_output', answer)], { stopReason: 'toolUse' })],
+    [
+      {
+        name: createStructuredOutputTool(schema).definition.name,
+        description: 'Declared script tool',
+        inputSchema: { jsonSchema: schema },
+        handler: async () => {
+          handlerCalls++;
+          return 'script ran';
+        },
+      },
+    ]
+  );
+  await expect(turn).rejects.toThrow('conflicts with a Pi built-in or internal tool');
+  expect(faux.state.callCount - callsBefore).toBe(0);
+  expect(handlerCalls).toBe(0);
+});
+
+test('every tool in the real Pi built-in registry rejects a declared name collision', async () => {
+  const { session } = await createAgentSession({
+    cwd: scratch,
+    agentDir: scratch,
+    model: faux.getModel(),
+    modelRuntime,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(scratch),
+    settingsManager: SettingsManager.inMemory(),
+    noTools: 'builtin',
+  });
+  const callsBefore = faux.state.callCount;
+  let handlerCalls = 0;
+  try {
+    const builtinNames = session.getAllTools().map(tool => tool.name);
+    expect(builtinNames.length).toBeGreaterThan(0);
+    for (const name of builtinNames) {
+      expect(() =>
+        buildPiNativeToolDefinitions([
+          {
+            name,
+            description: 'Declared script tool',
+            inputSchema: { jsonSchema: { type: 'object' } },
+            handler: async () => {
+              handlerCalls++;
+              return 'script ran';
+            },
+          },
+        ])
+      ).toThrow(`Native tool '${name}' conflicts with a Pi built-in or internal tool`);
+    }
+  } finally {
+    session.dispose();
+  }
+  expect(faux.state.callCount - callsBefore).toBe(0);
+  expect(handlerCalls).toBe(0);
+});
+
+test('structured_output remains a callable declared tool when no internal output tool is installed', async () => {
+  const seen: unknown[] = [];
+  const { result, modelCalls, text } = await runTurn(
+    [
+      fauxAssistantMessage([fauxToolCall('structured_output', answer)], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('script finished'),
+    ],
+    [
+      {
+        name: createStructuredOutputTool(schema).definition.name,
+        description: 'Declared script tool',
+        inputSchema: { jsonSchema: schema },
+        handler: async input => {
+          seen.push(input);
+          return 'script ran';
+        },
+      },
+    ],
+    null
+  );
+  expect(result?.isError).toBeUndefined();
+  expect(text).toBe('script finished');
+  expect(seen).toEqual([answer]);
+  expect(modelCalls).toBe(2);
 });
 
 describe('Pi structured_output tool on a real agent loop', () => {

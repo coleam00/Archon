@@ -28,7 +28,7 @@ import { writeNodeArtifact } from '../artifacts-index';
 import { safeSendMessage } from '../platform-messages';
 import { getLog } from './log';
 import { incrementalLoopUsage, sumTokenUsage } from './usage';
-import { RunSourceUnreadableError, settleSequentially, settledValuesOrThrow } from './node-source';
+import { RunSourceUnreadableError, settleSequentially, settleLayerRecovery } from './node-source';
 import type { OperatorPauseBoundary } from './operator-pause-boundary';
 import {
   beginExecution,
@@ -192,7 +192,7 @@ async function runLayerPhase(
     : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
 
   const layerHadFailure = await aggregateLayerResults(ctx, layer, layerResults, isParallelLayer);
-  settledValuesOrThrow(layerResults, ctx.workflowRun.id);
+  settleLayerRecovery(layerResults, ctx);
 
   return layerHadFailure;
 }

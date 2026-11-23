@@ -394,6 +394,9 @@ async function failedBody(
     output: state.lastOutput,
     error: errorMsg,
     failureKind: 'child_failed',
+    ...(failedBodyOutputs.some(({ output }) => output.retryable === false)
+      ? { retryable: false as const }
+      : {}),
     ...(providerFailure !== undefined ? { providerFailure } : {}),
     ...run.progress.usage,
     loopIterations: i,

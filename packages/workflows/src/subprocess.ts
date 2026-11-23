@@ -287,6 +287,7 @@ type SubprocessOptions = {
   env: NodeJS.ProcessEnv;
   protectedEnvKeys?: readonly string[];
   protectedCredentialValues?: readonly string[];
+  onCredentialValues?: (values: readonly string[]) => void;
   retention: SubprocessRetention | { standalone: true };
 } & (
   | {
@@ -331,6 +332,7 @@ export async function runSubprocess(
     options.protectedEnvKeys,
     options.protectedCredentialValues
   );
+  options.onCredentialValues?.(credentialValues);
   const retention = options.retention;
   // Container env is delivered in argv, while either execution mode can echo a
   // credential in output. Sanitize at the shared boundaries below so every downstream

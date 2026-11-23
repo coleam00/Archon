@@ -31,8 +31,28 @@ import { RunSourceUnreadableError, settledValuesOrThrow } from '../../node-sourc
 import { beginExecution, type RunLayersContext } from '../../run-context';
 import { resolveFanOutItems } from '../fan-out-shared';
 import { planComposeInstances, type ComposeFanOutFailure } from './compose-fan-out-expansion';
-import { runComposeInstance } from './compose-fan-out-instance';
+import { runComposeInstance, type ComposeInstanceOutcome } from './compose-fan-out-instance';
 import { joinComposeOutcomes } from './compose-fan-out-join';
+
+function settledComposeOutcomes(
+  settled: readonly PromiseSettledResult<ComposeInstanceOutcome>[],
+  runId: string
+): ComposeInstanceOutcome[] {
+  try {
+    return settledValuesOrThrow(settled, runId);
+  } catch (error) {
+    if (
+      !(error instanceof RunSourceUnreadableError) ||
+      !settled.some(result => result.status === 'fulfilled' && result.value.retryable === false)
+    )
+      throw error;
+    return settled.map(result =>
+      result.status === 'fulfilled'
+        ? result.value
+        : { status: 'failed', output: '', error: String(result.reason) }
+    );
+  }
+}
 
 function unresolvedFanOutTarget(
   errors: readonly WorkflowLoadError[],
@@ -239,7 +259,8 @@ export async function executeComposeFanOutNode(
     failureKind: NodeFailureKind,
     costUsd?: number,
     tokens?: TokenUsage,
-    providerFailure?: ProviderFailure
+    providerFailure?: ProviderFailure,
+    retryable?: false
   ): Promise<NodeExecutionResult> => {
     return recordNodeState(
       { store: deps.store, logDir: ctx.logDir },
@@ -249,6 +270,7 @@ export async function executeComposeFanOutNode(
           status: 'failed',
           error,
           failureKind,
+          ...(retryable === false ? { retryable } : {}),
           ...(providerFailure !== undefined ? { providerFailure } : {}),
         },
         {
@@ -372,7 +394,7 @@ export async function executeComposeFanOutNode(
     runComposeInstance(scope, snapshot)
   );
 
-  const outcomes = settledValuesOrThrow(settled, parentRun.id);
+  const outcomes = settledComposeOutcomes(settled, parentRun.id);
 
   const totalCostUsd = sumReportedCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
@@ -404,7 +426,8 @@ export async function executeComposeFanOutNode(
       joined.failureKind,
       totalCostUsd,
       totalTokens,
-      joined.providerFailure
+      joined.providerFailure,
+      joined.retryable
     );
   }
   return writeCompleted(

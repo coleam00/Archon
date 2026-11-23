@@ -465,7 +465,10 @@ function piCustomTools(
 ) {
   const addedTools = [
     ...(requestOptions?.nativeTools && requestOptions.nativeTools.length > 0
-      ? nativeTools.buildPiNativeToolDefinitions(requestOptions.nativeTools)
+      ? nativeTools.buildPiNativeToolDefinitions(
+          requestOptions.nativeTools,
+          structuredOutputTool ? [structuredOutputTool] : []
+        )
       : []),
     ...(structuredOutputTool ? [structuredOutputTool] : []),
   ];

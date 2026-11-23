@@ -139,3 +139,20 @@ export function settledValuesOrThrow<T>(
   }
   throw selected.reason;
 }
+
+export function settleLayerRecovery<T>(
+  results: readonly PromiseSettledResult<T>[],
+  ctx: Pick<RunLayersContext, 'nodeOutputs' | 'workflowRun'>
+): void {
+  try {
+    settledValuesOrThrow(results, ctx.workflowRun.id);
+  } catch (error) {
+    if (
+      !(error instanceof RunSourceUnreadableError) ||
+      ![...ctx.nodeOutputs.values()].some(
+        output => output.state === 'failed' && output.retryable === false
+      )
+    )
+      throw error;
+  }
+}

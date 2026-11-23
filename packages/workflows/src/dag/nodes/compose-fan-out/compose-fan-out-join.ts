@@ -11,7 +11,11 @@ import type { ComposeInstanceOutcome } from './compose-fan-out-instance';
 /** A composed fan-out join's verdict over every instance outcome, in snapshot order. */
 export type ComposeFanOutJoinResult =
   | { status: 'completed'; elements: JsonValue[] }
-  | ({ status: 'failed'; providerFailure?: ProviderFailure } & ComposeFanOutFailure);
+  | ({
+      status: 'failed';
+      providerFailure?: ProviderFailure;
+      retryable?: false;
+    } & ComposeFanOutFailure);
 
 /**
  * Reduce the instance outcomes through the declared `join`. An ambiguous instance blocks
@@ -36,7 +40,7 @@ export function joinComposeOutcomes(
     };
   }
 
-  if (join === 'all_success') {
+  if (join === 'all_success' || outcomes.some(outcome => outcome.retryable === false)) {
     const firstBad = outcomes.findIndex(o => o.status !== 'completed');
     if (firstBad !== -1) {
       const bad = outcomes[firstBad];
@@ -44,9 +48,12 @@ export function joinComposeOutcomes(
       return {
         status: 'failed',
         error:
-          `composed fan_out node '${node.id}' (join: all_success): ${ref} ${bad.status}` +
+          `composed fan_out node '${node.id}' (join: ${join}): ${ref} ${bad.status}` +
           (bad.error ? `: ${bad.error}` : ''),
         failureKind: 'child_failed',
+        ...(outcomes.some(outcome => outcome.retryable === false)
+          ? { retryable: false as const }
+          : {}),
         notice:
           `❌ **Composed fan-out failed** (node \`${node.id}\`): ${ref} ${bad.status}` +
           (bad.error ? ` — ${bad.error}` : ''),

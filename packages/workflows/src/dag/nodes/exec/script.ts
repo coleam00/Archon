@@ -310,7 +310,8 @@ export async function runScript(
   node: ExecNode,
   { command, args, input }: ScriptInvocation,
   env: NodeJS.ProcessEnv,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  onCredentialValues?: (values: readonly string[]) => void
 ): Promise<ReturnType<typeof certifyExecOutput> & { credentialValues: readonly string[] }> {
   const { workflowRun } = ctx;
   const { stdout, stderr, credentialValues } = await runSubprocessUntilRunStops(
@@ -329,6 +330,7 @@ export async function runScript(
       abortSignal,
       protectedEnvKeys: ctx.config.protectedEnvKeys,
       protectedCredentialValues: ctx.config.protectedCredentialValues,
+      onCredentialValues,
       retention: {
         logDir: ctx.logDir,
         workflowRunId: workflowRun.id,

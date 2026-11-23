@@ -624,6 +624,12 @@ async function usageLimitWait(
   { wait: WorkflowUsageLimitWaitContext; cause: ProviderLimitFailure['class'] } | undefined
 > {
   const { deps, workflowRun, config, execContext } = ctx;
+  if (
+    [...ctx.nodeOutputs.values()].some(
+      output => output.state === 'failed' && output.retryable === false
+    )
+  )
+    return undefined;
   const skip = async (
     nodeId: string,
     reason: 'reset_unavailable' | 'disabled' | 'reset_passed' | 'container_unsupported'

@@ -10,8 +10,16 @@ import { NodeFailure } from '../../ai-turn';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { renderOutputTypes } from '../../../output-types';
 import { qualifyWorkflowResources } from '../../../packaged-workflow';
-import type { AgentNode, DagNode } from '../../../schemas';
+import { dagNodeSchema, type AgentNode, type DagNode } from '../../../schemas';
 import { validateNodeOutputFormats } from '../../../loader/contracts';
+import {
+  captureWorkflowSource,
+  capturedSourceRoots,
+  WorkflowSourceUnavailableError,
+} from '../../../workflow-source';
+import * as sourceLoader from '../../../workflow-source/load';
+import * as scriptExecution from '../exec/script';
+import { RunSourceUnreadableError } from '../../node-source';
 import {
   createMockDeps,
   createMockPlatform,
@@ -121,15 +129,16 @@ test('engine validates complex stdin input, records one call, and leaves agent o
 });
 
 test('stdin carries a tool input larger than the Linux per-variable limit', async () => {
+  const payload = Array.from({ length: 5000 }, () => crypto.randomUUID()).join('');
+  let returned: string | undefined;
   mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
-    const input = { ...args, payload: 'x'.repeat(140 * 1024) };
-    expect(await options?.nativeTools?.[0].handler(input)).toBe('{"green":false}');
+    returned = await options?.nativeTools?.[0].handler({ ...args, payload });
     yield reply();
   });
   await run();
-  expect(events('script_tool_call')[0]?.data?.input).toMatchObject({
-    payload: expect.stringMatching(/^x{143360}$/),
-  });
+  expect(payload.length).toBeGreaterThan(128 * 1024);
+  expect(returned).toBe('{"green":false}');
+  expect(events('script_tool_call')[0]?.data?.input).toMatchObject({ payload });
   expect(events('node_failed')).toHaveLength(0);
 });
 
@@ -202,6 +211,181 @@ test('write timeout stops the node non-retryably and preserves provider failure'
     exec.mockRestore();
   }
 });
+
+test.each(['top', 'group', 'nested-group', 'compose', 'compose-all-done-group'] as const)(
+  'an unknown write blocks automatic continuation through %s',
+  async scope => {
+    const exec = spyOnNodeExec().mockRejectedValue(
+      Object.assign(new Error('write timed out'), { timedOut: true, code: null })
+    );
+    const writingNode = {
+      ...agent(true),
+      retry: { max_attempts: 3, delay_ms: 0, on_error: 'all' as const },
+    };
+    const group = (id: string, child: DagNode): DagNode => ({
+      id,
+      kind: 'loop_group',
+      loop_group: { max_iterations: 2, until: 'DONE', nodes: [child], fresh_context: false },
+    });
+    let node: DagNode = writingNode;
+    if (scope === 'group') node = group('outer', writingNode);
+    if (scope === 'nested-group') node = group('outer', group('inner', writingNode));
+    if (scope === 'compose' || scope === 'compose-all-done-group') {
+      await mkdir(join(root, '.archon', 'workflows'), { recursive: true });
+      await writeFile(
+        join(root, '.archon', 'workflows', 'write-block.yaml'),
+        `name: write-block
+description: One guarded write
+mutates_checkout: false
+nodes:
+  - id: inspect
+    prompt: Call lookup once
+    tools:
+      lookup:
+        description: Guarded write
+        script: lookup
+        writes: true
+        input_schema:
+          type: object
+        output_schema:
+          type: object
+`
+      );
+      const composed = dagNodeSchema.parse({
+        id: 'fan',
+        include: 'write-block',
+        fan_out: {
+          items: '[1]',
+          as: 'item',
+          join: scope === 'compose' ? 'all_success' : 'all_done',
+          max_parallel: 1,
+        },
+      });
+      if (composed.kind !== 'compose_fan_out') throw new Error('Expected composed fan-out');
+      node = composed;
+      if (scope === 'compose-all-done-group') node = group('outer', composed);
+    }
+    let handlerCalls = 0;
+    try {
+      mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
+        handlerCalls++;
+        try {
+          await options?.nativeTools?.[0].handler(args);
+        } catch {}
+        throw new NodeFailure('rate_limited', 'provider transport failed', {
+          class: 'rate_limited',
+          evidence: 'rate limited',
+          resetAt: new Date(Date.now() + 60_000).toISOString(),
+        });
+        yield reply();
+      });
+      await run([node]);
+      expect(handlerCalls).toBe(1);
+      expect(events('script_tool_call')).toHaveLength(1);
+      expect(events('script_tool_call')[0]?.data?.status).toBe('unknown');
+      expect(events('node_failed').some(event => event.data?.failure_kind === 'unknown')).toBe(
+        true
+      );
+      const finalFailure = events('node_failed').at(-1);
+      expect(finalFailure?.data).toMatchObject({
+        retryable: false,
+        provider_failure: { class: 'rate_limited' },
+      });
+      expect(deps.store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+      expect(deps.store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    } finally {
+      exec.mockRestore();
+    }
+  }
+);
+
+test.each(['top', 'group', 'compose', 'compose-instances'] as const)(
+  'a sibling source error cannot release an unknown write through %s',
+  async scope => {
+    const started = Promise.withResolvers<void>();
+    const exec = spyOnNodeExec().mockImplementation(async () => {
+      started.resolve();
+      throw Object.assign(new Error('write timed out'), { timedOut: true, code: null });
+    });
+    const prepare = scriptExecution.prepareToolScript;
+    let preparationCalls = 0;
+    const source = spyOn(scriptExecution, 'prepareToolScript').mockImplementation(
+      async (ctx, node, execution) => {
+        preparationCalls++;
+        if (scope === 'compose-instances' ? preparationCalls === 2 : node.id.includes('recover')) {
+          await started.promise;
+          throw new RunSourceUnreadableError(
+            node.id,
+            new WorkflowSourceUnavailableError(join(root, 'capture'), new Error('read denied'))
+          );
+        }
+        return prepare(ctx, node, execution);
+      }
+    );
+    const sibling: AgentNode = { ...agent(), id: 'recover' };
+    let nodes: DagNode[] = [agent(true), sibling];
+    if (scope === 'group')
+      nodes = [
+        {
+          id: 'outer',
+          kind: 'loop_group',
+          loop_group: { max_iterations: 2, until: 'DONE', fresh_context: false, nodes },
+        },
+      ];
+    if (scope === 'compose' || scope === 'compose-instances') {
+      await mkdir(join(root, '.archon', 'workflows'), { recursive: true });
+      await writeFile(
+        join(root, '.archon', 'workflows', 'recover-block.yaml'),
+        `name: recover-block
+description: Unreadable sibling
+mutates_checkout: false
+nodes:
+  - id: ${scope === 'compose-instances' ? 'inspect' : 'recover'}
+    prompt: Use lookup
+    tools:
+      lookup:
+        description: Read source
+        script: lookup
+        writes: true
+        input_schema: {type: object}
+        output_schema: {type: object}
+`
+      );
+      const fan = dagNodeSchema.parse({
+        id: 'fan',
+        include: 'recover-block',
+        fan_out: {
+          items: scope === 'compose-instances' ? '[1,2]' : '[1]',
+          as: 'item',
+          join: 'all_success',
+          max_parallel: 2,
+        },
+      });
+      if (fan.kind !== 'compose_fan_out') throw new Error('Expected composed fan-out');
+      nodes = scope === 'compose-instances' ? [fan] : [agent(true), fan];
+    }
+    let handlerCalls = 0;
+    try {
+      mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
+        handlerCalls++;
+        try {
+          await options?.nativeTools?.[0].handler(args);
+        } catch {}
+        yield reply();
+      });
+      await run(nodes);
+      expect(handlerCalls).toBe(1);
+      expect(events('script_tool_call')).toHaveLength(1);
+      expect(events('script_tool_call')[0]?.data?.status).toBe('unknown');
+      expect(deps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+      expect(deps.store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+      expect(deps.store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    } finally {
+      source.mockRestore();
+      exec.mockRestore();
+    }
+  }
+);
 
 test('unsupported tools provider is refused without invoking model', async () => {
   await expect(run([agent()], 'opencode')).rejects.toThrow('nativeTools');
@@ -421,6 +605,39 @@ test.each([false, true])(
   }
 );
 
+test('invalid input redacts inherited credentials without starting a script', async () => {
+  const key = 'REVIEW_INHERITED_SECRET';
+  const previous = process.env[key];
+  const secret = 'invalid-input-inherited-credential';
+  process.env[key] = secret;
+  const exec = spyOnNodeExec().mockResolvedValue({ stdout: '', stderr: '' });
+  let error: unknown;
+  try {
+    mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
+      try {
+        await options?.nativeTools?.[0].handler({
+          count: 'wrong',
+          payload: secret,
+          items: [{ id: 7, [secret]: secret }],
+        });
+      } catch (cause) {
+        error = cause;
+      }
+      yield reply();
+    });
+    await run();
+    expect(String(error)).toContain('Invalid input');
+    expect(exec.mock.calls.filter(([command]) => command === 'bun')).toHaveLength(0);
+    expect(events('script_tool_call')).toHaveLength(1);
+    expect(events('script_tool_call')[0]?.data?.status).toBe('failed');
+    expect(JSON.stringify(events('script_tool_call'))).not.toContain(secret);
+  } finally {
+    exec.mockRestore();
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  }
+});
+
 test('omits only an unsafe audit field when a credential matches the marker', async () => {
   let result: string | undefined;
   mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
@@ -494,6 +711,185 @@ test('redacts a recorded tool error without replacing the audit status', async (
     error: expect.stringContaining('[REDACTED]'),
   });
   expect(String(events('script_tool_call')[0]?.data?.error)).not.toContain('fixture-credential');
+});
+
+test.each([false, true])(
+  'failed calls redact inherited credentials in audit keys and values (writes: %s)',
+  async writes => {
+    const key = 'REVIEW_INHERITED_SECRET';
+    const previous = process.env[key];
+    const secret = 'review-inherited-credential';
+    process.env[key] = secret;
+    let actualInput: Record<string, unknown> | undefined;
+    let error: unknown;
+    try {
+      await writeFile(
+        join(root, '.archon', 'scripts', 'lookup.ts'),
+        'const input = JSON.parse(await Bun.stdin.text()); if (input.payload !== process.env.REVIEW_INHERITED_SECRET) process.exit(3); console.error("expected failure"); process.exit(2);'
+      );
+      mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
+        actualInput = { ...args, payload: secret, items: [{ id: 7, [secret]: secret }] };
+        try {
+          await options?.nativeTools?.[0].handler(actualInput);
+        } catch (cause) {
+          error = cause;
+        }
+        yield reply();
+      });
+      await run([agent(writes)]);
+      expect(actualInput).toEqual({
+        ...args,
+        payload: secret,
+        items: [{ id: 7, [secret]: secret }],
+      });
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain('expected failure');
+      expect(events('script_tool_call')).toHaveLength(1);
+      expect(events('script_tool_call')[0]?.data).toMatchObject({
+        status: 'failed',
+        input: {
+          ...args,
+          payload: '[REDACTED]',
+          items: [{ id: 7, '[REDACTED]': '[REDACTED]' }],
+        },
+      });
+      expect(JSON.stringify(events('script_tool_call'))).not.toContain(secret);
+      expect(events('node_failed')).toHaveLength(0);
+      expect(events('node_completed')).toHaveLength(1);
+    } finally {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
+  }
+);
+
+test.each(['preparation', 'call', 'swallowed'] as const)(
+  'unreadable captured tool source releases the run during %s',
+  async phase => {
+    const capture = await captureWorkflowSource({
+      sourceRoot: root,
+      captureRoot: join(root, 'capture'),
+    });
+    let invoking = false;
+    let handlerError: unknown;
+    let handlerCalls = 0;
+    const readFile = fs.readFile;
+    const checkSource = sourceLoader.assertWorkflowSourceIntegrity;
+    const fault = spyOn(sourceLoader, 'assertWorkflowSourceIntegrity').mockImplementation(
+      async (...parameters) => {
+        if (phase === 'preparation')
+          throw new WorkflowSourceUnavailableError(join(root, 'capture'), new Error('read denied'));
+        return checkSource(...parameters);
+      }
+    );
+    const read = spyOn(fs, 'readFile').mockImplementation((async (
+      path: Parameters<typeof fs.readFile>[0],
+      options?: Parameters<typeof fs.readFile>[1]
+    ) => {
+      if (invoking && String(path).endsWith('lookup.ts'))
+        throw Object.assign(new Error('read denied'), {
+          code: 'EACCES',
+          syscall: 'open',
+          path: String(path),
+        });
+      return readFile(path, options);
+    }) as typeof fs.readFile);
+    const exec = spyOnNodeExec().mockResolvedValue({ stdout: '{"green":false}', stderr: '' });
+    try {
+      mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
+        invoking = true;
+        handlerCalls++;
+        try {
+          await options?.nativeTools?.[0].handler(args);
+        } catch (cause) {
+          handlerError = cause;
+          if (phase !== 'swallowed') throw cause;
+        }
+        yield reply();
+      });
+      const outcome = await executeDagWorkflow(
+        dagOptions({
+          deps,
+          platform: createMockPlatform(),
+          cwd: root,
+          workflowRun: makeWorkflowRun(),
+          workflowProvider: 'claude',
+          workflow: { name: 'tools', nodes: [agent()] },
+          workflowSourceRoots: capturedSourceRoots(capture.anchor),
+        })
+      );
+      expect(outcome).toEqual({ kind: 'source_release', released: true });
+      expect(deps.store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
+      expect(events('workflow_failed')).toHaveLength(0);
+      expect(events('node_failed')).toHaveLength(1);
+      expect(events('node_failed')[0]?.data?.error).toContain("could not read the run's source");
+      expect(events('node_completed')).toHaveLength(0);
+      expect(events('script_tool_call')).toHaveLength(0);
+      expect(exec.mock.calls.filter(([command]) => command === 'bun')).toHaveLength(0);
+      expect(handlerCalls).toBe(phase === 'preparation' ? 0 : 1);
+      if (phase !== 'preparation') expect(handlerError).toBeInstanceOf(Error);
+    } finally {
+      fault.mockRestore();
+      read.mockRestore();
+      exec.mockRestore();
+    }
+  }
+);
+
+test('a failed call-event write takes precedence over overlapping source recovery', async () => {
+  const persisting = Promise.withResolvers<void>();
+  const sourceFailed = Promise.withResolvers<void>();
+  const storageError = new Error('call event store unavailable');
+  const persist = deps.store.persistWorkflowEvent.getMockImplementation();
+  if (!persist) throw new Error('Missing persist implementation');
+  deps.store.persistWorkflowEvent.mockImplementation(async event => {
+    if (event.event_type === 'script_tool_call') {
+      persisting.resolve();
+      await sourceFailed.promise;
+      throw storageError;
+    }
+    return persist(event);
+  });
+  const prepare = scriptExecution.prepareToolScript;
+  let rechecks = 0;
+  const source = spyOn(scriptExecution, 'prepareToolScript').mockImplementation(
+    async (...parameters) => {
+      const prepared = await prepare(...parameters);
+      return {
+        ...prepared,
+        recheck: async () => {
+          rechecks++;
+          if (rechecks === 2) {
+            sourceFailed.resolve();
+            throw new RunSourceUnreadableError(
+              'inspect',
+              new WorkflowSourceUnavailableError(join(root, 'capture'), new Error('read denied'))
+            );
+          }
+          return prepared.recheck();
+        },
+      };
+    }
+  );
+  try {
+    mockSendQueryDag.mockImplementation(async function* (_p, _c, _r, options) {
+      const tool = options?.nativeTools?.[0];
+      if (!tool) throw new Error('Missing tool');
+      const writing = tool.handler(args);
+      void writing.catch(() => undefined);
+      await persisting.promise;
+      const reading = tool.handler(args);
+      await Promise.allSettled([writing, reading]);
+      yield reply();
+    });
+    await expect(run([agent(true)])).rejects.toThrow('call event store unavailable');
+    expect(rechecks).toBe(2);
+    expect(deps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+    expect(deps.store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(events('node_completed')).toHaveLength(0);
+  } finally {
+    source.mockRestore();
+  }
 });
 
 test('a stalled unknown-event write cannot block shutdown past the second grace', async () => {

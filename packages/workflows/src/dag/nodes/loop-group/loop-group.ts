@@ -126,6 +126,7 @@ async function recordGroupResult(
         status: 'failed',
         error: result.error,
         ...(result.failureKind !== undefined ? { failureKind: result.failureKind } : {}),
+        ...(result.retryable === false ? { retryable: false as const } : {}),
         ...(result.providerFailure !== undefined
           ? { providerFailure: result.providerFailure }
           : {}),

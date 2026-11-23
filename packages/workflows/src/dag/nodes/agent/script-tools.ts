@@ -11,6 +11,7 @@ import { formatSubprocessFailure } from '../../../executor-shared';
 import type { RunLayersContext } from '../../run-context';
 import { prepareToolScript, runScript } from '../exec/script';
 import { ExecOutputContractError } from '../exec/exec-output';
+import { RunSourceUnreadableError } from '../../node-source';
 import {
   collectCredentialValues,
   containsCredentialValue,
@@ -39,6 +40,7 @@ export async function createScriptTools(
   const toolAbort = new AbortController();
   let unknownWrite: string | undefined;
   let recordingError: unknown;
+  let sourceError: RunSourceUnreadableError | undefined;
   let closed = false;
   const nativeTools: NativeTool[] = [];
   for (const [name, declaration] of Object.entries(node.tools ?? {})) {
@@ -58,17 +60,16 @@ export async function createScriptTools(
       inputSchema: nativeToolInputSchema.parse({ jsonSchema: declaration.input_schema }),
       handler: (input, context) => {
         const jsonInput = jsonValueSchema.parse(input);
+        let callCredentials: readonly string[] = collectCredentialValues(
+          ctx.execContext.kind === 'container' ? prepared.env : { ...process.env, ...prepared.env },
+          ctx.config.protectedEnvKeys,
+          ctx.config.protectedCredentialValues
+        );
         let recorded = false;
         const record = async (outcome: ToolOutcome): Promise<void> => {
           if (recorded) return;
           recorded = true;
-          const credentialValues =
-            outcome.credentialValues ??
-            collectCredentialValues(
-              prepared.env,
-              ctx.config.protectedEnvKeys,
-              ctx.config.protectedCredentialValues
-            );
+          const credentialValues = outcome.credentialValues ?? callCredentials;
           try {
             await persistNodeEvent(ctx.deps.store, {
               workflow_run_id: ctx.workflowRun.id,
@@ -111,6 +112,11 @@ export async function createScriptTools(
           try {
             await prepared.recheck();
           } catch (cause) {
+            if (cause instanceof RunSourceUnreadableError) {
+              sourceError ??= cause;
+              abortController.abort();
+              throw cause;
+            }
             return { output: null, status: 'failed', error: (cause as Error).message };
           }
           if (closed || toolAbort.signal.aborted || abortController.signal.aborted) {
@@ -128,7 +134,10 @@ export async function createScriptTools(
               script,
               { ...prepared.invocation, input: JSON.stringify(input) },
               prepared.env,
-              AbortSignal.any([toolAbort.signal, abortController.signal])
+              AbortSignal.any([toolAbort.signal, abortController.signal]),
+              values => {
+                callCredentials = values;
+              }
             );
             return {
               output:
@@ -183,6 +192,9 @@ export async function createScriptTools(
     },
     get recordingError() {
       return recordingError;
+    },
+    get sourceError() {
+      return sourceError;
     },
     async stop() {
       closed = true;

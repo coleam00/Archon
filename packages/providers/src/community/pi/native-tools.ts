@@ -1,7 +1,14 @@
 import { nativeToolInputParser, nativeToolInputSchema } from '@archon/provider-contract';
 import { Type, StringEnum, type TSchema } from '@earendil-works/pi-ai';
-import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
+import {
+  createCodingTools,
+  createReadOnlyTools,
+  createPowerShellToolDefinition,
+  defineTool,
+  type ToolDefinition,
+} from '@earendil-works/pi-coding-agent';
 import type { NativeTool, NativeToolInputSchema, NativeToolProperty } from '../../types';
+import { ClassifiedProviderError } from '../../shared/failure';
 
 function typeBoxFieldForProperty(prop: NativeToolProperty): TSchema {
   switch (prop.kind) {
@@ -41,7 +48,26 @@ export function nativeToolInputToTypeBox(input: NativeToolInputSchema): TSchema 
  * Adapt NativeTools to Pi `ToolDefinition`s for the `customTools` array. The
  * handler's text result becomes the tool's content; `details` is unused.
  */
-export function buildPiNativeToolDefinitions(nativeTools: NativeTool[]): ToolDefinition[] {
+export function buildPiNativeToolDefinitions(
+  nativeTools: NativeTool[],
+  internalTools: Pick<ToolDefinition, 'name'>[] = []
+): ToolDefinition[] {
+  const reservedNames = new Set(
+    [
+      ...createCodingTools(process.cwd()),
+      ...createReadOnlyTools(process.cwd()),
+      createPowerShellToolDefinition(process.cwd()),
+      ...internalTools,
+    ].map(tool => tool.name)
+  );
+  for (const spec of nativeTools) {
+    if (reservedNames.has(spec.name)) {
+      throw new ClassifiedProviderError(
+        'misconfigured',
+        `Native tool '${spec.name}' conflicts with a Pi built-in or internal tool. Rename the declared tool.`
+      );
+    }
+  }
   return nativeTools.map(spec => {
     const parser = nativeToolInputParser(spec.inputSchema);
     return defineTool({

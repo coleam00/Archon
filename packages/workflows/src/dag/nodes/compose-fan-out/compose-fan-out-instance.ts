@@ -44,6 +44,7 @@ export interface ComposeInstanceOutcome extends InstanceUsage {
   output: string;
   structuredOutput?: unknown;
   error?: string;
+  retryable?: false;
   /** The failed instance's typed provider failure, from {@link aggregateProviderFailure}. */
   providerFailure?: ProviderFailure;
 }
@@ -383,6 +384,7 @@ async function settleInstance(
   };
   const failed = [...instanceCtx.nodeOutputs.values()].filter(o => o.state === 'failed');
   if (failed.length > 0) {
+    const retryable = failed.some(output => output.retryable === false) ? false : undefined;
     const providerFailure = aggregateProviderFailure(
       rootFailures(instanceCtx.layers.flat(), instanceCtx.nodeOutputs).map(
         ({ output }) => output.providerFailure
@@ -394,6 +396,7 @@ async function settleInstance(
       status: 'failed',
       output: '',
       error: failed[0].error ?? 'composed instance node failed',
+      retryable,
       ...(providerFailure !== undefined ? { providerFailure } : {}),
       ...instanceUsage,
     };
@@ -404,6 +407,7 @@ async function settleInstance(
         status: 'failed',
         error: outcome.error ?? 'composed instance node failed',
         failureKind: 'child_failed',
+        retryable,
         ...(providerFailure !== undefined ? { providerFailure } : {}),
       },
       'failed and its terminal state could not be stored'

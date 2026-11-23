@@ -3,6 +3,7 @@ import {
   mockCreateBashTool,
   mockCreatePowerShellTool,
   mockSettingsManagerInMemory,
+  mockPrompt,
   consume,
   resetScript,
   scriptedAgentEnd,
@@ -10,7 +11,106 @@ import {
 import { delimiter } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { PiProvider } from './provider';
+import type { NativeToolInputSchema } from '../../types';
 describe('PiProvider tools', () => {
+  test.each([
+    'structured_output',
+    'read',
+    'bash',
+    'edit',
+    'write',
+    'grep',
+    'find',
+    'ls',
+    'powershell',
+  ])('rejects a declared %s collision before session, model or handler dispatch', async name => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    let handlerCalls = 0;
+    const { chunks, failure, error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        nodeConfig: { allowed_tools: [] },
+        outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+        nativeTools: [
+          {
+            name,
+            description: 'Declared script tool',
+            inputSchema: { jsonSchema: { type: 'object' } },
+            handler: async () => {
+              handlerCalls++;
+              return 'script ran';
+            },
+          },
+        ],
+      })
+    );
+    expect(error).toBeUndefined();
+    expect(failure).toEqual({
+      class: 'misconfigured',
+      evidence: `Native tool '${name}' conflicts with a Pi built-in or internal tool. Rename the declared tool.`,
+    });
+    expect(chunks.at(-1)).toEqual({ type: 'settled' });
+    expect(mockCreateAgentSession).not.toHaveBeenCalled();
+    expect(mockPrompt).not.toHaveBeenCalled();
+    expect(handlerCalls).toBe(0);
+  });
+
+  test.each([
+    { jsonSchema: { type: 'object' } },
+    { properties: {}, required: [] },
+  ] satisfies NativeToolInputSchema[])(
+    'rejects built-in collisions without output_format for schema %j',
+    async inputSchema => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      resetScript(scriptedAgentEnd());
+      const { failure } = await consume(
+        new PiProvider().sendQuery('hi', '/tmp', undefined, {
+          model: 'google/gemini-2.5-pro',
+          nativeTools: [
+            { name: 'read', description: 'Read', inputSchema, handler: async () => 'script ran' },
+          ],
+        })
+      );
+      expect(failure?.class).toBe('misconfigured');
+      expect(failure?.evidence).toContain("Native tool 'read' conflicts");
+      expect(mockCreateAgentSession).not.toHaveBeenCalled();
+      expect(mockPrompt).not.toHaveBeenCalled();
+    }
+  );
+
+  test('noncolliding tools keep production built-in, declared, internal ordering', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    const { failure } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+        nativeTools: [
+          {
+            name: 'lookup',
+            description: 'Look up an item',
+            inputSchema: { jsonSchema: { type: 'object' } },
+            handler: async () => 'found',
+          },
+        ],
+      })
+    );
+    expect(failure).toBeUndefined();
+    const tools = mockCreateAgentSession.mock.calls[0]?.[0]?.customTools as {
+      __piTool?: string;
+      name?: string;
+    }[];
+    expect(tools.map(tool => tool.__piTool ?? tool.name)).toEqual([
+      'read',
+      'bash',
+      'edit',
+      'write',
+      'lookup',
+      'structured_output',
+    ]);
+  });
+
   test('nodeConfig.effort=medium passes thinkingLevel', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());

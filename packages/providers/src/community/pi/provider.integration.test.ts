@@ -17,6 +17,7 @@ import { SessionManager, createAgentSession } from '@earendil-works/pi-coding-ag
 
 import type { MessageChunk } from '../../types';
 import { PiProvider } from './provider';
+import { createStructuredOutputTool } from './structured-output-tool';
 
 const scratch = mkdtempSync(join(tmpdir(), 'archon-pi-provider-int-'));
 const agentDir = join(scratch, 'agent');
@@ -131,6 +132,43 @@ afterAll(async () => {
     else process.env[key] = value;
   }
   await removeTempTree(scratch);
+});
+
+test('a native-tool collision fails at the production Pi boundary before model or script dispatch', async () => {
+  const name = createStructuredOutputTool({ type: 'object' }).definition.name;
+  const requestsBefore = authHeaders.length;
+  let handlerCalls = 0;
+  const chunks: MessageChunk[] = [];
+  for await (const chunk of new PiProvider().sendQuery('call the script', repoDir, undefined, {
+    model: 'mycustom/m1',
+    env: { MY_KEY: 'sk-per-call' },
+    protectedEnvKeys: [],
+    nodeConfig: { allowed_tools: [] },
+    outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+    nativeTools: [
+      {
+        name,
+        description: 'Declared script tool',
+        inputSchema: { jsonSchema: { type: 'object' } },
+        handler: async () => {
+          handlerCalls++;
+          return 'script ran';
+        },
+      },
+    ],
+  })) {
+    chunks.push(chunk);
+  }
+  expect(chunks.find(chunk => chunk.type === 'result')).toMatchObject({
+    isError: true,
+    failure: {
+      class: 'misconfigured',
+      evidence: `Native tool '${name}' conflicts with a Pi built-in or internal tool. Rename the declared tool.`,
+    },
+  });
+  expect(chunks.at(-1)).toEqual({ type: 'settled' });
+  expect(authHeaders.length - requestsBefore).toBe(0);
+  expect(handlerCalls).toBe(0);
 });
 
 describe('PiProvider with a substituted custom provider and a provider-registering extension', () => {
