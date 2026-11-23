@@ -37,6 +37,7 @@ const create = {
 } satisfies ForgeRequest;
 const draft = { operationId: 'draft-1', op: 'pr.draft', ref } satisfies ForgeRequest;
 const ready = { operationId: 'ready-1', op: 'pr.ready', ref } satisfies ForgeRequest;
+const close = { operationId: 'close-1', op: 'pr.close', ref } satisfies ForgeRequest;
 const marker = '<!-- archon-review-report -->';
 const upsert = {
   operationId: 'comment-1',
@@ -87,12 +88,13 @@ describe('mutation evidence at the dispatch boundary', () => {
   });
 
   // Verification is not pr.edit-body's alone: a plugin's answer to a create, a
-  // ready/draft flip or a comment upsert is the only claim dispatch has that the write
+  // ready/draft flip, a close or a comment upsert is the only claim dispatch has that the write
   // did what it was asked, so each op's branch is exercised both ways.
   test.each([
     ['pr.create', create],
     ['pr.ready', ready],
     ['pr.draft', draft],
+    ['pr.close', close],
     ['comment.upsert', upsert],
   ] as const)('accepts a %s result that answers the request', async (op, request) => {
     const result = await dispatch(request);
@@ -106,6 +108,7 @@ describe('mutation evidence at the dispatch boundary', () => {
     ['pr.create', 'a revision it was not asked for', create],
     ['pr.ready', 'a pull request still in draft', ready],
     ['pr.draft', 'a pull request still ready', draft],
+    ['pr.close', 'a pull request still open', close],
     ['comment.upsert', 'a body it did not write', upsert],
   ] as const)('refuses a %s result naming %s', async (op, _label, request) => {
     const result = await dispatch(request, 'mismatch');

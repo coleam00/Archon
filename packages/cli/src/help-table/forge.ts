@@ -25,6 +25,7 @@ const forgeOperationDescriptions = {
   'pr.edit-body': 'Replace a pull request body and verify the result',
   'pr.ready': 'Take a pull request out of draft and verify the result',
   'pr.draft': 'Convert a pull request to draft and verify the result',
+  'pr.close': 'Close a pull request without merging and verify the result',
   'pr.merge': 'Merge a pull request pinned to its approved head',
   'checks.rerun': 'Rerun selected failed checks at a revision',
   'pr.reviews': 'Read submitted reviews and root review comments',

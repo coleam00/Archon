@@ -96,6 +96,12 @@ export const prDraftRequestSchema = requestBase.extend({
   op: z.literal('pr.draft'),
   ref: prRefSchema,
 });
+// Closing never merges, deletes the head branch or writes a comment; a caller
+// that wants to say why uses a comment operation.
+export const prCloseRequestSchema = requestBase.extend({
+  op: z.literal('pr.close'),
+  ref: prRefSchema,
+});
 // The marker identifies the one canonical comment, so it has to survive a
 // first-line comparison against a body the forge may have re-wrapped.
 const commentMarker = text.refine(
@@ -484,6 +490,7 @@ export const mutationRequestSchemas = [
   prEditBodyRequestSchema,
   prReadyRequestSchema,
   prDraftRequestSchema,
+  prCloseRequestSchema,
   commentUpsertRequestSchema,
   workItemCommentUpsertRequestSchema,
   workItemCreateRequestSchema,
@@ -635,6 +642,7 @@ const appliedSchema = z.object({
   outcome: z.literal('applied'),
   changed: z.boolean(),
 });
+const appliedPrSchema = appliedSchema.extend({ pr: forgePrRecordSchema });
 
 export const lifecycleReadResultSchemas = [
   z.object({ op: prReviewsRequestSchema.shape.op, value: prReviewsSchema }),
@@ -699,22 +707,14 @@ export const mutationResultSchemas = [
       units: selectedChecksSchema,
     }),
   }),
-  z.object({
-    op: prCreateRequestSchema.shape.op,
-    value: appliedSchema.extend({ pr: forgePrRecordSchema }),
-  }),
+  z.object({ op: prCreateRequestSchema.shape.op, value: appliedPrSchema }),
   z.object({
     op: prEditBodyRequestSchema.shape.op,
     value: appliedSchema.extend({ pr: forgePrRecordSchema, bodyDigest: text }),
   }),
-  z.object({
-    op: prReadyRequestSchema.shape.op,
-    value: appliedSchema.extend({ pr: forgePrRecordSchema }),
-  }),
-  z.object({
-    op: prDraftRequestSchema.shape.op,
-    value: appliedSchema.extend({ pr: forgePrRecordSchema }),
-  }),
+  z.object({ op: prReadyRequestSchema.shape.op, value: appliedPrSchema }),
+  z.object({ op: prDraftRequestSchema.shape.op, value: appliedPrSchema }),
+  z.object({ op: prCloseRequestSchema.shape.op, value: appliedPrSchema }),
   z.object({
     op: commentUpsertRequestSchema.shape.op,
     value: appliedSchema.extend({ comment: commentRecordSchema }),

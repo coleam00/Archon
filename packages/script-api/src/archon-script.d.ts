@@ -988,6 +988,56 @@ declare module 'archon:script' {
         };
       };
     };
+    'pr.close': {
+      readonly request: {
+        readonly ref: {
+          readonly repo: {
+            readonly host: string;
+            readonly path: string;
+            readonly hostClaim?: true;
+          };
+          readonly number: number;
+        };
+      };
+      readonly result: {
+        readonly target: {
+          readonly repo: {
+            readonly host: string;
+            readonly path: string;
+            readonly hostClaim?: true;
+          };
+          readonly number: number;
+        } | {
+          readonly host: string;
+          readonly path: string;
+          readonly hostClaim?: true;
+        };
+        readonly outcome: 'applied';
+        readonly changed: boolean;
+        readonly pr: {
+          readonly repo: {
+            readonly host: string;
+            readonly path: string;
+            readonly hostClaim?: true;
+          };
+          readonly number: number;
+          readonly schemaVersion: 1;
+          readonly url: string;
+          readonly head: string;
+          readonly base: string;
+          readonly is_draft: boolean;
+          readonly state: 'open' | 'closed' | 'merged';
+          readonly head_repo: {
+            readonly host: string;
+            readonly path: string;
+            readonly hostClaim?: true;
+          } | null;
+          readonly head_revision: string | null;
+          readonly base_revision: string | null;
+          readonly maintainer_can_modify: boolean | null;
+        };
+      };
+    };
     'comment.upsert': {
       readonly request: {
         readonly ref: {
@@ -1636,7 +1686,7 @@ declare module 'archon:script' {
       readonly exitCode?: number | null;
     };
     readonly mutation?: {
-      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body' | 'attachment.put';
+      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'pr.close' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body' | 'attachment.put';
       readonly target: {
         readonly repo: {
           readonly host: string;
@@ -1729,7 +1779,7 @@ declare module 'archon:script' {
         readonly descriptionDigest: string;
       };
     } | {
-      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body' | 'attachment.put';
+      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'pr.close' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body' | 'attachment.put';
       readonly target: {
         readonly repo: {
           readonly host: string;
@@ -1836,7 +1886,7 @@ declare module 'archon:script' {
       };
       readonly leaveBehind: string;
     } | {
-      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body' | 'attachment.put';
+      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'pr.close' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body' | 'attachment.put';
       readonly target: {
         readonly repo: {
           readonly host: string;
