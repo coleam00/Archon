@@ -41,16 +41,15 @@ import {
   checkoutHandoffSchema,
   forgeRefusalSchema,
   type ForgeRefusal,
+  type StartLimit,
 } from '@archon/workflows/schemas/resource-start';
 import {
-  startLimitGrantRecordSchema,
-  startLimitRecordSchema,
   startLimitRefusal,
   startLimitStanding,
-  startLimitWindow,
-  type StartLimitRecord,
+  storedStartLimitSchema,
   type StartLimitRow,
 } from '@archon/workflows/start-limit';
+import { lastStartLimitReset } from './start-limit-resets';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDialect } from './connection';
 import {
@@ -360,8 +359,6 @@ function storedLimitFields(
     ...(typeof grantsLimit === 'string' ? { grants: grantsLimit } : {}),
   };
 }
-
-const storedStartLimitSchema = startLimitRecordSchema.omit({ window: true });
 
 function withEventInputs(
   stored: ResourceStartBindingIntent,
@@ -834,11 +831,12 @@ async function namedItem(
 interface StartLimitRequestRow {
   id: string;
   status: StartLimitRow['status'];
+  admitted_at: string | Date | null;
   start_limit: unknown;
   grants_limit: unknown;
 }
 
-const startLimitRowsSql = `SELECT id, status, start_limit, grants_limit
+const startLimitRowsSql = `SELECT id, status, admitted_at, start_limit, grants_limit
        FROM remote_agent_resource_start_requests
       WHERE item_id = $1 AND (start_limit IS NOT NULL OR grants_limit IS NOT NULL)
       ORDER BY queue_position`;
@@ -846,31 +844,13 @@ const startLimitRowsSql = `SELECT id, status, start_limit, grants_limit
 function startLimitRow(row: StartLimitRequestRow): StartLimitRow {
   return {
     status: row.status,
+    admittedAt: row.admitted_at == null ? null : toHydratedTimestamp(row.admitted_at).toISOString(),
     counted:
       row.start_limit == null
         ? null
-        : startLimitRecordSchema.parse(parseStoredJson(row.start_limit)),
-    grant:
-      row.grants_limit == null
-        ? null
-        : startLimitGrantRecordSchema.parse(parseStoredJson(row.grants_limit)),
+        : storedStartLimitSchema.parse(parseStoredJson(row.start_limit)),
+    grant: typeof row.grants_limit === 'string' ? row.grants_limit : null,
   };
-}
-
-/** When a run of `workflow` last completed on the item, or null when none has. */
-async function lastCompletion(
-  query: Query,
-  itemId: string,
-  workflow: string | undefined
-): Promise<string | null> {
-  if (workflow === undefined) return null;
-  const found = await query<{ completed_at: string | Date | null }>(
-    `SELECT MAX(completed_at) AS completed_at FROM remote_agent_workflow_runs
-      WHERE item_id = $1 AND workflow_name = $2 AND status = 'completed'`,
-    [itemId, workflow]
-  );
-  const at = found.rows[0]?.completed_at;
-  return at == null ? null : toHydratedTimestamp(at).toISOString();
 }
 
 /**
@@ -878,46 +858,30 @@ async function lastCompletion(
  * transaction after `lockAdmission`, so two starts cannot both take the last one. Returns
  * what the start's request records, or why it is refused. A limited start on no item is
  * refused: the count is per item, and letting it through would start it without a limit.
- * A grant on no item raises nothing. The reset run's spec for a grant is the one the
- * item's latest limited request recorded under that name.
+ * A grant on no item raises nothing.
  */
 async function countStartLimits(
   query: Query,
   item: { id: string; key: string } | null,
-  limit: ResourceStartBindingIntent['limit'],
+  limit: StartLimit | undefined,
   grants: string | undefined
 ): Promise<StartLimitColumns | { refused: string }> {
-  if (limit === undefined && grants === undefined) return { startLimit: null, grantsLimit: null };
-  if (item === null) {
-    if (limit === undefined) return { startLimit: null, grantsLimit: null };
+  const grantsLimit = item === null ? null : (grants ?? null);
+  if (limit === undefined) return { startLimit: null, grantsLimit };
+  if (item === null)
     return {
       refused: `Start limit '${limit.name}' counts starts per item, and this start names no item.`,
     };
-  }
   const rows = (await query<StartLimitRequestRow>(startLimitRowsSql, [item.id])).rows.map(
     startLimitRow
   );
-  let startLimit: string | null = null;
-  if (limit !== undefined) {
-    const standing = startLimitStanding(
-      limit,
-      rows,
-      await lastCompletion(query, item.id, limit.resetOn)
-    );
-    if (standing.left === 0) return { refused: startLimitRefusal(standing, item.key) };
-    startLimit = JSON.stringify({ ...limit, window: standing.since });
-  }
-  let grantsLimit: string | null = null;
-  if (grants !== undefined) {
-    const spec = [...rows].reverse().find(row => row.counted?.name === grants)?.counted;
-    const window = startLimitWindow(
-      grants,
-      rows,
-      await lastCompletion(query, item.id, spec?.resetOn)
-    );
-    grantsLimit = JSON.stringify({ name: grants, window });
-  }
-  return { startLimit, grantsLimit };
+  const standing = startLimitStanding(
+    limit,
+    rows,
+    await lastStartLimitReset(query, item.id, limit.resetOn)
+  );
+  if (standing.left === 0) return { refused: startLimitRefusal(standing, item.key) };
+  return { startLimit: JSON.stringify(limit), grantsLimit };
 }
 
 /** See `IResourceStartStore.readItemStartLimits`. Each limit stands by its latest recorded spec. */
@@ -927,7 +891,7 @@ export async function readItemStartLimits(itemId: string): Promise<ItemStartLimi
   const found = (await query<StartLimitRequestRow>(startLimitRowsSql, [itemId])).rows;
   const rows = found.map(startLimitRow);
   const countedUnder: Record<string, string> = {};
-  const specs = new Map<string, StartLimitRecord>();
+  const specs = new Map<string, StartLimit>();
   found.forEach((request, index) => {
     const counted = rows[index]?.counted;
     if (!counted) return;
@@ -937,7 +901,9 @@ export async function readItemStartLimits(itemId: string): Promise<ItemStartLimi
   });
   const limits: ItemStartLimits['limits'] = [];
   for (const spec of specs.values())
-    limits.push(startLimitStanding(spec, rows, await lastCompletion(query, itemId, spec.resetOn)));
+    limits.push(
+      startLimitStanding(spec, rows, await lastStartLimitReset(query, itemId, spec.resetOn))
+    );
   return { limits, countedUnder };
 }
 

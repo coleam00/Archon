@@ -662,6 +662,13 @@ export class SqliteAdapter implements IDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_item_asks_open ON remote_agent_item_asks(item_id, workflow_name) WHERE closed_as IS NULL;
       CREATE INDEX IF NOT EXISTS idx_item_asks_run_id ON remote_agent_item_asks(run_id);
+      -- Start-limit resets; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_start_limit_resets (
+        item_id TEXT NOT NULL REFERENCES remote_agent_items(id),
+        workflow_name TEXT NOT NULL,
+        reset_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_start_limit_resets_item ON remote_agent_start_limit_resets(item_id, workflow_name);
       -- Waits a completed run left on its item; see migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_item_waits (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),

@@ -788,9 +788,9 @@ A loop that spans runs needs a round limit: a check returns a change to the buil
 }
 ```
 
-- **What counts.** Admission counts, per item, the starts it admitted under `name` and those still queued, since a queued start is already promised. A start that was skipped, refused or withdrawn does not count. The count lives in the item's start requests, so it survives restarts. Every binding file that names the same `name` counts against one number.
+- **What counts.** Admission counts, per item, the starts it admitted under `name` and those still queued, since a queued start is already promised. A start that waited in the queue across a reset counts in the new count once it runs. A start that was skipped, refused or withdrawn does not count. The count lives in the item's start requests, so it survives restarts. Every binding file that names the same `name` counts against one number.
 - **At the limit.** Admission refuses the next start, in the transaction that would admit it, and writes no request and no run. The binding is `rejected` with a reason that names the limit, the item and how many starts were used; `archon trigger list` and `archon trigger inspect <receipt-id>` show it. The engine writes no ask.
-- **Reset.** When a run of `resetOn` completes on the item, the count starts again. Without `resetOn` it never resets by itself. Cleaning up that run later does not bring earlier rounds back.
+- **Reset.** When a run of `resetOn` completes on the item, the count starts again, and so do the grants: only starts and grants admitted at or after that completion count. Without `resetOn` it never resets by itself. The completion is recorded apart from the run, so cleaning up that run later does not bring earlier rounds back. SQLite keeps whole seconds, so a start admitted in the same second as the reset counts after it.
 - **One more round.** An asks-settled binding with `"grants": "<name>"` allows one more start on the item each time it starts: the answer that settles the asks is how an operator raises the limit for that item alone. No answer text is read; the option the binding matches on is the decision. Only an asks-settled trigger file may set `grants`.
 - **No item.** The count is per item, so a limited start that names no item is refused, and the file store, which keeps no items, refuses every limited start.
 

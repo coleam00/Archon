@@ -4,46 +4,41 @@
  * what admission will allow.
  *
  * The count is derived from the item's start requests, never kept as a counter. A request
- * a limited binding made records the limit it counted under (`StartLimitRecord`); a
- * request a granting binding made records the limit it raised (`StartLimitGrantRecord`).
- * Each records the window it was made in: the completion time of the limit's `resetOn`
- * run on the item when the request was written, or null before any. The current window
- * is the latest of the newest such completion and every window a request recorded, so
- * deleting the reset run (old runs are cleaned up) never brings earlier rounds back. A
- * request counts only in the window it recorded, which keeps the count off clock
- * comparisons between rows written at second precision.
+ * a limited binding made records the limit it counted under; a request a granting binding
+ * made records the name of the limit it raised. The count runs `since` the limit's last
+ * reset: the latest completion of its `resetOn` workflow on the item, which the store
+ * also records apart from the run row so run cleanup cannot undo it.
+ *
+ * A queued start always counts: it is a start already promised, and the queue admits it
+ * later without asking again, whenever that is. An admitted start or grant counts when it
+ * was admitted at or after `since`, so a start that waited in the queue across a reset
+ * counts in the new count once it runs. Times compare at the store's precision; SQLite
+ * keeps whole seconds, so a start admitted in the same second as a reset counts after it,
+ * which can refuse one start early but never lets one through late.
  */
 import { z } from 'zod';
 import { startLimitSchema, type StartLimit } from './schemas/resource-start';
 
 /**
- * What a limited start request records. Stored as JSON that more than one binary version
- * reads, so unknown keys are stripped, never refused.
+ * The limit a start request counted under, as stored. More than one binary version reads
+ * it, so unknown keys are stripped, never refused.
  */
-export const startLimitRecordSchema = z.object({
-  ...startLimitSchema.shape,
-  window: z.string().nullable(),
-});
-export type StartLimitRecord = z.infer<typeof startLimitRecordSchema>;
-
-/** What a granting start request records: the limit it raised and the window it raised it in. */
-export const startLimitGrantRecordSchema = z.object({
-  name: z.string().min(1),
-  window: z.string().nullable(),
-});
-export type StartLimitGrantRecord = z.infer<typeof startLimitGrantRecordSchema>;
+export const storedStartLimitSchema = z.object(startLimitSchema.shape);
 
 /** One start request on the item, as the count reads it. */
 export interface StartLimitRow {
   status: 'queued' | 'admitted' | 'skipped' | 'withdrawn';
-  counted: StartLimitRecord | null;
-  grant: StartLimitGrantRecord | null;
+  /** When the request was admitted (ISO), or null while it was not. */
+  admittedAt: string | null;
+  counted: StartLimit | null;
+  /** The name of the limit this start raised, or null. */
+  grant: string | null;
 }
 
 /**
  * A limit's standing on one item. `allowed` is `starts` plus `granted`; `left` is how many
- * more starts admission allows now. `since` is the window the count is in: when a run of
- * `resetOn` last completed on the item, or null when the count has never reset.
+ * more starts admission allows now. `since` is the last reset: when a run of `resetOn` last
+ * completed on the item, or null when the count has never reset.
  */
 export const startLimitStandingSchema = z.object({
   name: z.string(),
@@ -56,53 +51,22 @@ export const startLimitStandingSchema = z.object({
 });
 export type StartLimitStanding = z.infer<typeof startLimitStandingSchema>;
 
-function sameWindow(a: string | null, b: string | null): boolean {
-  return a === b || (a !== null && b !== null && Date.parse(a) === Date.parse(b));
+function admittedSince(row: StartLimitRow, since: string | null): boolean {
+  if (row.status !== 'admitted' || row.admittedAt === null) return false;
+  return since === null || Date.parse(row.admittedAt) >= Date.parse(since);
 }
 
-function later(a: string | null, b: string | null): string | null {
-  if (a === null) return b;
-  if (b === null) return a;
-  return Date.parse(b) > Date.parse(a) ? b : a;
-}
-
-/** The window limit `name` counts in now; see the module comment. */
-export function startLimitWindow(
-  name: string,
-  rows: readonly StartLimitRow[],
-  resetCompletedAt: string | null
-): string | null {
-  let window = resetCompletedAt;
-  for (const row of rows) {
-    if (row.counted?.name === name) window = later(window, row.counted.window);
-    if (row.grant?.name === name) window = later(window, row.grant.window);
-  }
-  return window;
-}
-
-/**
- * Where `limit` stands on an item with start requests `rows`. A queued start counts: it is
- * a start already promised, and the queue admits it without asking again. A grant counts
- * once its start is admitted.
- */
+/** Where `limit` stands on an item with start requests `rows`, counting since `since`. */
 export function startLimitStanding(
   limit: StartLimit,
   rows: readonly StartLimitRow[],
-  resetCompletedAt: string | null
+  since: string | null
 ): StartLimitStanding {
-  const since = startLimitWindow(limit.name, rows, resetCompletedAt);
   const used = rows.filter(
     row =>
-      row.counted?.name === limit.name &&
-      sameWindow(row.counted.window, since) &&
-      (row.status === 'admitted' || row.status === 'queued')
+      row.counted?.name === limit.name && (row.status === 'queued' || admittedSince(row, since))
   ).length;
-  const granted = rows.filter(
-    row =>
-      row.grant?.name === limit.name &&
-      sameWindow(row.grant.window, since) &&
-      row.status === 'admitted'
-  ).length;
+  const granted = rows.filter(row => row.grant === limit.name && admittedSince(row, since)).length;
   return {
     name: limit.name,
     starts: limit.starts,
@@ -117,9 +81,9 @@ export function startLimitStanding(
 /** Why admission refused a start at its limit, written where `trigger inspect` shows it. */
 export function startLimitRefusal(standing: StartLimitStanding, itemKey: string): string {
   const allowed = standing.starts + standing.granted;
-  const window =
+  const since =
     standing.since === null
       ? ''
       : ` since '${standing.resetOn ?? 'the reset'}' last completed at ${standing.since}`;
-  return `Start limit '${standing.name}' reached on item '${itemKey}': ${String(standing.used)} of ${String(allowed)} starts used${window}. An asks-settled binding that grants '${standing.name}' allows one more.`;
+  return `Start limit '${standing.name}' reached on item '${itemKey}': ${String(standing.used)} of ${String(allowed)} starts used${since}. An asks-settled binding that grants '${standing.name}' allows one more.`;
 }

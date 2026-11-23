@@ -909,6 +909,18 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_asks (
   replaced_by_run_id TEXT
 );
 
+-- Start-limit resets (#6109): a run completed on an item that has a start limit or a grant,
+-- recorded in the write that completes it. A limit whose resetOn names the workflow starts
+-- its count again from reset_at. Kept apart from the run row, which run cleanup deletes, so
+-- deleting the run does not bring earlier rounds back. Rows are only inserted.
+CREATE TABLE IF NOT EXISTS remote_agent_start_limit_resets (
+  item_id UUID NOT NULL REFERENCES remote_agent_items(id),
+  workflow_name TEXT NOT NULL,
+  reset_at TIMESTAMP WITH TIME ZONE NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_start_limit_resets_item
+  ON remote_agent_start_limit_resets(item_id, workflow_name);
+
 -- Waits: what a completed run said its item now waits for outside Archon (returns.waits).
 -- A row opens in the write that completes the run and closes once: met by an accepted
 -- event (met_by_* name the receipt binding it started, written in the same transaction),

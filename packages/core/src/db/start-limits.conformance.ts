@@ -13,72 +13,88 @@ import {
   resourceStartFixtures,
   type WorkflowStoreHarness,
 } from '@archon/workflows/store-conformance';
+import type { IDatabase } from './adapters/types';
 
 const LIMIT = { name: 'check', starts: 3, resetOn: 'plan' };
 
-export function describeSqlStartLimitConformance(
-  makeHarness: () => Promise<WorkflowStoreHarness>
-): void {
+type Harness = WorkflowStoreHarness & { db: IDatabase };
+type LimitFields = Pick<ResourceStartBindingIntent, 'limit' | 'grants'>;
+
+/**
+ * Starts on items through the real receipt, preparation and admission path. SQLite keeps
+ * whole seconds and a start admitted in the same second as a reset counts after it, so a
+ * test ages the admissions it means to come before a reset (`age`).
+ */
+function starts(harness: Harness) {
+  const { store, db } = harness;
+  const { launch } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
+  const start = async (itemKey: string | undefined, fields: LimitFields) => {
+    const identity = { receiptId: randomUUID(), bindingId: 'binding', ownerId: 'owner' };
+    await store.acceptStartReceipt({
+      receipt: {
+        id: identity.receiptId,
+        sourceInstanceId: 'source',
+        deliveryId: null,
+        contentDigest: identity.receiptId,
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+        ...(itemKey === undefined ? {} : { itemKey }),
+      },
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: identity.bindingId,
+          bindingRevision: null,
+          hostId: 'host',
+          runAsUserId: 'operator',
+          resource: 'resource',
+          overlap: 'queue',
+          launch: { cwd: '/c', workflowName: 'w', inputs: {}, isolation: { kind: 'in-place' } },
+          ...fields,
+        },
+      ],
+    });
+    await store.claimStartBindingPreparation(identity);
+    const result = await store.completeStartBindingPreparation({ ...identity, launch: launch() });
+    return { result, receiptId: identity.receiptId };
+  };
+  const finish = async (runId: string) => {
+    await store.claimPendingWorkflowRun(runId);
+    await store.completeWorkflowRun(runId, { duration_ms: 1 });
+  };
+  // Each started run ends before the next start, so none waits behind it.
+  const admitted = async (itemKey: string, fields: LimitFields = { limit: LIMIT }) => {
+    const { result } = await start(itemKey, fields);
+    if (result?.status !== 'admitted') throw new Error(`Expected admitted, got ${result?.status}`);
+    await finish(result.runId);
+    return result.runId;
+  };
+  /** A run of `plan` completed on the item: the reset `LIMIT` names. */
+  const plan = async (itemKey: string) => {
+    const run = await store.createWorkflowRun({
+      workflow_name: 'plan',
+      user_message: '',
+      codebase_id: CONFORMANCE_CODEBASE_ID,
+      item_key: itemKey,
+    });
+    await finish(run.id);
+    return { runId: run.id, itemId: run.item_id ?? '' };
+  };
+  const age = () =>
+    db.query(
+      "UPDATE remote_agent_resource_start_requests SET admitted_at = '2020-01-01 00:00:00' WHERE admitted_at IS NOT NULL"
+    );
+  const standing = async (itemId: string) => (await store.readItemStartLimits(itemId)).limits[0];
+  return { start, finish, admitted, plan, age, standing };
+}
+
+export function describeSqlStartLimitConformance(makeHarness: () => Promise<Harness>): void {
   test('a limited binding starts its stage three times on an item, then only after a grant or a reset', async () => {
     const harness = await makeHarness();
     try {
       const { store } = harness;
-      const { launch } = resourceStartFixtures(
-        CONFORMANCE_CODEBASE_ID,
-        CONFORMANCE_CONVERSATION_ID
-      );
-      const start = async (
-        itemKey: string | undefined,
-        fields: Pick<ResourceStartBindingIntent, 'limit' | 'grants'>
-      ) => {
-        const identity = { receiptId: randomUUID(), bindingId: 'binding', ownerId: 'owner' };
-        await store.acceptStartReceipt({
-          receipt: {
-            id: identity.receiptId,
-            sourceInstanceId: 'source',
-            deliveryId: null,
-            contentDigest: identity.receiptId,
-            receivedAt: new Date().toISOString(),
-            occurredAt: null,
-            sourceActor: null,
-            ...(itemKey === undefined ? {} : { itemKey }),
-          },
-          outcome: 'matched',
-          bindings: [
-            {
-              bindingId: identity.bindingId,
-              bindingRevision: null,
-              hostId: 'host',
-              runAsUserId: 'operator',
-              resource: 'resource',
-              overlap: 'queue',
-              launch: { cwd: '/c', workflowName: 'w', inputs: {}, isolation: { kind: 'in-place' } },
-              ...fields,
-            },
-          ],
-        });
-        await store.claimStartBindingPreparation(identity);
-        const result = await store.completeStartBindingPreparation({
-          ...identity,
-          launch: launch(),
-        });
-        return { result, receiptId: identity.receiptId };
-      };
-      // Each started run ends before the next start, so none waits behind it.
-      const finish = async (runId: string) => {
-        await store.claimPendingWorkflowRun(runId);
-        await store.completeWorkflowRun(runId, { duration_ms: 1 });
-      };
-      const admitted = async (
-        itemKey: string,
-        fields: Pick<ResourceStartBindingIntent, 'limit' | 'grants'> = { limit: LIMIT }
-      ) => {
-        const { result } = await start(itemKey, fields);
-        if (result?.status !== 'admitted')
-          throw new Error(`Expected admitted, got ${result?.status}`);
-        await finish(result.runId);
-        return result.runId;
-      };
+      const { start, admitted, plan, age, standing } = starts(harness);
       const itemId = async (key: string) =>
         (
           await store.createWorkflowRun({
@@ -106,46 +122,30 @@ export function describeSqlStartLimitConformance(
       await admitted('b');
 
       const a = await itemId('a');
-      const standing = await store.readItemStartLimits(a);
-      expect(standing.limits).toEqual([
+      const read = await store.readItemStartLimits(a);
+      expect(read.limits).toEqual([
         { name: 'check', starts: 3, resetOn: 'plan', since: null, granted: 0, used: 3, left: 0 },
       ]);
-      expect(Object.keys(standing.countedUnder).sort()).toEqual([...rounds].sort());
+      expect(Object.keys(read.countedUnder).sort()).toEqual([...rounds].sort());
 
       // An operator's answer starts a granting binding: one more start, then the limit again.
       await admitted('a', { grants: 'check' });
       await admitted('a');
       expect((await start('a', { limit: LIMIT })).result?.status).toBe('refused');
-      expect((await store.readItemStartLimits(a)).limits[0]).toMatchObject({
-        granted: 1,
-        used: 4,
-        left: 0,
-      });
-      expect((await store.readItemStartLimits(await itemId('b'))).limits[0]).toMatchObject({
-        granted: 0,
-        used: 1,
-        left: 2,
-      });
+      expect(await standing(a)).toMatchObject({ granted: 1, used: 4, left: 0 });
+      expect(await standing(await itemId('b'))).toMatchObject({ granted: 0, used: 1, left: 2 });
 
-      // The reset workflow completing on the item starts the count again, grants included.
-      const plan = await store.createWorkflowRun({
-        workflow_name: 'plan',
-        user_message: '',
-        codebase_id: CONFORMANCE_CODEBASE_ID,
-        item_key: 'a',
-      });
-      await finish(plan.id);
-      await admitted('a');
-      const reset = (await store.readItemStartLimits(a)).limits[0];
-      expect(reset).toMatchObject({ granted: 0, used: 1, left: 2 });
-      expect(reset?.since).not.toBeNull();
-      // Cleaning up the reset run does not bring the earlier rounds back.
+      // The reset workflow completing on the item starts the count again, grants included,
+      // and cleaning that run up before any later start does not bring the rounds back.
+      await age();
+      const reset = await plan('a');
+      const since = (await standing(a))?.since;
+      expect(since).not.toBeNull();
       const { deleteWorkflowRun } = await import('./workflow-run-writes');
-      await deleteWorkflowRun(plan.id);
-      expect((await store.readItemStartLimits(a)).limits[0]).toMatchObject({
-        since: reset?.since,
-        used: 1,
-      });
+      await deleteWorkflowRun(reset.runId);
+      expect(await standing(a)).toMatchObject({ since, granted: 0, used: 0, left: 3 });
+      await admitted('a');
+      expect(await standing(a)).toMatchObject({ used: 1, left: 2 });
 
       // The count is per item, so a limited start on no item is refused, not let through.
       expect((await start(undefined, { limit: LIMIT })).result).toEqual({
@@ -157,51 +157,58 @@ export function describeSqlStartLimitConformance(
     }
   });
 
+  test('a start that waited in the queue across a reset counts in the new count', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const { start, finish, admitted, plan, age, standing } = starts(harness);
+      // The first start holds the resource, so the second waits behind it.
+      const first = (await start('r', { limit: LIMIT })).result;
+      const waiting = (await start('r', { limit: LIMIT })).result;
+      if (first?.status !== 'admitted' || waiting?.status !== 'queued')
+        throw new Error('Expected one admitted start and one queued');
+      await age();
+      const { itemId } = await plan('r');
+      // Only the waiting start is in the new count: it is promised, and it runs after the reset.
+      expect(await standing(itemId)).toMatchObject({ used: 1, left: 2 });
+      await finish(first.runId);
+      const drained = await store.drainResourceStarts({ resource: 'resource', hostId: 'host' });
+      expect(drained).toEqual([expect.objectContaining({ status: 'admitted' })]);
+      expect(await standing(itemId)).toMatchObject({ used: 1, left: 2 });
+      await finish(waiting.requestId);
+      await admitted('r');
+      await admitted('r');
+      expect((await start('r', { limit: LIMIT })).result?.status).toBe('refused');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("a grant made before the limited binding's first start on the item counts", async () => {
+    const harness = await makeHarness();
+    try {
+      const { admitted, plan, standing } = starts(harness);
+      const { itemId } = await plan('g');
+      await admitted('g', { grants: 'check' });
+      await admitted('g');
+      expect(await standing(itemId)).toMatchObject({ granted: 1, used: 1, left: 3 });
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('a queued start holds its place in the count until it is withdrawn', async () => {
     const harness = await makeHarness();
     try {
       const { store } = harness;
-      const { launch } = resourceStartFixtures(
-        CONFORMANCE_CODEBASE_ID,
-        CONFORMANCE_CONVERSATION_ID
-      );
+      const { start } = starts(harness);
       const limit = { name: 'check', starts: 2 };
-      const start = async () => {
-        const identity = { receiptId: randomUUID(), bindingId: 'binding', ownerId: 'owner' };
-        await store.acceptStartReceipt({
-          receipt: {
-            id: identity.receiptId,
-            sourceInstanceId: 'source',
-            deliveryId: null,
-            contentDigest: identity.receiptId,
-            receivedAt: new Date().toISOString(),
-            occurredAt: null,
-            sourceActor: null,
-            itemKey: 'q',
-          },
-          outcome: 'matched',
-          bindings: [
-            {
-              bindingId: identity.bindingId,
-              bindingRevision: null,
-              hostId: 'host',
-              runAsUserId: 'operator',
-              resource: 'resource',
-              overlap: 'queue',
-              launch: { cwd: '/c', workflowName: 'w', inputs: {}, isolation: { kind: 'in-place' } },
-              limit,
-            },
-          ],
-        });
-        await store.claimStartBindingPreparation(identity);
-        return store.completeStartBindingPreparation({ ...identity, launch: launch() });
-      };
-      expect((await start())?.status).toBe('admitted');
-      const waiting = await start();
+      expect((await start('q', { limit })).result?.status).toBe('admitted');
+      const waiting = (await start('q', { limit })).result;
       if (waiting?.status !== 'queued') throw new Error('Expected the second start to queue');
-      expect((await start())?.status).toBe('refused');
+      expect((await start('q', { limit })).result?.status).toBe('refused');
       await store.withdrawQueuedResourceStart(waiting.requestId);
-      expect((await start())?.status).toBe('queued');
+      expect((await start('q', { limit })).result?.status).toBe('queued');
     } finally {
       await harness.close();
     }
