@@ -176,10 +176,17 @@ export const workflowHelp: HelpGroup = {
         },
         { spec: '--json', description: 'One JSON document per pass' },
         {
+          spec: '--sources <file>',
+          description:
+            'The ARCHON_WEBHOOK_SOURCES file for this process only; install records\n' +
+            "the installing shell's ARCHON_WEBHOOK_SOURCES in the job this way",
+        },
+        {
           spec: 'schedule install|remove|status',
           description:
             "Manage this install's wake --watch job (launchd, systemd user timer,\n" +
-            'or Task Scheduler); status says whether it is installed and loaded',
+            'or Task Scheduler); status says whether it is installed and loaded,\n' +
+            "and how the job's watch ended its last pass",
         },
         {
           spec: '--interval <seconds>',

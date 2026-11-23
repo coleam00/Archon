@@ -7,7 +7,7 @@
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
@@ -22,7 +22,7 @@ import {
 } from '../test-support/workflow-store';
 import { installNativeSchedule, type NativeScheduleOptions } from '../triggers/native-schedule';
 import { triggerCommand } from './trigger';
-import { workflowWakeScheduleConfig } from './wake-schedule';
+import { wakeLastPassPath, workflowWakeScheduleConfig, writeWakeLastPass } from './wake-schedule';
 
 const tempRoots = trackTempRoots();
 const previousHome = process.env.ARCHON_HOME;
@@ -337,4 +337,36 @@ test('names the observing sources nothing watches with the fix, and the watcher 
     unwatched: false,
   });
   expect(watched.error).toBeUndefined();
+
+  // The job discards the watcher's output; a failed last pass is reported, still not an error.
+  const lastPass = wakeLastPassPath();
+  await mkdir(dirname(lastPass), { recursive: true });
+  const failed = {
+    at: '2026-11-23T21:30:00.000Z',
+    pid: 1,
+    ok: false,
+    parts: {
+      observe: {
+        at: '2026-11-23T21:30:00.000Z',
+        ok: false,
+        errors: ["Webhook source 'github' resolved an unknown run-as user"],
+      },
+    },
+  };
+  await writeWakeLastPass(lastPass, failed);
+  const failing = await check();
+  expect(failing.observing).toEqual({
+    sources: observed,
+    watcher: { installed: true, registered: true, lastPass: failed },
+    unwatched: false,
+    problem:
+      "The wake watcher runs, but its last pass, at 2026-11-23T21:30:00.000Z, failed: Webhook source 'github' resolved an unknown run-as user.",
+  });
+  expect(failing.error).toBeUndefined();
+
+  // With the sources file only in the job (passed with --sources), check reads the file the
+  // job's watcher recorded.
+  delete process.env.ARCHON_WEBHOOK_SOURCES;
+  await writeWakeLastPass(lastPass, { ...failed, ok: true, parts: {}, sources });
+  expect((await check()).observing).toMatchObject({ sources: observed, unwatched: false });
 });

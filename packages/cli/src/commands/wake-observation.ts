@@ -13,7 +13,13 @@ import {
   NativeScheduleUnsupportedError,
   type NativeScheduleOptions,
 } from '../triggers/native-schedule';
-import { WAKE_SCHEDULE_INSTALL_COMMAND, workflowWakeScheduleTarget } from './wake-schedule';
+import {
+  describeWakeLastPass,
+  readWakeLastPass,
+  WAKE_SCHEDULE_INSTALL_COMMAND,
+  wakeLastPassPath,
+  workflowWakeScheduleTarget,
+} from './wake-schedule';
 import type { WakeObservation } from './workflow-continuations';
 
 /**
@@ -21,9 +27,9 @@ import type { WakeObservation } from './workflow-continuations';
  * them; `undefined` when the variable is not set.
  */
 async function loadObservingSources(
-  host: WorkflowHost
+  host: WorkflowHost,
+  configPath = process.env.ARCHON_WEBHOOK_SOURCES
 ): Promise<WebhookSourcePluginHost | undefined> {
-  const configPath = process.env.ARCHON_WEBHOOK_SOURCES;
   if (!configPath) return undefined;
   const { loadWebhookSourcePlugins } = await import('@archon/core/workflows/source-plugins');
   const { store } = host.deps;
@@ -41,9 +47,15 @@ async function loadObservingSources(
   );
 }
 
-/** The sources that observe, as `trigger check` reports them; none when nothing observes. */
+/**
+ * The sources that observe, as `trigger check` reports them; none when nothing observes.
+ * Without ARCHON_WEBHOOK_SOURCES here, the file the installed job's watcher last loaded is
+ * read: install passes the installing shell's file to the job with `--sources`.
+ */
 async function observingSources(host: WorkflowHost): Promise<readonly ObservingSource[]> {
-  return (await loadObservingSources(host))?.observing ?? [];
+  const configPath =
+    process.env.ARCHON_WEBHOOK_SOURCES || (await readWakeLastPass(wakeLastPassPath()))?.sources;
+  return (await loadObservingSources(host, configPath))?.observing ?? [];
 }
 
 /**
@@ -61,9 +73,24 @@ export async function observingReport(host: WorkflowHost, schedules: NativeSched
   if (sources.length === 0) return undefined;
   const server = `an Archon server started with ARCHON_WEBHOOK_SOURCES runs for this install`;
   try {
-    const job = await inspectNativeSchedule(workflowWakeScheduleTarget(), schedules);
+    const target = workflowWakeScheduleTarget();
+    const job = await inspectNativeSchedule(target, schedules);
     const watcher = { installed: job !== undefined, registered: job?.registered ?? false };
-    if (watcher.registered) return { sources, watcher, unwatched: false };
+    if (watcher.registered) {
+      // The job discards the watcher's output; its last pass is the one sign of a watcher
+      // that runs but fails every pass, for example on a binding's unknown run-as user.
+      const lastPass = await readWakeLastPass(wakeLastPassPath(target));
+      return {
+        sources,
+        watcher: { ...watcher, ...(lastPass ? { lastPass } : {}) },
+        unwatched: false,
+        ...(lastPass && (!lastPass.ok || lastPass.lastFailure)
+          ? {
+              problem: `The wake watcher runs, but ${describeWakeLastPass(lastPass).replace(/^Its/, 'its')}`,
+            }
+          : {}),
+      };
+    }
     return {
       sources,
       watcher,

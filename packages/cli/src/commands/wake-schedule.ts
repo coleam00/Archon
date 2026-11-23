@@ -10,6 +10,8 @@
  * exited, for any reason, is started again.
  */
 import { createHash } from 'node:crypto';
+import { readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { getArchonHome } from '@archon/paths';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
@@ -43,9 +45,22 @@ export function workflowWakeScheduleConfig(
 ): NativeScheduleConfig {
   const { id, archonHome } = workflowWakeScheduleTarget();
   const [executable, ...prefix] = cliProgramArguments();
+  // The job sets only ARCHON_HOME and PATH, so the sources file this shell names travels as
+  // an argument. Otherwise the job could read it only from ARCHON_HOME/.env, which every
+  // process on the install loads, a server included, and which wins over a process's own
+  // environment, so a server sharing the home could not leave observing to the job.
+  const sources = process.env.ARCHON_WEBHOOK_SOURCES?.trim();
   return {
     id,
-    programArguments: [executable, ...prefix, 'workflow', 'wake', '--watch', '--json'],
+    programArguments: [
+      executable,
+      ...prefix,
+      'workflow',
+      'wake',
+      '--watch',
+      '--json',
+      ...(sources ? ['--sources', resolve(sources)] : []),
+    ],
     workingDirectory: archonHome,
     archonHome,
     path: process.env.PATH ?? '',
@@ -54,6 +69,66 @@ export function workflowWakeScheduleConfig(
     output: 'discard',
     removeCommand: 'archon workflow wake schedule remove',
   };
+}
+
+/**
+ * What the watcher the job runs recorded about its latest pass. The job discards the
+ * watcher's output, so without this a watcher failing every pass looks installed and
+ * healthy. Each loop of the watch records its own part; `ok` is false when any part failed.
+ * `lastFailure` is this watcher's latest failed pass, kept after later passes succeed: a
+ * long-running watch reuses what it read of an unchanged issue, so a label start it failed
+ * to record fails one pass and then the passes after it report nothing.
+ */
+export interface WakeLastPass {
+  at: string;
+  pid: number;
+  ok: boolean;
+  parts: Partial<Record<'wake' | 'observe', { at: string; ok: boolean; errors: string[] }>>;
+  lastFailure?: { at: string; errors: string[] };
+  /** The sources file the watcher loaded, so `trigger check` can read what the job observes. */
+  sources?: string;
+}
+
+/** Where a watcher that follows the installed job records its last pass. */
+export function wakeLastPassPath(
+  target: { id: string; archonHome: string } = workflowWakeScheduleTarget()
+): string {
+  return join(target.archonHome, 'schedules', `${target.id}.last-pass.json`);
+}
+
+/** The last pass recorded for the installed job, when a watcher has recorded one. */
+export async function readWakeLastPass(
+  path = wakeLastPassPath()
+): Promise<WakeLastPass | undefined> {
+  try {
+    return JSON.parse(await readFile(path, 'utf8')) as WakeLastPass;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Replaces the record whole, so a reader never sees half of one. */
+export async function writeWakeLastPass(path: string, pass: WakeLastPass): Promise<void> {
+  const temporary = `${path}.${String(process.pid)}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(pass)}\n`);
+  await rename(temporary, path);
+}
+
+const failureText = (errors: readonly string[]): string =>
+  errors.join('; ') || 'run archon workflow wake --json to see why';
+
+/** For an operator: when the last pass ran, and when and why this watcher last failed one. */
+export function describeWakeLastPass(pass: WakeLastPass): string {
+  const last = pass.ok
+    ? `Its last pass, at ${pass.at}, succeeded.`
+    : `Its last pass, at ${pass.at}, failed: ${failureText(
+        Object.values(pass.parts).flatMap(part =>
+          part === undefined || part.ok ? [] : part.errors
+        )
+      )}.`;
+  if (pass.ok && pass.lastFailure)
+    return `${last} It failed a pass at ${pass.lastFailure.at}: ${failureText(pass.lastFailure.errors)}. A start that pass could not record is not retried until the watcher restarts.`;
+  return last;
 }
 
 type Values = Record<string, unknown>;
@@ -83,6 +158,7 @@ async function install(config: NativeScheduleConfig): Promise<Outcome> {
 
 async function remove(config: NativeScheduleConfig): Promise<Outcome> {
   const removed = await removeNativeSchedule(config);
+  await unlink(wakeLastPassPath(config)).catch(() => undefined);
   return {
     result: { removed },
     text: removed ? 'Removed the wake watcher job.' : NOT_INSTALLED,
@@ -92,7 +168,13 @@ async function remove(config: NativeScheduleConfig): Promise<Outcome> {
 async function status(config: NativeScheduleConfig): Promise<Outcome> {
   const installed = await inspectNativeSchedule(config);
   if (!installed) return { result: { installed: false }, text: NOT_INSTALLED };
-  const result = { installed: true, path: installed.path, registered: installed.registered };
+  const lastPass = await readWakeLastPass(wakeLastPassPath(config));
+  const result = {
+    installed: true,
+    path: installed.path,
+    registered: installed.registered,
+    ...(lastPass ? { lastPass } : {}),
+  };
   if (!installed.registered)
     return {
       result,
@@ -100,7 +182,10 @@ async function status(config: NativeScheduleConfig): Promise<Outcome> {
         `The wake watcher job is installed, but the scheduler has not loaded it: ${installed.path}. ` +
         'Install it again with the same --interval to load it, or remove it.',
     };
-  return { result, text: `The wake watcher job is installed: ${installed.path}.` };
+  const last = lastPass
+    ? ` ${describeWakeLastPass(lastPass)}`
+    : ' No watcher has recorded a pass yet.';
+  return { result, text: `The wake watcher job is installed: ${installed.path}.${last}` };
 }
 
 const OPERATIONS = { install, remove, status } satisfies Record<
