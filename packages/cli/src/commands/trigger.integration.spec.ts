@@ -1219,6 +1219,7 @@ describe('trigger CLI durable execution', () => {
         acceptReceipt: workflowHost.deps.store.acceptStartReceipt,
         isKnownUser: async id => (await workflowHost.records.users.getUserById(id)) !== null,
         hasDeliveryReceipt: hasStartReceiptForDelivery,
+        getReceipt: workflowHost.deps.store.getStartReceipt,
       });
       const app = new OpenAPIHono();
       registerWebhookSourceRoutes(app, host);
@@ -1411,6 +1412,7 @@ nodes:
         acceptReceipt: workflowHost.deps.store.acceptStartReceipt,
         isKnownUser: async id => !runAsUserRemoved && (await workflowHost.records.users.getUserById(id)) !== null,
         hasDeliveryReceipt: hasStartReceiptForDelivery,
+        getReceipt: workflowHost.deps.store.getStartReceipt,
       });
       const app = new OpenAPIHono();
       registerWebhookSourceRoutes(app, host);

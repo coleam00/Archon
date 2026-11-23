@@ -85,6 +85,7 @@ describe('webhook source plugin host', () => {
       acceptReceipt,
       isKnownUser: mock(async () => true),
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
 
     const result = host.receive('source-1', {
@@ -119,6 +120,7 @@ describe('webhook source plugin host', () => {
       acceptReceipt: async () => ({ receiptId: 'unused', replay: false }),
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     await expect(load).rejects.toThrow(configPath);
     await expect(load).rejects.toThrow('sources.0.observe.everySeconds');
@@ -134,6 +136,7 @@ describe('webhook source plugin host', () => {
       acceptReceipt,
       isKnownUser: mock(async () => true),
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     await expect(
       host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -148,6 +151,7 @@ describe('webhook source plugin host', () => {
       acceptReceipt,
       isKnownUser: mock(async () => false),
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     expect(
       await first.receive('source-1', {
@@ -162,6 +166,7 @@ describe('webhook source plugin host', () => {
       acceptReceipt,
       isKnownUser: mock(async () => false),
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     await expect(
       second.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -183,6 +188,7 @@ describe('webhook source plugin host', () => {
         acceptReceipt,
         isKnownUser: mock(async () => true),
         hasDeliveryReceipt: async () => false,
+        getReceipt: async () => null,
       });
       await expect(
         host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -203,6 +209,7 @@ describe('webhook source plugin host', () => {
       acceptReceipt,
       isKnownUser: mock(async () => true),
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     expect(
       await host.receive('source-1', {
@@ -230,6 +237,7 @@ describe('webhook source plugin host', () => {
       acceptReceipt,
       isKnownUser: mock(async () => true),
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     await expect(
       host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -246,6 +254,7 @@ describe('webhook source plugin host', () => {
       isKnownUser,
       hasDeliveryReceipt: async (sourceInstanceId, deliveryId) =>
         sourceInstanceId === 'source-1' && deliveryId === 'delivery-1',
+      getReceipt: async () => null,
     });
     expect(
       await host.receive('source-1', {
@@ -267,6 +276,7 @@ describe('webhook source plugin host', () => {
       },
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     expect(
       await host.receive('source-1', {
@@ -286,6 +296,7 @@ describe('webhook source plugin host', () => {
       }),
       isKnownUser: mock(async () => true),
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     await expect(
       host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -386,6 +397,7 @@ describe('observing open item waits', () => {
       acceptReceipt,
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     const forge = forgeReader();
     const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
@@ -407,6 +419,7 @@ describe('observing open item waits', () => {
       acceptReceipt,
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     const forge = forgeReader();
     const observer = createItemWaitObserver({ sources, store: waitStore([{}]), forge });
@@ -424,6 +437,7 @@ describe('observing open item waits', () => {
         acceptReceipt: async () => ({ receiptId: 'unused', replay: false }),
         isKnownUser: async () => true,
         hasDeliveryReceipt: async () => false,
+        getReceipt: async () => null,
       });
       const forge = forgeReader();
       const observer = createItemWaitObserver({
@@ -460,6 +474,7 @@ describe('observing open item waits', () => {
       acceptReceipt: async input => ({ receiptId: input.receipt.id, replay: false }),
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     const observer = createItemWaitObserver({
       sources,
@@ -477,6 +492,7 @@ describe('observing open item waits', () => {
       acceptReceipt: async input => ({ receiptId: input.receipt.id, replay: false }),
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     const forge = forgeReader();
     const observer = createItemWaitObserver({ sources, store: waitStore([{}]), forge });
@@ -503,6 +519,7 @@ describe('observing open item waits', () => {
       acceptReceipt,
       isKnownUser: async () => false,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     expect(unknown?.error).toContain('unknown run-as user');
     expect(acceptReceipt).not.toHaveBeenCalled();
@@ -516,6 +533,7 @@ describe('observing open item waits', () => {
       acceptReceipt: async input => ({ receiptId: input.receipt.id, replay: false }),
       isKnownUser: async id => id !== 'ghost',
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     const [partial] =
       (await createItemWaitObserver({ sources: mixed, store: waitStore([{}]), forge })?.pass(
@@ -529,6 +547,7 @@ describe('observing open item waits', () => {
       acceptReceipt,
       isKnownUser: async () => false,
       hasDeliveryReceipt: async () => true,
+      getReceipt: async () => null,
     });
     expect(replayed).toMatchObject({ receipts: [], conflicts: 0 });
     expect(replayed?.error).toBeUndefined();
@@ -539,6 +558,7 @@ describe('observing open item waits', () => {
       },
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     expect(conflicting).toMatchObject({ receipts: [], conflicts: 1 });
   });
@@ -559,6 +579,7 @@ describe('observing open item waits', () => {
       acceptReceipt: async () => ({ receiptId: 'unused', replay: false }),
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     };
     await expect(loadWebhookSourcePlugins(configPath, dependencies)).rejects.toThrow(
       'webhook-only'
@@ -576,6 +597,7 @@ describe('observing open item waits', () => {
       acceptReceipt: async () => ({ receiptId: 'unused', replay: false }),
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     };
     const sources = await loadWebhookSourcePlugins(configPath, dependencies);
     expect(
@@ -601,7 +623,14 @@ const LABEL_READ = { bindingId: 'binding-1', repo: LABEL_REPO, label: 'factory' 
  * to each issue (or to `askNumbers`), and returns one acceptance per issue: unmatched while
  * the read is seeding, matched otherwise. `listLabel` lists another label than declared.
  */
-async function labelFixture(plugin: { listLabel?: string; askNumbers?: number[] } = {}) {
+async function labelFixture(
+  plugin: {
+    listLabel?: string;
+    askNumbers?: number[];
+    reads?: unknown[];
+    unserved?: unknown[];
+  } = {}
+) {
   const root = await mkdtemp(join(tmpdir(), 'archon-webhook-source-'));
   roots.push(root);
   const modulePath = join(root, 'source.ts');
@@ -610,7 +639,10 @@ async function labelFixture(plugin: { listLabel?: string; askNumbers?: number[] 
     modulePath,
     `export default ({ config }) => ({
   receive: async () => ({ status: 'rejected', reason: 'unauthenticated' }),
-  observedLabels: { reads: [config.read], unserved: [{ bindingId: 'pr-binding', reason: 'issues only' }] },
+  observedLabels: {
+    reads: config.reads ?? [config.read],
+    unserved: config.unserved ?? [{ bindingId: 'pr-binding', reason: 'issues only' }],
+  },
   observe: async ({ labels, forge }) => {
     const acceptances = [];
     const labelFailures = [];
@@ -640,14 +672,18 @@ async function labelFixture(plugin: { listLabel?: string; askNumbers?: number[] 
           occurredAt: null,
           sourceActor: null,
         };
-        acceptances.push(
-          read.seeding
-            ? { receipt, outcome: 'unmatched', reason: 'seen', bindings: [] }
-            : { receipt, outcome: 'matched', bindings: [config.binding] }
-        );
+        const binding = { ...config.binding, bindingId: read.bindingId };
+        acceptances.push({
+          bindingId: read.bindingId,
+          label: read.label,
+          acceptance:
+            read.seenSince === null
+              ? { receipt, outcome: 'unmatched', reason: 'seen', bindings: [] }
+              : { receipt, outcome: 'matched', bindings: [binding] },
+        });
       }
     }
-    return { acceptances, unserved: [], failed: [], labelFailures };
+    return { acceptances: [], labelAcceptances: acceptances, unserved: [], failed: [], labelFailures };
   },
 });\n`,
     'utf8'
@@ -710,7 +746,7 @@ function labelForge(issues: Map<number, string>, failing = new Set<number>()) {
 }
 
 /** Receipts kept by delivery id, replaying a recorded one as the store does. */
-function receiptStore() {
+function receiptStore(knownUser: (id: string) => boolean = () => true) {
   const receipts = new Map<string, SourceReceiptAcceptance>();
   return {
     receipts,
@@ -721,8 +757,12 @@ function receiptStore() {
         if (!replay) receipts.set(deliveryId, input);
         return { receiptId: deliveryId, replay };
       },
-      isKnownUser: async () => true,
+      isKnownUser: async (id: string) => knownUser(id),
       hasDeliveryReceipt: async (_source: string, deliveryId: string) => receipts.has(deliveryId),
+      getReceipt: async (id: string) => {
+        const found = [...receipts.values()].find(receipt => receipt.receipt.id === id);
+        return found ? { occurredAt: found.receipt.occurredAt } : null;
+      },
     },
   };
 }
@@ -826,5 +866,56 @@ describe('observing label bindings', () => {
     expect(unlisted.report?.error).toContain(
       "Issue 9 of 'github.com/owner/repo' was not listed with label 'factory' in this pass"
     );
+  });
+
+  test('one read whose acceptance cannot be admitted does not hold back another read', async () => {
+    let userKnown = true;
+    const store = receiptStore(() => userKnown);
+    const issues = new Map([[5, 'event-1']]);
+    const observe = async (reads: unknown[]) => {
+      const sources = await loadWebhookSourcePlugins(
+        await labelFixture({ reads }),
+        store.dependencies
+      );
+      return (
+        (await createItemWaitObserver({
+          sources,
+          store: waitStore([]),
+          forge: labelForge(issues),
+        })?.pass(new Date())) ?? []
+      );
+    };
+    // binding-1 is seen first; then its run-as user is removed and binding-2 is added.
+    await observe([LABEL_READ]);
+    expect(store.receipts.has(MARKER)).toBe(true);
+    userKnown = false;
+    issues.set(5, 'event-2');
+    const otherRead = { bindingId: 'binding-2', repo: LABEL_REPO, label: 'urgent' };
+    const [report] = await observe([LABEL_READ, otherRead]);
+    // binding-1's new start cannot be admitted, yet binding-2 is still seen.
+    expect(report?.error).toContain('unknown run-as user');
+    expect(store.receipts.has('observe:label-seen:binding-2:github.com/owner/repo:urgent')).toBe(
+      true
+    );
+  });
+
+  test('a source with only label bindings it cannot observe is reported, and reads nothing', async () => {
+    const configPath = await labelFixture({ reads: [] });
+    const sources = await loadWebhookSourcePlugins(configPath, receiptStore().dependencies);
+    const forge = labelForge(new Map([[5, 'event-1']]));
+    const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
+    expect(await observer?.pass(new Date())).toEqual([
+      {
+        source: 'source-1',
+        waits: 0,
+        labels: 0,
+        reads: 0,
+        receipts: [],
+        conflicts: 0,
+        unserved: [],
+        unservedBindings: [{ bindingId: 'pr-binding', reason: 'issues only' }],
+      },
+    ]);
+    expect(forge.reads).toEqual([]);
   });
 });

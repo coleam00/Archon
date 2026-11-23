@@ -13,6 +13,7 @@ import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from '@hono/zod-openapi';
 import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
+import type { StartReceiptInspection } from '@archon/workflows/resource-start-store';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { createLogger } from '@archon/paths';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
@@ -83,6 +84,18 @@ function labelSeenMarker(read: ObservedLabelRead): string {
 }
 
 /**
+ * The receipt id of a read's seen marker, derived from the source and the marker's delivery
+ * id so a pass can read the marker, and its time, by id. A persisted contract as the
+ * delivery id is. Shaped as a version 8 UUID, the version for ids built this way.
+ */
+function labelSeenMarkerId(sourceInstanceId: string, read: ObservedLabelRead): string {
+  const hex = createHash('sha256')
+    .update(`${sourceInstanceId}\n${labelSeenMarker(read)}`)
+    .digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
  * What one source's observation admitted: each receipt, the waits it could not read, and
  * why an acceptance could not be admitted. One failed acceptance does not hide the others,
  * so their starts are still handed on.
@@ -110,6 +123,8 @@ export interface WebhookSourceHostDependencies {
   acceptReceipt: IWorkflowStore['acceptStartReceipt'];
   isKnownUser: (id: string) => Promise<boolean>;
   hasDeliveryReceipt: (sourceInstanceId: string, deliveryId: string) => Promise<boolean>;
+  /** A recorded receipt by id; observation reads a label read's seen marker with it. */
+  getReceipt: (id: string) => Promise<Pick<StartReceiptInspection, 'occurredAt'> | null>;
 }
 
 const log = createLogger('webhook-sources');
@@ -329,16 +344,14 @@ export async function loadWebhookSourcePlugins(
       if (!source || !plugin.observe)
         throw new Error(`Webhook source '${sourceInstanceId}' does not observe waits`);
       // A read with no marker yet is seen for the first time: what it lists is recorded,
-      // and starts nothing.
+      // and starts nothing. Once seen, a label added before the marker's time starts
+      // nothing either, such as one on an issue that was closed during the first sight.
+      const passStartedAt = new Date().toISOString();
       const labels = [];
-      for (const read of source.labels)
-        labels.push({
-          ...read,
-          seeding: !(await dependencies.hasDeliveryReceipt(
-            sourceInstanceId,
-            labelSeenMarker(read)
-          )),
-        });
+      for (const read of source.labels) {
+        const marker = await dependencies.getReceipt(labelSeenMarkerId(sourceInstanceId, read));
+        labels.push({ ...read, seenSince: marker === null ? null : marker.occurredAt });
+      }
       let observation: SourceObservation;
       try {
         observation = sourceObservationSchema.parse(await plugin.observe({ waits, labels, forge }));
@@ -377,31 +390,30 @@ export async function loadWebhookSourcePlugins(
           return false;
         }
       };
-      let allRecorded = true;
-      for (const acceptance of observation.acceptances)
-        allRecorded = (await record(acceptance)) && allRecorded;
-      // A read is seen once every issue it listed is recorded: no read of it failed and
-      // every acceptance of the pass was admitted. Until then the next pass seeds it again,
-      // which is safe because seeding records only unmatched receipts; an issue whose read
-      // failed must not start later as though its label were new.
+      for (const acceptance of observation.acceptances) await record(acceptance);
+      // A read is seen once every issue it listed is recorded: no read of it failed and each
+      // of its acceptances was admitted. Another read's failure does not hold it back. Until
+      // then the next pass sees it for the first time again, which is safe because that
+      // records only unmatched receipts; an issue whose read failed must not start later as
+      // though its label were new.
+      const unrecorded = new Set(
+        observation.labelFailures.map(({ bindingId, label }) => JSON.stringify([bindingId, label]))
+      );
+      for (const { bindingId, label, acceptance } of observation.labelAcceptances)
+        if (!(await record(acceptance))) unrecorded.add(JSON.stringify([bindingId, label]));
       for (const read of labels) {
-        if (
-          !read.seeding ||
-          !allRecorded ||
-          observation.labelFailures.some(
-            failure => failure.bindingId === read.bindingId && failure.label === read.label
-          )
-        )
+        if (read.seenSince !== null || unrecorded.has(JSON.stringify([read.bindingId, read.label])))
           continue;
         const deliveryId = labelSeenMarker(read);
         await record({
           receipt: {
-            id: randomUUID(),
+            id: labelSeenMarkerId(sourceInstanceId, read),
             sourceInstanceId,
             deliveryId,
             contentDigest: createHash('sha256').update(deliveryId).digest('hex'),
             receivedAt: new Date().toISOString(),
-            occurredAt: null,
+            // The cutoff later passes compare a label's add with: when this pass began.
+            occurredAt: passStartedAt,
             sourceActor: null,
           },
           outcome: 'unmatched',
@@ -456,8 +468,9 @@ export interface ItemWaitObserver {
   /**
    * Observe the open waits and the declared label reads through each source whose interval
    * has passed since it last observed. Calls no source, so reads nothing from the forge for
-   * it, when no wait is open and it declares no label read. A pass started while another
-   * runs returns nothing.
+   * it, when no wait is open and it declares no label read; such a source is reported only
+   * when it has label bindings it cannot observe. A pass started while another runs
+   * returns nothing.
    */
   pass(now: Date): Promise<ObservedSourceReport[]>;
 }
@@ -504,6 +517,15 @@ export function createItemWaitObserver(input: {
       waits.set(JSON.stringify(observed), observed);
     }
     return [...waits.values()];
+  };
+
+  const warnUnserved = (sourceInstanceId: string, bindings: readonly UnservedBinding[]): void => {
+    for (const { bindingId, reason } of bindings) {
+      const key = JSON.stringify([sourceInstanceId, bindingId, reason]);
+      if (warned.has(key)) continue;
+      warned.add(key);
+      log.warn({ sourceInstanceId, bindingId, reason }, 'source_observe_unserved');
+    }
   };
 
   const observeSource = async (
@@ -607,13 +629,23 @@ export function createItemWaitObserver(input: {
       warned.add(key);
       log.warn({ sourceInstanceId, ...wait, reason }, 'source_observe_unserved');
     }
-    for (const { bindingId, reason } of result.unservedBindings) {
-      const key = JSON.stringify([sourceInstanceId, bindingId, reason]);
-      if (warned.has(key)) continue;
-      warned.add(key);
-      log.warn({ sourceInstanceId, bindingId, reason }, 'source_observe_unserved');
-    }
+    warnUnserved(sourceInstanceId, result.unservedBindings);
     return result;
+  };
+
+  /** The report of a source that is not called: only the label bindings it cannot observe. */
+  const unobserved = (source: ObservingSource): ObservedSourceReport => {
+    warnUnserved(source.sourceInstanceId, source.unservedBindings);
+    return {
+      source: source.sourceInstanceId,
+      waits: 0,
+      labels: 0,
+      reads: 0,
+      receipts: [],
+      conflicts: 0,
+      unserved: [],
+      unservedBindings: source.unservedBindings,
+    };
   };
 
   return {
@@ -630,8 +662,14 @@ export function createItemWaitObserver(input: {
         const waits = await openWaits();
         const reports: ObservedSourceReport[] = [];
         for (const source of due) {
-          // A source with nothing to observe is not called, so it reads nothing.
-          if (waits.length === 0 && source.labels.length === 0) continue;
+          // A source with nothing to observe is not called, so it reads nothing; the label
+          // bindings it cannot observe are still reported, so the operator learns why.
+          if (waits.length === 0 && source.labels.length === 0) {
+            if (source.unservedBindings.length === 0) continue;
+            lastObserved.set(source.sourceInstanceId, now.getTime());
+            reports.push(unobserved(source));
+            continue;
+          }
           lastObserved.set(source.sourceInstanceId, now.getTime());
           reports.push(await observeSource(source, waits));
         }

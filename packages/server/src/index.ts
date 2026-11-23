@@ -538,6 +538,7 @@ async function createResourceStarts(): Promise<{
         isKnownUser: async id => (await workflowHost.records.users.getUserById(id)) !== null,
         hasDeliveryReceipt: (sourceInstanceId, deliveryId) =>
           workflowHost.deps.store.hasStartReceiptForDelivery(sourceInstanceId, deliveryId),
+        getReceipt: id => workflowHost.deps.store.getStartReceipt(id),
       })
     : undefined;
   // Explicit only: bindings choose their execution host, so the server never guesses one.

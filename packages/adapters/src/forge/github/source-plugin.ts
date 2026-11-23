@@ -211,7 +211,7 @@ async function observeWaits(
   sourceInstanceId: string,
   config: GitHubSourceConfig,
   { waits, forge }: ObserveInput
-): Promise<Omit<SourceObservation, 'labelFailures'>> {
+): Promise<Omit<SourceObservation, 'labelAcceptances' | 'labelFailures'>> {
   const { targets, unserved } = planTargets(config, waits);
   const failed: SourceObservation['failed'] = [];
   const acceptances: SourceReceiptAcceptance[] = [];
@@ -389,17 +389,18 @@ const errorText = (error: unknown): string =>
 
 /**
  * The label events a webhook would have carried for the open issues each read lists: one
- * `label.changed` added event per issue, with the forge's own label-added event. While a
- * read is seeding, each is recorded unmatched, so a label already on an issue when the
- * binding is first seen starts nothing. Only state is seen: a label added and removed
+ * `label.changed` added event per issue, with the forge's own label-added event. On a
+ * read's first sight every one is recorded unmatched, and after it so is an add older
+ * than that sight, so a label already on an issue when the binding is first seen starts
+ * nothing, even on an issue reopened later. Only state is seen: a label added and removed
  * between two passes is never read.
  */
 async function observeLabels(
   sourceInstanceId: string,
   config: GitHubSourceConfig,
   { labels, forge }: ObserveInput
-): Promise<Pick<SourceObservation, 'acceptances' | 'labelFailures'>> {
-  const acceptances: SourceReceiptAcceptance[] = [];
+): Promise<Pick<SourceObservation, 'labelAcceptances' | 'labelFailures'>> {
+  const labelAcceptances: SourceObservation['labelAcceptances'] = [];
   const labelFailures: LabelFailure[] = [];
   const receivedAt = new Date().toISOString();
   for (const read of labels) {
@@ -420,10 +421,11 @@ async function observeLabels(
         forge,
       });
       if (result?.kind === 'failed') labelFailures.push(result.failure);
-      else if (result?.kind === 'accepted') acceptances.push(result.acceptance);
+      else if (result?.kind === 'accepted')
+        labelAcceptances.push({ bindingId, label, acceptance: result.acceptance });
     }
   }
-  return { acceptances, labelFailures };
+  return { labelAcceptances, labelFailures };
 }
 
 /**
@@ -470,18 +472,22 @@ async function issueLabelAcceptance(
   const receipt: SourceReceiptInput = {
     id: randomUUID(),
     sourceInstanceId,
-    // A persisted contract: one delivery per label add, binding and item. The forge's event
-    // id makes a remove and re-add a new delivery; the same add read on a later pass is a
-    // replay, so it starts once.
-    deliveryId: `observe:label:${repo.host}/${repo.path}#${String(number)}:${added.id}:${bindingId}:${evaluated.start.itemKey ?? ''}`,
+    // A persisted contract: one delivery per label add and binding. The forge's event id
+    // makes a remove and re-add a new delivery; the same add read on a later pass is a
+    // replay, so it starts once. The item key is not part of it: a binding whose item
+    // mapping changes must not start an add it has already recorded.
+    deliveryId: `observe:label:${repo.host}/${repo.path}#${String(number)}:${added.id}:${bindingId}`,
     contentDigest: createHash('sha256').update(JSON.stringify(event)).digest('hex'),
     receivedAt,
     occurredAt: added.at,
     sourceActor: added.actor === null ? null : { source: sourceInstanceId, id: added.actor.id },
   };
+  // The two clocks are the forge's and this host's, so an add within their skew of the
+  // first sight can fall on either side of it.
+  const seen = read.seenSince === null || Date.parse(added.at) < Date.parse(read.seenSince);
   return {
     kind: 'accepted',
-    acceptance: read.seeding
+    acceptance: seen
       ? {
           receipt,
           outcome: 'unmatched',
@@ -509,11 +515,7 @@ const createGitHubWebhookSource: WebhookSourcePluginFactory = ({
     async observe(input) {
       const waits = await observeWaits(sourceInstanceId, config, input);
       const labels = await observeLabels(sourceInstanceId, config, input);
-      return {
-        ...waits,
-        acceptances: [...waits.acceptances, ...labels.acceptances],
-        labelFailures: labels.labelFailures,
-      };
+      return { ...waits, ...labels };
     },
     async receive(request): Promise<WebhookSourceResult> {
       if (

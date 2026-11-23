@@ -278,6 +278,7 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
         isKnownUser: async () => true,
         hasDeliveryReceipt: (source, delivery) =>
           harness.store.hasStartReceiptForDelivery(source, delivery),
+        getReceipt: id => harness.store.getStartReceipt(id),
       });
       const reads: string[] = [];
       const observer = createItemWaitObserver({

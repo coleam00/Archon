@@ -28,6 +28,7 @@ export async function wakeObservation(
       isKnownUser: async id => (await host.records.users.getUserById(id)) !== null,
       hasDeliveryReceipt: (sourceInstanceId, deliveryId) =>
         store.hasStartReceiptForDelivery(sourceInstanceId, deliveryId),
+      getReceipt: id => store.getStartReceipt(id),
     },
     // Wake receives no webhooks: a source that does not observe is never loaded here.
     { observingOnly: true }

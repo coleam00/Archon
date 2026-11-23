@@ -83,6 +83,21 @@ export const sourceObservationSchema = z
     unserved: z.array(z.object({ wait: observedWaitSchema, reason: z.string().min(1) }).strict()),
     /** Reads that failed; the other waits are still observed. */
     failed: z.array(z.object({ wait: observedWaitSchema, reason: z.string().min(1) }).strict()),
+    /**
+     * The acceptances a label read made, each with the read it belongs to, so the engine
+     * knows when every issue one read listed is recorded.
+     */
+    labelAcceptances: z
+      .array(
+        z
+          .object({
+            bindingId: z.string().min(1),
+            label: z.string().min(1),
+            acceptance: sourceReceiptAcceptanceSchema,
+          })
+          .strict()
+      )
+      .default([]),
     /** Label reads that failed, for one issue when `number` is set; the others still count. */
     labelFailures: z
       .array(
@@ -108,12 +123,14 @@ export interface WebhookSourcePlugin {
    * The events a webhook would have delivered, for an install that receives none: for the
    * state the open waits name, and for the open issues carrying a label in `labels`. A wait
    * that names no binding of this source gets no entry; one this source binds but cannot
-   * read is `unserved`, with why. `labels` holds only reads this source declared; while one
-   * is `seeding`, the labels already on issues are recorded as seen and start nothing.
+   * read is `unserved`, with why. `labels` holds only reads this source declared. A read's
+   * `seenSince` is when the engine first saw it, or `null` on that first sight: a label
+   * added before it is recorded as seen and starts nothing, and on the first sight every
+   * label listed is.
    */
   observe?(input: {
     waits: readonly ObservedItemWait[];
-    labels: readonly (ObservedLabelRead & { seeding: boolean })[];
+    labels: readonly (ObservedLabelRead & { seenSince: string | null })[];
     forge: SourceForgeReader;
   }): Promise<SourceObservation>;
 }
