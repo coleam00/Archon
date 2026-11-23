@@ -39,23 +39,22 @@ export async function captureBindingDefinitions(
   codebase: Codebase,
   item: WorkflowItem | null
 ): Promise<PreparedWorkflowSource> {
-  const landing = item ? await preparedLanding(host.deps.store, codebase, item) : undefined;
+  // The remote is read as the binding's run-as user, not as the process that fires it: a
+  // node whose own run is scrubbed can start work for a connected user, and an unconnected
+  // run-as user gets the scrub, so nothing reaches the host login. Resolved only when a
+  // remote is read: a checkout read as it is needs no credential.
+  let remoteEnv: Promise<NodeJS.ProcessEnv> | undefined;
+  const runAsEnv = () => (remoteEnv ??= runAsRemoteEnv(host, intent, codebase));
+  const landing = item
+    ? await preparedLanding(host.deps.store, codebase, item, await runAsEnv())
+    : undefined;
   const plan = bindingDefinitionsPlan(intent.launch, cwd, codebase, landing);
   if (plan.kind === 'directory')
     return prepareWorkflowSource(host.deps, {
       sourceRoot: plan.root,
       definitions: plan.definitions,
     });
-  // The base is fetched as the binding's run-as user, not as the process that fires it:
-  // a node whose own run is scrubbed can start work for a connected user, and an
-  // unconnected run-as user gets the scrub, so nothing reaches the host login.
-  const { envVars } = await resolveWorkflowGithubEnvironment(
-    host.deps,
-    codebase,
-    intent.runAsUserId,
-    { envVars: {} }
-  );
-  const input = { ...plan.input, fetchEnv: { ...process.env, ...envVars } };
+  const input = { ...plan.input, remoteEnv: await runAsEnv() };
   try {
     return await withLayeredDefinitions(input, composed =>
       prepareWorkflowSource(host.deps, {
@@ -82,6 +81,21 @@ export async function captureBindingDefinitions(
   }
 }
 
+/** This process's env with the binding's run-as user's GitHub credential, or its scrub. */
+async function runAsRemoteEnv(
+  host: WorkflowHost,
+  intent: ResourceStartBindingIntent,
+  codebase: Codebase
+): Promise<NodeJS.ProcessEnv> {
+  const { envVars } = await resolveWorkflowGithubEnvironment(
+    host.deps,
+    codebase,
+    intent.runAsUserId,
+    { envVars: {} }
+  );
+  return { ...process.env, ...envVars };
+}
+
 /**
  * The item's landing branch, for the base its definitions are read from. A branch that
  * cannot be used is refused when the run starts (`landingLane`), on the run with its
@@ -90,10 +104,11 @@ export async function captureBindingDefinitions(
 export async function preparedLanding(
   store: Parameters<typeof resolveRunLanding>[0],
   project: Parameters<typeof resolveRunLanding>[1],
-  item: WorkflowItem
+  item: WorkflowItem,
+  env?: NodeJS.ProcessEnv
 ): Promise<string | undefined> {
   try {
-    return (await resolveRunLanding(store, project, item))?.branch;
+    return (await resolveRunLanding(store, project, item, env))?.branch;
   } catch (error) {
     if (error instanceof LandingBranchRefusedError) return undefined;
     throw error;

@@ -47,12 +47,13 @@ function git(cwd: string, ...args: string[]): void {
 
 /**
  * A remote that serves only the run-as user's token, standing in for a private GitHub
- * repository: its upload-pack records the GH_TOKEN the fetch ran with and refuses any
- * other. git strips GIT_CONFIG_PARAMETERS from a local upload-pack's env, so the helper
- * is not visible here; the real-git proof that the run-as user's env makes git present
- * the token over HTTPS is in github-token-policy.test.ts.
+ * repository: its upload-pack, which serves every remote read (ls-remote and fetch),
+ * records the GH_TOKEN each read ran with and refuses any other. git strips
+ * GIT_CONFIG_PARAMETERS from a local upload-pack's env, so the helper is not visible here;
+ * the real-git proof that the run-as user's env makes git present the token over HTTPS is
+ * in github-token-policy.test.ts.
  */
-function privateProject(): { checkout: string; record: string } {
+function privateProject(): { checkout: string; reads: () => string[] } {
   const root = track(realpathSync(mkdtempSync(join(tmpdir(), 'archon-binding-fetch-'))));
   const remote = join(root, 'remote.git');
   git(root, 'init', '-q', '--bare', '--initial-branch=dev', remote);
@@ -63,17 +64,18 @@ function privateProject(): { checkout: string; record: string } {
   git(checkout, 'add', '-A');
   git(checkout, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'base');
   git(checkout, 'push', '-q', 'origin', 'dev');
-  const record = join(root, 'fetch-env');
+  const record = join(root, 'remote-reads');
+  writeFileSync(record, '');
   const uploadPack = join(root, 'upload-pack');
   writeFileSync(
     uploadPack,
-    `#!/bin/sh\nprintf '%s' "$GH_TOKEN" > '${record}'\n` +
+    `#!/bin/sh\nprintf 'token=%s\\n' "$GH_TOKEN" >> '${record}'\n` +
       `[ "$GH_TOKEN" = ghu_runas ] || { echo 'repository not found' >&2; exit 1; }\n` +
       'exec git-upload-pack "$@"\n'
   );
   chmodSync(uploadPack, 0o755);
   git(checkout, 'config', 'remote.origin.uploadpack', uploadPack);
-  return { checkout, record };
+  return { checkout, reads: () => readFileSync(record, 'utf8').split('\n').filter(Boolean) };
 }
 
 describe('a binding start fired from a scrubbed node', () => {
@@ -93,7 +95,8 @@ describe('a binding start fired from a scrubbed node', () => {
       isPerUserGitHubEnabled: () => true,
       getUserGithubToken: async (userId: string) =>
         userId === 'connected' ? 'ghu_runas' : undefined,
-      store: { getCodebase: async () => null },
+      // The item records its own landing branch.
+      store: { getCodebase: async () => null, getItemLanding: async () => ({ branch: 'dev' }) },
       loadConfig: async () => ({
         assistant: 'claude' as const,
         assistants: { claude: {}, codex: {} },
@@ -103,7 +106,10 @@ describe('a binding start fired from a scrubbed node', () => {
     },
   } as unknown as WorkflowHost;
 
-  const capture = (checkout: string, runAsUserId: string) =>
+  const item = { id: 'item-1', projectKey: 'project', key: 'issue-1' };
+
+  // No configured default branch: the base is detected from the remote, a read of its own.
+  const capture = (checkout: string, runAsUserId: string, onItem: typeof item | null = null) =>
     captureBindingDefinitions(
       host,
       {
@@ -115,10 +121,10 @@ describe('a binding start fired from a scrubbed node', () => {
         kind: 'repo',
         name: 'project',
         default_cwd: checkout,
-        default_branch: 'dev',
+        default_branch: null,
         repository_url: null,
       } as Codebase,
-      null
+      onItem
     );
 
   const scrubCaller = (): void => {
@@ -127,26 +133,29 @@ describe('a binding start fired from a scrubbed node', () => {
     process.env.GIT_CONFIG_PARAMETERS = "'credential.helper='";
   };
 
-  test("fetches the base with the run-as user's token, leaving the caller scrubbed", async () => {
-    const { checkout, record } = privateProject();
-    scrubCaller();
+  test("reads the remote with the run-as user's token, leaving the caller scrubbed", async () => {
+    for (const onItem of [null, item]) {
+      const { checkout, reads } = privateProject();
+      scrubCaller();
 
-    const source = await capture(checkout, 'connected');
-    await disposeWorkflowSource({ captureRoot: source.anchor.root });
+      const source = await capture(checkout, 'connected', onItem);
+      await disposeWorkflowSource({ captureRoot: source.anchor.root });
 
-    expect(readFileSync(record, 'utf8')).toBe('ghu_runas');
-    expect(process.env.GH_TOKEN).toBe('');
-    expect(process.env.GIT_CONFIG_PARAMETERS).toBe("'credential.helper='");
+      // Default-branch detection, or the item's landing check, and then the fetch.
+      expect(reads()).toEqual(['token=ghu_runas', 'token=ghu_runas']);
+      expect(process.env.GH_TOKEN).toBe('');
+      expect(process.env.GIT_CONFIG_PARAMETERS).toBe("'credential.helper='");
+    }
   }, 30_000);
 
-  test('refuses when the run-as user has no token, fetching with the scrub, not the host login', async () => {
-    const { checkout, record } = privateProject();
-    scrubCaller();
+  test("refuses when the run-as user has no token, reading with the scrub, not the caller's token", async () => {
+    const { checkout, reads } = privateProject();
+    // A caller that does hold a login, such as a host terminal.
+    process.env.GH_TOKEN = 'ghu_runas';
 
     const error = await capture(checkout, 'unconnected').catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(DefinitionSourceError);
-    expect((error as Error).message).toContain('Cannot read origin/dev');
-    expect(readFileSync(record, 'utf8')).toBe('');
+    expect(reads()).toEqual(['token=']);
   }, 30_000);
 });

@@ -1,8 +1,10 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getArchonHome } from '@archon/paths';
+import { RUN_GITHUB_IDENTITY_HANDOFF_ENV } from '@archon/paths/github-token-env';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { HandOffUncertainError, type StartedExecutor } from '@archon/core/workflows/start-executor';
+import { resolveUserGithubIdentityEnv } from '@archon/workflows/run-credential-env';
 import { cliProgramArguments } from './cli-program-arguments';
 import { DETACHED_RUN_OWNER_ENV } from './detached-run-control';
 import { startTriggerExecutor, TriggerExecutorRelayError } from './run-job-escape';
@@ -13,18 +15,27 @@ import { startTriggerExecutor, TriggerExecutorRelayError } from './run-job-escap
  * reported, so it resolves null and nothing is recorded. A plain rejection means nothing
  * started (`handOffAdmitted` records it as a failed hand-off); a broker relay that failed
  * part way leaves that open and rejects with `HandOffUncertainError`.
+ *
+ * The executor carries the run's user's GitHub identity, so the git Archon runs for the
+ * run before its first node (landing check, worktree fetch, submodules) authenticates as
+ * that user, never as whoever spawned it: a node whose own run is scrubbed can hand off a
+ * start for a connected user. The handoff marker keeps Archon's env files from replacing
+ * that identity when the executor loads them.
  */
 export async function spawnAdmitted(
   host: {
     readonly deps: {
       readonly store: Pick<WorkflowHost['deps']['store'], 'getResourceStartRequest'>;
-    };
+    } & Partial<Pick<WorkflowHost['deps'], 'isPerUserGitHubEnabled' | 'getUserGithubToken'>>;
   },
   requestId: string,
   hostId: string
 ): Promise<StartedExecutor | null> {
   const request = await host.deps.store.getResourceStartRequest(requestId);
   if (request?.status !== 'admitted') throw new Error('The admitted start request is unavailable.');
+  const identity = await resolveUserGithubIdentityEnv(host.deps, request.launch.run.origin?.userId);
+  const identityHandoff =
+    Object.keys(identity).length > 0 ? { ...identity, [RUN_GITHUB_IDENTITY_HANDOFF_ENV]: '1' } : {};
   const logDirectory = join(getArchonHome(), 'logs');
   await mkdir(logDirectory, { recursive: true });
   let pid: number | undefined;
@@ -35,7 +46,12 @@ export async function spawnAdmitted(
       {
         args: ['trigger', 'execute', requestId, '--host', hostId],
         cwd: request.launch.execution.cwd,
-        env: { ...process.env, ARCHON_HOME: getArchonHome(), [DETACHED_RUN_OWNER_ENV]: '1' },
+        env: {
+          ...process.env,
+          ...identityHandoff,
+          ARCHON_HOME: getArchonHome(),
+          [DETACHED_RUN_OWNER_ENV]: '1',
+        },
         log: join(logDirectory, `trigger-run-${requestId}.log`),
       },
       cliProgramArguments()
