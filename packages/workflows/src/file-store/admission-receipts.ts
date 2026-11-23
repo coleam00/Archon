@@ -227,6 +227,14 @@ export function createReceiptOperations(
       write(async (tx, runs) => {
         const item = await tx.owned(input);
         if (!item?.intent) return null;
+        // A limit counts per item, and this store keeps no items: refused, never let through.
+        if (item.intent.limit !== undefined) {
+          const reason = `Start limit '${item.intent.limit.name}' counts starts per item, and the file store keeps no items.`;
+          item.status = 'rejected';
+          item.error = reason;
+          item.forgeRefusal = null;
+          return { status: 'refused' as const, reason };
+        }
         const result = await tx.admit(preparedBindingStart(item.intent, input), runs);
         item.status = 'complete';
         item.error = null;

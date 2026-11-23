@@ -1,5 +1,6 @@
 import type {
   HeldPreparation,
+  RefusedPreparation,
   PendingStartBindingInspection,
   QueuedResourceStartInspection,
 } from '@archon/workflows/resource-start-store';
@@ -196,7 +197,7 @@ function bindingRunMetadata(
   };
 }
 
-type PreparationResult = ResourceStartDisposition | HeldPreparation;
+type PreparationResult = ResourceStartDisposition | HeldPreparation | RefusedPreparation;
 
 /**
  * Freeze one binding's workflow source, inputs and run configuration, then commit it to
@@ -283,6 +284,9 @@ async function prepareBinding(
     });
     if (!disposition) throw new Error('Preparation ownership changed before durable acceptance.');
     if (disposition.status === 'admitted' || disposition.status === 'queued') owner.adopt();
+    // The reason is on the rejected binding, which `trigger inspect` shows; it names no secret.
+    if (disposition.status === 'refused')
+      log.info({ ...identity, reason: disposition.reason }, 'resource_start.limit_reached');
     return disposition;
   });
 }

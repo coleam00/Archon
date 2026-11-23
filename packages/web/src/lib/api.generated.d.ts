@@ -8237,6 +8237,7 @@ export interface components {
             uid?: number;
           } | null;
         } | null;
+        startLimit: string | null;
         spend: {
           usd: number | null;
           inputTokens: number | null;
@@ -8323,6 +8324,15 @@ export interface components {
         limit: number;
         live: number;
       } | null;
+      startLimits: {
+        name: string;
+        starts: number;
+        resetOn: string | null;
+        since: string | null;
+        granted: number;
+        used: number;
+        left: number;
+      }[];
       waits: {
         event: string;
         about: string;
@@ -8913,6 +8923,7 @@ export interface components {
               uid?: number;
             } | null;
           } | null;
+          startLimit: string | null;
           spend: {
             usd: number | null;
             inputTokens: number | null;
@@ -8999,6 +9010,15 @@ export interface components {
           limit: number;
           live: number;
         } | null;
+        startLimits: {
+          name: string;
+          starts: number;
+          resetOn: string | null;
+          since: string | null;
+          granted: number;
+          used: number;
+          left: number;
+        }[];
         waits: {
           event: string;
           about: string;

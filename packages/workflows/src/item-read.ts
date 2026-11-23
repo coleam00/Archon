@@ -81,6 +81,7 @@ import { runOwnerObservationSchema } from './schemas/workflow-run-listing';
 import { readCompletedRunResult, resultCommitOf } from './run-result';
 import { getTerminalRecord } from './terminal-record';
 import { runPack, runPackSchema } from './run-pack';
+import { startLimitStandingSchema } from './start-limit';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -124,6 +125,12 @@ export const itemRunSchema = z.object({
   cause: startCauseSchema.nullable(),
   /** Set while the run's start is admitted but no executor has claimed it. */
   awaitingExecution: awaitingExecutionSchema.nullable(),
+  /**
+   * The name of the start limit the run's start counted under (its binding's `limit`), or
+   * null when it counted under none. A run finds where its limit stands, and so whether it
+   * is the last allowed round, in the item read's `startLimits` under this name.
+   */
+  startLimit: z.string().nullable(),
   /** The totals recorded on the run row; null where the run recorded no figure. */
   spend: z.object({
     usd: z.number().nullable(),
@@ -321,7 +328,10 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * remote; a run does when it starts. `waits` are what the item waits for outside Archon:
  * the open waits completed runs left on it (`returns.waits`), each with when it opened and
  * fell due, and `overdue` once that time has passed. An overdue set is also among
- * `questions`.
+ * `questions`. `startLimits` are the start limits of the bindings that started work on the
+ * item: for each, how many starts it allows, how many are used, granted and left, and since
+ * when it counts. A binding at `left: 0` is refused its next start on the item, and the
+ * refusal is on its receipt (`trigger inspect`).
  */
 export const itemReadSchema = z.object({
   item: workflowItemSchema,
@@ -331,6 +341,7 @@ export const itemReadSchema = z.object({
   hold: installHoldSchema.nullable(),
   held: z.array(itemHeldStartSchema),
   runLimit: runLimitSchema.nullable(),
+  startLimits: z.array(startLimitStandingSchema),
   waits: z.array(itemOpenWaitSchema),
   questions: z.array(attentionQueueItemSchema),
   answers: z.array(itemAnswerSchema),
@@ -365,6 +376,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'getResourceStartRequest'
       | 'listQueuedItemStarts'
       | 'listSkippedItemStarts'
+      | 'readItemStartLimits'
       | 'getInstallHold'
       | 'listHeldItemStarts'
       | 'getRunLimit'
@@ -405,7 +417,8 @@ async function itemRun(
   run: WorkflowRun,
   request: ResourceStartRequestInspection | null,
   heldBehind: ItemHeldBehind | null,
-  terminalEvents: ReadonlyMap<string, WorkflowEventRow[]>
+  terminalEvents: ReadonlyMap<string, WorkflowEventRow[]>,
+  startLimit: string | null
 ): Promise<ItemRun> {
   // The receipt stays the one owner of why a start happened; this only reads it.
   const receiptId = readResourceStartReceiptId(run.metadata);
@@ -421,6 +434,7 @@ async function itemRun(
     completedAt: run.completed_at?.toISOString() ?? null,
     cause: receipt ? startCause(receipt) : null,
     awaitingExecution: await awaitingExecution(request, run, source.startExecutor),
+    startLimit,
     spend: {
       usd: usage.costUsd ?? null,
       inputTokens: usage.tokens?.input ?? null,
@@ -738,6 +752,7 @@ export async function assembleItemRead(
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const holds = await itemHolds(source, found.item.id, own.values);
   const runLimit = await source.store.getRunLimit();
+  const startLimits = await source.store.readItemStartLimits(found.item.id);
   const queued: ItemQueuedStart[] = [];
   for (const start of waiting.filter(start => !tree.has(start.requestId)))
     queued.push({
@@ -762,7 +777,8 @@ export async function assembleItemRead(
           run,
           holds.request(run.id),
           (await holds.runHeldBehind(run)) ?? null,
-          terminalEvents
+          terminalEvents,
+          startLimits.countedUnder[run.id] ?? null
         )
       )
     ),
@@ -771,6 +787,7 @@ export async function assembleItemRead(
     hold,
     held,
     runLimit: runLimit && { limit: runLimit.limit, live: runLimit.live },
+    startLimits: startLimits.limits,
     waits: (await source.store.listOpenItemWaits(found.item.id)).map(wait => ({
       event: wait.event,
       about: wait.about,

@@ -10,7 +10,8 @@
  * part of the run only by a run-ended or asks-settled binding, the ended run's item key
  * only by a run-ended binding, a linked entry only by a linked run-ended binding with
  * `items`, the settled answers only by an asks-settled binding, and the item's answers by
- * either, except a linked run-ended binding.
+ * either, except a linked run-ended binding. A `grants` names a declared binding with a
+ * `limit`.
  */
 import type { Fail } from './pack-settings';
 import { readsItemAnswers, readsLinkedEntry } from './schemas/binding-input-source';
@@ -69,8 +70,25 @@ export function parsePackBindings(
     }
     bindings[id] = parseBinding(id, rawBinding, fail);
   }
-  for (const [id, binding] of Object.entries(bindings)) checkInputs(id, binding, bindings, fail);
+  for (const [id, binding] of Object.entries(bindings)) {
+    checkInputs(id, binding, bindings, fail);
+    checkGrants(id, binding, bindings, fail);
+  }
   return bindings;
+}
+
+/** A grant raises a declared limit, so it must name a binding that has one. */
+function checkGrants(
+  id: string,
+  binding: PackBinding,
+  bindings: Readonly<Record<string, PackBinding>>,
+  fail: Fail
+): void {
+  if (!('grants' in binding) || binding.grants === undefined) return;
+  const granted = Object.hasOwn(bindings, binding.grants) ? bindings[binding.grants] : undefined;
+  if (granted === undefined) fail(`binding '${id}' grants unknown binding '${binding.grants}'`);
+  else if (granted.limit === undefined)
+    fail(`binding '${id}' grants binding '${binding.grants}', which declares no limit`);
 }
 
 function checkInputs(

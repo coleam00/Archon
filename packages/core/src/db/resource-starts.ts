@@ -10,7 +10,9 @@ import {
 } from '@archon/workflows/resource-start-store';
 import type {
   HeldPreparation,
+  ItemStartLimits,
   PreparedBindingInput,
+  RefusedPreparation,
   StartBindingInspection,
   StartReceiptInspection,
   ResourceBlocker,
@@ -40,6 +42,15 @@ import {
   forgeRefusalSchema,
   type ForgeRefusal,
 } from '@archon/workflows/schemas/resource-start';
+import {
+  startLimitGrantRecordSchema,
+  startLimitRecordSchema,
+  startLimitRefusal,
+  startLimitStanding,
+  startLimitWindow,
+  type StartLimitRecord,
+  type StartLimitRow,
+} from '@archon/workflows/start-limit';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDialect } from './connection';
 import {
@@ -120,10 +131,17 @@ function disposition(row: RequestRow): ResourceStartDisposition {
   throw new Error(`Resource start request '${row.id}' has no executable disposition`);
 }
 
+/** What a binding start's request records for its start limit; see `@archon/workflows/start-limit`. */
+interface StartLimitColumns {
+  startLimit: string | null;
+  grantsLimit: string | null;
+}
+
 async function admitResourceStartWithQuery(
   query: Query,
   intent: ResourceStartIntent,
-  itemId: string | null = null
+  itemId: string | null = null,
+  limits: StartLimitColumns = { startLimit: null, grantsLimit: null }
 ): Promise<ResourceStartDisposition> {
   await lockAdmission(query);
   const { capacity } = await lockResourceSlotForAdmission(query, intent.resource, intent.capacity);
@@ -143,8 +161,8 @@ async function admitResourceStartWithQuery(
   const status = blocker && intent.overlap === 'skip' ? 'skipped' : 'queued';
   await query(
     `INSERT INTO remote_agent_resource_start_requests
-       (id, resource_key, host_id, overlap_policy, status, blocker_run_id, blocker_kind, launch, receipt_id, binding_id, item_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+       (id, resource_key, host_id, overlap_policy, status, blocker_run_id, blocker_kind, launch, receipt_id, binding_id, item_id, start_limit, grants_limit)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
     [
       intent.launch.run.id,
       intent.resource,
@@ -157,6 +175,8 @@ async function admitResourceStartWithQuery(
       intent.receipt?.receiptId ?? null,
       intent.receipt?.bindingId ?? null,
       itemId,
+      limits.startLimit,
+      limits.grantsLimit,
     ]
   );
   const row: RequestRow = {
@@ -306,9 +326,14 @@ function readStoredIntent(
   intent: unknown,
   eventInputNames: unknown,
   checkoutFrom: unknown,
-  itemKey: unknown
+  itemKey: unknown,
+  startLimit: unknown,
+  grantsLimit: unknown
 ): ResourceStartBindingIntent {
-  const parsed = resourceStartBindingIntentSchema.parse(parseStoredJson(intent));
+  const parsed = {
+    ...resourceStartBindingIntentSchema.parse(parseStoredJson(intent)),
+    ...storedLimitFields(startLimit, grantsLimit),
+  };
   const stored = withEventInputs(
     typeof itemKey === 'string' ? { ...parsed, itemKey } : parsed,
     eventInputNames
@@ -319,6 +344,24 @@ function readStoredIntent(
     ? stored
     : { ...stored, checkoutFrom: checkoutHandoffSchema.parse(parseStoredJson(checkoutFrom)) };
 }
+
+/**
+ * A binding's start limit and the limit it grants, from their own columns. Newer binaries
+ * may add keys to the stored limit, so unknown keys are stripped, not refused.
+ */
+function storedLimitFields(
+  startLimit: unknown,
+  grantsLimit: unknown
+): Pick<ResourceStartBindingIntent, 'limit' | 'grants'> {
+  return {
+    ...(startLimit == null
+      ? {}
+      : { limit: storedStartLimitSchema.parse(parseStoredJson(startLimit)) }),
+    ...(typeof grantsLimit === 'string' ? { grants: grantsLimit } : {}),
+  };
+}
+
+const storedStartLimitSchema = startLimitRecordSchema.omit({ window: true });
 
 function withEventInputs(
   stored: ResourceStartBindingIntent,
@@ -383,7 +426,14 @@ function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
     intent:
       row.intent == null
         ? null
-        : readStoredIntent(row.intent, row.event_input_names, row.checkout_from, row.item_key),
+        : readStoredIntent(
+            row.intent,
+            row.event_input_names,
+            row.checkout_from,
+            row.item_key,
+            row.start_limit,
+            row.grants_limit
+          ),
     requestStatus,
     disposition: requestDisposition,
   };
@@ -708,7 +758,7 @@ export async function claimStartBindingPreparation(input: {
 
 export async function completeStartBindingPreparation(
   input: PreparedBindingInput & { ownerId: string }
-): Promise<ResourceStartDisposition | HeldPreparation | null> {
+): Promise<ResourceStartDisposition | HeldPreparation | RefusedPreparation | null> {
   return getDatabase().withTransaction(async query => {
     // See withdrawQueuedResourceStart: acquire SQLite's writer lock before the read.
     if (getDatabase().dialect === 'sqlite') {
@@ -717,8 +767,13 @@ export async function completeStartBindingPreparation(
         [input.receiptId, input.bindingId]
       );
     }
-    const binding = await query<{ intent: unknown; item_key: string | null }>(
-      `SELECT intent, item_key FROM remote_agent_start_receipt_bindings
+    const binding = await query<{
+      intent: unknown;
+      item_key: string | null;
+      start_limit: unknown;
+      grants_limit: unknown;
+    }>(
+      `SELECT intent, item_key, start_limit, grants_limit FROM remote_agent_start_receipt_bindings
         WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3${getDialect().rowLock()}`,
       [input.receiptId, input.bindingId, input.ownerId]
     );
@@ -731,10 +786,22 @@ export async function completeStartBindingPreparation(
       return { status: 'held', hold };
     }
     const persisted = resourceStartBindingIntentSchema.parse(parseStoredJson(row.intent));
+    const { limit, grants } = storedLimitFields(row.start_limit, row.grants_limit);
+    const item = await namedItem(query, input, row.item_key);
+    const counted = await countStartLimits(query, item, limit, grants);
+    if ('refused' in counted) {
+      await query(
+        `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'rejected', preparation_error = $4, forge_refusal = NULL, updated_at = ${getDialect().now()}
+          WHERE receipt_id = $1 AND binding_id = $2 AND preparation_owner = $3`,
+        [input.receiptId, input.bindingId, input.ownerId, counted.refused]
+      );
+      return { status: 'refused', reason: counted.refused };
+    }
     const disposition = await admitResourceStartWithQuery(
       query,
       preparedBindingStart(persisted, input),
-      await namedItem(query, input, row.item_key)
+      item?.id ?? null,
+      counted
     );
     await query(
       `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'complete', preparation_error = NULL, forge_refusal = NULL, updated_at = ${getDialect().now()}
@@ -754,14 +821,124 @@ async function namedItem(
   query: Query,
   input: PreparedBindingInput,
   bindingItemKey: string | null
-): Promise<string | null> {
+): Promise<{ id: string; key: string } | null> {
   const receipt = await query<{ item_key: string | null }>(
     'SELECT item_key FROM remote_agent_start_receipts WHERE id = $1',
     [input.receiptId]
   );
   const key = bindingItemKey ?? receipt.rows[0]?.item_key;
   if (!key) return null;
-  return ensureItem(query, input.launch.run.codebase_id, key);
+  return { id: await ensureItem(query, input.launch.run.codebase_id, key), key };
+}
+
+interface StartLimitRequestRow {
+  id: string;
+  status: StartLimitRow['status'];
+  start_limit: unknown;
+  grants_limit: unknown;
+}
+
+const startLimitRowsSql = `SELECT id, status, start_limit, grants_limit
+       FROM remote_agent_resource_start_requests
+      WHERE item_id = $1 AND (start_limit IS NOT NULL OR grants_limit IS NOT NULL)
+      ORDER BY queue_position`;
+
+function startLimitRow(row: StartLimitRequestRow): StartLimitRow {
+  return {
+    status: row.status,
+    counted:
+      row.start_limit == null
+        ? null
+        : startLimitRecordSchema.parse(parseStoredJson(row.start_limit)),
+    grant:
+      row.grants_limit == null
+        ? null
+        : startLimitGrantRecordSchema.parse(parseStoredJson(row.grants_limit)),
+  };
+}
+
+/** When a run of `workflow` last completed on the item, or null when none has. */
+async function lastCompletion(
+  query: Query,
+  itemId: string,
+  workflow: string | undefined
+): Promise<string | null> {
+  if (workflow === undefined) return null;
+  const found = await query<{ completed_at: string | Date | null }>(
+    `SELECT MAX(completed_at) AS completed_at FROM remote_agent_workflow_runs
+      WHERE item_id = $1 AND workflow_name = $2 AND status = 'completed'`,
+    [itemId, workflow]
+  );
+  const at = found.rows[0]?.completed_at;
+  return at == null ? null : toHydratedTimestamp(at).toISOString();
+}
+
+/**
+ * Count a binding start against its start limit on the item, inside the admitting
+ * transaction after `lockAdmission`, so two starts cannot both take the last one. Returns
+ * what the start's request records, or why it is refused. A limited start on no item is
+ * refused: the count is per item, and letting it through would start it without a limit.
+ * A grant on no item raises nothing. The reset run's spec for a grant is the one the
+ * item's latest limited request recorded under that name.
+ */
+async function countStartLimits(
+  query: Query,
+  item: { id: string; key: string } | null,
+  limit: ResourceStartBindingIntent['limit'],
+  grants: string | undefined
+): Promise<StartLimitColumns | { refused: string }> {
+  if (limit === undefined && grants === undefined) return { startLimit: null, grantsLimit: null };
+  if (item === null) {
+    if (limit === undefined) return { startLimit: null, grantsLimit: null };
+    return {
+      refused: `Start limit '${limit.name}' counts starts per item, and this start names no item.`,
+    };
+  }
+  const rows = (await query<StartLimitRequestRow>(startLimitRowsSql, [item.id])).rows.map(
+    startLimitRow
+  );
+  let startLimit: string | null = null;
+  if (limit !== undefined) {
+    const standing = startLimitStanding(
+      limit,
+      rows,
+      await lastCompletion(query, item.id, limit.resetOn)
+    );
+    if (standing.left === 0) return { refused: startLimitRefusal(standing, item.key) };
+    startLimit = JSON.stringify({ ...limit, window: standing.since });
+  }
+  let grantsLimit: string | null = null;
+  if (grants !== undefined) {
+    const spec = [...rows].reverse().find(row => row.counted?.name === grants)?.counted;
+    const window = startLimitWindow(
+      grants,
+      rows,
+      await lastCompletion(query, item.id, spec?.resetOn)
+    );
+    grantsLimit = JSON.stringify({ name: grants, window });
+  }
+  return { startLimit, grantsLimit };
+}
+
+/** See `IResourceStartStore.readItemStartLimits`. Each limit stands by its latest recorded spec. */
+export async function readItemStartLimits(itemId: string): Promise<ItemStartLimits> {
+  const db = getDatabase();
+  const query: Query = (sql, params) => db.query(sql, params);
+  const found = (await query<StartLimitRequestRow>(startLimitRowsSql, [itemId])).rows;
+  const rows = found.map(startLimitRow);
+  const countedUnder: Record<string, string> = {};
+  const specs = new Map<string, StartLimitRecord>();
+  found.forEach((request, index) => {
+    const counted = rows[index]?.counted;
+    if (!counted) return;
+    countedUnder[request.id] = counted.name;
+    // Queue order, so the latest spec of a name wins.
+    specs.set(counted.name, counted);
+  });
+  const limits: ItemStartLimits['limits'] = [];
+  for (const spec of specs.values())
+    limits.push(startLimitStanding(spec, rows, await lastCompletion(query, itemId, spec.resetOn)));
+  return { limits, countedUnder };
 }
 
 export async function failStartBindingPreparation(input: {

@@ -724,6 +724,8 @@ export class SqliteAdapter implements IDatabase {
         event_input_names TEXT,
         item_key TEXT,
         checkout_from TEXT,
+        start_limit TEXT,
+        grants_limit TEXT,
         preparation_status TEXT NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
         preparation_owner TEXT,
         preparation_error TEXT,
@@ -762,6 +764,8 @@ export class SqliteAdapter implements IDatabase {
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         admitted_at TEXT,
         item_id TEXT REFERENCES remote_agent_items(id),
+        start_limit TEXT,
+        grants_limit TEXT,
         FOREIGN KEY (receipt_id, binding_id) REFERENCES remote_agent_start_receipt_bindings(receipt_id, binding_id) ON DELETE SET NULL
       );
 

@@ -439,6 +439,23 @@ export const bindingWakeSchema = z
   .strict();
 export type BindingWake = z.infer<typeof bindingWakeSchema>;
 
+/**
+ * `limit` on a binding: how many starts it may make on one item, counted under `name`.
+ * Only admitted starts and queued ones (a reserved start) count; a skipped, refused or
+ * withdrawn start does not. Every file of one pack binding shares the name, so they share
+ * one count. When a run of `resetOn` completes on the item the count starts again; without
+ * it the count never resets by itself. An asks-settled binding that `grants` the name
+ * allows one more start on that item each time it starts.
+ */
+export const startLimitSchema = z
+  .object({
+    name: z.string().min(1),
+    starts: z.number().int().positive(),
+    resetOn: z.string().min(1).optional(),
+  })
+  .strict();
+export type StartLimit = z.infer<typeof startLimitSchema>;
+
 export const resourceStartBindingIntentSchema = z
   .object({
     bindingId: z.string().min(1),
@@ -507,6 +524,19 @@ export const resourceStartBindingIntentSchema = z
      * reaches the `intent` column.
      */
     wake: bindingWakeSchema.optional(),
+    /**
+     * How many times this binding may start its stage on one item; see `startLimitSchema`.
+     * A binding without it starts as often as it matches. Admission counts and refuses, in
+     * the transaction that admits. The SQL store keeps it out of the `intent` column, which
+     * older binaries parse strictly; see `storableIntent` in core's start-receipt-writes.
+     */
+    limit: startLimitSchema.optional(),
+    /**
+     * The name of a `limit` this binding's start raises by one on its item, once the start
+     * is admitted. Only an asks-settled binding grants: the answer that settles the asks is
+     * how an operator allows one more round. Kept out of the `intent` column like `limit`.
+     */
+    grants: z.string().min(1).optional(),
   })
   .strict();
 export type ResourceStartBindingIntent = z.infer<typeof resourceStartBindingIntentSchema>;
@@ -779,6 +809,10 @@ export const triggerConfigSchema = z
   .refine(config => config.item === undefined || config.on === undefined, {
     message: 'An on binding maps no item: its start is on the item of the run its event names',
     path: ['item'],
+  })
+  .refine(config => config.binding.grants === undefined || config.on?.asksSettled !== undefined, {
+    message: 'Only an asks-settled binding grants: an answer is how an operator allows one more',
+    path: ['binding', 'grants'],
   })
   // The engine picks the lane of a start on another run's checkout; a fixed one here
   // would contradict it.

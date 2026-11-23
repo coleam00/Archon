@@ -52,6 +52,8 @@ const bindingSchema = resourceStartBindingIntentSchema
     checkoutFrom: true,
     itemKey: true,
     wake: true,
+    // Only an asks-settled binding grants a limit one more start.
+    grants: true,
   })
   .extend({
     inputMapping: z.record(

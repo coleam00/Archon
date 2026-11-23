@@ -256,6 +256,7 @@ export function createInMemoryWorkflowStore(
     listPendingStartBindings: admit(admission.listPendingStartBindings.bind(admission)),
     getResourceStartRequest: admit(admission.getResourceStartRequest.bind(admission)),
     listSkippedItemStarts: admit(admission.listSkippedItemStarts.bind(admission)),
+    readItemStartLimits: admit(admission.readItemStartLimits.bind(admission)),
     getInstallHold: admit(admission.getInstallHold.bind(admission)),
     getRunLimit: admit(admission.getRunLimit.bind(admission)),
     setInstallHold: admit(admission.setInstallHold.bind(admission)),

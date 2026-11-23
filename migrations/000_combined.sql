@@ -750,6 +750,15 @@ ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS item_ke
 -- preparation_error, which keeps only the failed boundary.
 ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS forge_refusal TEXT;
 
+-- A binding's start limit (JSON) and the name of the limit it grants (#6109), beside the
+-- intent for the same reason as event_input_names. On each start request, the limit it
+-- counted under and the limit it granted, each JSON with the window it was counted in:
+-- the count is derived from these rows, so no counter has to agree with them.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS start_limit TEXT;
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS grants_limit TEXT;
+ALTER TABLE remote_agent_resource_start_requests ADD COLUMN IF NOT EXISTS start_limit TEXT;
+ALTER TABLE remote_agent_resource_start_requests ADD COLUMN IF NOT EXISTS grants_limit TEXT;
+
 -- The durable thing runs are about: a key within a project, and when it was first named.
 -- No status, stage or config; where an item stands is derived from its runs. project_key
 -- is the engine's project identity, the one remote_agent_state_revisions scopes by.

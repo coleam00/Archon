@@ -2225,6 +2225,7 @@ declare module 'archon:script' {
           readonly uid?: number;
         } | null;
       } | null;
+      readonly startLimit: string | null;
       readonly spend: {
         readonly usd: number | null;
         readonly inputTokens: number | null;
@@ -2297,6 +2298,15 @@ declare module 'archon:script' {
       readonly limit: number;
       readonly live: number;
     } | null;
+    readonly startLimits: ReadonlyArray<{
+      readonly name: string;
+      readonly starts: number;
+      readonly resetOn: string | null;
+      readonly since: string | null;
+      readonly granted: number;
+      readonly used: number;
+      readonly left: number;
+    }>;
     readonly waits: ReadonlyArray<{
       readonly event: string;
       readonly about: string;
@@ -2761,6 +2771,7 @@ declare module 'archon:script' {
             readonly uid?: number;
           } | null;
         } | null;
+        readonly startLimit: string | null;
         readonly spend: {
           readonly usd: number | null;
           readonly inputTokens: number | null;
@@ -2833,6 +2844,15 @@ declare module 'archon:script' {
         readonly limit: number;
         readonly live: number;
       } | null;
+      readonly startLimits: ReadonlyArray<{
+        readonly name: string;
+        readonly starts: number;
+        readonly resetOn: string | null;
+        readonly since: string | null;
+        readonly granted: number;
+        readonly used: number;
+        readonly left: number;
+      }>;
       readonly waits: ReadonlyArray<{
         readonly event: string;
         readonly about: string;
