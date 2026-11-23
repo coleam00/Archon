@@ -278,6 +278,7 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
         isKnownUser: async () => true,
         hasDeliveryReceipt: (source, delivery) =>
           harness.store.hasStartReceiptForDelivery(source, delivery),
+        getReceipt: id => harness.store.getStartReceipt(id),
       });
       const reads: string[] = [];
       const observer = createItemWaitObserver({
@@ -290,6 +291,12 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
           },
           prReviews: async () => {
             throw new Error('No review is read for a check wait');
+          },
+          issuesWithLabel: async () => {
+            throw new Error('No label is read for a check wait');
+          },
+          labelAdded: async () => {
+            throw new Error('No label is read for a check wait');
           },
         },
       });

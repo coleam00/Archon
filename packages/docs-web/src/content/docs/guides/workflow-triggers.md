@@ -1077,16 +1077,56 @@ An install that receives no webhooks, such as a laptop or a machine behind NAT w
 
 [`archon workflow wake`](/reference/cli/#workflow-wake) observes on every invocation, and `workflow wake --watch` (what `archon workflow wake schedule install` runs) observes each source once per interval, also while runs it resumed are still running. `workflow wake` loads only the sources that declare `observe`, so a webhook-only source in the same file, such as one whose secret is set only for the server, cannot stop it. A running `archon serve` with the same file observes on its own timer and logs `webhook_source_observing` with the source and interval at boot. Set `ARCHON_WEBHOOK_SOURCES` where the process reads it: `~/.archon/.env` is read by both.
 
-A pass reads the open waits. When none is open, it reads nothing from the forge. Otherwise it reads, through your forge plugin and credentials as [`archon forge`](/reference/cli/#forge) does, what each wait's binding is about:
+A pass reads the open waits, and the labels the source's bindings name ([below](#label-an-issue-without-a-webhook)). When no wait is open and no binding names a label, it calls no source and reads nothing from the forge. Otherwise it reads, through your forge plugin and credentials as [`archon forge`](/reference/cli/#forge) does, what each wait's binding is about:
 
 - **A check wait**, woken by a `check.changed` binding on `check.revision`: the checks at the wait's commit. Each check becomes the `check.changed` event its webhook would have carried, without the commit's pull requests; a check event names no subject.
 - **A review wait**, woken by a `review.changed` binding on `review.commit` that maps its `item` from `subject.number`: the reviews of the pull request the wait's item key names under that mapping (`pr-7` with prefix `pr-` names pull request 7). Each submitted or dismissed review becomes the `review.changed` event its webhook would have carried. A review not yet submitted is skipped.
 
-Only the bindings that wake an open wait are evaluated, so observing never starts a binding nothing waits on, and an event about another commit than the wait's is not recorded. Each start goes to the wait's own item. Each event is recorded as one delivery of the source per binding and item, with the delivery id `observe:check:<host>/<path>@<commit>:<unit kind>:<unit id>:<phase>:<native result>:<binding id>:<item key>` or `observe:review:<host>/<path>#<number>:<review id>:<submitted|dismissed>:<binding id>:<item key>`, and the engine matches it against the waits exactly as it matches a webhook's. The same state observed again for the same binding and item is a replay and wakes nothing, so a completed check or a review wakes an item's wait at most once per binding, even when the stage it woke ends waiting at the same commit again. A wait that opens later on another item, or for another binding, is a new delivery. A check that had already completed, or a review already submitted, when the wait opened wakes it on the first pass; a webhook would have arrived before the wait and found nothing to wake. The engine refuses a source's read of a commit no open wait is about, or of a pull request no open wait's item key ends with.
+For check and review waits, only the bindings that wake an open wait are evaluated, so observing a commit's checks or a pull request's reviews never starts a binding nothing waits on, and an event about another commit than the wait's is not recorded. Label bindings are the exception: they start work with no wait open, as [below](#label-an-issue-without-a-webhook). Each start goes to the wait's own item. Each event is recorded as one delivery of the source per binding and item, with the delivery id `observe:check:<host>/<path>@<commit>:<unit kind>:<unit id>:<phase>:<native result>:<binding id>:<item key>` or `observe:review:<host>/<path>#<number>:<review id>:<submitted|dismissed>:<binding id>:<item key>`, and the engine matches it against the waits exactly as it matches a webhook's. The same state observed again for the same binding and item is a replay and wakes nothing, so a completed check or a review wakes an item's wait at most once per binding, even when the stage it woke ends waiting at the same commit again. A wait that opens later on another item, or for another binding, is a new delivery. A check that had already completed, or a review already submitted, when the wait opened wakes it on the first pass; a webhook would have arrived before the wait and found nothing to wake. The engine refuses a source's read of a commit no open wait is about, or of a pull request no open wait's item key ends with.
 
 A read that fails, such as a deleted commit or a repository the credential cannot see, is reported for its waits, and the other waits are still read. Any other wait the source binds is reported as not observed, with the reason: a wake binding of another kind, an item key that names no pull request, a project with no repository URL, a repository on another forge host, or a binding that matches the waited event but cannot start on it, such as an input mapped from a field the event lacks. `workflow wake` prints both on its `observe` line; a server logs `source_observe_failed` for a failed pass and `source_observe_unserved` once per process for each wait it cannot observe.
 
-`workflow wake --watch --json` writes `{"ok":true,"action":"wake","observe":[{"source":…,"everySeconds":…}]}` when it starts, and one `observe` line for each pass that read waits (see the [CLI reference](/reference/cli/#workflow-wake)). A stage start whose host could not be drained stays pending: a running watch drains that host again on its next pass, and the failure line names `archon trigger drain --host <id>` to run by hand. A one-shot `workflow wake`, or a watch that restarted, does not remember the host. Every wake pass drains the hosts this install's trigger files name, so a start on such a host is still handed on; a host named only by a source binding needs that command.
+`workflow wake --watch --json` writes `{"ok":true,"action":"wake","observe":[{"source":…,"everySeconds":…}]}` when it starts, and one `observe` line for each pass that read waits or labels, or that has label bindings to report as not observed (see the [CLI reference](/reference/cli/#workflow-wake)). A stage start whose host could not be drained stays pending: a running watch drains that host again on its next pass, and the failure line names `archon trigger drain --host <id>` to run by hand. A one-shot `workflow wake`, or a watch that restarted, does not remember the host. Every wake pass drains the hosts this install's trigger files name, so a start on such a host is still handed on; a host named only by a source binding needs that command.
+
+### Label an issue without a webhook
+
+On the same install, putting a label on an issue can start a workflow on that issue's item. Give the observing source a `label.changed` binding that names the repository and the label:
+
+```json
+{
+  "bindingId": "factory-intake",
+  "hostId": "laptop",
+  "runAsUserId": "2a568f73-e217-40ca-b17d-a784d19fd43a",
+  "resource": "github:acme/widgets:intake",
+  "overlap": "queue",
+  "launch": {
+    "cwd": "/srv/archon/widgets",
+    "workflowName": "take-issue",
+    "inputs": {},
+    "isolation": { "kind": "default" }
+  },
+  "selector": {
+    "kind": "label.changed",
+    "actions": ["added"],
+    "repository": { "host": "github.com", "path": "acme/widgets" },
+    "predicates": [{ "field": "label.name", "equals": "factory" }]
+  },
+  "inputMapping": { "issue": { "source": "field", "field": "subject.number" } },
+  "item": { "field": "subject.number", "prefix": "issue-" }
+}
+```
+
+Each pass lists every open issue in the repository that carries the label, and for each one reads when the label was last added, by the forge's own label event (the [`workitem.label.added`](/reference/forge/) operation). The event becomes the `label.changed` event a webhook would have carried, with action `added`, the label's name (its forge id is not read, so `label.id` is empty), and who added it as `label.actor`. It is recorded as one delivery with the id `observe:label:<host>/<path>#<number>:<label event id>:<binding id>`, and starts the binding, on the item its `item` mapping names, as a webhook delivery would. The item key is not part of the id, so correcting a binding's `item` mapping does not start an add already recorded. A `label.name` predicate with `in` reads each label it names.
+
+- **Labels already there start nothing.** The first pass that sees a binding's label records every issue that already carries it, and starts none of them. Only a label added after that pass starts work: an issue that was closed during the first pass and is reopened later with its old label starts nothing, because its label was added before the binding was first seen. The forge's time of the add is compared with this host's time of the first pass, so an add within the two clocks' skew of it can fall on either side. A binding whose `bindingId`, repository or label changes is seen for the first time again. A first pass that could not read or record every issue it listed records nothing as seen for that binding and label, and the next pass tries again; another binding's failure does not hold it back.
+- **Once per add.** The same add observed again is a replay and starts nothing. Removing the label and adding it again is a new label event, so the next pass starts the binding again.
+- **Observation sees state, not history.** A label added and removed between two passes is never seen and starts nothing. This is the one difference from an install that receives webhooks, which records every add.
+- **Starts past the limit queue.** A pass reads every labelled issue; each start is an ordinary binding start, so [`concurrency.runs`](/reference/configuration/#run-limit) and the binding's resource and overlap decide when it runs.
+- **Issues only.** A pull request in the list is skipped.
+
+The source reports a label binding it does not observe, with the reason: a binding whose selector names a pull request (`pull-request labels are not observed; only issues are`), one with no `added` action, one with `wake`, one that names no repository or no `label.name`, or one on another forge host. A source with `webhookSecretEnv` observes no label binding: its label events arrive by webhook, and observing too would start each twice. `workflow wake` prints each as `not observed: binding <id>: <reason>` on every pass, even when the source has nothing else to observe; a server logs `source_observe_unserved` once per process. A binding that cannot be observed reads nothing from the forge. The engine refuses a source's list of a label no binding of it names, and its read of an issue that list did not return.
+
+Your forge plugin must support `workitem.label.added`. An installed plugin released before it answers `unsupported_op`, and each pass reports that failure for the binding.
 
 ## Start workflows from any signed webhook
 

@@ -21,6 +21,7 @@ import { handleGithubPrView } from './pull-requests';
 import { handleGithubPrReviews } from './reviews';
 import {
   handleGithubRepoLabelsList,
+  handleGithubWorkItemLabelAdded,
   handleGithubWorkItemList,
   handleGithubWorkItemView,
 } from './workitems';
@@ -49,6 +50,7 @@ export const githubPluginMetadata = {
     'workitem.close',
     'workitem.edit-body',
     'workitem.list',
+    'workitem.label.added',
     'workitem.search',
     'repo.labels.list',
     'repo.label.ensure',
@@ -108,6 +110,7 @@ type ReadHandler<Op extends ReadOp> = (
 const readHandlers: { [Op in ReadOp]: ReadHandler<Op> } = {
   'workitem.view': handleGithubWorkItemView,
   'workitem.list': handleGithubWorkItemList,
+  'workitem.label.added': handleGithubWorkItemLabelAdded,
   'workitem.search': handleGithubWorkItemSearch,
   'workitem.comments': handleGithubWorkItemComments,
   'repo.labels.list': handleGithubRepoLabelsList,

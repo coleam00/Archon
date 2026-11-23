@@ -85,6 +85,7 @@ describe('webhook source plugin host', () => {
       acceptReceipt,
       isKnownUser: mock(async () => true),
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
 
     const result = host.receive('source-1', {
@@ -119,6 +120,7 @@ describe('webhook source plugin host', () => {
       acceptReceipt: async () => ({ receiptId: 'unused', replay: false }),
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     await expect(load).rejects.toThrow(configPath);
     await expect(load).rejects.toThrow('sources.0.observe.everySeconds');
@@ -134,6 +136,7 @@ describe('webhook source plugin host', () => {
       acceptReceipt,
       isKnownUser: mock(async () => true),
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     await expect(
       host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -148,6 +151,7 @@ describe('webhook source plugin host', () => {
       acceptReceipt,
       isKnownUser: mock(async () => false),
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     expect(
       await first.receive('source-1', {
@@ -162,6 +166,7 @@ describe('webhook source plugin host', () => {
       acceptReceipt,
       isKnownUser: mock(async () => false),
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     await expect(
       second.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -183,6 +188,7 @@ describe('webhook source plugin host', () => {
         acceptReceipt,
         isKnownUser: mock(async () => true),
         hasDeliveryReceipt: async () => false,
+        getReceipt: async () => null,
       });
       await expect(
         host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -203,6 +209,7 @@ describe('webhook source plugin host', () => {
       acceptReceipt,
       isKnownUser: mock(async () => true),
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     expect(
       await host.receive('source-1', {
@@ -230,6 +237,7 @@ describe('webhook source plugin host', () => {
       acceptReceipt,
       isKnownUser: mock(async () => true),
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     await expect(
       host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -246,6 +254,7 @@ describe('webhook source plugin host', () => {
       isKnownUser,
       hasDeliveryReceipt: async (sourceInstanceId, deliveryId) =>
         sourceInstanceId === 'source-1' && deliveryId === 'delivery-1',
+      getReceipt: async () => null,
     });
     expect(
       await host.receive('source-1', {
@@ -267,6 +276,7 @@ describe('webhook source plugin host', () => {
       },
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     expect(
       await host.receive('source-1', {
@@ -286,6 +296,7 @@ describe('webhook source plugin host', () => {
       }),
       isKnownUser: mock(async () => true),
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     await expect(
       host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -369,6 +380,12 @@ function forgeReader() {
       reads.push(input);
       return {} as never;
     },
+    issuesWithLabel: async (): Promise<never> => {
+      throw new Error('no label read expected');
+    },
+    labelAdded: async (): Promise<never> => {
+      throw new Error('no label read expected');
+    },
   };
 }
 
@@ -380,10 +397,13 @@ describe('observing open item waits', () => {
       acceptReceipt,
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     const forge = forgeReader();
     const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
-    expect(observer?.observing).toEqual([{ sourceInstanceId: 'source-1', everySeconds: 60 }]);
+    expect(observer?.observing).toEqual([
+      { sourceInstanceId: 'source-1', everySeconds: 60, labels: [], unservedBindings: [] },
+    ]);
     expect(await observer?.pass(new Date())).toEqual([]);
     expect(forge.reads).toEqual([]);
     expect(acceptReceipt).not.toHaveBeenCalled();
@@ -399,6 +419,7 @@ describe('observing open item waits', () => {
       acceptReceipt,
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     const forge = forgeReader();
     const observer = createItemWaitObserver({ sources, store: waitStore([{}]), forge });
@@ -416,6 +437,7 @@ describe('observing open item waits', () => {
         acceptReceipt: async () => ({ receiptId: 'unused', replay: false }),
         isKnownUser: async () => true,
         hasDeliveryReceipt: async () => false,
+        getReceipt: async () => null,
       });
       const forge = forgeReader();
       const observer = createItemWaitObserver({
@@ -452,6 +474,7 @@ describe('observing open item waits', () => {
       acceptReceipt: async input => ({ receiptId: input.receipt.id, replay: false }),
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     const observer = createItemWaitObserver({
       sources,
@@ -469,6 +492,7 @@ describe('observing open item waits', () => {
       acceptReceipt: async input => ({ receiptId: input.receipt.id, replay: false }),
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     const forge = forgeReader();
     const observer = createItemWaitObserver({ sources, store: waitStore([{}]), forge });
@@ -495,6 +519,7 @@ describe('observing open item waits', () => {
       acceptReceipt,
       isKnownUser: async () => false,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     expect(unknown?.error).toContain('unknown run-as user');
     expect(acceptReceipt).not.toHaveBeenCalled();
@@ -508,6 +533,7 @@ describe('observing open item waits', () => {
       acceptReceipt: async input => ({ receiptId: input.receipt.id, replay: false }),
       isKnownUser: async id => id !== 'ghost',
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     const [partial] =
       (await createItemWaitObserver({ sources: mixed, store: waitStore([{}]), forge })?.pass(
@@ -521,6 +547,7 @@ describe('observing open item waits', () => {
       acceptReceipt,
       isKnownUser: async () => false,
       hasDeliveryReceipt: async () => true,
+      getReceipt: async () => null,
     });
     expect(replayed).toMatchObject({ receipts: [], conflicts: 0 });
     expect(replayed?.error).toBeUndefined();
@@ -531,6 +558,7 @@ describe('observing open item waits', () => {
       },
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     });
     expect(conflicting).toMatchObject({ receipts: [], conflicts: 1 });
   });
@@ -551,6 +579,7 @@ describe('observing open item waits', () => {
       acceptReceipt: async () => ({ receiptId: 'unused', replay: false }),
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     };
     await expect(loadWebhookSourcePlugins(configPath, dependencies)).rejects.toThrow(
       'webhook-only'
@@ -568,6 +597,7 @@ describe('observing open item waits', () => {
       acceptReceipt: async () => ({ receiptId: 'unused', replay: false }),
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
     };
     const sources = await loadWebhookSourcePlugins(configPath, dependencies);
     expect(
@@ -582,5 +612,310 @@ describe('observing open item waits', () => {
     await expect(loadWebhookSourcePlugins(configPath, dependencies)).rejects.toThrow(
       'its plugin cannot observe waits'
     );
+  });
+});
+
+const LABEL_REPO = { host: 'github.com', path: 'owner/repo' };
+const LABEL_READ = { bindingId: 'binding-1', repo: LABEL_REPO, label: 'factory' };
+
+/**
+ * A source with one declared label read. Each pass lists the label, reads when it was added
+ * to each issue (or to `askNumbers`), and returns one acceptance per issue: unmatched while
+ * the read is seeding, matched otherwise. `listLabel` lists another label than declared.
+ */
+async function labelFixture(
+  plugin: {
+    listLabel?: string;
+    askNumbers?: number[];
+    reads?: unknown[];
+    unserved?: unknown[];
+  } = {}
+) {
+  const root = await mkdtemp(join(tmpdir(), 'archon-webhook-source-'));
+  roots.push(root);
+  const modulePath = join(root, 'source.ts');
+  const configPath = join(root, 'sources.json');
+  await writeFile(
+    modulePath,
+    `export default ({ config }) => ({
+  receive: async () => ({ status: 'rejected', reason: 'unauthenticated' }),
+  observedLabels: {
+    reads: config.reads ?? [config.read],
+    unserved: config.unserved ?? [{ bindingId: 'pr-binding', reason: 'issues only' }],
+  },
+  observe: async ({ labels, forge }) => {
+    const acceptances = [];
+    const labelFailures = [];
+    for (const read of labels) {
+      let listed;
+      try {
+        listed = await forge.issuesWithLabel({ repo: read.repo, label: config.listLabel ?? read.label });
+      } catch (error) {
+        labelFailures.push({ bindingId: read.bindingId, label: read.label, reason: error.message });
+        continue;
+      }
+      for (const number of config.askNumbers ?? listed.items.map(item => item.ref.number)) {
+        let added;
+        try {
+          added = await forge.labelAdded({ repo: read.repo, number, label: read.label });
+        } catch (error) {
+          labelFailures.push({ bindingId: read.bindingId, label: read.label, number, reason: error.message });
+          continue;
+        }
+        const deliveryId = 'observe:label:' + number + ':' + added.added.id + ':' + read.bindingId;
+        const receipt = {
+          id: crypto.randomUUID(),
+          sourceInstanceId: 'source-1',
+          deliveryId,
+          contentDigest: deliveryId,
+          receivedAt: '2026-01-01T00:00:00.000Z',
+          occurredAt: null,
+          sourceActor: null,
+        };
+        const binding = { ...config.binding, bindingId: read.bindingId };
+        acceptances.push({
+          bindingId: read.bindingId,
+          label: read.label,
+          acceptance:
+            read.seenSince === null
+              ? { receipt, outcome: 'unmatched', reason: 'seen', bindings: [] }
+              : { receipt, outcome: 'matched', bindings: [binding] },
+        });
+      }
+    }
+    return { acceptances: [], labelAcceptances: acceptances, unserved: [], failed: [], labelFailures };
+  },
+});\n`,
+    'utf8'
+  );
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      version: 1,
+      sources: [
+        {
+          sourceInstanceId: 'source-1',
+          module: modulePath,
+          config: { ...plugin, read: LABEL_READ, binding: acceptance().bindings[0] },
+          observe: { everySeconds: 15 },
+        },
+      ],
+    }),
+    'utf8'
+  );
+  return configPath;
+}
+
+/** A forge with open issues carrying the label, each with its latest label-added event id. */
+function labelForge(issues: Map<number, string>, failing = new Set<number>()) {
+  const reads: string[] = [];
+  return {
+    ...forgeReader(),
+    reads,
+    issuesWithLabel: async ({ repo, label }: { repo: typeof LABEL_REPO; label: string }) => {
+      reads.push(`list ${label}`);
+      return {
+        repo,
+        label,
+        items: [...issues.keys()].map(number => ({
+          ref: { repo, number },
+          kind: 'issue' as const,
+          url: `https://github.com/owner/repo/issues/${String(number)}`,
+          state: 'open' as const,
+        })),
+      };
+    },
+    labelAdded: async ({
+      repo,
+      number,
+      label,
+    }: {
+      repo: typeof LABEL_REPO;
+      number: number;
+      label: string;
+    }) => {
+      reads.push(`added ${String(number)}`);
+      if (failing.has(number)) throw new Error('events unavailable');
+      return {
+        subject: { kind: 'issue' as const, ref: { repo, number } },
+        name: label,
+        added: { id: issues.get(number) ?? 'none', at: '2026-01-01T00:00:00Z', actor: null },
+      };
+    },
+  };
+}
+
+/** Receipts kept by delivery id, replaying a recorded one as the store does. */
+function receiptStore(knownUser: (id: string) => boolean = () => true) {
+  const receipts = new Map<string, SourceReceiptAcceptance>();
+  return {
+    receipts,
+    dependencies: {
+      acceptReceipt: async (input: SourceReceiptAcceptance) => {
+        const deliveryId = input.receipt.deliveryId ?? input.receipt.id;
+        const replay = receipts.has(deliveryId);
+        if (!replay) receipts.set(deliveryId, input);
+        return { receiptId: deliveryId, replay };
+      },
+      isKnownUser: async (id: string) => knownUser(id),
+      hasDeliveryReceipt: async (_source: string, deliveryId: string) => receipts.has(deliveryId),
+      getReceipt: async (id: string) => {
+        const found = [...receipts.values()].find(receipt => receipt.receipt.id === id);
+        return found ? { occurredAt: found.receipt.occurredAt } : null;
+      },
+    },
+  };
+}
+
+describe('observing label bindings', () => {
+  const MARKER = 'observe:label-seen:binding-1:github.com/owner/repo:factory';
+
+  test('a label already on an issue starts nothing; a later add starts once, and a re-add again', async () => {
+    const configPath = await labelFixture();
+    const store = receiptStore();
+    const sources = await loadWebhookSourcePlugins(configPath, store.dependencies);
+    const issues = new Map([[5, 'event-1']]);
+    const forge = labelForge(issues);
+    const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
+    const matched = () =>
+      [...store.receipts.values()].filter(receipt => receipt.outcome === 'matched').length;
+    let now = Date.parse('2026-01-01T00:00:00.000Z');
+    const pass = async () => {
+      const reports = (await observer?.pass(new Date(now))) ?? [];
+      now += 15_000;
+      return reports;
+    };
+
+    // No wait is open, yet the declared read is observed, and first seen.
+    const [first] = await pass();
+    expect(first).toMatchObject({
+      waits: 0,
+      labels: 1,
+      reads: 2,
+      unservedBindings: [{ bindingId: 'pr-binding', reason: 'issues only' }],
+    });
+    expect(first?.error).toBeUndefined();
+    expect(store.receipts.has(MARKER)).toBe(true);
+    expect(matched()).toBe(0);
+
+    // A second issue labelled after the first pass starts.
+    issues.set(6, 'event-2');
+    const [second] = await pass();
+    expect(second?.receipts).toEqual(['observe:label:6:event-2:binding-1']);
+    expect(matched()).toBe(1);
+
+    // The same label state is a replay.
+    expect((await pass())[0]?.receipts).toEqual([]);
+
+    // Removed and added again: the forge's new event is a new delivery.
+    issues.set(6, 'event-3');
+    expect((await pass())[0]?.receipts).toEqual(['observe:label:6:event-3:binding-1']);
+    expect(matched()).toBe(2);
+  });
+
+  test('a first pass that could not read an issue records no marker, so it seeds again', async () => {
+    const configPath = await labelFixture();
+    const store = receiptStore();
+    const sources = await loadWebhookSourcePlugins(configPath, store.dependencies);
+    const issues = new Map([
+      [5, 'event-1'],
+      [6, 'event-2'],
+    ]);
+    const failing = new Set([6]);
+    const observer = createItemWaitObserver({
+      sources,
+      store: waitStore([]),
+      forge: labelForge(issues, failing),
+    });
+    const start = Date.parse('2026-01-01T00:00:00.000Z');
+    const [first] = (await observer?.pass(new Date(start))) ?? [];
+    expect(first?.error).toContain(
+      "binding 'binding-1' label 'factory' on issue 6: events unavailable"
+    );
+    expect(store.receipts.has(MARKER)).toBe(false);
+
+    // Issue 6 carried the label before the binding was first seen, so it starts nothing.
+    failing.clear();
+    const [second] = (await observer?.pass(new Date(start + 15_000))) ?? [];
+    expect(second?.error).toBeUndefined();
+    expect(store.receipts.has(MARKER)).toBe(true);
+    expect([...store.receipts.values()].every(receipt => receipt.outcome === 'unmatched')).toBe(
+      true
+    );
+  });
+
+  test('the forge lists only a declared label, and reads only issues that list returned', async () => {
+    const observeWith = async (plugin: Parameters<typeof labelFixture>[0]) => {
+      const sources = await loadWebhookSourcePlugins(
+        await labelFixture(plugin),
+        receiptStore().dependencies
+      );
+      const forge = labelForge(new Map([[5, 'event-1']]));
+      const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
+      const [report] = (await observer?.pass(new Date())) ?? [];
+      return { report, reads: forge.reads };
+    };
+    const undeclared = await observeWith({ listLabel: 'other' });
+    expect(undeclared.reads).toEqual([]);
+    expect(undeclared.report?.error).toContain(
+      "No binding of this source names label 'other' in 'github.com/owner/repo'"
+    );
+
+    const unlisted = await observeWith({ askNumbers: [5, 9] });
+    expect(unlisted.reads).toEqual(['list factory', 'added 5']);
+    expect(unlisted.report?.error).toContain(
+      "Issue 9 of 'github.com/owner/repo' was not listed with label 'factory' in this pass"
+    );
+  });
+
+  test('one read whose acceptance cannot be admitted does not hold back another read', async () => {
+    let userKnown = true;
+    const store = receiptStore(() => userKnown);
+    const issues = new Map([[5, 'event-1']]);
+    const observe = async (reads: unknown[]) => {
+      const sources = await loadWebhookSourcePlugins(
+        await labelFixture({ reads }),
+        store.dependencies
+      );
+      return (
+        (await createItemWaitObserver({
+          sources,
+          store: waitStore([]),
+          forge: labelForge(issues),
+        })?.pass(new Date())) ?? []
+      );
+    };
+    // binding-1 is seen first; then its run-as user is removed and binding-2 is added.
+    await observe([LABEL_READ]);
+    expect(store.receipts.has(MARKER)).toBe(true);
+    userKnown = false;
+    issues.set(5, 'event-2');
+    const otherRead = { bindingId: 'binding-2', repo: LABEL_REPO, label: 'urgent' };
+    const [report] = await observe([LABEL_READ, otherRead]);
+    // binding-1's new start cannot be admitted, yet binding-2 is still seen.
+    expect(report?.error).toContain('unknown run-as user');
+    expect(store.receipts.has('observe:label-seen:binding-2:github.com/owner/repo:urgent')).toBe(
+      true
+    );
+  });
+
+  test('a source with only label bindings it cannot observe is reported, and reads nothing', async () => {
+    const configPath = await labelFixture({ reads: [] });
+    const sources = await loadWebhookSourcePlugins(configPath, receiptStore().dependencies);
+    const forge = labelForge(new Map([[5, 'event-1']]));
+    const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
+    expect(await observer?.pass(new Date())).toEqual([
+      {
+        source: 'source-1',
+        waits: 0,
+        labels: 0,
+        reads: 0,
+        receipts: [],
+        conflicts: 0,
+        unserved: [],
+        unservedBindings: [{ bindingId: 'pr-binding', reason: 'issues only' }],
+      },
+    ]);
+    expect(forge.reads).toEqual([]);
   });
 });

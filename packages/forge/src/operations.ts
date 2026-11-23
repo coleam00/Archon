@@ -18,6 +18,8 @@ import {
   repoLabelsListSchema,
   prViewRequestSchema,
   prViewSchema,
+  workItemLabelAddedRequestSchema,
+  workItemLabelAddedSchema,
   workItemListRequestSchema,
   workItemListSchema,
   workItemSearchItemSchema,
@@ -125,6 +127,8 @@ export const commitChecksObservationSchema = checkSetSchema.safeExtend({
 });
 export type CommitChecksObservation = z.infer<typeof commitChecksObservationSchema>;
 export type PrReviewsObservation = z.infer<typeof prReviewsSchema>;
+export type WorkItemList = z.infer<typeof workItemListSchema>;
+export type WorkItemLabelAdded = z.infer<typeof workItemLabelAddedSchema>;
 /** The `forge check` refusals a plugin can state its own remedy for. */
 const pluginRemedyKinds = ['unsupported_op', 'no_credential'] as const;
 type PluginRemedyKind = (typeof pluginRemedyKinds)[number];
@@ -312,6 +316,10 @@ const auditResponseSchema = z.discriminatedUnion('ok', [
       }),
       z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
       z.object({ op: workItemListRequestSchema.shape.op, value: workItemListSchema }),
+      z.object({
+        op: workItemLabelAddedRequestSchema.shape.op,
+        value: workItemLabelAddedSchema,
+      }),
       z.object({
         op: workItemSearchRequestSchema.shape.op,
         value: workItemSearchSchema.omit({ text: true }).extend({

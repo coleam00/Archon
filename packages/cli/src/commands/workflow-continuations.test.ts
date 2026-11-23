@@ -570,15 +570,31 @@ function observation(receipts: string[]) {
       reason: "item 'issue-3' names no pull request under the binding's item mapping",
     },
   ];
+  const unservedBindings = [
+    { bindingId: 'pr-labels', reason: 'pull-request labels are not observed; only issues are' },
+  ];
   const pass = mock(async () => [
-    { source: 'github', waits: 2, reads: 1, receipts, conflicts: 0, unserved },
+    {
+      source: 'github',
+      waits: 2,
+      labels: 1,
+      reads: 1,
+      receipts,
+      conflicts: 0,
+      unserved,
+      unservedBindings,
+    },
   ]);
   return {
     dispatch,
     pass,
     unserved,
+    unservedBindings,
     value: {
-      observer: { observing: [{ sourceInstanceId: 'github', everySeconds: 60 }], pass },
+      observer: {
+        observing: [{ sourceInstanceId: 'github', everySeconds: 60, labels: [], unservedBindings }],
+        pass,
+      },
       dispatch,
     },
   };
@@ -613,10 +629,12 @@ test('watch says what it observes, and starts what an observed wait admitted on 
     action: 'observe',
     source: 'github',
     waits: 2,
+    labels: 1,
     reads: 1,
     started: 1,
     conflicts: 0,
     unserved: observed.unserved,
+    unservedBindings: observed.unservedBindings,
   });
   expect(drain.mock.calls.map(([drained]) => drained.hostId)).toEqual(['build-host']);
   expect(observed.dispatch).toHaveBeenCalledWith('request-1', 'build-host');
@@ -635,7 +653,16 @@ test('a host whose drain failed is drained again on the next pass, with no new o
   // third observation pass stops the watch.
   observed.pass
     .mockImplementationOnce(async () => [
-      { source: 'github', waits: 1, reads: 1, receipts: ['woken'], conflicts: 0, unserved: [] },
+      {
+        source: 'github',
+        waits: 1,
+        labels: 0,
+        reads: 1,
+        receipts: ['woken'],
+        conflicts: 0,
+        unserved: [],
+        unservedBindings: [],
+      },
     ])
     .mockImplementationOnce(async () => [])
     .mockImplementation(async () => {

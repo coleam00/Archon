@@ -471,7 +471,7 @@ async function reportObserved(
   json: boolean
 ): Promise<boolean> {
   const started = await owedStarts(host, report.receipts, owed);
-  const { source, waits, reads, conflicts, unserved, error } = report;
+  const { source, waits, labels, reads, conflicts, unserved, unservedBindings, error } = report;
   const ok = error === undefined;
   if (json)
     await writeJsonLine({
@@ -479,20 +479,24 @@ async function reportObserved(
       action: 'observe',
       source,
       waits,
+      labels,
       reads,
       started,
       conflicts,
       unserved,
+      unservedBindings,
       ...(ok ? {} : { error }),
     });
   else {
     console.log(
-      `observe ${source}: ${String(waits)} wait(s), ${String(reads)} read(s), ${String(started)} start(s)${conflicts ? `, ${String(conflicts)} conflicting deliveries` : ''}${ok ? '' : `; ${error}`}`
+      `observe ${source}: ${String(waits)} wait(s), ${String(labels)} label(s), ${String(reads)} read(s), ${String(started)} start(s)${conflicts ? `, ${String(conflicts)} conflicting deliveries` : ''}${ok ? '' : `; ${error}`}`
     );
     for (const { wait, reason } of unserved)
       console.log(
         `  not observed: ${wait.event} about ${wait.about} on ${wait.itemKey} from ${wait.workflowName}: ${reason}`
       );
+    for (const { bindingId, reason } of unservedBindings)
+      console.log(`  not observed: binding ${bindingId}: ${reason}`);
   }
   return ok;
 }

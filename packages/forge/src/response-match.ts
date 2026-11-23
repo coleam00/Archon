@@ -347,6 +347,8 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
     sameRepo(value.repo, request.repo) &&
     value.label === request.label &&
     value.items.every(item => item.state === 'open' && sameRepo(item.ref.repo, request.repo)),
+  'workitem.label.added': (request, value) =>
+    sameSubject(value.subject, request.subject) && value.name === request.name,
   'workitem.create': (request, value) =>
     sameTarget(value.target, request.repo) &&
     sameRepo(value.workitem.ref.repo, request.repo) &&

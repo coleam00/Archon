@@ -1,23 +1,26 @@
 /**
  * The installed source plugins (the file `ARCHON_WEBHOOK_SOURCES` names) and the two ways
  * their events reach the engine: a webhook delivery (`receive`) and, for a source that
- * declares `observe`, a pass over the open item waits (`createItemWaitObserver`). Both
- * admit through the same `admit`, so an observed event is recorded, deduplicated and
- * matched against the waits exactly as a delivered one is. Loaded by the server and by
- * `archon workflow wake`, which is why it lives here and not in the server.
+ * declares `observe`, a pass over the open item waits and the labels its bindings start on
+ * (`createItemWaitObserver`). Both admit through the same `admit`, so an observed event is
+ * recorded, deduplicated and matched against the waits exactly as a delivered one is.
+ * Loaded by the server and by `archon workflow wake`, which is why it lives here and not in
+ * the server.
  */
 import { readFile } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from '@hono/zod-openapi';
 import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
+import type { StartReceiptInspection } from '@archon/workflows/resource-start-store';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { createLogger } from '@archon/paths';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import type {
   ObservedItemWait,
+  ObservedLabelRead,
   SourceForgeReader,
   SourceObservation,
   WebhookSourcePlugin,
@@ -25,6 +28,7 @@ import type {
   WebhookSourceRequest,
 } from '@archon/workflows/webhook-source-plugin';
 import {
+  observedLabelsSchema,
   sourceObservationSchema,
   webhookSourceResultSchema,
 } from '@archon/workflows/webhook-source-plugin';
@@ -53,10 +57,42 @@ const sourceConfigSchema = z
 
 export type WebhookSourceOutcome = 'accepted' | 'malformed' | 'unauthenticated' | 'conflict';
 
-/** A source that observes the open waits, and how often. */
+/** A label binding a source cannot observe, with why. */
+export interface UnservedBinding {
+  bindingId: string;
+  reason: string;
+}
+
+/**
+ * A source that observes, how often, and the label reads its bindings name. The reads are
+ * fixed when the plugin loads; a pass lists only these.
+ */
 export interface ObservingSource {
   sourceInstanceId: string;
   everySeconds: number;
+  labels: readonly ObservedLabelRead[];
+  unservedBindings: readonly UnservedBinding[];
+}
+
+/**
+ * The delivery id of the receipt that says a label read has been observed once, so the
+ * labels already on issues then are recorded as seen and only a later add starts. A
+ * persisted contract: changing it makes every label binding a first sight again.
+ */
+function labelSeenMarker(read: ObservedLabelRead): string {
+  return `observe:label-seen:${read.bindingId}:${read.repo.host}/${read.repo.path}:${read.label}`;
+}
+
+/**
+ * The receipt id of a read's seen marker, derived from the source and the marker's delivery
+ * id so a pass can read the marker, and its time, by id. A persisted contract as the
+ * delivery id is. Shaped as a version 8 UUID, the version for ids built this way.
+ */
+function labelSeenMarkerId(sourceInstanceId: string, read: ObservedLabelRead): string {
+  const hex = createHash('sha256')
+    .update(`${sourceInstanceId}\n${labelSeenMarker(read)}`)
+    .digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 /**
@@ -87,6 +123,8 @@ export interface WebhookSourceHostDependencies {
   acceptReceipt: IWorkflowStore['acceptStartReceipt'];
   isKnownUser: (id: string) => Promise<boolean>;
   hasDeliveryReceipt: (sourceInstanceId: string, deliveryId: string) => Promise<boolean>;
+  /** A recorded receipt by id; observation reads a label read's seen marker with it. */
+  getReceipt: (id: string) => Promise<Pick<StartReceiptInspection, 'occurredAt'> | null>;
 }
 
 const log = createLogger('webhook-sources');
@@ -170,6 +208,19 @@ async function loadSourcePlugin(source: SourceEntry): Promise<WebhookSourcePlugi
   return plugin;
 }
 
+/** The label reads a loaded plugin declares, checked once so a malformed one fails the load. */
+function declaredLabels(
+  sourceInstanceId: string,
+  plugin: WebhookSourcePlugin
+): Pick<ObservingSource, 'labels' | 'unservedBindings'> {
+  const parsed = observedLabelsSchema.safeParse(plugin.observedLabels ?? { reads: [] });
+  if (!parsed.success)
+    throw new Error(
+      `Webhook source '${sourceInstanceId}' declares invalid label reads: ${configProblems(parsed.error)}`
+    );
+  return { labels: parsed.data.reads, unservedBindings: parsed.data.unserved };
+}
+
 /**
  * The configured sources' plugins. `observingOnly` loads just the sources that declare
  * `observe`, for a host that receives no webhooks: a source it would never call cannot
@@ -190,11 +241,13 @@ export async function loadWebhookSourcePlugins(
   for (const source of loaded) {
     if (plugins.has(source.sourceInstanceId))
       throw new Error(`Duplicate webhook source instance '${source.sourceInstanceId}'`);
-    plugins.set(source.sourceInstanceId, await loadSourcePlugin(source));
+    const plugin = await loadSourcePlugin(source);
+    plugins.set(source.sourceInstanceId, plugin);
     if (source.observe !== undefined)
       observing.push({
         sourceInstanceId: source.sourceInstanceId,
         everySeconds: source.observe.everySeconds,
+        ...declaredLabels(source.sourceInstanceId, plugin),
       });
   }
 
@@ -287,14 +340,21 @@ export async function loadWebhookSourcePlugins(
     },
     async observe(sourceInstanceId, waits, forge): Promise<SourceObservationAdmitted> {
       const plugin = pluginFor(sourceInstanceId);
-      if (
-        !observing.some(source => source.sourceInstanceId === sourceInstanceId) ||
-        !plugin.observe
-      )
+      const source = observing.find(entry => entry.sourceInstanceId === sourceInstanceId);
+      if (!source || !plugin.observe)
         throw new Error(`Webhook source '${sourceInstanceId}' does not observe waits`);
+      // A read with no marker yet is seen for the first time: what it lists is recorded,
+      // and starts nothing. Once seen, a label added before the marker's time starts
+      // nothing either, such as one on an issue that was closed during the first sight.
+      const passStartedAt = new Date().toISOString();
+      const labels = [];
+      for (const read of source.labels) {
+        const marker = await dependencies.getReceipt(labelSeenMarkerId(sourceInstanceId, read));
+        labels.push({ ...read, seenSince: marker === null ? null : marker.occurredAt });
+      }
       let observation: SourceObservation;
       try {
-        observation = sourceObservationSchema.parse(await plugin.observe({ waits, forge }));
+        observation = sourceObservationSchema.parse(await plugin.observe({ waits, labels, forge }));
       } catch (error) {
         log.error(
           { err: error as Error, sourceInstanceId, stage: 'observe' },
@@ -308,19 +368,58 @@ export async function loadWebhookSourcePlugins(
         admitted: [],
         conflicts: 0,
         unserved: observation.unserved,
-        failures: observation.failed.map(
-          ({ wait, reason }) =>
-            `wait '${wait.event}' about '${wait.about}' on item '${wait.itemKey}': ${reason}`
-        ),
+        failures: [
+          ...observation.failed.map(
+            ({ wait, reason }) =>
+              `wait '${wait.event}' about '${wait.about}' on item '${wait.itemKey}': ${reason}`
+          ),
+          ...observation.labelFailures.map(
+            ({ bindingId, label, number, reason }) =>
+              `binding '${bindingId}' label '${label}'${number === undefined ? '' : ` on issue ${String(number)}`}: ${reason}`
+          ),
+        ],
       };
-      for (const acceptance of observation.acceptances) {
+      const record = async (acceptance: SourceReceiptAcceptance): Promise<boolean> => {
         try {
           const admitted = await admit(sourceInstanceId, acceptance);
           if (admitted.outcome === 'conflict') result.conflicts += 1;
           else result.admitted.push({ receiptId: admitted.receiptId, replay: admitted.replay });
+          return admitted.outcome === 'accepted';
         } catch (error) {
           result.failures.push(causeChain(error));
+          return false;
         }
+      };
+      for (const acceptance of observation.acceptances) await record(acceptance);
+      // A read is seen once every issue it listed is recorded: no read of it failed and each
+      // of its acceptances was admitted. Another read's failure does not hold it back. Until
+      // then the next pass sees it for the first time again, which is safe because that
+      // records only unmatched receipts; an issue whose read failed must not start later as
+      // though its label were new.
+      const unrecorded = new Set(
+        observation.labelFailures.map(({ bindingId, label }) => JSON.stringify([bindingId, label]))
+      );
+      for (const { bindingId, label, acceptance } of observation.labelAcceptances)
+        if (!(await record(acceptance))) unrecorded.add(JSON.stringify([bindingId, label]));
+      for (const read of labels) {
+        if (read.seenSince !== null || unrecorded.has(JSON.stringify([read.bindingId, read.label])))
+          continue;
+        const deliveryId = labelSeenMarker(read);
+        await record({
+          receipt: {
+            id: labelSeenMarkerId(sourceInstanceId, read),
+            sourceInstanceId,
+            deliveryId,
+            contentDigest: createHash('sha256').update(deliveryId).digest('hex'),
+            receivedAt: new Date().toISOString(),
+            // The cutoff later passes compare a label's add with: when this pass began.
+            occurredAt: passStartedAt,
+            sourceActor: null,
+          },
+          outcome: 'unmatched',
+          reason: 'label binding first observed',
+          bindings: [],
+        });
       }
       return result;
     },
@@ -348,21 +447,30 @@ export interface ObservedSourceReport {
   source: string;
   /** The open waits passed to the source. */
   waits: number;
-  /** The forge reads the source made: a commit's checks or a pull request's reviews each. */
+  /** The label reads passed to the source: one repository and label each. */
+  labels: number;
+  /**
+   * The forge reads the source made: a commit's checks, a pull request's reviews, a label's
+   * open items, or when a label was added to one issue, each.
+   */
   reads: number;
   /** Receipts first recorded by this pass; a replay of an earlier pass is not one. */
   receipts: string[];
   conflicts: number;
   unserved: SourceObservation['unserved'];
+  /** The label bindings the source declared it cannot observe. */
+  unservedBindings: readonly UnservedBinding[];
   error?: string;
 }
 
 export interface ItemWaitObserver {
   readonly observing: readonly ObservingSource[];
   /**
-   * Observe the open waits through each source whose interval has passed since it last
-   * observed. Reads nothing from the forge, and calls no source, when no wait is open.
-   * A pass started while another runs returns nothing.
+   * Observe the open waits and the declared label reads through each source whose interval
+   * has passed since it last observed. Calls no source, so reads nothing from the forge for
+   * it, when no wait is open and it declares no label read; such a source is reported only
+   * when it has label bindings it cannot observe. A pass started while another runs
+   * returns nothing.
    */
   pass(now: Date): Promise<ObservedSourceReport[]>;
 }
@@ -411,6 +519,15 @@ export function createItemWaitObserver(input: {
     return [...waits.values()];
   };
 
+  const warnUnserved = (sourceInstanceId: string, bindings: readonly UnservedBinding[]): void => {
+    for (const { bindingId, reason } of bindings) {
+      const key = JSON.stringify([sourceInstanceId, bindingId, reason]);
+      if (warned.has(key)) continue;
+      warned.add(key);
+      log.warn({ sourceInstanceId, bindingId, reason }, 'source_observe_unserved');
+    }
+  };
+
   const observeSource = async (
     source: ObservingSource,
     waits: readonly ObservedItemWait[]
@@ -423,6 +540,12 @@ export function createItemWaitObserver(input: {
     const commits = new Set(waits.map(wait => JSON.stringify([wait.remote, wait.about])));
     const namesPullRequest = (remote: string, number: number): boolean =>
       waits.some(wait => wait.remote === remote && wait.itemKey.endsWith(String(number)));
+    // A label list must be one a declared read names, and a label-added read must be of an
+    // issue such a list returned in this pass.
+    const labelReads = new Set(
+      source.labels.map(entry => JSON.stringify([entry.repo.host, entry.repo.path, entry.label]))
+    );
+    const listed = new Set<string>();
     const read = new Set<string>();
     const guarded: SourceForgeReader = {
       commitChecks: async request => {
@@ -441,6 +564,34 @@ export function createItemWaitObserver(input: {
         read.add(key);
         return forge.prReviews(request);
       },
+      issuesWithLabel: async request => {
+        const { host, path } = request.repo;
+        const named = JSON.stringify([host, path, request.label]);
+        if (!labelReads.has(named))
+          throw new Error(
+            `No binding of this source names label '${request.label}' in '${host}/${path}'`
+          );
+        read.add(JSON.stringify(['label', host, path, request.label]));
+        const result = await forge.issuesWithLabel({ repo: { host, path }, label: request.label });
+        for (const item of result.items)
+          if (item.kind === 'issue')
+            listed.add(JSON.stringify([host, path, request.label, item.ref.number]));
+        return result;
+      },
+      labelAdded: async request => {
+        const { host, path } = request.repo;
+        const issue = JSON.stringify([host, path, request.label, request.number]);
+        if (!listed.has(issue))
+          throw new Error(
+            `Issue ${String(request.number)} of '${host}/${path}' was not listed with label '${request.label}' in this pass`
+          );
+        read.add(JSON.stringify(['label-added', host, path, request.label, request.number]));
+        return forge.labelAdded({
+          repo: { host, path },
+          number: request.number,
+          label: request.label,
+        });
+      },
     };
     const report = (
       admitted: SourceObservationAdmitted | undefined,
@@ -448,12 +599,14 @@ export function createItemWaitObserver(input: {
     ): ObservedSourceReport => ({
       source: source.sourceInstanceId,
       waits: waits.length,
+      labels: source.labels.length,
       reads: read.size,
       receipts: (admitted?.admitted ?? [])
         .filter(receipt => !receipt.replay)
         .map(receipt => receipt.receiptId),
       conflicts: admitted?.conflicts ?? 0,
       unserved: admitted?.unserved ?? [],
+      unservedBindings: source.unservedBindings,
       ...(error === undefined ? {} : { error }),
     });
     let result: ObservedSourceReport;
@@ -476,7 +629,23 @@ export function createItemWaitObserver(input: {
       warned.add(key);
       log.warn({ sourceInstanceId, ...wait, reason }, 'source_observe_unserved');
     }
+    warnUnserved(sourceInstanceId, result.unservedBindings);
     return result;
+  };
+
+  /** The report of a source that is not called: only the label bindings it cannot observe. */
+  const unobserved = (source: ObservingSource): ObservedSourceReport => {
+    warnUnserved(source.sourceInstanceId, source.unservedBindings);
+    return {
+      source: source.sourceInstanceId,
+      waits: 0,
+      labels: 0,
+      reads: 0,
+      receipts: [],
+      conflicts: 0,
+      unserved: [],
+      unservedBindings: source.unservedBindings,
+    };
   };
 
   return {
@@ -491,9 +660,16 @@ export function createItemWaitObserver(input: {
       running = true;
       try {
         const waits = await openWaits();
-        if (waits.length === 0) return [];
         const reports: ObservedSourceReport[] = [];
         for (const source of due) {
+          // A source with nothing to observe is not called, so it reads nothing; the label
+          // bindings it cannot observe are still reported, so the operator learns why.
+          if (waits.length === 0 && source.labels.length === 0) {
+            if (source.unservedBindings.length === 0) continue;
+            lastObserved.set(source.sourceInstanceId, now.getTime());
+            reports.push(unobserved(source));
+            continue;
+          }
           lastObserved.set(source.sourceInstanceId, now.getTime());
           reports.push(await observeSource(source, waits));
         }

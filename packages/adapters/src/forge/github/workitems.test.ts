@@ -577,6 +577,58 @@ test('listing by label returns open issues and pull requests across pages', asyn
   expect(urls).toHaveLength(2);
 });
 
+test('the latest add of the exact label is read across pages; a label never added reads none', async () => {
+  const event = (id: number, name: string, at: string, kind = 'labeled') => ({
+    id,
+    event: kind,
+    created_at: at,
+    actor: { id: 7, login: 'maintainer', type: 'User' },
+    label: { name, color: 'abcdef' },
+  });
+  const pageOne = [
+    event(1, 'factory', '2026-11-20T10:00:00Z'),
+    event(2, 'factory', '2026-11-21T10:00:00Z', 'unlabeled'),
+    ...Array.from({ length: 98 }, (_, index) =>
+      event(100 + index, 'other', '2026-11-21T11:00:00Z')
+    ),
+  ];
+  const urls: URL[] = [];
+  const fake = {
+    fetch: async (input: string | URL | Request): Promise<Response> => {
+      const url = new URL(String(input));
+      urls.push(url);
+      return Response.json(
+        url.searchParams.get('page') === '1'
+          ? pageOne
+          : [
+              event(3, 'factory', '2026-11-22T10:00:00Z'),
+              event(4, 'Factory', '2026-11-23T10:00:00Z'),
+            ]
+      );
+    },
+  };
+  const subject = { kind: 'issue' as const, ref };
+  const read = (name: string) =>
+    runOn({ operationId: 'added', op: 'workitem.label.added', subject, name }, fake);
+  expect(await read('factory')).toMatchObject({
+    ok: true,
+    result: {
+      op: 'workitem.label.added',
+      value: {
+        subject,
+        name: 'factory',
+        added: {
+          id: '3',
+          at: '2026-11-22T10:00:00Z',
+          actor: { host: 'github.com', id: '7', login: 'maintainer', type: 'user' },
+        },
+      },
+    },
+  });
+  expect(urls[0]?.pathname).toBe('/repos/owner/repo/issues/1/events');
+  expect(await read('missing')).toMatchObject({ ok: true, result: { value: { added: null } } });
+});
+
 test('an item view returns its author, and a response without one reports none', async () => {
   const fake = labelForge({ kind: 'pr' });
   expect(await runOn({ operationId: 'view', op: 'workitem.view', ref }, fake)).toMatchObject({

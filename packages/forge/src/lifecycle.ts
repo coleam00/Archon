@@ -173,6 +173,16 @@ export const workItemListRequestSchema = requestBase.extend({
   repo: repoRefSchema,
   label: text,
 });
+/**
+ * When `name` was last added to an issue or pull request, by the forge's own label event.
+ * The event's id tells two adds of the same label apart, so a remove and re-add is a new
+ * add even when the label is on the item both times it is read.
+ */
+export const workItemLabelAddedRequestSchema = requestBase.extend({
+  op: z.literal('workitem.label.added'),
+  subject: forgeSubjectRefSchema,
+  name: text,
+});
 /** The most matches one `workitem.search` returns, and the count it returns when none is asked for. */
 export const WORKITEM_SEARCH_MAX_LIMIT = 100;
 export const WORKITEM_SEARCH_DEFAULT_LIMIT = 30;
@@ -460,6 +470,7 @@ export const lifecycleReadRequestSchemas = [
   prReviewsRequestSchema,
   prThreadsRequestSchema,
   workItemListRequestSchema,
+  workItemLabelAddedRequestSchema,
   workItemSearchRequestSchema,
   workItemCommentsRequestSchema,
   prMergeStateRequestSchema,
@@ -540,6 +551,14 @@ export const workItemListSchema = z.object({
   label: text,
   items: z.array(subjectRecordSchema),
 });
+/** `added` is null when the forge records no add of the label, such as one never added. */
+export const workItemLabelAddedSchema = z.object({
+  subject: forgeSubjectRefSchema,
+  name: text,
+  added: z
+    .object({ id: text, at: z.iso.datetime({ offset: true }), actor: sourceActorSchema.nullable() })
+    .nullable(),
+});
 export const workItemSearchItemSchema = subjectRecordSchema.extend({
   title: z.string(),
   updatedAt: z.iso.datetime({ offset: true }),
@@ -615,6 +634,7 @@ export const lifecycleReadResultSchemas = [
   z.object({ op: prViewRequestSchema.shape.op, value: prViewResultSchema.nullable() }),
   z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
   z.object({ op: workItemListRequestSchema.shape.op, value: workItemListSchema }),
+  z.object({ op: workItemLabelAddedRequestSchema.shape.op, value: workItemLabelAddedSchema }),
   z.object({ op: workItemSearchRequestSchema.shape.op, value: workItemSearchSchema }),
   z.object({ op: workItemCommentsRequestSchema.shape.op, value: workItemCommentsSchema }),
   z.object({ op: prMergeStateRequestSchema.shape.op, value: prMergeStateSchema }),

@@ -227,6 +227,7 @@ async function fixture(
       acceptReceipt: input => workflowHost.deps.store.acceptStartReceipt(input),
       isKnownUser: async id => (await workflowHost.records.users.getUserById(id)) !== null,
       hasDeliveryReceipt: hasStartReceiptForDelivery,
+      getReceipt: getStartReceipt,
     }),
     autoDrain ? (): void => void host.requestDrain() : undefined
   );
