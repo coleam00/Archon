@@ -37,8 +37,20 @@ export class GitHubSetupFixture {
   passwordMessages!: string[];
   cancelled = Symbol('cancelled');
   nativeIsCancel = prompts.isCancel;
+  /**
+   * The startup environment the wizard reads. Empty, so a token in the operator's shell or
+   * a checkout `.env` cannot turn a test about App setup into a conflict refusal. A test
+   * that covers an inherited credential sets it here.
+   */
+  inheritedEnv: NodeJS.ProcessEnv = {};
   run = (force = false) =>
-    setupCommand({ repoPath: this.root, scope: this.scope, providers: [], force });
+    setupCommand({
+      repoPath: this.root,
+      scope: this.scope,
+      providers: [],
+      force,
+      inheritedEnv: this.inheritedEnv,
+    });
   read = () => parseDotenv(readFileSync(this.target, 'utf8'));
 
   constructor() {
@@ -59,6 +71,7 @@ export class GitHubSetupFixture {
       this.allowedUsers = '';
       this.keyPath = join(this.root, 'app.pem');
       writeFileSync(this.keyPath, this.privateKey);
+      this.inheritedEnv = {};
       this.authMode = 'app';
       this.keySource = 'path';
       this.switchAnswer = true;
