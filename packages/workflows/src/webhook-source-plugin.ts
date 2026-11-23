@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type {
   CommitChecksObservation,
+  ForgeSubjectRef,
   PrReviewsObservation,
   WorkItemLabelAdded,
   WorkItemList,
@@ -37,7 +38,7 @@ const observedLabelReadSchema = z
     label: z.string().min(1),
   })
   .strict();
-/** One label a binding of a source starts on: the open issues carrying it are listed. */
+/** One label a binding of a source starts on: the open issues and pull requests carrying it are listed. */
 export type ObservedLabelRead = z.infer<typeof observedLabelReadSchema>;
 
 /**
@@ -59,14 +60,17 @@ export type ObservedLabels = z.input<typeof observedLabelsSchema>;
  * The forge reads a source may make while it observes. Each refuses what nothing passed to
  * the same call names: a commit a wait is about; a pull request whose number ends the key
  * of an item a wait is on; the open items of a repository with a label a declared read
- * names; and when a label was added to an issue that list returned in the same call.
+ * names; and when a label was added to an issue or pull request that list returned in the
+ * same call, as the kind it was listed as.
  */
 export interface SourceForgeReader {
   commitChecks(input: { remote: string; revision: string }): Promise<CommitChecksObservation>;
   prReviews(input: { remote: string; number: number }): Promise<PrReviewsObservation>;
+  /** The open items with the label: issues and pull requests both. */
   issuesWithLabel(input: { repo: ObservedLabelRead['repo']; label: string }): Promise<WorkItemList>;
   labelAdded(input: {
     repo: ObservedLabelRead['repo'];
+    kind: ForgeSubjectRef['kind'];
     number: number;
     label: string;
   }): Promise<WorkItemLabelAdded>;

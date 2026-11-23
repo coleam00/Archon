@@ -372,8 +372,6 @@ function labelReadOf(
   if (selector.kind !== 'label.changed' || !selector.actions.includes('added'))
     return { reason: 'only an added label is observed' };
   if (binding.wake !== undefined) return { reason: 'a label wake is not observed' };
-  if (selector.subject?.kind === 'pr')
-    return { reason: 'pull-request labels are not observed; only issues are' };
   if (selector.repository === undefined)
     return { reason: 'the selector names no repository to list' };
   if (selector.repository.host !== config.host)
@@ -383,18 +381,38 @@ function labelReadOf(
 }
 
 type LabelRead = ObserveInput['labels'][number];
+type LabelledItem = Awaited<ReturnType<ObserveInput['forge']['issuesWithLabel']>>['items'][number];
+
+/**
+ * Whether the selector's `subject` and `subject.kind` predicates admit this listed item,
+ * compared as `matchForgeEvent` compares them. A label-event read costs one request per
+ * item, and the selector may already rule some out, such as every issue for a binding on
+ * pull requests. It must never admit less than the match; `evaluateBinding` still decides.
+ */
+function admitsSubject(selector: GitHubSourceBinding['selector'], item: LabelledItem): boolean {
+  const { subject, predicates = [] } = selector;
+  if (subject && (subject.kind !== item.kind || subject.number !== item.ref.number)) return false;
+  return predicates.every(predicate =>
+    predicate.field !== 'subject.kind'
+      ? true
+      : predicate.equals !== undefined
+        ? predicate.equals === item.kind
+        : predicate.in?.includes(item.kind) === true
+  );
+}
+
 type LabelFailure = SourceObservation['labelFailures'][number];
 
 const errorText = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
 /**
- * The label events a webhook would have carried for the open issues each read lists: one
- * `label.changed` added event per issue, with the forge's own label-added event. On a
- * read's first sight every one is recorded unmatched, and after it so is an add older
- * than that sight, so a label already on an issue when the binding is first seen starts
- * nothing, even on an issue reopened later. Only state is seen: a label added and removed
- * between two passes is never read.
+ * The label events a webhook would have carried for the open issues and pull requests each
+ * read lists that the binding's selector admits: one `label.changed` added event per item,
+ * with the forge's own label-added event. On a read's first sight every one is recorded
+ * unmatched, and after it so is an add older than that sight, so a label already on an
+ * item when the binding is first seen starts nothing, even on an item reopened later. Only
+ * state is seen: a label added and removed between two passes is never read.
  */
 async function observeLabels(
   sourceInstanceId: string,
@@ -415,9 +433,10 @@ async function observeLabels(
       labelFailures.push({ bindingId, label, reason: errorText(error) });
       continue;
     }
-    // The list holds pull requests too; only issues are observed.
-    for (const item of listed.items.filter(entry => entry.kind === 'issue')) {
-      const result = await issueLabelAcceptance(sourceInstanceId, receivedAt, binding, read, {
+    // The list holds issues and pull requests; read only those the selector can match.
+    for (const item of listed.items.filter(entry => admitsSubject(binding.selector, entry))) {
+      const result = await labelAcceptance(sourceInstanceId, receivedAt, binding, read, {
+        kind: item.kind,
         number: item.ref.number,
         forge,
       });
@@ -430,15 +449,19 @@ async function observeLabels(
 }
 
 /**
- * The acceptance one read makes for one labelled issue; why it cannot, as a failure; or
- * nothing, when the binding does not select the event.
+ * The acceptance one read makes for one labelled issue or pull request; why it cannot, as a
+ * failure; or nothing, when the binding does not select the event.
  */
-async function issueLabelAcceptance(
+async function labelAcceptance(
   sourceInstanceId: string,
   receivedAt: string,
   binding: GitHubSourceBinding,
   read: LabelRead,
-  { number, forge }: { number: number; forge: ObserveInput['forge'] }
+  {
+    kind,
+    number,
+    forge,
+  }: { kind: LabelledItem['kind']; number: number; forge: ObserveInput['forge'] }
 ): Promise<
   | { kind: 'accepted'; acceptance: SourceReceiptAcceptance }
   | { kind: 'failed'; failure: LabelFailure }
@@ -451,7 +474,7 @@ async function issueLabelAcceptance(
   });
   let added: Awaited<ReturnType<ObserveInput['forge']['labelAdded']>>['added'];
   try {
-    ({ added } = await forge.labelAdded({ repo, number, label }));
+    ({ added } = await forge.labelAdded({ repo, kind, number, label }));
   } catch (error) {
     return failure(errorText(error));
   }
@@ -460,7 +483,7 @@ async function issueLabelAcceptance(
   const event = {
     kind: 'label.changed',
     action: 'added',
-    subject: { kind: 'issue', ref: { repo, number } },
+    subject: { kind, ref: { repo, number } },
     // The list does not carry the label's own id.
     label: { name: label, id: null },
     actor: added.actor,
@@ -475,7 +498,8 @@ async function issueLabelAcceptance(
     sourceInstanceId,
     // A persisted contract: one delivery per label add and binding. The forge's event id
     // makes a remove and re-add a new delivery; the same add read on a later pass is a
-    // replay, so it starts once. The item key is not part of it: a binding whose item
+    // replay, so it starts once. A forge numbers issues and pull requests in one sequence
+    // per repository, so the number needs no kind. The item key is not part of it: a binding whose item
     // mapping changes must not start an add it has already recorded.
     deliveryId: `observe:label:${repo.host}/${repo.path}#${String(number)}:${added.id}:${bindingId}`,
     contentDigest: createHash('sha256').update(JSON.stringify(event)).digest('hex'),
@@ -492,7 +516,7 @@ async function issueLabelAcceptance(
       ? {
           receipt,
           outcome: 'unmatched',
-          reason: 'label was on the issue when the binding was first observed',
+          reason: 'label was on the item when the binding was first observed',
           bindings: [],
         }
       : { receipt, outcome: 'matched', bindings: [evaluated.start] },

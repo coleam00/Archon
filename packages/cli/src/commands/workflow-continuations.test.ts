@@ -570,9 +570,7 @@ function observation(receipts: string[]) {
       reason: "item 'issue-3' names no pull request under the binding's item mapping",
     },
   ];
-  const unservedBindings = [
-    { bindingId: 'pr-labels', reason: 'pull-request labels are not observed; only issues are' },
-  ];
+  const unservedBindings = [{ bindingId: 'pr-labels', reason: 'a label wake is not observed' }];
   const pass = mock(async () => [
     {
       source: 'github',
