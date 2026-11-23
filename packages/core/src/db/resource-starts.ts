@@ -10,7 +10,6 @@ import {
 } from '@archon/workflows/resource-start-store';
 import type {
   HeldPreparation,
-  ItemStartLimits,
   PreparedBindingInput,
   RefusedPreparation,
   StartBindingInspection,
@@ -41,15 +40,9 @@ import {
   checkoutHandoffSchema,
   forgeRefusalSchema,
   type ForgeRefusal,
-  type StartLimit,
 } from '@archon/workflows/schemas/resource-start';
-import {
-  startLimitRefusal,
-  startLimitStanding,
-  storedStartLimitSchema,
-  type StartLimitRow,
-} from '@archon/workflows/start-limit';
-import { lastStartLimitReset } from './start-limit-resets';
+import { countStartLimits, storedLimitFields, type StartLimitColumns } from './start-limits';
+export { readItemStartLimits } from './start-limits';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDialect } from './connection';
 import {
@@ -128,12 +121,6 @@ function disposition(row: RequestRow): ResourceStartDisposition {
     };
   }
   throw new Error(`Resource start request '${row.id}' has no executable disposition`);
-}
-
-/** What a binding start's request records for its start limit; see `@archon/workflows/start-limit`. */
-interface StartLimitColumns {
-  startLimit: string | null;
-  grantsLimit: string | null;
 }
 
 async function admitResourceStartWithQuery(
@@ -342,22 +329,6 @@ function readStoredIntent(
   return checkoutFrom == null
     ? stored
     : { ...stored, checkoutFrom: checkoutHandoffSchema.parse(parseStoredJson(checkoutFrom)) };
-}
-
-/**
- * A binding's start limit and the limit it grants, from their own columns. Newer binaries
- * may add keys to the stored limit, so unknown keys are stripped, not refused.
- */
-function storedLimitFields(
-  startLimit: unknown,
-  grantsLimit: unknown
-): Pick<ResourceStartBindingIntent, 'limit' | 'grants'> {
-  return {
-    ...(startLimit == null
-      ? {}
-      : { limit: storedStartLimitSchema.parse(parseStoredJson(startLimit)) }),
-    ...(typeof grantsLimit === 'string' ? { grants: grantsLimit } : {}),
-  };
 }
 
 function withEventInputs(
@@ -826,87 +797,6 @@ async function namedItem(
   const key = bindingItemKey ?? receipt.rows[0]?.item_key;
   if (!key) return null;
   return { id: await ensureItem(query, input.launch.run.codebase_id, key), key };
-}
-
-interface StartLimitRequestRow {
-  id: string;
-  queue_position: number | string;
-  status: StartLimitRow['status'];
-  start_limit: unknown;
-  grants_limit: unknown;
-}
-
-const startLimitRowsSql = `SELECT id, queue_position, status, start_limit, grants_limit
-       FROM remote_agent_resource_start_requests
-      WHERE item_id = $1 AND (start_limit IS NOT NULL OR grants_limit IS NOT NULL)
-      ORDER BY queue_position`;
-
-function startLimitRow(row: StartLimitRequestRow): StartLimitRow {
-  return {
-    id: String(row.id),
-    // PostgreSQL returns a BIGSERIAL as a string.
-    position: Number(row.queue_position),
-    status: row.status,
-    counted:
-      row.start_limit == null
-        ? null
-        : storedStartLimitSchema.parse(parseStoredJson(row.start_limit)),
-    grant: typeof row.grants_limit === 'string' ? row.grants_limit : null,
-  };
-}
-
-/**
- * Count a binding start against its start limit on the item, inside the admitting
- * transaction after `lockAdmission`, so two starts cannot both take the last one. Returns
- * what the start's request records, or why it is refused. A limited start on no item is
- * refused: the count is per item, and letting it through would start it without a limit.
- * A grant on no item raises nothing.
- */
-async function countStartLimits(
-  query: Query,
-  item: { id: string; key: string } | null,
-  limit: StartLimit | undefined,
-  grants: string | undefined
-): Promise<StartLimitColumns | { refused: string }> {
-  const grantsLimit = item === null ? null : (grants ?? null);
-  if (limit === undefined) return { startLimit: null, grantsLimit };
-  if (item === null)
-    return {
-      refused: `Start limit '${limit.name}' counts starts per item, and this start names no item.`,
-    };
-  const rows = (await query<StartLimitRequestRow>(startLimitRowsSql, [item.id])).rows.map(
-    startLimitRow
-  );
-  const standing = startLimitStanding(
-    limit,
-    rows,
-    await lastStartLimitReset(query, item.id, limit.resetOn)
-  );
-  if (standing.left === 0) return { refused: startLimitRefusal(standing, item.key) };
-  return { startLimit: JSON.stringify(limit), grantsLimit };
-}
-
-/** See `IResourceStartStore.readItemStartLimits`. Each limit stands by its latest recorded spec. */
-export async function readItemStartLimits(itemId: string): Promise<ItemStartLimits> {
-  const db = getDatabase();
-  const query: Query = (sql, params) => db.query(sql, params);
-  const found = (await query<StartLimitRequestRow>(startLimitRowsSql, [itemId])).rows;
-  const rows = found.map(startLimitRow);
-  const countedUnder: Record<string, string> = {};
-  const specs = new Map<string, StartLimit>();
-  found.forEach((request, index) => {
-    const counted = rows[index]?.counted;
-    if (!counted) return;
-    countedUnder[request.id] = counted.name;
-    // Queue order, so the latest spec of a name wins.
-    specs.set(counted.name, counted);
-  });
-  const limits: ItemStartLimits['limits'] = [];
-  for (const spec of specs.values())
-    limits.push(
-      startLimitStanding(spec, rows, await lastStartLimitReset(query, itemId, spec.resetOn))
-    );
-  return { limits, countedUnder };
 }
 
 export async function failStartBindingPreparation(input: {

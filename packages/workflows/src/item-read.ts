@@ -127,8 +127,9 @@ export const itemRunSchema = z.object({
   awaitingExecution: awaitingExecutionSchema.nullable(),
   /**
    * The name of the start limit the run's start counted under (its binding's `limit`), or
-   * null when it counted under none. A run finds where its limit stands, and so whether it
-   * is the last allowed round, in the item read's `startLimits` under this name.
+   * null when it counted under none. A run finds where its limit stands in the item read's
+   * `startLimits` under this name. `left: 0` allows no further start; starts already queued
+   * under the limit are counted in `used` and still run.
    */
   startLimit: z.string().nullable(),
   /** The totals recorded on the run row; null where the run recorded no figure. */
