@@ -256,6 +256,9 @@ export function registerMessageRoutes(
       await stream.writeSSE({
         data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
       });
+      // Read before the stream registers: a lock event emitted after this read is
+      // buffered for the stream and replays after the snapshot.
+      await stream.writeSSE({ data: webAdapter.lockSnapshotEvent(conversationId) });
 
       const writer = checkedSSEWriter(stream);
       webAdapter.registerStream(conversationId, writer);

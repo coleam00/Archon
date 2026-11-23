@@ -753,6 +753,9 @@ describe('SSE route replay', () => {
         const reader = response.body.getReader();
         readers.push(reader);
         expect(await read(reader)).toContain('"type":"heartbeat"');
+        if (conversationId !== DASHBOARD_STREAM) {
+          expect(await read(reader)).toContain('"type":"conversation_lock"');
+        }
         return reader;
       }
       async function read(reader: ResponseReader): Promise<string> {
@@ -796,6 +799,46 @@ describe('SSE route replay', () => {
   );
 });
 
+describe('SSE lock snapshot', () => {
+  test('a stream opened mid-turn starts with the lock state of its last lock event', async () => {
+    const transport = new SSETransport();
+    const adapter = new WebAdapter(
+      transport,
+      new MessagePersistence((id, event) => transport.emit(id, event)),
+      new WorkflowEventBridge(transport)
+    );
+    const { app } = makeApp(adapter);
+    const waits: ReturnType<typeof Promise.withResolvers<void>>[] = [];
+    const sleep = spyOn(SSEStreamingApi.prototype, 'sleep').mockImplementation(() => {
+      const wait = Promise.withResolvers<void>();
+      waits.push(wait);
+      return wait.promise;
+    });
+    const readers: Pick<ReadableStreamDefaultReader<Uint8Array>, 'read' | 'cancel'>[] = [];
+    async function snapshotOnOpen(): Promise<unknown> {
+      const response = await app.request('/api/stream/web-test-abc');
+      if (!response.body) throw new Error('Missing SSE response body');
+      const reader = response.body.getReader();
+      readers.push(reader);
+      await reader.read(); // heartbeat
+      const chunk = new TextDecoder().decode((await reader.read()).value);
+      return JSON.parse(chunk.replace(/^data: /, '').trim());
+    }
+    try {
+      await adapter.emitLockEvent('web-test-abc', true);
+      expect(await snapshotOnOpen()).toMatchObject({ type: 'conversation_lock', locked: true });
+      await adapter.emitLockEvent('web-test-abc', false);
+      expect(await snapshotOnOpen()).toMatchObject({ type: 'conversation_lock', locked: false });
+    } finally {
+      for (const reader of readers) await reader.cancel();
+      for (const wait of waits) wait.reject(new Error('cancel'));
+      for (let i = 0; i < 40; i++) await Promise.resolve();
+      sleep.mockRestore();
+      transport.stop();
+    }
+  });
+});
+
 describe('SSE heartbeat lifecycle', () => {
   for (const conversationId of ['web-test-abc', DASHBOARD_STREAM]) {
     test.each(['abort', 'close', 'error'] as const)(
@@ -837,6 +880,13 @@ describe('SSE heartbeat lifecycle', () => {
           expect(new TextDecoder().decode((await reader.read()).value)).toContain(
             '"type":"heartbeat"'
           );
+          // A conversation stream writes its lock snapshot before the heartbeat loop.
+          const opening = conversationId === DASHBOARD_STREAM ? 1 : 2;
+          if (opening === 2) {
+            expect(new TextDecoder().decode((await reader.read()).value)).toContain(
+              '"type":"conversation_lock"'
+            );
+          }
           await settle();
           expect(waits).toHaveLength(1);
           waits[0]!.resolve();
@@ -845,7 +895,7 @@ describe('SSE heartbeat lifecycle', () => {
           );
           await settle();
           expect(waits).toHaveLength(2);
-          expect(write).toHaveBeenCalledTimes(2);
+          expect(write).toHaveBeenCalledTimes(opening + 1);
           if (!activeStream) throw new Error('Heartbeat did not start');
           if (disconnect === 'abort') {
             await reader.cancel();
@@ -860,7 +910,7 @@ describe('SSE heartbeat lifecycle', () => {
           if (disconnect === 'error') waits[1]!.reject(failure);
           else waits[1]!.resolve();
           await settle();
-          expect(write).toHaveBeenCalledTimes(2);
+          expect(write).toHaveBeenCalledTimes(opening + 1);
           expect(waits).toHaveLength(2);
           // Hono closes the stream after the route callback returns.
           expect(close).toHaveBeenCalledTimes(closesBeforeWake + 1);

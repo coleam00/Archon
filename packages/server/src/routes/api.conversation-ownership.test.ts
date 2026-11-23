@@ -258,6 +258,7 @@ function makeApp(): OpenAPIHono {
     emitLockEvent: mock(async () => {}),
     registerStream: mock(() => {}),
     removeStream: mock(() => {}),
+    lockSnapshotEvent: mock(() => JSON.stringify({ type: 'conversation_lock', locked: false })),
   } as unknown as WebAdapter;
   const lockManager = {
     acquireLock: mock(async (_id: string, fn: () => Promise<void>) => {

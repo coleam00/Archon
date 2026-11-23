@@ -26,7 +26,8 @@ const ACTIVE_POLL_MS = 3000;
 // has stayed stable this long, unless the server still reports the turn locked.
 const SETTLE_MS = 6000;
 // Hard cap so a turn that never produces a reply (server error, etc.) can't
-// disable the composer forever.
+// disable the composer forever. It does not apply while the server reports the
+// conversation locked.
 const MAX_WAIT_MS = 300_000;
 // Distance from the bottom (px) within which we treat the scroll as "at bottom"
 // — drives both auto-scroll stickiness and the jump-to-bottom button's visibility.
@@ -180,8 +181,9 @@ export function ChatPage(): ReactElement {
     if (!busy || activeConvId === null) return;
     busySinceRef.current = Date.now();
     const id = setInterval(() => {
-      if (Date.now() - busySinceRef.current > MAX_WAIT_MS) {
-        serverLockedRef.current = false;
+      // The cap guards against a turn nobody reports on; a lock the server holds is
+      // a report, and the stream's lock snapshot on reconnect corrects a stale one.
+      if (Date.now() - busySinceRef.current > MAX_WAIT_MS && !serverLockedRef.current) {
         setBusy(false);
         return;
       }

@@ -131,8 +131,9 @@ test('Stop stays while the server holds the turn, calls cancel, and goes when th
   await act(async () => FakeEventSource.last?.emit({ type: 'conversation_lock', locked: true }));
   expect(stopButton()).toBeDefined();
 
-  // A long tool call: no new message for longer than the settle window.
-  await act(async () => jest.advanceTimersByTime(10_000));
+  // A long tool call: no new message for longer than the settle window and the
+  // five-minute cap that guards a turn nobody reports on.
+  await act(async () => jest.advanceTimersByTime(310_000));
   expect(stopButton()).toBeDefined();
 
   await act(async () => stopButton()?.click());
