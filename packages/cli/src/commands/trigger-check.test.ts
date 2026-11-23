@@ -22,13 +22,17 @@ import {
 } from '../test-support/workflow-store';
 import { installNativeSchedule, type NativeScheduleOptions } from '../triggers/native-schedule';
 import { triggerCommand } from './trigger';
+import { workflowWakeScheduleConfig } from './wake-schedule';
 
 const tempRoots = trackTempRoots();
 const previousHome = process.env.ARCHON_HOME;
+const previousSources = process.env.ARCHON_WEBHOOK_SOURCES;
 
 afterEach(() => {
   if (previousHome === undefined) delete process.env.ARCHON_HOME;
   else process.env.ARCHON_HOME = previousHome;
+  if (previousSources === undefined) delete process.env.ARCHON_WEBHOOK_SOURCES;
+  else process.env.ARCHON_WEBHOOK_SOURCES = previousSources;
 });
 
 function hostForTest(): WorkflowHost {
@@ -136,7 +140,11 @@ async function fixture() {
       schedules
     );
   };
-  const check = async (): Promise<{ bindings: CheckedBinding[]; error: unknown }> => {
+  const check = async (): Promise<{
+    bindings: CheckedBinding[];
+    observing?: Record<string, unknown>;
+    error: unknown;
+  }> => {
     let printed = '';
     const stdout = spyOn(process.stdout, 'write').mockImplementation(((
       chunk: unknown,
@@ -159,9 +167,25 @@ async function fixture() {
       stdout.mockRestore();
     }
     if (printed === '') throw error;
-    return { ...(JSON.parse(printed) as { bindings: CheckedBinding[] }), error };
+    return {
+      ...(JSON.parse(printed) as {
+        bindings: CheckedBinding[];
+        observing?: Record<string, unknown>;
+      }),
+      error,
+    };
   };
-  return { root, archonHome, config, installTimer, check, scheduled, timerPrefix, removeByHand };
+  return {
+    root,
+    archonHome,
+    config,
+    installTimer,
+    check,
+    scheduled,
+    schedules,
+    timerPrefix,
+    removeByHand,
+  };
 }
 
 test('reports an installed timer outside the triggers directory that passes an undeclared input', async () => {
@@ -258,4 +282,57 @@ test('a fire-only file may leave a required input to --inputs, but not pass an u
   expect((await check()).bindings[0]?.problems).toEqual([
     expect.stringContaining("does not declare input 'b'"),
   ]);
+});
+
+test('names the observing sources nothing watches with the fix, and the watcher once installed', async () => {
+  const { root, check, schedules } = await fixture();
+  const plugin = join(root, 'source.mjs');
+  await writeFile(
+    plugin,
+    `export default () => ({
+  receive: async () => ({ kind: 'ignored' }),
+  observedLabels: { reads: [{ bindingId: 'order', repo: { host: 'github.com', path: 'acme/app' }, label: 'factory' }] },
+  observe: async () => ({ events: [] }),
+});
+`
+  );
+  const sources = join(root, 'sources.json');
+  await writeFile(
+    sources,
+    JSON.stringify({
+      version: 1,
+      sources: [
+        { sourceInstanceId: 'github', module: plugin, config: {}, observe: { everySeconds: 60 } },
+      ],
+    })
+  );
+  process.env.ARCHON_WEBHOOK_SOURCES = sources;
+  const observed = [
+    {
+      source: 'github',
+      everySeconds: 60,
+      labels: [
+        { bindingId: 'order', repo: { host: 'github.com', path: 'acme/app' }, label: 'factory' },
+      ],
+    },
+  ];
+
+  const unwatched = await check();
+  expect(unwatched.observing).toEqual({
+    sources: observed,
+    watcher: { installed: false, registered: false },
+    unwatched: true,
+    fix: expect.stringContaining('Run archon workflow wake schedule install.'),
+  });
+  // A report, not a binding problem: the check still passes.
+  expect(unwatched.error).toBeUndefined();
+
+  await installNativeSchedule(workflowWakeScheduleConfig(), schedules);
+  const watched = await check();
+  expect(watched.observing).toEqual({
+    sources: observed,
+    watcher: { installed: true, registered: true },
+    unwatched: false,
+  });
+  expect(watched.error).toBeUndefined();
 });

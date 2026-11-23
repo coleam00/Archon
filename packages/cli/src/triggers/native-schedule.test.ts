@@ -667,7 +667,7 @@ describe('workflow wake native schedule', () => {
   itOnPosixHost(
     'installs the generated wake argv, preserves configuration and removes only that job',
     async () => {
-      const { workflowWakeScheduleConfig } = await import('../commands/workflow-continuations');
+      const { workflowWakeScheduleConfig } = await import('../commands/wake-schedule');
       const generated = workflowWakeScheduleConfig(5);
       const originalId = generated.id;
       expect(workflowWakeScheduleConfig(10).id).toBe(originalId);
@@ -706,6 +706,48 @@ describe('workflow wake native schedule', () => {
       expect(await removeNativeSchedule(generated, runtime)).toBe(false);
     }
   );
+
+  it('installs on Windows as a one-minute task whose watcher writes nowhere, and removes only it', async () => {
+    const { defaultWakeIntervalSeconds, workflowWakeScheduleConfig } = await import(
+      '../commands/wake-schedule'
+    );
+    const job = {
+      ...workflowWakeScheduleConfig(defaultWakeIntervalSeconds('win32')),
+      archonHome: await scratchDirectory(),
+    };
+    const { commands, runCommand } = recorder();
+    const win32 = {
+      platform: 'win32' as const,
+      windowsUserId: 'me',
+      windowsLauncher: ['C:\\Program Files\\archon\\archon.exe'] as const,
+      runCommand,
+    };
+    const label = `com.archon.trigger.${job.id}`;
+    const task = `\\Archon\\${label}`;
+    const schedules = join(job.archonHome, 'schedules');
+
+    const { path } = await installNativeSchedule(job, win32);
+    expect(path).toBe(join(schedules, `${label}.xml`));
+    expect(commands).toEqual([
+      ['schtasks.exe', '/Create', '/TN', task, '/XML', path, '/F'],
+      ['schtasks.exe', '/Run', '/TN', task],
+    ]);
+    const definition = (await readFile(path)).subarray(2).toString('utf16le');
+    expect(definition).toContain('<Interval>PT1M</Interval>');
+    expect(definition).toContain('<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>');
+    expect(await readFile(join(schedules, `${label}.cmd`), 'utf8')).toContain(
+      '"workflow" "wake" "--watch" "--json") >nul 2>&1'
+    );
+    expect(await inspectNativeSchedule(job, win32)).toMatchObject({ path, registered: true });
+
+    commands.length = 0;
+    expect(await removeNativeSchedule(job, win32)).toBe(true);
+    expect(commands).toEqual([
+      ['schtasks.exe', '/Query', '/TN', task],
+      ['schtasks.exe', '/Delete', '/TN', task, '/F'],
+    ]);
+    expect(await readdir(schedules)).toEqual([]);
+  });
 });
 
 describe('isolation cleanup native schedule', () => {

@@ -1,27 +1,27 @@
 /**
  * Builds what `workflow wake` observes from `ARCHON_WEBHOOK_SOURCES`. Kept apart from the
- * route so the route stays a thin mapping onto commands, and loaded only by `wake`.
+ * route so the route stays a thin mapping onto commands; loaded only by `wake` and by
+ * `trigger check`, which reports what nothing watches.
  */
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import type {
+  ObservingSource,
+  WebhookSourcePluginHost,
+} from '@archon/core/workflows/source-plugins';
 import type { WakeObservation } from './workflow-continuations';
 
 /**
- * What `workflow wake` observes for an install that receives no webhooks: the sources in
- * `ARCHON_WEBHOOK_SOURCES` that declare `observe`, or nothing when none does.
+ * The sources in `ARCHON_WEBHOOK_SOURCES` that declare `observe`, loaded as `wake` loads
+ * them; `undefined` when the variable is not set.
  */
-export async function wakeObservation(
-  host: WorkflowHost,
-  forgeTrustedEnv: NodeJS.ProcessEnv
-): Promise<WakeObservation | undefined> {
+async function loadObservingSources(
+  host: WorkflowHost
+): Promise<WebhookSourcePluginHost | undefined> {
   const configPath = process.env.ARCHON_WEBHOOK_SOURCES;
   if (!configPath) return undefined;
-  const [{ createItemWaitObserver, loadWebhookSourcePlugins }, { hostSourceForgeReader }] =
-    await Promise.all([
-      import('@archon/core/workflows/source-plugins'),
-      import('@archon/adapters/forge/source-forge-reader'),
-    ]);
+  const { loadWebhookSourcePlugins } = await import('@archon/core/workflows/source-plugins');
   const { store } = host.deps;
-  const sources = await loadWebhookSourcePlugins(
+  return loadWebhookSourcePlugins(
     configPath,
     {
       acceptReceipt: input => store.acceptStartReceipt(input),
@@ -33,9 +33,30 @@ export async function wakeObservation(
     // Wake receives no webhooks: a source that does not observe is never loaded here.
     { observingOnly: true }
   );
+}
+
+/** What `trigger check` reports as observed: the observing sources, or none. */
+export async function observingSources(host: WorkflowHost): Promise<readonly ObservingSource[]> {
+  return (await loadObservingSources(host))?.observing ?? [];
+}
+
+/**
+ * What `workflow wake` observes for an install that receives no webhooks: the sources in
+ * `ARCHON_WEBHOOK_SOURCES` that declare `observe`, or nothing when none does.
+ */
+export async function wakeObservation(
+  host: WorkflowHost,
+  forgeTrustedEnv: NodeJS.ProcessEnv
+): Promise<WakeObservation | undefined> {
+  const sources = await loadObservingSources(host);
+  if (!sources) return undefined;
+  const [{ createItemWaitObserver }, { hostSourceForgeReader }] = await Promise.all([
+    import('@archon/core/workflows/source-plugins'),
+    import('@archon/adapters/forge/source-forge-reader'),
+  ]);
   const observer = createItemWaitObserver({
     sources,
-    store,
+    store: host.deps.store,
     forge: hostSourceForgeReader(forgeTrustedEnv, process.env),
   });
   if (!observer) return undefined;

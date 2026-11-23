@@ -1,5 +1,9 @@
 import { beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { mkdtemp, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { removeTempTree } from '@archon/paths/test-utils';
 import type { NativeScheduleConfig } from '../triggers/native-schedule';
 function makeTestWorkflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
@@ -74,14 +78,22 @@ mock.module('../utils/stdout', () => ({ writeStdout }));
 const realNativeSchedule = await import('../triggers/native-schedule');
 let fingerprint: string | undefined = 'engine';
 mock.module('../utils/engine-fingerprint', () => ({ engineFingerprint: () => fingerprint }));
+const inspect = mock(
+  async (): Promise<
+    Awaited<ReturnType<typeof realNativeSchedule.inspectNativeSchedule>> | undefined
+  > => undefined
+);
+/** The wake job's definition file a watch follows; none unless a test installs one. */
+let wakeJobDefinition: string | undefined;
 mock.module('../triggers/native-schedule', () => ({
   ...realNativeSchedule,
   installNativeSchedule: install,
   removeNativeSchedule: remove,
-  inspectNativeSchedule: mock(async () => undefined),
+  inspectNativeSchedule: inspect,
+  nativeScheduleDefinition: () => wakeJobDefinition,
 }));
 
-/** The command reads the host platform; wake scheduling is macOS-only. */
+/** The command reads the host platform, which picks the default interval. */
 async function onPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T>): Promise<T> {
   const original = Object.getOwnPropertyDescriptor(process, 'platform');
   Object.defineProperty(process, 'platform', { value: platform, configurable: true });
@@ -91,7 +103,8 @@ async function onPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T>): 
     if (original) Object.defineProperty(process, 'platform', original);
   }
 }
-import { workflowContinuationCommand, workflowWakeScheduleCommand } from './workflow-continuations';
+import { workflowContinuationCommand } from './workflow-continuations';
+import { workflowWakeScheduleCommand } from './wake-schedule';
 
 beforeEach(() => {
   output.length = 0;
@@ -105,6 +118,9 @@ beforeEach(() => {
   signal.mockClear();
   install.mockClear();
   remove.mockClear();
+  inspect.mockReset();
+  inspect.mockResolvedValue(undefined);
+  wakeJobDefinition = undefined;
   drain.mockReset();
   // The real drain by default, so a pass's own drain of the install's hosts reaches the
   // store; the observation tests stub it where they hand starts on.
@@ -293,12 +309,72 @@ test('schedule installation failure is reported with a nonzero exit', () =>
     expect(output[0]).toMatchObject({ ok: false, error: 'service not registered' });
   }));
 
-test('schedule refuses to install a wake timer off macOS', () =>
-  onPlatform('linux', async () => {
-    expect(await workflowWakeScheduleCommand(['schedule', 'install'], { json: true })).toBe(1);
-    expect(install).not.toHaveBeenCalled();
-    expect(output[0]).toMatchObject({ ok: false });
+test('schedule installs on Windows with a one-minute default and status reports the job', () =>
+  onPlatform('win32', async () => {
+    expect(await workflowWakeScheduleCommand(['schedule', 'status'], { json: true })).toBe(0);
+    expect(output.at(-1)).toEqual({ ok: true, action: 'wake schedule status', installed: false });
+
+    expect(await workflowWakeScheduleCommand(['schedule', 'install'], { json: true })).toBe(0);
+    expect(install.mock.calls[0]?.[0].schedule.intervalSeconds).toBe(60);
+    inspect.mockResolvedValue({
+      path: 'installed',
+      registered: false,
+      log: 'log',
+      lastRunAt: null,
+    });
+    expect(await workflowWakeScheduleCommand(['schedule', 'status'], { json: true })).toBe(0);
+    expect(output.at(-1)).toEqual({
+      ok: true,
+      action: 'wake schedule status',
+      installed: true,
+      path: 'installed',
+      registered: false,
+    });
+    // --interval belongs to install only.
+    expect(
+      await workflowWakeScheduleCommand(['schedule', 'status'], { json: true, interval: '60' })
+    ).toBe(1);
   }));
+
+test('a watch following the wake job stops once the job is removed', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'archon-wake-job-'));
+  try {
+    wakeJobDefinition = join(directory, 'job.plist');
+    await writeFile(wakeJobDefinition, '');
+    const originalTimeout = globalThis.setTimeout;
+    const timers: {
+      setTimeout(callback: () => void, delay?: number): ReturnType<typeof setTimeout>;
+    } = globalThis;
+    const timer = spyOn(timers, 'setTimeout').mockImplementation((callback: () => void) =>
+      originalTimeout(callback, 0)
+    );
+    scan.mockImplementationOnce(async () => {
+      await unlink(wakeJobDefinition as string);
+      return [];
+    });
+    // Ends the loop if the check misses the removal, so the failure is an assertion, not a hang.
+    scan.mockImplementationOnce(async () => {
+      process.emit('SIGTERM');
+      return [];
+    });
+    try {
+      expect(await workflowContinuationCommand(host, 'wake', [], { json: true, watch: true })).toBe(
+        0
+      );
+    } finally {
+      timer.mockRestore();
+    }
+    expect(scan).toHaveBeenCalledTimes(1);
+    expect(output.at(-1)).toEqual({
+      ok: true,
+      action: 'wake',
+      stop: 'job removed',
+      definition: wakeJobDefinition,
+    });
+  } finally {
+    await removeTempTree(directory);
+  }
+});
 
 test('watch continues after a failed pass and returns failure on shutdown', async () => {
   const { spyOn } = await import('bun:test');

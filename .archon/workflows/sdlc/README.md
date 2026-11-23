@@ -431,12 +431,11 @@ answer continues only when a continuation host picks it up. A running `archon se
 is one. Without a server, install the wake timer, once per machine:
 
 ```bash
-archon workflow wake schedule install   # macOS
+archon workflow wake schedule install
 ```
 
-On Linux or Windows, run `archon workflow wake` from cron, systemd or Task Scheduler
-every minute. Without either, an answered run waits forever, and it keeps its place in
-the queue, so the runs behind it wait too.
+Without a server or the wake timer, an answered run waits forever, and it keeps its
+place in the queue, so the runs behind it wait too.
 
 **Ask the user** how many issues the factory works at once. The pack recommends 10 for
 intake and 10 for the build queue; the merge stage merges one pull request at a time,

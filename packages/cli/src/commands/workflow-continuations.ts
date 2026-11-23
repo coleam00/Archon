@@ -1,9 +1,8 @@
 import type { WorkflowResumeOptions } from '@archon/workflows/engine-port';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
-import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { getArchonHome } from '@archon/paths';
 import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
 import { resumeWorkflowContinuation } from '@archon/core/workflows/continuation-host';
 import {
@@ -19,17 +18,13 @@ import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import { deadlineWaitCursor, type WorkflowResumeCursor } from '@archon/workflows/store';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
-import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { engineFingerprint } from '../utils/engine-fingerprint';
-import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
+import { validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
 import { drainFailureReasons, drainInstallHosts } from '../utils/install-hosts';
 
-import {
-  installNativeSchedule,
-  removeNativeSchedule,
-  type NativeScheduleConfig,
-} from '../triggers/native-schedule';
+import { nativeScheduleDefinition } from '../triggers/native-schedule';
+import { workflowWakeScheduleTarget } from './wake-schedule';
 
 function writeJsonLine(value: unknown): Promise<void> {
   return writeStdout(`${JSON.stringify(value)}\n`);
@@ -38,22 +33,6 @@ function writeJsonLine(value: unknown): Promise<void> {
 type Values = Record<string, unknown>;
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-export function workflowWakeScheduleConfig(intervalSeconds = 5): NativeScheduleConfig {
-  const archonHome = getArchonHome();
-  const [executable, ...prefix] = cliProgramArguments();
-  return {
-    id: `workflow-wake-${createHash('sha256').update(archonHome).digest('hex')}`,
-    programArguments: [executable, ...prefix, 'workflow', 'wake', '--watch', '--json'],
-    workingDirectory: archonHome,
-    archonHome,
-    path: process.env.PATH ?? '',
-    schedule: { intervalSeconds, runAtLoad: true },
-    // A watcher writes a line every pass, forever; a log of it would only grow.
-    output: 'discard',
-    removeCommand: 'archon workflow wake schedule remove',
-  };
 }
 
 async function admit(
@@ -264,46 +243,6 @@ export async function workflowContinuationCommand(
   }
 }
 
-export async function workflowWakeScheduleCommand(args: string[], values: Values): Promise<number> {
-  const json = values.json === true;
-  try {
-    return await wakeSchedule(args, values, json);
-  } catch (error) {
-    if (json)
-      await writeJsonLine({
-        ok: false,
-        action: 'wake',
-        signaled: false,
-        error: errorMessage(error),
-      });
-    else console.error(errorMessage(error));
-    return 1;
-  }
-}
-
-async function wakeSchedule(args: string[], values: Values, json: boolean): Promise<number> {
-  const operation = args[1];
-  if (args.length !== 2 || (operation !== 'install' && operation !== 'remove')) {
-    throw new Error(
-      'Usage: archon workflow wake schedule <install|remove> [--interval <seconds>] [--json]'
-    );
-  }
-  validateFlags(values, operation === 'install' ? ['interval'] : []);
-  // A long-lived watcher is not the one-shot job the systemd and Task Scheduler backends run.
-  if (process.platform !== 'darwin')
-    throw new Error(
-      'Native wake scheduling is supported only on macOS. Use the documented long-lived systemd or Task Scheduler recipe on this host.'
-    );
-  const config = workflowWakeScheduleConfig(parseIntervalSeconds(values, 5));
-  const result =
-    operation === 'install'
-      ? { path: (await installNativeSchedule(config)).path }
-      : { removed: await removeNativeSchedule(config) };
-  if (json) await writeJsonLine({ ok: true, action: `wake schedule ${operation}`, ...result });
-  else console.log(`wake schedule ${operation}: ${JSON.stringify(result)}`);
-  return 0;
-}
-
 async function signalEvent(
   host: WorkflowHost,
   args: string[],
@@ -369,9 +308,9 @@ async function signalEvent(
 
 /**
  * `wake --watch` exits with this when the installed engine changed under it,
- * so its supervisor restarts it on current code (EX_TEMPFAIL). Nonzero on
- * purpose: systemd `Restart=on-failure` and Task Scheduler's restart act only
- * on a failure, and launchd's StartInterval restarts any exit.
+ * so its supervisor restarts it on current code (EX_TEMPFAIL). The installed wake
+ * job starts it again on its interval after any exit; the code is nonzero for a
+ * supervisor built by hand that restarts only on a failure.
  */
 const WAKE_ENGINE_CHANGED_EXIT = 75;
 
@@ -387,6 +326,18 @@ async function loadedEngine(watch: boolean, json: boolean): Promise<string | und
   if (json) await writeJsonLine({ ok: true, action: 'wake', engine: 'unknown' });
   else console.error('wake: engine unknown; restart the watcher after updating Archon');
   return undefined;
+}
+
+/**
+ * The wake job's definition file, when the job is installed as this watch starts. Removing
+ * the job deletes it, and the watch stops: no scheduler stops a running watcher on remove
+ * except launchd, so without this a removed job's watcher would run on. A watch started
+ * with no job installed has nothing to follow and never stops for this.
+ */
+function followedWakeJob(watch: boolean): string | undefined {
+  if (!watch) return undefined;
+  const definition = nativeScheduleDefinition(workflowWakeScheduleTarget());
+  return definition !== undefined && existsSync(definition) ? definition : undefined;
 }
 
 /** The installed engine, when it is no longer the one this watch loaded. */
@@ -547,15 +498,19 @@ interface WakeControl {
   engineMoved(): Promise<boolean>;
   /** Whether `engineMoved` has seen a change, without checking again. */
   moved(): boolean;
+  /** Whether the wake job this watch follows was removed; reported and stopped as above. */
+  jobRemoved(): Promise<boolean>;
 }
 
 /** A stop flag for both loops, sleeps that a stop ends at once, and the engine check. */
 function wakeControl(
   loaded: string | undefined,
+  job: string | undefined,
   json: boolean
 ): { control: WakeControl; stop: () => void } {
   let stopped = false;
   let moved = false;
+  let removed = false;
   const sleeps = new Set<() => void>();
   const stop = (): void => {
     stopped = true;
@@ -573,6 +528,16 @@ function wakeControl(
         return true;
       },
       moved: () => moved,
+      jobRemoved: async () => {
+        if (removed) return true;
+        if (job === undefined || existsSync(job)) return false;
+        removed = true;
+        stop();
+        if (json)
+          await writeJsonLine({ ok: true, action: 'wake', stop: 'job removed', definition: job });
+        else console.log(`wake: the wake job was removed (${job}), stopping`);
+        return true;
+      },
       stopped: () => stopped,
       sleep: ms =>
         new Promise<void>(resolve => {
@@ -607,7 +572,7 @@ async function observeLoop(
   const owed = new Set<string>();
   let ok = true;
   do {
-    if (await control.engineMoved()) break;
+    if ((await control.engineMoved()) || (await control.jobRemoved())) break;
     try {
       ok = (await observePass(host, observation, owed, json)) && ok;
     } catch (error) {
@@ -705,7 +670,7 @@ async function wake(
   if (args.length) throw new Error('Usage: archon workflow wake [--watch] [--json]');
   await announceObserving(observation, values.watch === true, json);
   const loaded = await loadedEngine(values.watch === true, json);
-  const { control, stop } = wakeControl(loaded, json);
+  const { control, stop } = wakeControl(loaded, followedWakeJob(values.watch === true), json);
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
   let ok = true;
@@ -715,7 +680,7 @@ async function wake(
     do {
       // Checked before every pass, so an update during the sleep never gets
       // another pass on the old engine.
-      if (await control.engineMoved()) break;
+      if ((await control.engineMoved()) || (await control.jobRemoved())) break;
       ok = (await wakePass(host, json)) && ok;
       if (!values.watch || control.stopped()) break;
       await control.sleep(5_000);

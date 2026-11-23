@@ -54,9 +54,11 @@ import { addTriggerFile } from '../triggers/add-trigger-file';
 import {
   inspectNativeSchedule,
   installNativeSchedule,
+  NativeScheduleUnsupportedError,
   removeNativeSchedule,
   type NativeScheduleOptions,
 } from '../triggers/native-schedule';
+import { WAKE_SCHEDULE_INSTALL_COMMAND, workflowWakeScheduleTarget } from './wake-schedule';
 import { checkFireBindings, fireConfig } from '../triggers/fire-binding-check';
 import { resolveCliUserId } from './auth';
 import { loadConfig } from '@archon/core/config/config-loader';
@@ -681,6 +683,42 @@ async function installTimer(
 }
 
 /**
+ * The sources that observe (event bindings on an install with no webhooks) and whether this
+ * host's scheduler runs the wake watcher that reads them; `undefined` when none observes.
+ * A report, not a problem: a server started with ARCHON_WEBHOOK_SOURCES observes too, and
+ * check cannot tell whether one runs for this install.
+ */
+async function observingReport(host: WorkflowHost, schedules: NativeScheduleOptions) {
+  const { observingSources } = await import('./wake-observation');
+  const sources = (await observingSources(host)).map(source => ({
+    source: source.sourceInstanceId,
+    everySeconds: source.everySeconds,
+    labels: source.labels,
+  }));
+  if (sources.length === 0) return undefined;
+  const server = `an Archon server started with ARCHON_WEBHOOK_SOURCES runs for this install`;
+  try {
+    const job = await inspectNativeSchedule(workflowWakeScheduleTarget(), schedules);
+    const watcher = { installed: job !== undefined, registered: job?.registered ?? false };
+    if (watcher.registered) return { sources, watcher, unwatched: false };
+    return {
+      sources,
+      watcher,
+      unwatched: true,
+      fix: `Nothing on this host's scheduler runs archon workflow wake --watch, so these sources are observed only while ${server}. Run ${WAKE_SCHEDULE_INSTALL_COMMAND}.`,
+    };
+  } catch (error) {
+    if (!(error instanceof NativeScheduleUnsupportedError)) throw error;
+    return {
+      sources,
+      watcher: { supported: false },
+      unwatched: true,
+      fix: `This host has no scheduler Archon can install the wake watcher with, so these sources are observed only while archon workflow wake --watch runs under a supervisor of your own, or while ${server}.`,
+    };
+  }
+}
+
+/**
  * List every trigger binding this install can start, reading only, and check that its
  * started workflow accepts its inputs as a start would. Bindings with `on`: for run-ended,
  * the ended workflow declares the outcome and every input the binding reads from it; for
@@ -689,7 +727,8 @@ async function installTimer(
  * starts, by the same check. It also reports what no run is refused for: a missing
  * `launch.cwd`, a run-ended binding that starts the workflow that ended, and two files that
  * start the same stage. Every other binding, including installed timers' config files
- * wherever they live, is listed under `bindings` (see `checkFireBindings`).
+ * wherever they live, is listed under `bindings` (see `checkFireBindings`). Sources that
+ * observe are listed under `observing`, with whether a wake watcher reads them.
  */
 async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOptions): Promise<void> {
   const bindings = await readOnBindings(getTriggersPath());
@@ -724,12 +763,14 @@ async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOption
     asksSettled: asksSettled.map((entry, index) => listed(entry, asksSettledProblems[index])),
     bindings: await checkFireBindings(deps, schedules),
   };
+  const observing = await observingReport(host, schedules);
   await writeJsonLine({
     directory: getTriggersPath(),
     // A standalone check has no item, so it cannot know an item's landing branch.
     definitions:
       "Each binding is checked against the definitions a start without an item reads: the binding's base, else its project's default branch, as fetched now, with the launch checkout's uncommitted changes on top. A run on an item checks the bindings it may fire against the definitions it captured, before it starts.",
     ...checked,
+    ...(observing ? { observing } : {}),
   });
   const broken = [...checked.runEnded, ...checked.asksSettled, ...checked.bindings].filter(
     entry => entry.problems.length > 0
