@@ -1,6 +1,6 @@
 import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import type { ConversationLockManager } from '@archon/core';
+import type { ConversationLockManager, HandleMessageContext } from '@archon/core';
 import { SSEStreamingApi } from 'hono/streaming';
 import { WebAdapter } from '../adapters/web';
 import { MessagePersistence } from '../adapters/web/persistence';
@@ -173,6 +173,7 @@ mock.module('@archon/core/utils/commands', () => ({
 }));
 
 import { registerApiRoutes } from './api';
+import { ConversationLockManager as RealLockManager } from '@archon/core/utils/conversation-lock';
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -211,7 +212,10 @@ const MOCK_MESSAGES = [
   },
 ];
 
-function makeApp(webAdapter?: WebAdapter): { app: OpenAPIHono; mockWebAdapter: WebAdapter } {
+function makeApp(
+  webAdapter?: WebAdapter,
+  lockManager?: ConversationLockManager
+): { app: OpenAPIHono; mockWebAdapter: WebAdapter } {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const mockWebAdapter =
     webAdapter ??
@@ -227,9 +231,72 @@ function makeApp(webAdapter?: WebAdapter): { app: OpenAPIHono; mockWebAdapter: W
     }),
     getStats: mock(makeIdleLockStats),
   } as unknown as ConversationLockManager;
-  registerApiRoutes(app, mockWebAdapter, mockLockManager);
+  registerApiRoutes(app, mockWebAdapter, lockManager ?? mockLockManager);
   return { app, mockWebAdapter };
 }
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/conversations/:id/cancel
+// ---------------------------------------------------------------------------
+
+describe('POST /api/conversations/:id/cancel', () => {
+  beforeEach(() => {
+    mockFindConversationByPlatformId.mockReset();
+    mockFindConversationByPlatformId.mockResolvedValue(null);
+    mockHandleMessage.mockReset();
+  });
+
+  async function cancel(app: OpenAPIHono, id = 'web-test-abc'): Promise<Response> {
+    return app.request(`/api/conversations/${id}/cancel`, { method: 'POST' });
+  }
+
+  test('does nothing when no reply is in flight', async () => {
+    const { app } = makeApp(undefined, new RealLockManager());
+    const response = await cancel(app);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ cancelled: false });
+  });
+
+  test('aborts the signal the in-flight turn was handed, once', async () => {
+    let turnSignal: AbortSignal | undefined;
+    let turnEnded!: () => void;
+    const ended = new Promise<void>(resolve => {
+      turnEnded = resolve;
+    });
+    mockHandleMessage.mockImplementationOnce(
+      async (...args: unknown[]) =>
+        new Promise<void>(resolve => {
+          turnSignal = (args[3] as HandleMessageContext).abortSignal;
+          turnSignal?.addEventListener('abort', () => resolve(), { once: true });
+        })
+    );
+    const lockManager = new RealLockManager();
+    const { app, mockWebAdapter } = makeApp(undefined, lockManager);
+    (mockWebAdapter.emitLockEvent as ReturnType<typeof mock>).mockImplementation(
+      async (_id: string, locked: boolean) => {
+        if (!locked) turnEnded();
+      }
+    );
+
+    await app.request('/api/conversations/web-test-abc/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'write a long essay' }),
+    });
+    expect(turnSignal?.aborted).toBe(false);
+
+    expect(await (await cancel(app)).json()).toEqual({ cancelled: true });
+    expect(turnSignal?.aborted).toBe(true);
+    // The turn ends and releases the conversation; a stop arriving after that is a no-op.
+    await ended;
+    expect(await (await cancel(app)).json()).toEqual({ cancelled: false });
+  });
+
+  test('refuses an id that is not a web conversation id', async () => {
+    const { app } = makeApp(undefined, new RealLockManager());
+    expect((await cancel(app, 'bad.id')).status).toBe(400);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Tests: POST /api/conversations/:id/message

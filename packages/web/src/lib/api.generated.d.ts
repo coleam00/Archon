@@ -1257,6 +1257,92 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/conversations/{id}/cancel': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Stop the in-flight chat reply
+     * @description Aborts the provider call of the reply in progress. The partial reply stays in the conversation, followed by a `chat_interrupted` marker message. Queued messages still run. `cancelled` is false when nothing was in flight or the reply was already stopped.
+     */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Whether a reply was stopped */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['CancelConversationResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/codebases': {
     parameters: {
       query?: never;
@@ -5862,6 +5948,9 @@ export interface components {
       message: string;
       /** @description Repeated files parts, each at most 10485760 bytes. Upload MIME type restrictions apply. */
       files?: string[];
+    };
+    CancelConversationResponse: {
+      cancelled: boolean;
     };
     CodebaseListResponse: components['schemas']['Codebase'][];
     Codebase: {

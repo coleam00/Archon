@@ -244,6 +244,9 @@ export async function handleMessage(
       config,
       cwd,
     });
+    // The operator's stop reaches the provider through its own contract, so every
+    // provider aborts the same way; only this chat turn's call carries it.
+    if (context.abortSignal) requestOptions.abortSignal = context.abortSignal;
 
     // 5. Send to AI provider
     const aiClient = getAgentProvider(providerKey);
@@ -278,7 +281,7 @@ export async function handleMessage(
       conversationId,
       conversation,
       pendingLaunch.launch,
-      turn.failed,
+      turn.failed || turn.stopped,
       context
     );
     await reportSourceWork(platform, conversationId, conversation, discoveredCodebase);
@@ -305,12 +308,12 @@ async function dispatchPendingLaunch(
   context: HandleMessageContext
 ): Promise<void> {
   // After the gate continuation: a launch has committed nothing yet, so unlike a resolved
-  // gate it is dropped when the turn throws or ends in an error result, and the user sees
-  // the error instead.
+  // gate it is dropped when the turn throws, ends in an error result, or is stopped by the
+  // operator; the user sees the error or the stop instead.
   if (launch !== null && failed) {
     getLog().info(
       { conversationId, workflowName: launch.entry.workflow.name },
-      'orchestrator.invoke_workflow_dropped_failed_turn'
+      'orchestrator.invoke_workflow_dropped_unfinished_turn'
     );
   } else if (launch !== null) {
     const { entry, codebase, prompt, inputs } = launch;
@@ -397,6 +400,7 @@ async function runChatTurn(
     startedAt: Date.now(),
     reported: false,
     failed: false,
+    stopped: false,
   };
   const turnInput = { ...input, turn };
   try {

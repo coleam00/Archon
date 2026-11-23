@@ -221,6 +221,15 @@ export function ChatPage(): ReactElement {
     })();
   };
 
+  // `busy` is not cleared here: the server's lock release (SSE) or the stop marker
+  // message (settle detector) returns the composer to idle once the turn has ended.
+  const onStop = (): void => {
+    if (activeConvId === null) return;
+    skill.cancelConversation(activeConvId).catch((e: unknown) => {
+      setError(e instanceof Error ? e.message : 'Stop failed.');
+    });
+  };
+
   const selectConversation = (conversationId: string | null): void => {
     if (projectId === undefined) return;
     setActiveConvId(conversationId);
@@ -361,7 +370,11 @@ export function ChatPage(): ReactElement {
 
       <ChatError error={error} loadError={loadError} />
 
-      <ChatComposer onSend={onSend} disabled={busy} />
+      <ChatComposer
+        onSend={onSend}
+        disabled={busy}
+        onStop={activeConvId !== null ? onStop : undefined}
+      />
     </section>
   );
 }

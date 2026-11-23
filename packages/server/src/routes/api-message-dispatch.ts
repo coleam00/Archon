@@ -178,7 +178,7 @@ export function createOrchestratorDispatch(
     extraContext: Omit<HandleMessageContext, 'isolationHints'>,
     filesToCleanup?: AttachedFile[]
   ): Promise<{ accepted: boolean; status: string }> {
-    const result = await lockManager.acquireLock(conversationId, async () => {
+    const result = await lockManager.acquireLock(conversationId, async signal => {
       // Emit lock:true at handler start so the UI knows processing has begun.
       // Fire-and-forget — if no SSE stream is connected yet, the event is buffered.
       webAdapter.emitLockEvent(conversationId, true);
@@ -186,6 +186,7 @@ export function createOrchestratorDispatch(
         await handleMessage(webAdapter, conversationId, message, {
           isolationHints: { workflowType: 'thread', workflowId: conversationId },
           ...extraContext,
+          abortSignal: signal,
         });
       } catch (error) {
         getLog().error({ err: error, conversationId }, 'handle_message_failed');

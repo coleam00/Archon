@@ -109,7 +109,7 @@ export function registerApiRoutes(
   registerProviderKeyRoutes(app);
   registerUserAiPrefsRoutes(app);
   registerConversationRoutes(app, { webAdapter, dispatchToOrchestrator });
-  registerMessageRoutes(app, { webAdapter, dispatchToOrchestrator });
+  registerMessageRoutes(app, { webAdapter, dispatchToOrchestrator, lockManager });
   registerCodebaseRoutes(app, registration);
 
   app.doc('/api/openapi.json', {

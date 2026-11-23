@@ -81,6 +81,11 @@ export interface HandleMessageContext {
    */
   readonly workflowAdoptRunId?: string;
   readonly workflowSupersedesRunId?: string;
+  /**
+   * The operator's stop for this turn (`ConversationLockManager.cancel`). Only the direct
+   * chat turn's provider call reads it; a workflow the turn dispatches is not stopped by it.
+   */
+  readonly abortSignal?: AbortSignal;
 }
 
 export type WorkflowRequest =
