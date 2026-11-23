@@ -2,17 +2,16 @@
  * Runs a deliver pack script as the engine does (a Bun subprocess reading
  * `INPUTS_*`) against a fake or real `archon forge`.
  *
- * By default the forge is a stateful fake: a preload that replaces `Bun.spawnSync`
- * for `archon forge` argv only, so it behaves the same on every platform. It keeps
- * one mutable pull request, one issue, the tracker's other issues and their
- * comments, so a write and the read-back that follows it see the same state.
+ * By default the forge is the typed state store in ./fixtures/fake-forge.ts, installed
+ * by a preload that replaces `Bun.spawnSync` for `archon forge` argv only, so it
+ * behaves the same on every platform.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type { ForgeFailure, ForgeOperations } from 'archon:script';
-import type { FakeForgeLogs, ForgePr, TrackerFake, TrackerIssue } from './fixtures/fake-forge';
+import type { FakeForgeLogs, ForgePr, TrackerFake, TrackerIssue, WriteOp } from './fixtures/fake-forge';
 import { trackTempRoots } from './temp-roots';
 
 export type { TrackerComment, TrackerFake, TrackerIssue, TrackerPr, TrackerSubject } from './fixtures/fake-forge';
@@ -67,11 +66,11 @@ export interface ScriptRun {
   readonly forge: readonly string[];
   /** Every JSON request body the fake forge was handed through `--data-file`. */
   readonly forgeRequests: readonly string[];
-  /** Every issue the fake forge created, in order. */
+  /** Every issue the fake forge stored, in order. */
   readonly createdIssues: readonly TrackerIssue[];
-  /** Every comment the fake forge wrote, with the issue or pull request it is on. */
+  /** Every comment write that changed the store, with the issue or pull request it is on. */
   readonly comments: readonly { readonly issue: number; readonly body: string }[];
-  /** Every issue close the fake forge received. */
+  /** Every close that changed the store. */
   readonly closes: readonly { readonly number: number; readonly state: string; readonly state_reason: string }[];
   /** Every issue or pull request body the fake forge was asked to write, in order. */
   readonly bodies: readonly string[];
@@ -308,25 +307,26 @@ export function forgeOperation<Op extends keyof ForgeOperations>(op: Op, value: 
   return JSON.stringify({ operationId: `op-${op}`, ok: true, result: { op, value } });
 }
 
-type WriteOp = NonNullable<ForgeFailure['mutation']>['op'];
-
 /** One failed forge write, with the mutation evidence a write owes its caller. */
-export function forgeFailure(
+export function forgeRefusal(
   op: WriteOp,
   outcome: 'refused' | 'verification_failed' | 'outcome_unknown',
   message: string
-): string {
-  const mutation =
-    outcome === 'refused'
-      ? { op, target: PR, outcome }
-      : { op, target: PR, outcome, leaveBehind: 'nothing known' };
-  const failure: ForgeFailure = {
+): ForgeFailure {
+  return {
     operationId: `op-${op}`,
     ok: false,
     error: { kind: 'forge_error', message },
-    mutation,
+    mutation:
+      outcome === 'refused'
+        ? { op, target: PR, outcome }
+        : { op, target: PR, outcome, leaveBehind: 'nothing known' },
   };
-  return JSON.stringify(failure);
+}
+
+/** {@link forgeRefusal} as the response document the CLI prints. */
+export function forgeFailure(...args: Parameters<typeof forgeRefusal>): string {
+  return JSON.stringify(forgeRefusal(...args));
 }
 
 /** Every forge operation a run invoked, with the request it sent, in call order. */
