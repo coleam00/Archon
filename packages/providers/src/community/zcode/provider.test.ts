@@ -52,9 +52,14 @@ const EPILOGUE_OK = JSON.stringify({
   projection: { turnCount: 1 },
 });
 
-async function collect(prompt = 'hi', options?: Parameters<ZcodeProvider['sendQuery']>[3]) {
+async function collect(prompt = 'hi', options?: Record<string, unknown>) {
   const chunks: { type: string }[] = [];
-  for await (const c of new ZcodeProvider().sendQuery(prompt, '/tmp', undefined, options)) {
+  for await (const c of new ZcodeProvider().sendQuery(
+    prompt,
+    '/tmp',
+    undefined,
+    options as never
+  )) {
     chunks.push(c as { type: string });
   }
   return chunks;
