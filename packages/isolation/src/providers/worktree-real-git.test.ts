@@ -708,36 +708,54 @@ describe('WorktreeProvider against real git', () => {
     expect(await lockReasonOf(worktreePath)).toBeNull();
   });
 
-  test('linked files are shared, stay out of git status, and survive destroying the worktree', async () => {
-    await writeFile(join(repoPath, '.gitignore'), '.cache\n');
-    await git(repoPath, 'add', '.gitignore');
-    await git(repoPath, 'commit', '-qm', 'ignore the cache');
-    await git(repoPath, 'remote', 'add', 'origin', repoPath);
-    provider = new WorktreeProvider(
-      async () => ({ linkFiles: ['.cache'], postCreate: ['warm'] }),
-      async input => {
-        await writeFile(join(input.workingPath, '.cache', 'warm'), 'from setup');
-      }
-    );
-    const created = await provider.create({
-      ...request,
-      workflowType: 'task',
-      taskBranch: { kind: 'new', branch: toBranchName('linked'), fromBranch: toBranchName('main') },
-    });
-    if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+  test.if(process.platform === 'win32')(
+    'linkFiles is refused on Windows before any worktree is added',
+    async () => {
+      provider = new WorktreeProvider(async () => ({ linkFiles: ['.cache'] }));
+      await expect(provider.create(request)).rejects.toThrow(
+        'worktree.linkFiles is not supported on Windows'
+      );
+      expect(await registeredWorktrees()).toEqual([resolve(repoPath)]);
+    }
+  );
 
-    expect(await readFile(join(repoPath, '.cache', 'warm'), 'utf8')).toBe('from setup');
-    expect(await git(created.workingPath, 'status', '--porcelain')).toBe('');
+  test.skipIf(process.platform === 'win32')(
+    'linked files are shared, stay out of git status, and survive destroying the worktree',
+    async () => {
+      await writeFile(join(repoPath, '.gitignore'), '.cache\n');
+      await git(repoPath, 'add', '.gitignore');
+      await git(repoPath, 'commit', '-qm', 'ignore the cache');
+      await git(repoPath, 'remote', 'add', 'origin', repoPath);
+      provider = new WorktreeProvider(
+        async () => ({ linkFiles: ['.cache'], postCreate: ['warm'] }),
+        async input => {
+          await writeFile(join(input.workingPath, '.cache', 'warm'), 'from setup');
+        }
+      );
+      const created = await provider.create({
+        ...request,
+        workflowType: 'task',
+        taskBranch: {
+          kind: 'new',
+          branch: toBranchName('linked'),
+          fromBranch: toBranchName('main'),
+        },
+      });
+      if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
 
-    const result = await provider.destroy(created.workingPath, {
-      canonicalRepoPath: request.canonicalRepoPath,
-      creationId: created.metadata.creationId,
-      branchName: created.branchName,
-    });
-    expect(result.worktreeRemoved).toBe(true);
-    expect(existsSync(created.workingPath)).toBe(false);
-    expect(await readFile(join(repoPath, '.cache', 'warm'), 'utf8')).toBe('from setup');
-  });
+      expect(await readFile(join(repoPath, '.cache', 'warm'), 'utf8')).toBe('from setup');
+      expect(await git(created.workingPath, 'status', '--porcelain')).toBe('');
+
+      const result = await provider.destroy(created.workingPath, {
+        canonicalRepoPath: request.canonicalRepoPath,
+        creationId: created.metadata.creationId,
+        branchName: created.branchName,
+      });
+      expect(result.worktreeRemoved).toBe(true);
+      expect(existsSync(created.workingPath)).toBe(false);
+      expect(await readFile(join(repoPath, '.cache', 'warm'), 'utf8')).toBe('from setup');
+    }
+  );
 
   test.each([false, true])(
     'failed post-create preserves installer output when present (%s)',

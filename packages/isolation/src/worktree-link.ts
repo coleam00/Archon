@@ -3,6 +3,8 @@
  *
  * Symlinks git-ignored paths from a new worktree to the canonical repo, so every
  * worktree shares one copy of a large cache, log or metadata directory.
+ *
+ * POSIX only. Windows refuses `linkFiles` (see `assertLinkFilesSupported`).
  */
 
 import { lstat, mkdir, readlink, stat, symlink, unlink } from 'fs/promises';
@@ -18,6 +20,27 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('worktree-link');
   return cachedLog;
+}
+
+/**
+ * Refuse a non-empty `worktree.linkFiles` on Windows. Without elevated rights
+ * the only directory link Windows offers is a junction, and Git for Windows
+ * treats a junction as a real directory: `git worktree remove`, or an agent's
+ * `git clean -fdx` in the worktree, walks into it and deletes the shared
+ * content in the canonical repo. Archon cannot guard the second, so it makes
+ * no link at all.
+ */
+export function assertLinkFilesSupported(
+  linkFiles: readonly string[] | undefined,
+  platform: NodeJS.Platform = process.platform
+): void {
+  if (platform !== 'win32' || !linkFiles?.length) return;
+  throw new Error(
+    'worktree.linkFiles is not supported on Windows: a directory link there is a junction, ' +
+      'which git treats as a real directory, so removing or cleaning the worktree would delete ' +
+      'the shared content in the canonical repo. Remove worktree.linkFiles (copyFiles still works), ' +
+      "or set linkFiles: [] in the project's .archon/config.yaml to turn off a global list."
+  );
 }
 
 /**
@@ -82,15 +105,14 @@ async function linkWorktreeFile(
     // A missing source becomes a directory now. Otherwise the first run's tool
     // would create a real, unshared directory in its worktree, and nothing would
     // ever be shared.
-    const sourceStats = await stat(source).catch(async (error: NodeJS.ErrnoException) => {
+    await stat(source).catch(async (error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error;
       await mkdir(source, { recursive: true });
-      return stat(source);
     });
 
     await mkdir(dirname(destination), { recursive: true });
-    // A junction needs no elevated rights on Windows; POSIX ignores the type.
-    await symlink(source, destination, sourceStats.isDirectory() ? 'junction' : 'file');
+    // POSIX needs no link type; Windows never gets here (assertLinkFilesSupported).
+    await symlink(source, destination);
   } catch (error) {
     getLog().error({ entry, source, destination, err: error }, 'worktree_link_failed');
     return false;
