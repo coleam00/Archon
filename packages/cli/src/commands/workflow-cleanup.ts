@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import {
+  ORPHAN_MIN_AGE_MS,
   findOrphanRunFiles,
   removeOrphanRunFiles,
   removeRunFiles,
@@ -17,8 +18,18 @@ import { getLog } from './workflow-shared';
 /** The store this CLI process opened: the file store, or the database `DATABASE_URL` picks. */
 export type CleanupStoreKind = 'files' | 'sqlite' | 'postgresql';
 
-const ORPHANS_RETRY =
-  'Once the cause is fixed, `archon workflow cleanup --orphans --yes` removes them. A path whose directory is outside the project workspace is never removed by Archon.';
+/**
+ * The retry hint after a failed removal. `--orphans` waits until a path is
+ * `ORPHAN_MIN_AGE_MS` past its last change, and a removal that failed part way has just
+ * changed it, so the hint names that wait.
+ */
+function orphansRetry(now: number): string {
+  const hours = String(ORPHAN_MIN_AGE_MS / 3_600_000);
+  return (
+    `Once the cause is fixed, \`archon workflow cleanup --orphans --yes\` removes them. It waits until a path is ${hours} hours past its last change, so paths this command touched may be listed only after ${new Date(now + ORPHAN_MIN_AGE_MS).toISOString()}. ` +
+    'A path whose directory is outside the project workspace is never removed by Archon.'
+  );
+}
 
 export function formatBytes(bytes: number): string {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -41,7 +52,7 @@ function reportLeftovers(report: RunFilesReport): boolean {
   if (report.failed.length === 0) return false;
   console.error(`Could not remove ${String(report.failed.length)} path(s):`);
   for (const { path, error } of report.failed) console.error(`  ${path}: ${error}`);
-  console.error(ORPHANS_RETRY);
+  console.error(orphansRetry(Date.now()));
   return true;
 }
 
@@ -110,11 +121,15 @@ export async function workflowOrphanCleanupCommand(
   host: { deps: { store: Pick<IWorkflowStore, 'getWorkflowRun'> } },
   options: { yes: boolean; storeKind: CleanupStoreKind }
 ): Promise<number> {
-  const { orphans, linked } = await findOrphanRunFiles(host.deps.store);
+  const { orphans, linked, deferred } = await findOrphanRunFiles(host.deps.store);
   for (const { path, linksTo } of linked)
     console.log(`Skipped ${path}: it is ${linksTo}, outside the project workspace.`);
+  if (deferred.count > 0 && deferred.readyAt)
+    console.log(
+      `Left ${String(deferred.count)} path(s) of runs with no row for now: each changed in the last ${String(ORPHAN_MIN_AGE_MS / 3_600_000)} hours and may belong to a run being created. Run again after ${deferred.readyAt.toISOString()} to list them.`
+    );
   if (orphans.length === 0) {
-    console.log('No files of deleted runs found.');
+    if (deferred.count === 0) console.log('No files of deleted runs found.');
     return 0;
   }
   for (const { path, bytes } of orphans) console.log(`${formatBytes(bytes)}\t${path}`);

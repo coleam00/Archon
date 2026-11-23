@@ -501,9 +501,10 @@ and the run's row stays deleted. Archon removes a path only where it sits on dis
 `$ARCHON_HOME/workspaces`: when a run directory such as `logs/` links outside it, the path
 is reported and left in place.
 
-`archon workflow cleanup --orphans` finds what earlier deletions left: run-id paths, older
-than 6 hours, whose run has no row in the selected store. It lists them with their sizes
-and removes them only with `--yes`. A run directory that links outside the workspace is
+`archon workflow cleanup --orphans` finds what earlier deletions left: run-id paths whose
+run has no row in the selected store. It lists them with their sizes and removes them only
+with `--yes`. A path that changed in the last 6 hours is left and counted, with the time
+after which a rerun lists it; a removal that failed part way has just changed its path. A run directory that links outside the workspace is
 named as skipped and not scanned. Switching stores keeps the other store's history, and
 its runs would look like orphans here. So `--yes` is refused while this `ARCHON_HOME` holds
 that history: `archon.db` when files are selected, `store/` when a database is selected.

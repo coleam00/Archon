@@ -2191,6 +2191,9 @@ Each deleted run's artifacts directory, log and frozen workflow source are remov
 reports the runs deleted, the disk space their files took and the state revisions pruned.
 It prints each path it could not remove with the error to stderr and exits 1. The rows
 stay deleted, and once the cause is fixed a later `--orphans --yes` removes those paths.
+A removal that failed part way has just changed its path, and `--orphans` waits until a
+path is 6 hours past its last change, so the message gives the time after which the retry
+lists them.
 A path whose directory links outside `$ARCHON_HOME/workspaces` is reported and never removed.
 
 ```bash
@@ -2201,8 +2204,9 @@ archon workflow cleanup --orphans --yes
 ```
 
 `--orphans` deletes no rows. It lists run-id paths under every project whose run has no
-row in the selected store, with each size and the total. It skips paths younger than
-6 hours, because a container run's frozen source can exist before its row does. Only
+row in the selected store, with each size and the total. It leaves a path that changed in
+the last 6 hours, because a container run's frozen source can exist before its row does.
+It says how many paths it left this way and when to run it again to list them. Only
 `--yes` removes the listed paths. `--yes` is refused while this `ARCHON_HOME` also holds
 the other store's history, because those runs have no row here.
 

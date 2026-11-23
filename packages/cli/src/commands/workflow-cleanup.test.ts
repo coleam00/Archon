@@ -95,24 +95,41 @@ test('removes the files of the runs the store deleted and reports runs and bytes
 // A read-only directory stops neither root nor Windows from removing its entries.
 const permissionsHold = process.platform !== 'win32' && process.getuid?.() !== 0;
 
-test.skipIf(!permissionsHold)('a path it cannot remove is printed and exits 1', async () => {
-  const [artifacts] = await writeRunFiles(id(1));
-  // An artifacts path that is a file inside a read-only directory cannot be removed.
-  const { chmod } = await import('node:fs/promises');
-  const parent = join(artifacts ?? '', '..');
-  await chmod(parent, 0o500);
-  try {
-    const code = await workflowCleanupCommand(
-      storeDeleting([{ id: id(1), output_root: root, codebase_id: null }]),
-      7
-    );
-    expect(code).toBe(1);
-    expect(err.join('\n')).toContain(artifacts ?? '');
-    expect(err.join('\n')).toContain('--orphans --yes');
-  } finally {
-    await chmod(parent, 0o700);
+test.skipIf(!permissionsHold)(
+  'a path it cannot remove is printed, and the suggested retry says when it will list it',
+  async () => {
+    const [artifacts] = await writeRunFiles(id(1));
+    // A run directory inside a read-only directory loses its contents but not itself.
+    const { chmod } = await import('node:fs/promises');
+    const parent = join(artifacts ?? '', '..');
+    await chmod(parent, 0o500);
+    try {
+      const code = await workflowCleanupCommand(
+        storeDeleting([{ id: id(1), output_root: root, codebase_id: null }]),
+        7
+      );
+      expect(code).toBe(1);
+      expect(err.join('\n')).toContain(artifacts ?? '');
+      expect(err.join('\n')).toContain('--orphans --yes');
+      expect(err.join('\n')).toContain('6 hours past its last change');
+    } finally {
+      await chmod(parent, 0o700);
+    }
+
+    // The cause is fixed; the retry runs at once and the path has just changed.
+    out = [];
+    const host = { deps: { store: { getWorkflowRun: async () => null } } };
+    expect(await workflowOrphanCleanupCommand(host, { yes: true, storeKind: 'sqlite' })).toBe(0);
+    expect(existsSync(artifacts ?? '')).toBe(true);
+    expect(out.join('\n')).not.toContain('No files of deleted runs found.');
+    expect(out).toContainEqual(expect.stringMatching(/^Left 1 path\(s\) .* Run again after /));
+
+    const old = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    await utimes(artifacts ?? '', old, old);
+    expect(await workflowOrphanCleanupCommand(host, { yes: true, storeKind: 'sqlite' })).toBe(0);
+    expect(existsSync(artifacts ?? '')).toBe(false);
   }
-});
+);
 
 test('reports deleted rows when pruning state revisions fails', async () => {
   await expect(

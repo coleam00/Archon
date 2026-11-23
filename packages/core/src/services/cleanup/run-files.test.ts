@@ -147,8 +147,11 @@ test('the orphan sweep lists only old run-id paths without a row, and removes on
   await age([...orphan, ...withRow, foreign], day);
   await age(young, ORPHAN_MIN_AGE_MS - 60_000);
 
-  const { orphans: listed, linked } = await findOrphanRunFiles(host.deps.store);
+  const { orphans: listed, linked, deferred } = await findOrphanRunFiles(host.deps.store);
   expect(linked).toEqual([]);
+  // The young paths with no row are counted, with when the newest becomes old enough.
+  expect(deferred.count).toBe(young.length);
+  expect(deferred.readyAt?.getTime()).toBeGreaterThan(Date.now());
   expect(listed.map(entry => entry.path).sort()).toEqual([...orphan].sort());
   expect(listed.every(entry => entry.bytes >= 50)).toBe(true);
   for (const path of [...orphan, ...withRow, ...young, foreign])

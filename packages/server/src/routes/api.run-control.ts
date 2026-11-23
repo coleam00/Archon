@@ -361,7 +361,7 @@ export function registerRunCleanupRoutes(
       const message =
         failed === 0
           ? `Deleted workflow run: ${run.workflow_name}`
-          : `Deleted workflow run: ${run.workflow_name}, but ${String(failed)} of its file path(s) could not be removed (see files.failed). Once the cause is fixed, archon workflow cleanup --orphans --yes removes them.`;
+          : `Deleted workflow run: ${run.workflow_name}, but ${String(failed)} of its file path(s) could not be removed (see files.failed). Once the cause is fixed, archon workflow cleanup --orphans --yes removes them, once each is 6 hours past its last change.`;
       return c.json({
         success: true,
         message,

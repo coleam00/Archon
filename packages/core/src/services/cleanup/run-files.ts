@@ -157,6 +157,12 @@ export interface OrphanRunFiles {
   orphans: OrphanRunFile[];
   /** Run directories left unscanned because they link outside the workspace. */
   linked: { path: string; linksTo: string }[];
+  /**
+   * Paths with no row that changed within {@link ORPHAN_MIN_AGE_MS}, left for now, and when
+   * the last of them is old enough to list. A removal that failed part way changes its path,
+   * so its leftovers land here first.
+   */
+  deferred: { count: number; readyAt: Date | null };
 }
 
 /**
@@ -188,8 +194,8 @@ async function children(path: string): Promise<Dirent[]> {
  * Run-id paths under every project's run directories whose id has no row in `store`.
  * Projects sit two levels under the workspaces root (`owner/repo`, `_folder/<slug>`,
  * `@cwd/<name>`); symlinked entries are never followed, and a run directory that links
- * outside the workspace is reported in `linked`, not scanned. A path younger than
- * {@link ORPHAN_MIN_AGE_MS} is left out.
+ * outside the workspace is reported in `linked`, not scanned. A path with no row that
+ * changed within {@link ORPHAN_MIN_AGE_MS} is counted in `deferred`, not listed.
  */
 export async function findOrphanRunFiles(
   store: Pick<IWorkflowStore, 'getWorkflowRun'>,
@@ -198,6 +204,7 @@ export async function findOrphanRunFiles(
   const workspaces = getArchonWorkspacesPath();
   const found: OrphanRunFile[] = [];
   const linked: OrphanRunFiles['linked'] = [];
+  const deferred: OrphanRunFiles['deferred'] = { count: 0, readyAt: null };
   const known = new Map<string, boolean>();
   const hasRow = async (id: string): Promise<boolean> => {
     let value = known.get(id);
@@ -227,15 +234,21 @@ export async function findOrphanRunFiles(
           const id = idOf(entry.name);
           if (id === null || !RUN_ID_PATTERN.test(id)) continue;
           const path = join(parent, entry.name);
-          const info = await lstat(path);
-          if (now - info.mtimeMs < ORPHAN_MIN_AGE_MS) continue;
           if (await hasRow(id)) continue;
+          const info = await lstat(path);
+          if (now - info.mtimeMs < ORPHAN_MIN_AGE_MS) {
+            const ready = info.mtimeMs + ORPHAN_MIN_AGE_MS;
+            deferred.count++;
+            if (deferred.readyAt === null || ready > deferred.readyAt.getTime())
+              deferred.readyAt = new Date(ready);
+            continue;
+          }
           found.push({ path, bytes: await pathBytes(path) });
         }
       }
     }
   }
-  return { orphans: found, linked };
+  return { orphans: found, linked, deferred };
 }
 
 /** Remove paths {@link findOrphanRunFiles} listed, reported like {@link removeRunFiles}. */
