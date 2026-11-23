@@ -35,8 +35,14 @@ export const CLASS_BY_VARIANT = {
   flexUnavailable: 'transient',
   // Codex's own per-session spend limit stopped the turn.
   sessionBudgetExceeded: 'budget_exceeded',
+  // The account or provider does not serve the requested model; the node must name another.
+  modelNotFound: 'misconfigured',
   contextWindowExceeded: 'unknown',
+  // Policy refusals: another attempt is not known to help.
+  policyCapacityUnavailable: 'unknown',
+  inferenceHookDenied: 'unknown',
   cyberPolicy: 'unknown',
+  bioPolicy: 'unknown',
   misalignmentPolicyViolation: 'unknown',
   tooManyDenials: 'unknown',
   badRequest: 'unknown',
@@ -148,7 +154,9 @@ export const MANAGED_CHATGPT_TOKEN_REJECTED =
   '`archon ai login openai`.';
 
 // Maps slugs that ChatGPT-plan accounts now reject (previously shipped as Archon
-// suggestions/defaults) to a current, plan-accepted slug to suggest instead.
+// suggestions/defaults) to a current, plan-accepted slug to suggest instead. The target
+// stays gpt-6.1-sol rather than gpt-6.2-sol: older Codex binaries set through
+// CODEX_BIN_PATH reject gpt-6.2-sol, and gpt-6.1-sol is still the large-tier default.
 const CODEX_MODEL_FALLBACKS: Record<string, string> = {
   'gpt-5.3-codex': 'gpt-6.1-sol',
   'gpt-5.2-codex': 'gpt-6.1-sol',

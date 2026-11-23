@@ -23,10 +23,15 @@ export type ThreadForkParams = { threadId: string,
  * Start from the loaded parent's effective config, tools, environments, and
  * persisted history to maximize prompt-cache reuse. Requires a loaded,
  * persisted parent and `ephemeral: true`. Enables `features.reasoning_effort_override`
- * on the fork. Cannot be combined with configuration overrides, `path`, `lastTurnId`,
- * or `beforeTurnId`.
+ * on the fork. Only `config.thread_unload_delay_secs` may override the inherited
+ * config. Cannot be combined with `path`, `lastTurnId`, or `beforeTurnId`.
  */
 experimentalPredictionMode?: boolean,
+/**
+ * Disable MCP servers in prediction mode when the inherited window uses incremental tools on Responses Lite.
+ * Requires `experimentalPredictionMode: true`.
+ */
+experimentalDisablePredictionMcp?: boolean,
 /**
  * Optional last turn id to fork through, inclusive.
  *
@@ -62,6 +67,12 @@ approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null,
  * `sandbox`.
  */
 permissions?: string | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, ephemeral?: boolean,
+/**
+ * Persist the fork as an attached thread of its resolved source, hidden from ordinary
+ * lists. The source cannot be deleted while attached threads exist. Requires a paginated source and local storage;
+ * incompatible with ephemeral and deferGoalContinuation. Omitted or false creates an ordinary fork.
+ */
+attachToSource?: boolean,
 /**
  * Optional client-supplied analytics source classification for this forked thread.
  */

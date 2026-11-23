@@ -23,7 +23,6 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { spawn } from 'node:child_process';
-import { appendFileSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
@@ -151,10 +150,19 @@ async function installPlugins(marketplaceFile: string): Promise<void> {
     const userHook = hooks.find(hook => hook.pluginId === null);
     if (!userHook) throw new Error('the user hook is not listed');
     userHookKey = userHook.key;
-    const trust = hooks.map(
-      hook => `[hooks.state.${toml(hook.key)}]\ntrusted_hash = ${toml(hook.currentHash)}\n`
-    );
-    appendFileSync(join(home, 'config.toml'), `\n${trust.join('\n')}`);
+    // Through Codex's own config write: a plugin hook's hash is an opaque value Codex
+    // splits into its declaration and content approvals when it persists it.
+    await connection.request('config/batchWrite', {
+      edits: [
+        {
+          keyPath: 'hooks.state',
+          value: Object.fromEntries(
+            hooks.map(hook => [hook.key, { trusted_hash: hook.currentHash }])
+          ),
+          mergeStrategy: 'upsert',
+        },
+      ],
+    });
   } finally {
     await connection.shutdown(3000);
   }
