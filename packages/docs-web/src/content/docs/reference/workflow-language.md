@@ -307,12 +307,15 @@ The ladder is the union of every provider's vocabulary. Codex accepts all eight 
 
 Archon type-checks the keys shown here and hands any other Claude sandbox setting, at any level of the block, to Claude as written. Archon does not catch a misspelled key.
 
-**settingSources** controls which filesystem setting sources a capable provider discovers. For Claude these are the project's `CLAUDE.md` and `.claude/` skills, commands and agents, and the user-level `~/.claude/`. For skills it controls eligibility, not activation: `skills:` selects the exact active set, and each declared skill must exist under an enabled source. Fewer sources give a leaner context and a faster node start:
+**settingSources** controls which filesystem setting sources a capable provider discovers. For Claude these are the project's `CLAUDE.md` and `.claude/` skills, commands and agents, and the user-level `~/.claude/`. For skills it controls eligibility, not activation: `skills:` declares the exact set the node may receive. An optional filesystem skill absent from all known skill roots is skipped and recorded in `skills_unavailable` (see [Optional skills](/guides/skills/#optional-skills)). A declared filesystem skill installed only under a disabled source or outside Claude's native roots is unreachable, not absent: even if optional, it is still passed to Claude and fails preflight. Required declarations keep their existing provider handling. Fewer sources give a leaner context and a faster node start:
 
 ```yaml
 - id: lean-review
   command: review
-  settingSources: []              # no setting sources; skills must be omitted or []
+  settingSources: []              # no filesystem setting sources
+  skills:
+    - name: playwright-cli
+      optional: true             # skipped only if absent; installed skills are unreachable
 
 - id: implement
   command: implement
