@@ -20,6 +20,8 @@ import { toConversationSummary, type ConversationSummary } from '../primitives/c
  *     ARCHON_WEB_AUTH_HEADER); with no identity (solo installs) nothing narrows.
  *   - sendMessage:        POST /api/conversations/:id/message. JSON, or
  *     multipart when files are attached (mirrors startRun's multipart path).
+ *   - cancelConversation: POST /api/conversations/:id/cancel. Stops the reply in
+ *     flight; resolves false when nothing was running.
  */
 
 type CreateConversationResponse =
@@ -97,3 +99,11 @@ type SendMessageMultipart =
   paths['/api/conversations/{id}/message']['post']['requestBody']['content']['multipart/form-data'];
 type SendMessageError =
   paths['/api/conversations/{id}/message']['post']['responses'][400]['content']['application/json'];
+
+/** Stop the conversation's in-flight reply. Resolves whether a reply was stopped. */
+export async function cancelConversation(conversationPlatformId: string): Promise<boolean> {
+  const res = await requestJson('/api/conversations/{id}/cancel', 'post', {
+    params: { id: conversationPlatformId },
+  });
+  return res.cancelled;
+}

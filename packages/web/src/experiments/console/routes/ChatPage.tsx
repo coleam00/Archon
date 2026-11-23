@@ -23,10 +23,11 @@ import type { ConversationSummary } from '../primitives/conversation';
 // EventSource in dev can miss bursts). Mirrors RunDetailPage's safety-net poll.
 const ACTIVE_POLL_MS = 3000;
 // Consider the turn done once the trailing message is an assistant reply that
-// has stayed stable this long. Independent of any SSE lock event.
+// has stayed stable this long, unless the server still reports the turn locked.
 const SETTLE_MS = 6000;
 // Hard cap so a turn that never produces a reply (server error, etc.) can't
-// disable the composer forever.
+// disable the composer forever. It does not apply while the server reports the
+// conversation locked.
 const MAX_WAIT_MS = 300_000;
 // Distance from the bottom (px) within which we treat the scroll as "at bottom"
 // — drives both auto-scroll stickiness and the jump-to-bottom button's visibility.
@@ -100,10 +101,11 @@ export function ChatPage(): ReactElement {
     () => (activeConvId !== null ? skill.listMessages(activeConvId) : Promise.resolve([]))
   );
 
-  // `busy` = a reply is pending → composer disabled + recovery poll active.
-  // Driven by message content and the send action, NOT by the SSE lock event,
-  // so it stays correct even when the per-conversation SSE drops or never
-  // connects (which it can, cross-origin in dev). SSE is a pure accelerator.
+  // `busy` = a reply is pending → composer disabled (Stop shown) + recovery poll.
+  // Driven by message content and the send action, so it stays correct even when
+  // the per-conversation SSE drops or never connects (which it can, cross-origin
+  // in dev). When SSE is there, its lock events are authoritative: lock:true keeps
+  // the turn busy through message silence, lock:false ends it at once.
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Non-error advisory (distinct channel from `error` so it doesn't read as a
@@ -114,21 +116,34 @@ export function ChatPage(): ReactElement {
   // works even when SSE is absent. The SSE lock event is a fast-path on top of it.
   const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settleSigRef = useRef('');
+  // The server's own word that a turn is running (SSE conversation_lock:true). While it
+  // holds, message silence does not end the turn: a long tool call is quiet, and the
+  // Stop control must stay for as long as the reply can still be stopped.
+  const serverLockedRef = useRef(false);
 
-  // SSE accelerator: invalidates the message cache on text/tool events, and via
-  // onLockChange clears `busy` the instant the server releases the conversation
-  // lock (conversation_lock:false) instead of waiting out SETTLE_MS. Must be
+  // SSE: invalidates the message cache on text/tool events. Via onLockChange,
+  // conversation_lock:true holds `busy` against the settle timer and
+  // conversation_lock:false clears it at once instead of waiting out SETTLE_MS. Must be
   // useCallback-stable — the hook's effect depends on it, so an inline lambda
   // would reconnect the EventSource on every render.
   const onLockChange = useCallback((locked: boolean): void => {
-    if (locked) return;
+    serverLockedRef.current = locked;
+    if (locked) {
+      setBusy(true);
+      return;
+    }
     if (settleTimerRef.current !== null) {
       clearTimeout(settleTimerRef.current);
       settleTimerRef.current = null;
     }
     setBusy(false);
   }, []);
-  useConversationSSE(activeConvId, onLockChange);
+  // A stream that closed for good reports no more locks, so the last one it reported
+  // stops counting and the settle timer and cap decide again.
+  const onStreamClosed = useCallback((): void => {
+    serverLockedRef.current = false;
+  }, []);
+  useConversationSSE(activeConvId, onLockChange, onStreamClosed);
 
   // Derive turn state from the trailing message: a user message means a reply
   // is pending; once an assistant reply lands and stays stable for SETTLE_MS the
@@ -154,7 +169,7 @@ export function ChatPage(): ReactElement {
     settleSigRef.current = sig;
     if (settleTimerRef.current !== null) clearTimeout(settleTimerRef.current);
     settleTimerRef.current = setTimeout(() => {
-      setBusy(false);
+      if (!serverLockedRef.current) setBusy(false);
     }, SETTLE_MS);
   }, [messages]);
   useEffect(
@@ -171,7 +186,10 @@ export function ChatPage(): ReactElement {
     if (!busy || activeConvId === null) return;
     busySinceRef.current = Date.now();
     const id = setInterval(() => {
-      if (Date.now() - busySinceRef.current > MAX_WAIT_MS) {
+      // The cap guards against a turn nobody reports on. A lock the server holds is a
+      // report: a reconnect's lock snapshot corrects a stale one, and a stream that
+      // closed for good drops it (onStreamClosed).
+      if (Date.now() - busySinceRef.current > MAX_WAIT_MS && !serverLockedRef.current) {
         setBusy(false);
         return;
       }
@@ -221,6 +239,15 @@ export function ChatPage(): ReactElement {
     })();
   };
 
+  // `busy` is not cleared here: the server's lock release (SSE) or the stop marker
+  // message (settle detector) returns the composer to idle once the turn has ended.
+  const onStop = (): void => {
+    if (activeConvId === null) return;
+    skill.cancelConversation(activeConvId).catch((e: unknown) => {
+      setError(e instanceof Error ? e.message : 'Stop failed.');
+    });
+  };
+
   const selectConversation = (conversationId: string | null): void => {
     if (projectId === undefined) return;
     setActiveConvId(conversationId);
@@ -228,6 +255,7 @@ export function ChatPage(): ReactElement {
     writeStoredChat(projectId, conversationId);
     setError(null);
     setNotice(null);
+    serverLockedRef.current = false;
     setBusy(false);
   };
 
@@ -361,7 +389,11 @@ export function ChatPage(): ReactElement {
 
       <ChatError error={error} loadError={loadError} />
 
-      <ChatComposer onSend={onSend} disabled={busy} />
+      <ChatComposer
+        onSend={onSend}
+        disabled={busy}
+        onStop={activeConvId !== null ? onStop : undefined}
+      />
     </section>
   );
 }

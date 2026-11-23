@@ -81,7 +81,9 @@ export interface WorkflowMessageMetadata {
     | 'workflow_status'
     | 'workflow_dispatch_status'
     | 'isolation_context'
-    | 'workflow_result';
+    | 'workflow_result'
+    /** Marks where a chat reply the operator stopped was cut off. */
+    | 'chat_interrupted';
   segment?: 'new' | 'auto';
   workflowDispatch?: { workerConversationId: string; workflowName: string };
   workflowResult?: { workflowName: string; runId: string };

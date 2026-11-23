@@ -1,6 +1,6 @@
 import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import type { ConversationLockManager } from '@archon/core';
+import type { ConversationLockManager, HandleMessageContext } from '@archon/core';
 import { SSEStreamingApi } from 'hono/streaming';
 import { WebAdapter } from '../adapters/web';
 import { MessagePersistence } from '../adapters/web/persistence';
@@ -173,6 +173,7 @@ mock.module('@archon/core/utils/commands', () => ({
 }));
 
 import { registerApiRoutes } from './api';
+import { ConversationLockManager as RealLockManager } from '@archon/core/utils/conversation-lock';
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -211,7 +212,10 @@ const MOCK_MESSAGES = [
   },
 ];
 
-function makeApp(webAdapter?: WebAdapter): { app: OpenAPIHono; mockWebAdapter: WebAdapter } {
+function makeApp(
+  webAdapter?: WebAdapter,
+  lockManager?: ConversationLockManager
+): { app: OpenAPIHono; mockWebAdapter: WebAdapter } {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const mockWebAdapter =
     webAdapter ??
@@ -227,9 +231,72 @@ function makeApp(webAdapter?: WebAdapter): { app: OpenAPIHono; mockWebAdapter: W
     }),
     getStats: mock(makeIdleLockStats),
   } as unknown as ConversationLockManager;
-  registerApiRoutes(app, mockWebAdapter, mockLockManager);
+  registerApiRoutes(app, mockWebAdapter, lockManager ?? mockLockManager);
   return { app, mockWebAdapter };
 }
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/conversations/:id/cancel
+// ---------------------------------------------------------------------------
+
+describe('POST /api/conversations/:id/cancel', () => {
+  beforeEach(() => {
+    mockFindConversationByPlatformId.mockReset();
+    mockFindConversationByPlatformId.mockResolvedValue(null);
+    mockHandleMessage.mockReset();
+  });
+
+  async function cancel(app: OpenAPIHono, id = 'web-test-abc'): Promise<Response> {
+    return app.request(`/api/conversations/${id}/cancel`, { method: 'POST' });
+  }
+
+  test('does nothing when no reply is in flight', async () => {
+    const { app } = makeApp(undefined, new RealLockManager());
+    const response = await cancel(app);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ cancelled: false });
+  });
+
+  test('aborts the signal the in-flight turn was handed, once', async () => {
+    let turnSignal: AbortSignal | undefined;
+    let turnEnded!: () => void;
+    const ended = new Promise<void>(resolve => {
+      turnEnded = resolve;
+    });
+    mockHandleMessage.mockImplementationOnce(
+      async (...args: unknown[]) =>
+        new Promise<void>(resolve => {
+          turnSignal = (args[3] as HandleMessageContext).abortSignal;
+          turnSignal?.addEventListener('abort', () => resolve(), { once: true });
+        })
+    );
+    const lockManager = new RealLockManager();
+    const { app, mockWebAdapter } = makeApp(undefined, lockManager);
+    (mockWebAdapter.emitLockEvent as ReturnType<typeof mock>).mockImplementation(
+      async (_id: string, locked: boolean) => {
+        if (!locked) turnEnded();
+      }
+    );
+
+    await app.request('/api/conversations/web-test-abc/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'write a long essay' }),
+    });
+    expect(turnSignal?.aborted).toBe(false);
+
+    expect(await (await cancel(app)).json()).toEqual({ cancelled: true });
+    expect(turnSignal?.aborted).toBe(true);
+    // The turn ends and releases the conversation; a stop arriving after that is a no-op.
+    await ended;
+    expect(await (await cancel(app)).json()).toEqual({ cancelled: false });
+  });
+
+  test('refuses an id that is not a web conversation id', async () => {
+    const { app } = makeApp(undefined, new RealLockManager());
+    expect((await cancel(app, 'bad.id')).status).toBe(400);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Tests: POST /api/conversations/:id/message
@@ -686,6 +753,9 @@ describe('SSE route replay', () => {
         const reader = response.body.getReader();
         readers.push(reader);
         expect(await read(reader)).toContain('"type":"heartbeat"');
+        if (conversationId !== DASHBOARD_STREAM) {
+          expect(await read(reader)).toContain('"type":"conversation_lock"');
+        }
         return reader;
       }
       async function read(reader: ResponseReader): Promise<string> {
@@ -729,6 +799,109 @@ describe('SSE route replay', () => {
   );
 });
 
+describe('SSE lock snapshot', () => {
+  test('a stream opened mid-turn starts with the lock state of its last lock event', async () => {
+    const transport = new SSETransport();
+    const adapter = new WebAdapter(
+      transport,
+      new MessagePersistence((id, event) => transport.emit(id, event)),
+      new WorkflowEventBridge(transport)
+    );
+    const { app } = makeApp(adapter);
+    const waits: ReturnType<typeof Promise.withResolvers<void>>[] = [];
+    const sleep = spyOn(SSEStreamingApi.prototype, 'sleep').mockImplementation(() => {
+      const wait = Promise.withResolvers<void>();
+      waits.push(wait);
+      return wait.promise;
+    });
+    const readers: Pick<ReadableStreamDefaultReader<Uint8Array>, 'read' | 'cancel'>[] = [];
+    async function snapshotOnOpen(): Promise<unknown> {
+      const response = await app.request('/api/stream/web-test-abc');
+      if (!response.body) throw new Error('Missing SSE response body');
+      const reader = response.body.getReader();
+      readers.push(reader);
+      await reader.read(); // heartbeat
+      const chunk = new TextDecoder().decode((await reader.read()).value);
+      return JSON.parse(chunk.replace(/^data: /, '').trim());
+    }
+    try {
+      await adapter.emitLockEvent('web-test-abc', true);
+      expect(await snapshotOnOpen()).toMatchObject({ type: 'conversation_lock', locked: true });
+      await adapter.emitLockEvent('web-test-abc', false);
+      expect(await snapshotOnOpen()).toMatchObject({ type: 'conversation_lock', locked: false });
+    } finally {
+      for (const reader of readers) await reader.cancel();
+      for (const wait of waits) wait.reject(new Error('cancel'));
+      for (let i = 0; i < 40; i++) await Promise.resolve();
+      sleep.mockRestore();
+      transport.stop();
+    }
+  });
+
+  test('a reply that ends while a replacement stream writes its snapshot still reaches it', async () => {
+    const transport = new SSETransport();
+    const adapter = new WebAdapter(
+      transport,
+      new MessagePersistence((id, event) => transport.emit(id, event)),
+      new WorkflowEventBridge(transport)
+    );
+    const { app } = makeApp(adapter);
+    const waits: ReturnType<typeof Promise.withResolvers<void>>[] = [];
+    const sleep = spyOn(SSEStreamingApi.prototype, 'sleep').mockImplementation(() => {
+      const wait = Promise.withResolvers<void>();
+      waits.push(wait);
+      return wait.promise;
+    });
+    const readers: Pick<ReadableStreamDefaultReader<Uint8Array>, 'read' | 'cancel'>[] = [];
+    async function open(): Promise<(typeof readers)[number]> {
+      const response = await app.request('/api/stream/web-test-abc');
+      if (!response.body) throw new Error('Missing SSE response body');
+      const reader = response.body.getReader();
+      readers.push(reader);
+      return reader;
+    }
+    /** Everything the stream has delivered once nothing more arrives. */
+    async function drained(reader: (typeof readers)[number]): Promise<string> {
+      let text = '';
+      for (;;) {
+        const next = await Promise.race([
+          reader.read(),
+          new Promise<null>(resolve => setTimeout(() => resolve(null), 50)),
+        ]);
+        if (next === null || next.done) return text;
+        text += new TextDecoder().decode(next.value);
+      }
+    }
+    const realWrite = SSEStreamingApi.prototype.writeSSE;
+    const write = spyOn(SSEStreamingApi.prototype, 'writeSSE');
+    try {
+      await drained(await open());
+      await adapter.emitLockEvent('web-test-abc', true);
+      // The reply ends exactly while the reconnecting stream writes its locked snapshot,
+      // so the unlock event is delivered to the stream being replaced.
+      let ended = false;
+      write.mockImplementation(async function (this: SSEStreamingApi, message) {
+        if (!ended && typeof message.data === 'string' && message.data.includes('"locked":true')) {
+          ended = true;
+          await adapter.emitLockEvent('web-test-abc', false);
+        }
+        return realWrite.call(this, message);
+      });
+      const replacement = await drained(await open());
+      expect(ended).toBe(true);
+      const locks = [...replacement.matchAll(/"locked":(true|false)/g)].map(m => m[1]);
+      expect(locks.at(-1)).toBe('false');
+    } finally {
+      write.mockRestore();
+      for (const reader of readers) await reader.cancel().catch(() => undefined);
+      for (const wait of waits) wait.reject(new Error('cancel'));
+      for (let i = 0; i < 40; i++) await Promise.resolve();
+      sleep.mockRestore();
+      transport.stop();
+    }
+  });
+});
+
 describe('SSE heartbeat lifecycle', () => {
   for (const conversationId of ['web-test-abc', DASHBOARD_STREAM]) {
     test.each(['abort', 'close', 'error'] as const)(
@@ -770,6 +943,13 @@ describe('SSE heartbeat lifecycle', () => {
           expect(new TextDecoder().decode((await reader.read()).value)).toContain(
             '"type":"heartbeat"'
           );
+          // A conversation stream writes its lock snapshot before the heartbeat loop.
+          const opening = conversationId === DASHBOARD_STREAM ? 1 : 2;
+          if (opening === 2) {
+            expect(new TextDecoder().decode((await reader.read()).value)).toContain(
+              '"type":"conversation_lock"'
+            );
+          }
           await settle();
           expect(waits).toHaveLength(1);
           waits[0]!.resolve();
@@ -778,7 +958,7 @@ describe('SSE heartbeat lifecycle', () => {
           );
           await settle();
           expect(waits).toHaveLength(2);
-          expect(write).toHaveBeenCalledTimes(2);
+          expect(write).toHaveBeenCalledTimes(opening + 1);
           if (!activeStream) throw new Error('Heartbeat did not start');
           if (disconnect === 'abort') {
             await reader.cancel();
@@ -793,7 +973,7 @@ describe('SSE heartbeat lifecycle', () => {
           if (disconnect === 'error') waits[1]!.reject(failure);
           else waits[1]!.resolve();
           await settle();
-          expect(write).toHaveBeenCalledTimes(2);
+          expect(write).toHaveBeenCalledTimes(opening + 1);
           expect(waits).toHaveLength(2);
           // Hono closes the stream after the route callback returns.
           expect(close).toHaveBeenCalledTimes(closesBeforeWake + 1);

@@ -250,10 +250,12 @@ export function useRunStreamSSE(conversationPlatformId: string | null, runId: st
  *
  *   text / tool_call / tool_result → messages changed (debounced refetch)
  *   conversation_lock              → refetch on unlock + onLockChange(locked)
+ *   stream closed for good         → onStreamClosed(): no further lock event will arrive
  */
 export function useConversationSSE(
   conversationPlatformId: string | null,
-  onLockChange?: (locked: boolean) => void
+  onLockChange?: (locked: boolean) => void,
+  onStreamClosed?: () => void
 ): void {
   useEffect(() => {
     if (conversationPlatformId === null) return;
@@ -302,6 +304,7 @@ export function useConversationSSE(
     es.onerror = (): void => {
       if (es.readyState === EventSource.CLOSED) {
         console.warn('[console-sse] conversation stream closed', { conversationPlatformId });
+        onStreamClosed?.();
       }
     };
 
@@ -309,5 +312,5 @@ export function useConversationSSE(
       if (flushTimer !== null) clearTimeout(flushTimer);
       es.close();
     };
-  }, [conversationPlatformId, onLockChange]);
+  }, [conversationPlatformId, onLockChange, onStreamClosed]);
 }

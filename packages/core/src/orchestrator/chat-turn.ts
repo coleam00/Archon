@@ -8,6 +8,7 @@ import type { ResultChunk, SendQueryOptions, TokenUsage } from '@archon/provider
 import {
   addResultUsage,
   sessionPreview,
+  type MessageChunk,
   toolCallDisplayName,
   type ResultUsageTotal,
 } from '@archon/provider-contract';
@@ -62,6 +63,8 @@ export interface ChatTurn {
   result?: TurnResult;
   /** A failed turn drops any launch queued during it. */
   failed: boolean;
+  /** The operator stopped the turn; it drops a queued launch as a failed one does. */
+  stopped: boolean;
 }
 
 /**
@@ -82,6 +85,7 @@ export function reportChatTurn(
 ): void {
   turn.reported = true;
   turn.failed = props.outcome === 'failed';
+  turn.stopped = props.outcome === 'cancelled';
   captureChatTurn({
     ...props,
     costUsd: turn.result?.cost,
@@ -165,6 +169,53 @@ async function sessionIdAfterResult(
 }
 
 /**
+ * Whether the operator stopped this turn. Read from the signal the orchestrator owns,
+ * never from the provider's error text: every provider ends an aborted query by throwing,
+ * and the wording of that throw is not a contract.
+ */
+function turnStopped(input: ChatTurnInput): boolean {
+  return input.requestOptions.abortSignal?.aborted === true;
+}
+
+function resultFailed(msg: ResultChunk): boolean {
+  // Defense-in-depth: errorSubtype === 'success' is the Claude SDK's marker
+  // for a clean stop_sequence termination (the SDK sets is_error: true
+  // alongside subtype: 'success' to encode "non-default termination, not a
+  // failure"). The Claude provider already filters this; the guard here
+  // defends against a third-party IAgentProvider that forwards the SDK
+  // pair raw — without it, direct chat would surface a spurious error to
+  // the user and drop the actual conversation output.
+  return msg.failure !== undefined || (msg.isError === true && msg.errorSubtype !== 'success');
+}
+
+/**
+ * The provider stream for a turn the operator may stop. After a stop, a provider may end
+ * the stream by throwing, by reporting a failure result, or by simply ending it (Claude
+ * does when nothing was streamed yet); each counts as a stopped reply, not a failure.
+ * A successful result does not end the reply early: Claude reports one and keeps the turn
+ * open while background tasks run, so a stop at any point before the stream ends stopped
+ * the reply. A throw without a stop still fails the turn.
+ */
+function stoppableChunks(input: ChatTurnInput): {
+  chunks: AsyncGenerator<MessageChunk>;
+  stopped: () => boolean;
+} {
+  let stopped = false;
+  async function* chunks(): AsyncGenerator<MessageChunk> {
+    try {
+      for await (const msg of turnChunks(input)) {
+        if (msg.type === 'result' && resultFailed(msg) && turnStopped(input)) break;
+        yield msg;
+      }
+    } catch (error) {
+      if (!turnStopped(input)) throw error;
+    }
+    stopped = turnStopped(input);
+  }
+  return { chunks: chunks(), stopped: () => stopped };
+}
+
+/**
  * When the `result` chunk is a failure, tell the user, persist the session and report the
  * failed turn. Returns whether it was one; the turn then ends.
  */
@@ -173,15 +224,7 @@ async function reportFailedResult(
   msg: ResultChunk,
   newSessionId: string | undefined
 ): Promise<boolean> {
-  // Defense-in-depth: errorSubtype === 'success' is the Claude SDK's marker
-  // for a clean stop_sequence termination (the SDK sets is_error: true
-  // alongside subtype: 'success' to encode "non-default termination, not a
-  // failure"). The Claude provider already filters this; the guard here
-  // defends against a third-party IAgentProvider that forwards the SDK
-  // pair raw — without it, direct chat would surface a spurious error to
-  // the user and drop the actual conversation output.
-  const failed = msg.failure !== undefined || (msg.isError && msg.errorSubtype !== 'success');
-  if (!failed) return false;
+  if (!resultFailed(msg)) return false;
   const { turn, platform, conversationId, aiClient, session, requestOptions } = input;
   getLog().warn(
     {
@@ -208,9 +251,8 @@ async function reportFailedResult(
   return true;
 }
 
-/** Persist the reply, send the result footer and report the completed turn. */
-async function completeChatTurn(input: ChatTurnInput, text: string): Promise<void> {
-  const { turn, platform, conversationId, conversation, aiClient, requestOptions } = input;
+function persistReply(input: ChatTurnInput, text: string): void {
+  const { platform, conversationId, conversation } = input;
   // Adapter-owned storage must not get a second copy of the assistant reply (#1182).
   if (platform.capabilities.messagePersistence === 'core' && text) {
     messageDb.addMessage(conversation.id, 'assistant', text).catch((e: unknown) => {
@@ -221,6 +263,12 @@ async function completeChatTurn(input: ChatTurnInput, text: string): Promise<voi
       );
     });
   }
+}
+
+/** Persist the reply, send the result footer and report the completed turn. */
+async function completeChatTurn(input: ChatTurnInput, text: string): Promise<void> {
+  const { turn, platform, conversationId, aiClient, requestOptions } = input;
+  persistReply(input, text);
   await maybeSendResultFooter(platform, conversationId, turn.result);
   reportChatTurn(turn, {
     platform: platform.getPlatformType(),
@@ -230,6 +278,30 @@ async function completeChatTurn(input: ChatTurnInput, text: string): Promise<voi
     // pre-AI setup, i.e. "time the user waited", not pure model latency.
     durationMs: Date.now() - turn.startedAt,
     outcome: 'completed',
+  });
+}
+
+/**
+ * End a turn the operator stopped: keep the partial reply, which the caller has already
+ * sent, and mark where it was cut off. The marker is a message of its own so it persists
+ * and renders on every adapter, also when nothing was streamed yet. The stored session
+ * is kept, so the next message resumes the same context.
+ */
+async function finishStoppedTurn(input: ChatTurnInput, partialText: string): Promise<void> {
+  const { turn, platform, conversationId, aiClient, requestOptions } = input;
+  getLog().info({ conversationId }, 'chat_turn_stopped');
+  persistReply(input, partialText);
+  await platform.sendMessage(conversationId, 'Response stopped.', {
+    category: 'chat_interrupted',
+    segment: 'new',
+  });
+  await maybeSendResultFooter(platform, conversationId, turn.result);
+  reportChatTurn(turn, {
+    platform: platform.getPlatformType(),
+    provider: aiClient.getType(),
+    model: requestOptions.model,
+    durationMs: Date.now() - turn.startedAt,
+    outcome: 'cancelled',
   });
 }
 
@@ -256,8 +328,9 @@ async function streamReply(input: ChatTurnInput) {
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
   let toolFailed = false;
+  const stream = stoppableChunks(input);
 
-  for await (const msg of turnChunks(input)) {
+  for await (const msg of stream.chunks) {
     switch (msg.type) {
       case 'agent_message_chunk':
         if (msg.text.trim()) toolFailed = false;
@@ -293,7 +366,7 @@ async function streamReply(input: ChatTurnInput) {
       }
     }
   }
-  return { allMessages, newSessionId, toolFailed };
+  return { allMessages, newSessionId, toolFailed, stopped: stream.stopped() };
 }
 
 /**
@@ -303,11 +376,14 @@ export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
   const { session, conversationId } = input;
   const reply = await streamReply(input);
   if (reply === null) return;
-  const { allMessages, newSessionId, toolFailed } = reply;
+  const { allMessages, newSessionId, toolFailed, stopped } = reply;
 
   if (newSessionId) {
     await tryPersistSessionId(session.id, newSessionId);
   }
+
+  // The partial reply was already streamed. A tool the stop cancelled is not a failure.
+  if (stopped) return finishStoppedTurn(input, allMessages.join(''));
 
   if (toolFailed) return reportUnansweredToolFailure(input);
 
@@ -340,8 +416,9 @@ async function collectBatchChunks(input: ChatTurnInput) {
   let totalChunksTruncated = false;
   let newSessionId: string | undefined;
   let toolFailed = false;
+  const stream = stoppableChunks(input);
 
-  for await (const msg of turnChunks(input)) {
+  for await (const msg of stream.chunks) {
     switch (msg.type) {
       case 'agent_message_chunk':
         if (msg.text.trim()) toolFailed = false;
@@ -385,6 +462,7 @@ async function collectBatchChunks(input: ChatTurnInput) {
     totalChunksTruncated,
     newSessionId,
     toolFailed,
+    stopped: stream.stopped(),
   };
 }
 
@@ -402,6 +480,7 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
     totalChunksTruncated,
     newSessionId,
     toolFailed,
+    stopped,
   } = batch;
   const { platform, conversationId, session } = input;
   if (newSessionId) {
@@ -427,6 +506,11 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
 
   // Filter tool indicators and build final message
   const finalMessage = filterToolIndicators(assistantMessages);
+
+  if (stopped) {
+    if (finalMessage) await platform.sendMessage(conversationId, finalMessage);
+    return finishStoppedTurn(input, finalMessage);
+  }
 
   if (toolFailed) return reportUnansweredToolFailure(input);
 

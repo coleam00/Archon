@@ -39,7 +39,9 @@ export function ChatStream({ messages, showTools = false }: ChatStreamProps): Re
     <div className="flex flex-col gap-3.5">
       {visible.map(message => (
         <Fragment key={message.id}>
-          {message.category === 'workflow_result' && message.workflowResult !== null ? (
+          {message.category === 'chat_interrupted' ? (
+            <p className="pl-10 font-mono text-console-11 text-text-tertiary">Response stopped</p>
+          ) : message.category === 'workflow_result' && message.workflowResult !== null ? (
             <ConsoleWorkflowResultCard
               runId={message.workflowResult.runId}
               workflowName={message.workflowResult.workflowName}
