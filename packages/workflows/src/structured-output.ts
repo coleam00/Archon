@@ -8,9 +8,11 @@ import { metricOutputSchema } from './schemas/metric';
  * Single process-wide ajv instance. `strict: false` keeps it tolerant of the
  * dialect drift real author schemas carry (unknown keywords/formats are ignored
  * rather than throwing at compile time); `allErrors: true` surfaces every
- * failure at once so a reask prompt can list them all.
+ * failure at once so a reask prompt can list them all. `verbose: true` gives each
+ * error its `parentSchema`, so an additional-property error can quote what the
+ * object's own description says belongs there.
  */
-const ajv = new Ajv({ allErrors: true, strict: false });
+const ajv = new Ajv({ allErrors: true, strict: false, verbose: true });
 
 /**
  * Compiled-validator cache keyed by the schema object identity. Compilation is
@@ -139,9 +141,16 @@ function validateMetricRecords(value: unknown): StructuredValidationResult {
 /**
  * Render ajv errors as `path: message` lines for reask prompts and logs.
  * `instancePath` is empty for a root-level failure (e.g. a missing top-level
- * required field), rendered as `(root)`. Returns a single generic line when ajv
+ * required field), rendered as `(root)`. An additional-property error carries the
+ * object's description when it has one: that is where a schema says what to write
+ * instead (an ask of a workflow that declares its options names them there). Returns a single generic line when ajv
  * reports a failure with no error detail (shouldn't happen with `allErrors`).
  */
+function schemaDescription(schema: unknown): string {
+  if (schema === null || typeof schema !== 'object' || !('description' in schema)) return '';
+  return typeof schema.description === 'string' ? `: ${schema.description}` : '';
+}
+
 function formatSchemaErrors(errors: ErrorObject[] | null | undefined): string[] {
   if (!errors || errors.length === 0) {
     return ['value does not match the declared schema'];
@@ -151,7 +160,7 @@ function formatSchemaErrors(errors: ErrorObject[] | null | undefined): string[] 
     const detail = e.params?.missingProperty
       ? `${e.message} ('${String(e.params.missingProperty)}')`
       : e.params?.additionalProperty
-        ? `${e.message} ('${String(e.params.additionalProperty)}')`
+        ? `${e.message} ('${String(e.params.additionalProperty)}')${schemaDescription(e.parentSchema)}`
         : Array.isArray(e.params?.allowedValues)
           ? `${e.message} (${(e.params.allowedValues as unknown[]).map(String).join(', ')})`
           : (e.message ?? 'invalid');

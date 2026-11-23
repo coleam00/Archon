@@ -137,27 +137,33 @@ export type StoredAsk = z.infer<typeof storedItemAskSchema>;
 /**
  * The asks property's value when the workflow declares its options: each ask has no
  * options of its own, and its recommendation names a declared id or is null. The option
- * list in the recommendation's description is what the model reads to choose.
+ * list in the recommendation's description is what the model reads to choose; the ask's
+ * own description names the declared ids for an ask that wrote options anyway.
  */
 function declaredItemAsksSchema(options: readonly DeclaredAskOption[]) {
   const offered = options
     .map(option => `'${option.id}': ${option.does} (cost: ${option.cost})`)
     .join('; ');
   const { options: _options, ...fields } = askFields;
+  const ids = options.map(option => `'${option.id}'`).join(', ');
   return z
     .array(
-      z.strictObject({
-        ...fields,
-        recommendation: recommendationSchema(
-          z
-            .enum(options.map(option => option.id))
-            .describe(`The id of the option you would take. Every ask offers: ${offered}.`)
-        ),
-      })
+      z
+        .strictObject({
+          ...fields,
+          recommendation: recommendationSchema(
+            z
+              .enum(options.map(option => option.id))
+              .describe(`The id of the option you would take. Every ask offers: ${offered}.`)
+          ),
+        })
+        // Output validation quotes this when an ask carries a key it does not declare,
+        // so an ask written with its own options is told what to write instead.
+        .describe(
+          `An ask of a workflow whose returns.options supplies its options, so write no options: every ask offers ${ids}. Recommend one by its id, or leave the recommendation null.`
+        )
     )
-    .describe(
-      `${ITEM_ASKS_DESCRIPTION} This workflow declares the options every ask offers, so write none: recommend one by its id.`
-    );
+    .describe(ITEM_ASKS_DESCRIPTION);
 }
 
 /** A JSON Schema of the asks property without zod's dialect key. */

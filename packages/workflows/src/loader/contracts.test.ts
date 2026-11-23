@@ -615,9 +615,12 @@ nodes:
     expect(errors([{ ...ask, recommendation: { option: 'drop', why: 'x' } }])).toContainEqual(
       '/asks/0/recommendation/option: must be equal to one of the allowed values (send-back, take-as-is)'
     );
-    expect(errors([{ ...ask, options: declared }])).toContainEqual(
-      "/asks/0: must NOT have additional properties ('options')"
-    );
+    // Options the writer added are refused naming the declared ids, so a retry can correct
+    // it, whether the recommendation is valid or null.
+    for (const recommendation of [ask.recommendation, null])
+      expect(errors([{ ...ask, recommendation, options: declared }])).toEqual([
+        "/asks/0: must NOT have additional properties ('options'): An ask of a workflow whose returns.options supplies its options, so write no options: every ask offers 'send-back', 'take-as-is'. Recommend one by its id, or leave the recommendation null.",
+      ]);
 
     // At run end each ask gets the declared options, with does and cost from the YAML.
     expect(parseItemAsks([ask], declared)).toEqual({

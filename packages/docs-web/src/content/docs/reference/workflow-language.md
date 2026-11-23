@@ -2495,9 +2495,13 @@ returns:
   `recommendation.option` is limited to the declared ids (an `enum`), with each option's
   `does` and `cost` in its description. The recommendation may still be `null`.
 - Output that carries `options`, or recommends an id outside the set, fails the node's output
-  validation like any other schema miss: an agent node is asked again with the errors, which
-  name the declared ids (`must be equal to one of the allowed values (send-back,
-  take-as-is)`), and a `bash:` or `script:` node fails.
+  validation like any other schema miss: an agent node is asked again with the errors, and a
+  `bash:` or `script:` node fails. Both errors name the declared ids. A wrong recommendation
+  reads `must be equal to one of the allowed values (send-back, take-as-is)`. An ask that
+  wrote its own options reads `must NOT have additional properties ('options')`, followed by
+  the note that `returns.options` supplies them and the ids every ask offers. (An
+  additional-property error quotes the object's `description`, when it has one, for any
+  output schema.)
 - When the run completes, each ask is stored with the declared options, `does` and `cost` as
   the YAML wrote them, so `archon workflow attention`, the console and the item's tracker
   comment show them like any ask's options.
