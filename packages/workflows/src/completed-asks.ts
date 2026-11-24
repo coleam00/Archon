@@ -1,6 +1,6 @@
 /**
- * The asks and waits a workflow declares with `returns: { node, asks: <property>, waits:
- * <property> }`: the engine's schemas added to the returns node, and the asks and waits a
+ * The asks and waits a workflow declares with `returns: { node, asks: <property>, options?,
+ * waits: <property> }`: the engine's schemas added to the returns node, and the asks and waits a
  * completed run leaves, read when it is about to complete. The schemas and their checks
  * live in `schemas/item-ask.ts` and `schemas/item-wait.ts`.
  */
@@ -24,7 +24,9 @@ export function withEngineResultSchemas<
 >(workflow: W): W {
   const returns = workflow.returns;
   const added: [string, () => Record<string, unknown>][] = [];
-  if (workflow.result?.asks !== undefined) added.push([workflow.result.asks, itemAsksJsonSchema]);
+  const options = workflow.result?.options;
+  if (workflow.result?.asks !== undefined)
+    added.push([workflow.result.asks, () => itemAsksJsonSchema(options)]);
   if (workflow.result?.waits !== undefined)
     added.push([workflow.result.waits, itemWaitsJsonSchema]);
   if (added.length === 0 || returns === undefined) return workflow;
@@ -96,7 +98,7 @@ export function readCompletedAsks(
     return { kind: 'invalid', error: `${subject} could not be read: ${(error as Error).message}` };
   }
   if (value === undefined || value === null) return { kind: 'asks', asks: [] };
-  const parsed = parseItemAsks(value);
+  const parsed = parseItemAsks(value, workflow.result?.options);
   return 'problem' in parsed
     ? { kind: 'invalid', error: `${subject}: ${parsed.problem}` }
     : { kind: 'asks', asks: parsed.asks };

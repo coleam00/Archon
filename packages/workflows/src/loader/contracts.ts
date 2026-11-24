@@ -15,7 +15,7 @@ import { itemWaitsJsonSchema } from '../schemas/item-wait';
 import { isDeepStrictEqual } from 'node:util';
 
 /**
- * Validate the result contract (`returns: { node, outcome, asks, waits }`) against its selected node.
+ * Validate the result contract (`returns: { node, outcome, asks, options, waits }`) against its selected node.
  *
  * Include aliases are deliberately deferred: `parseWorkflow` can only see the
  * `include:` directive, while `expandWorkflowIncludes` owns rebinding that alias
@@ -27,6 +27,8 @@ export function validateWorkflowResultContract(
     readonly nodes: readonly (DagNode | IncludeDirective)[];
   }
 ): string | null {
+  if (workflow.result?.options !== undefined && workflow.result.asks === undefined)
+    return 'Workflow returns.options declares the options of asks; declare returns.asks too';
   const declared = declaredResultFields(workflow.result);
   const [first] = declared;
   if (first === undefined) return null;
@@ -63,8 +65,14 @@ interface DeclaredResultField {
 function declaredResultFields(result: WorkflowDefinition['result']): DeclaredResultField[] {
   const fields: DeclaredResultField[] = [];
   if (result?.outcome !== undefined) fields.push({ key: 'outcome', field: result.outcome });
-  if (result?.asks !== undefined)
-    fields.push({ key: 'asks', field: result.asks, engineSchema: itemAsksJsonSchema });
+  if (result?.asks !== undefined) {
+    const options = result.options;
+    fields.push({
+      key: 'asks',
+      field: result.asks,
+      engineSchema: () => itemAsksJsonSchema(options),
+    });
+  }
   if (result?.waits !== undefined)
     fields.push({ key: 'waits', field: result.waits, engineSchema: itemWaitsJsonSchema });
   return fields;
