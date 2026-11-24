@@ -138,9 +138,9 @@ prompt guidance. It is also installed automatically during
 Install the agent skill an installed workflow pack ships, instead of `archon-cli`.
 The command copies the folder the pack's manifest names in `skill.path` to
 `.claude/skills/<name>/` and `.agents/skills/<name>/`, where `<name>` is
-`skill.name`. A rerun, for example after `archon plugin update <id>`, replaces both
-folders whole, so a file the pack dropped disappears. It leaves `archon-cli` and every
-other skill folder alone.
+`skill.name`, and writes a `.archon-pack` file naming the pack into each. A rerun, for
+example after `archon plugin update <id>`, replaces both folders whole, so a file the
+pack dropped disappears. It leaves `archon-cli` and every other skill folder alone.
 
 ```bash
 archon skill add --pack acme/tools/packs/review-kit
@@ -149,8 +149,11 @@ archon skill add --pack acme/tools/packs/review-kit
 The skill is read from the installed pack's own `archon-plugin.json`, at the commit
 `archon plugin list` shows. The command exits 1 and writes nothing when the pack is not
 installed or its receipt is broken, when the plugin is not a workflow pack, when the
-pack declares no `skill`, when the skill folder holds no `SKILL.md`, and when another
-installed pack ships a skill with the same name. An installed pack skill is for your own
+pack declares no `skill`, when the skill folder holds no `SKILL.md`, when another
+installed pack ships a skill with the same name, and when a destination folder already
+exists and its `.archon-pack` does not name this pack. That last refusal covers a
+folder another pack installed before it was removed or renamed its skill, and a folder
+you copied by hand or wrote yourself; move or delete it, then run the command again. An installed pack skill is for your own
 agent: it does not change which skills a workflow node gets, which is still only the
 skills the node names.
 

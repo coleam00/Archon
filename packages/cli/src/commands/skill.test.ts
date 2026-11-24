@@ -468,6 +468,53 @@ describe('packSkillInstallCommand', () => {
     expect(existsSync(join(project, '.claude'))).toBe(false);
   });
 
+  // Receipts know only what is installed now; the project folder keeps its owner.
+  it('refuses a folder another pack installed, after that pack is removed or renames its skill', async () => {
+    const shared = { name: 'shared-skill', path: 'skill' };
+    for (const change of ['removed', 'renamed'] as const) {
+      const { pluginsDir, project } = setup();
+      const alpha = installPack(pluginsDir, 'alpha/first', shared, { 'skill/SKILL.md': 'alpha' });
+      expect((await run('alpha/first', project, pluginsDir)).code).toBe(0);
+      if (change === 'removed') {
+        rmSync(join(receiptPath(pluginsDir, 'alpha/first'), '..'), { recursive: true });
+        rmSync(alpha, { recursive: true });
+      } else {
+        installPack(
+          pluginsDir,
+          'alpha/first',
+          { name: 'renamed-skill', path: 'skill' },
+          { 'skill/SKILL.md': 'alpha' }
+        );
+      }
+      installPack(pluginsDir, 'beta/second', shared, { 'skill/SKILL.md': 'beta' });
+
+      const result = await run('beta/second', project, pluginsDir);
+      expect(result.code).toBe(1);
+      expect(result.err).toContain('holds the skill alpha/first installed, not beta/second');
+      for (const root of ['.claude', '.agents']) {
+        expect(readFileSync(join(project, root, 'skills/shared-skill/SKILL.md'), 'utf8')).toBe(
+          'alpha'
+        );
+      }
+    }
+  });
+
+  it('refuses a same-named folder no pack install wrote, leaving it as it is', async () => {
+    const { pluginsDir, project } = setup();
+    installPack(pluginsDir, ID, { name: 'review-kit', path: 'skill' }, { 'skill/SKILL.md': 'x' });
+    const handCopy = join(project, '.agents', 'skills', 'review-kit');
+    mkdirSync(handCopy, { recursive: true });
+    writeFileSync(join(handCopy, 'SKILL.md'), 'my own');
+
+    const result = await run(ID, project, pluginsDir);
+    expect(result.code).toBe(1);
+    expect(result.err).toBe(
+      `Error: ${handCopy} exists and archon skill add --pack did not install it; move or delete it, then run this again`
+    );
+    expect(readFileSync(join(handCopy, 'SKILL.md'), 'utf8')).toBe('my own');
+    expect(existsSync(join(project, '.claude', 'skills', 'review-kit'))).toBe(false);
+  });
+
   it('is what archon skill add --pack runs, and never writes archon-cli', async () => {
     const root = tempRoot(mkdtempSync(join(tmpdir(), 'archon-pack-skill-cli-')));
     const child = Bun.spawn(

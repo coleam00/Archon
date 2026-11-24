@@ -13,7 +13,7 @@
  * its manifest's `skill` field to the same two roots, under the skill's own name.
  */
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'fs';
-import { cp, readFile } from 'fs/promises';
+import { cp, readFile, writeFile } from 'fs/promises';
 import { dirname, join, resolve } from 'path';
 import {
   ARCHON_SKILL_NAME,
@@ -123,6 +123,48 @@ async function readTreeManifest(tree: string): Promise<WorkflowPackManifest> {
   return parsed.data;
 }
 
+/** The id of another installed pack that ships a skill named `name`, if any. */
+async function packShippingSkill(
+  receipts: PluginReceipt[],
+  pluginsDir: string,
+  packId: string,
+  name: string
+): Promise<string | undefined> {
+  for (const other of receipts.filter(isPackReceipt)) {
+    if (other.id === packId) continue;
+    // A pack whose tree manifest cannot be read is a discovery error already, and
+    // ships no skill anyone could have installed.
+    const otherSkill = await readTreeManifest(packTreePath(pluginsDir, other.id, other.commit))
+      .then(manifest => manifest.skill)
+      .catch(() => undefined);
+    if (otherSkill?.name === name) return other.id;
+  }
+  return undefined;
+}
+
+/** Written into each installed pack skill folder: the id of the pack that owns it. */
+const PACK_SKILL_OWNER_FILE = '.archon-pack';
+
+/**
+ * Why `destination` must not be replaced by `packId`, or undefined when it may be: it is
+ * absent, or its owner marker names this pack. A folder another pack installed, or one
+ * no `skill add --pack` wrote (a hand copy, the operator's own skill), is refused.
+ */
+async function ownershipRefusal(destination: string, packId: string): Promise<string | undefined> {
+  if (!existsSync(destination)) return undefined;
+  let owner: string;
+  try {
+    owner = (await readFile(join(destination, PACK_SKILL_OWNER_FILE), 'utf-8')).trim();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+    return `${destination} exists and archon skill add --pack did not install it; move or delete it, then run this again`;
+  }
+  return owner === packId
+    ? undefined
+    : `${destination} holds the skill ${owner} installed, not ${packId}; remove it first if ${owner}'s skill is no longer wanted`;
+}
+
 function isFile(path: string): boolean {
   try {
     return statSync(path).isFile();
@@ -183,29 +225,33 @@ export async function packSkillInstallCommand(
       );
       return 1;
     }
-    for (const other of receipts.filter(isPackReceipt)) {
-      if (other.id === receipt.id) continue;
-      // A pack whose tree manifest cannot be read is a discovery error already, and
-      // ships no skill anyone could have installed.
-      const otherSkill = await readTreeManifest(packTreePath(pluginsDir, other.id, other.commit))
-        .then(manifest => manifest.skill)
-        .catch(() => undefined);
-      if (otherSkill?.name === skill.name) {
-        console.error(
-          `Error: ${packId} and ${other.id} both ship a skill named ${skill.name}; installing it would replace the other pack's skill`
-        );
-        return 1;
-      }
+    const rival = await packShippingSkill(receipts, pluginsDir, packId, skill.name);
+    if (rival) {
+      console.error(
+        `Error: ${packId} and ${rival} both ship a skill named ${skill.name}; installing it would replace the other pack's skill`
+      );
+      return 1;
     }
 
     const destinations = [
       join(absoluteTarget, '.claude', 'skills', skill.name),
       join(absoluteTarget, '.agents', 'skills', skill.name),
     ];
+    // The receipts above know only what is installed now. A folder already in the
+    // project may belong to a pack since removed, or to a skill since renamed, so the
+    // folder's own marker decides; both are checked before either is replaced.
+    for (const destination of destinations) {
+      const refusal = await ownershipRefusal(destination, packId);
+      if (refusal) {
+        console.error(`Error: ${refusal}`);
+        return 1;
+      }
+    }
     console.log(`Adding ${packId} skill (${skill.name}) into ${destinations.join(' and ')}`);
     for (const destination of destinations) {
       rmSync(destination, { recursive: true, force: true });
       await cp(join(tree, skill.path), destination, { recursive: true });
+      await writeFile(join(destination, PACK_SKILL_OWNER_FILE), `${packId}\n`);
     }
     console.log('Done. Restart Claude Code or Codex to load the skills.');
     return 0;
