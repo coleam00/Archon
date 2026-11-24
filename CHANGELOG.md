@@ -32,6 +32,8 @@ Runs belong to items, a stage hands off to the next through a binding instead of
 - `archon workflow attention --watch` writes only what needs someone: an item that opens or changes, the close of an item it wrote, a run that failed, completed with a failed outcome or lost its owner, and a coverage warning. It no longer writes `ready`, `bookmark`, `resumed`, or a line for a run that completed with any other outcome or was cancelled. A program that reads those lines or resumes with `--after` must add `--protocol`, which is the previous stream unchanged; `--after` without `--protocol` is refused.
 - `GET /api/runs/attention/stream` takes `level=quiet|notices|protocol` in place of `needsSomeone`. `needsSomeone=true` is now `level=quiet`; without `level` the stream is still the full protocol.
 - `archon workflow run <name> --resume` is removed; the flag is now an unknown option. It picked the newest failed, paused or day-old `running` run for that workflow and path, which could continue a run the operator did not mean. Resume a run by its id with `archon workflow resume <run-id>`, and find the id with `archon workflow runs` (`--item <key>` for one item). Continuations (`workflow resume`, `approve`, `reject`, `respond`, `answer`) now refuse `--input` and `--base` instead of ignoring them, as they already refused `--model`; `run --resume --base` was the only way to retarget a continuation's PR, and it goes with the flag.
+- An SDLC build round that needs a maintainer's decision ends its run and leaves the question on the issue's item, answered with `archon workflow answer --ref <ref>`, and a new `build-after-answer` binding starts the next round. Write that binding file, and abandon and re-triage any build run still paused on the old question before upgrading. (#6147)
+- The SDLC build pick starts intake through a new fire-only `intake` binding, and the `merge-after-base-checks` binding is gone. Write the `intake`, `build-pick` and `build-pick-after-build` files again with `archon pack bindings sdlc --only intake,build-pick,build-pick-after-build --force`, and remove `merge-after-base-checks` from the GitHub source plugin's config. A pull request held by a red default branch is started again by the 30-minute merge pick. (#6145)
 
 ### Added
 
@@ -117,6 +119,7 @@ Runs belong to items, a stage hands off to the next through a binding instead of
 - The SDLC pack has a `ci` setting. With `ci: none` in `.archon/packs/sdlc.yaml`, delivery runs and records the full validation itself, and a pull request is ready and merges only with a recorded validation that passed at its head. (#5429, #5645, #5821)
 - The SDLC pack's runs are on their issue's item, so an issue's intake, build rounds and merge read as one item, and the pack declares its per-issue metrics as data. `archon metrics` also reports how many review rounds a pull request takes to reach Ready and the test and production lines each merged pull request added. A build round that continues a reviewed pull request continues that review instead of starting over. (#5395, #5454, #5500, #5892, #5906)
 - The SDLC pack's queues find their repository from the checkout's remote when no repository input is given. A message to `archon-build-pick` that names several issues writes a work order, and a merge can start a discoveries drain through the pack's run-ended binding. (#5404, #5405, #5428)
+- A binding can limit how often it starts its stage on one item: `limit: { name, starts, resetOn? }` caps the starts, a run of `resetOn` completing on the item starts the count again, and an asks-settled binding with `grants: <name>` allows one more each time it starts. Admission refuses a start past the limit with a reason `archon trigger list` and `archon trigger inspect` show, and `archon workflow runs --item <key> --json` reports each limit's `starts`, `granted`, `used` and `left`. An older binary on the same database counts and refuses nothing. (#6137)
 
 ### Changed
 
@@ -143,11 +146,13 @@ Runs belong to items, a stage hands off to the next through a binding instead of
 - The wake watcher (`archon workflow wake --watch`) exits with status 75 once the installed Archon changes, so its supervisor restarts it and resumed runs continue on the new code. (#5997)
 - The SDLC pack's delivery hands a pull request off without waiting for pending CI, review verifies its blockers and reruns only the lenses that found them, and simplify joins the first review. Triage asks whether a run can start instead of requiring six contract elements, and under-shaped work goes to `plan`. A build runs CI's static checks before it pushes. (#5407, #5411, #5481, #5919)
 - The SDLC pack's UI lenses look for a browser tool once (`playwright-cli`, otherwise `agent-browser`) and finish at once when there is none. (#5967)
+- The SDLC pack builds from, proposes against and merges into the item's landing branch (`$BASE_BRANCH`) instead of the default branch. On an item with a landing branch the merge stage cannot start yet, because the engine refuses its in-place run there. (#6148)
 
 ### Removed
 
 - The maintainer standup and maintainer PR review workflows in this repository are removed. (#5426)
 - The SDLC pack workflows `archon-validate`, `archon-upkeep`, `archon-forge-check` and `archon-worktree-cleanup` are removed; see Breaking for what replaces each. (#5391, #5481, #5820, #5933)
+- The SDLC pack's review bench (`archon-review-eval`, `archon-review-eval-judge`) and its case set are removed. (#6146)
 
 ### Fixed
 
