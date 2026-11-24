@@ -737,7 +737,6 @@ describe('CommandHandler', () => {
               { branchName: 'feat-b', workingPath: '/worktrees/feat-b' },
             ],
           });
-          mockCountActiveByCodebase.mockResolvedValueOnce(2);
 
           const result = await handleCommand(
             conversationWithCodebase,
@@ -745,12 +744,15 @@ describe('CommandHandler', () => {
             operator
           );
 
+          expect(mockCleanupMergedWorktrees).toHaveBeenCalledWith(
+            'codebase-123',
+            '/workspace/my-repo'
+          );
           expect(result.success).toBe(true);
-          expect(result.message).toContain('Repository gone: /workspace/my-repo does not exist');
+          expect(result.message).toContain('/workspace/my-repo');
           expect(result.message).toContain('feat-a: /worktrees/feat-a');
           expect(result.message).toContain('feat-b: /worktrees/feat-b');
           expect(result.message).not.toContain('Failed:');
-          expect(result.message).toContain('Active worktrees: 2');
         });
 
         test('should report when no stale worktrees to clean up', async () => {

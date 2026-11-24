@@ -16,8 +16,6 @@ import * as db from '../../db/conversations';
 import { createIsolationStore } from '../../db/isolation-environments';
 import { toError } from '../../utils/error';
 import { configureWorktreeIsolation } from '../../workflows/worktree-setup';
-import { getWorktreeStatusBreakdown } from '../../services/cleanup-service';
-import { cleanupMergedWorktrees } from '../../services/cleanup/merged-sweep';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -56,14 +54,6 @@ function getResolver(): IsolationResolver {
     resolver = new IsolationResolver({
       store: createIsolationStore(),
       provider: getIsolationProvider(),
-      cleanup: {
-        makeRoom: async (codebaseId, repoPath): Promise<{ removedCount: number }> => {
-          // A gone checkout removes nothing; the sweep logs it.
-          const outcome = await cleanupMergedWorktrees(codebaseId, repoPath);
-          return { removedCount: outcome.kind === 'swept' ? outcome.result.removed.length : 0 };
-        },
-        getBreakdown: getWorktreeStatusBreakdown,
-      },
     });
   }
   return resolver;
