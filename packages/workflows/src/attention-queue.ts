@@ -49,6 +49,7 @@ import { resolveRunAttention } from './run-attention-resolution';
 import { stateProjectKeySchema } from './state-document-store';
 import type { AttentionQueueCounts } from './attention-counts';
 import type { IWorkflowStore } from './store';
+import { isItemWithoutRunRef } from './attention-item-refs';
 
 /**
  * A project as the engine identifies it. `key` is the identity: the project storage key
@@ -125,7 +126,9 @@ const itemBase = {
  * the item wait behind it (`holdsItem`), which only `resume` or `abandon` moves;
  * `overdue_wait` is an item whose waits a completed run left (`returns.waits`) are still
  * open past their deadline, which the awaited event, another run of the waiting workflow
- * on the item, or a withdrawal closes.
+ * on the item, or a withdrawal closes; `stopped` is an item whose newest run completed with
+ * an outcome that is not final (`returns.final`), started nothing and left no ask or wait,
+ * so nothing moves it: it takes no answer, and any newer run on the item closes it.
  *
  * `run` is the paused run that holds the item. A gate, a usage-limit wait and an
  * unreadable pause are always a run. A question may have none: then nothing is paused on
@@ -186,10 +189,29 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     /** The earliest deadline of the set, which has passed. `pausedAt` is when it opened. */
     deadline: z.string().datetime(),
   }),
+  z.object({
+    kind: z.literal('stopped'),
+    ...itemBase,
+    /**
+     * The completed run that stopped the item, which holds nothing, and the outcome it
+     * completed with. `pausedAt` is when it ended.
+     */
+    stoppedIn: z.object({ runId: z.string(), workflow: z.string(), outcome: z.string() }),
+    /** The run's declared `returns.summary`, or null when it declares or gave none. */
+    summary: z.string().nullable(),
+    /**
+     * The project's checkout, the directory a start on the item runs from (`--cwd`); null
+     * when the run has no registered project.
+     */
+    checkout: z.string().nullable(),
+  }),
 ]);
 export type AttentionQueueItem = z.infer<typeof attentionQueueItemSchema>;
 /** An item a paused run holds. */
-export type RunAttentionQueueItem = Exclude<AttentionQueueItem, { kind: 'overdue_wait' }> & {
+export type RunAttentionQueueItem = Exclude<
+  AttentionQueueItem,
+  { kind: 'overdue_wait' | 'stopped' }
+> & {
   run: object;
 };
 /** True when a paused run holds `item`; narrows to its `run`. */
@@ -205,57 +227,27 @@ export function itemOccurrence(item: AttentionQueueItem): string | null {
   const run = heldRunOf(item);
   return run !== undefined && 'occurrence' in run ? run.occurrence : null;
 }
-/** The completed run that left an item no run holds (an ask or overdue waits), else undefined. */
+/** The completed run that left an item no run holds (an ask, overdue waits, a stop), else undefined. */
 export function leftByRun(
   item: AttentionQueueItem
 ): { runId: string; workflow: string } | undefined {
   if (item.kind === 'attention') return item.askedIn;
+  if (item.kind === 'stopped')
+    return { runId: item.stoppedIn.runId, workflow: item.stoppedIn.workflow };
   return item.kind === 'overdue_wait' ? item.waitingIn : undefined;
 }
 /** An ask a completed run left: a question no run holds. */
 export type AskQueueItem = Extract<AttentionQueueItem, { kind: 'attention' }> & {
   run?: undefined;
 };
-/** An item no run holds: an ask, or an overdue wait. */
+/** An item no run holds: an ask, an overdue wait, or a stopped item. */
 export type AttentionQueueItemWithoutRun =
   | AskQueueItem
-  | Extract<AttentionQueueItem, { kind: 'overdue_wait' }>;
+  | Extract<AttentionQueueItem, { kind: 'overdue_wait' | 'stopped' }>;
 /** An overdue wait's queue item. */
 export type OverdueWaitQueueItem = Extract<AttentionQueueItem, { kind: 'overdue_wait' }>;
-
-const ASK_REF_PREFIX = 'ask:';
-
-/**
- * The ref of an ask a completed run left. `askIdOfRef` reads it back; nothing else builds
- * or parses one. A run id is a UUID, so no run ref takes this form.
- */
-export function askItemRef(askId: string): string {
-  return `${ASK_REF_PREFIX}${askId}`;
-}
-
-/** The ask id an ask ref names, or undefined when the ref is not an ask's. */
-export function askIdOfRef(ref: string): string | undefined {
-  return ref.startsWith(ASK_REF_PREFIX) && ref.length > ASK_REF_PREFIX.length
-    ? ref.slice(ASK_REF_PREFIX.length)
-    : undefined;
-}
-
-const WAIT_REF_PREFIX = 'wait:';
-
-/**
- * The ref of the waits a completed run left, as one item: the set is met, replaced or
- * withdrawn together. `waitRunIdOfRef` reads it back.
- */
-export function waitItemRef(runId: string): string {
-  return `${WAIT_REF_PREFIX}${runId}`;
-}
-
-/** The run a wait ref names, or undefined when the ref is not a wait's. */
-export function waitRunIdOfRef(ref: string): string | undefined {
-  return ref.startsWith(WAIT_REF_PREFIX) && ref.length > WAIT_REF_PREFIX.length
-    ? ref.slice(WAIT_REF_PREFIX.length)
-    : undefined;
-}
+/** A stopped item's queue item. */
+export type StoppedQueueItem = Extract<AttentionQueueItem, { kind: 'stopped' }>;
 
 const RUN_REF_SEPARATOR = ':';
 
@@ -417,8 +409,9 @@ export interface AttentionQueueSource {
   /** The branch of a run's checkout; null when the host has no record of one. */
   branchOf(run: WorkflowRun): Promise<string | null>;
   /**
-   * The open items no run holds: the asks completed runs left and their overdue waits
-   * (`openAskItems`, `overdueWaitItems` in `queue-items-without-run.ts`), which a host sets here. It is where a source of such items joins the one reader. An entry
+   * The open items no run holds: the asks completed runs left, their overdue waits and the
+   * items they stopped (`openAskItems`, `overdueWaitItems`, `stoppedItems` in
+   * `queue-items-without-run.ts`), which a host sets here. It is where a source of such items joins the one reader. An entry
    * that does not read is reported in its place.
    */
   itemsWithoutRun?(): Promise<readonly AttentionRead<AttentionQueueItemWithoutRun>[]>;
@@ -669,8 +662,8 @@ export async function readAttentionQueueItemByRef(
     (item): item is AttentionQueueItemWithoutRun => !isAttentionDegraded(item) && item.ref === ref
   );
   if (withoutRun !== undefined) return { kind: 'found', item: withoutRun };
-  // An ask or a set of waits that closed is no longer an item: its ref names nothing open.
-  if (askIdOfRef(ref) !== undefined || waitRunIdOfRef(ref) !== undefined) return { kind: 'none' };
+  // An ask, a set of waits or a stop that closed is no longer an item: its ref names nothing open.
+  if (isItemWithoutRunRef(ref)) return { kind: 'none' };
   const runId = runIdOfRef(ref);
   if (runId === '') return { kind: 'unknown' };
   const item = await readAttentionQueueItem(source, runId);

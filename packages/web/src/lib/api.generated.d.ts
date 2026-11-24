@@ -6142,6 +6142,8 @@ export interface components {
           cost: string;
         }[];
         waits?: string;
+        final?: string[];
+        summary?: string;
       };
     };
     DagNode: {
@@ -7855,6 +7857,34 @@ export interface components {
           }[];
           /** Format: date-time */
           deadline: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'stopped';
+          ref: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          stoppedIn: {
+            runId: string;
+            workflow: string;
+            outcome: string;
+          };
+          summary: string | null;
+          checkout: string | null;
         };
     AttentionQueueCountsResponse: {
       counts: components['schemas']['AttentionQueueCounts'];
@@ -8186,6 +8216,34 @@ export interface components {
             }[];
             /** Format: date-time */
             deadline: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'stopped';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            stoppedIn: {
+              runId: string;
+              workflow: string;
+              outcome: string;
+            };
+            summary: string | null;
+            checkout: string | null;
           }
         | unknown;
     };
@@ -8632,6 +8690,34 @@ export interface components {
             }[];
             /** Format: date-time */
             deadline: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'stopped';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            stoppedIn: {
+              runId: string;
+              workflow: string;
+              outcome: string;
+            };
+            summary: string | null;
+            checkout: string | null;
           }
       )[];
       answers: (
@@ -9325,6 +9411,34 @@ export interface components {
               /** Format: date-time */
               deadline: string;
             }
+          | {
+              /** @enum {string} */
+              kind: 'stopped';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              stoppedIn: {
+                runId: string;
+                workflow: string;
+                outcome: string;
+              };
+              summary: string | null;
+              checkout: string | null;
+            }
         )[];
         answers: (
           | {
@@ -9909,6 +10023,34 @@ export interface components {
                 }[];
                 /** Format: date-time */
                 deadline: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'stopped';
+                ref: string;
+                project: {
+                  key: string;
+                  codebaseId: string | null;
+                  name: string;
+                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
+                revision: number;
+                labels: {
+                  [key: string]: string;
+                };
+                /** Format: date-time */
+                pausedAt: string | null;
+                stoppedIn: {
+                  runId: string;
+                  workflow: string;
+                  outcome: string;
+                };
+                summary: string | null;
+                checkout: string | null;
               };
         }
       | (
@@ -11342,9 +11484,11 @@ export interface components {
           values: {
             value: string;
             startsNothing: boolean;
+            final: boolean;
           }[];
         } | null;
         asks: boolean;
+        waits: boolean;
         nodes: {
           id: string;
           kind: string;

@@ -101,6 +101,7 @@ export type TransactionView = Omit<
   | 'withdrawItemAsk'
   | 'listOpenItemWaits'
   | 'withdrawItemWaits'
+  | 'listStoppedItemRuns'
 > & {
   /**
    * The run `resumeWorkflowRun(id, cursor)` would continue; throws what it would throw
