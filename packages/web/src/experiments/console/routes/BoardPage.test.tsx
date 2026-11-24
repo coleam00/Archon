@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { Window } from 'happy-dom';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import { BoardPage } from './BoardPage';
+import { BoardPage, PackBoard } from './BoardPage';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import type { Project } from '../primitives/project';
 import type { ItemAsk } from '../primitives/run';
@@ -90,6 +90,9 @@ const graph: PackGraph = {
   discoveryErrors: [],
 };
 
+/** No item in any state. */
+const NONE = { running: 0, waiting: 0, queued: 0, failed: 0, stopped: 0, done: 0, resting: 0 };
+
 const ask: ItemAsk = {
   kind: 'attention',
   ref: 'ask:a1',
@@ -151,6 +154,13 @@ test('each open item is under the stage it stands at, in the order the pack grap
     item('issue-5', null, 'running'),
   ]);
   set(K.packGraph('web', 'flow'), graph);
+  // The newest item at rest of twelve, which ended with the outcome `dropped`.
+  const done = item('issue-9', 'check', 'done');
+  set(K.boardDone('web', 'flow'), {
+    items: [{ ...done, runs: done.runs.map(run => ({ ...run, outcome: 'dropped' })) }],
+    next: 'cursor',
+    totals: { ...NONE, done: 12 },
+  });
   set(K.runsAttention, {
     runs: [],
     ownerLost: [],
@@ -175,6 +185,11 @@ test('each open item is under the stage it stands at, in the order the pack grap
     ['check', ['issue-1']],
     ['Not on a stage', ['issue-4']],
   ]);
+  // Done is the last column: the newest at rest, how each ended, and how many there are.
+  const doneColumn = pack.querySelector('[data-done]');
+  expect(doneColumn === null ? [] : keysIn(doneColumn)).toEqual(['issue-9']);
+  expect(doneColumn?.querySelector('[data-done-total]')?.textContent).toBe('12');
+  expect(doneColumn?.querySelector('[data-chip]')?.textContent).toBe('dropped');
   const decide = page.querySelector('[data-needs-decision]');
   expect(decide === null ? [] : keysIn(decide)).toEqual(['issue-3']);
   expect(decide?.querySelector('[data-item-reason]')?.textContent).toContain('check');
@@ -201,6 +216,30 @@ test('each open item is under the stage it stands at, in the order the pack grap
   expect(
     page.querySelector(`[data-item="issue-2"] a[href="#${asked?.getAttribute('id') ?? ''}"]`)
   ).not.toBeNull();
+});
+
+test('stages a pack groups share a column, and each card there says its own stage', () => {
+  set(K.packGraph('web', 'flow'), graph);
+  set(K.boardDone('web', 'flow'), { items: [], next: null, totals: NONE });
+  const page = render(
+    '/console/p/web/board',
+    <PackBoard
+      projectId="web"
+      pack="flow"
+      items={[item('issue-1', 'build', 'running'), item('issue-2', 'plan', 'queued')]}
+      groups={[{ name: 'Make', stages: ['plan', 'build'] }]}
+    />
+  );
+  expect(
+    [...page.querySelectorAll('[data-stage]')].map(column => [
+      column.getAttribute('data-stage'),
+      keysIn(column),
+    ])
+  ).toEqual([
+    ['Make', ['issue-1', 'issue-2']],
+    ['check', []],
+  ]);
+  expect(page.querySelector('[data-item="issue-2"]')?.textContent).toContain('plan');
 });
 
 test('only a project with an item on a pack stage gets the board tab', () => {

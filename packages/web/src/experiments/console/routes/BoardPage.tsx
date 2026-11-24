@@ -1,10 +1,12 @@
 /**
  * The board of a project that runs a staged pack: its open items under the stage each is
- * on, the asks that wait on them, and the items at rest behind a control.
+ * on, a last column of the items whose story ended, the ones that need a decision, and the
+ * asks that wait.
  *
  * It decides nothing. Where an item is and whether it is open is the item read's
  * `standing`, the stages and their order are the pack graph's, and an ask is drawn and
- * answered by the component the runs page uses.
+ * answered by the component the runs page uses. How stages are grouped into columns is the
+ * pack's to say: the board is handed the groups as data and names none itself.
  */
 import { useState, type ReactElement } from 'react';
 import { Link, useParams } from 'react-router';
@@ -81,7 +83,16 @@ function decisionReason(read: ItemRead): string {
 const runPath = (projectId: string, runId: string): string =>
   `/console/p/${encodeURIComponent(projectId)}/r/${encodeURIComponent(runId)}`;
 
-function ItemCard({ read, projectId }: { read: ItemRead; projectId: string }): ReactElement {
+function ItemCard({
+  read,
+  projectId,
+  stage,
+}: {
+  read: ItemRead;
+  projectId: string;
+  /** The exact stage, shown when the card's column holds more than one. */
+  stage?: string;
+}): ReactElement {
   const run = standingRun(read);
   const chip = chipOf(read);
   const asks = read.questions.filter(isItemAsk).length;
@@ -105,10 +116,11 @@ function ItemCard({ read, projectId }: { read: ItemRead; projectId: string }): R
           data-chip={chip}
           className={`shrink-0 rounded-full border px-2 py-0.5 text-console-10 font-semibold ${CHIP[chip].tone}`}
         >
-          {CHIP[chip].label}
+          {chip === 'done' ? howItEnded(read) : CHIP[chip].label}
         </span>
       </div>
       <p className="mt-1 text-console-11 text-text-tertiary">
+        {stage === undefined ? '' : `${stage} · `}
         {run === undefined ? (
           key
         ) : (
@@ -140,6 +152,12 @@ function ItemCard({ read, projectId }: { read: ItemRead; projectId: string }): R
   );
 }
 
+/** How a done item ended, in the engine's facts: its change merged, or its run's final outcome. */
+function howItEnded(read: ItemRead): string {
+  if (read.merged !== null) return 'Merged';
+  return standingRun(read)?.outcome ?? CHIP.done.label;
+}
+
 /** What the items of a stage are doing, as counts: `1 needs you · 2 running`. */
 function stageLine(items: ItemRead[]): string {
   return (Object.keys(CHIP) as Chip[])
@@ -151,17 +169,29 @@ function stageLine(items: ItemRead[]): string {
 }
 
 /**
- * One stage with its items. An empty stage collapses to a narrow heading, so the pack's
- * order still shows and the occupied stages stay on screen.
+ * How a pack groups its stages into columns for display: a name and its stages, by their
+ * names within the pack, in order. The pack declares it; without it each stage is a column.
  */
-function Stage({
+export interface StageGroup {
+  name: string;
+  stages: readonly string[];
+}
+
+/**
+ * One column with its items. An empty column collapses to a narrow heading, so the pack's
+ * order still shows and the occupied ones stay on screen.
+ */
+function Column({
   name,
   items,
   projectId,
+  stageOf,
 }: {
   name: string;
   items: ItemRead[];
   projectId: string;
+  /** Given for a column of several stages, so each card says which one it is on. */
+  stageOf?: (read: ItemRead) => string | undefined;
 }): ReactElement {
   const empty = items.length === 0;
   return (
@@ -185,7 +215,12 @@ function Stage({
       {empty ? null : (
         <ul className="mt-2 flex flex-col gap-2">
           {items.map(read => (
-            <ItemCard key={read.item.id} read={read} projectId={projectId} />
+            <ItemCard
+              key={read.item.id}
+              read={read}
+              projectId={projectId}
+              stage={stageOf?.(read)}
+            />
           ))}
         </ul>
       )}
@@ -193,24 +228,116 @@ function Stage({
   );
 }
 
-/** A pack's stages in the graph's order, each with the open items standing at it. */
-function PackBoard({
+const DONE_SHOWN = 5;
+const DONE_PAGE = 20;
+
+/**
+ * The board's own last column: the pack's items whose story ended, newest first. It shows a
+ * few with the total in its heading, and reads more a page at a time when opened.
+ */
+function DoneColumn({
+  projectId,
+  pack,
+  newest,
+}: {
+  projectId: string;
+  pack: string;
+  newest: { data: ItemPage | undefined; error: Error | undefined };
+}): ReactElement {
+  const [more, setMore] = useState<ItemPage | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const total = newest.data?.totals?.done ?? 0;
+  const shown = [...(newest.data?.items ?? []), ...(more?.items ?? [])];
+  const next = more === null ? newest.data?.next : more.next;
+  const load = async (): Promise<void> => {
+    if (next == null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const page = await listItemsPage(projectId, ['done'], {
+        pack,
+        limit: DONE_PAGE,
+        after: next,
+      });
+      setMore({ ...page, items: [...(more?.items ?? []), ...page.items] });
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'The items could not be read.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const button =
+    'mt-2 rounded border border-border px-2 py-1 text-console-11 text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-50';
+  return (
+    <div data-done className="md:w-64 md:shrink-0">
+      <h3 className="flex items-baseline justify-between gap-2 border-b border-border pb-1 text-console-12 font-semibold text-text-secondary">
+        <span>Done</span>
+        <span data-done-total className="text-text-tertiary">
+          {total}
+        </span>
+      </h3>
+      <ul className="mt-2 flex flex-col gap-2">
+        {shown.map(read => (
+          <ItemCard key={read.item.id} read={read} projectId={projectId} />
+        ))}
+      </ul>
+      {newest.error !== undefined || error !== null ? (
+        <p className="mt-2 text-console-11 text-error">{newest.error?.message ?? error}</p>
+      ) : null}
+      {next != null ? (
+        <button type="button" disabled={busy} onClick={() => void load()} className={button}>
+          {busy ? 'Reading…' : `Show more of ${String(total)}`}
+        </button>
+      ) : null}
+      {more !== null ? (
+        <button
+          type="button"
+          onClick={() => {
+            setMore(null);
+          }}
+          className={`${button} ml-2`}
+        >
+          Show fewer
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * A pack's columns, each with the open items standing at it, then Done. A column is a group
+ * the pack declares, or a stage of the graph that no group holds, in the graph's order.
+ */
+export function PackBoard({
   projectId,
   pack,
   items,
+  groups = [],
 }: {
   projectId: string;
   pack: string;
   items: ItemRead[];
+  groups?: readonly StageGroup[];
 }): ReactElement {
   const { data: graph, error } = useEntity<PackGraph>(K.packGraph(projectId, pack), () =>
     getPackGraph(projectId, pack)
   );
+  const newest = useEntity<ItemPage>(K.boardDone(projectId, pack), () =>
+    listItemsPage(projectId, ['done'], { pack, limit: DONE_SHOWN })
+  );
   const stageOf = (read: ItemRead): string | undefined => standingRun(read)?.pack?.workflow;
   // A workflow of the pack that only other workflows call is not a stage an item stands at.
-  const stages = (graph?.stages ?? []).filter(stage => stage.inFlow);
+  const stages = (graph?.stages ?? []).filter(stage => stage.inFlow).map(stage => stage.workflow);
+  const grouped = new Set(groups.flatMap(group => group.stages));
+  const columns: StageGroup[] = [
+    ...groups.map(group => ({ ...group, stages: group.stages.filter(s => stages.includes(s)) })),
+    ...stages.filter(stage => !grouped.has(stage)).map(stage => ({ name: stage, stages: [stage] })),
+  ].filter(column => column.stages.length > 0);
   // An item whose stage the pack no longer has, or whose pack could not be read, stays visible.
-  const offStage = items.filter(read => !stages.some(stage => stage.workflow === stageOf(read)));
+  const offStage = items.filter(read => !stages.includes(stageOf(read) ?? ''));
+  // A pack with nothing open and nothing done has nothing to show.
+  if (items.length === 0 && newest.data?.totals?.done === 0) return <></>;
   return (
     <section data-pack={pack} className="mb-6">
       <h2 className="text-sm font-medium text-text-primary">{pack}</h2>
@@ -221,70 +348,21 @@ function PackBoard({
         <p className="mt-2 text-console-12 text-text-tertiary">Loading stages…</p>
       ) : (
         <div className="mt-3 flex flex-col gap-4 md:flex-row md:overflow-x-auto md:pb-2">
-          {stages.map(stage => (
-            <Stage
-              key={stage.name}
-              name={stage.workflow}
-              items={items.filter(read => stageOf(read) === stage.workflow)}
+          {columns.map(column => (
+            <Column
+              key={column.name}
+              name={column.name}
+              items={items.filter(read => column.stages.includes(stageOf(read) ?? ''))}
               projectId={projectId}
+              stageOf={column.stages.length > 1 ? stageOf : undefined}
             />
           ))}
           {offStage.length > 0 ? (
-            <Stage name="Not on a stage" items={offStage} projectId={projectId} />
+            <Column name="Not on a stage" items={offStage} projectId={projectId} />
           ) : null}
+          <DoneColumn projectId={projectId} pack={pack} newest={newest} />
         </div>
       )}
-    </section>
-  );
-}
-
-/** The items nothing runs, is queued or waits on: read a page at a time, when asked for. */
-function RestingItems({ projectId }: { projectId: string }): ReactElement {
-  const [page, setPage] = useState<ItemPage | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const load = async (): Promise<void> => {
-    setBusy(true);
-    setError(null);
-    try {
-      const next = await listItemsPage(projectId, ['done', 'resting'], {
-        after: page?.next ?? undefined,
-      });
-      setPage({ ...next, items: [...(page?.items ?? []), ...next.items] });
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'The items could not be read.');
-    } finally {
-      setBusy(false);
-    }
-  };
-  const more = page === null || page.next !== null;
-  return (
-    <section data-resting className="mt-8 border-t border-border pt-4">
-      <h2 className="text-sm font-medium text-text-primary">Items at rest</h2>
-      <p className="mt-1 text-console-12 text-text-tertiary">
-        Nothing runs, is queued or waits on these. A merged item is one of them.
-      </p>
-      {page !== null && page.items.length > 0 ? (
-        <ul className="mt-3 grid gap-2 md:grid-cols-3">
-          {page.items.map(read => (
-            <ItemCard key={read.item.id} read={read} projectId={projectId} />
-          ))}
-        </ul>
-      ) : null}
-      {page !== null && page.items.length === 0 && !more ? (
-        <p className="mt-2 text-console-12 text-text-tertiary">None.</p>
-      ) : null}
-      {error !== null ? <p className="mt-2 text-console-12 text-error">{error}</p> : null}
-      {more ? (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void load()}
-          className="mt-3 rounded border border-border px-3 py-1.5 text-console-12 text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
-        >
-          {busy ? 'Reading…' : page === null ? 'Show items at rest' : 'Show more'}
-        </button>
-      ) : null}
     </section>
   );
 }
@@ -332,7 +410,10 @@ export function BoardPage(): ReactElement {
   // An item that needs a decision is not on a stage: it sits in its own strip until a newer run.
   const decide = items.filter(needsDecision);
   const moving = items.filter(read => !needsDecision(read));
-  const packs = [...new Set(moving.flatMap(read => packOf(read) ?? []))].sort();
+  // Every pack with an item in the project, so a pack with nothing open still shows Done.
+  const packs = [
+    ...new Set([...(project?.itemPacks ?? []), ...moving.flatMap(read => packOf(read) ?? [])]),
+  ].sort();
   const outside = moving.filter(read => packOf(read) === undefined);
 
   return (
@@ -439,7 +520,6 @@ export function BoardPage(): ReactElement {
             </div>
           </section>
         ) : null}
-        <RestingItems projectId={projectId} />
       </div>
     </section>
   );
