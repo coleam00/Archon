@@ -88,7 +88,16 @@ import {
 
 const log = createLogger('resource-start-host');
 
-type PreparationStage = 'run_as_user' | 'run_configuration' | 'launch_preparation';
+const PREPARATION_STAGES = ['run_as_user', 'run_configuration', 'launch_preparation'] as const;
+type PreparationStage = (typeof PREPARATION_STAGES)[number];
+
+/**
+ * Whether a binding's stored error is the stage its preparation failed at. `trigger fire`
+ * reads it so a binding another process failed to prepare fails the fire as its own would.
+ */
+export function isPreparationStageFailure(error: string | null): boolean {
+  return PREPARATION_STAGES.some(stage => error === `${stage}_failed`);
+}
 
 interface BindingIdentity {
   receiptId: string;
