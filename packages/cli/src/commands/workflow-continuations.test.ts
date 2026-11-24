@@ -876,6 +876,7 @@ function observation(receipts: string[]) {
       labels: 1,
       reads: 1,
       receipts,
+      replayed: [] as string[],
       conflicts: 0,
       unserved,
       unservedBindings,
@@ -955,6 +956,7 @@ test('a host whose drain failed is drained again on the next pass, with no new o
         labels: 0,
         reads: 1,
         receipts: ['woken'],
+        replayed: [],
         conflicts: 0,
         unserved: [],
         unservedBindings: [],
@@ -988,6 +990,56 @@ test('a host whose drain failed is drained again on the next pass, with no new o
       'build-host',
       'build-host',
     ]);
+  } finally {
+    timer.mockRestore();
+  }
+});
+
+test('a host whose start is still queued is drained again while its label is observed', async () => {
+  const originalTimeout = globalThis.setTimeout;
+  const timers: {
+    setTimeout(callback: () => void, delay?: number): ReturnType<typeof setTimeout>;
+  } = globalThis;
+  const timer = spyOn(timers, 'setTimeout').mockImplementation((callback: () => void) =>
+    originalTimeout(callback, 0)
+  );
+  const observed = observation([]);
+  const report = { source: 'github', waits: 0, labels: 1, reads: 1, conflicts: 0 };
+  const quiet = { unserved: [], unservedBindings: [] };
+  // The label start is recorded, then the same label is observed again: a replay. Each
+  // drain returns with the start still queued at capacity.
+  observed.pass
+    .mockImplementationOnce(async () => [
+      { ...report, ...quiet, receipts: ['woken'], replayed: [] },
+    ])
+    .mockImplementationOnce(async () => [
+      { ...report, ...quiet, receipts: [], replayed: ['woken'] },
+    ])
+    .mockImplementation(async () => {
+      process.emit('SIGTERM');
+      return [];
+    });
+  drain.mockResolvedValue(undefined);
+  try {
+    expect(
+      await workflowContinuationCommand(
+        host,
+        'wake',
+        [],
+        { json: true, watch: true },
+        async () => observed.value
+      )
+    ).toBe(0);
+    expect(drain.mock.calls.map(([drained]) => drained.hostId)).toEqual([
+      'build-host',
+      'build-host',
+    ]);
+    // The replay starts nothing new, so it is not counted as a start.
+    expect(
+      output
+        .filter(line => (line as { action?: string }).action === 'observe')
+        .map(line => (line as { started?: number }).started)
+    ).toEqual([1, 0]);
   } finally {
     timer.mockRestore();
   }
