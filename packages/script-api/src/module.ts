@@ -222,6 +222,12 @@ export function forge<Op extends keyof ForgeOperations>(
         `forge ${op} completed, but the host could not record it in the run's audit or on its item.`
     );
   else if (answer.code !== 0) throw failed(command, answer);
+  // A merge the host could not record on the run's item for want of a forge fact: the
+  // merge happened, so the result is returned, and the host's reason with its fix is passed on.
+  else if (isRecord(response.itemRecord) && response.itemRecord.recorded === false)
+    console.error(
+      answer.stderr || `forge ${op} completed, but was not recorded on the run's item.`
+    );
   return result.value as ForgeOperations[Op]['result'];
 }
 
@@ -394,8 +400,8 @@ export function linkItem(request: ItemLinkRequest): ItemLink & { readonly create
  * {@link ItemWriteError} on a refusal (`no_item` when the run is on no item), and
  * {@link HostCommandError} when the host gives no answer, in which case the merge may or
  * may not have been recorded. A container run cannot call it, as it has no host CLI.
- * A `pr.merge` through {@link forge} on a run with an item records the merge by itself;
- * calling this afterwards keeps that record.
+ * A `pr.merge` through {@link forge} on a run with an item records the merge by itself
+ * when the forge plugin reports its merge time; calling this afterwards keeps that record.
  */
 export function recordMerge(merge: {
   readonly change: string;
@@ -414,7 +420,8 @@ export function recordMerge(merge: {
  * which case the branch may or may not have been recorded.
  * A container run cannot call it, as it has no host CLI.
  * A `pr.merge` through {@link forge} on a run with an item records the merged pull
- * request's base branch by itself; recording the same branch afterwards changes nothing.
+ * request's base branch by itself, with the merge; recording the same branch afterwards
+ * changes nothing.
  */
 export function recordLanding(branch: string): ItemLanding {
   return itemWrite('workflow landing', ['--branch', branch]) as ItemLanding;

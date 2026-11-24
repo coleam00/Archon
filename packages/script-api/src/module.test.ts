@@ -50,7 +50,8 @@ if (command === 'forge') {
       mutation: { op: sub, target: request.ref, outcome: 'refused' } }, 1);
   else {
     if (request.reason) process.stderr.write(request.reason);
-    answer({ operationId: 'x', ok: true, result: { op: sub, value: { echoed: request } } }, request.exit ?? 0);
+    const itemRecord = request.unrecorded ? { itemRecord: { recorded: false, reason: 'no_merge_time' } } : {};
+    answer({ operationId: 'x', ok: true, result: { op: sub, value: { echoed: request } }, ...itemRecord }, request.exit ?? 0);
   }
 } else if (command === 'state' && args.includes('--held')) {
   answer({ ok: false, error: 'not held', code: 3, reason: 'lease_not_held' }, 3);
@@ -113,6 +114,13 @@ test('forge returns the result, and a completed operation the host could not rec
     } as never);
     // The host's own reason reaches the script, not a generic warning in its place.
     expect(stderr.mock.calls).toEqual([[reason]]);
+    stderr.mockClear();
+    // A merge that succeeded but was not recorded on the item is no failure, and is said.
+    const unrecorded = 'merged it, but the forge plugin reported no merge time';
+    expect(forge('pr.merge', { ref, unrecorded: true, reason: unrecorded } as never)).toEqual({
+      echoed: { ref, unrecorded: true, reason: unrecorded },
+    } as never);
+    expect(stderr.mock.calls).toEqual([[unrecorded]]);
   } finally {
     stderr.mockRestore();
   }

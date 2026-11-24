@@ -842,21 +842,23 @@ test.serial(
       WORKFLOW_ID: runId,
       ARCHON_NODE_EXECUTION: JSON.stringify({ runId, path: 'land' }),
     });
-    const record = async (runId: string) => {
+    const record = async (runId: string, at: string | undefined) => {
       let outcome: Awaited<ReturnType<typeof recordRunMerge>> | undefined;
-      let read = false;
-      const readFacts = async () => {
-        read = true;
-        return facts;
-      };
       const result = await invoke(async () => {
-        outcome = await recordRunMerge(runId, readFacts, nodeEnv(runId));
+        outcome = await recordRunMerge(runId, { ...facts, at }, nodeEnv(runId));
       });
       expect(result.exitCode, result.stderr).toBe(0);
-      return { outcome, read };
+      return outcome;
     };
+    const merges = () => rows<{ n: number }>('SELECT count(*) AS n FROM remote_agent_item_merges');
 
-    expect(await record(onItem.id)).toEqual({ outcome: 'recorded', read: true });
+    // A plugin that reports no merge time leaves the item as it was, merge and landing alike.
+    expect(await record(onItem.id, undefined)).toBe('no_merge_time');
+    const untouched = await readItemJson('item-1');
+    expect(untouched.merged).toBeNull();
+    expect(untouched.landing).toBeNull();
+
+    expect(await record(onItem.id, facts.at)).toBe('recorded');
     const item = await readItemJson('item-1');
     expect(item.merged).toMatchObject({
       change: facts.change,
@@ -887,14 +889,10 @@ test.serial(
     const after = await readItemJson('item-1');
     expect(after.merged).toEqual(item.merged);
     expect(after.landing?.branch).toBe('dev');
-    expect(rows<{ n: number }>('SELECT count(*) AS n FROM remote_agent_item_merges')).toEqual([
-      { n: 1 },
-    ]);
+    expect(merges()).toEqual([{ n: 1 }]);
 
-    // A run on no item reads nothing from the forge and writes nothing.
-    expect(await record(bare.id)).toEqual({ outcome: 'no_item', read: false });
-    expect(rows<{ n: number }>('SELECT count(*) AS n FROM remote_agent_item_merges')).toEqual([
-      { n: 1 },
-    ]);
+    // A run on no item writes nothing.
+    expect(await record(bare.id, facts.at)).toBe('no_item');
+    expect(merges()).toEqual([{ n: 1 }]);
   }
 );

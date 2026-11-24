@@ -17,11 +17,12 @@ import {
   cliForgeCheckRequestSchema,
   cliForgeMetadataRequestSchema,
   cliForgeResponseSchema,
+  type CliForgeItemRecord,
   type CliForgeResponse,
 } from '@archon/forge';
 import { z } from '@hono/zod-openapi';
 import { writeJsonLine } from '../utils/stdout';
-import type { RunMergeFacts, recordRunMerge } from './forge-merge-record';
+import type { recordRunMerge } from './forge-merge-record';
 
 async function persistAudit(audit: ForgeOperationAudit, runId: string): Promise<void> {
   const { persistWorkflowEvent } = await import('@archon/core/db/workflow-events');
@@ -103,12 +104,14 @@ export async function forgeCommand(
     response = result.response;
     const runId = env.WORKFLOW_ID;
     if (runId) {
-      const failures = await recordRunFacts(runId, input, result, context);
-      if (failures.length > 0) {
+      const recorded = await recordRunFacts(runId, result, context);
+      if (recorded.itemRecord && response.ok)
+        response = { ...response, itemRecord: recorded.itemRecord };
+      for (const line of recorded.stderr) process.stderr.write(`${line}\n`);
+      if (recorded.failed) {
         // Retain the actual operation outcome on stdout. A failure to record it is a
         // separate failure and never rewrites an observed result as a refusal.
         await writeResponse(response, context);
-        for (const failure of failures) process.stderr.write(`${failure}\n`);
         return 2;
       }
     }
@@ -278,65 +281,65 @@ async function dispatchRequest(
   return result;
 }
 
+/** What a run-owned operation left on the run, and what the caller is told about it. */
+interface RunRecord {
+  /** One line per record that could not be written, or that the result could not supply. */
+  stderr: string[];
+  /** A record could not be written: the command exits 2. */
+  failed: boolean;
+  itemRecord?: CliForgeItemRecord;
+}
+
 /**
  * What a run-owned operation leaves on the run: its audit, and for an applied `pr.merge`
- * on a run with an item, the merge and landing branch on that item. Returns one stderr
- * line per record that could not be written; none of them throws, because the operation
- * has already reached the forge.
+ * on a run with an item, the merge and landing branch on that item, from the merge result.
+ * Nothing here throws, because the operation has already reached the forge.
  */
 async function recordRunFacts(
   runId: string,
-  input: ForgeInput,
   { response, audit }: ForgeDispatchResult,
   context: ForgeCommandContext
-): Promise<string[]> {
-  const failures: string[] = [];
-  const persist = async (operationAudit: ForgeOperationAudit): Promise<void> => {
-    try {
-      await (context.dependencies.audit ?? persistAudit)(operationAudit, runId);
-    } catch {
-      failures.push(
-        `Forge operation ${operationAudit.operationId} completed but its run audit could not be persisted.`
+): Promise<RunRecord> {
+  const record: RunRecord = { stderr: [], failed: false };
+  try {
+    await (context.dependencies.audit ?? persistAudit)(audit, runId);
+  } catch {
+    record.failed = true;
+    record.stderr.push(
+      `Forge operation ${context.operationId} completed but its run audit could not be persisted.`
+    );
+  }
+  if (!response.ok || response.result.op !== 'pr.merge') return record;
+  const merged = response.result.value;
+  try {
+    const recordMerge =
+      context.dependencies.recordMerge ?? (await import('./forge-merge-record')).recordRunMerge;
+    const outcome = await recordMerge(
+      runId,
+      {
+        change: merged.pr.url,
+        commit: merged.landed.commit,
+        at: merged.merged_at,
+        branch: merged.pr.base,
+      },
+      context.env
+    );
+    if (outcome === 'recorded') record.itemRecord = { recorded: true };
+    if (outcome === 'no_merge_time') {
+      // The merge happened, so this is no failure: the caller is told, and the exit stays 0.
+      record.itemRecord = { recorded: false, reason: 'no_merge_time' };
+      record.stderr.push(
+        `Forge operation ${context.operationId} merged ${merged.pr.url}, but the forge plugin reported no merge time, so the merge and its landing branch were not recorded on the run's item. Update the forge plugin with \`archon plugin update\`.`
       );
     }
-  };
-  await persist(audit);
-  if (!response.ok || response.result.op !== 'pr.merge') return failures;
-  const merged = response.result.value;
-  // The merge result carries no merge time, so one `pr.view` reads it from the forge. The
-  // read is audited on the run like any run forge read, after the item record has closed
-  // its database connection, since `persistAudit` opens and closes its own.
-  let viewAudit: ForgeOperationAudit | undefined;
-  const readFacts = async (): Promise<RunMergeFacts> => {
-    const view = await (context.dependencies.dispatch ?? dispatchForge)(
-      {
-        operationId: randomUUID(),
-        op: 'pr.view',
-        selector: { kind: 'number', ref: merged.target },
-      },
-      { ...trustedDiscovery(input, context), credentialEnv: context.env }
-    );
-    viewAudit = view.audit;
-    if (!view.response.ok) throw new Error(`pr.view failed: ${view.response.error.message}`);
-    const read = view.response.result.op === 'pr.view' ? view.response.result.value : null;
-    if (read?.pr.state !== 'merged')
-      throw new Error('pr.view does not read the pull request as merged');
-    const at = read.timestamps?.merged_at;
-    if (!at) throw new Error('the forge plugin reports no merge time in pr.view');
-    return { change: merged.pr.url, commit: merged.landed.commit, at, branch: merged.pr.base };
-  };
-  try {
-    const record =
-      context.dependencies.recordMerge ?? (await import('./forge-merge-record')).recordRunMerge;
-    await record(runId, readFacts, context.env);
   } catch (error) {
+    record.failed = true;
     const reason = error instanceof Error ? error.message : String(error);
-    failures.push(
+    record.stderr.push(
       `Forge operation ${context.operationId} merged ${merged.pr.url} but the item record could not be written: ${reason}`
     );
   }
-  if (viewAudit) await persist(viewAudit);
-  return failures;
+  return record;
 }
 
 /**

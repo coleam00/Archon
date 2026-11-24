@@ -56,6 +56,7 @@ export async function mergePullRequest(
   const observed = await readPull(fetchImpl, token, request.ref);
   const pr = prRecord(request.ref.repo, observed);
   const commit = observed.merge_commit_sha ?? null;
+  const mergedAt = observed.merged_at ? { merged_at: observed.merged_at } : {};
   if (
     pr.number !== request.ref.number ||
     pr.state !== 'merged' ||
@@ -86,6 +87,7 @@ export async function mergePullRequest(
       conditions: request.conditions,
       enforcedConditions: ['head'],
       landed: { commit, tree, parents },
+      ...mergedAt,
     });
   }
   const object = z
@@ -111,5 +113,6 @@ export async function mergePullRequest(
     conditions: request.conditions,
     enforcedConditions: ['head'],
     landed: { commit, tree, parents },
+    ...mergedAt,
   });
 }

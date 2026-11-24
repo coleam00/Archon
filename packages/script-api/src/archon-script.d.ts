@@ -720,6 +720,7 @@ declare module 'archon:script' {
           readonly tree: string | null;
           readonly parents: ReadonlyArray<string> | null;
         };
+        readonly merged_at?: string;
       };
     };
     'checks.rerun': {
@@ -3519,8 +3520,8 @@ declare module 'archon:script' {
    * {@link ItemWriteError} on a refusal (`no_item` when the run is on no item), and
    * {@link HostCommandError} when the host gives no answer, in which case the merge may or
    * may not have been recorded. A container run cannot call it, as it has no host CLI.
-   * A `pr.merge` through {@link forge} on a run with an item records the merge by itself;
-   * calling this afterwards keeps that record.
+   * A `pr.merge` through {@link forge} on a run with an item records the merge by itself
+   * when the forge plugin reports its merge time; calling this afterwards keeps that record.
    */
   export function recordMerge(merge: {
       readonly change: string;
@@ -3534,7 +3535,8 @@ declare module 'archon:script' {
    * which case the branch may or may not have been recorded.
    * A container run cannot call it, as it has no host CLI.
    * A `pr.merge` through {@link forge} on a run with an item records the merged pull
-   * request's base branch by itself; recording the same branch afterwards changes nothing.
+   * request's base branch by itself, with the merge; recording the same branch afterwards
+   * changes nothing.
    */
   export function recordLanding(branch: string): ItemLanding;
   /**
