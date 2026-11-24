@@ -1424,16 +1424,33 @@ test.each([false, true])(
   }
 );
 
-test('merged cleanup reports a gone checkout and keeps its environment active', async () => {
+test('merged cleanup reports a gone checkout and leaves its worktrees and records alone', async () => {
+  // A worktree outside the checkout survives the checkout's deletion, so the sweep could touch it.
+  const outside = join(root, 'outside');
+  await git(repo, 'worktree', 'add', '-q', '-b', 'outside', outside);
+  const outsideEnv = await isolationDb.create({
+    codebase_id: codebaseId,
+    workflow_type: 'task',
+    workflow_id: 'outside',
+    working_path: outside,
+    branch_name: toBranchName('outside'),
+  });
   await rm(repo, { recursive: true, force: true });
+  expect(existsSync(outside)).toBe(true);
 
   const outcome = await cleanupMergedWorktrees(codebaseId, repo);
 
-  expect(outcome).toEqual({
-    kind: 'repository-gone',
-    environments: [{ branchName: env.branch_name, workingPath: env.working_path }],
+  expect(outcome.kind).toBe('repository-gone');
+  if (outcome.kind !== 'repository-gone') return;
+  expect(outcome.environments).toHaveLength(2);
+  expect(outcome.environments).toContainEqual({
+    branchName: env.branch_name,
+    workingPath: env.working_path,
   });
+  expect(outcome.environments).toContainEqual({ branchName: 'outside', workingPath: outside });
+  expect(existsSync(join(outside, 'file'))).toBe(true);
   expect(await status()).toBe('active');
+  expect((await isolationDb.getById(outsideEnv.id))?.status).toBe('active');
 });
 
 test('merged cleanup retires locally and reports the retained published branch', async () => {

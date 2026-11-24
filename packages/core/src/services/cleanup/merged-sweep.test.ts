@@ -397,7 +397,8 @@ describe('cleanupMergedWorktrees', () => {
   test('reports the worktrees of a gone checkout without checking or removing them', async () => {
     mergedSweepFinds(
       worktreeEnv('probe/x'),
-      worktreeEnv('folder', { id: 'env-folder', provider: 'container' })
+      worktreeEnv('folder', { id: 'env-folder', provider: 'container' }),
+      worktreeEnv('probe/y')
     );
     mockGetPrState.mockResolvedValue(prAt('MERGED'));
     mockCheckoutExists.mockResolvedValue(false);
@@ -407,7 +408,10 @@ describe('cleanupMergedWorktrees', () => {
     expect(mockCheckoutExists).toHaveBeenCalledWith('/workspace/gone');
     expect(outcome).toEqual({
       kind: 'repository-gone',
-      environments: [{ branchName: 'probe/x', workingPath: '/workspace/repo/worktrees/probe/x' }],
+      environments: [
+        { branchName: 'probe/x', workingPath: '/workspace/repo/worktrees/probe/x' },
+        { branchName: 'probe/y', workingPath: '/workspace/repo/worktrees/probe/y' },
+      ],
     });
     expect(mockLoadRepoConfig).not.toHaveBeenCalled();
     expect(mockGetDefaultBranch).not.toHaveBeenCalled();

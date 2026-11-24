@@ -738,8 +738,9 @@ describe('CommandHandler', () => {
             ],
           });
 
+          // Run from a surviving worktree: the sweep must still get the registered checkout.
           const result = await handleCommand(
-            conversationWithCodebase,
+            { ...conversationWithCodebase, cwd: '/worktrees/feat-a' },
             '/worktree cleanup merged',
             operator
           );
