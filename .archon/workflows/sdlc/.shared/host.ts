@@ -6,7 +6,7 @@
 import { isObject } from './inputs.ts';
 
 /** The host's `archon` argv, as the CLI and server publish it to every exec node. */
-export function archonCommand(): readonly string[] {
+function archonCommand(): readonly string[] {
   const value = process.env.ARCHON_CLI_COMMAND;
   if (value === undefined || value === '') {
     throw new Error(

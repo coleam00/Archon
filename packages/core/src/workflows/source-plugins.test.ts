@@ -620,13 +620,13 @@ const LABEL_READ = { bindingId: 'binding-1', repo: LABEL_REPO, label: 'factory' 
 
 /**
  * A source with one declared label read. Each pass lists the label, reads when it was added
- * to each issue (or to `askNumbers`), and returns one acceptance per issue: unmatched while
- * the read is seeding, matched otherwise. `listLabel` lists another label than declared.
+ * to each listed item, as the kind it was listed as (or to `asks`), and returns one
+ * acceptance per item: unmatched while the read is seeding, matched otherwise. `listLabel` lists another label than declared.
  */
 async function labelFixture(
   plugin: {
     listLabel?: string;
-    askNumbers?: number[];
+    asks?: { kind: 'issue' | 'pr'; number: number }[];
     reads?: unknown[];
     unserved?: unknown[];
   } = {}
@@ -654,10 +654,11 @@ async function labelFixture(
         labelFailures.push({ bindingId: read.bindingId, label: read.label, reason: error.message });
         continue;
       }
-      for (const number of config.askNumbers ?? listed.items.map(item => item.ref.number)) {
+      const asks = config.asks ?? listed.items.map(item => ({ kind: item.kind, number: item.ref.number }));
+      for (const { kind, number } of asks) {
         let added;
         try {
-          added = await forge.labelAdded({ repo: read.repo, number, label: read.label });
+          added = await forge.labelAdded({ repo: read.repo, kind, number, label: read.label });
         } catch (error) {
           labelFailures.push({ bindingId: read.bindingId, label: read.label, number, reason: error.message });
           continue;
@@ -707,13 +708,15 @@ async function labelFixture(
 }
 
 /**
- * A forge with open issues carrying the label, each with its latest label-added event id.
- * An issue in `updated` is listed with that `updatedAt`; any other is listed without one.
+ * A forge with open items carrying the label, each with its latest label-added event id:
+ * issues, except the pull requests in `prs`. An item in `updated` is listed with that
+ * `updatedAt`; any other is listed without one.
  */
 function labelForge(
   issues: Map<number, string>,
   failing = new Set<number>(),
-  updated = new Map<number, string>()
+  updated = new Map<number, string>(),
+  prs = new Set<number>()
 ) {
   const reads: string[] = [];
   return {
@@ -726,7 +729,7 @@ function labelForge(
         label,
         items: [...issues.keys()].map(number => ({
           ref: { repo, number },
-          kind: 'issue' as const,
+          kind: prs.has(number) ? ('pr' as const) : ('issue' as const),
           url: `https://github.com/owner/repo/issues/${String(number)}`,
           state: 'open' as const,
           ...(updated.has(number) ? { updatedAt: updated.get(number) } : {}),
@@ -735,17 +738,19 @@ function labelForge(
     },
     labelAdded: async ({
       repo,
+      kind,
       number,
       label,
     }: {
       repo: typeof LABEL_REPO;
+      kind: 'issue' | 'pr';
       number: number;
       label: string;
     }) => {
       reads.push(`added ${String(number)}`);
       if (failing.has(number)) throw new Error('events unavailable');
       return {
-        subject: { kind: 'issue' as const, ref: { repo, number } },
+        subject: { kind, ref: { repo, number } },
         name: label,
         added: { id: issues.get(number) ?? 'none', at: '2026-01-01T00:00:00Z', actor: null },
       };
@@ -852,13 +857,17 @@ describe('observing label bindings', () => {
     );
   });
 
-  test('the forge lists only a declared label, and reads only issues that list returned', async () => {
+  test('the forge lists only a declared label, and reads only items that list returned, by kind', async () => {
     const observeWith = async (plugin: Parameters<typeof labelFixture>[0]) => {
       const sources = await loadWebhookSourcePlugins(
         await labelFixture(plugin),
         receiptStore().dependencies
       );
-      const forge = labelForge(new Map([[5, 'event-1']]));
+      const listed = new Map([
+        [5, 'event-1'],
+        [7, 'event-2'],
+      ]);
+      const forge = labelForge(listed, new Set(), new Map(), new Set([7]));
       const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
       const [report] = (await observer?.pass(new Date())) ?? [];
       return { report, reads: forge.reads };
@@ -869,11 +878,25 @@ describe('observing label bindings', () => {
       "No binding of this source names label 'other' in 'github.com/owner/repo'"
     );
 
-    const unlisted = await observeWith({ askNumbers: [5, 9] });
-    expect(unlisted.reads).toEqual(['list factory', 'added 5']);
-    expect(unlisted.report?.error).toContain(
-      "Issue 9 of 'github.com/owner/repo' was not listed with label 'factory' in this pass"
-    );
+    // Issue 5 and pull request 7 are listed; a number not listed, or asked as the other
+    // kind, is refused.
+    const listed = await observeWith({});
+    expect(listed.reads).toEqual(['list factory', 'added 5', 'added 7']);
+    expect(listed.report?.error).toBeUndefined();
+    const unlisted = await observeWith({
+      asks: [
+        { kind: 'issue', number: 5 },
+        { kind: 'pr', number: 7 },
+        { kind: 'issue', number: 9 },
+        { kind: 'pr', number: 5 },
+        { kind: 'issue', number: 7 },
+      ],
+    });
+    expect(unlisted.reads).toEqual(['list factory', 'added 5', 'added 7']);
+    for (const refused of ['Issue 9 of', 'Pull request 5 of', 'Issue 7 of'])
+      expect(unlisted.report?.error).toContain(
+        `${refused} 'github.com/owner/repo' was not listed with label 'factory' in this pass`
+      );
   });
 
   test('one read whose acceptance cannot be admitted does not hold back another read', async () => {

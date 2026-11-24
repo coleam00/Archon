@@ -63,15 +63,6 @@ function remotes(
   });
 }
 
-/** The distinct repositories this checkout's remotes name. */
-export function remoteRepos(): Repo[] {
-  const repos: Repo[] = [];
-  for (const { repo } of remotes()) {
-    if (repo && !repos.some(known => sameRepo(known, repo))) repos.push(repo);
-  }
-  return repos;
-}
-
 /**
  * The repository a workflow works on: its `repo_host` and `repo_path` inputs when both
  * are set, otherwise the repository the forge's `resolve` finds for this checkout's

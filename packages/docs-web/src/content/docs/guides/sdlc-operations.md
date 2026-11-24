@@ -59,7 +59,6 @@ Each stage picks its model from a concern alias, falling back to the tier it has
 | `@discoveries` | the discoveries decision | `large` |
 | `@split` | the split queue's slicing | `large` |
 | `@test-value-judge` | the test-value metric's judge | `large` |
-| `@review-eval-judge` | the review bench's judge | `large` |
 
 ```bash
 archon ai alias set @reviewer codex gpt-6.1-sol                                   # every run
@@ -122,7 +121,7 @@ Two bindings in the GitHub source plugin's configuration start intake: `intake-i
   - build one issue, whose build run the pick starts, refusing with why when the issue does not wait;
   - choose between several, which pauses as an attention item labelled `kind: pick`, recommending the issue the message most likely means, and starts the build of the issue you pick;
   - write a [work order](#work-orders) for several issues to build, starting none of them;
-  - file new work no issue covers, such as a pasted brief or a file, as an issue, and hand it to `archon-intake` detached, so the run builds nothing;
+  - file new work no issue covers, such as a pasted brief or a file, as an issue, and hand it to `archon-intake` through your `intake` binding, so the run builds nothing;
   - refuse the run with the agent's reason.
 
   A message that explicitly asks for several issues to be built together, such as "build #122 and #123 in one pull request", files one combined issue carrying each original's contract. Its `Delivered together` section lists the originals, and the delivery's pull request references and closes them with it. The agent never groups issues the message did not ask to group. Scripts claim, write and file only what the agent declared. A run with a `number` ignores its message.
@@ -166,9 +165,9 @@ The work item's `facts.build` holds the item's status, which says who owns it: t
 
 ### Its bindings
 
-Four bindings run the queue. `build-queue` starts one build run for one issue and has no schedule: picks fire it. Each run changes its checkout, so it launches in a worktree, with `overlap: skip` and a capacity of 10. That number is how many issues are built at once, and it is a starting point: set `concurrency.resources.<resource>` in the install's config to what the machine and the provider's rate limits carry. `build-after-intake` starts the same workflow under the same resource when an intake run routes its issue. `build-pick` starts a pick every 30 minutes, and `build-pick-after-build` starts one when a build run ends. The pack README's [Let it run on its own](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#10-let-it-run-on-its-own) says what to look at.
+Four bindings run the queue. `build-queue` starts one build run for one issue and has no schedule: picks fire it. Each run changes its checkout, so it launches in a worktree, with `overlap: skip` and a capacity of 10. That number is how many issues are built at once, and it is a starting point: set `concurrency.resources.<resource>` in the install's config to what the machine and the provider's rate limits carry. `build-after-intake` starts the same workflow under the same resource when an intake run routes its issue. `build-pick` starts a pick every 30 minutes, and `build-pick-after-build` starts one when a build run ends. A pick that starts intake, for new work its message files, a work order's untriaged members or a blocked item it sends back, fires the fire-only `intake` binding, under intake's resource. The pack README's [Let it run on its own](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#10-let-it-run-on-its-own) says what to look at.
 
-The pick's `build_queue_binding` input names the `build-queue` file, and the pick refuses to run without it. A binding set written before the pick has a scheduled `build-queue` and no pick: write the four again with `archon pack bindings sdlc --only build-queue,build-after-intake,build-pick,build-pick-after-build --force`, remove the old `build-queue` schedule, schedule `build-pick`, and register the run-ended files with `archon trigger add`. A scheduled start of `archon-build-queue` names no issue and is refused.
+The pick's `build_queue_binding` input names the `build-queue` file, and the pick refuses to run without it. Its `intake_binding` input names the `intake` file; a pick node that would start intake refuses while it is empty. Pick files written before `intake` existed lack it: write `intake`, `build-pick` and `build-pick-after-build` again with `--only` and `--force`. A binding set written before the pick has a scheduled `build-queue` and no pick: write the four again with `archon pack bindings sdlc --only build-queue,build-after-intake,build-pick,build-pick-after-build --force`, remove the old `build-queue` schedule, schedule `build-pick`, and register the run-ended files with `archon trigger add`. A scheduled start of `archon-build-queue` names no issue and is refused.
 
 A build round starts as soon as intake routes an issue only when the intake run is on the issue's item and `build-after-intake` is registered. Intake bindings written before the item mapping start runs on no item, which hand nothing on: write `intake-issues` and `intake-labels` again with `--only` and `--force`, replace their entries in the source plugin's configuration, and register `build-after-intake` with `archon trigger add`.
 
@@ -271,16 +270,11 @@ Before merging, the agent rechecks the pull request's closing keyword against th
 
 ### What it waits for
 
-A run that cannot merge yet ends with outcome `waiting`. It holds no slot, no session and no claim while the item waits. When the forge will report what it waits for, the run leaves a [wait](/reference/workflow-language/#waits-what-an-item-waits-for-outside-archon) on the item, and a completed check at exactly that commit starts the stage again:
+A run that cannot merge yet ends with outcome `waiting`. It holds no slot, no session and no claim while the item waits. When its checks are pending at its head under `ci: forge`, or the agent just re-ran them, the run leaves a `checks` [wait](/reference/workflow-language/#waits-what-an-item-waits-for-outside-archon) on the item about that head commit, and a completed check at exactly that commit starts the stage again.
 
-| Wait | About | Left when |
-| --- | --- | --- |
-| `checks` | the pull request's head commit | its checks are pending there under `ci: forge`, or the agent just re-ran them |
-| `base-checks` | the default branch's head commit | the default branch's CI is red |
+A check at any other commit, such as an older head, meets no wait and starts nothing. Each completed check is its own event, so a run woken while other checks still run waits again without the agent. A red check wakes the agent. Each wait is expected within 60 minutes; past that the item is listed in `archon workflow attention` as an overdue wait, and the next backstop pass starts it.
 
-A check at any other commit, such as an older head, meets neither and starts nothing. Each completed check is its own event, so a run woken while other checks still run, or while the default branch is still red at that commit, waits again without the agent. A red check wakes the agent. Each wait is expected within 60 minutes; past that the item is listed in `archon workflow attention` as an overdue wait, and the next backstop pass starts it.
-
-A red default branch asks nobody. Nothing merges, the run's summary and a notice labelled `kind=base-red` carry the agent's diagnosis: the failing checks and what each points at, the pull requests merged since the branch was green, the one it suspects, and whether to rerun, revert or fix forward. It recommends a rerun by hand when no recent merge touched the red code: the forge's rerun acts only on a pull request, so the pack never reruns the default branch. A rerun of those jobs completes checks at the commit the items wait on, and wakes them. A fix that lands as a new commit names another commit, so the items wait for the backstop.
+A red default branch asks nobody. Nothing merges, the run's summary and a notice labelled `kind=base-red` carry the agent's diagnosis: the failing checks and what each points at, the pull requests merged since the branch was green, the one it suspects, and whether to rerun, revert or fix forward. It recommends a rerun by hand when no recent merge touched the red code: the forge's rerun acts only on a pull request, so the pack never reruns the default branch. A red default branch leaves no wait: every pull request it holds back would wait on the same commit, and the engine starts nothing for an event that meets waits on more than one item. The items wait for the backstop, which reads them after a rerun or a fix alike.
 
 Everything else a pull request can wait for has no forge event the pack binds. The backstop covers it: every 30 minutes `archon-merge-pick` starts a merge run on each item the stage has, except one whose ask is open, one waiting on a check that is not yet overdue, one with a merge run already queued or running, and one whose newest merge run failed. That is how these get read:
 
@@ -289,7 +283,7 @@ Everything else a pull request can wait for has no forge event the pack binds. T
 - the forge finishing its computation of whether the pull request merges;
 - a new review verdict, which is a comment and not a forge review;
 - a validation recorded under `ci: none`;
-- a default branch fixed by a new commit;
+- a red default branch, fixed by a new commit or a rerun;
 - a hand-off or a check event that was lost.
 
 The backstop reads no pull request and runs no agent. Each run it starts does.
@@ -324,13 +318,12 @@ Every start of the merge stage shares the resource `merge` with a capacity of 1 
 | --- | --- |
 | `merge-after-build` | a build round ends `ready` |
 | `merge-after-checks` | a check completes at the head a `checks` wait names |
-| `merge-after-base-checks` | a check completes at the default-branch commit a `base-checks` wait names |
 | `merge-after-answer` | the stage's ask is answered with `merge`, `return` or `park` |
 | `merge-queue` | fired for one item: by the backstop, or by hand with `archon trigger fire --config <file> --item issue-<number>` |
 
 `merge-pick` schedules the backstop every 30 minutes, with `overlap: skip`. `build-after-merge-return`, `discoveries-after-merge` and `intake-after-merge` are the bindings on the stage's outcome described above.
 
-The two check bindings are event bindings for the GitHub source plugin, so they need a server with a webhook subscribed to check runs and commit statuses, as intake's bindings do. Without them the stage still merges: a waiting item's wait goes overdue after an hour and the next backstop pass starts it.
+The check binding is an event binding for the GitHub source plugin, so it needs a server with a webhook subscribed to check runs and commit statuses, as intake's bindings do. Without it the stage still merges: a waiting item's wait goes overdue after an hour and the next backstop pass starts it.
 
 ## Discoveries
 

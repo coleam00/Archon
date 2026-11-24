@@ -252,7 +252,7 @@ export interface BaseFacts {
 
 /** A wait as the engine opens it on the item (`returns.waits`). */
 export interface EventWait {
-  readonly event: 'checks' | 'base-checks';
+  readonly event: 'checks';
   readonly about: string;
   readonly within_minutes: number;
 }
@@ -261,20 +261,21 @@ export interface EventWait {
 const WAIT_MINUTES = 60;
 
 /**
- * The forge events a pull request that did not merge waits for; `.pack/pack.yaml` binds
- * each name to a completed check. `checks`: a check completing at exactly the pull
- * request's head, while its checks are pending there or the stage just re-ran them.
- * `base-checks`: a check completing at exactly the default branch's head, while that
- * branch is red. A check at any other commit meets neither. Anything else a pull request
- * waits for has no event, and the backstop reads it.
+ * The forge event a pull request that did not merge waits for; `.pack/pack.yaml` binds
+ * `checks` to a check completing at exactly the pull request's head, while its checks
+ * are pending there or the stage just re-ran them. A check at any other commit meets it
+ * not.
+ *
+ * Anything else a pull request waits for has no event the pack can bind, and the
+ * backstop reads it. A red default branch is one: every pull request it holds back would
+ * wait on the same commit, the engine starts nothing for an event that meets waits on
+ * two items, and a fix lands as a new commit no wait names.
  */
-export function eventWaits(facts: PrFacts, base: BaseFacts, ci: CiMode, reran: boolean): EventWait[] {
-  const waits: EventWait[] = [];
+export function eventWaits(facts: PrFacts, ci: CiMode, reran: boolean): EventWait[] {
   if (ci === 'forge' && (facts.checks.state === 'pending' || reran)) {
-    waits.push({ event: 'checks', about: facts.head_revision, within_minutes: WAIT_MINUTES });
+    return [{ event: 'checks', about: facts.head_revision, within_minutes: WAIT_MINUTES }];
   }
-  if (base.checks.state === 'red') waits.push({ event: 'base-checks', about: base.head, within_minutes: WAIT_MINUTES });
-  return waits;
+  return [];
 }
 
 /** The default branch, its head commit and the checks on it. */

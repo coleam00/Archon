@@ -7,6 +7,7 @@ import type { UserInput } from "./UserInput";
 export type TurnSteerParams = { threadId: string, clientUserMessageId?: string | null, input: Array<UserInput>,
 /**
  * Optional metadata to enrich Codex's ResponsesAPI turn metadata.
+ * Replaces unprotected client-provided entries when supplied; an empty map clears them.
  *
  * Entries are flattened into the JSON string sent as
  * `client_metadata["x-codex-turn-metadata"]` on ResponsesAPI HTTP and websocket requests.
@@ -15,6 +16,11 @@ export type TurnSteerParams = { threadId: string, clientUserMessageId?: string |
  * such as `session_id`, `thread_id`, `turn_id`, and `window_id` cannot be overridden.
  */
 responsesapiClientMetadata?: { [key in string]?: string } | null,
+/**
+ * Merge entries into the ResponsesAPI turn metadata without removing existing entries.
+ * Applied after `responsesapiClientMetadata` if both are provided; reserved keys remain protected.
+ */
+responsesapiClientMetadataPatch?: { [key in string]?: string } | null,
 /**
  * Optional client-provided context fragments keyed by an opaque source identifier.
  */

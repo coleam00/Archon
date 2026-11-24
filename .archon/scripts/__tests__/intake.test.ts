@@ -26,6 +26,10 @@ import {
   hostCli,
   type TrackerComment,
   type TrackerIssue,
+  type TrackerFake,
+  type TrackerSubject,
+  forgeCalls,
+  forgeRefusal,
   labelWrites,
   packScriptRunner,
   PR,
@@ -293,8 +297,9 @@ interface Event {
   readonly issueLabels?: readonly string[];
   readonly statuses?: Record<string, string>;
   readonly state?: 'open' | 'closed';
-  readonly stateReason?: string;
+  readonly stateReason?: TrackerSubject['state_reason'];
   readonly writeLost?: boolean;
+  readonly fail?: TrackerFake['fail'];
   /** Other issues on the tracker, such as the original a duplicate links to. */
   readonly others?: readonly TrackerIssue[];
   /** Comments already on the tracker's issues. */
@@ -321,6 +326,7 @@ function run(
       issueLabels: event.issueLabels ?? [],
       repositoryLabels: [],
       writeLost: event.writeLost,
+      fail: event.fail,
       issues: event.others,
       comments: event.comments,
     },
@@ -580,21 +586,26 @@ describe('the intake scripts', () => {
     const at = install();
     const event = { runId: 'run-1', others: [ORIGINAL] };
     const decided = facts(at, event).output;
-    const closed = { ...event, state: 'closed' as const, stateReason: 'duplicate' };
+    const closed = { ...event, state: 'closed' as const, stateReason: 'duplicate' as const };
     const repeated = outcome(at, closed, decided, DUPLICATE_VERDICT);
     expect({ code: repeated.code, stderr: repeated.stderr }).toEqual({ code: 0, stderr: '' });
     expect([...repeated.closes, ...repeated.comments]).toEqual([]);
     expect(stored(at).value).toMatchObject({ stage: 'close', claim: null });
   }, 60_000);
 
-  test('an item someone closed for another reason is refused before any comment', () => {
+  test('a closed item whose close the forge refuses writes no comment and fails the run', () => {
     const at = install();
     const event = { runId: 'run-1', others: [ORIGINAL] };
     const decided = facts(at, event).output;
-    const closed = { ...event, state: 'closed' as const, stateReason: 'not_planned' };
+    const closed = {
+      ...event,
+      state: 'closed' as const,
+      stateReason: 'not_planned' as const,
+      fail: { 'workitem.close': forgeRefusal('workitem.close', 'refused', 'closed for another reason') },
+    };
     const applied = outcome(at, closed, decided, DUPLICATE_VERDICT);
     expect(applied.code).not.toBe(0);
-    expect(applied.stderr).toContain('already closed for another reason');
+    expect(forgeCalls(applied).filter(call => call.op === 'workitem.close')).toHaveLength(1);
     expect([...applied.closes, ...applied.comments]).toEqual([]);
   }, 60_000);
 

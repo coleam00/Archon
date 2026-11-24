@@ -51,7 +51,17 @@ export const forgeEventFieldSchema = z.enum([
 ]);
 export type ForgeEventField = z.infer<typeof forgeEventFieldSchema>;
 
+const subjectKindSchema = z.enum(['issue', 'pr']);
+
 const predicateSchema = z.union([
+  // A subject's kind, for a binding on every issue or every pull request; `subject` names one.
+  z
+    .object({
+      field: z.literal('subject.kind'),
+      equals: subjectKindSchema.optional(),
+      in: z.array(subjectKindSchema).min(1).optional(),
+    })
+    .refine(value => (value.equals === undefined) !== (value.in === undefined)),
   z
     .object({
       field: z.literal('label.name'),
@@ -104,9 +114,7 @@ const predicateSchema = z.union([
 
 const selectorIdentitySchema = z.object({
   repository: repoRefSchema.optional(),
-  subject: z
-    .object({ kind: z.enum(['issue', 'pr']), number: z.number().int().positive() })
-    .optional(),
+  subject: z.object({ kind: subjectKindSchema, number: z.number().int().positive() }).optional(),
   predicates: z.array(predicateSchema).optional(),
 });
 const rawForgeEventSelectorSchema = z.discriminatedUnion('kind', [

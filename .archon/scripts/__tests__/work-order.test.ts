@@ -144,6 +144,7 @@ describe('a work order from the run\'s message', () => {
         ARCHON_CALL_LOG: calls,
         INPUTS_REPO: JSON.stringify(PR.repo),
         INPUTS_ORDER: JSON.stringify(declared),
+        INPUTS_INTAKE_BINDING: '/bindings/intake.json',
       },
     });
   }
@@ -160,9 +161,9 @@ describe('a work order from the run\'s message', () => {
       status: 'open',
       done_at: null,
     });
-    const launches = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).filter(argv => argv[1] === 'run');
-    expect(launches).toHaveLength(1);
-    expect(launches[0]).toEqual(expect.arrayContaining(['archon-intake', 'number=8']));
+    const fires = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).filter(argv => argv[0] === 'trigger');
+    expect(fires).toHaveLength(1);
+    expect(fires[0]).toEqual(expect.arrayContaining(['--config', '/bindings/intake.json', '--item', 'issue-8']));
   }, 60_000);
 
   test('an id that exists is refused and the approved order is left as it was', () => {

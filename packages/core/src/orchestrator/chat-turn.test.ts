@@ -38,7 +38,7 @@ import {
   operator,
 } from '../test/orchestrator-agent-harness';
 import { reportChatTurn, type ChatTurn } from './chat-turn';
-import { addResultUsage, type TokenUsage } from '@archon/provider-contract';
+import { addResultUsage, type ProviderChunk, type TokenUsage } from '@archon/provider-contract';
 import { chatTurnEventProperties } from '@archon/paths/telemetry-events';
 import { handleMessage } from './orchestrator-agent';
 
@@ -316,6 +316,77 @@ describe('stale session ID clearing on error_during_execution', () => {
       expect(sentMessages.some(m => m.includes('AI usage limit reached'))).toBe(false);
     }
   );
+
+  // A provider names its session before its result, so a turn stopped before any result
+  // still leaves the conversation resumable.
+  async function announcedTurn(
+    mode: 'stream' | 'batch',
+    stream: () => AsyncGenerator<ProviderChunk>
+  ): Promise<unknown[]> {
+    mockSendQuery.mockImplementationOnce(stream);
+    mockTransitionSession.mockResolvedValueOnce(
+      makeSession({ id: 'session-1', assistant_session_id: null })
+    );
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator }).catch(() => undefined);
+    return mockUpdateSession.mock.calls.map(call => call[1]);
+  }
+
+  test.each(['stream', 'batch'] as const)(
+    '%s mode: a turn stopped before its result keeps the announced session',
+    async mode => {
+      const thrown = await announcedTurn(mode, async function* () {
+        yield { type: 'session', sessionId: 'early-id' };
+        yield { type: 'agent_message_chunk', text: 'Partial.' };
+        throw new Error('Query aborted');
+      });
+      expect(thrown).toEqual(['early-id']);
+      mockUpdateSession.mockClear();
+      const ended = await announcedTurn(mode, async function* () {
+        yield { type: 'session', sessionId: 'early-id' };
+        yield { type: 'agent_message_chunk', text: 'Partial.' };
+      });
+      expect(ended.at(-1)).toBe('early-id');
+    }
+  );
+
+  test.each(['stream', 'batch'] as const)(
+    "%s mode: the result's session wins over the announced one",
+    async mode => {
+      const updates = await announcedTurn(mode, async function* () {
+        yield { type: 'session', sessionId: 'early-id' };
+        yield { type: 'agent_message_chunk', text: 'Reply.' };
+        yield { type: 'result', sessionId: 'result-id' };
+      });
+      expect(updates.at(-1)).toBe('result-id');
+      mockUpdateSession.mockClear();
+      const cleared = await announcedTurn(mode, async function* () {
+        yield { type: 'session', sessionId: 'early-id' };
+        yield { type: 'result', isError: true, errorSubtype: 'error_during_execution' };
+      });
+      expect(cleared.at(-1)).toBeNull();
+    }
+  );
+
+  test('a stale resume that announces its session first is still retried fresh', async () => {
+    mockSendQuery
+      .mockImplementationOnce(async function* () {
+        yield { type: 'session', sessionId: 'stale-session-id' };
+        yield staleRejection;
+      })
+      .mockImplementationOnce(async function* () {
+        yield { type: 'session', sessionId: 'fresh-id' };
+        yield { type: 'agent_message_chunk', text: 'Fresh reply.' };
+        yield { type: 'result', sessionId: 'fresh-id' };
+      });
+    await staleTurn('stream');
+
+    expect(resumeArgs()).toEqual(['stale-session-id', undefined]);
+    const updates = mockUpdateSession.mock.calls.map(call => call[1]);
+    expect(updates.lastIndexOf('stale-session-id')).toBeLessThan(updates.indexOf(null));
+    expect(updates.at(-1)).toBe('fresh-id');
+  });
 
   test('does NOT surface error to user on stop_sequence success (#1425)', async () => {
     // Regression test for #1425: stop_sequence terminations carry is_error:

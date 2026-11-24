@@ -353,6 +353,8 @@ describe('CopilotProvider.sendQuery', () => {
       code: 'copilot.resume_failed',
       message: expect.stringContaining('Could not resume'),
     });
+    // The fresh session is the one named, never the requested one.
+    expect(chunks).toContainEqual({ type: 'session', sessionId: 'sess-new' });
   });
 
   test('forkSession=true with resumeSessionId creates fresh session (SDK has no fork)', async () => {
@@ -420,6 +422,8 @@ describe('CopilotProvider.sendQuery', () => {
 
     const p = new CopilotProvider();
     const gen = p.sendQuery('hi', '/w', undefined, { model: 'gpt-5' });
+    // The session is named before the prompt is sent.
+    expect((await gen.next()).value).toEqual({ type: 'session', sessionId: 'sess-42' });
     const first = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
     session.fire(evt('assistant.usage', { model: 'gpt-5', inputTokens: 10, outputTokens: 3 }));
@@ -452,6 +456,8 @@ describe('CopilotProvider.sendQuery', () => {
         const session = makeFakeSession('sess-conformance');
         nextCreateSessionResult = session;
         const gen = new CopilotProvider().sendQuery('hi', '/w', undefined, { model: 'gpt-5' });
+        const announced = await gen.next();
+        if (!announced.done) yield announced.value;
         const first = gen.next();
         await new Promise(resolve => setTimeout(resolve, 5));
         for (const event of events) session.fire(event);
@@ -511,6 +517,7 @@ describe('CopilotProvider.sendQuery', () => {
       model: 'gpt-5',
       abortSignal: ac.signal,
     });
+    await gen.next();
     const first = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
     ac.abort();

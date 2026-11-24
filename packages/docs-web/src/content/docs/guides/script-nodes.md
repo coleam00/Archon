@@ -521,11 +521,12 @@ parses the upstream classifier's JSON, filters, and forwards a clean payload:
       items:
         type: array
         items: { type: object }
+    required: [items]
 
 - id: filter
   script: |
-    const upstream = JSON.parse(process.env.UPSTREAM ?? '{}');
-    const high = (upstream.items ?? []).filter(i => i.severity === 'high');
+    const upstream = $classify.output;
+    const high = upstream.items.filter(i => i.severity === 'high');
     console.log(JSON.stringify(high));
   runtime: bun
   depends_on: [classify]
@@ -536,9 +537,8 @@ parses the upstream classifier's JSON, filters, and forwards a clean payload:
   when: "$filter.output != '[]'"
 ```
 
-*(Note: to actually populate `UPSTREAM` you'd inline-substitute
-`$classify.output` into the script body. The example above illustrates the
-shape.)*
+`$classify.output` is substituted as a JSON literal, so the script reads it by
+[direct assignment](#variable-substitution-in-scripts).
 
 ### Reusable helper in `~/.archon/scripts/`
 

@@ -86,11 +86,11 @@ export function hostSourceForgeReader(
         throw new SourceForgeReadError('invalid_response', 'The forge answered another operation');
       return listed.result.value;
     },
-    async labelAdded({ repo, number, label }) {
+    async labelAdded({ repo, kind, number, label }) {
       const added = await read({
         operationId: randomUUID(),
         op: 'workitem.label.added',
-        subject: { kind: 'issue', ref: { repo, number } },
+        subject: { kind, ref: { repo, number } },
         name: label,
       });
       if (added.result.op !== 'workitem.label.added')

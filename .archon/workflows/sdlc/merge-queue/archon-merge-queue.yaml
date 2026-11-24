@@ -9,8 +9,8 @@ description: |
   branch or merges into it cleanly, and the default branch's CI is not red, and merges
   pinned to that head. The stage never pushes and never holds a run open: a conflict, a
   stale verdict or red the change caused goes back to the build queue; a pull request
-  whose checks still run, or that a red default branch holds back, ends waiting for a
-  check at that commit; and anything unclear ends as one ask on the item with three
+  whose checks still run ends waiting for a check at its head; one a red default branch
+  holds back ends waiting for the backstop (archon-merge-pick); and anything unclear ends as one ask on the item with three
   fixed options (merge, return, park), whose answer starts the stage again.
 
   Use when: a trigger binding the operator installed starts it (see

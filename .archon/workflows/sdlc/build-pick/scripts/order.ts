@@ -7,11 +7,12 @@
  * write is conditional on the order not existing, so an id already taken refuses the
  * run instead of replacing an order someone approved.
  *
- * Bound inputs: INPUTS_REPO from start, INPUTS_ORDER (id, members, unresolved) from interpret.
+ * Bound inputs: INPUTS_REPO from start, INPUTS_ORDER (id, members, unresolved) from
+ * interpret; the workflow's INPUTS_INTAKE_BINDING.
  */
 
-import { launchDetached } from '../../.shared/launch.ts';
 import { emit, input, refuse, runId as workflowRunId, state } from 'archon:script';
+import { startIntake } from '../../.shared/build.ts';
 import { runUser } from '../../.shared/host.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
 import { ORDER_PREFIX, parseWorkOrder, type WorkOrder } from '../../.shared/order.ts';
@@ -45,10 +46,7 @@ function main(): void {
 
   const repo = nullableJson(input('repo')) as { host: string; path: string };
   const unseen = order.members.filter(number => readWorkItem(number) === null);
-  const intake = unseen.map(number => {
-    const run = launchDetached('archon-intake', { repo_host: repo.host, repo_path: repo.path, number: String(number) });
-    return `#${String(number)} (intake run ${run})`;
-  });
+  const intake = unseen.map(number => `#${String(number)} (intake ${startIntake({ repo, number }, runId)})`);
   const lines = [
     `Wrote ${name} with members ${order.members.map(number => `#${String(number)}`).join(', ')}, approved by ${by}; a pick with orders_only starts each once intake has triaged it.`,
     ...(intake.length === 0 ? [] : [`Not yet triaged, sent to intake first: ${intake.join(', ')}.`]),

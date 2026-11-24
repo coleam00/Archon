@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { readReceipts, receiptPath } from '@archon/plugin-manifest/store';
 import { parseProviderRunModel } from '@archon/provider-contract';
+import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 import { descriptor } from './fixtures/process-provider-data';
 import { loadProviderPlugins } from './load-provider-plugins';
 
@@ -193,7 +194,7 @@ test('incompatible receipts are reported and retained while valid providers stil
     ]);
     expect(warning.mock.calls.flat().join(' ')).toContain('archon plugin update owner/stale');
     expect(warning.mock.calls[0][1]).toBe(
-      `Plugin unavailable: owner/stale (provider 'process-fixture') uses protocol 2, but this Archon requires protocol 3. If ${join(dir, receipt.manifest.executable + (process.platform === 'win32' ? '.exe' : ''))} exists, move it aside before retrying. Run: archon plugin update owner/stale`
+      `Plugin unavailable: owner/stale (provider 'process-fixture') uses protocol 2, but this Archon requires protocol ${String(PROVIDER_PLUGIN_PROTOCOL)}. If ${join(dir, receipt.manifest.executable + (process.platform === 'win32' ? '.exe' : ''))} exists, move it aside before retrying. Run: archon plugin update owner/stale`
     );
     expect(warning.mock.calls[0][0]).toMatchObject({ receipt: stale });
     expect(await readFile(stale, 'utf8')).toBe(contents);

@@ -74,7 +74,8 @@ describe('classifyTurnError', () => {
     ['sessionBudgetExceeded', 'budget_exceeded'],
     ['contextWindowExceeded', 'unknown'],
     ['badRequest', 'unknown'],
-    // What an unsupported model arrives as.
+    ['modelNotFound', 'misconfigured'],
+    // What an unsupported model arrives as from a Codex older than 0.165.
     ['other', 'unknown'],
     // A variant a newer Codex may add.
     ['someFutureVariant', 'unknown'],
