@@ -754,14 +754,25 @@ describe('a pack folder given as the source', () => {
   });
 
   test('a pack named like a reserved project folder loads live and from its capture', async () => {
+    // Project data in the same-named workflows directory is not a second copy of the pack.
+    const projectData: Record<string, Record<string, string>> = {
+      defaults: { '.archon/workflows/defaults/legacy.yaml': flow('legacy') },
+      fixtures: { '.archon/workflows/fixtures/extra.stubs.yaml': 'nodes: {}\n' },
+    };
     for (const name of ['defaults', 'fixtures']) {
-      const folder = await rawPackFolder(name, { 'one/workflow.yaml': flow('one') });
+      const folder = await rawPackFolder(name, {
+        'one/workflow.yaml': flow('one'),
+        ...projectData[name],
+      });
       const ownWorkflow = (result: Awaited<ReturnType<typeof discoverFrom>>): unknown =>
         result.workflows.find(entry => entry.workflow.name === 'one')?.workflow.pack;
-      expect(ownWorkflow(await discoverFrom(folder))).toMatchObject({
-        key: name,
-        source: 'project',
-      });
+      const live = await discoverFrom(folder);
+      expect(ownWorkflow(live)).toMatchObject({ key: name, source: 'project' });
+      const roots = liveSourceRoots(folder);
+      expect((await packCopies(live, roots, name)).loaded).toEqual([
+        { source: 'project', key: name, dir: folder },
+      ]);
+      expect(await packDirectory(roots, { source: 'project', key: name })).toBe(folder);
 
       const capture = await captureWorkflowSource({
         sourceRoot: folder,
@@ -808,6 +819,25 @@ describe('a pack folder given as the source', () => {
     );
     expect(captured).toMatchObject({ pack: false, other: true });
     expect(captured.errors).toContainEqual(neither);
+  });
+
+  test("a malformed root manifest leaves the project's other packs' scripts and commands", async () => {
+    const folder = join(dirname(project), 'malformed-checkout');
+    const team = join(folder, '.archon', 'workflows', 'team');
+    await mkdir(join(team, 'wf', 'scripts'), { recursive: true });
+    await writeFile(join(folder, 'archon-plugin.json'), '{ not json');
+    await writeFile(join(team, 'wf', 'wf.yaml'), flow('wf'));
+    await writeFile(join(team, 'wf', 'scripts', 'check.ts'), 'console.log(1);\n');
+
+    const checkScript = join(team, 'wf', 'scripts', 'check.ts').replaceAll('\\', '/');
+    expect(
+      [...(await discoverScriptsForCwd(folder)).values()].some(
+        script => script.path === checkScript
+      )
+    ).toBe(true);
+    expect(await packDirectory(liveSourceRoots(folder), { source: 'project', key: 'team' })).toBe(
+      team
+    );
   });
 
   test('a capture from a git checkout of a pack holds what an install would, and no .env', async () => {

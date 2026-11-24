@@ -17,10 +17,12 @@ import {
   cliForgeCheckRequestSchema,
   cliForgeMetadataRequestSchema,
   cliForgeResponseSchema,
+  type CliForgeItemRecord,
   type CliForgeResponse,
 } from '@archon/forge';
 import { z } from '@hono/zod-openapi';
 import { writeJsonLine } from '../utils/stdout';
+import type { recordRunMerge } from './forge-merge-record';
 
 async function persistAudit(audit: ForgeOperationAudit, runId: string): Promise<void> {
   const { persistWorkflowEvent } = await import('@archon/core/db/workflow-events');
@@ -48,6 +50,7 @@ interface ForgeCommandDependencies {
   readConfig?: () => Promise<unknown>;
   sourcePlugins?: readonly SourcePlugin[];
   audit?: typeof persistAudit;
+  recordMerge?: typeof recordRunMerge;
   write?: typeof writeJsonLine;
   env?: NodeJS.ProcessEnv;
 }
@@ -99,8 +102,19 @@ export async function forgeCommand(
     if (input.op === 'check') return await answerCheck(input, context);
     const result = await dispatchRequest(input, context);
     response = result.response;
-    const auditFailure = await auditOperation(result.audit, response, context);
-    if (auditFailure !== undefined) return auditFailure;
+    const runId = env.WORKFLOW_ID;
+    if (runId) {
+      const recorded = await recordRunFacts(runId, result, context);
+      if (recorded.itemRecord && response.ok)
+        response = { ...response, itemRecord: recorded.itemRecord };
+      for (const line of recorded.stderr) process.stderr.write(`${line}\n`);
+      if (recorded.failed) {
+        // Retain the actual operation outcome on stdout. A failure to record it is a
+        // separate failure and never rewrites an observed result as a refusal.
+        await writeResponse(response, context);
+        return 2;
+      }
+    }
   } catch (error) {
     response = failureResponse(error, context);
   }
@@ -267,26 +281,65 @@ async function dispatchRequest(
   return result;
 }
 
-/** Returns the exit code when the run audit could not be persisted. */
-async function auditOperation(
-  audit: ForgeOperationAudit,
-  response: CliForgeResponse,
+/** What a run-owned operation left on the run, and what the caller is told about it. */
+interface RunRecord {
+  /** One line per record that could not be written, or that the result could not supply. */
+  stderr: string[];
+  /** A record could not be written: the command exits 2. */
+  failed: boolean;
+  itemRecord?: CliForgeItemRecord;
+}
+
+/**
+ * What a run-owned operation leaves on the run: its audit, and for an applied `pr.merge`
+ * on a run with an item, the merge and landing branch on that item, from the merge result.
+ * Nothing here throws, because the operation has already reached the forge.
+ */
+async function recordRunFacts(
+  runId: string,
+  { response, audit }: ForgeDispatchResult,
   context: ForgeCommandContext
-): Promise<number | undefined> {
-  const runId = context.env.WORKFLOW_ID;
-  if (!runId) return undefined;
+): Promise<RunRecord> {
+  const record: RunRecord = { stderr: [], failed: false };
   try {
     await (context.dependencies.audit ?? persistAudit)(audit, runId);
-    return undefined;
   } catch {
-    // Retain the actual operation outcome on stdout. Audit failure is a
-    // separate failure and never rewrites an observed result as a refusal.
-    await writeResponse(response, context);
-    process.stderr.write(
-      `Forge operation ${context.operationId} completed but its run audit could not be persisted.\n`
+    record.failed = true;
+    record.stderr.push(
+      `Forge operation ${context.operationId} completed but its run audit could not be persisted.`
     );
-    return 2;
   }
+  if (!response.ok || response.result.op !== 'pr.merge') return record;
+  const merged = response.result.value;
+  try {
+    const recordMerge =
+      context.dependencies.recordMerge ?? (await import('./forge-merge-record')).recordRunMerge;
+    const outcome = await recordMerge(
+      runId,
+      {
+        change: merged.pr.url,
+        commit: merged.landed.commit,
+        at: merged.merged_at,
+        branch: merged.pr.base,
+      },
+      context.env
+    );
+    if (outcome === 'recorded') record.itemRecord = { recorded: true };
+    if (outcome === 'no_merge_time') {
+      // The merge happened, so this is no failure: the caller is told, and the exit stays 0.
+      record.itemRecord = { recorded: false, reason: 'no_merge_time' };
+      record.stderr.push(
+        `Forge operation ${context.operationId} merged ${merged.pr.url}, but the forge plugin reported no merge time, so the merge and its landing branch were not recorded on the run's item. Update the forge plugin: find its id with \`archon plugin list\`, then run \`archon plugin update <id>\`.`
+      );
+    }
+  } catch (error) {
+    record.failed = true;
+    const reason = error instanceof Error ? error.message : String(error);
+    record.stderr.push(
+      `Forge operation ${context.operationId} merged ${merged.pr.url} but the item record could not be written: ${reason}`
+    );
+  }
+  return record;
 }
 
 /**

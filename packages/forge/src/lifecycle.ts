@@ -695,6 +695,9 @@ export const mutationResultSchemas = [
       conditions: mergeConditionsSchema,
       enforcedConditions: z.array(mergeConditionSchema),
       landed: landedSchema,
+      // When the forge says the change merged, from the read-back after the merge. A run on
+      // an item records the merge with it. Absent from a plugin released before the field.
+      merged_at: timestamp.optional(),
     }),
   }),
   z.object({

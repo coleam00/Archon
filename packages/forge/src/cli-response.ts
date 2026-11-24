@@ -42,10 +42,22 @@ const cliForgeCheckSchema = z.object({
 const [success, failure] = forgeResponseSchema.options;
 const credential = { credentialSource: z.string().min(1).optional() };
 
+/**
+ * What the host recorded on the run's item for an applied `pr.merge` from a run on an item.
+ * `no_merge_time`: the plugin's result carries no `merged_at`, so nothing was recorded; the
+ * merge itself still happened. Absent for every other operation and for a run on no item.
+ */
+export const cliForgeItemRecordSchema = z.discriminatedUnion('recorded', [
+  z.object({ recorded: z.literal(true) }),
+  z.object({ recorded: z.literal(false), reason: z.literal('no_merge_time') }),
+]);
+export type CliForgeItemRecord = z.infer<typeof cliForgeItemRecordSchema>;
+
 /** CLI host additions; the executable plugin protocol remains forgeResponseSchema. */
 export const cliForgeResponseSchema = z.discriminatedUnion('ok', [
   success.extend({
     ...credential,
+    itemRecord: cliForgeItemRecordSchema.optional(),
     result: z.union([
       success.shape.result,
       z.object({ op: z.literal('metadata'), value: pluginMetadataSchema }),

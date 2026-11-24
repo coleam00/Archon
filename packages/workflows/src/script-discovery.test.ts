@@ -335,7 +335,7 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () => 
     );
   });
 
-  test('does not register scripts from a reserved fixtures directory (#3183)', async () => {
+  test('does not register scripts from a reserved fixtures or defaults directory (#3183)', async () => {
     mockReaddir.mockImplementation(async (path: string) => {
       const p = norm(path);
       if (p === '/home/scripts' || p === '/repo/.archon/scripts') return [];
@@ -343,8 +343,10 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () => 
       if (p === '/home/workflows/personal-pack') return ['daily', 'fixtures'];
       if (p === '/home/workflows/personal-pack/daily/scripts') return ['shared.py'];
       if (p === '/home/workflows/personal-pack/fixtures/scripts') return ['hidden.py'];
-      if (p === '/repo/.archon/workflows') return ['fixtures'];
+      if (p === '/repo/.archon/workflows') return ['fixtures', 'defaults'];
       if (p === '/repo/.archon/workflows/fixtures/scripts') return ['root-hidden.ts'];
+      if (p === '/repo/.archon/workflows/defaults') return ['legacy'];
+      if (p === '/repo/.archon/workflows/defaults/legacy/scripts') return ['defaults-hidden.ts'];
       return [];
     });
     mockStat.mockImplementation(async (path: string) => ({
