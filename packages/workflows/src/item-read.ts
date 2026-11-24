@@ -7,10 +7,10 @@
  * run (`item-hold`). Where the item stands is left to the reader; this computes no stage
  * and stores nothing.
  */
+import { askItemRef } from './attention-item-refs';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import {
-  askItemRef,
   attentionQueueItemSchema,
   compareAge,
   isHeldByRun,

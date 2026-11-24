@@ -11,7 +11,7 @@ import type {
   WorkflowUsageLimitWaitContext,
 } from '../schemas';
 import { SUBRUN_METADATA_KEYS } from '../schemas';
-import { asksResultMetadata } from '../schemas/run-metadata';
+import { keptAsksResult, stoppedItem } from './item-completion';
 import type { RunExitReason } from '../schemas/run-terminal-reason';
 import {
   RESULT_COMMIT_METADATA_KEY,
@@ -142,7 +142,8 @@ export async function finishRun(
     runTranscriptUsage,
     completionResult(returned, starts),
     asksCheckout,
-    result
+    result,
+    stoppedItem(ctx, returned, starts, result)
   );
   await reportNoOutcome(ctx, outcome);
   // The receipts the write wrote, which include those it resolved for linked starts.
@@ -164,7 +165,7 @@ function completionResult(
 }
 
 /** What the run's returns node said the engine records with the completion. */
-type ReturnedResult = CompletedItemFacts & { outcome?: RunCompletedOutcome };
+export type ReturnedResult = CompletedItemFacts & { outcome?: RunCompletedOutcome };
 
 /**
  * The outcome, asks and waits the run completes with, or undefined when one is not of its
@@ -254,7 +255,7 @@ async function readHandOffs(
   const startsOnEnd = outcome !== undefined && deps.runEndedStarts !== undefined;
   try {
     const result =
-      startsOnEnd || asks !== undefined
+      startsOnEnd || asks !== undefined || workflow.result?.summary !== undefined
         ? await readCompletingResult(deps.store, workflowRun, workflow.returns)
         : undefined;
     const starts =
@@ -295,14 +296,6 @@ function runEndedFacts(
     result,
     inputs: resolveRunInputs(workflowRun) ?? {},
   };
-}
-
-/** The asking run's result, kept on its row for the bindings its settled asks start. */
-function keptAsksResult(
-  completion: Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3],
-  value: JsonValue | undefined
-): Record<string, string> {
-  return completion?.asks === undefined || value === undefined ? {} : asksResultMetadata(value);
 }
 
 /**
@@ -466,7 +459,8 @@ async function completeRun(
   runTranscriptUsage: WorkflowUsage,
   result: Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3],
   asksCheckout: AsksCheckout | undefined,
-  returnedValue: JsonValue | undefined
+  returnedValue: JsonValue | undefined,
+  stopped: Record<string, unknown> | undefined
 ): ReturnType<WorkflowDeps['store']['completeWorkflowRun']> {
   const { deps, workflow, workflowRun, logDir } = ctx;
   const duration = Date.now() - ctx.startedAt;
@@ -531,6 +525,7 @@ async function completeRun(
           // the row alone. Gated on the asks a top-level run declares, like the asks.
           ...keptAsksResult(result, returnedValue),
           ...(asksCheckout === undefined ? {} : asksCheckoutMetadata(asksCheckout)),
+          ...stopped,
         },
         // The one write of the run's outcome (#5660): it lands with the completed status,
         // so no reader sees an outcome on a run that has not ended. The starts the end

@@ -745,7 +745,7 @@ export function makeApp(lockManager?: ConversationLockManager): {
   const mockLockManager = {
     acquireLock: mock(async (_id: string, fn: () => Promise<void>) => {
       await fn();
-      return { status: 'started' };
+      return { status: 'started', turnId: 'turn-1' };
     }),
     getStats: mock(makeIdleLockStats),
   } as unknown as ConversationLockManager;

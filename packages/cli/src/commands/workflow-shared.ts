@@ -20,6 +20,7 @@ import {
 import * as archonPaths from '@archon/paths';
 import { createLogger } from '@archon/paths';
 import type { ResumeRequestCursor } from '@archon/workflows/store';
+import type { CheckoutHandoffRunMetadata } from '@archon/workflows/schemas/resource-start';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import {
   ContinuedItemProjectError,
@@ -180,6 +181,13 @@ export interface WorkflowRunOptions {
    * no-adopter query. Provenance only — NO lane inheritance.
    */
   supersedesRunId?: string;
+  /**
+   * @internal The copy hand-off a nameless `--supersedes` restart keeps from the run it
+   * replaces, recorded on the new run's row as its first start recorded it. A run that
+   * ended on a copy hands on the checkout it was given (`ended-checkout.ts`), so without
+   * it a later hand-off would select the restart's throwaway worktree.
+   */
+  checkoutHandoff?: CheckoutHandoffRunMetadata;
 }
 
 export type RunDestination =

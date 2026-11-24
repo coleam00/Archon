@@ -48,10 +48,13 @@ Each item names the run, its workflow, its project, how long it has waited, the 
 | `unreadable` | A paused run Archon cannot describe | Inspect it, then resume or abandon it |
 | `owner_lost` | A run whose owner process on this host is gone while it holds its [item](/reference/cli/#items), with a later start of its workflow on that item waiting behind it | `archon workflow resume <run-id>` or `archon workflow abandon <run-id>`. Archon never ends it by itself |
 | `overdue_wait` | An item still [waiting for something outside Archon](/reference/workflow-language/#waits-what-an-item-waits-for-outside-archon) past its deadline; no run holds it | Look at why the event has not come. It still wakes the item when it does. `archon workflow answer --withdraw <ref>` withdraws the waits |
+| `stopped` | An item whose last run completed with an outcome that is not [final](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs), started nothing and left no ask or wait, so nothing moves it; no run holds it | Read the item (`archon workflow runs --item <key>`) and start the run it needs on it. It takes no answer and cannot be withdrawn; any new run on the item closes it |
 
 A `usage_limit` wait retries from the node that hit the limit, at the provider's reset time or a 5 to 15 minute backoff, and pauses again if the limit is still there. With `workflows.autoResumeOnQuotaReset: false`, or for a container run, the run fails instead of waiting.
 
 An `overdue_wait` item carries `waitingIn` (the completed run that left the waits and its workflow), `waits` (each wait's `event` and `about`), `deadline` and, as `pausedAt`, when the waits opened. Its ref is `wait:<run-id>`.
+
+A `stopped` item carries `stoppedIn` (the run that stopped it, its workflow and the `outcome` it ended in), `summary` (the run's declared [`returns.summary`](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs), or null), `checkout` (the project's checkout, where a start on the item runs from, or null) and, as `pausedAt`, when that run ended. Its ref is `stopped:<run-id>`. It stays listed while that run is the item's last: any run started on the item after it, whatever its status, closes it. Its text gives `archon workflow runs --item-of <run-id>` to read the item and `archon workflow run <workflow> --item <key> --cwd <checkout>` to start the next stage, both from any directory.
 
 An `owner_lost` item carries `item` and `observedStatus`, the run's stored status (`running`, or `paused` for a parent whose sub-run lost its owner), which is unchanged. The list observes owners on this host only, so a holder owned on another host is not listed; `archon workflow runs --item <key>` shows its owner as `unknown`.
 
@@ -268,7 +271,7 @@ With explicit chat scope (`--chat-project-id <id>`), CLI list, count and watch u
 }
 ```
 
-- **`kind`** is one of the five kinds above. A `usage_limit` item carries `resetAt`, and its `run` has a `node` and no `occurrence`. An `unreadable` item carries `reason` and `detail`; it also covers these structural failures in a parent's sub-run tree: a sub-run with no row, or a tree that revisits a run or exceeds 500 runs.
+- **`kind`** is one of the kinds above. A `usage_limit` item carries `resetAt`, and its `run` has a `node` and no `occurrence`. An `unreadable` item carries `reason` and `detail`; it also covers these structural failures in a parent's sub-run tree: a sub-run with no row, or a tree that revisits a run or exceeds 500 runs.
 - **`ref`** is the item's identity: it names this item and no other, and changes when the run moves to another pause. Treat it as opaque.
 - **`run`** is the paused run that holds the item: its `id`, `workflow` and the fields below. Every item a workflow pauses for has one. The field is optional on an `attention` item, so read it as `item.run?.id`: an item that no paused run holds has no `run`, and its `ref` is all that names it.
 - **`item`** is `{ id, projectKey, key }` when the run was started for an item (`--item`), and absent otherwise.

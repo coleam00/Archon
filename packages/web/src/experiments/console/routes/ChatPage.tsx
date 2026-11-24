@@ -120,18 +120,23 @@ export function ChatPage(): ReactElement {
   // holds, message silence does not end the turn: a long tool call is quiet, and the
   // Stop control must stay for as long as the reply can still be stopped.
   const serverLockedRef = useRef(false);
+  // The reply a Stop names: the turn the latest lock event said started, or the one this
+  // page's send started. A stop names it so it never stops the reply queued after it.
+  const turnIdRef = useRef<string | undefined>(undefined);
 
   // SSE: invalidates the message cache on text/tool events. Via onLockChange,
   // conversation_lock:true holds `busy` against the settle timer and
   // conversation_lock:false clears it at once instead of waiting out SETTLE_MS. Must be
   // useCallback-stable — the hook's effect depends on it, so an inline lambda
   // would reconnect the EventSource on every render.
-  const onLockChange = useCallback((locked: boolean): void => {
+  const onLockChange = useCallback((locked: boolean, turnId: string | undefined): void => {
     serverLockedRef.current = locked;
     if (locked) {
+      if (turnId !== undefined) turnIdRef.current = turnId;
       setBusy(true);
       return;
     }
+    turnIdRef.current = undefined;
     if (settleTimerRef.current !== null) {
       clearTimeout(settleTimerRef.current);
       settleTimerRef.current = null;
@@ -212,6 +217,7 @@ export function ChatPage(): ReactElement {
       try {
         if (activeConvId === null) {
           const conv = await skill.createConversation(projectId, text);
+          turnIdRef.current = conv.turnId;
           setActiveConvId(conv.conversationId);
           setNewChat(false);
           writeStoredChat(projectId, conv.conversationId);
@@ -227,7 +233,7 @@ export function ChatPage(): ReactElement {
             );
           }
         } else {
-          await skill.sendMessage(activeConvId, text, files);
+          turnIdRef.current = await skill.sendMessage(activeConvId, text, files);
           writeStoredChat(projectId, activeConvId);
           invalidate(K.messages(activeConvId));
         }
@@ -243,7 +249,12 @@ export function ChatPage(): ReactElement {
   // message (settle detector) returns the composer to idle once the turn has ended.
   const onStop = (): void => {
     if (activeConvId === null) return;
-    skill.cancelConversation(activeConvId).catch((e: unknown) => {
+    const turnId = turnIdRef.current;
+    if (turnId === undefined) {
+      setError('Stop failed: the server has not said which reply is running yet.');
+      return;
+    }
+    skill.cancelConversation(activeConvId, turnId).catch((e: unknown) => {
       setError(e instanceof Error ? e.message : 'Stop failed.');
     });
   };
@@ -256,6 +267,7 @@ export function ChatPage(): ReactElement {
     setError(null);
     setNotice(null);
     serverLockedRef.current = false;
+    turnIdRef.current = undefined;
     setBusy(false);
   };
 

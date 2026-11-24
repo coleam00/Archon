@@ -70,8 +70,8 @@ export class TriggerFileError extends Error {
   }
 }
 
-/** A trigger file with `on`: what every form shares. */
-interface OnBindingFile {
+/** A trigger file's binding: what every form shares, with `on` or without. */
+export interface OnBindingFile {
   file: string;
   sourceInstanceId: string;
   binding: TriggerConfig['binding'];

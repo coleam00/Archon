@@ -4,19 +4,24 @@
  * (`returns.waits`, see `schemas/item-wait.ts`). A host joins them to the one reader through
  * `AttentionQueueSource.itemsWithoutRun`. A wait's deadline raises attention and wakes
  * nothing; the set stays open until an event meets it, a newer run of its workflow replaces
- * it, or it is withdrawn by its `wait:` ref.
+ * it, or it is withdrawn by its `wait:` ref. A completed run that stopped its item (see
+ * `readItemStopped`) is listed while it is the newest run on the item; it takes no answer.
  */
+import { askItemRef, stoppedItemRef, waitItemRef } from './attention-item-refs';
 import { isAttentionDegraded, type AttentionRead } from './schemas/attention-degraded';
 import {
-  askItemRef,
   projectRef,
+  projectRefForRun,
   runProject,
-  waitItemRef,
   type AskQueueItem,
+  type AttentionQueueItemSources,
   type AttentionQueueItemWithoutRun,
   type CodebaseCache,
   type OverdueWaitQueueItem,
+  type StoppedQueueItem,
 } from './attention-queue';
+import { readItemStopped } from './schemas/run-metadata';
+import type { WorkflowRun } from './schemas/workflow-run';
 import type { StoredItemAsk } from './schemas/item-ask';
 import type { StoredItemWait } from './schemas/item-wait';
 import { OTHER_ATTENTION_OPTION } from './schemas/wait-node';
@@ -150,5 +155,61 @@ export async function overdueWaitItems(
   for (const set of waitSets(await store.listOpenItemWaits()))
     if (set.some(wait => Date.parse(wait.deadlineAt) <= now.getTime()))
       items.push(await waitQueueItem(store, set, codebases));
+  return items;
+}
+
+/** The store reads a stopped item's queue item needs. */
+export type StoppedItemStore = Pick<
+  IWorkflowStore,
+  'listStoppedItemRuns' | 'getItem' | 'getCodebase'
+>;
+
+/**
+ * The queue item of an item `run` stopped, or null when the run recorded no stop or has no
+ * outcome or item. Nothing here changes the item. Each surface spells the commands that
+ * read it and start a new run on it, which closes the item.
+ */
+export async function stoppedQueueItem(
+  store: Omit<StoppedItemStore, 'listStoppedItemRuns'>,
+  run: WorkflowRun,
+  codebases: CodebaseCache = new Map()
+): Promise<StoppedQueueItem | null> {
+  const stopped = readItemStopped(run.metadata);
+  if (stopped === undefined || run.item_id === null || run.completed_outcome === null) return null;
+  const item = await store.getItem(run.item_id);
+  let codebase: AttentionQueueItemSources['codebase'] = null;
+  if (run.codebase_id !== null) {
+    const read = codebases.get(run.codebase_id) ?? store.getCodebase(run.codebase_id);
+    codebases.set(run.codebase_id, read);
+    codebase = await read;
+  }
+  return {
+    kind: 'stopped',
+    ref: stoppedItemRef(run.id),
+    project: projectRefForRun(run, codebase),
+    ...(item === null ? {} : { item }),
+    revision: 1,
+    labels: {},
+    pausedAt: run.completed_at?.toISOString() ?? null,
+    stoppedIn: { runId: run.id, workflow: run.workflow_name, outcome: run.completed_outcome },
+    summary: stopped.summary,
+    checkout: codebase?.default_cwd ?? null,
+  };
+}
+
+/** The items completed runs stopped, for `AttentionQueueSource.itemsWithoutRun`. */
+export async function stoppedItems(
+  store: StoppedItemStore
+): Promise<AttentionRead<StoppedQueueItem>[]> {
+  const codebases: CodebaseCache = new Map();
+  const items: AttentionRead<StoppedQueueItem>[] = [];
+  for (const run of await store.listStoppedItemRuns()) {
+    if (isAttentionDegraded(run)) {
+      items.push(run);
+      continue;
+    }
+    const item = await stoppedQueueItem(store, run, codebases);
+    if (item !== null) items.push(item);
+  }
   return items;
 }

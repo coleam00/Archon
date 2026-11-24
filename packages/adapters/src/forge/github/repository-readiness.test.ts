@@ -64,7 +64,7 @@ import { ensureRepoReady, type ReadinessAuth } from './repository-readiness';
 const mockLockManager = {
   acquireLock: mock(async (_id: string, handler: () => Promise<void>) => {
     await handler();
-    return { status: 'started' as const };
+    return { status: 'started' as const, turnId: 'turn-1' };
   }),
 };
 

@@ -198,6 +198,34 @@ export function readAsksResult(metadata: Record<string, unknown>): JsonValue | u
   return typeof text === 'string' ? (JSON.parse(text) as JsonValue) : undefined;
 }
 
+/**
+ * Set by the completing write of a top-level run on an item that stopped the item: it
+ * completed with a declared outcome that is not final (`returns.final`), its end started
+ * nothing, and it left no ask or wait. The attention queue lists the item as `stopped`
+ * while this run is the newest on it. `summary` is the declared `returns.summary` value,
+ * or null. Older binaries read metadata as an open record and ignore the key.
+ */
+export const ITEM_STOPPED_METADATA_KEY = 'item_stopped';
+
+/** The longest summary kept, so one line in attention stays one line. */
+const ITEM_STOPPED_SUMMARY_MAX = 500;
+
+/** The metadata that marks a completed run as having stopped its item. */
+export function itemStoppedMetadata(summary: string | null): Record<string, unknown> {
+  const line = summary?.trim().slice(0, ITEM_STOPPED_SUMMARY_MAX) ?? '';
+  return { [ITEM_STOPPED_METADATA_KEY]: { summary: line === '' ? null : line } };
+}
+
+/** The stop a completed run recorded, or undefined when it stopped nothing. */
+export function readItemStopped(
+  metadata: Record<string, unknown>
+): { summary: string | null } | undefined {
+  const value = metadata[ITEM_STOPPED_METADATA_KEY];
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const summary = (value as Record<string, unknown>).summary;
+  return { summary: typeof summary === 'string' ? summary : null };
+}
+
 export const CANCELLED_REASON_METADATA_KEY = 'cancelled_reason';
 
 export const ISOLATION_ENV_ID_METADATA_KEY = 'isolation_env_id';
