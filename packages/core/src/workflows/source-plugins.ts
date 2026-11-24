@@ -18,14 +18,15 @@ import type { IWorkflowStore } from '@archon/workflows/store';
 import { createLogger } from '@archon/paths';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
-import type {
-  ObservedItemWait,
-  ObservedLabelRead,
-  SourceForgeReader,
-  SourceObservation,
-  WebhookSourcePlugin,
-  WebhookSourcePluginFactory,
-  WebhookSourceRequest,
+import {
+  isTemporaryReadKind,
+  type ObservedItemWait,
+  type ObservedLabelRead,
+  type SourceForgeReader,
+  type SourceObservation,
+  type WebhookSourcePlugin,
+  type WebhookSourcePluginFactory,
+  type WebhookSourceRequest,
 } from '@archon/workflows/webhook-source-plugin';
 import {
   observedLabelsSchema,
@@ -105,6 +106,7 @@ export interface SourceObservationAdmitted {
   conflicts: number;
   unserved: SourceObservation['unserved'];
   failures: string[];
+  temporary: boolean;
 }
 
 export interface WebhookSourcePluginHost {
@@ -378,6 +380,9 @@ export async function loadWebhookSourcePlugins(
               `binding '${bindingId}' label '${label}'${number === undefined ? '' : ` on issue ${String(number)}`}: ${reason}`
           ),
         ],
+        temporary: [...observation.failed, ...observation.labelFailures].some(entry =>
+          isTemporaryReadKind(entry.kind)
+        ),
       };
       const record = async (acceptance: SourceReceiptAcceptance): Promise<void> => {
         try {
@@ -500,9 +505,41 @@ export function createItemWaitObserver(input: {
   const warned = new Set<string>();
   // Track which overdue waits have been reported in unserved, once per observer process
   const reportedOverdue = new Set<string>();
+  const backoff = new Map<string, { failures: number; retryAt: number }>();
+  const BACKOFF_CAP_MS = 15 * 60 * 1000;
   let running = false;
 
-  const openWaits = async (now: Date): Promise<{ active: ObservedItemWait[]; overdue: Array<{ wait: ObservedItemWait; deadlineAt: string }> }> => {
+  const ready = (source: ObservingSource, now: Date): boolean => {
+    const held = backoff.get(source.sourceInstanceId);
+    if (held !== undefined && now.getTime() < held.retryAt) return false;
+    const last = lastObserved.get(source.sourceInstanceId);
+    return last === undefined || now.getTime() - last >= source.everySeconds * 1000;
+  };
+
+  const settleBackoff = (source: ObservingSource, now: Date, temporary: boolean): void => {
+    if (!temporary) {
+      backoff.delete(source.sourceInstanceId);
+      return;
+    }
+    const failures = (backoff.get(source.sourceInstanceId)?.failures ?? 0) + 1;
+    const delay = Math.min(
+      BACKOFF_CAP_MS,
+      Math.max(source.everySeconds, 60) * 1000 * 2 ** (failures - 1)
+    );
+    const retryAt = now.getTime() + delay;
+    backoff.set(source.sourceInstanceId, { failures, retryAt });
+    log.warn(
+      { sourceInstanceId: source.sourceInstanceId, retryAt: new Date(retryAt).toISOString() },
+      'source_observe_backoff'
+    );
+  };
+
+  const openWaits = async (
+    now: Date
+  ): Promise<{
+    active: ObservedItemWait[];
+    overdue: Array<{ wait: ObservedItemWait; deadlineAt: string }>;
+  }> => {
     const remotes = new Map<string, Promise<string | null>>();
     const remoteOf = async (runId: string): Promise<string | null> => {
       const run = await store.getWorkflowRun(runId);
@@ -550,7 +587,7 @@ export function createItemWaitObserver(input: {
   const observeSource = async (
     source: ObservingSource,
     waits: readonly ObservedItemWait[]
-  ): Promise<ObservedSourceReport> => {
+  ): Promise<{ report: ObservedSourceReport; temporary: boolean }> => {
     // The forge is asked only about what an open wait names: the item's invariant, held
     // here at the boundary rather than trusted to each plugin. A pull request is named when
     // its number ends the key of an item a wait is on in that repository. How the number is
@@ -659,8 +696,10 @@ export function createItemWaitObserver(input: {
       ...(error === undefined ? {} : { error }),
     });
     let result: ObservedSourceReport;
+    let temporary = false;
     try {
       const admitted = await sources.observe(source.sourceInstanceId, waits, guarded);
+      temporary = admitted.temporary;
       result = report(
         admitted,
         admitted.failures.length === 0 ? undefined : admitted.failures.join('; ')
@@ -679,7 +718,7 @@ export function createItemWaitObserver(input: {
       log.warn({ sourceInstanceId, ...wait, reason }, 'source_observe_unserved');
     }
     warnUnserved(sourceInstanceId, result.unservedBindings);
-    return result;
+    return { report: result, temporary };
   };
 
   /** The report of a source that is not called: only the label bindings it cannot observe. */
@@ -698,66 +737,60 @@ export function createItemWaitObserver(input: {
     };
   };
 
+  const takeOverdue = (
+    overdue: readonly { wait: ObservedItemWait; deadlineAt: string }[]
+  ): SourceObservation['unserved'] => {
+    const fresh: SourceObservation['unserved'] = [];
+    for (const { wait, deadlineAt } of overdue) {
+      const key = JSON.stringify([wait, deadlineAt]);
+      if (!warned.has(key)) {
+        warned.add(key);
+        log.warn({ ...wait, deadlineAt }, 'source_observe_overdue');
+      }
+      if (reportedOverdue.has(key)) continue;
+      reportedOverdue.add(key);
+      fresh.push({ wait, reason: `deadline passed at ${deadlineAt}; polling stopped` });
+    }
+    return fresh;
+  };
+
+  const readSource = async (
+    source: ObservingSource,
+    waits: readonly ObservedItemWait[],
+    overdue: number,
+    fresh: SourceObservation['unserved'],
+    now: Date
+  ): Promise<ObservedSourceReport | undefined> => {
+    const idle = waits.length === 0 && source.labels.length === 0;
+    if (idle && source.unservedBindings.length === 0 && overdue === 0) return undefined;
+    lastObserved.set(source.sourceInstanceId, now.getTime());
+    if (idle) {
+      settleBackoff(source, now, false);
+      const report = unobserved(source);
+      if (fresh.length > 0) report.unserved = fresh;
+      return report;
+    }
+    const observed = await observeSource(source, waits);
+    settleBackoff(source, now, observed.temporary);
+    const report = observed.report;
+    if (fresh.length > 0) report.unserved = [...report.unserved, ...fresh];
+    return report;
+  };
+
   return {
     observing: sources.observing,
     async pass(now) {
       if (running) return [];
-      const due = sources.observing.filter(source => {
-        const last = lastObserved.get(source.sourceInstanceId);
-        return last === undefined || now.getTime() - last >= source.everySeconds * 1000;
-      });
+      const due = sources.observing.filter(source => ready(source, now));
       if (due.length === 0) return [];
       running = true;
       try {
         const { active: waits, overdue } = await openWaits(now);
         const reports: ObservedSourceReport[] = [];
-        // Report overdue waits once per observer process (not per source)
-        for (const { wait, deadlineAt } of overdue) {
-          const key = JSON.stringify([wait, deadlineAt]);
-          if (!warned.has(key)) {
-            warned.add(key);
-            log.warn({ ...wait, deadlineAt }, 'source_observe_overdue');
-          }
-        }
-        // Build the unserved entries for overdue waits, once per observer process
-        const overdueUnserved = overdue
-          .map(({ wait, deadlineAt }) => {
-            const key = JSON.stringify([wait, deadlineAt]);
-            return { key, wait, deadlineAt };
-          })
-          .filter(({ key }) => {
-            if (reportedOverdue.has(key)) return false;
-            reportedOverdue.add(key);
-            return true;
-          })
-          .map(({ wait, deadlineAt }) => ({
-            wait,
-            reason: `deadline passed at ${deadlineAt}; polling stopped`,
-          }));
+        const fresh = takeOverdue(overdue);
         for (const source of due) {
-          // A source with nothing to observe is not called, so it reads nothing; the label
-          // bindings it cannot observe are still reported, so the operator learns why.
-          if (waits.length === 0 && source.labels.length === 0) {
-            if (source.unservedBindings.length === 0 && overdue.length === 0) continue;
-            lastObserved.set(source.sourceInstanceId, now.getTime());
-            const report = unobserved(source);
-            // Add overdue waits to unserved for reporting (once per observer process)
-            if (overdueUnserved.length > 0) {
-              report.unserved = overdueUnserved;
-            }
-            reports.push(report);
-            continue;
-          }
-          lastObserved.set(source.sourceInstanceId, now.getTime());
-          const report = await observeSource(source, waits);
-          // Add overdue waits to unserved for reporting (once per observer process)
-          if (overdueUnserved.length > 0) {
-            report.unserved = [
-              ...report.unserved,
-              ...overdueUnserved,
-            ];
-          }
-          reports.push(report);
+          const report = await readSource(source, waits, overdue.length, fresh, now);
+          if (report !== undefined) reports.push(report);
         }
         return reports;
       } finally {

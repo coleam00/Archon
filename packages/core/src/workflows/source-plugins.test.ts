@@ -312,7 +312,13 @@ const REMOTE = 'https://github.com/owner/repo.git';
  * `about`) and returns `acceptances`, each with a fresh receipt id as a plugin would.
  */
 async function observingFixture(
-  plugin: { acceptances: unknown[]; revision?: string; prNumber?: number; failed?: unknown[] },
+  plugin: {
+    acceptances: unknown[];
+    revision?: string;
+    prNumber?: number;
+    failed?: unknown[];
+    failOnce?: boolean;
+  },
   observe: unknown = { everySeconds: 60 }
 ) {
   const root = await mkdtemp(join(tmpdir(), 'archon-webhook-source-'));
@@ -321,18 +327,23 @@ async function observingFixture(
   const configPath = join(root, 'sources.json');
   await writeFile(
     modulePath,
-    `export default ({ config }) => ({
+    `export default ({ config }) => {
+  let failedOnce = false;
+  return {
   receive: async () => ({ status: 'rejected', reason: 'unauthenticated' }),
   observe: async ({ waits, forge }) => {
     if (config.prNumber) await forge.prReviews({ remote: waits[0].remote, number: config.prNumber });
     else await forge.commitChecks({ remote: waits[0].remote, revision: config.revision ?? waits[0].about });
+    const failing = config.failOnce === true && !failedOnce;
+    failedOnce = true;
     return {
       acceptances: config.acceptances.map(a => ({ ...a, receipt: { ...a.receipt, id: crypto.randomUUID() } })),
       unserved: [],
-      failed: config.failed ?? [],
+      failed: failing || config.failOnce !== true ? (config.failed ?? []) : [],
     };
   },
-});\n`,
+};
+};\n`,
     'utf8'
   );
   await writeFile(
@@ -629,6 +640,7 @@ async function labelFixture(
     asks?: { kind: 'issue' | 'pr'; number: number }[];
     reads?: unknown[];
     unserved?: unknown[];
+    failureKind?: string;
   } = {}
 ) {
   const root = await mkdtemp(join(tmpdir(), 'archon-webhook-source-'));
@@ -651,7 +663,7 @@ async function labelFixture(
       try {
         listed = await forge.issuesWithLabel({ repo: read.repo, label: config.listLabel ?? read.label });
       } catch (error) {
-        labelFailures.push({ bindingId: read.bindingId, label: read.label, reason: error.message });
+        labelFailures.push({ bindingId: read.bindingId, label: read.label, reason: error.message, ...(config.failureKind ? { kind: config.failureKind } : {}) });
         continue;
       }
       const asks = config.asks ?? listed.items.map(item => ({ kind: item.kind, number: item.ref.number }));
@@ -660,7 +672,7 @@ async function labelFixture(
         try {
           added = await forge.labelAdded({ repo: read.repo, kind, number, label: read.label });
         } catch (error) {
-          labelFailures.push({ bindingId: read.bindingId, label: read.label, number, reason: error.message });
+          labelFailures.push({ bindingId: read.bindingId, label: read.label, number, reason: error.message, ...(config.failureKind ? { kind: config.failureKind } : {}) });
           continue;
         }
         if (added.added === null) {
@@ -787,112 +799,229 @@ function receiptStore(knownUser: (id: string) => boolean = () => true) {
   };
 }
 
-  test('before-deadline waits are read normally, after-deadline waits are not read', async () => {
-    const configPath = await observingFixture({ acceptances: [acceptance()] });
-    const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
+test('before-deadline waits are read normally, after-deadline waits are not read', async () => {
+  const configPath = await observingFixture({ acceptances: [acceptance()] });
+  const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
+  const sources = await loadWebhookSourcePlugins(configPath, {
+    acceptReceipt,
+    isKnownUser: async () => true,
+    hasDeliveryReceipt: async () => false,
+    getReceipt: async () => null,
+  });
+  const forge = forgeReader();
+
+  // Test at exactly the deadline: should be overdue
+  const deadlineTime = new Date('2026-01-01T01:00:00.000Z');
+  const observer = createItemWaitObserver({
+    sources,
+    store: waitStore([{ deadlineAt: '2026-01-01T01:00:00.000Z' }]),
+    forge,
+  });
+  const [report] = (await observer?.pass(deadlineTime)) ?? [];
+  expect(report?.waits).toBe(0);
+  expect(report?.reads).toBe(0);
+  expect(forge.reads).toEqual([]);
+  expect(report?.unserved).toHaveLength(1);
+  expect(report?.unserved?.[0]?.reason).toContain('deadline passed at');
+});
+
+test('one overdue report per observer process across repeated passes', async () => {
+  const configPath = await observingFixture({ acceptances: [acceptance()] });
+  const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
+  const sources = await loadWebhookSourcePlugins(configPath, {
+    acceptReceipt,
+    isKnownUser: async () => true,
+    hasDeliveryReceipt: async () => false,
+    getReceipt: async () => null,
+  });
+  const forge = forgeReader();
+
+  const deadlineTime = new Date('2026-01-01T02:00:00.000Z');
+  const observer = createItemWaitObserver({
+    sources,
+    store: waitStore([{ deadlineAt: '2026-01-01T01:00:00.000Z' }]),
+    forge,
+  });
+
+  // First pass: should report overdue
+  const [report1] = (await observer?.pass(deadlineTime)) ?? [];
+  expect(report1?.unserved).toHaveLength(1);
+  expect(report1?.unserved?.[0]?.reason).toContain('deadline passed at');
+
+  // Second pass: same overdue wait should not be reported again (once per process)
+  const [report2] = (await observer?.pass(new Date(deadlineTime.getTime() + 60_000))) ?? [];
+  expect(report2?.unserved).toHaveLength(0);
+});
+
+test('active and overdue waits mixed: only active are read', async () => {
+  const configPath = await observingFixture({ acceptances: [acceptance()] });
+  const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
+  const sources = await loadWebhookSourcePlugins(configPath, {
+    acceptReceipt,
+    isKnownUser: async () => true,
+    hasDeliveryReceipt: async () => false,
+    getReceipt: async () => null,
+  });
+  const forge = forgeReader();
+
+  const now = new Date('2026-01-01T02:00:00.000Z');
+  const observer = createItemWaitObserver({
+    sources,
+    store: waitStore([
+      { deadlineAt: '2026-01-01T01:00:00.000Z' }, // overdue
+      { deadlineAt: '2026-01-01T03:00:00.000Z' }, // active
+    ]),
+    forge,
+  });
+
+  const [report] = (await observer?.pass(now)) ?? [];
+  expect(report?.waits).toBe(1); // only active
+  expect(report?.reads).toBe(1); // only active is read
+  expect(report?.unserved).toHaveLength(1); // overdue is reported
+});
+
+test('only-overdue waits with no labels perform zero plugin calls but report once', async () => {
+  const configPath = await observingFixture({ acceptances: [acceptance()] });
+  const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
+  const sources = await loadWebhookSourcePlugins(configPath, {
+    acceptReceipt,
+    isKnownUser: async () => true,
+    hasDeliveryReceipt: async () => false,
+    getReceipt: async () => null,
+  });
+  const forge = forgeReader();
+
+  const now = new Date('2026-01-01T02:00:00.000Z');
+  const observer = createItemWaitObserver({
+    sources,
+    store: waitStore([{ deadlineAt: '2026-01-01T01:00:00.000Z' }]), // only overdue
+    forge,
+  });
+
+  const [report] = (await observer?.pass(now)) ?? [];
+  expect(report?.waits).toBe(0);
+  expect(report?.reads).toBe(0);
+  expect(report?.unserved).toHaveLength(1);
+  expect(acceptReceipt).not.toHaveBeenCalled();
+});
+
+const waited = {
+  workflowName: 'host',
+  event: 'checks',
+  about: REVISION,
+  itemKey: 'pr-7',
+};
+
+async function backedOff(kind: string, failOnce = false) {
+  const configPath = await observingFixture(
+    {
+      acceptances: [acceptance()],
+      failed: [{ wait: waited, reason: 'slow down', kind }],
+      ...(failOnce ? { failOnce: true } : {}),
+    },
+    { everySeconds: 15 }
+  );
+  const sources = await loadWebhookSourcePlugins(configPath, {
+    acceptReceipt: mock(async () => ({ receiptId: 'receipt-1', replay: false })),
+    isKnownUser: async () => true,
+    hasDeliveryReceipt: async () => false,
+    getReceipt: async () => null,
+  });
+  const forge = forgeReader();
+  const observer = createItemWaitObserver({
+    sources,
+    store: waitStore([{ deadlineAt: '2026-12-31T23:59:59.000Z' }]),
+    forge,
+  });
+  return { forge, observer };
+}
+
+test.each(['rate_limited', 'unavailable'])(
+  'a %s read pauses the source, and a later clean pass resumes',
+  async kind => {
+    const { forge, observer } = await backedOff(kind, true);
+    const start = Date.parse('2026-06-01T00:00:00.000Z');
+    const [first] = (await observer?.pass(new Date(start))) ?? [];
+    expect(forge.reads).toHaveLength(1);
+    expect(first?.receipts).toEqual(['receipt-1']);
+    expect(first?.error).toContain('slow down');
+
+    await observer?.pass(new Date(start + 15_000));
+    expect(forge.reads).toHaveLength(1);
+
+    await observer?.pass(new Date(start + 60_000));
+    expect(forge.reads).toHaveLength(2);
+
+    await observer?.pass(new Date(start + 75_000));
+    expect(forge.reads).toHaveLength(3);
+  }
+);
+
+test('repeated temporary failures wait longer, once per pass', async () => {
+  const { forge, observer } = await backedOff('rate_limited');
+  const start = Date.parse('2026-06-01T00:00:00.000Z');
+  await observer?.pass(new Date(start));
+  await observer?.pass(new Date(start + 15_000));
+  expect(forge.reads).toHaveLength(1);
+  await observer?.pass(new Date(start + 60_000));
+  await observer?.pass(new Date(start + 120_000));
+  expect(forge.reads).toHaveLength(2);
+  await observer?.pass(new Date(start + 180_000));
+  expect(forge.reads).toHaveLength(3);
+});
+
+test.each(['not_found', 'unspecified'] as const)(
+  'a %s failure does not pause the source',
+  async label => {
+    const kind = label === 'unspecified' ? undefined : label;
+    const configPath = await observingFixture(
+      {
+        acceptances: [acceptance()],
+        failed: [{ wait: waited, reason: 'missing', ...(kind === undefined ? {} : { kind }) }],
+      },
+      { everySeconds: 15 }
+    );
     const sources = await loadWebhookSourcePlugins(configPath, {
-      acceptReceipt,
+      acceptReceipt: mock(async () => ({ receiptId: 'receipt-1', replay: false })),
       isKnownUser: async () => true,
       hasDeliveryReceipt: async () => false,
       getReceipt: async () => null,
     });
     const forge = forgeReader();
-    
-    // Test at exactly the deadline: should be overdue
-    const deadlineTime = new Date('2026-01-01T01:00:00.000Z');
     const observer = createItemWaitObserver({
       sources,
-      store: waitStore([{ deadlineAt: '2026-01-01T01:00:00.000Z' }]),
+      store: waitStore([{ deadlineAt: '2026-12-31T23:59:59.000Z' }]),
       forge,
     });
-    const [report] = (await observer?.pass(deadlineTime)) ?? [];
-    expect(report?.waits).toBe(0);
-    expect(report?.reads).toBe(0);
-    expect(forge.reads).toEqual([]);
-    expect(report?.unserved).toHaveLength(1);
-    expect(report?.unserved?.[0]?.reason).toContain('deadline passed at');
-  });
+    const start = Date.parse('2026-06-01T00:00:00.000Z');
+    await observer?.pass(new Date(start));
+    await observer?.pass(new Date(start + 15_000));
+    expect(forge.reads).toHaveLength(2);
+  }
+);
 
-  test('one overdue report per observer process across repeated passes', async () => {
-    const configPath = await observingFixture({ acceptances: [acceptance()] });
-    const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
-    const sources = await loadWebhookSourcePlugins(configPath, {
-      acceptReceipt,
-      isKnownUser: async () => true,
-      hasDeliveryReceipt: async () => false,
-      getReceipt: async () => null,
-    });
-    const forge = forgeReader();
-    
-    const deadlineTime = new Date('2026-01-01T02:00:00.000Z');
-    const observer = createItemWaitObserver({
-      sources,
-      store: waitStore([{ deadlineAt: '2026-01-01T01:00:00.000Z' }]),
-      forge,
-    });
-    
-    // First pass: should report overdue
-    const [report1] = (await observer?.pass(deadlineTime)) ?? [];
-    expect(report1?.unserved).toHaveLength(1);
-    expect(report1?.unserved?.[0]?.reason).toContain('deadline passed at');
-    
-    // Second pass: same overdue wait should not be reported again (once per process)
-    const [report2] = (await observer?.pass(new Date(deadlineTime.getTime() + 60_000))) ?? [];
-    expect(report2?.unserved).toHaveLength(0);
+test('an admission error does not pause the source', async () => {
+  const configPath = await observingFixture({ acceptances: [acceptance()] }, { everySeconds: 15 });
+  const sources = await loadWebhookSourcePlugins(configPath, {
+    acceptReceipt: mock(async () => {
+      throw new Error('store down');
+    }),
+    isKnownUser: async () => true,
+    hasDeliveryReceipt: async () => false,
+    getReceipt: async () => null,
   });
-
-  test('active and overdue waits mixed: only active are read', async () => {
-    const configPath = await observingFixture({ acceptances: [acceptance()] });
-    const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
-    const sources = await loadWebhookSourcePlugins(configPath, {
-      acceptReceipt,
-      isKnownUser: async () => true,
-      hasDeliveryReceipt: async () => false,
-      getReceipt: async () => null,
-    });
-    const forge = forgeReader();
-    
-    const now = new Date('2026-01-01T02:00:00.000Z');
-    const observer = createItemWaitObserver({
-      sources,
-      store: waitStore([
-        { deadlineAt: '2026-01-01T01:00:00.000Z' }, // overdue
-        { deadlineAt: '2026-01-01T03:00:00.000Z' }, // active
-      ]),
-      forge,
-    });
-    
-    const [report] = (await observer?.pass(now)) ?? [];
-    expect(report?.waits).toBe(1); // only active
-    expect(report?.reads).toBe(1); // only active is read
-    expect(report?.unserved).toHaveLength(1); // overdue is reported
+  const forge = forgeReader();
+  const observer = createItemWaitObserver({
+    sources,
+    store: waitStore([{ deadlineAt: '2026-12-31T23:59:59.000Z' }]),
+    forge,
   });
-
-  test('only-overdue waits with no labels perform zero plugin calls but report once', async () => {
-    const configPath = await observingFixture({ acceptances: [acceptance()] });
-    const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
-    const sources = await loadWebhookSourcePlugins(configPath, {
-      acceptReceipt,
-      isKnownUser: async () => true,
-      hasDeliveryReceipt: async () => false,
-      getReceipt: async () => null,
-    });
-    const forge = forgeReader();
-    
-    const now = new Date('2026-01-01T02:00:00.000Z');
-    const observer = createItemWaitObserver({
-      sources,
-      store: waitStore([{ deadlineAt: '2026-01-01T01:00:00.000Z' }]), // only overdue
-      forge,
-    });
-    
-    const [report] = (await observer?.pass(now)) ?? [];
-    expect(report?.waits).toBe(0);
-    expect(report?.reads).toBe(0);
-    expect(report?.unserved).toHaveLength(1);
-    expect(acceptReceipt).not.toHaveBeenCalled();
-  });
-
+  const start = Date.parse('2026-06-01T00:00:00.000Z');
+  const [first] = (await observer?.pass(new Date(start))) ?? [];
+  expect(first?.error).toContain('store down');
+  await observer?.pass(new Date(start + 15_000));
+  expect(forge.reads).toHaveLength(2);
+});
 
 describe('observing label bindings', () => {
   const MARKER = 'observe:label-seen:binding-1:github.com/owner/repo:factory';
@@ -1168,5 +1297,19 @@ describe('observing label bindings', () => {
       },
     ]);
     expect(forge.reads).toEqual([]);
+  });
+
+  test('a rate_limited label read pauses the source', async () => {
+    const configPath = await labelFixture({ failureKind: 'rate_limited' });
+    const sources = await loadWebhookSourcePlugins(configPath, receiptStore().dependencies);
+    const forge = labelForge(new Map([[5, 'event-1']]), new Set([5]));
+    const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
+    const start = Date.parse('2026-06-01T00:00:00.000Z');
+    const [first] = (await observer?.pass(new Date(start))) ?? [];
+    expect(first?.error).toContain('events unavailable');
+    const reads = forge.reads.length;
+    expect(reads).toBeGreaterThan(0);
+    await observer?.pass(new Date(start + 15_000));
+    expect(forge.reads).toHaveLength(reads);
   });
 });

@@ -10,6 +10,7 @@ import {
 import { removeTempTree } from '@archon/paths/test-utils';
 import createGitHubWebhookSource from './source-plugin';
 import { githubWebhookSourceConfigSchema } from './source-config';
+import { SourceForgeReadError } from '../source-forge-reader';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import type { z } from '@hono/zod-openapi';
 
@@ -506,10 +507,10 @@ describe('GitHub source plugin observing open waits', () => {
     item: { field: 'subject.number', prefix: 'pr-' },
     wake: { workflow: 'host', wait: 'review', about: { field: 'review.commit' } },
   });
-  const unit = (id: string, status: 'in_progress' | 'completed') => ({
+  const unit = (id: string, status: 'in_progress' | 'completed' | 'unknown') => ({
     unit: { kind: 'check' as const, id, name: 'build' },
     nativeState: status,
-    phase: status === 'completed' ? ('completed' as const) : ('running' as const),
+    phase: status === 'in_progress' ? ('running' as const) : status,
     nativeResult: status === 'completed' ? 'success' : null,
     result: status === 'completed' ? ('success' as const) : null,
     state: status === 'completed' ? ('green' as const) : ('pending' as const),
@@ -713,6 +714,105 @@ describe('GitHub source plugin observing open waits', () => {
       },
     ]);
     expect(observed.acceptances.map(a => a.bindings[0]?.itemKey)).toEqual(['pr-7']);
+  });
+
+  test('completed checks are read once; a later item still gets its own delivery', async () => {
+    const { observe } = await observer([checksWake]);
+    const { forge, reads } = reader([unit('77', 'completed')]);
+    const first = await observe({ labels: [], waits: [wait], forge });
+    const later = await observe({
+      labels: [],
+      waits: [wait, { ...wait, itemKey: 'pr-9' }],
+      forge,
+    });
+    expect(reads).toEqual([{ remote, revision }]);
+    expect(later.acceptances.map(entry => entry.receipt.deliveryId)).toEqual([
+      first.acceptances[0]?.receipt.deliveryId,
+      `observe:check:github.com/owner/repo@${revision}:check:77:completed:success:checks-done:pr-9`,
+    ]);
+  });
+
+  test('pending, empty, failed, and unknown checks are read again, and so are reviews', async () => {
+    const pending = await observer([checksWake]);
+    const pendingRead = reader([unit('77', 'in_progress')]);
+    await pending.observe({ labels: [], waits: [wait], forge: pendingRead.forge });
+    await pending.observe({ labels: [], waits: [wait], forge: pendingRead.forge });
+    expect(pendingRead.reads).toHaveLength(2);
+
+    const empty = await observer([checksWake]);
+    const emptyRead = reader([]);
+    await empty.observe({ labels: [], waits: [wait], forge: emptyRead.forge });
+    await empty.observe({ labels: [], waits: [wait], forge: emptyRead.forge });
+    expect(emptyRead.reads).toHaveLength(2);
+
+    const unknown = await observer([checksWake]);
+    const unknownRead = reader([unit('77', 'unknown')]);
+    await unknown.observe({ labels: [], waits: [wait], forge: unknownRead.forge });
+    await unknown.observe({ labels: [], waits: [wait], forge: unknownRead.forge });
+    expect(unknownRead.reads).toHaveLength(2);
+
+    const missing = await observer([checksWake]);
+    const missingRead = reader([unit('77', 'completed')]);
+    const gone = { ...wait, about: 'gone' };
+    await missing.observe({ labels: [], waits: [gone], forge: missingRead.forge });
+    await missing.observe({ labels: [], waits: [gone], forge: missingRead.forge });
+    expect(missingRead.reads).toHaveLength(2);
+
+    const reviews = await observer([reviewWake]);
+    const reviewRead = reader([], [review('300', 'APPROVED', revision)]);
+    await reviews.observe({ labels: [], waits: [reviewWait], forge: reviewRead.forge });
+    await reviews.observe({ labels: [], waits: [reviewWait], forge: reviewRead.forge });
+    expect(reviewRead.reads).toHaveLength(2);
+  });
+
+  test('a commit that leaves the plan is read again when it returns', async () => {
+    const { observe } = await observer([checksWake]);
+    const { forge, reads } = reader([unit('77', 'completed')]);
+    await observe({ labels: [], waits: [wait], forge });
+    await observe({ labels: [], waits: [{ ...wait, about: 'other-revision' }], forge });
+    await observe({ labels: [], waits: [wait], forge });
+    expect(reads).toEqual([
+      { remote, revision },
+      { remote, revision: 'other-revision' },
+      { remote, revision },
+    ]);
+  });
+
+  test('checks on another host are not remembered', async () => {
+    const { observe } = await observer([checksWake]);
+    const { forge, reads } = reader([unit('77', 'completed')], [], 'gitlab.example.com');
+    await observe({ labels: [], waits: [wait], forge });
+    await observe({ labels: [], waits: [wait], forge });
+    expect(reads).toHaveLength(2);
+  });
+
+  test('a rate-limited check read keeps its kind', async () => {
+    const { observe } = await observer([checksWake]);
+    const observed = await observe({
+      labels: [],
+      waits: [wait],
+      forge: {
+        commitChecks: async () => {
+          throw new SourceForgeReadError('rate_limited', 'slow down');
+        },
+        prReviews: async () => {
+          throw new Error('no review read expected');
+        },
+        issuesWithLabel: async () => {
+          throw new Error('no label read expected');
+        },
+        labelAdded: async () => {
+          throw new Error('no label read expected');
+        },
+      },
+    });
+    expect(observed.failed).toEqual([
+      {
+        wait: { workflowName: 'host', event: 'checks', about: revision, itemKey: 'pr-7' },
+        reason: 'slow down',
+        kind: 'rate_limited',
+      },
+    ]);
   });
 
   test('names each wait it binds but cannot read, and evaluates no binding nobody waits on', async () => {

@@ -8,6 +8,7 @@ import {
 } from '@archon/forge';
 import { normalizeGitHubWebhook, reviewState } from './normalize-event';
 export { githubSourceCapabilities as capabilities } from './normalize-event';
+import { SourceForgeReadError } from '../source-forge-reader';
 import type { JsonValue } from '@archon/workflows/output-ref';
 import {
   mappedItemKey,
@@ -139,16 +140,26 @@ function targetOf(
   return { reason: `${binding.selector.kind} wakes about ${String(field)} are not observed` };
 }
 
+type CheckRead = { host: string; events: { key: string; event: ForgeEvent }[] };
+
+function commitKey(remote: string, revision: string): string {
+  return JSON.stringify([remote, revision]);
+}
+
 /**
  * The events a webhook would have carried for what one target reads, each with the key that
  * makes it one delivery. Built in a fixed key order, so the same state digests the same on
- * every pass.
+ * every pass. A commit whose checks are all completed is remembered for this process.
  */
 async function targetEvents(
   target: ObserveTarget,
-  forge: ObserveInput['forge']
-): Promise<{ host: string; events: { key: string; event: ForgeEvent }[] }> {
+  forge: ObserveInput['forge'],
+  remembered?: { host: string; cache: Map<string, CheckRead> }
+): Promise<CheckRead> {
   if (target.kind === 'commit') {
+    const key = commitKey(target.remote, target.revision);
+    const cached = remembered?.cache.get(key);
+    if (cached !== undefined && cached.host === remembered?.host) return cached;
     const observed = await forge.commitChecks({ remote: target.remote, revision: target.revision });
     const repo = { host: observed.repo.host, path: observed.repo.path };
     const events = observed.units.map(unit => ({
@@ -167,7 +178,15 @@ async function targetEvents(
         pullRequests: [],
       },
     })) satisfies { key: string; event: ForgeEvent }[];
-    return { host: repo.host, events };
+    const read = { host: repo.host, events };
+    if (
+      remembered !== undefined &&
+      repo.host === remembered.host &&
+      observed.units.length > 0 &&
+      observed.units.every(unit => unit.phase === 'completed')
+    )
+      remembered.cache.set(key, read);
+    return read;
   }
   const observed = await forge.prReviews({ remote: target.remote, number: target.number });
   const pr = {
@@ -211,20 +230,28 @@ async function targetEvents(
 async function observeWaits(
   sourceInstanceId: string,
   config: GitHubSourceConfig,
-  { waits, forge }: ObserveInput
+  { waits, forge }: ObserveInput,
+  cache: Map<string, CheckRead>
 ): Promise<Omit<SourceObservation, 'labelAcceptances' | 'labelFailures'>> {
   const { targets, unserved } = planTargets(config, waits);
+  const planned = new Set(
+    targets.flatMap(entry =>
+      entry.target.kind === 'commit' ? [commitKey(entry.target.remote, entry.target.revision)] : []
+    )
+  );
+  for (const key of cache.keys()) if (!planned.has(key)) cache.delete(key);
   const failed: SourceObservation['failed'] = [];
   const acceptances: SourceReceiptAcceptance[] = [];
   const receivedAt = new Date().toISOString();
   for (const { target, served } of targets) {
     let read: Awaited<ReturnType<typeof targetEvents>>;
     try {
-      read = await targetEvents(target, forge);
+      read = await targetEvents(target, forge, { host: config.host, cache });
     } catch (error) {
       // One unreadable target does not stop the others.
-      const reason = error instanceof Error ? error.message : String(error);
-      for (const { wait } of served) failed.push({ wait, reason });
+      const failure = readError(error);
+      for (const { wait } of served)
+        failed.push(withKind({ wait, reason: failure.reason }, failure.kind));
       continue;
     }
     for (const { wait, binding } of served) {
@@ -406,6 +433,15 @@ type LabelFailure = SourceObservation['labelFailures'][number];
 const errorText = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+function readError(error: unknown): { reason: string; kind?: string } {
+  const reason = errorText(error);
+  return error instanceof SourceForgeReadError ? { reason, kind: error.kind } : { reason };
+}
+
+function withKind<T extends { reason: string }>(failure: T, kind: string | undefined): T {
+  return kind === undefined ? failure : { ...failure, kind };
+}
+
 /**
  * The label events a webhook would have carried for the open issues and pull requests each
  * read lists that the binding's selector admits: one `label.changed` added event per item,
@@ -430,7 +466,8 @@ async function observeLabels(
     try {
       listed = await forge.issuesWithLabel({ repo, label });
     } catch (error) {
-      labelFailures.push({ bindingId, label, reason: errorText(error) });
+      const read = readError(error);
+      labelFailures.push(withKind({ bindingId, label, reason: read.reason }, read.kind));
       continue;
     }
     // The list holds issues and pull requests; read only those the selector can match.
@@ -468,15 +505,16 @@ async function labelAcceptance(
   | undefined
 > {
   const { bindingId, label, repo } = read;
-  const failure = (reason: string) => ({
+  const failure = (reason: string, kind?: string) => ({
     kind: 'failed' as const,
-    failure: { bindingId, label, number, reason },
+    failure: withKind({ bindingId, label, number, reason }, kind),
   });
   let added: Awaited<ReturnType<ObserveInput['forge']['labelAdded']>>['added'];
   try {
     ({ added } = await forge.labelAdded({ repo, kind, number, label }));
   } catch (error) {
-    return failure(errorText(error));
+    const read = readError(error);
+    return failure(read.reason, read.kind);
   }
   // Without the forge's event there is no identity for this add; never invent one.
   if (added === null) return failure('the forge records no add');
@@ -531,6 +569,7 @@ const createGitHubWebhookSource: WebhookSourcePluginFactory = ({
   const parsed = githubWebhookSourceConfigSchema.safeParse(rawConfig);
   if (!parsed.success) throw new Error('Invalid GitHub source plugin configuration');
   const config = parsed.data;
+  const terminalChecks = new Map<string, CheckRead>();
   const secret =
     config.webhookSecretEnv === undefined ? undefined : process.env[config.webhookSecretEnv];
   if (config.webhookSecretEnv !== undefined && !secret)
@@ -538,7 +577,7 @@ const createGitHubWebhookSource: WebhookSourcePluginFactory = ({
   return {
     observedLabels: labelReadsOf(config),
     async observe(input) {
-      const waits = await observeWaits(sourceInstanceId, config, input);
+      const waits = await observeWaits(sourceInstanceId, config, input, terminalChecks);
       const labels = await observeLabels(sourceInstanceId, config, input);
       return { ...waits, ...labels };
     },
