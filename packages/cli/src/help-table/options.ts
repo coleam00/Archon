@@ -103,7 +103,8 @@ export const orderedFlags: FlagHelp[] = [
     spec: '--supersedes <run-id>',
     description:
       "Record this fresh run as replacing the prior run's open item; with a workflow name, no lane inheritance.\n" +
-      'With no name, start that run again from its record: workflow, source, inputs and checkout hand-off',
+      'With no name, start that run again from its record: project, workflow, source, base, inputs and\n' +
+      'checkout hand-off; an explicit --base wins over the recorded base',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
