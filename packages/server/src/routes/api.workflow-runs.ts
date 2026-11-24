@@ -1,10 +1,14 @@
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { dirname } from 'path';
+import { getRunArtifactsDirForRoot, resolveRunStorageRoot } from '@archon/paths';
 import * as conversationDb from '@archon/core/db/conversations';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
 import { observeRunOwner } from '@archon/core/services/run-attention-watch';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import { nodeCostScope } from '@archon/workflows/node-record-serialization';
+import { readWorkflowSourceState } from '@archon/workflows/schemas/run-metadata';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   buildLoopRounds,
   buildRunNodeStates,
@@ -105,6 +109,33 @@ const getProviderEventsRoute = createRoute({
     500: jsonError('Server error'),
   },
 });
+
+type KnownPath = z.infer<typeof workflowRunDetailSchema>['run']['known_paths'][number];
+
+/**
+ * The directories a run's record names. The artifact kinds need the run's own persisted
+ * storage root: a run without one gets none of them rather than a path guessed from its
+ * project.
+ */
+function runKnownPaths(
+  run: Pick<WorkflowRun, 'id' | 'working_path' | 'output_root' | 'metadata'>
+): KnownPath[] {
+  const paths: KnownPath[] = [];
+  if (run.working_path) paths.push({ kind: 'checkout', path: run.working_path });
+  const root = resolveRunStorageRoot(run, null);
+  if (root !== null) {
+    const artifacts = getRunArtifactsDirForRoot(root, run.id);
+    paths.push(
+      { kind: 'run_artifacts', path: artifacts },
+      { kind: 'artifact_runs', path: dirname(artifacts) }
+    );
+  }
+  const source = readWorkflowSourceState(run.metadata);
+  if (source.kind === 'recorded') {
+    paths.push({ kind: 'workflow_source', path: source.record.root });
+  }
+  return paths;
+}
 
 export function registerDashboardRunsRoute(app: OpenAPIHono): void {
   const registerOpenApiRoute = openApiRouteRegistrar(app);
@@ -267,6 +298,7 @@ export function registerWorkflowRunReadRoutes(app: OpenAPIHono): void {
           // The console reads node state from here and keeps no fold of its own.
           nodes: terminalRecord?.nodes ?? buildRunNodeStates(run, events),
           ...(loopRounds.length > 0 ? { loop_rounds: loopRounds } : {}),
+          known_paths: runKnownPaths(run),
         },
         // The console renders each cost's scope from here and keeps no copy of the rule.
         events: events.map(event =>

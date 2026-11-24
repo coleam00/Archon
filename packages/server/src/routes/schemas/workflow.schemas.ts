@@ -253,6 +253,17 @@ export const workflowRunDetailSchema = z
         description:
           'Each round of each loop_group the run has entered, in order: the body nodes it reached, with state, timing and output. Absent when the run ran no loop.',
       }),
+      known_paths: z
+        .array(
+          z.object({
+            kind: z.enum(['checkout', 'run_artifacts', 'artifact_runs', 'workflow_source']),
+            path: z.string(),
+          })
+        )
+        .openapi({
+          description:
+            "Directories the run's record names, derived per request and never stored, for clients that shorten them for display: its checkout, its artifacts directory, the directory holding the artifacts of the project's runs, and its captured workflow source. A kind is absent when the run does not record that directory.",
+        }),
     }),
     events: z.array(workflowEventSchema),
   })

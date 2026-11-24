@@ -59,6 +59,7 @@ export const detailFixture: Detail = {
       value: { delivered: false, summary: 'An open PR already implements this fix.' },
     }),
     nodes: [{ node_id: 'outcome', state: 'completed' }],
+    known_paths: [],
   },
   events: [
     {

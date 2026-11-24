@@ -10822,6 +10822,12 @@ export interface components {
             structured_output?: unknown;
           }[];
         }[];
+        /** @description Directories the run's record names, derived per request and never stored, for clients that shorten them for display: its checkout, its artifacts directory, the directory holding the artifacts of the project's runs, and its captured workflow source. A kind is absent when the run does not record that directory. */
+        known_paths: {
+          /** @enum {string} */
+          kind: 'checkout' | 'run_artifacts' | 'artifact_runs' | 'workflow_source';
+          path: string;
+        }[];
       };
       events: components['schemas']['WorkflowEvent'][];
     };
