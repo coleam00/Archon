@@ -223,6 +223,7 @@ export function createWorkflowStore(): IWorkflowStore {
     recordItemMerge: itemMergesDb.recordItemMerge,
     getItemLanding: itemLandingsDb.getItemLanding,
     recordItemLanding: itemLandingsDb.recordItemLanding,
+    recordItemTitle: itemsDb.recordItemTitle,
     listItemLinks: itemLinksDb.listItemLinks,
     recordItemLink: itemLinksDb.recordItemLink,
     endItemLink: itemLinksDb.endItemLink,

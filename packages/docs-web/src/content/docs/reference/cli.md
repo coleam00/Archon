@@ -15,7 +15,7 @@ sidebar:
 
 Install Archon and add a provider; see the [Quickstart](/getting-started/quick-start/). From a source checkout, run `bun run cli` in the repository, or `bun link` inside `packages/cli` to put `archon` on your PATH; see [Installation](/getting-started/installation/#from-source).
 
-The `workflow` subcommands, except `attention`, `notice`, `test`, `wake`, `signal` and the `--item-of` forms of `runs`, `link`, `merged` and `landing`, plus `complete`, `validate` and `setup --scope project`, run inside a git repository; a subdirectory resolves to the repository root. A non-git directory also works when it is a registered [folder project](/guides/multi-repo-projects/), or on first use with `--folder`, which registers it and runs in place. Every other command works from any directory. See [Working directory](#working-directory) for how the project is resolved.
+The `workflow` subcommands, except `attention`, `notice`, `test`, `wake`, `signal` and the `--item-of` forms of `runs`, `link`, `merged`, `landing` and `title`, plus `complete`, `validate` and `setup --scope project`, run inside a git repository; a subdirectory resolves to the repository root. A non-git directory also works when it is a registered [folder project](/guides/multi-repo-projects/), or on first use with `--folder`, which registers it and runs in place. Every other command works from any directory. See [Working directory](#working-directory) for how the project is resolved.
 
 ## Setup and maintenance
 
@@ -1512,6 +1512,28 @@ has named in the project (`error: "not_found"`: a merge never creates an item), 
 item under `--item-of` (`error: "no_item"`), a malformed flag, or a directory with no
 registered project. Every later item read carries the fact as
 `merged`. It needs the database store.
+
+### `workflow title`
+
+Set what an item is called. Every read of the item returns the title beside the key:
+`workflow runs --item`, `workflow items`, the attention queue and the API. The engine gives
+it no meaning and never derives it from the key; whoever knows the title sets it, such as a
+pack's first stage from the issue it read.
+
+```bash
+archon workflow title --item issue-42 --text "Checkout fails for saved cards"
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--item <key>` | The item, in the project the working directory belongs to. A key nothing has named yet writes the item, so a title can be set before the item has a run |
+| `--item-of <run-id>` | In place of `--item`: the item the run is on (its root run's, for a `workflow:` child), in that item's project whatever the working directory. A run on no item exits 1 with `error: "no_item"` |
+| `--text <title>` | The title: one to 300 characters after trimming |
+| `--json` | Print the item as `{ id, projectKey, key, title }` |
+
+Setting it again replaces it. An item no one titled reads `title: null`. It exits 1 for an
+empty or too long title, a run on no item under `--item-of`, or a directory with no
+registered project. It needs the database store.
 
 ### `workflow landing`
 

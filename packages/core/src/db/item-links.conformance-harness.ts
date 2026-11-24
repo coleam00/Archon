@@ -18,6 +18,36 @@ import type { IDatabase } from './adapters/types';
 export function describeItemLinkConformance(
   makeHarness: () => Promise<WorkflowStoreHarness & { db: IDatabase }>
 ): void {
+  test('a title is set before the item has a run, replaced, and read with the item and its links', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const projectKey = projectKeyForCodebase(
+        { name: 'conformance', default_cwd: '/conformance' },
+        ''
+      );
+      const titled = await store.recordItemTitle({ projectKey, key: 'whole', title: 'First' });
+      expect(titled).toMatchObject({ projectKey, key: 'whole', title: 'First' });
+      await store.recordItemTitle({ projectKey, key: 'whole', title: 'Ship the order' });
+      // The one item, read by key and by id, and from the other end of a link.
+      const read = (await store.getItemRuns(projectKey, 'whole'))?.item;
+      expect(read).toEqual({ ...titled, title: 'Ship the order' });
+      expect(await store.getItem(titled.id)).toEqual(read ?? null);
+      const { link } = await store.recordItemLink({
+        projectKey,
+        fromKey: 'piece',
+        toKey: 'whole',
+        kind: 'part_of',
+        via: 'cli',
+        by: { declared: 'triage-agent' },
+        fromRun: null,
+      });
+      expect([link.from.title, link.to.title]).toEqual([null, 'Ship the order']);
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('a link is recorded once while active, read from both items, ended and kept', async () => {
     const harness = await makeHarness();
     try {

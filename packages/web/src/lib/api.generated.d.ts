@@ -7620,6 +7620,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           revision: number;
           labels: {
@@ -7688,6 +7689,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           revision: number;
           labels: {
@@ -7728,6 +7730,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           revision: number;
           labels: {
@@ -7768,6 +7771,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           revision: number;
           labels: {
@@ -7815,6 +7819,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           revision: number;
           labels: {
@@ -7854,6 +7859,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           revision: number;
           labels: {
@@ -7885,6 +7891,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           revision: number;
           labels: {
@@ -7979,6 +7986,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             revision: number;
             labels: {
@@ -8047,6 +8055,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             revision: number;
             labels: {
@@ -8087,6 +8096,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             revision: number;
             labels: {
@@ -8127,6 +8137,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             revision: number;
             labels: {
@@ -8174,6 +8185,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             revision: number;
             labels: {
@@ -8213,6 +8225,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             revision: number;
             labels: {
@@ -8244,6 +8257,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             revision: number;
             labels: {
@@ -8281,6 +8295,7 @@ export interface components {
         id: string;
         projectKey: string;
         key: string;
+        title?: string | null;
       };
       runs: {
         id: string;
@@ -8453,6 +8468,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             revision: number;
             labels: {
@@ -8521,6 +8537,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             revision: number;
             labels: {
@@ -8561,6 +8578,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             revision: number;
             labels: {
@@ -8601,6 +8619,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             revision: number;
             labels: {
@@ -8648,6 +8667,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             revision: number;
             labels: {
@@ -8687,6 +8707,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             revision: number;
             labels: {
@@ -8718,6 +8739,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             revision: number;
             labels: {
@@ -8881,6 +8903,7 @@ export interface components {
           id: string;
           projectKey: string;
           key: string;
+          title?: string | null;
         };
         /** Format: date-time */
         at: string;
@@ -8942,6 +8965,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
             };
       } | null;
@@ -8995,6 +9019,7 @@ export interface components {
           id: string;
           projectKey: string;
           key: string;
+          title?: string | null;
         };
         runs: {
           id: string;
@@ -9167,6 +9192,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               revision: number;
               labels: {
@@ -9235,6 +9261,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               revision: number;
               labels: {
@@ -9275,6 +9302,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               revision: number;
               labels: {
@@ -9315,6 +9343,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               revision: number;
               labels: {
@@ -9362,6 +9391,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               revision: number;
               labels: {
@@ -9407,6 +9437,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               revision: number;
               labels: {
@@ -9438,6 +9469,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               revision: number;
               labels: {
@@ -9601,6 +9633,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           /** Format: date-time */
           at: string;
@@ -9662,6 +9695,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
               };
         } | null;
@@ -9780,6 +9814,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 revision: number;
                 labels: {
@@ -9848,6 +9883,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 revision: number;
                 labels: {
@@ -9888,6 +9924,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 revision: number;
                 labels: {
@@ -9928,6 +9965,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 revision: number;
                 labels: {
@@ -9975,6 +10013,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 revision: number;
                 labels: {
@@ -10020,6 +10059,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 revision: number;
                 labels: {
@@ -10051,6 +10091,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 revision: number;
                 labels: {

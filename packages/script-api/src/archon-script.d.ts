@@ -2187,6 +2187,7 @@ declare module 'archon:script' {
       readonly id: string;
       readonly projectKey: string;
       readonly key: string;
+      readonly title?: string | null;
     };
     readonly runs: ReadonlyArray<{
       readonly id: string;
@@ -2328,6 +2329,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
@@ -2387,6 +2389,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
@@ -2422,6 +2425,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
@@ -2456,6 +2460,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
@@ -2490,6 +2495,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
@@ -2523,6 +2529,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
@@ -2548,6 +2555,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
@@ -2672,6 +2680,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly at: string;
       readonly via: string;
@@ -2719,6 +2728,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
       };
     } | null;
@@ -2756,6 +2766,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly runs: ReadonlyArray<{
         readonly id: string;
@@ -2897,6 +2908,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
@@ -2956,6 +2968,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
@@ -2991,6 +3004,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
@@ -3025,6 +3039,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
@@ -3059,6 +3074,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
@@ -3092,6 +3108,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
@@ -3117,6 +3134,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
@@ -3241,6 +3259,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly at: string;
         readonly via: string;
@@ -3288,6 +3307,7 @@ declare module 'archon:script' {
             readonly id: string;
             readonly projectKey: string;
             readonly key: string;
+            readonly title?: string | null;
           };
         };
       } | null;
@@ -3324,11 +3344,13 @@ declare module 'archon:script' {
       readonly id: string;
       readonly projectKey: string;
       readonly key: string;
+      readonly title?: string | null;
     };
     readonly to: {
       readonly id: string;
       readonly projectKey: string;
       readonly key: string;
+      readonly title?: string | null;
     };
     readonly at: string;
     readonly via: string;
@@ -3579,6 +3601,15 @@ declare module 'archon:script' {
    * A container run cannot call it, as it has no host CLI.
    */
   export function recordLanding(branch: string): ItemLanding;
+  /**
+   * Set what this run's own item is called (`archon workflow title`); setting it again
+   * replaces it. Every read of the item returns it beside the key. Throws
+   * {@link ItemWriteError} on a refusal (`no_item` when the run is on no item, or a title that
+   * is empty or too long), and {@link HostCommandError} when the host gives no answer, in
+   * which case the title may or may not have been set.
+   * A container run cannot call it, as it has no host CLI.
+   */
+  export function recordTitle(title: string): ItemRead['item'];
   /**
    * A page of this project's items with a run started in a window (`archon workflow
    * items`), each read as `item()` reads one, with all its runs. `since` and `until` take

@@ -415,6 +415,18 @@ export function recordLanding(branch: string): ItemLanding {
 }
 
 /**
+ * Set what this run's own item is called (`archon workflow title`); setting it again
+ * replaces it. Every read of the item returns it beside the key. Throws
+ * {@link ItemWriteError} on a refusal (`no_item` when the run is on no item, or a title that
+ * is empty or too long), and {@link HostCommandError} when the host gives no answer, in
+ * which case the title may or may not have been set.
+ * A container run cannot call it, as it has no host CLI.
+ */
+export function recordTitle(title: string): ItemRead['item'] {
+  return itemWrite('workflow title', ['--text', title]) as ItemRead['item'];
+}
+
+/**
  * A page of this project's items with a run started in a window (`archon workflow
  * items`), each read as `item()` reads one, with all its runs. `since` and `until` take
  * `archon metrics` syntax (default the last 30 days); `limit` is at most 100. Pass a page's
