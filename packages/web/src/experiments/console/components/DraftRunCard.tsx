@@ -93,10 +93,18 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Values for a workflow's declared `inputs:` (#2554), keyed by input name, held with
-  // the workflow they were typed for: they apply only while that workflow is selected,
-  // so one workflow's values can never be submitted against another's declaration.
+  // the workflow they were filled for, so one workflow's values can never be shown or
+  // submitted against another's declaration, whichever path changes the workflow.
   const [inputDraft, setInputDraft] = useState<InputDraft>(NO_INPUTS);
   const inputValues = inputDraft.workflow === workflowName ? inputDraft.values : {};
+
+  // Picking a workflow discards what was filled for the previous one. A handler, not an
+  // effect on `workflowName`: that would also run after a re-run sets the workflow and
+  // its inputs together, and wipe them.
+  const pickWorkflow = (name: string): void => {
+    setWorkflowName(name);
+    setInputDraft(NO_INPUTS);
+  };
   const [modelOverrideRows, setModelOverrideRows] = useState<RunModelOverrideRow[]>([]);
   const nextModelOverrideId = useRef(1);
 
@@ -443,7 +451,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             workflows={sortedWorkflows}
             recommendedNames={recommendedNames}
             value={workflowName}
-            onChange={setWorkflowName}
+            onChange={pickWorkflow}
             disabled={submitting}
             onClose={() => {
               requestAnimationFrame(() => {

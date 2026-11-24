@@ -65,12 +65,8 @@ export interface Run {
   /** workflow_runs.working_path — used to join against worktrees. */
   workingPath: WorkflowRun['working_path'];
   userMessage: NonNullable<WorkflowRun['user_message']>;
-  /**
-   * The declared inputs the run was invoked with, by name: not the pack settings and
-   * defaults its `$INPUTS` also holds. Empty for a run started before the engine recorded
-   * which inputs were supplied. A re-run restores these.
-   */
-  suppliedInputs?: Readonly<Record<string, string>>;
+  /** The inputs the run was invoked with, by name; a re-run restores these. */
+  suppliedInputs?: Readonly<WorkflowRun['supplied_inputs']>;
   activeNodes: NonNullable<components['schemas']['DashboardWorkflowRun']['active_nodes']>;
   lastTool?: string | null;
   toolCallAttention?: NonNullable<WorkflowRunMetadata['tool_call_attention']>;
@@ -150,6 +146,7 @@ type RawWorkflowRun = Pick<
       | 'working_path'
       | 'user_message'
       | 'metadata'
+      | 'supplied_inputs'
       | 'attention'
       | 'operator_pause'
       | 'parent_run_id'
@@ -276,28 +273,6 @@ function readCurrentPause(raw: RawWorkflowRun): Pick<Run, 'approval' | 'wait' | 
   };
 }
 
-/**
- * `metadata.dispatch.supplied_inputs` names the inputs the run was invoked with, and
- * `metadata.inputs` holds every resolved value as text. The console cannot import the
- * engine's metadata readers, so it reads the two keys here and keeps only string values.
- */
-function readSuppliedInputs(metadata: RawWorkflowRun['metadata']): Record<string, string> {
-  const dispatch = metadata?.dispatch;
-  const names =
-    typeof dispatch === 'object' && dispatch !== null && 'supplied_inputs' in dispatch
-      ? dispatch.supplied_inputs
-      : undefined;
-  const values = metadata?.inputs;
-  if (!Array.isArray(names) || typeof values !== 'object' || values === null) return {};
-  const supplied: Record<string, string> = {};
-  for (const name of names) {
-    if (typeof name !== 'string' || !Object.hasOwn(values, name)) continue;
-    const value: unknown = (values as Record<string, unknown>)[name];
-    if (typeof value === 'string') supplied[name] = value;
-  }
-  return supplied;
-}
-
 export function toRun(raw: RawWorkflowRun): Run {
   const activeNodes = Array.isArray(raw.active_nodes)
     ? raw.active_nodes.filter(nodeId => typeof nodeId === 'string' && nodeId.length > 0)
@@ -319,7 +294,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     finishedAt: raw.completed_at ?? null,
     workingPath: raw.working_path ?? null,
     userMessage: raw.user_message ?? '',
-    suppliedInputs: readSuppliedInputs(raw.metadata),
+    suppliedInputs: raw.supplied_inputs ?? {},
     activeNodes,
     lastTool: null,
     toolCallAttention: raw.status === 'running' ? (raw.metadata?.tool_call_attention ?? []) : [],

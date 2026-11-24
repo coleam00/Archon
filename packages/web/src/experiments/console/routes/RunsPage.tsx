@@ -759,7 +759,9 @@ function RunsFeedBody({
   if (feedError !== undefined) {
     return <EmptyState title="Could not load runs." hint={feedError.message} />;
   }
-  if (loading) return <EmptyState title="Loading…" />;
+  // A scoped project's draft card stays mounted while the feed loads: unmounting it
+  // would drop a re-run it has already read from the URL and stripped.
+  if (loading && draftProject === null) return <EmptyState title="Loading…" />;
   if (runs.length === 0 && draftProject === null) {
     return (
       <EmptyState

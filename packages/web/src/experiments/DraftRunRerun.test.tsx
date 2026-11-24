@@ -7,13 +7,14 @@ import { K } from './console/store/keys';
 import { toRun } from './console/primitives/run';
 import { toWorkflow } from './console/primitives/workflow';
 import { rerunPath } from './console/lib/rerun';
-import { DraftRunCard } from './console/components/DraftRunCard';
+import { RunsPage } from './console/routes/RunsPage';
 
 const dom = new Window({ url: 'http://localhost' });
 const globals = {
   window: dom,
   document: dom.document,
   localStorage: dom.localStorage,
+  HTMLElement: dom.HTMLElement,
   requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
   IS_REACT_ACT_ENVIRONMENT: true,
 };
@@ -33,12 +34,30 @@ let started: Record<string, unknown>[] = [];
 
 beforeEach(() => {
   started = [];
+  // The project is warm, as it is when the run detail page sent the operator here; the
+  // runs feed is not, so it loads after the page mounts.
+  set(K.project('p1'), {
+    id: 'p1',
+    name: 'demo',
+    path: projectCwd,
+    defaultBranch: 'dev',
+    repositoryUrl: null,
+    lastSyncedAt: null,
+    kind: 'repo',
+  });
   globalThis.fetch = Object.assign(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.startsWith('/api/dashboard/runs'))
+        return Response.json({ runs: [], counts: {}, total: 0 });
+      if (url.startsWith('/api/runs/attention'))
+        return Response.json({ runs: [], items: [], answerRefusals: [] });
       if (url === '/api/conversations') return Response.json({ conversationId: 'web-test' });
-      started.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-      return Response.json({ accepted: true });
+      if (url.endsWith('/run')) {
+        started.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return Response.json({ accepted: true });
+      }
+      throw new Error(`Unexpected request: ${url}`);
     },
     { preconnect: originalFetch.preconnect }
   );
@@ -51,6 +70,8 @@ afterEach(async () => {
   router?.dispose();
   container.remove();
   invalidate(K.workflows(projectCwd));
+  invalidate(K.project('p1'));
+  invalidate(K.runs('p1'));
   globalThis.fetch = originalFetch;
 });
 
@@ -70,12 +91,8 @@ function offer(...workflows: { name: string; inputs: Record<string, { default?: 
   });
 }
 
-/** Re-run a run that started with `inputs` resolved and `supplied` named as supplied. */
-async function rerun(run: {
-  message: string;
-  inputs: Record<string, string>;
-  supplied: string[];
-}): Promise<void> {
+/** Follow the Re-run link of a run of `build` started with `message` and `supplied`. */
+async function rerun(run: { message: string; supplied: Record<string, string> }): Promise<void> {
   const original = toRun({
     id: 'run-1',
     workflow_name: 'build',
@@ -83,20 +100,11 @@ async function rerun(run: {
     status: 'completed',
     started_at: '2026-11-24T10:00:00Z',
     user_message: run.message,
-    metadata: {
-      inputs: run.inputs,
-      dispatch: { base_branch: 'dev', supplied_inputs: run.supplied },
-    },
+    supplied_inputs: run.supplied,
   });
-  const memory = createMemoryRouter(
-    [
-      {
-        path: '/console/p/:projectId',
-        element: <DraftRunCard projectId="p1" projectCwd={projectCwd} />,
-      },
-    ],
-    { initialEntries: [rerunPath({ ...original, projectId: 'p1' })] }
-  );
+  const memory = createMemoryRouter([{ path: '/console/p/:projectId', element: <RunsPage /> }], {
+    initialEntries: [rerunPath({ ...original, projectId: 'p1' })],
+  });
   router = memory;
   root = createRoot(container);
   await act(async () => root?.render(<RouterProvider router={memory} />));
@@ -107,12 +115,24 @@ function field(name: string): HTMLInputElement | null {
   return label?.querySelector('input') ?? null;
 }
 
-async function start(): Promise<Record<string, unknown> | undefined> {
-  const button = [...container.querySelectorAll('button')].find(b =>
-    b.textContent?.startsWith('Start run')
-  );
-  if (!button) throw new Error('Missing Start run');
+async function click(button: HTMLElement | null | undefined): Promise<void> {
+  if (!button) throw new Error('Missing button');
   await act(async () => button.click());
+}
+
+async function pick(workflow: string): Promise<void> {
+  await click(container.querySelector<HTMLElement>('[data-keymap-workflow-trigger]'));
+  await click(
+    [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(o =>
+      o.textContent?.includes(workflow)
+    )
+  );
+}
+
+async function start(): Promise<Record<string, unknown> | undefined> {
+  await click(
+    [...container.querySelectorAll('button')].find(b => b.textContent?.startsWith('Start run'))
+  );
   return started[0];
 }
 
@@ -122,7 +142,7 @@ test('an inputs-only run re-runs with its supplied input filled and its defaulte
     { name: 'a-other', inputs: { issue: {} } },
     { name: 'build', inputs: { issue: {}, notes: { default: 'from-default' } } }
   );
-  await rerun({ message: '', inputs: { issue: '42', notes: 'from-default' }, supplied: ['issue'] });
+  await rerun({ message: '', supplied: { issue: '42' } });
 
   expect(field('issue')?.value).toBe('42');
   expect(field('notes')?.value).toBe('');
@@ -134,14 +154,23 @@ test('an inputs-only run re-runs with its supplied input filled and its defaulte
 
 test('a re-run restores the message and drops an input the workflow no longer declares', async () => {
   offer({ name: 'build', inputs: { notes: {} } });
-  await rerun({
-    message: 'fix the flaky test',
-    inputs: { issue: '42', notes: 'be brief' },
-    supplied: ['issue', 'notes'],
-  });
+  await rerun({ message: 'fix the flaky test', supplied: { issue: '42', notes: 'be brief' } });
 
   expect(container.querySelector('textarea')?.value).toBe('fix the flaky test');
   const body = await start();
   expect(body?.message).toBe('fix the flaky test');
   expect(body?.inputs).toEqual({ notes: 'be brief' });
+});
+
+test('picking another workflow discards the re-run inputs, also after picking back', async () => {
+  offer({ name: 'a-other', inputs: { issue: {} } }, { name: 'build', inputs: { issue: {} } });
+  await rerun({ message: '', supplied: { issue: '42' } });
+  expect(field('issue')?.value).toBe('42');
+
+  await pick('a-other');
+  expect(field('issue')?.value).toBe('');
+  await pick('build');
+  expect(field('issue')?.value).toBe('');
+  const body = await start();
+  expect(body?.inputs).toBeUndefined();
 });

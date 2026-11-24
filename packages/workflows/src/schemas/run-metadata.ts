@@ -488,6 +488,23 @@ export function readRunDispatchMetadata(
 }
 
 /**
+ * The inputs a run was invoked with, as text by name: what re-running it supplies again.
+ * Empty for a run whose dispatch record names none, including every run started before
+ * the record did.
+ */
+export function readSuppliedRunInputs(
+  metadata: Record<string, unknown> | undefined
+): Record<string, string> {
+  const names = readRunDispatchMetadata(metadata)?.supplied_inputs ?? [];
+  const inputs = readSubrunMetadata(metadata).inputs ?? {};
+  return Object.fromEntries(
+    names
+      .filter(name => Object.hasOwn(inputs, name))
+      .map(name => [name, canonicalValueText(inputs[name] ?? null)])
+  );
+}
+
+/**
  * Key under which a run records the executable SOURCE it was started from.
  *
  * A run reads its workflows, commands, and scripts from one directory and acts on
