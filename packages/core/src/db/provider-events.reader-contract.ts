@@ -167,7 +167,10 @@ export function providerEventReaderContract(
     });
     // Unawaited store writes can commit out of order: attempt a's seq 1 lands first.
     await write('build', envelope('a', 1, { type: 'agent_message_chunk', text: 'second' }));
-    await write('build', envelope('a', 0, { type: 'agent_message_chunk', text: 'first' }));
+    await write(
+      'build',
+      envelope('a', 0, { type: 'heartbeat', instructionSources: ['/native/AGENTS.md'] })
+    );
     await write('review', envelope('r', 0, { type: 'agent_message_chunk', text: 'other node' }));
     await write('build', envelope('b', 0, { type: 'state_update', state: 'running' }));
     await write('build', envelope('b', 1, { type: 'agent_message_chunk', text: 'retry' }));
@@ -185,7 +188,7 @@ export function providerEventReaderContract(
     expect(build[1]).toEqual({
       runId,
       stepName: 'build',
-      ...envelope('a', 0, { type: 'agent_message_chunk', text: 'first' }),
+      ...envelope('a', 0, { type: 'heartbeat', instructionSources: ['/native/AGENTS.md'] }),
     });
 
     const all = await listProviderEvents(runId);

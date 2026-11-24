@@ -29,10 +29,12 @@ import type { LoginAccountParams } from '../codex/protocol/v2/LoginAccountParams
 import type { LoginAccountResponse } from '../codex/protocol/v2/LoginAccountResponse';
 import type { McpToolCallStatus } from '../codex/protocol/v2/McpToolCallStatus';
 import type { RateLimitWindow } from '../codex/protocol/v2/RateLimitWindow';
-import type { Thread } from '../codex/protocol/v2/Thread';
-import type { ThreadForkResponse } from '../codex/protocol/v2/ThreadForkResponse';
+import {
+  threadStartResponse,
+  threadResumeResponse,
+  threadForkResponse,
+} from './codex-thread-responses';
 import type { ThreadItem } from '../codex/protocol/v2/ThreadItem';
-import type { ThreadResumeResponse } from '../codex/protocol/v2/ThreadResumeResponse';
 import type { ThreadStartResponse } from '../codex/protocol/v2/ThreadStartResponse';
 import type { TokenUsageBreakdown } from '../codex/protocol/v2/TokenUsageBreakdown';
 import type { Turn } from '../codex/protocol/v2/Turn';
@@ -48,6 +50,7 @@ type CommandExecution = Extract<ThreadItem, { type: 'commandExecution' }>;
 type McpToolCall = Extract<ThreadItem, { type: 'mcpToolCall' }>;
 
 export interface FakeTurnScript {
+  instructionSources?: Partial<Record<'thread/start' | 'thread/resume' | 'thread/fork', unknown>>;
   toolCalls?: DynamicToolCallParams[];
   account?: GetAccountResponse['account'];
   /** `requiresOpenaiAuth` in the default `account/read` answer (default true). */
@@ -266,6 +269,15 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
         } satisfies LoginAccountResponse,
       });
     };
+    const instructionResponse = (
+      method: 'thread/start' | 'thread/resume' | 'thread/fork',
+      response: ThreadStartResponse
+    ): unknown => ({
+      ...response,
+      ...(turn.instructionSources && method in turn.instructionSources
+        ? { instructionSources: turn.instructionSources[method] }
+        : {}),
+    });
     const serveRequest = (id: number, method: Method, params: unknown): void => {
       switch (method) {
         case 'initialize':
@@ -273,17 +285,26 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
           if (!turn.ignoreInitialize) send({ id, result: initializeResponse() });
           break;
         case 'thread/start':
-          send({ id, result: threadStartResponse(THREAD_ID) });
+          send({ id, result: instructionResponse('thread/start', threadStartResponse(THREAD_ID)) });
           break;
         case 'thread/resume': {
           const { threadId } = params as { threadId: string };
-          send({ id, result: threadResumeResponse(threadId) });
+          send({
+            id,
+            result: instructionResponse('thread/resume', threadResumeResponse(threadId)),
+          });
           break;
         }
         case 'thread/fork': {
           forks += 1;
           const source = (params as { threadId: string }).threadId;
-          send({ id, result: threadForkResponse(`${source}-fork-${String(forks)}`, source) });
+          send({
+            id,
+            result: instructionResponse(
+              'thread/fork',
+              threadForkResponse(`${source}-fork-${String(forks)}`, source)
+            ),
+          });
           break;
         }
         case 'turn/start':
@@ -388,78 +409,6 @@ function initializeResponse(): InitializeResponse {
     platformFamily: 'unix',
     platformOs: 'linux',
   };
-}
-
-function threadOf(id: string): Thread {
-  return {
-    id,
-    sessionId: id,
-    environments: null,
-    extra: null,
-    canAcceptDirectInput: null,
-    daybreakEnabled: null,
-    forkedFromId: null,
-    parentThreadId: null,
-    attachedToThreadId: null,
-    preview: '',
-    ephemeral: false,
-    section: null,
-    sectionEnteredAt: null,
-    projectId: null,
-    historyMode: 'paginated',
-    modelProvider: 'openai',
-    model: null,
-    reasoningEffort: null,
-    createdAt: 0,
-    updatedAt: 0,
-    recencyAt: null,
-    status: { type: 'idle' },
-    path: null,
-    cwd: '/workspace',
-    cliVersion: '0.0.0',
-    originator: null,
-    source: 'appServer',
-    threadSource: null,
-    agentNickname: null,
-    agentRole: null,
-    gitInfo: null,
-    name: null,
-    turns: [],
-  };
-}
-
-function threadStartResponse(id: string): ThreadStartResponse {
-  return {
-    thread: threadOf(id),
-    model: 'gpt-fake',
-    runtimeWorkspaceRoots: [],
-    activePermissionProfile: null,
-    multiAgentMode: 'explicitRequestOnly',
-    modelProvider: 'openai',
-    serviceTier: null,
-    disabledPluginIds: [],
-    cwd: '/workspace',
-    instructionSources: [],
-    approvalPolicy: 'never',
-    approvalsReviewer: 'user',
-    sandbox: { type: 'dangerFullAccess' },
-    reasoningEffort: null,
-  };
-}
-
-function threadResumeResponse(id: string): ThreadResumeResponse {
-  return {
-    ...threadStartResponse(id),
-    collaborationMode: null,
-    initialTurnsPage: null,
-    turnsBackwardsCursor: null,
-    itemsBackwardsCursor: null,
-  };
-}
-
-function threadForkResponse(id: string, source: string): ThreadForkResponse {
-  const response = threadStartResponse(id);
-  return { ...response, thread: { ...response.thread, forkedFromId: source } };
 }
 
 function configReadResponse(servers: string[]): ConfigReadResponse {

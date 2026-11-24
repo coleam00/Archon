@@ -1,8 +1,10 @@
 import { expect, test } from 'bun:test';
 import { z } from 'zod';
 import type { ProviderChunk } from '../events';
+import { providerChunkSchema } from '../events';
 import { connectProvider } from './connect';
 import baseline from './fixtures/protocol-4-baseline.schema.json';
+import published from '../../schema/provider-contract.schema.json';
 import { descriptor, fixtureProvider } from './fixtures/provider';
 import { streamPair } from './fixtures/streams';
 import { PluginProtocolMismatchError, PluginRpc } from './rpc';
@@ -132,6 +134,26 @@ test('the baseline is the current protocol', () => {
   expect(baseline.$defs.ProviderPluginDescriptor.properties.protocol.const).toBe(
     PROVIDER_PLUGIN_PROTOCOL
   );
+});
+
+test.each(
+  [[], ['/home/operator/AGENTS.md', '/workspace/AGENTS.md']].map(paths => [paths] as const)
+)('protocol-4 readers accept observed instruction sources %j', instructionSources => {
+  const event = { type: 'heartbeat', instructionSources } satisfies ProviderChunk;
+  expect(providerChunkSchema.parse(event)).toEqual(event);
+  expect(
+    z
+      .fromJSONSchema({
+        ...published,
+        $ref: '#/$defs/ProviderEvent',
+      } as unknown as z.core.JSONSchema.BaseSchema)
+      .parse(event)
+  ).toEqual(event);
+  expect(baselineDef('ProviderChunk').parse(event)).toMatchObject({ type: 'heartbeat' });
+  expect(
+    baselineDef('ProviderChunk').safeParse({ type: 'instruction_sources', instructionSources })
+      .success
+  ).toBe(false);
 });
 
 test('the session request sample covers every baseline field', () => {

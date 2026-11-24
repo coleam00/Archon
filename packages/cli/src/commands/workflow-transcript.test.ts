@@ -439,6 +439,14 @@ describe('workflowLogsCommand', () => {
         exitCode: 2,
       }),
       event('lint', 'a2', { type: 'heartbeat' }),
+      event('lint', 'a2', {
+        type: 'heartbeat',
+        instructionSources: [
+          '/remote/user/CLAUDE.md',
+          `/remote/${'long-directory/'.repeat(20)}AGENTS.md`,
+        ],
+      }),
+      event('lint', 'a2', { type: 'heartbeat', instructionSources: [] }),
       event('lint', 'a2', { type: 'state_update', state: 'running' }),
       event('lint', 'a2', { type: 'state_update', state: 'requires_action' }),
       // A newer event type, and a line missing its event: neither renders nor throws.
@@ -492,11 +500,19 @@ describe('workflowLogsCommand', () => {
         '  subtask started: scan',
         '  subtask completed: done',
         '  hook failed: guard (PreToolUse, exit 2)',
+        '  Loaded instruction sources:',
+        '    /remote/user/CLAUDE.md',
+        `    /remote/${'long-directory/'.repeat(20)}AGENTS.md`,
+        '  Loaded instruction sources: none',
         '  waiting on the user',
         '[plan] Completed (1s)',
         '',
       ].join('\n')
     );
+    stdoutSpy.mockClear();
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(run('completed'));
+    expect(await workflowLogsCommand(createTestWorkflowHost(), run('completed').id, false)).toBe(0);
+    expect(stdoutText()).toBe(`${rows.map(row => JSON.stringify(row)).join('\n')}\n`);
   });
 
   it('follows as text, rendering a row only once it is whole', async () => {

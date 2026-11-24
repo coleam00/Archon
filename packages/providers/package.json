@@ -65,6 +65,9 @@
   },
   "testGroups": [
     [
+      "src/claude/guidance.boundary.test.ts"
+    ],
+    [
       "src/claude/provider.test.ts"
     ],
     [

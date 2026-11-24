@@ -99,10 +99,62 @@ async function streamOf(
   }
   expect(chunks[0]).toEqual({ type: 'session', sessionId: THREAD_ID });
   expect(chunks.at(-1)).toEqual({ type: 'settled' });
-  return chunks.slice(1, -1);
+  return chunks
+    .slice(1, -1)
+    .filter(chunk => !(chunk.type === 'heartbeat' && chunk.instructionSources !== undefined));
 }
 
 type CollabItem = Extract<ThreadItem, { type: 'collabAgentToolCall' }>;
+
+test('start, resume and fork report their own native instruction sources', async () => {
+  const { provider } = providerWith({
+    instructionSources: {
+      'thread/start': ['/native/start/AGENTS.md'],
+      'thread/resume': ['/native/resume/AGENTS.md'],
+      'thread/fork': ['/native/fork/AGENTS.md'],
+    },
+  });
+  const fresh = await run(provider);
+  const resumed = await run(provider, undefined, THREAD_ID);
+  const forked = await run(provider, { forkSession: true }, THREAD_ID);
+  expect(
+    [fresh, resumed, forked].map(chunks => chunks.filter(chunk => chunk.type === 'heartbeat'))
+  ).toEqual([
+    [{ type: 'heartbeat', instructionSources: ['/native/start/AGENTS.md'] }],
+    [{ type: 'heartbeat', instructionSources: ['/native/resume/AGENTS.md'] }],
+    [{ type: 'heartbeat', instructionSources: ['/native/fork/AGENTS.md'] }],
+  ]);
+  expect(fresh.slice(0, 2)).toEqual([
+    { type: 'session', sessionId: THREAD_ID },
+    { type: 'heartbeat', instructionSources: ['/native/start/AGENTS.md'] },
+  ]);
+});
+
+test.each(['thread/start', 'thread/resume', 'thread/fork'] as const)(
+  '%s distinguishes observed emptiness from missing or malformed sources',
+  async method => {
+    for (const instructionSources of [[], undefined, null, [''], [1]]) {
+      const chunks = await run(
+        providerWith({ instructionSources: { [method]: instructionSources } }).provider,
+        { forkSession: method === 'thread/fork' },
+        method === 'thread/start' ? undefined : THREAD_ID
+      );
+      const observed = chunks.filter(chunk => chunk.type === 'heartbeat');
+      if (Array.isArray(instructionSources) && instructionSources.length === 0) {
+        expect(observed).toEqual([{ type: 'heartbeat', instructionSources: [] }]);
+      } else {
+        expect(observed).toEqual([]);
+        expect(chunks).toContainEqual(
+          expect.objectContaining({
+            type: 'warning',
+            code: 'codex.instruction_sources_unavailable',
+          })
+        );
+      }
+      expect(chunks.at(-1)).toEqual({ type: 'settled' });
+    }
+  }
+);
 
 /** Codex's v1 `spawn_agent` item: `receiverThreadIds` names the new thread once it completes. */
 function collabSpawn(status: CollabItem['status'], receiverThreadIds: string[] = []): CollabItem {
@@ -219,7 +271,7 @@ describe('CodexProvider', () => {
           for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
         };
         await expect(collect()).rejects.toThrow('cleanup refused');
-        expect(chunks.map(chunk => chunk.type)).toEqual(['session', 'result']);
+        expect(chunks.map(chunk => chunk.type)).toEqual(['session', 'heartbeat', 'result']);
         expect(mockLogger.error).toHaveBeenCalledWith(
           expect.objectContaining({
             err: expect.objectContaining({ message: expect.stringContaining('cleanup refused') }),
@@ -821,6 +873,7 @@ describe('CodexProvider', () => {
         ]);
         expect(chunks.map(c => c.type)).toEqual([
           'session',
+          'heartbeat',
           'subtask',
           'subtask',
           'result',
@@ -844,8 +897,14 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
         if (chunk.type === 'result' && chunk.failure) break;
       }
-      expect(chunks.map(c => c.type)).toEqual(['session', 'subtask', 'subtask', 'result']);
-      expect(chunks[2]).toMatchObject({ status: 'completed' });
+      expect(chunks.map(c => c.type)).toEqual([
+        'session',
+        'heartbeat',
+        'subtask',
+        'subtask',
+        'result',
+      ]);
+      expect(chunks[3]).toMatchObject({ status: 'completed' });
       expect(resultOf(chunks).failure?.evidence).toContain('parent failed');
       expect(server.processes[0].stdinEnded).toBe(true);
     });
@@ -870,7 +929,7 @@ describe('CodexProvider', () => {
         }
       };
       await expect(consume()).rejects.toThrow('Query aborted');
-      expect(chunks.map(c => c.type)).toEqual(['session', 'subtask', 'result']);
+      expect(chunks.map(c => c.type)).toEqual(['session', 'heartbeat', 'subtask', 'result']);
       expect(server.processes[0].stdinEnded).toBe(true);
     });
 
@@ -880,7 +939,7 @@ describe('CodexProvider', () => {
       const server = createFakeAppServer(() => ({ exitsAfterStdinCloseMs: 100 }));
       const chunks = await run(new CodexProvider(server, 20));
       expect(server.processes[0].signals).toEqual([]);
-      expect(chunks.map(c => c.type)).toEqual(['session', 'result', 'settled']);
+      expect(chunks.map(c => c.type)).toEqual(['session', 'heartbeat', 'result', 'settled']);
     });
 
     test('an abnormal process exit after the final notification is not a settle', async () => {
@@ -889,7 +948,7 @@ describe('CodexProvider', () => {
         exitCode: 137,
       });
       const chunks = await run(provider);
-      expect(chunks.map(c => c.type)).toEqual(['session', 'result']);
+      expect(chunks.map(c => c.type)).toEqual(['session', 'heartbeat', 'result']);
       expect(server.processes[0].signals).toEqual([]);
       expect(mockLogger.error).toHaveBeenCalledWith(
         expect.objectContaining({ lifecycle: 'process_abnormal_exit' }),
@@ -907,8 +966,8 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
         if (chunk.type === 'result') server.processes[0].exit(137);
       }
-      expect(chunks.map(c => c.type)).toEqual(['session', 'subtask', 'result']);
-      expect(chunks[1]).toMatchObject({ status: 'started' });
+      expect(chunks.map(c => c.type)).toEqual(['session', 'heartbeat', 'subtask', 'result']);
+      expect(chunks[2]).toMatchObject({ status: 'started' });
       expect(server.processes[0].stdinEnded).toBe(false);
     });
   });
@@ -2761,8 +2820,13 @@ describe('CodexProvider', () => {
       }
 
       expect(error?.message).toBe('Query aborted');
-      expect(chunks.map(c => c.type)).toEqual(['session', 'tool_call', 'tool_call_update']);
-      expect(chunks[2]).toMatchObject({ toolCallId: 'cmd-1', status: 'cancelled' });
+      expect(chunks.map(c => c.type)).toEqual([
+        'session',
+        'heartbeat',
+        'tool_call',
+        'tool_call_update',
+      ]);
+      expect(chunks[3]).toMatchObject({ toolCallId: 'cmd-1', status: 'cancelled' });
       const process0 = server.processes[0];
       expect(paramsOf(server, 'turn/interrupt')).toEqual({ threadId: THREAD_ID, turnId: TURN_ID });
       expect(process0.stdinEnded).toBe(true);

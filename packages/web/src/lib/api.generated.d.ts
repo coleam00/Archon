@@ -11115,6 +11115,7 @@ export interface components {
         | {
             /** @enum {string} */
             type: 'heartbeat';
+            instructionSources?: string[];
           };
       runId: string;
       stepName: string;

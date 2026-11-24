@@ -261,12 +261,17 @@ describe('GET /api/workflows/runs/:runId/provider-events', () => {
 
   test('serves the store records unchanged, filtered by step and cursor', async () => {
     mockGetWorkflowRun.mockImplementation(async () => MOCK_RUNNING_RUN);
-    mockListProviderEvents.mockImplementation(async () => [record]);
+    const sources: ProviderEventRecord = {
+      ...record,
+      seq: 1,
+      event: { type: 'heartbeat', instructionSources: ['/remote/AGENTS.md'] },
+    };
+    mockListProviderEvents.mockImplementation(async () => [record, sources]);
     const { app } = makeApp();
 
     const all = await app.request('/api/workflows/runs/run-uuid-1/provider-events');
     expect(all.status).toBe(200);
-    expect(await all.json()).toEqual({ events: [record] });
+    expect(await all.json()).toEqual({ events: [record, sources] });
     expect(mockListProviderEvents).toHaveBeenLastCalledWith('run-uuid-1', { stepName: undefined });
 
     await app.request('/api/workflows/runs/run-uuid-1/provider-events?step=plan');

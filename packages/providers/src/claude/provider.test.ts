@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import type { Options, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import type { Options, Query, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { createMockLogger } from '../test/mocks/logger';
 import type { IAgentProvider, MessageChunk } from '../types';
 
@@ -26,6 +26,11 @@ type MockQuery = (...args: Parameters<typeof sdkQuery>) => AsyncGenerator<unknow
 const mockQuery = mock<MockQuery>(async function* (_params) {
   // Empty generator by default
 });
+const getContextUsage = mock<
+  (
+    ...args: Parameters<Query['getContextUsage']>
+  ) => Promise<Pick<Awaited<ReturnType<Query['getContextUsage']>>, 'memoryFiles'>>
+>(async () => ({ memoryFiles: [] }));
 
 // Mock the claude-agent-sdk
 type SdkToolHandler = (
@@ -47,7 +52,8 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
       },
     },
   }),
-  query: mockQuery,
+  query: (...args: Parameters<typeof sdkQuery>) =>
+    Object.assign(mockQuery(...args), { getContextUsage }),
   archiveSession: unmocked('archiveSession'),
   unarchiveSession: unmocked('unarchiveSession'),
   matchDeniedModels: unmocked('matchDeniedModels'),
@@ -76,6 +82,8 @@ beforeEach(() => {
   pluginIdsSpy = spyOn(pluginsModule, 'readClaudePluginIds').mockResolvedValue([]);
   client = new ClaudeProvider();
   mockQuery.mockClear();
+  getContextUsage.mockReset();
+  getContextUsage.mockResolvedValue({ memoryFiles: [] });
   mockLogger.info.mockClear();
   mockLogger.warn.mockClear();
   mockLogger.error.mockClear();
@@ -433,6 +441,7 @@ describe('message stream', () => {
       { type: 'mcp_server_status', server: 'github', status: 'connected' },
       { type: 'mcp_server_status', server: 'linear', status: 'needs_auth' },
       { type: 'mcp_server_status', server: 'broken', status: 'failed', error: 'spawn ENOENT' },
+      { type: 'heartbeat', instructionSources: [] },
     ]);
   });
 
@@ -451,7 +460,71 @@ describe('message stream', () => {
     expect(chunks).toEqual([
       { type: 'session', sessionId: 'sid' },
       { type: 'mcp_server_status', server: 'github', status: 'connected' },
+      { type: 'heartbeat', instructionSources: [] },
+      { type: 'heartbeat', instructionSources: [] },
     ]);
+  });
+
+  test('observes live files at each init instead of inferring sources from configuration', async () => {
+    getContextUsage.mockResolvedValueOnce({
+      memoryFiles: [{ path: '/native/user/CLAUDE.md', type: 'custom', tokens: 1 }],
+    });
+    getContextUsage.mockResolvedValueOnce({
+      memoryFiles: [{ path: '/native/project/AGENTS.md', type: 'custom', tokens: 1 }],
+    });
+    sdkYields(
+      { type: 'system', subtype: 'init', session_id: 's', mcp_servers: [] },
+      { type: 'system', subtype: 'init', session_id: 's', mcp_servers: [] },
+      { type: 'result', session_id: 's' }
+    );
+    const chunks = await chunksOf('test', '/workspace', 's', {
+      assistantConfig: { settingSources: ['project'] },
+    });
+    expect(chunks.filter(chunk => chunk.type === 'heartbeat')).toEqual([
+      { type: 'heartbeat', instructionSources: ['/native/user/CLAUDE.md'] },
+      { type: 'heartbeat', instructionSources: ['/native/project/AGENTS.md'] },
+    ]);
+    expect(getContextUsage.mock.calls).toEqual([[{ detail: 'summary' }], [{ detail: 'summary' }]]);
+    expect(chunks.at(-1)).toEqual({ type: 'settled' });
+  });
+
+  test('an unavailable source observation warns without changing turn execution or inventing an empty list', async () => {
+    getContextUsage.mockRejectedValue(new Error('control unavailable'));
+    sdkYields(
+      { type: 'system', subtype: 'init', session_id: 's', mcp_servers: [] },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } },
+      { type: 'result', session_id: 's' }
+    );
+    const chunks = await chunksOf('test', '/workspace');
+    expect(chunks).toContainEqual(
+      expect.objectContaining({ type: 'warning', code: 'claude.instruction_sources_unavailable' })
+    );
+    expect(chunks.some(chunk => chunk.type === 'heartbeat')).toBe(false);
+    expect(chunks).toContainEqual({ type: 'agent_message_chunk', text: 'done' });
+    expect(chunks.at(-1)).toEqual({ type: 'settled' });
+  });
+
+  test('caller cancellation during source observation neither warns nor settles', async () => {
+    const abort = new AbortController();
+    getContextUsage.mockImplementation(async () => {
+      abort.abort();
+      throw new Error('cancelled control');
+    });
+    sdkYields({ type: 'system', subtype: 'init', session_id: 's', mcp_servers: [] });
+    const chunks: MessageChunk[] = [];
+    await expect(
+      (async () => {
+        for await (const chunk of client.sendQuery('test', '/workspace', undefined, {
+          abortSignal: abort.signal,
+        }))
+          chunks.push(chunk);
+      })()
+    ).rejects.toThrow('Query aborted');
+    expect(
+      chunks.some(
+        chunk => chunk.type === 'warning' || chunk.type === 'heartbeat' || chunk.type === 'settled'
+      )
+    ).toBe(false);
   });
 
   test('reports compaction when it starts and when its boundary lands', async () => {

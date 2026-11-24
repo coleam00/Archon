@@ -141,7 +141,8 @@ export async function* streamClaudeMessages(
   events: AsyncGenerator,
   toolResultQueue: ToolResultEntry[],
   spendBaseline: SpendBaseline,
-  closeInput: () => void
+  closeInput: () => void,
+  observeInstructionSources: () => Promise<Extract<MessageChunk, { type: 'heartbeat' | 'warning' }>>
 ): AsyncGenerator<MessageChunk> {
   const state: StreamState = {
     toolResultQueue,
@@ -165,6 +166,12 @@ export async function* streamClaudeMessages(
     // Drain tool results captured by hooks before processing the next event
     yield* drainHookResults(state);
     if ((yield* streamEvent(state, msg)) === 'stop') break;
+    if (
+      (msg as { type?: unknown }).type === 'system' &&
+      (msg as { subtype?: unknown }).subtype === 'init'
+    ) {
+      yield await observeInstructionSources();
+    }
   }
 
   // Drain any remaining tool results after the stream ends

@@ -684,6 +684,13 @@
             "type": {
               "type": "string",
               "const": "heartbeat"
+            },
+            "instructionSources": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           },
           "required": [

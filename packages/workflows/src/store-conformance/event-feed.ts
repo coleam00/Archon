@@ -286,7 +286,10 @@ export function describeEventFeedConformance(getHarness: () => WorkflowStoreHarn
             attemptId,
             seq,
             observedAt: wait.waitingSince,
-            event: { type: 'agent_message_chunk', text: 'hello' },
+            event:
+              seq === 0 && attemptId === 'first'
+                ? { type: 'heartbeat', instructionSources: ['/native/AGENTS.md'] }
+                : { type: 'agent_message_chunk', text: 'hello' },
           },
         });
       }
@@ -296,6 +299,14 @@ export function describeEventFeedConformance(getHarness: () => WorkflowStoreHarn
         ['first', 1],
         ['second', 0],
       ]);
+      expect(records[0]).toEqual({
+        runId: run.id,
+        stepName: 'build',
+        attemptId: 'first',
+        seq: 0,
+        observedAt: wait.waitingSince,
+        event: { type: 'heartbeat', instructionSources: ['/native/AGENTS.md'] },
+      });
       expect(
         await store.listProviderEvents(run.id, {
           stepName: 'build',

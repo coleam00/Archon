@@ -1,6 +1,6 @@
 // @archon-test-isolated
 import { describe, expect, mock, test } from 'bun:test';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -26,14 +26,17 @@ async function makeHandler(
     configuredMcpServers?: string[];
     attempt?: AttemptEventSequence;
     platform?: IWorkflowPlatform;
+    onMessageText?: (text: string) => Promise<void>;
   } = {}
 ): Promise<{
   handler: ReturnType<typeof createProviderEventHandler>;
   rows: Parameters<CreateEvent>[0][];
   sent: string[];
+  logDir: string;
 }> {
   const rows: Parameters<CreateEvent>[0][] = [];
   const sent: string[] = [];
+  const logDir = trackTempRoot(await mkdtemp(join(tmpdir(), 'provider-events-')));
   const platform: IWorkflowPlatform = {
     sendMessage: mock(async (_conversationId: string, message: string) => {
       sent.push(message);
@@ -64,18 +67,45 @@ async function makeHandler(
     platform: options.platform ?? platform,
     conversationId: 'conv-1',
     messageContext: {},
-    logDir: trackTempRoot(await mkdtemp(join(tmpdir(), 'provider-events-'))),
+    logDir,
     runId: 'run-1',
     nodeId: 'node-1',
     stepName: 'node-1',
     attempt: options.attempt ?? createAttemptEventSequence('attempt-1'),
     configuredMcpServers: new Set(options.configuredMcpServers),
-    onMessageText: async () => undefined,
+    onMessageText: options.onMessageText ?? (async () => undefined),
   });
-  return { handler, rows, sent };
+  return { handler, rows, sent, logDir };
 }
 
 describe('createProviderEventHandler', () => {
+  test('records and emits observed sources without manufacturing platform output', async () => {
+    const onMessageText = mock(async () => undefined);
+    const { handler, rows, sent, logDir } = await makeHandler({ onMessageText });
+    const emitted: unknown[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
+      if (event.type === 'provider_event' && event.runId === 'run-1') emitted.push(event.event);
+    });
+    const event = { type: 'heartbeat', instructionSources: ['/native/AGENTS.md'] } as const;
+    try {
+      await handler.handle({ ...event, instructionSources: [...event.instructionSources] });
+    } finally {
+      unsubscribe();
+    }
+    expect(rows).toHaveLength(1);
+    expect(providerEventEnvelopeSchema.parse(rows[0].data)).toMatchObject({
+      attemptId: 'attempt-1',
+      seq: 0,
+      event,
+    });
+    expect(emitted).toEqual([event]);
+    expect(sent).toEqual([]);
+    expect(onMessageText).not.toHaveBeenCalled();
+    const logged = JSON.parse(await readFile(join(logDir, 'run-1.jsonl'), 'utf8'));
+    expect(providerEventEnvelopeSchema.parse(logged)).toEqual(
+      providerEventEnvelopeSchema.parse(rows[0].data)
+    );
+  });
   test.each(['stream', 'batch'] as const)(
     'records and emits tools before forwarding them in %s mode',
     async mode => {

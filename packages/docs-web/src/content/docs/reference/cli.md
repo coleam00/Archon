@@ -421,6 +421,8 @@ env:
 
 The layer is sparse: omitted settings keep their normal lower-layer values. In `--config ./config.minimax.yaml --model large=openai/gpt-5.6`, only `large` is replaced by the flag; `small`, `medium`, aliases, and every other omitted setting still fall through. See [Run-scoped configuration](/reference/configuration/#run-scoped-configuration) for the supported keys and fail-fast exclusions.
 
+For Claude evals without personal guidance, use the existing `assistants.claude.settingSources: [project]` run layer and a fresh native session. See [Project-only guidance for evals](/reference/configuration/#project-only-guidance-for-evals) for node-override precedence, observed-source verification and the bundled Codex limitation.
+
 #### Running a workflow from another checkout
 
 `--cwd` and `--workflow-source` answer two different questions: what the run acts on, and where the workflow itself is read from. They are the same directory unless you say otherwise.
@@ -1033,6 +1035,8 @@ The list is uncapped. Files under the engine's own `.archon` child are counted, 
 With a path, the command writes the file's exact bytes to stdout. `--json` returns `{ "runId", "path", "content" }` with the content as UTF-8 text, and fails for a file that is not valid UTF-8; read that one without `--json`. A path that does not exist, names a directory, or resolves outside the run's artifacts (`..`, or a symlink pointing elsewhere) exits `1`. Under `--json` every failure is one `{ "ok": false, "runId", "error" }` document.
 
 ### `workflow logs`
+
+With `--format text`, source-bearing provider heartbeats show **Loaded instruction sources** with the native paths, or **none** for an observed empty array. Ordinary heartbeats remain hidden. Default JSONL output keeps the complete optional `instructionSources` field unchanged. See [Project-only guidance for evals](/reference/configuration/#project-only-guidance-for-evals); an absent field is not an empty observation.
 
 Print the run's existing JSONL transcript, or follow it as rows are appended:
 

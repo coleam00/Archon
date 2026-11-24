@@ -199,7 +199,10 @@ export const stateUpdateSchema = z.object({
 });
 
 /** Provider activity that resets the idle watchdog without starting a new result phase. */
-export const heartbeatSchema = z.object({ type: z.literal('heartbeat') });
+export const heartbeatSchema = z.object({
+  type: z.literal('heartbeat'),
+  instructionSources: z.array(z.string().min(1)).optional(),
+});
 
 /** Every non-terminal event a provider may stream. */
 export const providerEventSchema = z.discriminatedUnion('type', [

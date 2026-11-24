@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { z } from 'zod';
+import { awaitingTurnSettlement } from './settled';
 import {
   toolCallUpdateSchema,
   providerChunkSchema,
@@ -11,6 +12,8 @@ import {
 } from './events';
 
 const oneOfEach: ProviderEvent[] = [
+  { type: 'heartbeat', instructionSources: ['/home/operator/AGENTS.md', '/work/AGENTS.md'] },
+  { type: 'heartbeat', instructionSources: [] },
   { type: 'agent_message_chunk', text: 'Done.' },
   { type: 'agent_message_chunk', text: 'continued', continuesPreviousBlock: true },
   { type: 'agent_thought_chunk', text: 'Check the tests first.' },
@@ -153,6 +156,19 @@ describe('provider event vocabulary', () => {
   ])('rejects %s', (_label, chunk) => {
     expect(providerChunkSchema.safeParse(chunk).success).toBe(false);
   });
+});
+
+test('instruction observations preserve the result phase and reject malformed paths', () => {
+  for (const instructionSources of [undefined, [], ['/work/AGENTS.md']]) {
+    const heartbeat = providerEventSchema.parse({ type: 'heartbeat', instructionSources });
+    expect(awaitingTurnSettlement(true, heartbeat)).toBe(true);
+    expect(awaitingTurnSettlement(false, heartbeat)).toBe(false);
+  }
+  for (const instructionSources of [[''], [1], null, '/work/AGENTS.md']) {
+    expect(providerEventSchema.safeParse({ type: 'heartbeat', instructionSources }).success).toBe(
+      false
+    );
+  }
 });
 
 describe('truncateToolOutput', () => {

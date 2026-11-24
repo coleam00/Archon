@@ -122,7 +122,11 @@ function formatProviderEvent(
     case 'hook':
       return formatHook(event);
     case 'heartbeat':
-      return undefined;
+      return event.instructionSources === undefined
+        ? undefined
+        : event.instructionSources.length === 0
+          ? '  Loaded instruction sources: none'
+          : `  Loaded instruction sources:\n${event.instructionSources.map(path => `    ${path}`).join('\n')}`;
     case 'state_update':
       return event.state === 'requires_action' ? '  waiting on the user' : undefined;
     default:

@@ -4,7 +4,7 @@
  * parent turn completes and the background work it started has drained.
  */
 import { requireMcpConnections, type McpStatus } from '../mcp/readiness';
-import { BUNDLED_VERSION, createLogger } from '@archon/paths';
+import { createLogger } from '@archon/paths';
 import { sessionPreview, toolCallSchema, truncateToolOutput } from '@archon/provider-contract';
 import {
   mergeTokenUsage,
@@ -15,7 +15,8 @@ import {
 } from '../types';
 import { ClassifiedProviderError, failureResult } from '../shared/failure';
 import type { AppServerConnection, ParamsOf } from './app-server';
-import { withDeliveredCredentialConfig, type CodexLogin, type ThreadParams } from './login';
+import type { CodexLogin, ThreadParams } from './login';
+import { openThread } from './thread';
 import { toolResponse, type buildCodexNativeTools } from './native-tools';
 import type { ServerNotification } from './protocol/ServerNotification';
 import { steered, type TurnIds } from './turn-messages';
@@ -27,13 +28,7 @@ import type { TokenUsageBreakdown } from './protocol/v2/TokenUsageBreakdown';
 import type { Turn } from './protocol/v2/Turn';
 import type { McpServerConnectionStatus } from './protocol/v2/McpServerConnectionStatus';
 import type { TurnError } from './protocol/v2/TurnError';
-import {
-  applyNodeScope,
-  checkThreadMcpScope,
-  declaredServers,
-  readCodexInventory,
-  readThreadMcpStatuses,
-} from './scope';
+import { declaredServers, readThreadMcpStatuses } from './scope';
 import {
   MANAGED_CHATGPT_TOKEN_REJECTED,
   classifyTurnError,
@@ -249,15 +244,6 @@ function idAt(value: unknown, key: 'thread' | 'turn'): string | undefined {
   return typeof id === 'string' && id.length > 0 ? id : undefined;
 }
 
-/** The Codex home the app-server reports in its `initialize` response, for error messages. */
-function codexHomeOf(initializeResponse: unknown): string {
-  const home =
-    typeof initializeResponse === 'object' && initializeResponse !== null
-      ? (initializeResponse as { codexHome?: unknown }).codexHome
-      : undefined;
-  return typeof home === 'string' && home.length > 0 ? home : 'the Codex home';
-}
-
 export interface TurnRequest {
   abortSignal: AbortSignal | undefined;
   /** Engine texts to steer into the active turn (`SendQueryOptions.turnMessages`). */
@@ -365,8 +351,23 @@ async function readDeclaredMcpStatuses(
  */
 export async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   const { connection } = request;
-  const threadId = await openThread(request);
+  const { threadId, instructionSources } = await openThread(request);
+  getLog().debug(
+    {
+      sessionIdPreview: sessionPreview(threadId),
+      resumed: !!request.resumeSessionId,
+      forked: !!request.resumeSessionId && request.forkSession,
+    },
+    'codex.thread_ready'
+  );
   yield { type: 'session', sessionId: threadId };
+  yield instructionSources === undefined
+    ? {
+        type: 'warning',
+        code: 'codex.instruction_sources_unavailable',
+        message: 'Codex did not report valid loaded instruction sources.',
+      }
+    : { type: 'heartbeat', instructionSources };
   const declared = Object.keys(declaredServers(request.threadParams.config ?? {}));
   yield* requireMcpConnections(
     declared,
@@ -482,71 +483,6 @@ function usageAfter(reported: TokenUsage | undefined, usage: TokenUsage): TokenU
   for (const key of ['input', 'output', 'cacheRead', 'cacheWrite'] as const)
     later[key] = Math.max(0, (usage[key] ?? 0) - (reported?.[key] ?? 0));
   return Object.values(later).some(Boolean) ? later : undefined;
-}
-
-/**
- * Initialize the connection, log in, and start, continue or fork the thread with the
- * request's config, scoped to the node's plugins and MCP servers when it declares them.
- */
-async function openThread(request: TurnRequest): Promise<string> {
-  const { connection, nodePlugins, login, tools } = request;
-  const initialized = await connection.request('initialize', {
-    clientInfo: { name: 'archon', title: 'Archon', version: BUNDLED_VERSION },
-    // Host tools and external ChatGPT tokens both require Codex's experimental API.
-    capabilities:
-      tools.specs.length || login?.type === 'chatgptAuthTokens'
-        ? { experimentalApi: true, requestAttestation: false }
-        : null,
-  });
-  connection.notify('initialized');
-  if (login) {
-    // The credential stays in this process's memory: the app-server was started with the
-    // ephemeral credential store, so nothing reaches the user's CODEX_HOME.
-    await connection.request('account/login/start', login);
-  }
-
-  let { threadParams } = request;
-  if (request.authoritativeCredential) {
-    threadParams = await withDeliveredCredentialConfig(connection, request.cwd, threadParams);
-  }
-  let declared: string[] | undefined;
-  if (nodePlugins) {
-    const inventory = await readCodexInventory(connection, {
-      cwd: request.cwd,
-      plugins: nodePlugins,
-      codexHome: codexHomeOf(initialized),
-    });
-    const scope = applyNodeScope(threadParams.config ?? {}, inventory, nodePlugins);
-    threadParams = { ...threadParams, config: scope.config };
-    declared = scope.declared;
-  }
-  // A resumed or forked thread needs the same config: Codex does not store it with the
-  // thread, and a fork without it loads the user's MCP servers and plugins again.
-  const threadResponse = request.resumeSessionId
-    ? await connection.request(request.forkSession ? 'thread/fork' : 'thread/resume', {
-        threadId: request.resumeSessionId,
-        cwd: request.cwd,
-        ...threadParams,
-        excludeTurns: true,
-      })
-    : await connection.request('thread/start', {
-        cwd: request.cwd,
-        ...threadParams,
-        ...(tools.specs.length ? { dynamicTools: tools.specs } : {}),
-      });
-  const threadId = idAt(threadResponse, 'thread');
-  if (!threadId) throw new Error('Codex app-server returned a thread without an id');
-  request.onThread(threadId);
-  if (declared) await checkThreadMcpScope(connection, threadId, declared);
-  getLog().debug(
-    {
-      sessionIdPreview: sessionPreview(threadId),
-      resumed: !!request.resumeSessionId,
-      forked: !!request.resumeSessionId && request.forkSession,
-    },
-    'codex.thread_ready'
-  );
-  return threadId;
 }
 
 /** Serve host tool calls for the turn, then start it. */

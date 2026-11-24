@@ -378,6 +378,34 @@ assistants:
 
 Set in `~/.archon/config.yaml` (global) or `.archon/config.yaml` (repo-specific).
 
+### Project-only guidance for evals
+
+To measure a Claude workflow without personal user-level guidance, select an ordinary [run-scoped configuration](#run-scoped-configuration) file for a **new native session**:
+
+```yaml
+# eval-project-only.yaml
+assistants:
+  claude:
+    settingSources: [project]
+```
+
+```bash
+archon workflow run <workflow> "<eval input>" --config ./eval-project-only.yaml
+archon workflow logs <run-id> --format text
+```
+
+The workflow must already select Claude through its normal provider/tier configuration. An existing node-level `settingSources` override wins over assistant defaults, including this run layer; check the observed record instead of assuming the layer prevailed. No new workflow field or Archon source-selection switch is involved. The default remains `['project', 'user']`, and Archon keeps the provider's native home, authentication and unrelated configuration. Skills, plugins and MCP servers still obey the node's explicit capability scope. A skill installed under a disabled source cannot be selected.
+
+Claude discovers project `CLAUDE.md` natively. To include `AGENTS.md`, import it from the project's `CLAUDE.md` (for example, `Read @AGENTS.md`); Archon does not load or synthesize guidance files. Native project discovery may include ancestor files, so inspect the paths rather than classifying them by directory or display label.
+
+On each native initialization, the run records provider-observed paths in a `heartbeat` event's optional `instructionSources` array. Text logs show **Loaded instruction sources**; the existing JSONL transcript and `GET /api/workflows/runs/{runId}/provider-events` expose the same ordered paths for machine consumers. `[]` means the provider observed no loaded instruction files. Omission means no observation is available, not that none loaded; an unavailable native observation produces a namespaced provider warning. Plain heartbeats remain invisible in text logs. Older protocol-4 readers accept these rows but may discard the new metadata.
+
+These are current native observations, not certification about managed policy, arbitrary prompt text, later tool reads, or guidance already present in resumed history. Provider-native settings and guidance remain live even when a run's AI bindings are recorded. Start fresh for a clean baseline; resumed and wake turns report current files without rewriting their history.
+
+**Codex limitation:** bundled Codex **0.171.0** has no supported native setting that retains project guidance while excluding user-level guidance. Archon reports the loaded files from native `thread/start`, `thread/resume` and `thread/fork` responses, but does not claim project-only exclusion on Codex. `project_doc_max_bytes = 0` disables project guidance while retaining user guidance; replacing model `instructions` is not guidance-source selection. Moving `CODEX_HOME` would hide unrelated configuration and authentication and is not an Archon workaround. An older operator-selected binary that omits or malforms native source facts produces `codex.instruction_sources_unavailable`, never a fabricated empty observation.
+
+Native contracts: [Claude SDK setting sources](https://platform.claude.com/docs/en/agent-sdk/typescript), [Codex guidance discovery](https://developers.openai.com/codex/guides/agents-md/), and [Codex configuration](https://developers.openai.com/codex/config-reference/). The Codex limitation is verified against the pinned release, not inferred from moving documentation.
+
 ### Where a run reads `.archon/config.yaml`
 
 `.archon/config.yaml` is one of a run's definitions, with the project's workflows (`.archon/workflows`, which also holds in-repository packs), commands (`.archon/commands` and a configured `commands.folder`) and scripts (`.archon/scripts`). A run that a binding starts, or that `archon workflow run` starts with a worktree, reads all of them from the **base branch as fetched when the run starts, with the files uncommitted in the launch checkout laid on top**: modified, deleted, untracked and gitignored files under those paths, each file on its own. Changes committed on the checkout's own branch are not a layer: a file committed there and not changed since is read from the base branch. Both layers go into the run's source capture, outside every checkout. Nothing is copied into the worktree, so a local edit applies to the run and never reaches a commit or pull request it makes. The worktree is cut from the same base commit, so the run's code and its definitions come from one commit.

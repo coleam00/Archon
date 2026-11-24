@@ -54,6 +54,8 @@ Within a protocol version, changes are additive: every message valid for the ver
 
 Protocol 3 adds the parsed `heartbeat` event; protocol-2 hosts and plugins must upgrade together. Protocol 4 adds the `session` chunk; protocol-3 hosts and plugins must upgrade together.
 
+A heartbeat may include `instructionSources`, the provider's observed loaded instruction-file paths in native order. An empty array means the provider observed no loaded files; omission means no observation is available. This metadata preserves the heartbeat's watchdog and result-phase semantics. Paths are not file contents, configuration snapshots, inferred user/project classifications, or proof that earlier session history excludes guidance. They use the ordinary provider-event record and report channels. Protocol-4 readers predating this optional field accept the event but may discard the observation.
+
 Version negotiation follows ACP. The host sends its protocol in `initialize`; the plugin always answers with its descriptor, but serves sessions and `_archon/*` requests only when both protocols match. On a mismatch the host fails with `PluginProtocolMismatchError` (a `PluginProtocolError`), whose message and `hostProtocol`/`pluginProtocol` fields name both versions. A peer released before this negotiation existed still rejects a mismatched `initialize` with `-32602`.
 
 `src/plugin/fixtures/protocol-4-baseline.schema.json` is the published schema at the first protocol-4 release. `compat.test.ts` sends baseline-shaped requests to the current plugin and current requests to a plugin pinned to the baseline. A protocol bump replaces the snapshot; a test fails while its protocol differs from `PROVIDER_PLUGIN_PROTOCOL`.

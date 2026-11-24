@@ -44,7 +44,7 @@ import type {
   MessageChunk,
   ProviderCapabilities,
 } from '../types';
-import { sessionPreview, truncateToolOutput } from '@archon/provider-contract';
+import { heartbeatSchema, sessionPreview, truncateToolOutput } from '@archon/provider-contract';
 import { parseClaudeConfig, resolveSettingSources } from './config';
 import { CLAUDE_CAPABILITIES } from './capabilities';
 import { buildContainerSpawn } from './container-spawn';
@@ -596,6 +596,28 @@ async function* awaitMcpReadiness(
   controller.signal.throwIfAborted();
 }
 
+async function observeInstructionSources(
+  nativeQuery: Pick<ReturnType<typeof query>, 'getContextUsage'>,
+  signal: AbortSignal
+): Promise<Extract<MessageChunk, { type: 'heartbeat' | 'warning' }>> {
+  signal.throwIfAborted();
+  try {
+    const usage = await nativeQuery.getContextUsage({ detail: 'summary' });
+    signal.throwIfAborted();
+    return heartbeatSchema.parse({
+      type: 'heartbeat',
+      instructionSources: usage.memoryFiles.map(file => file.path),
+    });
+  } catch {
+    signal.throwIfAborted();
+    return {
+      type: 'warning',
+      code: 'claude.instruction_sources_unavailable',
+      message: 'Claude could not report loaded instruction sources.',
+    };
+  }
+}
+
 // ─── Claude Provider ───────────────────────────────────────────────────────
 
 /**
@@ -726,7 +748,9 @@ export class ClaudeProvider implements IAgentProvider {
       // whenever a resume was requested.
       for await (const streamed of withResumedOutcome(
         closeOpenToolCalls(
-          streamClaudeMessages(events, toolResultQueue, spendBaseline, closeInput),
+          streamClaudeMessages(events, toolResultQueue, spendBaseline, closeInput, () =>
+            observeInstructionSources(rawEvents, controller.signal)
+          ),
           // A result can arrive while background agents still run their tools.
           { resultEndsTurn: false }
         ),

@@ -23,7 +23,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { spawn } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
@@ -655,6 +655,10 @@ describe('Codex capability scope on the real binary', () => {
       const chunks = await runNode({});
       expect(resultOf(chunks).failure?.evidence).toContain('stub model');
       expect(await seen()).toEqual({ tools: [], skills: [], hooks: ['user'], guidance: true });
+      expect(chunks).toContainEqual({
+        type: 'heartbeat',
+        instructionSources: [join(await realpath(home), 'AGENTS.md'), join(repo, 'AGENTS.md')],
+      });
     },
     testTimeout(20_000)
   );
@@ -666,10 +670,34 @@ describe('Codex capability scope on the real binary', () => {
       expect(sessionId).toBeDefined();
       modelRequests = [];
       await rm(hookLog, { force: true });
-      await runNode({}, sessionId);
+      await writeFile(join(repo, 'AGENTS.md'), 'UPDATED-PROJECT-GUIDANCE-MARKER\n');
+      const chunks = await runNode({}, sessionId);
       expect(await seen()).toEqual({ tools: [], skills: [], hooks: ['user'], guidance: true });
+      expect(chunks).toContainEqual({
+        type: 'heartbeat',
+        instructionSources: [join(await realpath(home), 'AGENTS.md'), join(repo, 'AGENTS.md')],
+      });
+      expect(modelRequests[0].body).toContain('UPDATED-PROJECT-GUIDANCE-MARKER');
     },
     testTimeout(20_000)
+  );
+
+  test(
+    'zero project document budget reports user guidance, not a project-only baseline',
+    async () => {
+      await addUserConfig('project_doc_max_bytes = 0', 'prepend');
+      const before = await userFileHashes();
+      const chunks = await runNode({});
+      expect(chunks).toContainEqual({
+        type: 'heartbeat',
+        instructionSources: [join(await realpath(home), 'AGENTS.md')],
+      });
+      expect(modelRequests.length).toBeGreaterThan(0);
+      expect(modelRequests[0].body).toContain('USER-GUIDANCE-MARKER');
+      expect(modelRequests[0].body).not.toContain('PROJECT-GUIDANCE-MARKER');
+      expect(await userFileHashes()).toEqual(before);
+    },
+    testTimeout(20000)
   );
 
   test(
