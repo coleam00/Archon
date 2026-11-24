@@ -12,7 +12,11 @@ import * as codebaseDb from '../../db/codebases';
 import * as sessionDb from '../../db/sessions';
 import * as isolationEnvDb from '../../db/isolation-environments';
 import { cleanupStaleWorktrees } from '../../services/cleanup-service';
-import { cleanupMergedWorktrees } from '../../services/cleanup/merged-sweep';
+import {
+  cleanupMergedWorktrees,
+  type CleanupOperationResult,
+  type MergedCleanupOutcome,
+} from '../../services/cleanup/merged-sweep';
 import { getUseBlocker } from '../../services/cleanup/run-lock';
 import { ensureIsolationConfigured } from '../../orchestrator/dispatch/isolation-resolver';
 import { createRegisteredWorktree } from '../../workflows/registered-worktree';
@@ -367,9 +371,16 @@ async function cleanupWorktrees(
   }
 
   try {
-    let result;
+    let result: CleanupOperationResult;
     if (cleanupType === 'merged') {
-      result = await cleanupMergedWorktrees(codebaseId, mainPath);
+      const outcome = await cleanupMergedWorktrees(codebaseId, mainPath);
+      if (outcome.kind === 'repository-gone') {
+        return {
+          success: true,
+          message: await repositoryGoneMessage(mainPath, codebaseId, outcome),
+        };
+      }
+      result = outcome.result;
     } else {
       result = await cleanupStaleWorktrees(codebaseId, mainPath);
     }
@@ -411,6 +422,22 @@ async function cleanupWorktrees(
     getLog().error({ err, cleanupType, codebaseId: codebaseId }, 'cmd.worktree_cleanup_failed');
     return { success: false, message: `Failed to cleanup: ${err.message}` };
   }
+}
+
+/** A gone checkout is reported, not a failure: nothing was checked or removed. */
+async function repositoryGoneMessage(
+  mainPath: string,
+  codebaseId: string,
+  outcome: Extract<MergedCleanupOutcome, { kind: 'repository-gone' }>
+): Promise<string> {
+  let msg = `Repository gone: ${mainPath} does not exist; its worktrees were not checked.\n`;
+  for (const { branchName, workingPath } of outcome.environments) {
+    msg += `  • ${branchName}: ${workingPath}\n`;
+  }
+  msg +=
+    'To release a record, delete its worktree directory once nothing in it is needed, ' +
+    'then run `archon isolation list`.\n';
+  return `${msg}\n${await activeWorktreeCountMessage(codebaseId)}`;
 }
 
 async function activeWorktreeCountMessage(codebaseId: string): Promise<string> {

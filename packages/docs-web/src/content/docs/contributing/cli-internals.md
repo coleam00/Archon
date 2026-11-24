@@ -289,10 +289,11 @@ archon isolation cleanup [days] (default: 7)
 
 ## `isolation cleanup --merged` Flow
 
-1. `isolationCleanupMergedCommand` calls `cleanupMergedEnvironments` for each codebase. When
+1. `isolationCleanupMergedCommand` calls `cleanupMergedWorktrees` for each codebase, the same
+   sweep chat `/worktree cleanup merged` and the isolation resolver's make-room step call. When
    the codebase's checkout directory does not exist, it returns `repository-gone` with the
-   codebase's worktree environments and does not sweep them; otherwise it runs
-   `cleanupMergedWorktrees`.
+   codebase's worktree environments and does not sweep them; otherwise it judges each
+   environment as below.
 2. `judgeBranchForRemoval` first checks base ancestry and patch equivalence, requiring
    coverage of both the branch ref and worktree HEAD. Otherwise it checks the branch-name PR. A merged PR authorizes
    removal only if its head covers every existing local tip: worktree HEAD and

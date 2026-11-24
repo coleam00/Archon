@@ -646,10 +646,18 @@ describe('CommandHandler', () => {
           expect(result.message).toContain('Usage');
         });
 
+        /** The next `/worktree cleanup <type>` sweeps with `result`. */
+        const cleanupSweeps = (
+          type: 'merged' | 'stale',
+          result: ReturnType<typeof emptyCleanup>
+        ): void => {
+          if (type === 'merged')
+            mockCleanupMergedWorktrees.mockResolvedValueOnce({ kind: 'swept', result });
+          else mockCleanupStaleWorktrees.mockResolvedValueOnce(result);
+        };
+
         test.each(['merged', 'stale'] as const)('reports %s removal failures', async type => {
-          const cleanup =
-            type === 'merged' ? mockCleanupMergedWorktrees : mockCleanupStaleWorktrees;
-          cleanup.mockResolvedValueOnce({
+          cleanupSweeps(type, {
             ...emptyCleanup(),
             removed: ['done'],
             errors: [{ branchName: 'kept', error: 'registration changed' }],
@@ -665,7 +673,7 @@ describe('CommandHandler', () => {
         });
 
         test('should report merged worktree cleanup results', async () => {
-          mockCleanupMergedWorktrees.mockResolvedValueOnce({
+          cleanupSweeps('merged', {
             errors: [],
             removed: ['feat-old', 'feat-done'],
             warnings: [{ branchName: 'feat-done', message: "Remote branch retained 'feat-done'" }],
@@ -698,9 +706,7 @@ describe('CommandHandler', () => {
         test.each(['merged', 'stale'] as const)(
           'preserves completed %s cleanup warnings when the count query fails',
           async cleanupType => {
-            const cleanup =
-              cleanupType === 'merged' ? mockCleanupMergedWorktrees : mockCleanupStaleWorktrees;
-            cleanup.mockResolvedValueOnce({
+            cleanupSweeps(cleanupType, {
               ...emptyCleanup(),
               removed: ['feat-done'],
               warnings: [
@@ -722,6 +728,30 @@ describe('CommandHandler', () => {
             expect(result.message).toContain('count query failed');
           }
         );
+
+        test('reports a gone checkout once, naming its worktrees', async () => {
+          mockCleanupMergedWorktrees.mockResolvedValueOnce({
+            kind: 'repository-gone',
+            environments: [
+              { branchName: 'feat-a', workingPath: '/worktrees/feat-a' },
+              { branchName: 'feat-b', workingPath: '/worktrees/feat-b' },
+            ],
+          });
+          mockCountActiveByCodebase.mockResolvedValueOnce(2);
+
+          const result = await handleCommand(
+            conversationWithCodebase,
+            '/worktree cleanup merged',
+            operator
+          );
+
+          expect(result.success).toBe(true);
+          expect(result.message).toContain('Repository gone: /workspace/my-repo does not exist');
+          expect(result.message).toContain('feat-a: /worktrees/feat-a');
+          expect(result.message).toContain('feat-b: /worktrees/feat-b');
+          expect(result.message).not.toContain('Failed:');
+          expect(result.message).toContain('Active worktrees: 2');
+        });
 
         test('should report when no stale worktrees to clean up', async () => {
           mockCleanupStaleWorktrees.mockResolvedValueOnce(emptyCleanup());
