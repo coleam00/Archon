@@ -1,7 +1,10 @@
 /**
  * `archon workflow link`: record a link from one item of this project to another, or end
  * one. A link is a directed relation the engine stores and reports; the item read shows it
- * from both sides (`workflow runs --item`). The engine acts on no link.
+ * from both sides (`workflow runs --item`). The engine acts on a link in two places: an
+ * active `part_of` gives an item that records no landing branch the branch of the item it is
+ * part of (`item-landing.ts`), and a run-ended trigger with `linked` starts its stage on the
+ * items linked to the ended run's item (`linked-starts.ts`).
  */
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { projectRefForCodebase } from '@archon/core/operations/attention-queue';
