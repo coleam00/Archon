@@ -74,6 +74,7 @@ import { registerRepository } from '../handlers/clone';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { handOffAdmitted, type StartedExecutor } from './start-executor';
+import { leaveForInstalledEngine } from './installed-engine-preparation';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { assertLaneStartable, executionLane, handoffIsolation } from './resource-start-lanes';
 import { resolveBindingInputs, selectStartedWorkflow } from './binding-workflow';
@@ -305,38 +306,6 @@ async function prepareBinding(
   });
 }
 
-/**
- * A preparation that failed in a process whose engine is no longer the installed one goes
- * back to pending instead of being rejected: the failure may be this process's old code
- * reading definitions written for the new engine, so a process on the installed engine
- * prepares it. Nothing was admitted, so the start is neither lost nor run twice.
- */
-async function leaveForInstalledEngine(
-  host: WorkflowHost,
-  identity: BindingIdentity,
-  stage: PreparationStage,
-  error: unknown
-): Promise<never> {
-  let reset: boolean;
-  try {
-    reset = await host.deps.store.resetStartBindingPreparation(identity);
-  } catch (resetError) {
-    throw new AggregateError(
-      [error, resetError],
-      `Preparation ${preparationStageFailure(stage)} on a changed engine; leaving it pending also failed.`
-    );
-  }
-  if (!reset) throw error;
-  log.warn(
-    { receiptId: identity.receiptId, bindingId: identity.bindingId, stage },
-    'resource_start.left_for_installed_engine'
-  );
-  throw new Error(
-    `Left pending for a process on the installed engine: this process's engine changed since it started, and preparation ${preparationStageFailure(stage)}.`,
-    { cause: error }
-  );
-}
-
 async function prepareClaimedBinding(
   host: ResourceStartHost,
   intent: ResourceStartBindingIntent,
@@ -360,7 +329,13 @@ async function prepareClaimedBinding(
     stage = 'launch_preparation';
     return await prepareBinding(host, intent, identity, found?.item ?? null, runConfig);
   } catch (error) {
-    if (host.engineChanged?.()) return await leaveForInstalledEngine(host, identity, stage, error);
+    if (host.engineChanged?.())
+      return await leaveForInstalledEngine(
+        host.deps.store,
+        identity,
+        preparationStageFailure(stage),
+        error
+      );
     // Unknown failures are not an implicit retry policy; the receipt stays inspectable.
     // Configuration and provider errors can contain secret values, so persist the
     // failed boundary, not the exception text. A forge refusal is the exception: it holds
