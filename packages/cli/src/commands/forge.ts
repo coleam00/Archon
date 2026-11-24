@@ -329,7 +329,7 @@ async function recordRunFacts(
       // The merge happened, so this is no failure: the caller is told, and the exit stays 0.
       record.itemRecord = { recorded: false, reason: 'no_merge_time' };
       record.stderr.push(
-        `Forge operation ${context.operationId} merged ${merged.pr.url}, but the forge plugin reported no merge time, so the merge and its landing branch were not recorded on the run's item. Update the forge plugin with \`archon plugin update\`.`
+        `Forge operation ${context.operationId} merged ${merged.pr.url}, but the forge plugin reported no merge time, so the merge and its landing branch were not recorded on the run's item. Update the forge plugin: find its id with \`archon plugin list\`, then run \`archon plugin update <id>\`.`
       );
     }
   } catch (error) {

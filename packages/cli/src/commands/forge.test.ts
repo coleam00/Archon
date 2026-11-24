@@ -989,7 +989,7 @@ test('a merge from a plugin that reports no merge time succeeds and says it was 
   ]);
   expect(result.stderr).toHaveLength(1);
   expect(result.stderr[0]).toContain('reported no merge time');
-  expect(result.stderr[0]).toContain('archon plugin update');
+  expect(result.stderr[0]).toContain('archon plugin update <id>');
 });
 
 test('a run on no item gets no item record and no item field', async () => {
