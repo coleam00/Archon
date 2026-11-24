@@ -691,8 +691,9 @@ test('forge check exits 1 with a typed reason for a missing plugin, capability o
       message: 'plugin test 1.0.0 does not support pr.merge, pr.review.submit',
     },
     unsupported: ['pr.merge', 'pr.review.submit'],
-    // The test plugin states no remedies, so forge names the generic step.
-    remedy: expect.stringContaining('archon plugin update <id>'),
+    // The test plugin states no remedies and is configured by command, so forge's
+    // generic step names that command rather than a receipt to update.
+    remedy: expect.stringContaining(`(${process.execPath})`),
   });
 
   // A plugin's own remedy replaces forge's generic step.

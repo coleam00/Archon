@@ -214,6 +214,10 @@ describe('validateWorkflowsCommand', () => {
           ),
         }),
       ]);
+      // The hint's update step takes an id, and says where to find it.
+      const { hint } = output.results[0].issues[0];
+      expect(hint).toContain('`archon plugin update <id>`');
+      expect(hint).toContain('`archon plugin list`');
     } finally {
       write.mockRestore();
     }

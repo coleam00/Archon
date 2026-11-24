@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test';
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { discoverPlugins } from './discovery';
-import { dispatchForge } from './dispatch';
+import { checkForgeAccess, dispatchForge } from './dispatch';
 import { repoRefSchema, type RepoRef } from './identity';
 
 const fixture = join(import.meta.dir, 'fixtures', 'test-plugin.ts');
@@ -316,5 +319,57 @@ test.each([
       ok: false,
       error: { kind: 'forge_error', message: `${expected} (resolve)` },
     });
+  }
+);
+
+const trackTempRoot = trackTempRoots();
+
+/** A directory holding `archon-forge-test`, a script that runs the fixture without the operation. */
+function scannedFixtureDir(): string {
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-remedy-')));
+  const executable = join(dir, 'archon-forge-test');
+  writeFileSync(
+    executable,
+    `#!/bin/sh\nexec "${process.execPath}" --no-env-file "${fixture}" --mode unsupported "$@"\n`
+  );
+  chmodSync(executable, 0o755);
+  return dir;
+}
+
+// The generic unsupported_op remedy is a step that works for where the executable came from:
+// only a plugin `archon plugin add` installed has a receipt `archon plugin update` acts on.
+test.skipIf(process.platform === 'win32').each([
+  [
+    'installed',
+    (dir: string) => ({ pluginsDir: dir }),
+    ['`archon plugin list`', 'archon-forge-test', '`archon plugin update <id>`'],
+  ],
+  [
+    'scanned',
+    (dir: string) => ({ config: { pluginDirs: [dir], scanPath: false } }),
+    ['archon-forge-test', 'did not install'],
+  ],
+  ['configured', () => ({ config: config('unsupported') }), [process.execPath, "Archon's config"]],
+  [
+    'source',
+    () => ({
+      config: { scanPath: false },
+      sourcePlugins: [
+        { name: 'test', command: process.execPath, args: [fixture, '--mode', 'unsupported'] },
+      ],
+    }),
+    ['source checkout'],
+  ],
+] as const)(
+  'an unsupported_op remedy for a %s plugin names its own next step',
+  async (origin, options, says) => {
+    const check = await checkForgeAccess(
+      { host: 'forge.example', operations: ['pr.merge'] },
+      { ...options(scannedFixtureDir()), env: {} }
+    );
+    if (check.ok) throw new Error('Expected a refusal');
+    expect(check.error.kind).toBe('unsupported_op');
+    for (const text of says) expect(check.remedy).toContain(text);
+    if (origin !== 'installed') expect(check.remedy).not.toContain('archon plugin update');
   }
 );

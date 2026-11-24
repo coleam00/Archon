@@ -1,3 +1,4 @@
+import { basename, extname } from 'node:path';
 import { z } from 'zod';
 import {
   forgeAuditResponse,
@@ -473,7 +474,7 @@ export async function checkForgeAccess(
           kind: 'unsupported_op',
           message: `plugin ${name} ${version} does not support ${unsupported.join(', ')}`,
         },
-        plugin.metadata
+        plugin
       ),
       unsupported,
     };
@@ -483,7 +484,7 @@ export async function checkForgeAccess(
   if (credential.kind === 'missing') {
     return refused(
       { kind: 'no_credential', message: credential.message },
-      plugin.metadata,
+      plugin,
       credentialEnvNames(plugin, discovery, host).override
     );
   }
@@ -576,20 +577,21 @@ type PreReadRefusalKind = Exclude<ForgeAccessRefusalKind, 'authorization' | 'not
 /** A refusal the operator fixes, with their next step: the plugin's text, else forge's. */
 function refused(
   error: ForgeError & { kind: PreReadRefusalKind },
-  metadata?: PluginMetadata,
+  plugin?: DiscoveredPlugin,
   tokenEnvOverride?: string
 ): Extract<ForgeAccessCheck, { ok: false }> {
-  return { ok: false, error, remedy: remedy(error.kind, metadata, tokenEnvOverride) };
+  return { ok: false, error, remedy: remedy(error.kind, plugin, tokenEnvOverride) };
 }
 
 function remedy(
   kind: PreReadRefusalKind,
-  metadata: PluginMetadata | undefined,
+  plugin: DiscoveredPlugin | undefined,
   tokenEnvOverride: string | undefined
 ): string {
-  if (kind === 'no_plugin_for_host' || metadata === undefined) {
+  if (kind === 'no_plugin_for_host' || plugin === undefined) {
     return "Install a forge plugin that claims this host with `archon plugin add <owner/repo[/path][@tag]>`, or map the host to an installed plugin under `forge.hosts` in Archon's config.";
   }
+  const { metadata } = plugin;
   // The plugin's own text names the variables it declares, which a configured token_env replaces.
   if (kind === 'no_credential' && tokenEnvOverride) {
     return `Set ${tokenEnvOverride}, the token_env Archon's config names for plugin ${metadata.name}, in Archon's env file or the run's environment.`;
@@ -597,8 +599,34 @@ function remedy(
   const own = metadata.remedies?.[kind];
   if (own) return own;
   return kind === 'unsupported_op'
-    ? `Update plugin ${metadata.name} (installed ${metadata.version}): find its id with \`archon plugin list\`, then run \`archon plugin update <id>\`.`
+    ? replacePluginStep(plugin)
     : `Supply the credential plugin ${metadata.name} reads${metadata.token_env.length > 0 ? ` (${metadata.token_env.join(', ')})` : ''} in Archon's env file or the run's environment.`;
+}
+
+/**
+ * How the operator gets a plugin version that serves a missing operation. Only an
+ * executable in Archon's plugin directory has an install receipt `archon plugin update`
+ * can act on; `archon plugin list` names a forge receipt's executable, which ties the
+ * receipt to the one that refused.
+ */
+function replacePluginStep({ metadata, origin, command }: DiscoveredPlugin): string {
+  const plugin = `plugin ${metadata.name} ${metadata.version}`;
+  switch (origin) {
+    case 'installed':
+      return `Update ${plugin}: \`archon plugin list\` shows the id of the forge plugin whose executable is ${executableName(command)}; run \`archon plugin update <id>\` with that id.`;
+    case 'scanned':
+      return `Replace ${command} (${plugin}), which Archon found on PATH or in a configured plugin directory and did not install, with a version that supports the operation.`;
+    case 'configured':
+      return `Point the command Archon's config sets for ${plugin} under \`forge\` (${command}) at a version that supports the operation.`;
+    case 'source':
+      return `Update this Archon source checkout, which runs ${plugin}, to a revision whose plugin supports the operation.`;
+  }
+}
+
+/** An executable's file name, without the `.exe` a Windows install adds. */
+function executableName(command: string): string {
+  const file = basename(command);
+  return extname(file).toLowerCase() === '.exe' ? file.slice(0, -4) : file;
 }
 
 async function runOperation(
