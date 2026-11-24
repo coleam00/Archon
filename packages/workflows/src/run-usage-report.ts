@@ -196,10 +196,10 @@ function executedObservation(observation: DagUsageObservation): boolean {
 }
 
 function consumedObservations(fold: DagUsageFold): DagUsageObservation[] {
-  const selected = allContributions(fold.usageContributions).map(
-    contribution => contribution.evidence
-  );
-  return fold.observations.filter(observation => {
+  const selected = allContributions(fold.usageContributions)
+    .map(contribution => contribution.evidence)
+    .filter(observation => observation !== undefined);
+  const observations = fold.observations.filter(observation => {
     if (
       !aiObservation(observation, fold.observations) ||
       exclusion(observation) !== undefined ||
@@ -208,8 +208,17 @@ function consumedObservations(fold: DagUsageFold): DagUsageObservation[] {
       return false;
     if (observation.accounting === 'aggregate' || observation.accounting === 'amendment')
       return false;
-    return observation.nodeKind !== 'loop' || selected.includes(observation);
+    return observation.nodeKind !== 'loop';
   });
+  return [
+    ...observations,
+    ...selected.filter(
+      observation =>
+        observation.nodeKind === 'loop' &&
+        aiObservation(observation, fold.observations) &&
+        exclusion(observation) === undefined
+    ),
+  ];
 }
 
 function allContributions(contributions: readonly UsageContribution[]): UsageContribution[] {

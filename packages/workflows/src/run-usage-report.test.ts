@@ -488,4 +488,42 @@ describe('recorded usage coverage', () => {
       gaps: [],
     });
   });
+
+  it('retains partial carried-baseline measurement evidence alongside a deferred loop increment', () => {
+    const start = startNodeExecution({
+      runId: 'run',
+      path: 'loop',
+      node: {
+        id: 'loop',
+        kind: 'loop',
+        loop: { prompt: 'p', until: 'DONE', max_iterations: 2, fresh_context: false },
+      },
+      invocation: newNodeInvocation(),
+      provider: 'claude',
+    });
+    const baseline = finishNodeExecution(
+      start,
+      { status: 'failed', error: 'config', failureKind: 'config' },
+      { costUsd: 0.25, tokens: { input: 2, output: 1 }, costPartial: true }
+    );
+    const deferred = serializeDeferredNodeUsage(
+      finishNodeExecution(
+        start,
+        { status: 'suspended', point: 'interactive_loop' },
+        { costUsd: 0.5, tokens: { input: 3, output: 2 } }
+      ),
+      baseline.spend
+    );
+    const result = report([serializeNodeStateRecord(baseline), deferred]);
+    expect(result.totals).toEqual({ usd: 0.75, inputTokens: 5, outputTokens: 3 });
+    expect(result.coverage.usd).toMatchObject({
+      state: 'partial',
+      aiNodes: 1,
+      contributedAiNodes: 1,
+    });
+    expect(result.coverage.usd.partial).toContainEqual(
+      expect.objectContaining({ path: 'loop', partial: true, invocationId: start.invocation.id })
+    );
+    expect(result.coverage.inputTokens.state).toBe('complete');
+  });
 });
