@@ -429,40 +429,61 @@ async function observeOpenedIssues(
       continue;
     }
     for (const issue of listed.items) {
-      const event = {
-        kind: 'issue.lifecycle',
-        action: 'opened',
-        issue: { repo, number: issue.ref.number },
-        state: issue.state,
-      } satisfies ForgeEvent;
-      const evaluated = evaluateBinding(binding, event);
-      if ('skipped' in evaluated) {
-        if (evaluated.skipped.status === 'rejected')
-          openedIssueFailures.push({
-            bindingId,
-            reason: `issue ${String(issue.ref.number)}: the binding rejects the event: ${evaluated.skipped.reason}`,
-          });
-        continue;
-      }
-      acceptances.push({
-        receipt: {
-          id: randomUUID(),
-          sourceInstanceId,
-          // A persisted contract: one delivery per issue and binding, so an issue listed
-          // again, by a later pass or a restarted process, is a replay and starts once.
-          deliveryId: `observe:issue-opened:${repo.host}/${repo.path}#${String(issue.ref.number)}:${bindingId}`,
-          contentDigest: createHash('sha256').update(JSON.stringify(event)).digest('hex'),
-          receivedAt,
-          occurredAt: issue.createdAt,
-          sourceActor:
-            issue.author == null ? null : { source: sourceInstanceId, id: issue.author.id },
-        },
-        outcome: 'matched',
-        bindings: [evaluated.start],
-      });
+      const result = openedIssueAcceptance(sourceInstanceId, receivedAt, binding, repo, issue);
+      if (result === undefined) continue;
+      if (result.kind === 'failed') openedIssueFailures.push({ bindingId, reason: result.reason });
+      else acceptances.push(result.acceptance);
     }
   }
   return { acceptances, openedIssueFailures };
+}
+
+type OpenedIssue = Awaited<ReturnType<ObserveInput['forge']['issuesOpened']>>['items'][number];
+
+/**
+ * The acceptance one opened issue makes for one binding; why the binding rejects it; or
+ * nothing, when the binding does not select the event.
+ */
+function openedIssueAcceptance(
+  sourceInstanceId: string,
+  receivedAt: string,
+  binding: GitHubSourceBinding,
+  repo: { host: string; path: string },
+  issue: OpenedIssue
+):
+  | { kind: 'accepted'; acceptance: SourceReceiptAcceptance }
+  | { kind: 'failed'; reason: string }
+  | undefined {
+  const event = {
+    kind: 'issue.lifecycle',
+    action: 'opened',
+    issue: { repo, number: issue.ref.number },
+    state: issue.state,
+  } satisfies ForgeEvent;
+  const evaluated = evaluateBinding(binding, event);
+  if ('skipped' in evaluated)
+    return evaluated.skipped.status === 'rejected'
+      ? {
+          kind: 'failed',
+          reason: `issue ${String(issue.ref.number)}: the binding rejects the event: ${evaluated.skipped.reason}`,
+        }
+      : undefined;
+  const acceptance: SourceReceiptAcceptance = {
+    receipt: {
+      id: randomUUID(),
+      sourceInstanceId,
+      // A persisted contract: one delivery per issue and binding, so an issue listed again,
+      // by a later pass or a restarted process, is a replay and starts once.
+      deliveryId: `observe:issue-opened:${repo.host}/${repo.path}#${String(issue.ref.number)}:${binding.bindingId}`,
+      contentDigest: createHash('sha256').update(JSON.stringify(event)).digest('hex'),
+      receivedAt,
+      occurredAt: issue.createdAt,
+      sourceActor: issue.author == null ? null : { source: sourceInstanceId, id: issue.author.id },
+    },
+    outcome: 'matched',
+    bindings: [evaluated.start],
+  };
+  return { kind: 'accepted', acceptance };
 }
 
 /** The repository a label binding lists, or why it cannot be observed. */

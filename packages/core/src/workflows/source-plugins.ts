@@ -17,6 +17,7 @@ import type { StartReceiptInspection } from '@archon/workflows/resource-start-st
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { createLogger } from '@archon/paths';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
+import { openedIssueReads, openedSeenMarker } from './opened-issue-reads';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import type {
   ObservedItemWait,
@@ -83,14 +84,6 @@ export interface ObservingSource {
  */
 function labelSeenMarker(read: ObservedLabelRead): string {
   return `observe:label-seen:${read.bindingId}:${read.repo.host}/${read.repo.path}:${read.label}`;
-}
-
-/**
- * The delivery id of the receipt that says an opened-issue read has been observed once: an
- * issue opened before its time starts nothing. A persisted contract as the label one is.
- */
-function openedSeenMarker(read: ObservedOpenedIssueRead): string {
-  return `observe:issue-opened-seen:${read.bindingId}:${read.repo.host}/${read.repo.path}`;
 }
 
 /**
@@ -248,13 +241,6 @@ function declaredReads(
 }
 
 /**
- * How far an opened-issue read looks back past the start of its last clean pass: the
- * forge's clock against this host's, and an issue the forge lists a little after creating
- * it. Issues read twice are replays, so the overlap costs no start.
- */
-const OPENED_OVERLAP_MS = 10 * 60 * 1000;
-
-/**
  * The configured sources' plugins. `observingOnly` loads just the sources that declare
  * `observe`, for a host that receives no webhooks: a source it would never call cannot
  * stop it, such as one whose webhook secret is only in the server's environment.
@@ -284,9 +270,7 @@ export async function loadWebhookSourcePlugins(
       });
   }
 
-  // Per opened-issue read, the `since` its next pass lists from, once a pass that read it
-  // had no failure. Only this process remembers; a new one lists from the first sight.
-  const openedSince = new Map<string, string>();
+  const opened = openedIssueReads();
 
   const pluginFor = (sourceInstanceId: string): WebhookSourcePlugin => {
     const plugin = plugins.get(sourceInstanceId);
@@ -392,50 +376,24 @@ export async function loadWebhookSourcePlugins(
         labels.push({ ...read, seenSince: marker === null ? null : marker.occurredAt });
       }
       // An opened-issue read's first sight is the engine's: it records the marker and hands
-      // the read on from the next pass, so an issue opened before that starts nothing. A
-      // marker that is not recorded leaves the read for the next pass to try again.
-      const unseenOpened: ObservedOpenedIssueRead[] = [];
-      const openedIssues: (ObservedOpenedIssueRead & { since: string })[] = [];
-      const openedKey = (read: ObservedOpenedIssueRead): string =>
-        JSON.stringify([sourceInstanceId, read.bindingId, read.repo.host, read.repo.path]);
-      for (const read of source.openedIssues) {
-        const marker = await dependencies.getReceipt(
-          seenMarkerId(sourceInstanceId, openedSeenMarker(read))
-        );
-        if (marker === null || marker.occurredAt === null) {
-          unseenOpened.push(read);
-          continue;
-        }
-        const later = openedSince.get(openedKey(read));
-        const since =
-          later !== undefined && Date.parse(later) > Date.parse(marker.occurredAt)
-            ? later
-            : marker.occurredAt;
-        openedIssues.push({ ...read, since });
-      }
-      // A plugin lists opened issues only from the `since` it was handed, so it cannot start
-      // an issue opened before the read's first sight.
-      const sinceGuarded: SourceForgeReader = {
-        ...forge,
-        issuesOpened: async request => {
-          if (
-            !openedIssues.some(
-              read =>
-                read.repo.host === request.repo.host &&
-                read.repo.path === request.repo.path &&
-                read.since === request.since
-            )
-          )
-            throw new Error(
-              `No opened-issue read of '${request.repo.host}/${request.repo.path}' lists from ${request.since} in this pass`
-            );
-          return forge.issuesOpened(request);
-        },
-      };
+      // the read on from the next pass, so an issue opened before that starts nothing.
+      const openedPass = await opened.pass({
+        sourceInstanceId,
+        reads: source.openedIssues,
+        passStartedAt,
+        forge,
+        marker: read =>
+          dependencies.getReceipt(seenMarkerId(sourceInstanceId, openedSeenMarker(read))),
+      });
       let observation: SourceObservation;
       try {
         observation = sourceObservationSchema.parse(
-          await plugin.observe({ waits, labels, openedIssues, forge: sinceGuarded })
+          await plugin.observe({
+            waits,
+            labels,
+            openedIssues: openedPass.handed,
+            forge: openedPass.forge,
+          })
         );
       } catch (error) {
         log.error(
@@ -486,7 +444,7 @@ export async function loadWebhookSourcePlugins(
             deliveryId: labelSeenMarker(read),
             reason: 'label binding first observed',
           })),
-        ...unseenOpened.map(read => ({
+        ...openedPass.unseen.map(read => ({
           deliveryId: openedSeenMarker(read),
           reason: 'opened-issue binding first observed',
         })),
@@ -508,13 +466,8 @@ export async function loadWebhookSourcePlugins(
           bindings: [],
         });
       }
-      // A clean pass read every issue opened since each read's `since`, so the next pass
-      // lists from this one's start, less the overlap.
-      if (result.failures.length === 0) {
-        const next = new Date(Date.parse(passStartedAt) - OPENED_OVERLAP_MS).toISOString();
-        for (const read of openedIssues)
-          if (Date.parse(next) > Date.parse(read.since)) openedSince.set(openedKey(read), next);
-      }
+      // A clean pass read every issue opened since each read's `since`.
+      openedPass.settle(result.failures.length === 0);
       return result;
     },
   };
