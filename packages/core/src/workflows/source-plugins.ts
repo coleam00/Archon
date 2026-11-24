@@ -500,7 +500,7 @@ export function createItemWaitObserver(input: {
   const warned = new Set<string>();
   let running = false;
 
-  const openWaits = async (): Promise<ObservedItemWait[]> => {
+  const openWaits = async (now: Date): Promise<{ active: ObservedItemWait[]; overdue: Array<{ wait: ObservedItemWait; deadlineAt: string }> }> => {
     const remotes = new Map<string, Promise<string | null>>();
     const remoteOf = async (runId: string): Promise<string | null> => {
       const run = await store.getWorkflowRun(runId);
@@ -512,7 +512,9 @@ export function createItemWaitObserver(input: {
       remotes.set(codebaseId, remote);
       return remote;
     };
-    const waits = new Map<string, ObservedItemWait>();
+    const active = new Map<string, ObservedItemWait>();
+    const overdue: Array<{ wait: ObservedItemWait; deadlineAt: string }> = [];
+    const nowTime = now.getTime();
     for (const wait of await store.listOpenItemWaits()) {
       const item = await store.getItem(wait.itemId);
       if (item === null) continue;
@@ -523,9 +525,15 @@ export function createItemWaitObserver(input: {
         itemKey: item.key,
         remote: await remoteOf(wait.runId),
       };
-      waits.set(JSON.stringify(observed), observed);
+      // Partition by deadline: deadlineAt <= now means overdue
+      const deadlineTime = new Date(wait.deadlineAt).getTime();
+      if (deadlineTime <= nowTime) {
+        overdue.push({ wait: observed, deadlineAt: wait.deadlineAt });
+      } else {
+        active.set(JSON.stringify(observed), observed);
+      }
     }
-    return [...waits.values()];
+    return { active: [...active.values()], overdue };
   };
 
   const warnUnserved = (sourceInstanceId: string, bindings: readonly UnservedBinding[]): void => {
@@ -699,19 +707,46 @@ export function createItemWaitObserver(input: {
       if (due.length === 0) return [];
       running = true;
       try {
-        const waits = await openWaits();
+        const { active: waits, overdue } = await openWaits(now);
         const reports: ObservedSourceReport[] = [];
+        // Report overdue waits once per observer process (not per source)
+        for (const { wait, deadlineAt } of overdue) {
+          const key = JSON.stringify([wait, deadlineAt]);
+          if (!warned.has(key)) {
+            warned.add(key);
+            log.warn({ ...wait, deadlineAt }, 'source_observe_overdue');
+          }
+        }
         for (const source of due) {
           // A source with nothing to observe is not called, so it reads nothing; the label
           // bindings it cannot observe are still reported, so the operator learns why.
           if (waits.length === 0 && source.labels.length === 0) {
-            if (source.unservedBindings.length === 0) continue;
+            if (source.unservedBindings.length === 0 && overdue.length === 0) continue;
             lastObserved.set(source.sourceInstanceId, now.getTime());
-            reports.push(unobserved(source));
+            const report = unobserved(source);
+            // Add overdue waits to unserved for reporting
+            if (overdue.length > 0) {
+              report.unserved = overdue.map(({ wait, deadlineAt }) => ({
+                wait,
+                reason: `deadline passed at ${deadlineAt}; polling stopped`,
+              }));
+            }
+            reports.push(report);
             continue;
           }
           lastObserved.set(source.sourceInstanceId, now.getTime());
-          reports.push(await observeSource(source, waits));
+          const report = await observeSource(source, waits);
+          // Add overdue waits to unserved for reporting
+          if (overdue.length > 0) {
+            report.unserved = [
+              ...report.unserved,
+              ...overdue.map(({ wait, deadlineAt }) => ({
+                wait,
+                reason: `deadline passed at ${deadlineAt}; polling stopped`,
+              })),
+            ];
+          }
+          reports.push(report);
         }
         return reports;
       } finally {
