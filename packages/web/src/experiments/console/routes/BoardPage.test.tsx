@@ -74,6 +74,7 @@ const graph: PackGraph = {
     name: `acme/flow:${workflow}`,
     workflow,
     entry: workflow === 'plan',
+    roles: [],
     // `lint` is a workflow of the pack that only other workflows call.
     inFlow: workflow !== 'lint',
     returns: null,

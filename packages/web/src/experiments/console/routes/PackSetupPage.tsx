@@ -167,6 +167,26 @@ export function PackSetup({ graph }: { graph: PackGraph }): ReactElement {
           </ul>
         )}
       </section>
+      {graph.stages.some(stage => stage.inFlow && stage.roles.length > 0) ? (
+        <section data-setup="roles" className="mb-8">
+          <h2 className={heading}>Which roles each stage names</h2>
+          <p className="mt-1 text-console-12 text-text-tertiary">
+            A role is a model alias. A binding's run config, the project or the install can set it;
+            this page does not resolve which one does. Unset, the stage runs on the tier or model
+            shown.
+          </p>
+          <ul className="mt-2 flex flex-col gap-1 text-console-12 text-text-secondary">
+            {graph.stages
+              .filter(stage => stage.inFlow && stage.roles.length > 0)
+              .map(stage => (
+                <li key={stage.name} data-roles={stage.workflow}>
+                  <span className="font-mono text-text-primary">{stage.workflow}</span>:{' '}
+                  {stage.roles.map(({ role, fallback }) => `${role} (else ${fallback})`).join(', ')}
+                </li>
+              ))}
+          </ul>
+        </section>
+      ) : null}
       {graph.capacity.length > 0 ? (
         <section data-setup="capacity" className="mb-8">
           <h2 className={heading}>How much runs at once</h2>

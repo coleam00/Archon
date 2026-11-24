@@ -11559,6 +11559,10 @@ export interface components {
         name: string;
         workflow: string;
         entry: boolean;
+        roles: {
+          role: string;
+          fallback: string;
+        }[];
         inFlow: boolean;
         returns: string | null;
         outcome: {

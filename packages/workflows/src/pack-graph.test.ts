@@ -210,6 +210,23 @@ describe('a pack graph', () => {
     expect(order(chain)).toEqual(['intake', 'build', 'check', 'close']);
   });
 
+  test('a stage lists the roles its nodes name, each with the tier it falls back to', () => {
+    const node = (id: string, model: unknown) => ({ id, prompt: 'Do it.', model });
+    const staged = stages(
+      wf('review', [
+        node('judge', ['@judge', 'medium']),
+        node('again', ['@judge', 'medium']),
+        node('write', ['@reviewer', '@writer', 'large']),
+        node('plain', 'small'),
+      ])
+    );
+    expect(graphOf(staged, { declared: undefined, installed: [] }).stages[0]?.roles).toEqual([
+      { role: '@judge', fallback: 'medium' },
+      { role: '@reviewer', fallback: 'large' },
+      { role: '@writer', fallback: 'large' },
+    ]);
+  });
+
   test('an asks arrow is active with its file and declared, inactive without one', () => {
     const asks = (workflow: string, from: string, settled: 'answered' | 'withdrawn') =>
       packAsksSettledBindingSchema.parse({

@@ -65,6 +65,12 @@ const packGraphStageSchema = z.object({
   /** A timer, event or fire binding of the pack starts the stage: work enters here. */
   entry: z.boolean(),
   /**
+   * The roles the stage's nodes name: each `@alias` of a `model:` preference list, with the
+   * tier or model the list ends in, which runs when no config defines the alias. The graph
+   * does not resolve them: a binding's run config, the project and the install each may.
+   */
+  roles: z.array(z.object({ role: z.string(), fallback: z.string() })),
+  /**
    * Work flows through the stage: it is an entry, or an arrow leads to or from it. False for
    * a workflow of the pack that only other workflows include or call, which no item stands at.
    */
@@ -630,6 +636,23 @@ function graphArrows(input: GraphInput): PackGraphArrow[] {
   return arrows;
 }
 
+/** Every `@alias` the nodes' model preference lists name, each once, with the list's last entry. */
+function stageRoles(nodes: Stage['nodes']): PackGraph['stages'][number]['roles'] {
+  const roles = new Map<string, { role: string; fallback: string }>();
+  const visit = (list: Stage['nodes']): void => {
+    for (const node of list) {
+      const model = 'model' in node ? node.model : undefined;
+      const fallback = Array.isArray(model) ? model.at(-1) : undefined;
+      if (Array.isArray(model) && fallback !== undefined)
+        for (const role of model.slice(0, -1))
+          roles.set(`${role}\0${fallback}`, { role, fallback });
+      if (isLoopGroupNode(node)) visit(resolvedBodyNodes(node.loop_group));
+    }
+  };
+  visit(nodes);
+  return [...roles.values()];
+}
+
 function graphStage(
   stage: Stage,
   started: ReadonlySet<string>,
@@ -653,6 +676,7 @@ function graphStage(
     name: stage.name,
     workflow: stage.pack?.workflow ?? stage.name,
     entry: flow.entries.has(stage.name),
+    roles: stageRoles(stage.nodes),
     inFlow:
       flow.entries.has(stage.name) ||
       flow.arrows.some(arrow => arrow.from.stage === stage.name || arrow.to === stage.name),
