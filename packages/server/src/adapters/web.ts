@@ -35,9 +35,10 @@ export class WebAdapter implements IPlatformAdapter {
   >();
   /**
    * Conversations whose last emitted lock event was `locked: true`. It changes only where
-   * that event is emitted, so a lock snapshot never disagrees with the event stream.
+   * that event is emitted, so a lock snapshot never disagrees with the event stream. The
+   * value is the turn holding the lock, when a lock event named one.
    */
-  private lockedConversations = new Set<string>();
+  private lockedConversations = new Map<string, string | undefined>();
 
   constructor(
     private transport: SSETransport,
@@ -246,11 +247,7 @@ export class WebAdapter implements IPlatformAdapter {
    * Emit a lock event to the SSE stream for a conversation.
    * Called by API routes based on acquireLock() return status.
    */
-  async emitLockEvent(
-    conversationId: string,
-    locked: boolean,
-    queuePosition?: number
-  ): Promise<void> {
+  async emitLockEvent(conversationId: string, locked: boolean, turnId?: string): Promise<void> {
     if (!locked) {
       // Finalize ALL running tools and emit tool_result for each before lock release
       const convTools = this.runningTools.get(conversationId);
@@ -282,14 +279,19 @@ export class WebAdapter implements IPlatformAdapter {
         getLog().error({ conversationId, err: e }, 'lock_release_flush_failed');
       });
     }
-    if (locked) this.lockedConversations.add(conversationId);
+    // A queued message's early lock event names no turn; the running turn keeps its id.
+    if (locked)
+      this.lockedConversations.set(
+        conversationId,
+        turnId ?? this.lockedConversations.get(conversationId)
+      );
     else this.lockedConversations.delete(conversationId);
     // Use transport.emit() directly so the lock event is fully awaited and ordered after tool_results
     const lockEvent = JSON.stringify({
       type: 'conversation_lock',
       conversationId,
       locked,
-      queuePosition,
+      ...(turnId !== undefined ? { turnId } : {}),
       timestamp: Date.now(),
     });
     await this.transport.emit(conversationId, lockEvent);
@@ -306,10 +308,12 @@ export class WebAdapter implements IPlatformAdapter {
    * knows a reply is still running even though the turn's earlier events were delivered.
    */
   lockSnapshotEvent(conversationId: string): string {
+    const turnId = this.lockedConversations.get(conversationId);
     return JSON.stringify({
       type: 'conversation_lock',
       conversationId,
       locked: this.isConversationLocked(conversationId),
+      ...(turnId !== undefined ? { turnId } : {}),
       timestamp: Date.now(),
     });
   }

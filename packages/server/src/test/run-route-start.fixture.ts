@@ -24,7 +24,7 @@ registerWorkflowRunLaunchRoute(app, {
   webAdapter: { setConversationDbId: () => undefined } as unknown as WebAdapter,
   dispatchToOrchestrator: async () => {
     dispatched += 1;
-    return { accepted: true, status: 'started' };
+    return { accepted: true, status: 'started', turnId: 'turn-1' };
   },
 });
 const response = await app.request(`/api/workflows/${workflow}/run`, {

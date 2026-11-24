@@ -129,7 +129,7 @@ describe('POST /api/conversations/:id/message multipart files', () => {
         body: form,
       });
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ accepted: true, status: 'started' });
+      expect(await response.json()).toMatchObject({ accepted: true, status: 'started' });
       expect(mockAddMessage).toHaveBeenCalledTimes(1);
       expect(mockHandleMessage).toHaveBeenCalledTimes(1);
       expect(received).toEqual(expected);
@@ -464,7 +464,7 @@ describe('POST /api/workflows/:name/run', () => {
         body: form,
       });
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ accepted: true, status: 'started' });
+      expect(await response.json()).toMatchObject({ accepted: true, status: 'started' });
       expect(mockHandleMessage).toHaveBeenCalledTimes(1);
       expect(received).toEqual([
         { name: 'first.txt', content: 'first contents' },
@@ -587,9 +587,12 @@ describe('POST /api/workflows/:name/run', () => {
             );
           };
           const first = await send(firstIngress, 'first');
-          expect(await first.json()).toEqual({ accepted: true, status: 'started' });
+          expect(await first.json()).toMatchObject({ accepted: true, status: 'started' });
           const queued = await send(queuedIngress, 'queued');
-          expect(await queued.json()).toEqual({ accepted: true, status: 'queued-conversation' });
+          expect(await queued.json()).toMatchObject({
+            accepted: true,
+            status: 'queued-conversation',
+          });
           const uploadDir = join(home, 'artifacts', 'uploads', 'web-test-abc');
           expect(await fsPromises.readdir(uploadDir)).toHaveLength(2);
           releaseFirst.resolve();
