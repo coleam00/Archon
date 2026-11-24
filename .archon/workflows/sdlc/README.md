@@ -79,7 +79,7 @@ archon plugin list
 
 `validate workflows` lists every `archon-*` workflow as `ok`. The list of plugins must
 show a forge plugin for the repository's host; for github.com,
-`archon plugin add coleam00/Archon/plugins/forge-github`. The pack acts as the account its
+`archon plugin add <the Archon repository>/plugins/forge-github` (see `archon plugin --help`). The pack acts as the account its
 credential resolves to (on GitHub: `GH_TOKEN`, then `GITHUB_TOKEN`, then the `gh` login).
 
 The engine checks the operations `.pack/pack.yaml` lists under `forge:` each time a run
