@@ -16,6 +16,11 @@ export interface PathToken {
   description: string;
   /** The directory as the run recorded it. */
   path: string;
+  /**
+   * The path as commands spell it. A Windows run records backslashes while its agent's
+   * shell commands mostly use forward slashes, so both spellings count.
+   */
+  spellings: readonly string[];
 }
 
 const PATH_TOKENS: Record<KnownPath['kind'], Pick<PathToken, 'token' | 'description'>> = {
@@ -41,38 +46,17 @@ export function pathTokens(known: readonly KnownPath[]): PathToken[] {
   for (const { kind, path: recorded } of known) {
     const path = withoutTrailingSeparator(recorded);
     if (path.length === 0 || byPath.has(path)) continue;
-    byPath.set(path, { kind, path, ...PATH_TOKENS[kind] });
+    const spellings = [...new Set([path, path.replaceAll('\\', '/'), path.replaceAll('/', '\\')])];
+    byPath.set(path, { kind, path, spellings, ...PATH_TOKENS[kind] });
   }
   return [...byPath.values()].sort((a, b) => b.path.length - a.path.length);
-}
-
-/**
- * A recorded path as commands spell it. A Windows run records backslashes while its
- * agent's shell commands mostly use forward slashes, so both spellings count.
- */
-function spellings(path: string): string[] {
-  return [...new Set([path, path.replaceAll('\\', '/'), path.replaceAll('/', '\\')])];
-}
-
-const PATH_NAME_CHAR = /[A-Za-z0-9._-]/;
-
-/**
- * The spelling of `token` at `at`, when the path ends there. A known path followed by
- * more of a file name is a sibling directory (`<checkout>-old`), not the path.
- */
-function spellingAt(text: string, at: number, token: PathToken): string | undefined {
-  return spellings(token.path).find(spelling => {
-    if (!text.startsWith(spelling, at)) return false;
-    const next = text[at + spelling.length];
-    return next === undefined || !PATH_NAME_CHAR.test(next);
-  });
 }
 
 /** The `cd <checkout> && ` a command starts with, in any quoting or spelling; '' when none. */
 function checkoutPrefix(text: string, tokens: readonly PathToken[]): string {
   for (const token of tokens) {
     if (token.kind !== 'checkout') continue;
-    for (const spelling of spellings(token.path)) {
+    for (const spelling of token.spellings) {
       for (const quote of ['"', "'", '']) {
         const prefix = `cd ${quote}${spelling}${quote} && `;
         if (text.startsWith(prefix)) return prefix;
@@ -80,6 +64,46 @@ function checkoutPrefix(text: string, tokens: readonly PathToken[]): string {
     }
   }
   return '';
+}
+
+const PATH_NAME_CHAR = /[A-Za-z0-9._-]/;
+
+/** One spelling of a token and where it next occurs; `at` is stale once the scan passes it. */
+interface Occurrence {
+  token: PathToken;
+  spelling: string;
+  at: number;
+}
+
+/**
+ * Where `spelling` next occurs as a whole path at or after `from`; Infinity when it does
+ * not. A known path followed by more of a file name is a sibling directory
+ * (`<checkout>-old`), not the path.
+ */
+function nextWholePath(text: string, spelling: string, from: number): number {
+  let at = text.indexOf(spelling, from);
+  while (at !== -1) {
+    const next = text[at + spelling.length];
+    if (next === undefined || !PATH_NAME_CHAR.test(next)) return at;
+    at = text.indexOf(spelling, at + 1);
+  }
+  return Infinity;
+}
+
+/** The first known path at or after `from`; where two start together, the longer path. */
+function nextOccurrence(
+  text: string,
+  from: number,
+  occurrences: Occurrence[]
+): Occurrence | undefined {
+  let first: Occurrence | undefined;
+  for (const occurrence of occurrences) {
+    if (occurrence.at < from) occurrence.at = nextWholePath(text, occurrence.spelling, from);
+    if (occurrence.at !== Infinity && (first === undefined || occurrence.at < first.at)) {
+      first = occurrence;
+    }
+  }
+  return first;
 }
 
 export type ShortenedPart = string | PathToken;
@@ -93,49 +117,40 @@ export interface ShortenedText {
 /**
  * `text` with every known path replaced by its token and a leading `cd <checkout> && `
  * dropped. `tokens` must be longest path first, as {@link pathTokens} returns them.
+ *
+ * With `max`, the result is cut to that many displayed characters and ends in an
+ * ellipsis when anything was cut. A token is never cut in half: it would no longer read
+ * as one. Only the text that can reach the display is searched, so the cost does not
+ * grow with the rest of a long value.
  */
-export function shortenText(text: string, tokens: readonly PathToken[]): ShortenedText {
+export function shortenText(
+  text: string,
+  tokens: readonly PathToken[],
+  max?: number
+): ShortenedText {
   const prefix = checkoutPrefix(text, tokens);
+  const longestSpelling = Math.max(1, ...tokens.flatMap(t => t.spellings.map(s => s.length)));
+  // A displayed character stands for at most one spelling of recorded text.
+  const searched =
+    max === undefined ? text : text.slice(0, prefix.length + (max + 1) * longestSpelling);
+  const occurrences: Occurrence[] = tokens.flatMap(token =>
+    token.spellings.map(spelling => ({ token, spelling, at: -1 }))
+  );
   const parts: ShortenedPart[] = [];
-  let literalFrom = prefix.length;
+  let room = max ?? Infinity;
   let at = prefix.length;
   while (at < text.length) {
-    let matched: { token: PathToken; length: number } | undefined;
-    for (const token of tokens) {
-      const spelling = spellingAt(text, at, token);
-      if (spelling !== undefined) {
-        matched = { token, length: spelling.length };
-        break;
-      }
-    }
-    if (matched === undefined) {
-      at += 1;
-      continue;
-    }
-    if (at > literalFrom) parts.push(text.slice(literalFrom, at));
-    parts.push(matched.token);
-    at += matched.length;
-    literalFrom = at;
+    const found = nextOccurrence(searched, at, occurrences);
+    const literalEnd = Math.min(found?.at ?? text.length, at + room);
+    if (literalEnd > at) parts.push(text.slice(at, literalEnd));
+    room -= literalEnd - at;
+    at = literalEnd;
+    if (found === undefined || found.at !== at || found.token.token.length > room) break;
+    parts.push(found.token);
+    room -= found.token.token.length;
+    at += found.spelling.length;
   }
-  if (literalFrom < text.length || parts.length === 0) parts.push(text.slice(literalFrom));
+  if (at < text.length) parts.push('…');
+  if (parts.length === 0) parts.push('');
   return { parts, droppedCheckoutPrefix: prefix.length > 0 };
-}
-
-/** `parts` cut to `max` displayed characters, with an ellipsis when anything was cut. */
-export function truncateParts(parts: readonly ShortenedPart[], max: number): ShortenedPart[] {
-  const kept: ShortenedPart[] = [];
-  let room = max;
-  for (const part of parts) {
-    const shown = typeof part === 'string' ? part : part.token;
-    if (shown.length <= room) {
-      kept.push(part);
-      room -= shown.length;
-      continue;
-    }
-    // A token is never cut in half: it would no longer read as one.
-    if (typeof part === 'string' && room > 0) kept.push(part.slice(0, room));
-    kept.push('…');
-    break;
-  }
-  return kept;
 }

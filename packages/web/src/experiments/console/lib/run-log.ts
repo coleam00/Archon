@@ -205,12 +205,6 @@ export interface SystemRow {
  */
 export type BlindEntry =
   | { kind: 'message'; key: string; at: number; message: Message }
-  /**
-   * The conversation's copy of agent text a node section already shows from the
-   * engine's record, or an engine notice sent to the conversation unmarked; the two
-   * cannot be told apart.
-   */
-  | { kind: 'conversation_copy'; key: string; at: number; message: Message }
   | { kind: 'tool'; key: string; at: number; call: InlineToolCall; timestamp: string }
   | { kind: 'text'; key: string; at: number; event: TextEvent }
   | { kind: 'artifact'; key: string; at: number; event: ArtifactEvent }
@@ -227,8 +221,6 @@ export interface LogSection {
 }
 
 export interface RunLog {
-  /** The engine recorded agent text for this run, so node sections show it. */
-  recordedText: boolean;
   /** Every tool call the run made, whether or not the toggles show it. */
   toolCallCount: number;
   /** Node-blind entries from before the first node started. */
@@ -236,11 +228,38 @@ export interface RunLog {
   sections: LogSection[];
 }
 
-function hasRecordedText(providerEvents: RunProviderEvents): boolean {
+/**
+ * Tells whether a conversation message repeats agent text a node section already shows.
+ * Each recorded text chunk is also sent to the conversation, where consecutive ones are
+ * joined into one message, so a copy is exactly a run of one node's chunks. Any other
+ * message (an engine notice, text changed on its way to the conversation) is not known
+ * to be shown elsewhere and stays a message.
+ */
+function recordedTextCopies(providerEvents: RunProviderEvents): (content: string) => boolean {
+  const nodes: { text: string; chunkStarts: Set<number>; chunkEnds: Set<number> }[] = [];
   for (const records of providerEvents.values()) {
-    if (records.some(record => record.event.type === 'agent_message_chunk')) return true;
+    const node = { text: '', chunkStarts: new Set<number>(), chunkEnds: new Set<number>() };
+    for (const { event } of records) {
+      if (event.type !== 'agent_message_chunk') continue;
+      node.chunkStarts.add(node.text.length);
+      node.text += event.text;
+      node.chunkEnds.add(node.text.length);
+    }
+    if (node.text.length > 0) nodes.push(node);
   }
-  return false;
+  return content =>
+    nodes.some(node => {
+      let at = node.text.indexOf(content);
+      while (at !== -1) {
+        if (node.chunkStarts.has(at) && node.chunkEnds.has(at + content.length)) return true;
+        at = node.text.indexOf(content, at + 1);
+      }
+      return false;
+    });
+}
+
+function firstLine(content: string): string {
+  return content.split('\n')[0]?.slice(0, 160) ?? '';
 }
 
 function systemMessageEntry(m: Message, at: number): BlindEntry {
@@ -259,9 +278,19 @@ function systemMessageEntry(m: Message, at: number): BlindEntry {
     at,
     row: {
       label: m.category ?? 'System',
-      detail: m.content.split('\n')[0]?.slice(0, 160) ?? '',
+      detail: firstLine(m.content),
       timestamp: m.timestamp,
     },
+  };
+}
+
+/** The node's section shows this text in full, so a row only says the conversation holds it too. */
+function conversationCopyEntry(m: Message, at: number): BlindEntry {
+  return {
+    kind: 'system_row',
+    key: `sm:copy:${m.id}`,
+    at,
+    row: { label: 'Conversation copy', detail: firstLine(m.content), timestamp: m.timestamp },
   };
 }
 
@@ -279,7 +308,7 @@ function inlineToolEntries(m: Message, at: number): BlindEntry[] {
 function messageEntries(
   messages: readonly Message[],
   showInline: boolean,
-  recordedText: boolean
+  isRecordedTextCopy: (content: string) => boolean
 ): BlindEntry[] {
   const entries: BlindEntry[] = [];
   for (const m of messages) {
@@ -303,15 +332,11 @@ function messageEntries(
       entries.push(...inlineTools);
       continue;
     }
-    const isCopy =
-      recordedText && m.role === 'assistant' && m.category === null && m.error === null;
-    entries.push({
-      kind: isCopy ? 'conversation_copy' : 'message',
-      key: `m:${m.id}`,
-      at,
-      message: m,
-    });
-    entries.push(...inlineTools);
+    const isCopy = m.role === 'assistant' && m.error === null && isRecordedTextCopy(m.content);
+    entries.push(
+      isCopy ? conversationCopyEntry(m, at) : { kind: 'message', key: `m:${m.id}`, at, message: m },
+      ...inlineTools
+    );
   }
   return entries;
 }
@@ -348,7 +373,6 @@ export function buildRunLog({
 }): RunLog {
   const toolCalls = runToolCalls(messages, providerEvents);
   const paired = new Map(toolCalls.fromProviderEvents.map(t => [t.record, t]));
-  const recordedText = hasRecordedText(providerEvents);
 
   const sections: LogSection[] = nodeRuns.map(node => ({
     node,
@@ -367,7 +391,7 @@ export function buildRunLog({
   const starts = nodeRuns.map(node => new Date(node.startedAt).getTime());
   const leading: BlindEntry[] = [];
   const blind = [
-    ...messageEntries(messages, toolCalls.showInline, recordedText),
+    ...messageEntries(messages, toolCalls.showInline, recordedTextCopies(providerEvents)),
     ...runEventEntries(events),
   ].sort((a, b) => a.at - b.at);
   for (const entry of blind) {
@@ -375,14 +399,13 @@ export function buildRunLog({
     while (owner + 1 < nodeCount && starts[owner + 1] <= entry.at) owner += 1;
     (owner === -1 ? leading : sections[owner].trailing).push(entry);
   }
-  return { recordedText, toolCallCount: toolCalls.count, leading, sections };
+  return { toolCallCount: toolCalls.count, leading, sections };
 }
 
 function visibleEntries(entries: readonly BlindEntry[], show: LogVisibility): BlindEntry[] {
   return entries.filter(entry => {
     if (entry.kind === 'tool') return show.showToolCalls;
     if (entry.kind === 'system' || entry.kind === 'system_row') return show.showSystem;
-    if (entry.kind === 'conversation_copy') return show.showSystem;
     return true;
   });
 }

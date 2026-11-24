@@ -284,17 +284,28 @@ describe('conversation messages are placed between nodes, never against a tool c
     }),
   ];
 
-  test('with recorded text, an assistant message is the copy of it and sits behind System', () => {
+  test('a message that repeats recorded text is a row behind System, not a second card', () => {
     const log = build(
-      new Map([['plan', [record('plan', 'a1', 0, T, { type: 'agent_message_chunk', text: 'A' })]]]),
+      new Map([
+        [
+          'plan',
+          [
+            record('plan', 'a1', 0, T, { type: 'agent_message_chunk', text: 'text ' }),
+            record('plan', 'a1', 1, T, {
+              type: 'agent_message_chunk',
+              text: 'of copy',
+              continuesPreviousBlock: true,
+            }),
+          ],
+        ],
+      ]),
       {
         messages,
         nodeRuns,
       }
     );
-    expect(log.recordedText).toBe(true);
     expect(kinds(log.leading)).toEqual(['message:m:before']);
-    expect(kinds(log.sections[0]?.trailing ?? [])).toEqual(['conversation_copy:m:copy']);
+    expect(kinds(log.sections[0]?.trailing ?? [])).toEqual(['system_row:sm:copy:copy']);
     // No provider tool call was recorded, so the message-inline one is the only record of it.
     expect(kinds(log.sections[1]?.trailing ?? [])).toEqual(['message:m:answer', 'tool:t:empty:0']);
     // The recorded block and the two user messages; the copy is not counted twice.
@@ -311,7 +322,44 @@ describe('conversation messages are placed between nodes, never against a tool c
       showSystem: true,
       selectedNodeId: null,
     });
-    expect(kinds(loud.sections[0]?.trailing ?? [])).toEqual(['conversation_copy:m:copy']);
+    expect(kinds(loud.sections[0]?.trailing ?? [])).toEqual(['system_row:sm:copy:copy']);
+  });
+
+  test('a message the record does not hold stays a card in a run that recorded agent text', () => {
+    const chunk = (seq: number, value: string): ProviderEventRecord =>
+      record('plan', 'a1', seq, T, { type: 'agent_message_chunk', text: value });
+    const log = build(new Map([['plan', [chunk(0, 'Reading the plan. '), chunk(1, 'Done.')]]]), {
+      nodeRuns,
+      messages: [
+        message('notice', '2026-10-02T10:00:10.000Z', { content: 'Bash node plan stderr: x' }),
+        message('retry', '2026-10-02T10:00:20.000Z', { content: 'Retrying node plan (2/3)' }),
+        // Part of a chunk, as a notice quoting the agent would be: not the chunk.
+        message('part', '2026-10-02T10:00:30.000Z', { content: 'Reading the plan.' }),
+        message('whole', '2026-10-02T10:00:40.000Z', { content: 'Reading the plan. Done.' }),
+        message('failed', '2026-10-02T10:00:50.000Z', {
+          content: 'Done.',
+          error: { message: 'boom' },
+        }),
+      ],
+    });
+    expect(kinds(log.sections[0]?.trailing ?? [])).toEqual([
+      'message:m:notice',
+      'message:m:retry',
+      'message:m:part',
+      'system_row:sm:copy:whole',
+      'message:m:failed',
+    ]);
+    const quiet = visibleRunLog(log, {
+      showToolCalls: true,
+      showSystem: false,
+      selectedNodeId: null,
+    });
+    expect(kinds(quiet.sections[0]?.trailing ?? [])).toEqual([
+      'message:m:notice',
+      'message:m:retry',
+      'message:m:part',
+      'message:m:failed',
+    ]);
   });
 
   test('without recorded text the message is the text, and an empty one is only a System row', () => {
@@ -327,7 +375,6 @@ describe('conversation messages are placed between nodes, never against a tool c
         nodeRuns,
       }
     );
-    expect(log.recordedText).toBe(false);
     expect(kinds(log.sections[0]?.trailing ?? [])).toEqual(['message:m:copy']);
     // Provider events hold the run's tool calls, so the inline copy is not shown.
     expect(kinds(log.sections[1]?.trailing ?? [])).toEqual([

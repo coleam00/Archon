@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { pathTokens, shortenText, truncateParts, type ShortenedPart } from './run-paths';
+import { pathTokens, shortenText, type ShortenedPart } from './run-paths';
 
 const WORKTREE = 'C:\\Users\\me\\.archon\\workspaces\\acme\\app\\worktrees\\feat\\x';
 const RUNS = 'C:\\Users\\me\\.archon\\workspaces\\acme\\app\\artifacts\\runs';
@@ -89,11 +89,25 @@ describe('shortenText', () => {
   });
 });
 
-describe('truncateParts', () => {
+describe('shortenText cut to a displayed length', () => {
+  const text = `${WORKTREE}/abcdef`;
+
   test('cuts literal text at the limit and never splits a token', () => {
-    const { parts } = shortenText(`${WORKTREE}/abcdef`, tokens);
-    expect(shown(truncateParts(parts, 13))).toBe('‹worktree›/ab…');
-    expect(shown(truncateParts(parts, 5))).toBe('…');
-    expect(truncateParts(parts, 17)).toEqual(parts);
+    expect(shown(shortenText(text, tokens, 13).parts)).toBe('‹worktree›/ab…');
+    expect(shown(shortenText(text, tokens, 5).parts)).toBe('…');
+    expect(shortenText(text, tokens, 17)).toEqual(shortenText(text, tokens));
+  });
+
+  test('counts a token by its name, not by the length of its path', () => {
+    const value = `${RUN}/a ${WORKTREE}/b ${RUNS}/c`;
+    expect(shown(shortenText(value, tokens, 26).parts)).toBe('‹run›/a ‹worktree›/b …');
+    expect(shown(shortenText(value, tokens, 29).parts)).toBe('‹run›/a ‹worktree›/b ‹runs›/c');
+  });
+
+  test('cuts a value far longer than the limit the same way as a short one', () => {
+    const start = `x ${WORKTREE}/a `;
+    const long = start + `${RUN}/b `.repeat(20_000);
+    expect(shown(shortenText(long, tokens, 20).parts)).toBe('x ‹worktree›/a ‹run›…');
+    expect(shown(shortenText(`${start}tail`, tokens, 20).parts)).toBe('x ‹worktree›/a tail');
   });
 });

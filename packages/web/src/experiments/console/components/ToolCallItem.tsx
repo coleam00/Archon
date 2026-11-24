@@ -3,7 +3,6 @@ import { formatRelativeToBaseline, formatClock } from '../lib/format';
 import { useStreamContext } from '../lib/stream-context';
 import {
   shortenText,
-  truncateParts,
   type PathToken,
   type ShortenedPart,
   type ShortenedText,
@@ -16,7 +15,7 @@ interface ToolCallItemProps {
   timestamp: string;
   /** The run's known paths, shown as tokens. A chat has none. */
   paths?: readonly PathToken[];
-  /** Show the call exactly as recorded: nothing shortened, nothing cut off. */
+  /** Show all the row holds: lines wrap instead of being cut off, every argument in full. */
   exact?: boolean;
 }
 
@@ -28,27 +27,38 @@ function inputFields(input: InlineToolCall['input']): Record<string, unknown> | 
 
 const ARG_VALUE_MAX = 48;
 
-/** The first two arguments, as `key="value"`. */
-function argsSummary(input: InlineToolCall['input'], paths: readonly PathToken[]): ShortenedText {
+const ARGS_SHOWN = 2;
+const NON_OBJECT_INPUT_MAX = 80;
+
+/** The arguments as `key="value"`: the first two, cut short, or with `exact` all of them in full. */
+function argsSummary(
+  input: InlineToolCall['input'],
+  paths: readonly PathToken[],
+  exact: boolean
+): ShortenedText {
   const fields = inputFields(input);
   if (fields === null) {
-    const text = (JSON.stringify(input) ?? '').slice(0, 80);
+    const json = JSON.stringify(input) ?? '';
+    const text = exact ? json : json.slice(0, NON_OBJECT_INPUT_MAX);
     return { parts: text.length > 0 ? [text] : [], droppedCheckoutPrefix: false };
   }
   const entries = Object.entries(fields);
+  const shownEntries = exact ? entries : entries.slice(0, ARGS_SHOWN);
   const parts: ShortenedPart[] = [];
   let droppedCheckoutPrefix = false;
-  for (const [key, value] of entries.slice(0, 2)) {
+  for (const [key, value] of shownEntries) {
     if (parts.length > 0) parts.push(' ');
     if (typeof value !== 'string') {
       parts.push(`${key}=${JSON.stringify(value)}`);
       continue;
     }
-    const shortened = shortenText(value, paths);
+    const shortened = shortenText(value, paths, exact ? undefined : ARG_VALUE_MAX);
     droppedCheckoutPrefix ||= shortened.droppedCheckoutPrefix;
-    parts.push(`${key}="`, ...truncateParts(shortened.parts, ARG_VALUE_MAX), '"');
+    parts.push(`${key}="`, ...shortened.parts, '"');
   }
-  if (entries.length > 2) parts.push(` +${(entries.length - 2).toString()}`);
+  if (entries.length > shownEntries.length) {
+    parts.push(` +${(entries.length - shownEntries.length).toString()}`);
+  }
   return { parts, droppedCheckoutPrefix };
 }
 
@@ -70,8 +80,13 @@ export interface ToolCallRow {
 /**
  * What a tool-call row shows for `call`. The run log calls this too, for its token key
  * and its per-node working-directory line, so those cannot disagree with the rows.
+ * With `exact`, the arguments of a call that has no description are all listed in full.
  */
-export function toolCallRow(call: InlineToolCall, paths: readonly PathToken[]): ToolCallRow {
+export function toolCallRow(
+  call: InlineToolCall,
+  paths: readonly PathToken[],
+  exact = false
+): ToolCallRow {
   const fields = inputFields(call.input);
   const description =
     typeof fields?.description === 'string' && fields.description.length > 0
@@ -81,7 +96,7 @@ export function toolCallRow(call: InlineToolCall, paths: readonly PathToken[]): 
   const name = shortenText(call.name, paths);
   const lines =
     description === null
-      ? [name, argsSummary(call.input, paths)]
+      ? [name, argsSummary(call.input, paths, exact)]
       : [command === null ? name : shortenText(command, paths)];
   return {
     description,
@@ -180,7 +195,7 @@ export function ToolCallItem({
   const { runStartedAt } = useStreamContext();
   const displayed = formatRelativeToBaseline(timestamp, runStartedAt);
   const wallClock = formatClock(timestamp);
-  const shown = useMemo(() => toolCallRow(call, exact ? NO_PATHS : paths), [call, paths, exact]);
+  const shown = useMemo(() => toolCallRow(call, paths, exact), [call, paths, exact]);
   const fields = inputFields(call.input);
   const hasInput = fields === null || Object.keys(fields).length > 0;
   const hasDetails = hasInput || (call.output !== undefined && call.output.length > 0);

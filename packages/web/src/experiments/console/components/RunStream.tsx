@@ -290,7 +290,6 @@ function SystemLine({
 function renderBlindEntry(entry: BlindEntry, fullPaths: boolean): ReactElement {
   switch (entry.kind) {
     case 'message':
-    case 'conversation_copy':
       return (
         <div key={entry.key} className="py-4">
           <MessageItem message={entry.message} variant="log" />

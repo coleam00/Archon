@@ -435,7 +435,7 @@ describe('RunStream run log', () => {
   const call = (seq: number, name: string): ProviderEventRecord =>
     record('route', 'a1', seq, at, { type: 'tool_call', toolCallId: `c${seq.toString()}`, name });
 
-  test('groups each tool call under the text recorded before it; the conversation copy sits behind System', () => {
+  test('groups each tool call under the text recorded before it; only a provable conversation copy sits behind System', () => {
     const fixture = {
       ...base,
       // Flushed before any of the records below by the conversation's own clock.
@@ -443,8 +443,19 @@ describe('RunStream run log', () => {
         {
           id: 'm1',
           role: 'assistant' as const,
-          content: 'Conversation copy of the text',
+          content: 'Text Alpha',
           timestamp: '2026-10-02T10:00:00.500Z',
+          toolCalls: [],
+          error: null,
+          category: null,
+          dispatch: null,
+          workflowResult: null,
+        },
+        {
+          id: 'm2',
+          role: 'assistant' as const,
+          content: 'Kept worktree: 1 commit on no remote',
+          timestamp: '2026-10-02T10:00:00.600Z',
           toolCalls: [],
           error: null,
           category: null,
@@ -471,10 +482,13 @@ describe('RunStream run log', () => {
     );
     expect(positions.every(position => position > -1)).toBe(true);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    // The recorded text shows once; a notice the record does not hold shows by default.
+    expect(html.split('Text Alpha').length).toBe(2);
     expect(html).not.toContain('Conversation copy');
-    expect(renderStream({ ...fixture, showSystem: true })).toContain(
-      'Conversation copy of the text'
-    );
+    expect(html).toContain('Kept worktree: 1 commit on no remote');
+    const withSystem = renderStream({ ...fixture, showSystem: true });
+    expect(withSystem).toContain('Conversation copy');
+    expect(withSystem.split('Text Alpha').length).toBe(3);
   });
 
   test.each([

@@ -75,10 +75,22 @@ describe('ToolCallItem row', () => {
     expect(html).toContain(`title="${RUN}"`);
   });
 
-  test('exact shows the command as recorded, with no token', () => {
-    const text = textOf(render(described, { paths, exact: true }));
-    expect(text).toContain(command);
-    expect(text).not.toContain('‹');
+  test('exact shows a described command in full, wrapped instead of cut off', () => {
+    const html = render(described, { exact: true });
+    expect(textOf(html)).toContain(command);
+    expect(html).toContain('whitespace-pre-wrap');
+    expect(html).not.toContain('truncate');
+  });
+
+  test('exact shows every argument of a call with no description in full', () => {
+    const file = `${WORKTREE}\\src\\a-very-long-directory-name\\another-long-one\\lib.rs`;
+    const text = textOf(
+      render({ name: 'Read', input: { file_path: file, limit: 40, offset: 2 } }, { exact: true })
+    );
+    expect(text).toContain(`Readfile_path="${file}" limit=40 offset=2`);
+    expect(text).not.toContain('…');
+    const raw = 'y'.repeat(120);
+    expect(textOf(render({ name: 'Bash', input: raw }, { exact: true }))).toContain(`"${raw}"`);
   });
 
   test('a described call with no command keeps its name on the second line', () => {
