@@ -2866,7 +2866,7 @@ same input again. Every workflow of the pack reads them as `$INPUTS.<name>` and
 `INPUTS_<UPPER_SNAKE>`, exactly like its own inputs. A flat workflow has no pack and no settings.
 
 The pack declares them in `<pack>/.pack/pack.yaml`, a top-level `inputs:` block in the same
-shape as a workflow's, plus a `type`. The file holds only `inputs:`,
+shape as a workflow's, plus a `type` and the optional `section` and `file` keys. The file holds only `inputs:`,
 [`bindings:`](#pack-bindings) and [`forge:`](#pack-forge-needs):
 
 ```yaml
@@ -2882,11 +2882,31 @@ inputs:
   reviewers:
     type: list            # comma-separated text, no empty items
     description: who to request reviews from
+  review_policy:
+    description: the project's review policy
+    section: Policies     # optional grouping name
+    file: true            # string only: the value is a path to a file
+    default: docs/review-policy.md
 ```
 
 The declaration sits in a dot folder so neither workflow loader reads it as a workflow. Values
 stay text, as every `--input` is. An invalid declaration fails every workflow of the pack at
 load, naming the file and the key.
+
+Two optional keys are for a reader that lists a pack's settings, such as a settings page:
+
+- `section:` names the group a setting belongs to. Settings with the same section belong
+  together, in the order the pack lists them; a setting without one belongs to a default group.
+  How groups are shown is the reader's choice. The engine does not interpret the name.
+- `file: true` says the value is a path to a file, relative to the project or absolute. It is
+  allowed only on a `string` setting. [`archon validate workflows`](/reference/cli/#validate-workflows-name)
+  reports a file setting whose value, or default when the project sets none, names a path that
+  does not exist or is not a file. An empty value is not an error. A run does not check the
+  file at start; the node that reads it does.
+
+An unknown key on a setting is ignored, so a pack can use a key a newer Archon adds, and
+`archon validate workflows` lists each one as a `parse_warning`. Releases before this one
+refuse an unknown key on a setting, so they fail to load a pack that sets `section:` or `file:`.
 
 A project sets the values in `.archon/packs/<pack>.yaml`, under `settings:` only:
 
@@ -2908,8 +2928,8 @@ that is after its worktree was created. A `required` setting must be set there, 
 by a workflow `inputs:` entry of the same name, or passed with `--input`.
 
 Run [`archon validate workflows`](/reference/cli/#validate-workflows-name) to check project
-pack settings before starting a run. It reports invalid values and undeclared names against
-each discovered workflow's pack declaration. Required values that an invocation can supply
+pack settings before starting a run. It reports invalid values, undeclared names and missing
+files named by `file` settings against each discovered workflow's pack declaration. Required values that an invocation can supply
 are checked only at run start.
 
 Pack folders of the same name in the project, home and bundled scopes share one file, and each
