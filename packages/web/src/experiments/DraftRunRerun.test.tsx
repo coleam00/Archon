@@ -31,9 +31,12 @@ const container = document.createElement('div');
 const projectCwd = '/draft-rerun-test';
 const originalFetch = globalThis.fetch;
 let started: Record<string, unknown>[] = [];
+/** Resolves when the runs feed may answer; a test that holds it sees the feed loading. */
+let feedAnswers: Promise<void> = Promise.resolve();
 
 beforeEach(() => {
   started = [];
+  feedAnswers = Promise.resolve();
   // The project is warm, as it is when the run detail page sent the operator here; the
   // runs feed is not, so it loads after the page mounts.
   set(K.project('p1'), {
@@ -48,8 +51,10 @@ beforeEach(() => {
   globalThis.fetch = Object.assign(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith('/api/dashboard/runs'))
+      if (url.startsWith('/api/dashboard/runs')) {
+        await feedAnswers;
         return Response.json({ runs: [], counts: {}, total: 0 });
+      }
       if (url.startsWith('/api/runs/attention'))
         return Response.json({ runs: [], items: [], answerRefusals: [] });
       if (url === '/api/conversations') return Response.json({ conversationId: 'web-test' });
@@ -162,9 +167,11 @@ test('a re-run restores the message and drops an input the workflow no longer de
   expect(body?.inputs).toEqual({ notes: 'be brief' });
 });
 
-test('picking another workflow discards the re-run inputs, also after picking back', async () => {
+test('confirming the workflow keeps the re-run inputs; picking another discards them, also after picking back', async () => {
   offer({ name: 'a-other', inputs: { issue: {} } }, { name: 'build', inputs: { issue: {} } });
   await rerun({ message: '', supplied: { issue: '42' } });
+  expect(field('issue')?.value).toBe('42');
+  await pick('build');
   expect(field('issue')?.value).toBe('42');
 
   await pick('a-other');
@@ -173,4 +180,22 @@ test('picking another workflow discards the re-run inputs, also after picking ba
   expect(field('issue')?.value).toBe('');
   const body = await start();
   expect(body?.inputs).toBeUndefined();
+});
+
+test('while the feed loads, the page says so instead of counting no active runs, and keeps the re-run', async () => {
+  offer({ name: 'build', inputs: { issue: {} } });
+  let answer = (): void => {};
+  feedAnswers = new Promise(resolve => {
+    answer = resolve;
+  });
+  await rerun({ message: '', supplied: { issue: '42' } });
+
+  expect(container.textContent).toContain('Loading…');
+  expect(container.textContent).not.toContain('Active0');
+  expect(field('issue')?.value).toBe('42');
+
+  await act(async () => answer());
+  expect(container.textContent).not.toContain('Loading…');
+  expect(container.textContent).toContain('Active0');
+  expect(field('issue')?.value).toBe('42');
 });

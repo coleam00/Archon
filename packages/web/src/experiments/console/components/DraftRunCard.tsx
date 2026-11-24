@@ -98,10 +98,11 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   const [inputDraft, setInputDraft] = useState<InputDraft>(NO_INPUTS);
   const inputValues = inputDraft.workflow === workflowName ? inputDraft.values : {};
 
-  // Picking a workflow discards what was filled for the previous one. A handler, not an
-  // effect on `workflowName`: that would also run after a re-run sets the workflow and
-  // its inputs together, and wipe them.
+  // Picking another workflow discards what was filled for the previous one; confirming
+  // the selected one keeps it. A handler, not an effect on `workflowName`: that would
+  // also run after a re-run sets the workflow and its inputs together, and wipe them.
   const pickWorkflow = (name: string): void => {
+    if (name === workflowName) return;
     setWorkflowName(name);
     setInputDraft(NO_INPUTS);
   };

@@ -213,7 +213,8 @@ export function filterRuns(
 
 interface SectionHeaderProps {
   label: string;
-  count: number;
+  /** Null while the count is not known yet. */
+  count: number | null;
 }
 
 function SectionHeader({ label, count }: SectionHeaderProps): ReactElement {
@@ -222,12 +223,14 @@ function SectionHeader({ label, count }: SectionHeaderProps): ReactElement {
       <span className="font-mono text-console-11 font-bold uppercase tracking-console-label text-text-tertiary">
         {label}
       </span>
-      <span
-        className="rounded-full border bg-surface-elevated px-2 py-px font-mono text-console-11 tabular-nums text-text-secondary"
-        style={{ borderColor: 'var(--border)' }}
-      >
-        {count}
-      </span>
+      {count !== null ? (
+        <span
+          className="rounded-full border bg-surface-elevated px-2 py-px font-mono text-console-11 tabular-nums text-text-secondary"
+          style={{ borderColor: 'var(--border)' }}
+        >
+          {count}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -241,6 +244,8 @@ interface RunsFeedProps {
   promotedRunIds: ReadonlySet<string>;
   /** Heading of the finished runs: on the Running tab they are the ones that just ended. */
   recentLabel: string;
+  /** The feed's first load is in flight: `runs` is empty because nothing is known yet. */
+  loading: boolean;
 }
 
 /**
@@ -260,6 +265,7 @@ function RunsFeed({
   selectedRunId,
   promotedRunIds,
   recentLabel,
+  loading,
 }: RunsFeedProps): ReactElement {
   const active = runs.filter(r => r.status === 'running' || r.status === 'paused');
   const recent = runs.filter(
@@ -272,7 +278,7 @@ function RunsFeed({
     <div className="flex flex-col gap-6.5">
       {showActiveSection ? (
         <section>
-          <SectionHeader label="Active" count={active.length} />
+          <SectionHeader label="Active" count={loading ? null : active.length} />
           <div className="flex flex-col gap-2">
             {draftProject !== null ? (
               <DraftRunCard projectId={draftProject.id} projectCwd={draftProject.path} />
@@ -289,6 +295,8 @@ function RunsFeed({
           </div>
         </section>
       ) : null}
+
+      {loading ? <EmptyState title="Loading…" /> : null}
 
       {recent.length > 0 ? (
         <section>
@@ -741,7 +749,6 @@ function RunsHeader({
 interface RunsFeedBodyProps extends Omit<RunsFeedProps, 'showProject' | 'recentLabel'> {
   /** The feed's load error; demo mode passes none, since its mocks render regardless. */
   feedError: Error | undefined;
-  loading: boolean;
   filter: Filter;
   scope: Scope;
 }
@@ -778,6 +785,7 @@ function RunsFeedBody({
       selectedRunId={selectedRunId}
       promotedRunIds={promotedRunIds}
       recentLabel={filter === 'running' ? 'Just finished' : 'Recent'}
+      loading={loading}
     />
   );
 }

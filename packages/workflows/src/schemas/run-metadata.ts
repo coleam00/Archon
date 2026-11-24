@@ -490,18 +490,23 @@ export function readRunDispatchMetadata(
 /**
  * The inputs a run was invoked with, as text by name: what re-running it supplies again.
  * Empty for a run whose dispatch record names none, including every run started before
- * the record did.
+ * the record did. Reads the canonical text map only, so a run list never depends on the
+ * rest of a row's sub-run metadata parsing.
  */
 export function readSuppliedRunInputs(
   metadata: Record<string, unknown> | undefined
 ): Record<string, string> {
   const names = readRunDispatchMetadata(metadata)?.supplied_inputs ?? [];
-  const inputs = readSubrunMetadata(metadata).inputs ?? {};
-  return Object.fromEntries(
-    names
-      .filter(name => Object.hasOwn(inputs, name))
-      .map(name => [name, canonicalValueText(inputs[name] ?? null)])
-  );
+  const text = metadata?.[SUBRUN_METADATA_KEYS.inputs];
+  if (typeof text !== 'object' || text === null) return {};
+  const supplied: Record<string, string> = {};
+  for (const name of names) {
+    const value: unknown = Object.hasOwn(text, name)
+      ? (text as Record<string, unknown>)[name]
+      : undefined;
+    if (typeof value === 'string') supplied[name] = value;
+  }
+  return supplied;
 }
 
 /**
