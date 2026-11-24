@@ -3058,7 +3058,7 @@ A ruling is a decision recorded on the item without a question having been asked
 
 The branch an item's change lands on is a fact of the item too, recorded with [`workflow landing`](#workflow-landing). Every fresh run on the item, and on an item `part_of` it that records none, is cut from that branch and proposes against it.
 
-A link is a directed relation from one item to another: `depends_on`, `part_of` or `duplicate_of` ([`workflow link`](#workflow-link)). Only accepted links are recorded. Both items' reads show it, with its direction. Ending a link keeps the record with who ended it and when. The engine acts on a link in two places: an active `part_of` carries the [landing branch](#workflow-landing) of the item it points at to an item that records none, and a run-ended trigger with `linked` [starts its stage on the linked items](/guides/workflow-triggers/#start-a-stage-on-an-item-when-the-items-it-links-to-end). Otherwise what a link means for an item is for a reading node to judge.
+A link is a directed relation from one item to another: `depends_on`, `part_of` or `duplicate_of` ([`workflow link`](#workflow-link)). Only accepted links are recorded. Both items' reads show it, with its direction. Ending a link keeps the record with who ended it and when. The engine acts on a link only as [`workflow link`](#workflow-link) describes. Otherwise what a link means for an item is for a reading node to judge.
 
 Items need the database store and a registered project. With `store: files`, or in a directory with no project, naming, reading or listing an item fails; it is never read as empty.
 
