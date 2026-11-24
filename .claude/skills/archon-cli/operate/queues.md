@@ -19,7 +19,7 @@ own: what happened to an issue is its item's runs, outcomes, asks and answers.
 | `archon-split` | Builds a large issue whole, or files its next piece as an issue linked `part_of` the item and puts it in triage. | `split`; `plan`, `build`; `ask` |
 | `archon-plan` | Chooses the approach and the verifiable steps. | `planned`; `ask` |
 | `archon-build` | Builds, commits, pushes and opens a draft pull request; continues it in the same session when it comes back. | `built`; `replan`; `ask` |
-| `archon-review` | Seven lenses, three verifiers on the blocking findings, one verdict posted on the pull request. Also reviews any pull request by hand. | `approve`, `return`, `replan`, `ask`; by hand `ready`, `not_ready` |
+| `archon-review` | Seven lenses and a simplify pass, three verifiers on the blocking findings, one verdict posted on the pull request; a smaller shape goes back to the builder. Also reviews any pull request by hand. | `approve`, `return`, `replan`, `ask`; by hand `ready`, `not_ready` |
 | `archon-host` | Answers settled review threads, updates the description, reads CI once, takes the pull request out of draft. | `ready`, `return`, `ask` |
 | `archon-land` | Judges the pull request against the land policy, merges it pinned to the head whose checks it read, records the merge on the item. | `merged`, `return`, `ask` |
 | `archon-discoveries` | Files, tracks, drops or holds what the item's runs noticed outside their change. | `decided`, `ask` |

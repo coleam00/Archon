@@ -1,0 +1,69 @@
+# Simplify — The Smallest Coherent Shape
+
+Writing code is cheap; maintaining it and recovering option value are not. Hunt this class of defect: **the change delivers its required outcome through more structure than that outcome needs.** Preserve meaningful invariants, supported behavior, and useful foundations — not accidental implementation shape. Before you start, read `review-lens.md` (`.archon/sdlc/policy/`, over the default in `$PACK_DIR/.shared/policy/`): it says how a lens stays read-only, where scratch work goes, what counts as a finding, and how a discovery is recorded. Your scratch worktree is `git worktree add --detach "$(mktemp -d "$NODE_SCRATCH_DIR/XXXXXX")" HEAD`, and your scratch files go under `$ARTIFACTS_DIR`.
+
+Delivery runs you beside each round's review, and the next round's implementer adopts or declines every finding you report together with the review's, so report only a smaller shape you proved keeps the required outcome and the behavior the project supported before the change. The diff is this branch's commits over its base: fetch `$BASE_BRANCH` from the remote of the repository this work is proposed to (`git remote -v`; in a fork setup, the upstream, whatever it is named) and read `git diff <that remote>/$BASE_BRANCH...HEAD`. The accepted contract is the work order below — judge against its required outcome, not against the plan or design the implementation followed: a mechanism the plan chose is a claim to test, not a requirement. The builder's `implementation.md`, at the path `$ARTIFACTS_DIR/review/scope.md` names, records what the implementation claims and how it disposed of earlier findings.
+
+When the previous review of this item names a `shape` report that exists, an earlier round of this delivery ran this pass, and its first line names the commit it judged. Then judge only the delta from that commit to `HEAD`, and only when the delta is large or reshapes the code's structure; a correction of a few lines that keeps the shape needs no second pass. Never report again a finding the implementer declined unless the delta changes its evidence. Either way, write `shape.md` in full: the next implementer reads only this round's pass. The previous review's result (`null` on a first round):
+
+$INPUTS.earlier
+
+Accepted work order: the issue this change delivers, number `$INPUTS.issue` (empty for a review by hand, where the pull request's own problem and outcome are the contract), as `$ARTIFACTS_DIR/review/scope.md` records its accepted contract.
+
+The project's own values are in its steering documents: open, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point — only when a finding depends on a value one of them states, and read the section you cite, not the whole file. A structural preference that one of them states is a finding you cite, and one that none of them states is taste you leave out. Anchor the review on the accepted work order's stated invariants, and scale scrutiny to concrete consequences and explicitly try to refute the relevant invariants; a prose-only change gets the minimum.
+
+## Establish the contract
+
+Start with the diff above, against its base. Establish the intended outcome and invariants from the accepted work order, the PR, the changed files, their tests, and direct consumers. Read beyond the diff only as far as settling a concrete question requires. Existing code is evidence, not a mandate.
+
+## Test the structural decisions
+
+Look first for decisions that add coordination or prematurely close options:
+
+- **Data shape and ownership:** Do core types match the dominant access paths? Is data copied, flattened, rebuilt, cached, or represented more than once when one owner could carry it? A copy of an owner's rule or vocabulary is a second owner even when a boundary forbids importing the owner: the boundary explains the copy, it does not justify it. Report it with the smallest shape that removes the second owner, even when that shape crosses a stated boundary; whether the boundary stops the fix is the implementer's decision.
+- **Coherent capability:** Does the change deepen one useful abstraction, or spread special-case coordination across callers, layers, and schemas?
+- **Concurrency:** If another actor changes shared state concurrently, is the answer safely "nothing"? If not, should the state be isolated instead of synchronized?
+- **Foundations:** Would one smaller primitive make the downstream logic obvious? Remove dead weight before adding scaffold; add scaffold early only when every later phase benefits from it.
+- **Premature machinery:** Which real supported variation requires each new state, lifecycle, wrapper, configuration surface, fallback, or extension point?
+
+Then answer three questions explicitly, every time. Each finding they produce carries the same evidence as any other (Require proof, below), and the report names what you checked for each even when it found nothing:
+
+1. **Does something already do this?** For each helper, type, gate, state, reader, parser, or wrapper the change adds, look for an existing primitive in the repository and in the libraries the project already depends on (its manifests and lockfile name them) that implements it — search by what it does, not only by its name, and read the library's own exports where it is installed. A hand-written version of what an installed library or an in-repo helper already provides is a finding even when the machinery itself is needed; cite the primitive.
+2. **Does anything go beyond the brief?** Map each changed behavior, surface, and edit to the required outcome in the work order. A behavior change, removed option, relaxed rule, extra runtime check, or doc edit the outcome does not need is a finding: cite the hunk and the part of the work order it does not serve. Its smaller shape drops the extra.
+3. **Does anything cost more than what it protects?** For each test, guard, check, or helper the change adds, weigh what maintaining it costs — its size, a new cross-package or source-scraping dependency, a new way for unrelated edits to fail — against the failure it prevents. When the cost is larger, the finding names the smaller protection or none. A test, guard, or check for a failure no supported path reaches today protects nothing, so its smaller protection is none.
+
+Apply the laziness test:
+
+- Prefer deletion and direct control flow before introducing helpers or abstractions.
+- Keep call paths flat enough that ownership and decisions remain easy to trace. A rich interface that hides substantial work is not itself a deep call chain.
+- Consolidate each decision behind one source of truth and pass the resolved result plainly.
+- Question new signals threaded through types, schemas, pipelines, or layers; look for the owner or primitive that already knows the answer.
+- Catch small pass-throughs, representation leaks, and duplicated choices before they become lasting coordination costs.
+- DRY shared structure and data models, not every repeated line. Explicit repetition can be simpler than a premature abstraction.
+
+Line count is not the invariant. Fewer states, representations, concepts, synchronization points, branches, and ownership boundaries are. If the result would exhaust a human maintainer, reconsider it.
+
+## Require proof
+
+Report a simplification only when the evidence establishes:
+
+- the required outcome and invariant;
+- the avoidable machinery and its concrete maintenance or correctness cost;
+- an existing or smaller primitive that carries the same behavior; and
+- callers, tests, contracts, or focused validation that support the replacement. Tests the change added for its own machinery are not evidence for keeping that machinery.
+
+Try to falsify the smaller shape against concurrency, ordering, persistence, compatibility, and error semantics where relevant. A finding never proposes added state, locks, protocols, or operator or API surface: a simplification removes structure. Do not replace explicit code with clever code, move complexity into a helper, invent a new abstraction for hypothetical reuse, or broaden the review into unrelated cleanup. Report a proved defect of another kind too — a wrong outcome, an unprotected behavior, a missing type at a boundary — as the defect and the invariant it breaks, never as a lock, claim, state or protocol to add: the implementer chooses the fix.
+
+When execution is practical, run the smallest command that can falsify a replacement. Invoke it the way this repository documents its own commands — the package scripts and invocation rules its steering files name, never an ad-hoc variant one of them warns against.
+
+## What each finding costs
+
+State what each finding costs if it merges — the machinery that stays, the decision or data that gains a second owner, the concept every later maintainer carries — and whether you proved the smaller shape keeps that outcome and behavior or could not falsify it; for one you could not, name the evidence that would settle it. Do not assign a severity: the implementer judges each one directly on this evidence. Simplification is corrected on the produced change, not deferred: merged complexity compounds into drift that every later change pays for.
+
+## Output
+
+Write your report to `$ARTIFACTS_DIR/shape.md`. Its first line is `Judged at: <HEAD commit>`. When you skipped a later round's pass, the rest is one line saying why, and `findings` is false. Otherwise each in-scope finding begins with `sources: [simplify]`, followed by what it costs, the proof fields above with `file:line` references, the smaller shape, what disappears, and any real tradeoff. Then the examined-and-clean list naming the decisive primitives, invariants, or supported variations that justify the structure you left alone. If nothing meaningful can disappear, say so briefly and name what you checked — never claim the change is optimal.
+
+Your discoveries file is `$ARTIFACTS_DIR/discoveries/review-simplify.json`, and your `source_node` is `simplify`.
+
+Verify every cited `file:line` is real, then reply with one line pointing to your report and the findings count. Declare `findings`: true exactly when the report holds at least one finding; `count`: how many findings the report holds; `skipped`: true when you skipped a later round's pass; and `report`: the absolute path of `$ARTIFACTS_DIR/shape.md`.

@@ -82,6 +82,8 @@ Implements the work with focused checks on what it changed, commits, pushes the 
 
 Reviews a change through parallel specialist lenses and ends in one evidence-based verdict. A scope agent fixes the commit under review and the accepted contract; a route agent picks the lenses the change earns (seams, code, tests, errors, docs, ux). Synthesis aggregates their reports and judges every acceptance item, invariant and steering constraint. When the verdict is not ready, three independent verifiers judge each blocking finding, and the verdict node demotes one two of them reject. A round after an earlier review of the item verifies the earlier findings and reviews only the delta since the commit that round reviewed. The report is posted on the pull request as one marked comment, edited in place each round, only while the pull request's head is the reviewed commit. Read-only.
 
+Beside the lenses, a simplify pass judges whether the change delivers its outcome through more structure than it needs and writes `shape.md`. A smaller shape it names sends the change back to the builder even when the verdict is ready; the verdict's `simplify` field counts them and `shape` names the report.
+
 - **Started by** build `built`. By hand on any pull request, on its own item, from a checkout of its head branch:
 
   ```bash
@@ -118,7 +120,7 @@ Reads what the item's runs recorded outside their change, the review's accepted 
 
 ## Removed workflows
 
-`archon-intake`, `archon-build-queue`, `archon-build-pick`, `archon-deliver`, `archon-implement`, `archon-simplify`, `archon-pr`, `archon-merge-queue`, `archon-merge-pick`, `archon-ship` and the `archon-metrics-*` workflows are gone. The changelog's entry for the rebuilt pack names what replaces each one, and the inputs that changed.
+`archon-intake`, `archon-build-queue`, `archon-build-pick`, `archon-deliver`, `archon-implement`, `archon-simplify` (now a pass inside `archon-review`), `archon-pr`, `archon-merge-queue`, `archon-merge-pick`, `archon-ship` and the `archon-metrics-*` workflows are gone. The changelog's entry for the rebuilt pack names what replaces each one, and the inputs that changed.
 
 ## Summary
 

@@ -22,7 +22,7 @@ An **operator** is whoever runs the pack: a person, or more often that person's 
 | `archon-split` | Decides whether a large issue is built whole or as pieces, files the next piece as its own issue (once, by a marker), links it `part_of` the item and puts it in triage. | Triage `split`; its own answers | `split` (the pieces come back through triage); `plan`, `build` (built whole); `ask` |
 | `archon-plan` | Chooses the approach, breaks it into verifiable steps and names the validation. | Link or split `plan`; build or review `replan`; a `replan` answer; its own answers | `planned` (build); `ask` |
 | `archon-build` | Builds the change, commits, pushes and opens a draft pull request; when the change comes back, continues it in the same session on the same branch. | Plan `planned`, investigate `rooted`, link or split `build`; a return from review, host or land; a `send-back` or `one-more-round` answer; its own answers | `built` (review); `replan`; `ask` |
-| `archon-review` | Seven lenses (scope, seams, code, tests, errors, docs, ux), three verifiers on the blocking findings, and one verdict; posts the report on the pull request. Also reviews any pull request by hand. | Build `built` | `approve` (host); `return` (build); `replan`; `ask`. By hand: `ready`, `not_ready` |
+| `archon-review` | Seven lenses (scope, seams, code, tests, errors, docs, ux) and a simplify pass beside them, three verifiers on the blocking findings, and one verdict; a smaller shape simplify names goes back to the builder; posts the report on the pull request. Also reviews any pull request by hand. | Build `built` | `approve` (host); `return` (build); `replan`; `ask`. By hand: `ready`, `not_ready` |
 | `archon-host` | Answers the review threads the builder settled, updates the description, checks the merge with the base, reads CI once and takes the pull request out of draft. | Review `approve`; a `take-as-is` answer on a review ask | `ready` (land); `return` (build); `ask` |
 | `archon-land` | Judges the pull request against the project's land policy, merges it pinned to the head whose checks it read, and records the merge on the item. | Host `ready`; a `take-as-is` answer on a host ask; a `land` answer | `merged` (discoveries); `return` (build); `ask` |
 | `archon-discoveries` | Verifies what the item's runs noticed outside their change, and files, tracks, drops or holds each one. Files at most three issues a pass and labels none. | Land `merged`; its own answers | `decided`; `ask` |
@@ -125,7 +125,7 @@ merge asked says so in its `land.md`; this repository's does.
 
 Every agent step names an alias that falls back to a tier (`small`, `medium`, `large`):
 `@triage`, `@link`, `@investigator`, `@split`, `@planner`, `@implementer`, `@reviewer` and the
-lens aliases `@review-<lens>` and `@review-route`, `@settle-threads`, `@update-pr-body`,
+lens aliases `@review-<lens>` (`@review-simplify` among them) and `@review-route`, `@settle-threads`, `@update-pr-body`,
 `@ci`, `@merge`, `@discoveries`. Nothing needs setting for a first run.
 
 ```bash

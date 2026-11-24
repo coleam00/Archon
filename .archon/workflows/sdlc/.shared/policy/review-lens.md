@@ -1,6 +1,6 @@
 # Review lens conduct
 
-This is the SDLC pack's default for how every review lens works
+This is the SDLC pack's default for how every review lens, and the simplify pass, works
 beside the others and reports. A project adds to it with its own
 `.archon/sdlc/policy/review-lens.md`: a lens reads this default first and the project's
 file after it, and where the two conflict, the project's line wins.

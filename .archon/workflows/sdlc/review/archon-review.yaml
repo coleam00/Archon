@@ -7,7 +7,8 @@ description: |
   acceptance item, invariant and steering constraint is met with cited evidence or
   raised as a blocking finding. A round that follows an earlier review of the item
   verifies the earlier findings and reviews only the delta since the commit that round
-  reviewed. When the verdict is not ready, three independent verifiers judge each
+  reviewed. Beside the lenses, a simplify pass names any smaller shape that keeps the
+  outcome. When the verdict is not ready, three independent verifiers judge each
   blocking finding, and one most of them reject is demoted. The report is posted to the
   pull request as one comment, edited in place each round, only while the pull
   request's head is the reviewed commit. Read-only: it judges, it never edits.
@@ -135,6 +136,24 @@ nodes:
     depends_on: [route]
     when: "$route.output.ux == true"
 
+  # Beside the lenses, so its smaller shapes reach the builder with the review's findings.
+  # A later round judges only a large or reshaping delta (see commands/simplify.md). Its
+  # report is shape.md, and the verdict carries its count, so a bench can tell what it added.
+  - id: simplify
+    model: ['@review-simplify', '@reviewer', medium]
+    command: simplify
+    context: fresh
+    depends_on: [scope]
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        findings: { type: boolean }
+        count: { type: integer, minimum: 0 }
+        skipped: { type: boolean }
+        report: { type: string, description: 'The absolute path of shape.md.' }
+      required: [findings, count, skipped, report]
+
   # all_done: a lens that failed must not kill the review. Synthesis reads how each lens
   # ended from $NODE_OUTCOMES_FILE and holds readiness on a selected lens that did not
   # complete, so the gap is disclosed and the next round is the retry.
@@ -194,7 +213,7 @@ nodes:
   - id: verdict
     command: review-verdict
     context: fresh
-    depends_on: [scope, synthesize, verify-1, verify-2, verify-3]
+    depends_on: [scope, synthesize, simplify, verify-1, verify-2, verify-3]
     trigger_rule: all_done
     output_format:
       type: object
@@ -208,6 +227,8 @@ nodes:
         published: { type: boolean }
         findings_summary: { type: string }
         report: { type: string, description: 'The absolute path of review/report.md.' }
+        simplify: { type: integer, minimum: 0, description: 'How many smaller shapes the simplify pass reported this round.' }
+        shape: { type: string, description: 'The absolute path of shape.md, or empty when simplify did not complete.' }
         discoveries: *discoveries
         contract_left: { type: array, items: { type: string } }
-      required: [outcome, ready, action, head, pull_request, published, findings_summary, report, discoveries, contract_left]
+      required: [outcome, ready, action, head, pull_request, published, findings_summary, report, simplify, shape, discoveries, contract_left]

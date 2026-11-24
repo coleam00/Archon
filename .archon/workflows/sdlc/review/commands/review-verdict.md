@@ -17,20 +17,29 @@ When synthesis's verdict was ready, there are no votes: skip to the next section
 - Record the demotion in `findings.json` (the record becomes `severity: note` and gains `verify`: the votes as written), and put a short verification section at the top of `report.md` and its round copy, naming each demoted finding and the votes, so the report says why its verdict differs from synthesis's text below it.
 - Decide readiness again from these facts alone: the verdict is ready when no blocking finding stays open and synthesis declared no coverage gap (`coverage_gaps`). Otherwise the action is the most severe of the remaining open blockers' own `action`s (`ask` over `replan` over `correct`) and of what the coverage gaps need: synthesis's action when it is more severe than any blocker it saw, which only a gap explains; otherwise `correct`.
 
+## The simplify pass
+
+Beside the lenses, the simplify pass judged whether the change delivers its outcome through more structure than it needs. What it ended with (`null` when it did not complete):
+
+$simplify.output
+
+Its smaller shapes are not review findings and you do not judge them: they go to the builder, who adopts or declines each one. Add a short "Simplify" section to `report.md` naming the count and the path of its report, `shape.md`.
+
 ## Decide how the review ends
 
 When `$INPUTS.issue` is empty, this review was started by hand on a pull request, not by delivery: end `ready` when the verdict is ready and `not_ready` otherwise. Nothing starts after it, and you leave no ask.
 
 Otherwise, in delivery:
 
-- **approve** — the verdict is ready. The host stage starts on the change.
+- **approve** — the verdict is ready and the simplify pass reported no smaller shape (or did not complete). The host stage starts on the change.
+- **return** also when the verdict is ready but the simplify pass reported a smaller shape: the builder adopts or declines each one, and the next round's review sees the result. Its round limit applies as below.
 - **return** — the action is `correct`: the change goes back to its builder with this report. Before you return it, read `rounds.md` (`.archon/sdlc/policy/`, over the default in `$PACK_DIR/.shared/policy/`): the binding is `build-after-review`. When its limit is used up, end `ask` instead, with the options `one-more-round` (the builder fixes what this report returned once more), `take-as-is`, `replan` and `stop` (below).
 - **replan** — the action is `replan`: the item goes back to planning with this report.
 - **ask** — the action is `ask`. Leave each decision synthesis named as an ask, written as `asks.md` says. Its options are fixed, because the answer's option starts the next stage: `send-back` (the builder continues with the operator's answer and this report), `take-as-is` (the change goes on to the host stage as it is), `replan` (the item goes back to planning with the answer) and `stop` (nothing more runs; an operator lands or closes the change by hand). Write the decision itself, and what each option means for it, in `context`. Recommend the one you would take, or `null` with why you cannot choose.
 
 ## Publish the report
 
-Publish when the target is a pull request and `$scope.output.head_matches` is true; otherwise publish nothing and say why in `findings_summary`. Write the comment body to `$ARTIFACTS_DIR/review/comment.md` with your file-writing tool: the line `<!-- archon-review-report -->`, then `Reviewed commit: \`<the full commit under review>\``, then `Verdict: ready` or `Verdict: not ready`, then `Contract: complete` when `contract_left` is empty or `Contract: open` otherwise, then a blank line and the whole of `report.md`. Before you write it, read the pull request's head again with `pr.view`; when it is no longer the commit under review, publish nothing and say so. Then write the request `{"subject":{"kind":"pr","ref":<ref>},"marker":"<!-- archon-review-report -->","body":<the file's text>}` to `$ARTIFACTS_DIR/review/comment.json` and pass it with `--data-file` to `workitem.comment.upsert`, through the Archon CLI whose argv is the JSON string array in `$ARCHON_CLI_COMMAND`. The forge keeps one comment per marker, so every round edits the same comment. A failed write is reported in `findings_summary`, never repeated through another tool; the verdict stands either way.
+Publish when the target is a pull request and `$scope.output.head_matches` is true; otherwise publish nothing and say why in `findings_summary`. Write the comment body to `$ARTIFACTS_DIR/review/comment.md` with your file-writing tool: the line `<!-- archon-review-report -->`, then `Reviewed commit: \`<the full commit under review>\``, then `Verdict: ready` or `Verdict: not ready` (the review's verdict, whatever simplify reported), then `Contract: complete` when `contract_left` is empty or `Contract: open` otherwise, then a blank line and the whole of `report.md`. Before you write it, read the pull request's head again with `pr.view`; when it is no longer the commit under review, publish nothing and say so. Then write the request `{"subject":{"kind":"pr","ref":<ref>},"marker":"<!-- archon-review-report -->","body":<the file's text>}` to `$ARTIFACTS_DIR/review/comment.json` and pass it with `--data-file` to `workitem.comment.upsert`, through the Archon CLI whose argv is the JSON string array in `$ARCHON_CLI_COMMAND`. The forge keeps one comment per marker, so every round edits the same comment. A failed write is reported in `findings_summary`, never repeated through another tool; the verdict stands either way.
 
 ## Declare
 
@@ -42,6 +51,8 @@ Publish when the target is a pull request and `$scope.output.head_matches` is tr
 - `published` — true when the comment was written.
 - `findings_summary` — start with `Review report: <the absolute path of report.md>.` Then two to four sentences with blocking and note counts after the votes, what blocks readiness or that nothing does, and whether the report was published.
 - `report` — the absolute path of `$ARTIFACTS_DIR/review/report.md`. The next review round, the builder and the host read it there.
+- `simplify` — the simplify pass's `count`, or `0` when it did not complete.
+- `shape` — the simplify pass's `report` path, or the empty string when it did not complete.
 - `discoveries` — synthesis's accepted discovery records, plus each pre-existing defect the votes demoted.
 - `contract_left` — synthesis's list, unchanged.
 - `asks` — with `ask`, each decision as above; otherwise empty.
