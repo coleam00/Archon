@@ -1,6 +1,6 @@
 /**
  * Read what one merge run decides from: the issue's work item, its pull request and the
- * default branch.
+ * run's base branch (`readBase`).
  *
  * The run is on the issue's item, where the engine admits one merge run at a time, so it
  * takes no claim. It refuses an item that is not the merge stage's (`mergeAccepts`), which

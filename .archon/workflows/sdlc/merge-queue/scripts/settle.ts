@@ -6,7 +6,7 @@
  * merged: one that reads back merged is recorded merged whatever was declared, and a
  * closed one is parked. A declared `merge` goes through the gate (`gateRefusals`), read
  * fresh, and merges pinned to the declared head; a refusal, or a merge the forge cannot
- * verify, leaves the item waiting with the reasons. A merge moves the default branch, so
+ * verify, leaves the item waiting with the reasons. A merge moves the base branch, so
  * the forge may not have computed whether the next pull request merges yet: that read is
  * repeated a few times before the gate refuses it.
  *
@@ -73,7 +73,7 @@ interface Settled {
   /** The brief the item's next build round starts from, on a return. */
   readonly brief: string;
   readonly merge_commit: string | null;
-  /** The pull request and the default branch as last read, for what a waiting item waits on. */
+  /** The pull request and the base branch as last read, for what a waiting item waits on. */
   readonly facts: PrFacts | null;
   readonly base: BaseFacts | null;
 }
@@ -250,7 +250,7 @@ function afterMerge(start: MergeStart, settled: Settled, runId: string, at: stri
 }
 
 /**
- * What a waiting item waits for. A red default branch is also reported with the judge's
+ * What a waiting item waits for. A red base branch is also reported with the judge's
  * diagnosis: once per judgment, so a run a check woke to the same red branch says nothing.
  */
 function waitsOf(start: MergeStart, settled: Settled, diagnosis: string | null, lines: string[]): EventWait[] {
@@ -258,7 +258,7 @@ function waitsOf(start: MergeStart, settled: Settled, diagnosis: string | null, 
   if (settled.status !== 'waiting' || facts === null || base === null) return [];
   if (base.checks.state === 'red') {
     const pr = String(start.pr?.number ?? '');
-    const red = `The default branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')}); nothing merges until it is green.`;
+    const red = `The base branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')}); nothing merges until it is green.`;
     lines.push([red, diagnosis ?? ''].filter(line => line !== '').join(' '));
     if (diagnosis !== null) announce(`${red} PR ${pr} waits. ${diagnosis}`, { stage: 'merge', kind: 'base-red', item: String(start.item.number), pr });
   }

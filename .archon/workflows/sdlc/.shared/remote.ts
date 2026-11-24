@@ -140,3 +140,26 @@ export function fetchDefaultBranch(repo: Repo): { readonly branch: string; reado
     gitOrThrow('update-ref', '-d', ref);
   }
 }
+
+/**
+ * The run's base branch as the engine resolved it (`$BASE_BRANCH`): the item's landing
+ * branch when it has one, else the repository's base. The build checkout and the merge
+ * gate both judge against it, so a pull request is built and merged on the same branch.
+ */
+export function runBase(): string {
+  const base = process.env.BASE_BRANCH;
+  if (!base) throw new Error('the run has no base branch ($BASE_BRANCH)');
+  return base;
+}
+
+/** The commit `branch` is at on the remote that names `repo`, fetched into a unique ref as above. */
+export function fetchBranch(repo: Repo, branch: string): string {
+  const remote = remoteFor(repo);
+  const ref = `refs/archon/fetch/${randomUUID()}`;
+  try {
+    gitOrThrow('fetch', '--quiet', '--no-tags', '--no-write-fetch-head', '--refmap=', remote, `refs/heads/${branch}:${ref}`);
+    return gitOrThrow('rev-parse', '--verify', ref);
+  } finally {
+    gitOrThrow('update-ref', '-d', ref);
+  }
+}

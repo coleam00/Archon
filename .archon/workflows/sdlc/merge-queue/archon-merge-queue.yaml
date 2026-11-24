@@ -5,11 +5,12 @@ description: |
   issue's item, where the engine admits one merge run at a time. One agent judges the
   pull request, and a script merges what it declared through a gate that refuses unless
   the trusted review verdict says Ready at the head, what the pack's ci setting trusts
-  passes there (green checks, or a recorded validation), the head contains the default
-  branch or merges into it cleanly, and the default branch's CI is not red, and merges
+  passes there (green checks, or a recorded validation), the pull request targets the
+  base branch (the item's landing branch, else the default branch), the head contains
+  that branch or merges into it cleanly, and that branch's CI is not red, and merges
   pinned to that head. The stage never pushes and never holds a run open: a conflict, a
   stale verdict or red the change caused goes back to the build queue; a pull request
-  whose checks still run ends waiting for a check at its head; one a red default branch
+  whose checks still run ends waiting for a check at its head; one a red base branch
   holds back ends waiting for the backstop (archon-merge-pick); and anything unclear ends as one ask on the item with three
   fixed options (merge, return, park), whose answer starts the stage again.
 
@@ -77,7 +78,7 @@ nodes:
         item: { type: object }
         pr: { type: [object, 'null'] }
         url: { type: string }
-        # The pull request's gate facts, and the default branch's; null when not read.
+        # The pull request's gate facts, and the base branch's; null when not read.
         facts: { type: [object, 'null'] }
         base: { type: [object, 'null'] }
         # The stage's record on the work item, with an approval the answer just gave.
@@ -167,7 +168,7 @@ nodes:
                       required: [option, why]
                   required: [question, context, recommendation]
               required: *decision
-        # The default branch as the judge found it; when red, the diagnosis.
+        # The base branch as the judge found it; when red, the diagnosis.
         base: { type: string }
       required: [decision, base]
 

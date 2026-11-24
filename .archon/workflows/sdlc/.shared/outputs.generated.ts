@@ -85,7 +85,7 @@ export interface WorkflowOutputs {
   };
   'archon-build-queue': {
     facts: {
-      readonly path: 'closed' | 'route';
+      readonly path: 'closed' | 'answered' | 'route';
       readonly item: {
         readonly repo: {
           readonly host: string;
@@ -103,6 +103,10 @@ export interface WorkflowOutputs {
       readonly continues: number | null;
       readonly branch: string;
       readonly related: ReadonlyArray<Readonly<Record<string, unknown>>>;
+      readonly answered: {
+        readonly decision: 'ready' | 'parked';
+        readonly summary: string;
+      } | null;
     };
     route: {
       readonly decision: 'launch' | 'ask' | 'ready';
@@ -113,19 +117,17 @@ export interface WorkflowOutputs {
       readonly reason: string;
       readonly ask: {
         readonly question: string;
+        readonly context: string;
         readonly options: ReadonlyArray<{
           readonly id: string;
-          readonly label: string;
           readonly does: string;
-          readonly value: {
-            readonly effect: 'continue' | 'ready' | 'park';
-            readonly ruling: string;
-          };
+          readonly cost: string;
+          readonly effect: 'continue' | 'ready' | 'park';
+          readonly ruling: string;
         }>;
         readonly recommendation: {
           readonly option: string;
           readonly why: string;
-          readonly confidence: 'low' | 'medium' | 'high';
         };
       } | null;
     };
@@ -149,42 +151,32 @@ export interface WorkflowOutputs {
       readonly ask_class: 'stop' | 'scope';
       readonly ask: {
         readonly question: string;
+        readonly context: string;
         readonly options: ReadonlyArray<{
           readonly id: string;
-          readonly label: string;
           readonly does: string;
-          readonly value: {
-            readonly effect: 'continue' | 'ready' | 'park';
-            readonly ruling: string;
-          };
+          readonly cost: string;
+          readonly effect: 'continue' | 'ready' | 'park';
+          readonly ruling: string;
         }>;
         readonly recommendation: {
           readonly option: string;
           readonly why: string;
-          readonly confidence: 'low' | 'medium' | 'high';
         };
       } | null;
     };
     apply: {
       readonly decision: 'parked' | 'ready' | 'continue' | 'asked';
       readonly summary: string;
-      readonly question: string;
-      readonly options: ReadonlyArray<{
-        readonly id: string;
-        readonly label: string;
-        readonly does: string;
-        readonly value: Readonly<Record<string, unknown>>;
-      }>;
-      readonly recommendation: Readonly<Record<string, unknown>> | null;
-      readonly class: '' | 'route' | 'stop' | 'scope';
-      readonly item: string;
-      readonly pr: string;
-      readonly asked: Readonly<Record<string, unknown>> | null;
-    };
-    ruling: {
-      readonly decision: 'continue' | 'ready' | 'parked';
-      readonly section: string;
-      readonly summary: string;
+      readonly asked: {
+        readonly brief: string;
+        readonly by: 'route' | 'stop' | 'scope';
+        readonly options: ReadonlyArray<{
+          readonly id: string;
+          readonly effect: 'continue' | 'ready' | 'park';
+          readonly ruling: string;
+        }>;
+      } | null;
     };
   };
   'archon-deliver': {
@@ -785,26 +777,23 @@ export const OUTPUT_ENUMS = {
   },
   'archon-build-queue': {
     facts: {
-      path: ['closed', 'route'],
+      path: ['closed', 'answered', 'route'],
+      'answered.decision': ['ready', 'parked'],
     },
     route: {
       decision: ['launch', 'ask', 'ready'],
       route: ['investigate', 'plan', 'deliver', 'continue'],
-      'ask.options[].value.effect': ['continue', 'ready', 'park'],
-      'ask.recommendation.confidence': ['low', 'medium', 'high'],
+      'ask.options[].effect': ['continue', 'ready', 'park'],
     },
     answer: {
       decision: ['done', 'continue', 'ask'],
       ask_class: ['stop', 'scope'],
-      'ask.options[].value.effect': ['continue', 'ready', 'park'],
-      'ask.recommendation.confidence': ['low', 'medium', 'high'],
+      'ask.options[].effect': ['continue', 'ready', 'park'],
     },
     apply: {
       decision: ['parked', 'ready', 'continue', 'asked'],
-      class: ['', 'route', 'stop', 'scope'],
-    },
-    ruling: {
-      decision: ['continue', 'ready', 'parked'],
+      'asked.by': ['route', 'stop', 'scope'],
+      'asked.options[].effect': ['continue', 'ready', 'park'],
     },
   },
   'archon-deliver': {
