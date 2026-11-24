@@ -30,8 +30,8 @@ import { K } from '../store/keys';
 
 type Chip = ItemRead['standing']['state'] | 'needs_you';
 
-/** Every state but the two an item ends in. */
-const OPEN = ['running', 'waiting', 'queued', 'failed', 'stopped'] as const;
+/** The states of an item that is on a stage: something runs, is queued or waits on it. */
+const MOVING = ['running', 'waiting', 'queued'] as const;
 
 // The order chips are counted in on a stage heading.
 const CHIP: Record<Chip, { label: string; tone: string }> = {
@@ -224,11 +224,93 @@ function Column({
 }
 
 const DONE_SHOWN = 5;
-const DONE_PAGE = 20;
+const DECIDE_SHOWN = 6;
+const MORE_PAGE = 20;
+
+interface Newest {
+  data: ItemPage | undefined;
+  error: Error | undefined;
+}
 
 /**
- * The board's own last column: the pack's items whose story ended, newest first. It shows a
- * few with the total in its heading, and reads more a page at a time when opened.
+ * The newest few items of a list and more of them a page at a time: what Done and the
+ * needs-a-decision strip show. `newest` is the cached first page; `read` fetches the page
+ * after a cursor.
+ */
+function useMore(
+  newest: Newest,
+  read: (after: string) => Promise<ItemPage>
+): {
+  shown: ItemRead[];
+  more: boolean;
+  expanded: boolean;
+  busy: boolean;
+  error: string | undefined;
+  load: () => void;
+  collapse: () => void;
+} {
+  const [extra, setExtra] = useState<ItemPage | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const next = extra === null ? newest.data?.next : extra.next;
+  const load = async (): Promise<void> => {
+    if (next == null) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const page = await read(next);
+      setExtra({ ...page, items: [...(extra?.items ?? []), ...page.items] });
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'The items could not be read.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return {
+    shown: [...(newest.data?.items ?? []), ...(extra?.items ?? [])],
+    more: next != null,
+    expanded: extra !== null,
+    busy,
+    error: newest.error?.message ?? error,
+    load: () => void load(),
+    collapse: () => {
+      setExtra(null);
+    },
+  };
+}
+
+const MORE_BUTTON =
+  'mt-2 mr-2 rounded border border-border px-2 py-1 text-console-11 text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-50';
+
+function MoreControls({
+  list,
+  total,
+}: {
+  list: ReturnType<typeof useMore>;
+  total: number;
+}): ReactElement {
+  return (
+    <>
+      {list.error !== undefined ? (
+        <p className="mt-2 text-console-11 text-error">{list.error}</p>
+      ) : null}
+      {list.more ? (
+        <button type="button" disabled={list.busy} onClick={list.load} className={MORE_BUTTON}>
+          {list.busy ? 'Reading…' : `Show more of ${String(total)}`}
+        </button>
+      ) : null}
+      {list.expanded ? (
+        <button type="button" onClick={list.collapse} className={MORE_BUTTON}>
+          Show fewer
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * The board's own last column: the pack's items that are done, newest first. It shows a few
+ * with the total in its heading, and reads more a page at a time when opened.
  */
 function DoneColumn({
   projectId,
@@ -237,33 +319,12 @@ function DoneColumn({
 }: {
   projectId: string;
   pack: string;
-  newest: { data: ItemPage | undefined; error: Error | undefined };
+  newest: Newest;
 }): ReactElement {
-  const [more, setMore] = useState<ItemPage | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const total = newest.data?.totals?.done ?? 0;
-  const shown = [...(newest.data?.items ?? []), ...(more?.items ?? [])];
-  const next = more === null ? newest.data?.next : more.next;
-  const load = async (): Promise<void> => {
-    if (next == null) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const page = await listItemsPage(projectId, ['done'], {
-        pack,
-        limit: DONE_PAGE,
-        after: next,
-      });
-      setMore({ ...page, items: [...(more?.items ?? []), ...page.items] });
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'The items could not be read.');
-    } finally {
-      setBusy(false);
-    }
-  };
-  const button =
-    'mt-2 rounded border border-border px-2 py-1 text-console-11 text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-50';
+  const list = useMore(newest, after =>
+    listItemsPage(projectId, ['done'], { pack, limit: MORE_PAGE, after })
+  );
   return (
     <div data-done className="md:w-64 md:shrink-0">
       <h3 className="flex items-baseline justify-between gap-2 border-b border-border pb-1 text-console-12 font-semibold text-text-secondary">
@@ -273,30 +334,49 @@ function DoneColumn({
         </span>
       </h3>
       <ul className="mt-2 flex flex-col gap-2">
-        {shown.map(read => (
+        {list.shown.map(read => (
           <ItemCard key={read.item.id} read={read} projectId={projectId} />
         ))}
       </ul>
-      {newest.error !== undefined || error !== null ? (
-        <p className="mt-2 text-console-11 text-error">{newest.error?.message ?? error}</p>
-      ) : null}
-      {next != null ? (
-        <button type="button" disabled={busy} onClick={() => void load()} className={button}>
-          {busy ? 'Reading…' : `Show more of ${String(total)}`}
-        </button>
-      ) : null}
-      {more !== null ? (
-        <button
-          type="button"
-          onClick={() => {
-            setMore(null);
-          }}
-          className={`${button} ml-2`}
-        >
-          Show fewer
-        </button>
-      ) : null}
+      <MoreControls list={list} total={total} />
     </div>
+  );
+}
+
+const DECIDE = ['failed', 'stopped'] as const;
+
+/**
+ * The items nothing moves until an operator decides: the last run failed, or it ended with
+ * an outcome and nothing followed. Newest first, a few shown, each with its reason.
+ */
+function DecisionStrip({ projectId }: { projectId: string }): ReactElement | null {
+  const newest = useEntity<ItemPage>(K.boardDecide(projectId), () =>
+    listItemsPage(projectId, DECIDE, { limit: DECIDE_SHOWN })
+  );
+  const totals = newest.data?.totals;
+  const total = totals == null ? 0 : totals.failed + totals.stopped;
+  const list = useMore(newest, after =>
+    listItemsPage(projectId, DECIDE, { limit: MORE_PAGE, after })
+  );
+  if (list.shown.length === 0 && list.error === undefined) return null;
+  return (
+    <section data-needs-decision className="mb-6">
+      <h2 className="text-sm font-medium text-text-primary">
+        Failed or stopped: needs a decision{' '}
+        <span data-decide-total className="font-normal text-text-tertiary">
+          {total}
+        </span>
+      </h2>
+      <p className="mt-1 text-console-12 text-text-tertiary">
+        Nothing moves these until a new run starts on them.
+      </p>
+      <ul className="mt-3 grid gap-2 md:grid-cols-3">
+        {list.shown.map(read => (
+          <ItemCard key={read.item.id} read={read} projectId={projectId} />
+        ))}
+      </ul>
+      <MoreControls list={list} total={total} />
+    </section>
   );
 }
 
@@ -382,7 +462,7 @@ export function BoardPage(): ReactElement {
   const { projectId = '' } = useParams<{ projectId: string }>();
   const { data: projects } = useEntity<Project[]>(K.projects, () => skill.listProjects());
   const project = projects?.find(candidate => candidate.id === projectId);
-  const open = useEntity<ItemRead[]>(K.board(projectId), () => listItems(projectId, OPEN));
+  const open = useEntity<ItemRead[]>(K.board(projectId), () => listItems(projectId, MOVING));
   const { data: attention } = useEntity<skill.RunsAttention>(
     K.runsAttention,
     skill.listRunsNeedingAttention
@@ -402,9 +482,7 @@ export function BoardPage(): ReactElement {
         (read.item.title ?? '').toLowerCase().includes(wanted))
   );
   const packOf = (read: ItemRead): string | undefined => standingRun(read)?.pack?.key;
-  // An item that needs a decision is not on a stage: it sits in its own strip until a newer run.
-  const decide = items.filter(needsDecision);
-  const moving = items.filter(read => !needsDecision(read));
+  const moving = items;
   // Every pack with an item in the project, so a pack with nothing open still shows Done.
   const packs = [
     ...new Set([...(project?.itemPacks ?? []), ...moving.flatMap(read => packOf(read) ?? [])]),
@@ -423,7 +501,7 @@ export function BoardPage(): ReactElement {
               ? open.error.message
               : open.data === undefined
                 ? 'Reading items…'
-                : `${String(all.length)} open`}
+                : `${String(all.length)} on a stage`}
           </p>
         </div>
         <ProjectViewTabs projectId={projectId} active="board" />
@@ -471,21 +549,7 @@ export function BoardPage(): ReactElement {
             items={moving.filter(read => packOf(read) === pack)}
           />
         ))}
-        {decide.length > 0 ? (
-          <section data-needs-decision className="mb-6">
-            <h2 className="text-sm font-medium text-text-primary">
-              Failed or stopped: needs a decision
-            </h2>
-            <p className="mt-1 text-console-12 text-text-tertiary">
-              Nothing moves these until a new run starts on them.
-            </p>
-            <ul className="mt-3 grid gap-2 md:grid-cols-3">
-              {decide.map(read => (
-                <ItemCard key={read.item.id} read={read} projectId={projectId} />
-              ))}
-            </ul>
-          </section>
-        ) : null}
+        <DecisionStrip projectId={projectId} />
         {outside.length > 0 ? (
           <section data-outside-pack className="mb-6">
             <button

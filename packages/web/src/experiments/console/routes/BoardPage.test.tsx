@@ -148,12 +148,17 @@ test('each open item is under the stage it stands at, in the order the pack grap
       ],
     },
     { ...item('issue-2', 'plan', 'waiting'), questions: [ask] },
-    item('issue-3', 'check', 'failed'),
     // A stage the pack no longer has stays on the board; a run of no pack waits to be asked for.
     item('issue-4', 'retired', 'queued'),
     item('issue-5', null, 'running'),
   ]);
   set(K.packGraph('web', 'flow'), graph);
+  // A failed item is read apart from the ones on a stage.
+  set(K.boardDecide('web'), {
+    items: [item('issue-3', 'check', 'failed')],
+    next: null,
+    totals: { ...NONE, failed: 1 },
+  });
   // The newest item at rest of twelve, which ended with the outcome `dropped`.
   const done = item('issue-9', 'check', 'done');
   set(K.boardDone('web', 'flow'), {
