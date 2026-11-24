@@ -7,13 +7,17 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { ClassifiedProviderError } from '../shared/failure';
 import {
   buildPluginListCommand,
-  readClaudePluginIds,
+  readClaudePluginInventory,
   resolveBundledClaudeBinary,
   withPluginScopeCheck,
 } from './plugins';
 
 /** A command that prints `stdout` and exits with `code`, standing in for the CLI. */
-function fakeCli(stdout: string, code = 0, stderr = ''): Parameters<typeof readClaudePluginIds>[0] {
+function fakeCli(
+  stdout: string,
+  code = 0,
+  stderr = ''
+): Parameters<typeof readClaudePluginInventory>[0] {
   return {
     command: 'sh',
     args: ['-c', 'printf "%s" "$OUT"; printf "%s" "$ERR" >&2; exit "$CODE"'],
@@ -32,7 +36,7 @@ async function failureOf(promise: Promise<unknown>): Promise<ClassifiedProviderE
   throw new Error('expected a ClassifiedProviderError');
 }
 
-describe('readClaudePluginIds', () => {
+describe('readClaudePluginInventory', () => {
   test('returns each installed id once, ignoring fields Archon does not read', async () => {
     // Cut down from a real `claude plugin list --json` (2.1.282): one record per
     // install scope, so an id can repeat.
@@ -42,14 +46,29 @@ describe('readClaudePluginIds', () => {
       { id: 'plugin-dev@claude-code-plugins', scope: 'project', enabled: true },
     ]);
 
-    expect(await readClaudePluginIds(fakeCli(listed))).toEqual([
-      'logfire@pydantic-skills',
-      'plugin-dev@claude-code-plugins',
+    expect(await readClaudePluginInventory(fakeCli(listed))).toEqual({
+      installed: ['logfire@pydantic-skills', 'plugin-dev@claude-code-plugins'],
+      managed: [],
+    });
+  });
+
+  test('reports the ids installed at Managed scope, which the node cannot turn off', async () => {
+    // Shape from a real `claude plugin list --json` (2.1.331) on a machine whose
+    // organization enforces a plugin through managed settings.
+    const listed = JSON.stringify([
+      { id: 'policy-plugin@org-marketplace', scope: 'managed', enabled: true },
+      { id: 'policy-plugin@org-marketplace', scope: 'user', enabled: false },
+      { id: 'posthog@official', scope: 'user', enabled: true },
     ]);
+
+    expect(await readClaudePluginInventory(fakeCli(listed))).toEqual({
+      installed: ['policy-plugin@org-marketplace', 'posthog@official'],
+      managed: ['policy-plugin@org-marketplace'],
+    });
   });
 
   test('a failing command is misconfigured and carries its stderr', async () => {
-    const error = await failureOf(readClaudePluginIds(fakeCli('', 3, 'config unreadable')));
+    const error = await failureOf(readClaudePluginInventory(fakeCli('', 3, 'config unreadable')));
     expect(error.failureClass).toBe('misconfigured');
     expect(error.message).toContain('config unreadable');
   });
@@ -60,7 +79,7 @@ describe('readClaudePluginIds', () => {
     ['reporting a signal as exit status 128+N', 'exit 143'],
   ])('a listing %s is transient', async (_, script) => {
     const cmd = { ...fakeCli(''), args: ['-c', script] };
-    expect((await failureOf(readClaudePluginIds(cmd))).failureClass).toBe('transient');
+    expect((await failureOf(readClaudePluginInventory(cmd))).failureClass).toBe('transient');
   });
 
   test('a failure without stderr does not echo the command line, which can hold credentials', async () => {
@@ -68,18 +87,18 @@ describe('readClaudePluginIds', () => {
       ...fakeCli('', 3),
       args: [...fakeCli('', 3).args, 'sh', '-e', 'TOKEN=sk-secret'],
     };
-    const error = await failureOf(readClaudePluginIds(cmd));
+    const error = await failureOf(readClaudePluginInventory(cmd));
     expect(error.message).toContain('exited with code 3');
     expect(error.message).not.toContain('sk-secret');
   });
 
   test('output that is not the expected JSON is misconfigured', async () => {
-    expect((await failureOf(readClaudePluginIds(fakeCli('not json')))).failureClass).toBe(
+    expect((await failureOf(readClaudePluginInventory(fakeCli('not json')))).failureClass).toBe(
       'misconfigured'
     );
-    expect((await failureOf(readClaudePluginIds(fakeCli('[{"name":"x"}]')))).failureClass).toBe(
-      'misconfigured'
-    );
+    expect(
+      (await failureOf(readClaudePluginInventory(fakeCli('[{"name":"x"}]')))).failureClass
+    ).toBe('misconfigured');
   });
 });
 
@@ -135,7 +154,7 @@ describe('real bundled Claude CLI', () => {
     expect(resolveBundledClaudeBinary()).toBeDefined();
     const configDir = mkdtempSync(join(tmpdir(), 'archon-plugin-list-'));
     try {
-      const ids = await readClaudePluginIds(
+      const inventory = await readClaudePluginInventory(
         buildPluginListCommand({
           cliPath: undefined,
           cwd: configDir,
@@ -143,7 +162,7 @@ describe('real bundled Claude CLI', () => {
           execContext: undefined,
         })
       );
-      expect(ids).toEqual([]);
+      expect(inventory).toEqual({ installed: [], managed: [] });
     } finally {
       await removeTempTree(configDir);
     }
@@ -155,12 +174,16 @@ describe('withPluginScopeCheck', () => {
     return { type: 'system', subtype: 'init', plugins } as unknown as SDKMessage;
   }
 
-  async function drain(events: SDKMessage[], named: string[]): Promise<SDKMessage[]> {
+  async function drain(
+    events: SDKMessage[],
+    named: string[],
+    managed: string[] = []
+  ): Promise<SDKMessage[]> {
     const seen: SDKMessage[] = [];
     async function* source(): AsyncGenerator<SDKMessage> {
       yield* events;
     }
-    for await (const event of withPluginScopeCheck(source(), named)) seen.push(event);
+    for await (const event of withPluginScopeCheck(source(), { named, managed })) seen.push(event);
     return seen;
   }
 
@@ -172,6 +195,32 @@ describe('withPluginScopeCheck', () => {
       ]),
     ];
     expect(await drain(events, ['posthog@official'])).toEqual(events);
+  });
+
+  test('a Managed-scope plugin the node does not name passes, like a builtin', async () => {
+    const events = [
+      init([
+        { name: 'agents-md', path: 'builtin', source: 'agents-md@builtin' },
+        { name: 'policy-plugin', path: '/m', source: 'policy-plugin@org-marketplace' },
+      ]),
+    ];
+    expect(await drain(events, [], ['policy-plugin@org-marketplace'])).toEqual(events);
+  });
+
+  test('a Managed-scope plugin that did not load is not required', async () => {
+    const events = [init([{ name: 'agents-md', source: 'agents-md@builtin' }])];
+    expect(await drain(events, [], ['policy-plugin@org-marketplace'])).toEqual(events);
+  });
+
+  test('a Managed-scope id does not admit the same plugin from another marketplace', async () => {
+    const error = await failureOf(
+      drain(
+        [init([{ name: 'policy-plugin', source: 'policy-plugin@fork' }])],
+        [],
+        ['policy-plugin@org-marketplace']
+      )
+    );
+    expect(error.message).toContain('policy-plugin@fork');
   });
 
   test('a named plugin that did not load fails', async () => {

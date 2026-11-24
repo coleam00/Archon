@@ -71,9 +71,12 @@ type RequestOptions = NonNullable<SendQueryArgs[3]>;
 let client: ClaudeProvider;
 // Workflow nodes read the installed-plugin inventory before the session starts.
 // Never run the real CLI here; a test that needs an inventory overrides this.
-let pluginIdsSpy: ReturnType<typeof spyOn<typeof pluginsModule, 'readClaudePluginIds'>>;
+let pluginInventorySpy: ReturnType<typeof spyOn<typeof pluginsModule, 'readClaudePluginInventory'>>;
 beforeEach(() => {
-  pluginIdsSpy = spyOn(pluginsModule, 'readClaudePluginIds').mockResolvedValue([]);
+  pluginInventorySpy = spyOn(pluginsModule, 'readClaudePluginInventory').mockResolvedValue({
+    installed: [],
+    managed: [],
+  });
   client = new ClaudeProvider();
   mockQuery.mockClear();
   mockLogger.info.mockClear();
@@ -82,7 +85,7 @@ beforeEach(() => {
   mockLogger.debug.mockClear();
 });
 afterEach(() => {
-  pluginIdsSpy.mockRestore();
+  pluginInventorySpy.mockRestore();
 });
 
 /**
@@ -2649,7 +2652,10 @@ describe('workflow-node plugin scope', () => {
   }
 
   test('a node that names nothing turns off every installed plugin and keeps native settings', async () => {
-    pluginIdsSpy.mockResolvedValue(['posthog@official', 'prp-core@prp']);
+    pluginInventorySpy.mockResolvedValue({
+      installed: ['posthog@official', 'prp-core@prp'],
+      managed: [],
+    });
     sdkYields(builtinInit, { type: 'result', session_id: 'sid' });
 
     await nodeChunks({ nodeId: 'closed-node' });
@@ -2664,7 +2670,7 @@ describe('workflow-node plugin scope', () => {
   });
 
   test('delivered auth disables key helpers while retaining capability settings', async () => {
-    pluginIdsSpy.mockResolvedValue(['posthog@official']);
+    pluginInventorySpy.mockResolvedValue({ installed: ['posthog@official'], managed: [] });
     sdkYields(builtinInit, { type: 'result', session_id: 'sid' });
 
     await nodeChunks(
@@ -2685,7 +2691,10 @@ describe('workflow-node plugin scope', () => {
   });
 
   test('a named plugin is the only one enabled', async () => {
-    pluginIdsSpy.mockResolvedValue(['posthog@official', 'prp-core@prp']);
+    pluginInventorySpy.mockResolvedValue({
+      installed: ['posthog@official', 'prp-core@prp'],
+      managed: [],
+    });
     sdkYields(initWith({ name: 'posthog', path: '/p', source: 'posthog@official' }), {
       type: 'result',
       session_id: 'sid',
@@ -2701,7 +2710,7 @@ describe('workflow-node plugin scope', () => {
   });
 
   test('a named plugin that is not installed fails as misconfigured before the session starts', async () => {
-    pluginIdsSpy.mockResolvedValue(['prp-core@prp']);
+    pluginInventorySpy.mockResolvedValue({ installed: ['prp-core@prp'], managed: [] });
 
     const chunks = await nodeChunks({ nodeId: 'named', plugins: ['posthog@official'] });
 
@@ -2712,7 +2721,7 @@ describe('workflow-node plugin scope', () => {
   });
 
   test('a failed inventory read fails as misconfigured before the session starts', async () => {
-    pluginIdsSpy.mockRejectedValue(
+    pluginInventorySpy.mockRejectedValue(
       new ClassifiedProviderError('misconfigured', 'Cannot list Claude plugins: boom')
     );
 
@@ -2747,19 +2756,38 @@ describe('workflow-node plugin scope', () => {
     expect(result?.failure?.evidence).toContain('synced@claude-ai');
   });
 
+  test('a Managed-scope plugin loads without being named, and the node logs it', async () => {
+    pluginInventorySpy.mockResolvedValue({
+      installed: ['policy-plugin@org-marketplace', 'posthog@official'],
+      managed: ['policy-plugin@org-marketplace'],
+    });
+    sdkYields(
+      initWith({ name: 'policy-plugin', path: '/m', source: 'policy-plugin@org-marketplace' }),
+      { type: 'result', session_id: 'sid' }
+    );
+
+    const chunks = await nodeChunks({ nodeId: 'closed-node' });
+
+    expect(chunks.find(c => c.type === 'result')?.failure).toBeUndefined();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { plugins: ['policy-plugin@org-marketplace'] },
+      'claude.managed_plugins_loaded'
+    );
+  });
+
   test('direct chat reads no inventory and sets no plugin settings', async () => {
     sdkYields({ type: 'result', session_id: 'sid' });
 
     await chunksOf('chat', tmpdir());
     await nodeChunks({ allowed_tools: ['Read'] });
 
-    expect(pluginIdsSpy).not.toHaveBeenCalled();
+    expect(pluginInventorySpy).not.toHaveBeenCalled();
     expect(sdkOptions(0).settings).toBeUndefined();
     expect(sdkOptions(1).settings).toBeUndefined();
   });
 
   test('a resumed node gets the same plugin scope as a fresh one', async () => {
-    pluginIdsSpy.mockResolvedValue(['posthog@official']);
+    pluginInventorySpy.mockResolvedValue({ installed: ['posthog@official'], managed: [] });
     sdkYields(builtinInit, { type: 'result', session_id: 'sid' });
 
     await nodeChunks({ nodeId: 'closed-node' }, undefined, 'prior-session');

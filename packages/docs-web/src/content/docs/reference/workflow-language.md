@@ -327,7 +327,7 @@ Omitting the field inherits `assistants.<provider>.settingSources` from `.archon
 
 ### Plugins
 
-A Claude workflow node loads none of the Claude Code plugins installed on the machine: no plugin subagents, hooks, LSP servers, commands, skills or MCP servers. Your own settings, hooks, permissions and `CLAUDE.md` still load, and so do the plugins built into Claude Code (`@builtin`). A node that needs a plugin names it by its exact id, as `claude plugin list` prints it:
+A Claude workflow node loads none of the Claude Code plugins installed on the machine: no plugin subagents, hooks, LSP servers, commands, skills or MCP servers. Your own settings, hooks, permissions and `CLAUDE.md` still load, and so do the plugins built into Claude Code (`@builtin`) and any plugin your organization enforces at Managed scope, which `claude plugin list --json` reports with `"scope": "managed"`. A node cannot turn a Managed-scope plugin off, so Archon accepts it without the node naming it and logs `claude.managed_plugins_loaded` when it loads. A node that needs a plugin names it by its exact id, as `claude plugin list` prints it:
 
 ```yaml
 - id: triage
@@ -339,7 +339,7 @@ A Claude workflow node loads none of the Claude Code plugins installed on the ma
 
 A named plugin brings its agents, hooks, LSP servers and commands. Its skills reach the node only when `skills:` names them, and its MCP servers only through `mcp:` (see [MCP Servers](/guides/mcp-servers/#servers-that-ship-in-a-claude-plugin)).
 
-The node fails before its first model turn when a named plugin is not installed, or when Claude Code reports a loaded plugin the node did not name, for example one synced from claude.ai or loaded by another route.
+The node fails before its first model turn when a named plugin is not installed, or when Claude Code reports a loaded plugin that the node did not name and that is neither built in nor installed at Managed scope, for example one synced from claude.ai or loaded by another route.
 
 A Codex workflow node works the same way. It loads none of the user's Codex plugins and no ChatGPT apps, while the user's `config.toml` settings, hooks and `AGENTS.md` still load. A node names a plugin by the id `codex plugin list` prints, such as `github@openai-curated`. A named Codex plugin brings its skills, which the node body invokes as `$<plugin>:<skill>`, and its hooks. Its MCP servers reach the node only through `mcp:` (see [MCP Servers](/guides/mcp-servers/#servers-that-ship-in-a-codex-plugin)), and its apps stay off. A named plugin is turned on for the node even if you turned plugins off globally in Codex. The node fails before its turn starts when a named plugin is not installed in the Codex home in use.
 

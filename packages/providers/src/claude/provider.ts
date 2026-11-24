@@ -58,10 +58,15 @@ import { createLogger } from '@archon/paths';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
 import { closeOpenToolCalls } from '../shared/tool-calls';
 import { diagnoseBinary } from '../shared/binary-diagnostics';
-import { buildPluginListCommand, readClaudePluginIds, withPluginScopeCheck } from './plugins';
+import {
+  buildPluginListCommand,
+  type PluginScope,
+  readClaudePluginInventory,
+  withPluginScopeCheck,
+} from './plugins';
 import type { SETTING_SOURCES } from '@archon/paths/skills';
 import { ClaudeFirstEventTimeoutError, thrownErrorChunks } from './failure';
-import { applyNodeConfig, isWorkflowNode } from './node-config';
+import { applyNodeConfig } from './node-config';
 import { requireMcpConnections } from '../mcp/readiness';
 import { streamClaudeMessages, type ToolResultEntry } from './stream';
 import { holdTurnEndWhileSubtasksRun, OpenSubtasks } from './structured-output-hold';
@@ -448,13 +453,23 @@ interface QueryRun {
 /**
  * The SDK options for one query: base options, the node's config, delivered
  * credentials, native tools and the resume target. Yields the node config's warnings.
+ * Returns the plugin scope the session must be checked against when the node
+ * config applied one (a workflow node).
  */
 async function* buildQueryOptions(
   cwd: string,
   resumeSessionId: string | undefined,
   requestOptions: SendQueryOptions | undefined,
   run: QueryRun
-): AsyncGenerator<MessageChunk, { options: Options; env: NodeJS.ProcessEnv; mcpNames: string[] }> {
+): AsyncGenerator<
+  MessageChunk,
+  {
+    options: Options;
+    env: NodeJS.ProcessEnv;
+    mcpNames: string[];
+    pluginScope: PluginScope | undefined;
+  }
+> {
   const isContainerRun = requestOptions?.execContext?.kind === 'container';
   const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
 
@@ -488,6 +503,7 @@ async function* buildQueryOptions(
     [...settingSources]
   );
 
+  let pluginScope: PluginScope | undefined;
   if (requestOptions?.nodeConfig) {
     const skillSearch = {
       env,
@@ -495,13 +511,13 @@ async function* buildQueryOptions(
       includeUser: !isContainerRun && settingSources.includes('user'),
       isContainer: isContainerRun,
     };
-    const nodeConfigWarnings = await applyNodeConfig(
+    const applied = await applyNodeConfig(
       options,
       requestOptions.nodeConfig,
       cwd,
       skillSearch,
       () =>
-        readClaudePluginIds(
+        readClaudePluginInventory(
           buildPluginListCommand({
             cliPath: resolvedCliPath,
             cwd,
@@ -510,7 +526,8 @@ async function* buildQueryOptions(
           })
         )
     );
-    for (const warning of nodeConfigWarnings) {
+    pluginScope = applied.pluginScope;
+    for (const warning of applied.warnings) {
       yield { type: 'warning', ...warning };
     }
   }
@@ -534,7 +551,7 @@ async function* buildQueryOptions(
     registerNativeTools(options, requestOptions.nativeTools);
   }
   setResumeTarget(options, cwd, resumeSessionId, requestOptions?.forkSession);
-  return { options, env, mcpNames };
+  return { options, env, mcpNames, pluginScope };
 }
 
 /**
@@ -673,7 +690,7 @@ export class ClaudeProvider implements IAgentProvider {
         throw new Error('Query aborted');
       }
       const toolResultQueue: ToolResultEntry[] = [];
-      const { options, env, mcpNames } = yield* buildQueryOptions(
+      const { options, env, mcpNames, pluginScope } = yield* buildQueryOptions(
         cwd,
         resumeSessionId,
         requestOptions,
@@ -711,11 +728,8 @@ export class ClaudeProvider implements IAgentProvider {
         yield* awaitMcpReadiness(rawEvents, mcpNames, controller, firstEventTimeoutMs, diagnostics);
       }
       input.admit();
-      const nodeConfig = requestOptions?.nodeConfig;
       const events = withFirstMessageTimeout(
-        isWorkflowNode(nodeConfig)
-          ? withPluginScopeCheck(rawEvents, nodeConfig.plugins ?? [])
-          : rawEvents,
+        pluginScope ? withPluginScopeCheck(rawEvents, pluginScope) : rawEvents,
         controller,
         firstEventTimeoutMs,
         diagnostics

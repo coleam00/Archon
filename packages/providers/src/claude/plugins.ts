@@ -10,7 +10,13 @@
  * The inventory is the off mechanism, not the guarantee: plugins can also arrive
  * through routes the inventory does not list. The guarantee is
  * {@link withPluginScopeCheck}, which reads the session's `system/init` frame and
- * fails the node when any plugin outside `@builtin` and the named set loaded.
+ * fails the node when any plugin outside `@builtin`, the named set and the
+ * Managed-scope set loaded.
+ *
+ * A plugin installed at Managed scope is enforced by the organization's managed
+ * settings: it ignores the off overlay and always loads. The inventory reports it
+ * with `scope: "managed"`, and the check accepts it as it accepts a builtin,
+ * because no node configuration can remove it.
  *
  * A named plugin's MCP servers and skills are not wired here. They reach the node
  * through the node's own `mcp:` and `skills:` lists, like every other server or
@@ -23,18 +29,45 @@ import { createRequire } from 'node:module';
 import { constants } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { SDKMessage, Settings } from '@anthropic-ai/claude-agent-sdk';
+import { createLogger } from '@archon/paths';
 import { z } from 'zod';
 import { ClassifiedProviderError } from '../shared/failure';
 import type { ExecutionContext } from '../types';
 import { buildDockerExecCommandArgs } from './container-spawn';
+
+/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('provider.claude');
+  return cachedLog;
+}
 
 const PLUGIN_LIST_ARGS = ['plugin', 'list', '--json'] as const;
 
 /** Generous bound for a command that normally takes well under a second. */
 const PLUGIN_LIST_TIMEOUT_MS = 60_000;
 
-/** Only the field Archon reads; unknown fields are ignored so an additive CLI change does not break it. */
-const pluginListSchema = z.array(z.object({ id: z.string().min(1) }));
+/** Only the fields Archon reads; unknown fields are ignored so an additive CLI change does not break it. */
+const pluginListSchema = z.array(z.object({ id: z.string().min(1), scope: z.string().optional() }));
+
+/** The `claude plugin list --json` scope of a plugin the organization's managed settings enforce. */
+const MANAGED_SCOPE = 'managed';
+
+/** What `claude plugin list --json` reports, reduced to the ids plugin scoping needs. */
+export interface ClaudePluginInventory {
+  /** Every installed plugin id, once each. */
+  installed: string[];
+  /** The installed ids with a Managed-scope record, which the off overlay cannot turn off. */
+  managed: string[];
+}
+
+/** The plugins a workflow node's session may load besides `@builtin` ones. */
+export interface PluginScope {
+  /** The node's `plugins:`; each must load. */
+  named: readonly string[];
+  /** Managed-scope ids from the inventory; each may load whether or not the node names it. */
+  managed: readonly string[];
+}
 
 /** How to run `claude plugin list --json` in the same place the session will run. */
 export interface PluginListCommand {
@@ -105,11 +138,13 @@ export function buildPluginListCommand(input: {
 
 /**
  * Every installed plugin id `claude plugin list --json` reports, deduplicated (it
- * lists one record per install scope). A listing ended by a signal or the timeout
+ * lists one record per install scope), and those with a Managed-scope record. A listing ended by a signal or the timeout
  * is `transient`; any other failure is `misconfigured`. Both carry the command's
  * own output as evidence, and the node fails before its session starts.
  */
-export async function readClaudePluginIds(cmd: PluginListCommand): Promise<string[]> {
+export async function readClaudePluginInventory(
+  cmd: PluginListCommand
+): Promise<ClaudePluginInventory> {
   const stdout = await new Promise<string>((resolve, reject) => {
     execFile(
       cmd.command,
@@ -157,7 +192,10 @@ export async function readClaudePluginIds(cmd: PluginListCommand): Promise<strin
       `Cannot list Claude plugins: unexpected \`claude plugin list --json\` shape: ${parsed.error.message}`
     );
   }
-  return [...new Set(parsed.data.map(p => p.id))];
+  return {
+    installed: [...new Set(parsed.data.map(p => p.id))],
+    managed: [...new Set(parsed.data.filter(p => p.scope === MANAGED_SCOPE).map(p => p.id))],
+  };
 }
 
 /**
@@ -207,7 +245,9 @@ const initPluginsSchema = z.array(z.object({ name: z.string(), source: z.string(
 /**
  * Pass the session's messages through unchanged, after checking each
  * `system/init` frame: every loaded plugin must be built into Claude Code
- * (`@builtin`) or named by the node, and every named plugin must have loaded.
+ * (`@builtin`), installed at Managed scope, or named by the node, and every named
+ * plugin must have loaded. Managed-scope plugins that loaded without being named
+ * are logged, so a run shows what the organization added to the session.
  * A mismatch throws `misconfigured`; leaving the loop ends the SDK query, which
  * terminates the CLI before it does more work under the wrong plugin set.
  *
@@ -220,12 +260,12 @@ const initPluginsSchema = z.array(z.object({ name: z.string(), source: z.string(
  */
 export async function* withPluginScopeCheck(
   events: AsyncIterable<SDKMessage>,
-  namedIds: readonly string[]
+  scope: PluginScope
 ): AsyncGenerator<SDKMessage> {
   let initSeen = false;
   for await (const event of events) {
     if (event.type === 'system' && event.subtype === 'init') {
-      checkInitPlugins(event.plugins, namedIds);
+      checkInitPlugins(event.plugins, scope);
       initSeen = true;
     } else if (
       !initSeen &&
@@ -248,7 +288,7 @@ const MODEL_OUTPUT_TYPES: ReadonlySet<SDKMessage['type']> = new Set([
   'result',
 ]);
 
-function checkInitPlugins(plugins: unknown, namedIds: readonly string[]): void {
+function checkInitPlugins(plugins: unknown, scope: PluginScope): void {
   const parsed = initPluginsSchema.safeParse(plugins);
   if (!parsed.success) {
     throw new ClassifiedProviderError(
@@ -256,16 +296,23 @@ function checkInitPlugins(plugins: unknown, namedIds: readonly string[]): void {
       `Cannot verify the node's plugin scope: Claude Code reported an unexpected plugin list: ${parsed.error.message}`
     );
   }
-  const named = new Set(namedIds);
+  const named = new Set(scope.named);
+  const managed = new Set(scope.managed);
   const loaded = new Set<string>();
   const unexpected: string[] = [];
+  const managedLoaded: string[] = [];
   for (const plugin of parsed.data) {
     // A row without its id cannot be matched to the named set, so it fails closed.
     const id = plugin.source ?? `${plugin.name} (no source id)`;
     loaded.add(id);
-    if (!id.endsWith('@builtin') && !named.has(id)) unexpected.push(id);
+    if (id.endsWith('@builtin') || named.has(id)) continue;
+    if (managed.has(id)) managedLoaded.push(id);
+    else unexpected.push(id);
   }
-  const missing = namedIds.filter(id => !loaded.has(id));
+  if (managedLoaded.length > 0) {
+    getLog().info({ plugins: managedLoaded }, 'claude.managed_plugins_loaded');
+  }
+  const missing = scope.named.filter(id => !loaded.has(id));
   if (unexpected.length === 0 && missing.length === 0) return;
   const problems = [
     ...(unexpected.length > 0
