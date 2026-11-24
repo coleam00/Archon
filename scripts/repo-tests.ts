@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { archonCliInvocation } from '@archon/paths/cli-command';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
 import { discoverPackageTestFiles, selectWindowsTestFiles } from './package-test-groups';
 import { junitDestination, parseTestArguments } from './package-test-requests';
@@ -10,8 +9,7 @@ import { runReportedGroup, writeCombinedReport } from './package-test-reports';
  * Runs the repository's tests, from the repository root.
  *
  * With no arguments it walks `ROOT_TEST_PLAN`, which is the work the
- * `bun --filter '*' --parallel test && bun test ./scripts/ && bun test ./.archon/scripts/`
- * chain used to do. The chain had to go because `bun run` appends its arguments to
+ * `bun --filter '*' --parallel test && bun test ./scripts/` chain used to do. The chain had to go because `bun run` appends its arguments to
  * whatever the script expands to, so `bun run test <path>` ran the whole chain and then
  * tacked the path onto its last step — green even when the path was wrong.
  *
@@ -24,9 +22,8 @@ import { runReportedGroup, writeCombinedReport } from './package-test-reports';
  * is what made a mistyped path look like a pass.
  *
  * `--plan <shard>` walks only the plan steps of that shard. CI runs each shard on its own
- * runner so they finish side by side; `pack` runs only when the change touches the pack
- * (`PACK_INPUTS` in `should-run-test-suite.ts`). A workspace shard too slow
- * for one runner runs in parts across runners; `ARCHON_TEST_PART` in `package-tests.ts`.
+ * runner so they finish side by side. A workspace shard too slow for one runner runs in
+ * parts across runners; `ARCHON_TEST_PART` in `package-tests.ts`.
  *
  * `--windows` runs only the test files that carry `WINDOWS_TEST_DIRECTIVE`
  * (`package-test-groups.ts`), across every workspace package and root test directory. It is
@@ -49,15 +46,13 @@ export type RootTestStep =
  * every tracked test is collected, so execution and inventory cannot drift apart.
  *
  * Root steps run serially. Under `bun test --parallel`, `./scripts/` timed out
- * (`docker-safe-directory.test.ts`) and on Linux CI the git fixtures of
- * `.archon/scripts/__tests__/deliver-checks-harness.ts` failed in every intake test.
+ * (`docker-safe-directory.test.ts`).
  */
 export const ROOT_TEST_PLAN = [
   { kind: 'workspace', shard: 'cli', package: '@archon/cli' },
   { kind: 'workspace', shard: 'core', package: '@archon/core' },
   { kind: 'workspaces', shard: 'packages' },
   { kind: 'root', shard: 'scripts', selectors: ['./scripts/'] },
-  { kind: 'root', shard: 'pack', selectors: ['./.archon/scripts/'] },
 ] as const satisfies readonly RootTestStep[];
 
 export type TestShard = (typeof ROOT_TEST_PLAN)[number]['shard'];
@@ -67,28 +62,12 @@ const TEST_SHARDS: readonly TestShard[] = [
 ];
 
 /**
- * A root-owned run: `bun test` with the pack's preload, which gives the pack scripts these
- * tests import and start the `archon:script` module. Only these runs get it; it asks the
- * CLI `rootTestEnv` names, which no other `bun test` under the repository root has.
- */
-export function rootTestCommand(selectors: readonly string[]): string[] {
-  const [bun, test, ...rest] = bunTestCommand(selectors);
-  return [
-    bun as string,
-    test as string,
-    '--preload',
-    './.archon/scripts/__tests__/archon-script-preload.ts',
-    ...rest,
-  ];
-}
-
-/**
  * The command one plan step runs. Each workspace runs its own `test` script, which owns that
  * package's group splitting and concurrency.
  */
 export function planStepCommand(step: RootTestStep): string[] {
   if (step.kind === 'workspace') return ['bun', '--filter', step.package, 'test'];
-  if (step.kind === 'root') return rootTestCommand(step.selectors);
+  if (step.kind === 'root') return bunTestCommand(step.selectors);
   // A negated filter alone already leaves out the root package, so no `'*'` goes beside it.
   const solo = ROOT_TEST_PLAN.flatMap((other: RootTestStep): string[] =>
     other.kind === 'workspace' ? ['--filter', `!${other.package}`] : []
@@ -162,23 +141,10 @@ function routeArgument(argument: string): RoutedArgument | undefined {
     : undefined;
 }
 
-/**
- * The environment of a root-owned run. Pack tests run the host CLI through
- * `ARCHON_CLI_COMMAND`, the same contract a workflow run gives pack scripts, because the
- * pack may not reach into `packages/`. It always names this checkout's CLI: an inherited
- * value, as inside an Archon run, names another checkout's.
- */
-export function rootTestEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return {
-    ...env,
-    ARCHON_CLI_COMMAND: JSON.stringify(archonCliInvocation()),
-  };
-}
-
 async function run(command: string[], cwd: string): Promise<number> {
   const child = Bun.spawn(command, {
     cwd,
-    env: bunTestEnv(cwd === REPO_ROOT ? rootTestEnv() : process.env),
+    env: bunTestEnv(process.env),
     stdio: ['inherit', 'inherit', 'inherit'],
   });
   return await child.exited;
@@ -243,7 +209,7 @@ async function runRequested(requested: string[]): Promise<number> {
         `No argument named a test path this runner can place: ${parseTestArguments(requested)
           .positionals.map(token => token.value)
           .join(' ')}`,
-        'Name a path under packages/<name>/, scripts/ or .archon/scripts/, or run',
+        'Name a path under packages/<name>/ or scripts/, or run',
         '`bun run test <selector>` from the package directory the selector belongs to.',
       ].join('\n')
     );
@@ -268,7 +234,7 @@ async function runRequested(requested: string[]): Promise<number> {
   for (const { owner, args } of runs) {
     const runOwner = (ownerArgs: string[]) =>
       run(
-        owner.cwd === REPO_ROOT ? rootTestCommand(ownerArgs) : ['bun', 'run', 'test', ...ownerArgs],
+        owner.cwd === REPO_ROOT ? bunTestCommand(ownerArgs) : ['bun', 'run', 'test', ...ownerArgs],
         owner.cwd
       );
     if (destination === undefined) {
@@ -336,7 +302,7 @@ function assertSharedPackageRunner(packageDirectory: string, label: string): voi
 /**
  * The runs of the Windows set. Each package with a marked file runs its own `--windows` form,
  * which keeps its isolation groups. Root files run one plan step at a time, in that step's own
- * process as the plan runs them, so `./scripts/` and `./.archon/scripts/` never share mocks.
+ * process as the plan runs them, so two root directories never share mocks.
  * Every file is named by its exact `./` path, never as a substring filter that could pick up
  * an unmarked file.
  *
@@ -381,7 +347,7 @@ async function runWindowsSet(): Promise<number> {
   }
   for (const { owner, args } of runs) {
     const command =
-      owner.cwd === REPO_ROOT ? rootTestCommand(args) : ['bun', 'run', 'test', ...args];
+      owner.cwd === REPO_ROOT ? bunTestCommand(args) : ['bun', 'run', 'test', ...args];
     const code = await run(command, owner.cwd);
     if (firstFailure === 0) firstFailure = code;
   }

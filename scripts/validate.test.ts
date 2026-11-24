@@ -41,7 +41,6 @@ describe('validate check selection', () => {
       ['bun', 'run', 'check:provider-contract-schema'],
       ['bun', 'run', 'check:chat-contract-schema'],
       ['bun', 'run', 'check:api-types'],
-      ['bun', 'run', 'check:workflow-output-types'],
       ['bun', 'run', 'check:script-api-types'],
     ]);
   });
@@ -167,26 +166,26 @@ describe('validate check selection', () => {
     });
   });
 
-  test.each([
-    ['pack-tests', 'run-pack-tests'],
-    ['workflow-fixtures', 'run-pack-fixtures'],
-  ])('%s runs in CI only when the %s decision selects it', (check, output) => {
-    // An unconditional `--only <check>` would put the slow pack checks back on every PR.
-    const workflow = Bun.YAML.parse(
-      readFileSync(resolve(import.meta.dir, '../.github/workflows/test.yml'), 'utf8')
-    ) as { jobs: Record<string, { steps?: { if?: string; run?: string }[] }> };
-    const steps = Object.values(workflow.jobs)
-      .flatMap(job => job.steps ?? [])
-      .filter(step =>
-        [...(step.run ?? '').matchAll(/bun run validate --only (\S+)/g)].some(match =>
-          match[1].split(',').includes(check)
-        )
-      );
-    expect(steps.length).toBeGreaterThan(0);
-    for (const step of steps) {
-      expect(step.if ?? '').toContain(`needs.changes.outputs.${output} == 'true'`);
+  test.each([['workflow-fixtures', 'run-pack-fixtures']])(
+    '%s runs in CI only when the %s decision selects it',
+    (check, output) => {
+      // An unconditional `--only <check>` would put the slow fixture check back on every PR.
+      const workflow = Bun.YAML.parse(
+        readFileSync(resolve(import.meta.dir, '../.github/workflows/test.yml'), 'utf8')
+      ) as { jobs: Record<string, { steps?: { if?: string; run?: string }[] }> };
+      const steps = Object.values(workflow.jobs)
+        .flatMap(job => job.steps ?? [])
+        .filter(step =>
+          [...(step.run ?? '').matchAll(/bun run validate --only (\S+)/g)].some(match =>
+            match[1].split(',').includes(check)
+          )
+        );
+      expect(steps.length).toBeGreaterThan(0);
+      for (const step of steps) {
+        expect(step.if ?? '').toContain(`needs.changes.outputs.${output} == 'true'`);
+      }
     }
-  });
+  );
 
   test('the checks run every shard of the test plan and name no other', () => {
     const planned = VALIDATE_CHECKS.flatMap(check => check.commands).flatMap(command =>

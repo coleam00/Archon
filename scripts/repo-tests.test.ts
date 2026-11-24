@@ -8,12 +8,10 @@ import { join, relative } from 'node:path';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { archonCliInvocation } from '@archon/paths/cli-command';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
 import {
   planRequestedRuns,
   planShard,
-  rootTestEnv,
   planStepCommand,
   ROOT_TEST_PLAN,
   type RootTestStep,
@@ -50,17 +48,14 @@ describe('planRequestedRuns', () => {
     expect(runs[0].args).toEqual(['./scripts/test-inventory.test.ts']);
   });
 
-  test.each(['.archon/scripts', '.archon/scripts/', 'scripts', 'scripts/'])(
-    'routes the root-owned directory %s',
-    selector => {
-      expect(planRequestedRuns([selector])).toEqual([
-        {
-          owner: { label: 'the repository root', cwd: REPO_ROOT },
-          args: [`./${selector.replace(/\/$/, '')}`],
-        },
-      ]);
-    }
-  );
+  test.each(['scripts', 'scripts/'])('routes the root-owned directory %s', selector => {
+    expect(planRequestedRuns([selector])).toEqual([
+      {
+        owner: { label: 'the repository root', cwd: REPO_ROOT },
+        args: [`./${selector.replace(/\/$/, '')}`],
+      },
+    ]);
+  });
 
   test.each([
     'scriptsx',
@@ -173,7 +168,6 @@ describe('windowsTestFiles', () => {
     write('packages/a/src/marked.test.ts', `${WINDOWS_TEST_DIRECTIVE}\n`);
     write('packages/a/src/unmarked.test.ts', '');
     write('scripts/marked.test.ts', `${WINDOWS_TEST_DIRECTIVE}\n`);
-    write('.archon/scripts/__tests__/unmarked.test.ts', '');
 
     expect(windowsTestFiles(root)).toEqual([
       'packages/a/src/marked.test.ts',
@@ -193,18 +187,12 @@ describe('windowsSetRuns', () => {
       JSON.stringify({ scripts: { test: PACKAGE_TEST_RUNNER } })
     );
     const runs = windowsSetRuns(
-      [
-        'packages/a/src/x.test.ts',
-        'packages/a/src/y.test.ts',
-        'scripts/s.test.ts',
-        '.archon/scripts/__tests__/p.test.ts',
-      ],
+      ['packages/a/src/x.test.ts', 'packages/a/src/y.test.ts', 'scripts/s.test.ts'],
       root
     );
     expect(runs.map(({ owner, args }) => ({ label: owner.label, args }))).toEqual([
       { label: 'packages/a', args: ['--windows'] },
       { label: 'scripts', args: ['./scripts/s.test.ts'] },
-      { label: '.archon/scripts', args: ['./.archon/scripts/__tests__/p.test.ts'] },
     ]);
   });
 
@@ -222,7 +210,7 @@ describe('windowsSetRuns', () => {
 });
 
 describe('planShard', () => {
-  test.each(['cli', 'core', 'packages', 'scripts', 'pack'] as const)(
+  test.each(['cli', 'core', 'packages', 'scripts'] as const)(
     '--plan %s selects that shard',
     shard => {
       expect(planShard(['--plan', shard])).toBe(shard);
@@ -233,22 +221,13 @@ describe('planShard', () => {
     'rejects the malformed request %j',
     requested => {
       expect(() => planShard(requested)).toThrow(
-        'Usage: bun run test --plan <cli|core|packages|scripts|pack>'
+        'Usage: bun run test --plan <cli|core|packages|scripts>'
       );
     }
   );
 
   test.each([[[]], [['scripts/']], [['-t', '--plan']]])('leaves %j to the router', requested => {
     expect(planShard(requested)).toBeUndefined();
-  });
-});
-
-describe('rootTestEnv', () => {
-  test("names this checkout's CLI for pack tests, even when a host CLI is inherited", () => {
-    expect(JSON.parse(rootTestEnv({}).ARCHON_CLI_COMMAND ?? '')).toEqual(archonCliInvocation());
-    expect(
-      JSON.parse(rootTestEnv({ ARCHON_CLI_COMMAND: '["archon"]' }).ARCHON_CLI_COMMAND ?? '')
-    ).toEqual(archonCliInvocation());
   });
 });
 
@@ -339,7 +318,7 @@ describe('repo-tests exit codes', () => {
     const { exitCode, stderr } = invoke(['--plan', 'nope']);
 
     expect(exitCode).toBe(1);
-    expect(stderr).toContain('Usage: bun run test --plan <cli|core|packages|scripts|pack>');
+    expect(stderr).toContain('Usage: bun run test --plan <cli|core|packages|scripts>');
   });
 
   test('propagates a failing run instead of reporting success', () => {
@@ -365,19 +344,6 @@ describe('repo-tests exit codes', () => {
 
     expect(exitCode).toBe(0);
     expect(stdout).toContain('◀ @archon/paths ./src/skills.test.ts');
-  });
-
-  test('bun run test .archon/scripts/ executes the directory tests', () => {
-    // `bun test` exits non-zero when `-t` matches nothing it collected, so a zero exit
-    // proves the directory selector reached a test inside it. The filter keeps the run to
-    // one cheap test instead of the whole directory, and the exit code reads the same
-    // whether or not Bun quiets its console output for an agent caller.
-    const { exitCode } = Bun.spawnSync(
-      ['bun', 'run', 'test', '.archon/scripts/', '-t', 'a blocked item closes nothing'],
-      { cwd: REPO_ROOT, stdout: 'ignore', stderr: 'ignore' }
-    );
-
-    expect(exitCode).toBe(0);
   });
 });
 

@@ -205,17 +205,16 @@ export function shouldRunWorkspaceTests(
 }
 
 /**
- * What the pack shard (`.archon/scripts/` tests) and the workflow fixtures exercise, besides the
- * root scripts that run them (`packRunnerInputs`). An entry ending in `/` matches a directory.
- *   - The pack itself: its workflows, prompts, scripts and their tests, policy files, and the repo
- *     config the fixtures load. `.archon/commands/` is absent: it holds only Markdown prompts for
+ * What the workflow fixtures exercise, besides the root scripts that run them
+ * (`packRunnerInputs`). An entry ending in `/` matches a directory.
+ *   - The workflows themselves: their prompts, scripts, policy files, and the repo config the
+ *     fixtures load. `.archon/commands/` is absent: it holds only Markdown prompts for
  *     workflows that have no fixtures, which the suite treats as prose.
- *   - The contracts the pack is written against: `@archon/cli` (the `state`, `workflow` and
- *     `forge` commands the pack shells to through `ARCHON_CLI_COMMAND`, which pack tests run for
- *     real), `@archon/workflows` (the workflow language, the script-node environment, and the dry
- *     run the fixtures use), `@archon/forge` (the plugin protocol behind `archon forge`), and
- *     `@archon/paths` (where those commands and the test preload find the Archon home, config
- *     and plugins). `@archon/core` stays out although `archon state` runs on it: it changes on
+ *   - The contracts the workflows are written against: `@archon/cli` (the `state`, `workflow`
+ *     and `forge` commands they shell to through `ARCHON_CLI_COMMAND`), `@archon/workflows` (the
+ *     workflow language, the script-node environment, and the dry run the fixtures use),
+ *     `@archon/forge` (the plugin protocol behind `archon forge`), and `@archon/paths` (where
+ *     those commands find the Archon home, config and plugins). `@archon/core` stays out although `archon state` runs on it: it changes on
  *     most pull requests, and its database and config behaviour is what its own tests guard.
  *     The other packages below the contracts are likewise left to their own tests.
  *   - The test preload, which `packRunnerInputs` cannot reach because `bunfig.toml` names it
@@ -235,7 +234,7 @@ const PACK_INPUTS = [
   'scripts/test-preload.ts',
 ];
 
-/** The root `scripts/` files that run the pack shard and the fixtures: the runner and its imports. */
+/** The root `scripts/` files that run the fixtures: the runner and its imports. */
 export const packRunnerInputs = (repo: string, extra: Iterable<string> = []): Set<string> =>
   rootScriptImports(repo, WORKSPACE_RUNNER_ENTRY_POINTS, extra);
 
@@ -251,8 +250,8 @@ export function rootScriptImports(
 }
 
 /**
- * Whether the pack shard and the workflow fixtures must run. Only a file the suite runs for can
- * count, so pack prose skips them, and a run that asks for them always has the job that holds them.
+ * Whether the workflow fixtures must run. Only a file the suite runs for can count, so pack
+ * prose skips them, and a run that asks for them always has the job that holds them.
  */
 export function shouldRunPackTests(
   files: Iterable<string>,
@@ -620,7 +619,6 @@ function githubApi(env: NodeJS.ProcessEnv = process.env): GitHubGet {
 
 const MODES = {
   '--workspace-tests': 'workspace',
-  '--pack-tests': 'pack-tests',
   '--pack-fixtures': 'pack-fixtures',
   '--full-matrix': 'full-matrix',
   '--docker-build': 'docker-build',
@@ -630,11 +628,7 @@ const MODES = {
 export type Mode = 'suite' | (typeof MODES)[keyof typeof MODES];
 
 /** The modes a dispatch runs only on request, each named after the `test.yml` input that asks. */
-const OPT_IN_MODES: ReadonlySet<Mode> = new Set([
-  'pack-tests',
-  'pack-fixtures',
-  'windows-full-suite',
-]);
+const OPT_IN_MODES: ReadonlySet<Mode> = new Set(['pack-fixtures', 'windows-full-suite']);
 
 /**
  * A push runs the whole suite on Windows only on `main`. A push to `dev` runs the
@@ -660,8 +654,8 @@ export function dispatchDecision(mode: Mode, event: EventPayload): boolean {
   throw new Error(`The dispatch input ${mode} is ${JSON.stringify(value)}, not a boolean`);
 }
 
-/** What a schedule can turn on: the whole Windows suite, and the pack checks its job gates on. */
-const SCHEDULED_MODES = new Set<Mode>(['windows-full-suite', 'pack-tests', 'pack-fixtures']);
+/** What a schedule can turn on: the whole Windows suite, and the workflow fixtures its job gates on. */
+const SCHEDULED_MODES = new Set<Mode>(['windows-full-suite', 'pack-fixtures']);
 
 export type ScheduleCoverage = { covered: boolean; why: string };
 
@@ -725,7 +719,6 @@ const PREDICATES: Record<Mode, (files: Iterable<string>) => boolean> = {
     const changed = [...files];
     return shouldRunWorkspaceTests(changed, workspaceTestInputs(process.cwd(), changed));
   },
-  'pack-tests': packPredicate,
   'pack-fixtures': packPredicate,
   'full-matrix': files => shouldRunPushOnlyJob('full-matrix', files),
   'docker-build': files => shouldRunPushOnlyJob('docker-build', files),

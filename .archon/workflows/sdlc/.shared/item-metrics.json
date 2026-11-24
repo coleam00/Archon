@@ -3,20 +3,20 @@
     {
       "name": "sdlc.item_merge_rate",
       "op": "share",
-      "items": { "has_run": { "workflow": ["archon-build-queue"] } },
+      "items": { "has_run": { "workflow": ["archon-build"] } },
       "where": { "merged": true }
     },
     {
       "name": "sdlc.item_build_rounds",
       "op": "count",
       "of": "runs",
-      "runs": { "workflow": ["archon-build-queue"] },
+      "runs": { "workflow": ["archon-build"] },
       "items": { "merged": true }
     },
     {
       "name": "sdlc.item_lead_time",
       "op": "duration",
-      "from": { "run": "first", "at": "started", "of": { "workflow": ["archon-intake"] } },
+      "from": { "run": "first", "at": "started", "of": { "workflow": ["archon-triage"] } },
       "to": "merged"
     },
     {

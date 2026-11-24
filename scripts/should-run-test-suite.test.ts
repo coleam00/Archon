@@ -165,7 +165,7 @@ describe('test-suite change decision', () => {
   });
 
   test.each([
-    ['.archon/workflows/sdlc/implement/commands/implement.md', 'a packaged command prompt'],
+    ['.archon/workflows/sdlc/build/commands/build.md', 'a packaged command prompt'],
     ['.archon/workflows/sdlc/.shared/policy/triage.md', 'a pack .shared/ document'],
     ['.claude/skills/archon-cli/SKILL.md', 'the bundled CLI skill'],
     ['packages/docs-web/src/content/docs/reference/provider-capabilities.md', 'a generated doc'],
@@ -554,7 +554,7 @@ describe('pack test selection', () => {
   const REPO_ROOT = resolve(import.meta.dir, '..');
   const runner = packRunnerInputs(REPO_ROOT);
 
-  test('derives the root scripts that run the pack shard', () => {
+  test('derives the root scripts that run the workflow fixtures', () => {
     for (const file of [
       'scripts/validate.ts',
       'scripts/repo-tests.ts',
@@ -566,9 +566,9 @@ describe('pack test selection', () => {
   });
 
   test.each([
-    '.archon/workflows/sdlc/intake/intake.yaml',
-    '.archon/workflows/sdlc/.shared/merge.ts',
-    '.archon/scripts/__tests__/merge-queue.test.ts',
+    '.archon/workflows/sdlc/triage/archon-triage.yaml',
+    '.archon/workflows/sdlc/land/scripts/record.ts',
+    '.archon/scripts/echo-args.js',
     '.archon/sdlc/policy/maintainers.json',
     '.archon/config.yaml',
     'packages/cli/src/commands/state.ts',
@@ -621,19 +621,15 @@ describe('pack test selection', () => {
       return result.stdout;
     };
 
-    for (const mode of ['--pack-tests', '--pack-fixtures']) {
-      expect(decide('.archon/scripts/queue.ts', mode)).toBe('true');
-      expect(decide('packages/core/db.ts', mode)).toBe('false');
-    }
+    expect(decide('.archon/scripts/queue.ts', '--pack-fixtures')).toBe('true');
+    expect(decide('packages/core/db.ts', '--pack-fixtures')).toBe('false');
   });
 
   test.each([
-    ['--pack-tests', { 'pack-tests': 'true', 'pack-fixtures': 'false' }, 'true'],
-    ['--pack-tests', { 'pack-tests': 'false', 'pack-fixtures': 'true' }, 'false'],
-    ['--pack-fixtures', { 'pack-tests': 'false', 'pack-fixtures': 'true' }, 'true'],
+    ['--pack-fixtures', { 'pack-fixtures': 'true' }, 'true'],
     ['--pack-fixtures', {}, 'false'],
-    [undefined, { 'pack-tests': 'false' }, 'true'],
-    ['--workspace-tests', { 'pack-tests': 'false' }, 'true'],
+    [undefined, { 'pack-fixtures': 'false' }, 'true'],
+    ['--workspace-tests', { 'pack-fixtures': 'false' }, 'true'],
     ['--full-matrix', {}, 'true'],
     ['--windows-full-suite', {}, 'false'],
     ['--windows-full-suite', { 'windows-full-suite': 'true' }, 'true'],
@@ -652,17 +648,17 @@ describe('pack test selection', () => {
   });
 
   test('a dispatch input that is not a boolean is fatal', () => {
-    expect(() => dispatchDecision('pack-tests', { inputs: { 'pack-tests': 'yes' } })).toThrow(
+    expect(() => dispatchDecision('pack-fixtures', { inputs: { 'pack-fixtures': 'yes' } })).toThrow(
       'not a boolean'
     );
-    expect(dispatchDecision('pack-tests', { inputs: { 'pack-tests': true } })).toBe(true);
+    expect(dispatchDecision('pack-fixtures', { inputs: { 'pack-fixtures': true } })).toBe(true);
   });
 
   test('every opt-in mode has the boolean dispatch input of its name in test.yml', () => {
     const workflow = Bun.YAML.parse(
       readFileSync(resolve(REPO_ROOT, '.github/workflows/test.yml'), 'utf8')
     ) as { on: { workflow_dispatch: { inputs: Record<string, unknown> } } };
-    for (const mode of ['pack-tests', 'pack-fixtures', 'windows-full-suite']) {
+    for (const mode of ['pack-fixtures', 'windows-full-suite']) {
       expect(workflow.on.workflow_dispatch.inputs[mode]).toMatchObject({
         type: 'boolean',
         default: false,
@@ -1059,7 +1055,7 @@ describe('a scheduled run', () => {
   const HEAD = 'dev-head';
   const RUNS = `actions/workflows/test.yml/runs?event=schedule&head_sha=${HEAD}&status=completed`;
   const RUN_URL = 'https://github.com/coleam00/Archon/actions/runs/9';
-  const WINDOWS_MODES: Mode[] = ['windows-full-suite', 'pack-tests', 'pack-fixtures'];
+  const WINDOWS_MODES: Mode[] = ['windows-full-suite', 'pack-fixtures'];
   const OTHER_MODES: Mode[] = ['suite', 'workspace', 'full-matrix', 'docker-build', 'serve-binary'];
 
   const coverage = (answer: unknown) =>

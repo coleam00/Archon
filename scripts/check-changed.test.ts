@@ -74,8 +74,8 @@ describe('changeScope', () => {
     expect(scoped(['scripts/package-tests.ts']).packages.size).toBe(5);
   });
 
-  test('a pack file checks the pack and the root scripts that import it', () => {
-    const scope = scoped(['.archon/scripts/x.ts']);
+  test('a pack file checks the pack and the root scripts that read it', () => {
+    const scope = scoped(['.archon/workflows/sdlc/land/scripts/record.ts']);
     expect(scope.pack).toBe(true);
     expect(scope.rootScripts).toBe(true);
     expect(scope.packages.size).toBe(0);
@@ -187,14 +187,13 @@ describe('scopedTypeChecks', () => {
     });
   });
 
-  test('adds the root scripts project for root scripts and the pack projects for the pack', () => {
+  test('adds the root scripts project for root scripts and the pack project for the pack', () => {
     expect(projects(true, false).built).toEqual([
       'packages/core/tsconfig.json',
       'scripts/tsconfig.json',
     ]);
     expect(projects(false, true).built).toEqual([
       'packages/core/tsconfig.json',
-      '.archon/scripts/tsconfig.json',
       '.archon/workflows/tsconfig.json',
     ]);
   });

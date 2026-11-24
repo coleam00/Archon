@@ -16,12 +16,6 @@ export const CONFORMANCE = 'scripts/sdk-type-conformance.test.ts';
 
 export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
   {
-    file: '.archon/scripts/__tests__/intake.test.ts',
-    name: 'Event',
-    kind: 'independent',
-    reason: 'Synthetic forge intake event, not an OpenCode event.',
-  },
-  {
     file: 'packages/chat-slack/src/test/slack.ts',
     name: 'Command',
     kind: 'independent',

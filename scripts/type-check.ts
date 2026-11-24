@@ -21,7 +21,6 @@ import type { PackageManifest } from './check-package-edges';
 /** The TypeScript projects outside the workspace packages, checked from the repository root. */
 export const ROOT_TSC_PROJECTS = [
   'scripts/tsconfig.json',
-  '.archon/scripts/tsconfig.json',
   '.archon/workflows/tsconfig.json',
 ] as const;
 
