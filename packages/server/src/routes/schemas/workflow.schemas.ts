@@ -492,8 +492,12 @@ export const itemWindowQuerySchema = z.object({
     .optional()
     .openapi({
       description:
-        'Keep only the open items (true: standing.state is not resting) or only the ones at rest (false). Name it on every page; the cursor does not carry it.',
+        'Keep only the open items (true: standing.state is not resting) or only the ones at rest (false). With it the page comes most recently active first and the answer carries totals. Name it on every page; the cursor does not carry it.',
     }),
+  pack: z.string().min(1).optional().openapi({
+    description:
+      'Keep only the items whose standing run is a run of this pack, by pack key. Ordered and counted as with open. Name it on every page.',
+  }),
 });
 
 /** GET /api/items/window response: a page of items, as `archon workflow items --json`. */

@@ -646,7 +646,12 @@ export async function placeItem(
   source: ItemReadSource,
   item: WorkflowItem,
   install: InstallFacts
-): Promise<{ standing: ItemStanding; read: () => Promise<ItemRead> } | null> {
+): Promise<{
+  standing: ItemStanding;
+  /** The run `standing.runId` names, for a reader that orders or filters items by it. */
+  run: WorkflowRun | undefined;
+  read: () => Promise<ItemRead>;
+} | null> {
   const { hold, runLimit } = install;
   const held = install.held
     .filter(start => start.projectKey === item.projectKey && start.itemKey === item.key)
@@ -767,7 +772,7 @@ export async function placeItem(
       ],
     };
   };
-  return { standing, read };
+  return { standing, run: own.values.find(run => run.id === standing.runId), read };
 }
 
 /**

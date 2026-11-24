@@ -13,6 +13,7 @@ import {
   type ItemReadSource,
 } from './item-read';
 import { MetricsQueryError, resolveMetricsWindow } from './metrics';
+import { runPack } from './run-pack';
 import type { WorkflowItem } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
 
@@ -28,14 +29,23 @@ export const itemWindowSchema = z.object({
   items: z.array(itemReadSchema),
   /** Pass as `after` to read the next page; null on the last one. */
   next: z.string().nullable(),
+  /**
+   * With `open` or `pack` in the query: how many items of the window (of that pack, when
+   * named) are open and how many rest, whatever the page holds. Null without either.
+   */
+  totals: z.object({ open: z.number().int(), resting: z.number().int() }).nullable(),
 });
 export type ItemWindow = z.infer<typeof itemWindowSchema>;
 
 /**
  * A first page names its window (`since` and `until` in `archon metrics` syntax, both
- * optional); a later page names only the cursor it follows. `open` keeps the items that
- * are open (`true`: their `standing.state` is not `resting`) or the ones at rest (`false`);
- * a cursor does not carry it, so each page names it again.
+ * optional); a later page names only the cursor it follows.
+ *
+ * `open` keeps the items that are open (`true`: their `standing.state` is not `resting`) or
+ * the ones at rest (`false`). `pack` keeps the items whose standing run is a run of that
+ * pack (`runPack`'s key). With either, every item of the window is placed, the page comes
+ * most recently active first (when its standing run ended, or started), and the answer
+ * carries `totals`. A cursor does not carry them, so each page names them again.
  */
 export interface ItemWindowQuery {
   since?: string;
@@ -43,6 +53,7 @@ export interface ItemWindowQuery {
   limit?: number;
   after?: string;
   open?: boolean;
+  pack?: string;
 }
 
 /** The query cannot be answered as given; surfaces report it as a refusal, not a failure. */
@@ -53,6 +64,8 @@ const cursorSchema = z.strictObject({
   since: z.string().datetime(),
   until: z.string().datetime(),
   after: z.string(),
+  /** How many items of a placed read (`open`, `pack`) precede the page; `after` is then unused. */
+  offset: z.number().int().nonnegative().optional(),
 });
 
 function encodeCursor(cursor: z.infer<typeof cursorSchema>): string {
@@ -76,6 +89,7 @@ interface ResolvedQuery {
   since: Date;
   until: Date;
   afterItemId: string | null;
+  offset: number;
   limit: number;
 }
 
@@ -95,11 +109,12 @@ function resolveQuery(query: ItemWindowQuery, projectKey: string, now: Date): Re
       since: new Date(cursor.since),
       until: new Date(cursor.until),
       afterItemId: cursor.after,
+      offset: cursor.offset ?? 0,
       limit,
     };
   }
   try {
-    return { ...resolveMetricsWindow(query, now), afterItemId: null, limit };
+    return { ...resolveMetricsWindow(query, now), afterItemId: null, offset: 0, limit };
   } catch (error) {
     if (error instanceof MetricsQueryError) throw new ItemWindowQueryError(error.message);
     throw error;
@@ -110,26 +125,68 @@ export interface ItemWindowSource extends ItemReadSource {
   store: ItemReadSource['store'] & Pick<IWorkflowStore, 'listItemsInWindow'>;
 }
 
-/** The item read whole when `open` keeps it (see `ItemWindowQuery`), else null. */
-async function keptRead(
+type Install = Awaited<ReturnType<typeof readInstallFacts>>;
+
+/** Every item of the window, in id order, read from the store a page at a time. */
+async function listWindow(
   source: ItemWindowSource,
-  item: WorkflowItem,
-  install: Awaited<ReturnType<typeof readInstallFacts>>,
-  open: boolean | undefined
-): Promise<ItemRead | null> {
-  const placed = await placeItem(source, item, install);
-  // Items are never deleted, so one the window listed is still there.
-  if (placed === null) throw new Error(`Item '${item.key}' was listed but not found`);
-  return open === undefined || open === (placed.standing.state !== 'resting')
-    ? placed.read()
-    : null;
+  range: { projectKey: string; since: Date; until: Date }
+): Promise<WorkflowItem[]> {
+  const items: WorkflowItem[] = [];
+  for (;;) {
+    const listed = await source.store.listItemsInWindow({
+      ...range,
+      afterItemId: items.at(-1)?.id ?? null,
+      limit: ITEM_WINDOW_MAX_LIMIT,
+    });
+    items.push(...listed);
+    if (listed.length < ITEM_WINDOW_MAX_LIMIT) return items;
+  }
+}
+
+/** Place `item`; items are never deleted, so one the window listed is still there. */
+async function placed(source: ItemWindowSource, item: WorkflowItem, install: Install) {
+  const place = await placeItem(source, item, install);
+  if (place === null) throw new Error(`Item '${item.key}' was listed but not found`);
+  return place;
+}
+
+/**
+ * A page of a placed read (`open`, `pack`): every item of the window is placed, which costs
+ * a few reads each, and only the page's items are read whole.
+ */
+async function readPlacedPage(
+  source: ItemWindowSource,
+  range: { projectKey: string; since: Date; until: Date },
+  query: ItemWindowQuery,
+  page: { offset: number; limit: number },
+  install: Install
+): Promise<Pick<ItemWindow, 'items' | 'totals'> & { nextOffset: number | null }> {
+  const totals = { open: 0, resting: 0 };
+  const kept: { place: Awaited<ReturnType<typeof placed>>; at: number }[] = [];
+  for (const item of await listWindow(source, range)) {
+    const place = await placed(source, item, install);
+    if (query.pack !== undefined && (place.run && runPack(place.run))?.key !== query.pack) continue;
+    const open = place.standing.state !== 'resting';
+    totals[open ? 'open' : 'resting'] += 1;
+    if (query.open === undefined || query.open === open)
+      kept.push({
+        place,
+        at: (place.run?.completed_at ?? place.run?.started_at)?.getTime() ?? 0,
+      });
+  }
+  // Stable, so items that tie keep the store's id order.
+  kept.sort((a, b) => b.at - a.at);
+  const end = page.offset + page.limit;
+  const items: ItemRead[] = [];
+  for (const { place } of kept.slice(page.offset, end)) items.push(await place.read());
+  return { items, totals, nextOffset: end < kept.length ? end : null };
 }
 
 /**
  * One page of the project's items in the window. What the install holds for every item is
- * read once a page. Where an item stands is decided by `placeItem`, so `open` filters on it
- * and only a kept item is read whole: the store lists until the page is full or the window
- * is exhausted.
+ * read once a page. Without `open` or `pack` the page follows the store's id order and reads
+ * only its own items; with one, see `ItemWindowQuery`.
  */
 export async function readItemWindow(
   source: ItemWindowSource,
@@ -137,30 +194,36 @@ export async function readItemWindow(
   query: ItemWindowQuery,
   now: Date = new Date()
 ): Promise<ItemWindow> {
-  const { since, until, afterItemId, limit } = resolveQuery(query, projectKey, now);
+  const { since, until, afterItemId, offset, limit } = resolveQuery(query, projectKey, now);
   const window = { since: since.toISOString(), until: until.toISOString() };
-  const install = await readInstallFacts(source);
-  const items: ItemRead[] = [];
-  const page = (after: string | null): ItemWindow => ({
-    window,
-    items,
-    next: after === null ? null : encodeCursor({ project: projectKey, ...window, after }),
-  });
-  let after = afterItemId;
-  for (;;) {
-    const listed = await source.store.listItemsInWindow({
-      projectKey,
-      since,
-      until,
-      afterItemId: after,
-      limit: limit + 1,
+  const cursor = (after: string, next?: number): string =>
+    encodeCursor({
+      project: projectKey,
+      ...window,
+      after,
+      ...(next === undefined ? {} : { offset: next }),
     });
-    for (const item of listed.slice(0, limit)) {
-      after = item.id;
-      const read = await keptRead(source, item, install, query.open);
-      if (read !== null) items.push(read);
-      if (items.length === limit) return page(item === listed.at(-1) ? null : after);
-    }
-    if (listed.length <= limit) return page(null);
+  const install = await readInstallFacts(source);
+  if (query.open !== undefined || query.pack !== undefined) {
+    const range = { projectKey, since, until };
+    const page = await readPlacedPage(source, range, query, { offset, limit }, install);
+    return {
+      window,
+      items: page.items,
+      next: page.nextOffset === null ? null : cursor('', page.nextOffset),
+      totals: page.totals,
+    };
   }
+  const listed = await source.store.listItemsInWindow({
+    projectKey,
+    since,
+    until,
+    afterItemId,
+    limit: limit + 1,
+  });
+  const items: ItemRead[] = [];
+  for (const item of listed.slice(0, limit))
+    items.push(await (await placed(source, item, install)).read());
+  const last = listed.length > limit ? listed[limit - 1] : undefined;
+  return { window, items, next: last === undefined ? null : cursor(last.id), totals: null };
 }

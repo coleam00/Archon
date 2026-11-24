@@ -3343,6 +3343,10 @@ declare module 'archon:script' {
       }>;
     }>;
     readonly next: string | null;
+    readonly totals: {
+      readonly open: number;
+      readonly resting: number;
+    } | null;
   };
 
   /** A link between two items, as the engine records it; `ended` is null while it is active. */

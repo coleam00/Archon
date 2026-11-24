@@ -223,7 +223,18 @@ describe('reading items over a window', () => {
       }
     };
     expect(await keys(true)).toEqual(['b']);
-    expect(await keys(false)).toEqual(['a', 'c']);
+    // Most recently active first: c's last run ended after a's.
+    expect(await keys(false)).toEqual(['c', 'a']);
+    // The totals count the whole window, whatever the page holds.
+    const first = await readItemWindow(source([], { b1: 'failed' }), PROJECT, {
+      ...wide,
+      open: false,
+      limit: 1,
+    });
+    expect(first.totals).toEqual({ open: 1, resting: 2 });
+    // No run here recorded a pack, so no item is a pack's.
+    const ofPack = await readItemWindow(source(), PROJECT, { ...wide, pack: 'flow' });
+    expect([ofPack.items, ofPack.totals]).toEqual([[], { open: 0, resting: 0 }]);
   });
 
   test('an item whose runs cannot all be read is reported as degraded, and the rest of it reads', async () => {
