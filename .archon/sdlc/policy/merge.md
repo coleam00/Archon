@@ -1,17 +1,20 @@
-# Merge queue policy
+# Land policy
 
-Archon's additions to the SDLC pack's default merge policy. The queue reads the default
-first and this file after it.
+Archon's additions to the SDLC pack's default land policy. The land stage reads the
+default first and this file after it.
 
-## Clear: the queue merges
+## Every merge is asked
 
-- A pull request whose issue has a dated maintainer Current scope section that already
-  authorizes merge on a Ready verdict and green CI, when the pull request stays inside
-  that scope. That ruling is the maintainer's approval for its size; it does not cover
-  the cases below, which still ask.
+Nothing merges until an operator approved the pull request at exactly its head: the
+land stage asks for every pull request, with what it would have done as its
+recommendation. An approval holds only at the head it named. Under the default's looser
+rule, whether an earlier approval still held after a conflict round was the agent's
+reading, and it let a non-merge commit through (pull request 5815). This holds until an
+approval is held at a commit by an engine rule (issue 5769).
 
-## Unclear: the queue asks
+## Unclear: the land stage asks
 
-- Changes to the SDLC pack itself: its workflows, commands, scripts, their tests or policy documents. Any change under `.archon/` counts, even a test-only change.
+- Changes to the SDLC pack itself or anything else under `.archon/` (its workflows,
+  commands, scripts, packs and policy documents), even a test-only change.
 - The workflow language: its YAML surface, schemas or validation.
 - The plugin protocol, or any contract an outside plugin or provider builds against.
