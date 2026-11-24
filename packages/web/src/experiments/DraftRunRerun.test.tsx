@@ -15,6 +15,7 @@ const globals = {
   document: dom.document,
   localStorage: dom.localStorage,
   HTMLElement: dom.HTMLElement,
+  KeyboardEvent: dom.KeyboardEvent,
   requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
   IS_REACT_ACT_ENVIRONMENT: true,
 };
@@ -33,10 +34,12 @@ const originalFetch = globalThis.fetch;
 let started: Record<string, unknown>[] = [];
 /** Resolves when the runs feed may answer; a test that holds it sees the feed loading. */
 let feedAnswers: Promise<void> = Promise.resolve();
+let feedFails = false;
 
 beforeEach(() => {
   started = [];
   feedAnswers = Promise.resolve();
+  feedFails = false;
   // The project is warm, as it is when the run detail page sent the operator here; the
   // runs feed is not, so it loads after the page mounts.
   set(K.project('p1'), {
@@ -53,10 +56,14 @@ beforeEach(() => {
       const url = String(input);
       if (url.startsWith('/api/dashboard/runs')) {
         await feedAnswers;
-        return Response.json({ runs: [], counts: {}, total: 0 });
+        return feedFails
+          ? Response.json({ error: 'feed down' }, { status: 500 })
+          : Response.json({ runs: [], counts: {}, total: 0 });
       }
       if (url.startsWith('/api/runs/attention'))
         return Response.json({ runs: [], items: [], answerRefusals: [] });
+      // A test that does not `offer` workflows sees their list still loading.
+      if (url.startsWith('/api/workflows?')) return new Promise<Response>(() => {});
       if (url === '/api/conversations') return Response.json({ conversationId: 'web-test' });
       if (url.endsWith('/run')) {
         started.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
@@ -96,8 +103,7 @@ function offer(...workflows: { name: string; inputs: Record<string, { default?: 
   });
 }
 
-/** Follow the Re-run link of a run of `build` started with `message` and `supplied`. */
-async function rerun(run: { message: string; supplied: Record<string, string> }): Promise<void> {
+function rerunLink(run: { message: string; supplied: Record<string, string> }): string {
   const original = toRun({
     id: 'run-1',
     workflow_name: 'build',
@@ -107,8 +113,13 @@ async function rerun(run: { message: string; supplied: Record<string, string> })
     user_message: run.message,
     supplied_inputs: run.supplied,
   });
+  return rerunPath({ ...original, projectId: 'p1' });
+}
+
+/** Follow the Re-run link of a run of `build` started with `message` and `supplied`. */
+async function rerun(run: { message: string; supplied: Record<string, string> }): Promise<void> {
   const memory = createMemoryRouter([{ path: '/console/p/:projectId', element: <RunsPage /> }], {
-    initialEntries: [rerunPath({ ...original, projectId: 'p1' })],
+    initialEntries: [rerunLink(run)],
   });
   router = memory;
   root = createRoot(container);
@@ -134,10 +145,14 @@ async function pick(workflow: string): Promise<void> {
   );
 }
 
-async function start(): Promise<Record<string, unknown> | undefined> {
-  await click(
-    [...container.querySelectorAll('button')].find(b => b.textContent?.startsWith('Start run'))
+function startButton(): HTMLButtonElement | undefined {
+  return [...container.querySelectorAll('button')].find(b =>
+    b.textContent?.startsWith('Start run')
   );
+}
+
+async function start(): Promise<Record<string, unknown> | undefined> {
+  await click(startButton());
   return started[0];
 }
 
@@ -197,5 +212,37 @@ test('while the feed loads, the page says so instead of counting no active runs,
   await act(async () => answer());
   expect(container.textContent).not.toContain('Loading…');
   expect(container.textContent).toContain('Active0');
+  expect(field('issue')?.value).toBe('42');
+});
+
+test('the card does not start a re-run until it knows the workflow declares its inputs', async () => {
+  await rerun({ message: '', supplied: { issue: '42' } });
+
+  expect(startButton()?.disabled).toBe(true);
+  const textarea = container.querySelector('textarea');
+  await act(async () => {
+    textarea?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  });
+  expect(started).toEqual([]);
+});
+
+test('a re-run without a message replaces the message already in the card', async () => {
+  offer({ name: 'build', inputs: { issue: {} } });
+  await rerun({ message: 'an earlier request', supplied: {} });
+  expect(container.querySelector('textarea')?.value).toBe('an earlier request');
+
+  await act(async () => router?.navigate(rerunLink({ message: '', supplied: { issue: '42' } })));
+  expect(container.querySelector('textarea')?.value).toBe('');
+  const body = await start();
+  expect(body?.message).toBe('');
+  expect(body?.inputs).toEqual({ issue: '42' });
+});
+
+test('when the feed fails to load, the re-run card stays with its inputs beside the error', async () => {
+  offer({ name: 'build', inputs: { issue: {} } });
+  feedFails = true;
+  await rerun({ message: '', supplied: { issue: '42' } });
+
+  expect(container.textContent).toContain('Could not load runs.');
   expect(field('issue')?.value).toBe('42');
 });

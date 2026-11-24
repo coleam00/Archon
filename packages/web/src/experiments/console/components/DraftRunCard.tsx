@@ -116,11 +116,13 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     const taken = takeRerun(searchParams);
     if (taken === null) return;
     const { rerun, rest } = taken;
-    if (rerun.workflow.length > 0) {
-      setWorkflowName(rerun.workflow);
-      setInputDraft({ workflow: rerun.workflow, values: rerun.inputs });
-    }
-    if (rerun.message !== null) setContext(rerun.message);
+    // A re-run replaces the whole draft: nothing typed before it is sent along.
+    if (rerun.workflow.length > 0) setWorkflowName(rerun.workflow);
+    setInputDraft({ workflow: rerun.workflow, values: rerun.inputs });
+    setContext(rerun.message ?? '');
+    setFiles([]);
+    setModelOverrideRows([]);
+    setError(null);
     setMode('expanded');
     setSearchParams(rest, { replace: true });
   }, [searchParams, setSearchParams]);
@@ -147,9 +149,12 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     setFiles(prev => prev.filter((_, i) => i !== idx));
   };
 
-  const { data: workflowData } = useEntity(K.workflows(projectCwd), () =>
+  const { data: workflowData, error: workflowsError } = useEntity(K.workflows(projectCwd), () =>
     skill.listWorkflows(projectCwd)
   );
+  // Until the declarations load, the card cannot tell which filled inputs to send, and
+  // sending none would drop a re-run's inputs, so it does not start.
+  const workflowsLoaded = workflowData !== undefined;
 
   const allWorkflows = workflowData?.workflows ?? [];
   const recommendedNames = workflowData?.recommended ?? [];
@@ -218,6 +223,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   }, [mode]);
 
   const submit = async (): Promise<void> => {
+    if (!workflowsLoaded) return;
     if (workflowName.length === 0) {
       setError('Pick a workflow first.');
       return;
@@ -371,7 +377,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         <button
           type="button"
           onClick={() => void submit()}
-          disabled={submitting || workflowName.length === 0}
+          disabled={submitting || !workflowsLoaded || workflowName.length === 0}
           className="brand-bar flex items-center gap-1.5 rounded-lg px-3.75 py-2.25 text-console-13 font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-all hover:-translate-y-px hover:brightness-110 active:brightness-95 disabled:translate-y-0 disabled:opacity-50 disabled:shadow-none"
         >
           {submitting ? 'Starting…' : 'Start run'}
@@ -382,6 +388,11 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
       </div>
 
       {error !== null ? <p className="mt-1 font-mono text-console-11 text-error">{error}</p> : null}
+      {workflowsError !== undefined && !workflowsLoaded ? (
+        <p className="mt-1 font-mono text-console-11 text-error">
+          Could not load workflows: {workflowsError.message}
+        </p>
+      ) : null}
     </>
   );
 
