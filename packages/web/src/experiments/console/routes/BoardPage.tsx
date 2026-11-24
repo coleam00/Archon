@@ -420,6 +420,13 @@ export function PackBoard({
         <span data-pack-links className="text-console-11 font-normal text-text-tertiary">
           <Link
             className="underline hover:text-text-primary"
+            to={`/console/p/${encodeURIComponent(projectId)}/packs/${encodeURIComponent(pack)}/setup`}
+          >
+            Setup
+          </Link>
+          {' · '}
+          <Link
+            className="underline hover:text-text-primary"
             to={`/console/p/${encodeURIComponent(projectId)}/packs/${encodeURIComponent(pack)}/settings`}
           >
             Settings
