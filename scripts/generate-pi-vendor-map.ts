@@ -118,8 +118,15 @@ function displayName(vendor: string): string {
 /**
  * Extract pi-ai's module-private `envMap` object literal from source. Parsed
  * with a strict entry regex (no eval): every non-blank line inside the literal
- * must match `key: "ENV_VAR",` — anything else is an upstream shape change and
- * fails loud.
+ * must match `key: "ENV_VAR",` or `key: ["ENV_VAR", …],` — anything else is an
+ * upstream shape change and fails loud.
+ *
+ * Pi 1.6 orders a fallback list for some vendors: a per-plan variable first,
+ * then one both plans used to share. Archon delivers one credential per vendor,
+ * so the generated map names the first entry — the variable a `key set` writes and
+ * Pi reads first. A user who set only a later fallback by hand still works in Pi,
+ * but `pi.auth` reports that vendor unconnected; widening the generated map to the
+ * whole list is the change to make when a per-vendor credential is ever split.
  */
 function parseEnvMap(source: string): Record<string, string> {
   const match = /const envMap = \{([\s\S]*?)\};/.exec(source);
@@ -128,13 +135,14 @@ function parseEnvMap(source: string): Record<string, string> {
       'Could not locate `const envMap = {...}` in pi-ai env-api-keys.js — upstream shape changed; update this generator.'
     );
   }
-  const entryRe = /^\s*(?:"([^"]+)"|([A-Za-z0-9_$]+)):\s*"([^"]+)",?\s*$/;
+  const entryRe = /^\s*(?:"([^"]+)"|([A-Za-z0-9_$]+)):\s*(?:"([^"]+)"|\[([^\]]+)\]),?\s*$/;
   const parsed: Record<string, string> = {};
   for (const line of match[1].split('\n')) {
     if (!line.trim()) continue;
     const entry = entryRe.exec(line);
     const key = entry?.[1] ?? entry?.[2];
-    const value = entry?.[3];
+    // A list's first entry is the variable Pi reads first; see the docstring.
+    const value = entry?.[3] ?? /"([^"]+)"/.exec(entry?.[4] ?? '')?.[1];
     if (!key || !value) {
       throw new Error(
         `Unparseable envMap line in pi-ai env-api-keys.js: ${line.trim()} — upstream shape changed; update this generator.`

@@ -25,13 +25,17 @@ import { expect, mock, test } from 'bun:test';
 let piCodingAgentLoaded = false;
 let piAiLoaded = false;
 
-mock.module('@earendil-works/pi-coding-agent', () => {
+// Each factory spreads the real module so a later SDK release cannot leave an export
+// unimplemented here (see scripts/check-mock-modules.ts), and the counter is what the test
+// reads. Spreading costs nothing until something resolves the module, which is the failure
+// this file exists to catch.
+mock.module('@earendil-works/pi-coding-agent', async () => {
   piCodingAgentLoaded = true;
-  return {};
+  return { ...(await import('@earendil-works/pi-coding-agent')) };
 });
-mock.module('@earendil-works/pi-ai', () => {
+mock.module('@earendil-works/pi-ai', async () => {
   piAiLoaded = true;
-  return {};
+  return { ...(await import('@earendil-works/pi-ai')) };
 });
 
 test('registering and instantiating the Pi provider does not eagerly load the Pi SDK', async () => {

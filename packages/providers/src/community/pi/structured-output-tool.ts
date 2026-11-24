@@ -8,7 +8,8 @@
  * note in ./provider.ts).
  */
 import { createLogger } from '@archon/paths';
-import { Type, validateToolArguments } from '@earendil-works/pi-ai';
+import { validateToolArguments } from '@earendil-works/pi-ai';
+import { Type } from 'typebox';
 import {
   defineTool,
   type AgentSession,
