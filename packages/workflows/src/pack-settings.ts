@@ -25,7 +25,7 @@
  */
 import { readFile, stat } from 'fs/promises';
 import type { z } from 'zod';
-import { join, resolve } from 'path';
+import { isAbsolute, join, sep } from 'path';
 import { inputEnvKeyCollision } from './loader/workflow-fields';
 import { parsePackBindings } from './pack-bindings';
 import { PACK_DECLARATION_PATH } from './packaged-workflow';
@@ -284,6 +284,31 @@ export async function readProjectPackSettings(
   return readProjectValues(cwd, pack.key, pack.settings ?? {});
 }
 
+/** One declared setting, with the value the project sets for it when it sets one. */
+export interface PackSettingEntry {
+  readonly name: string;
+  readonly spec: PackSettingSpec;
+  /** The project's value; absent when the project leaves the setting to its default. */
+  readonly value?: string;
+}
+
+/**
+ * A pack's settings in the order the pack declares them, each with its declaration
+ * (description, default, section, file marker) and the project's value. This is the read
+ * a host lists settings from.
+ *
+ * @throws PackSettingsError on an invalid project file, as {@link readProjectPackSettings}.
+ */
+export async function readPackSettingEntries(
+  cwd: string,
+  pack: WorkflowPack
+): Promise<PackSettingEntry[]> {
+  const values = await readProjectPackSettings(cwd, pack);
+  return Object.entries(pack.settings ?? {}).map(([name, spec]) =>
+    Object.hasOwn(values, name) ? { name, spec, value: values[name] } : { name, spec }
+  );
+}
+
 /**
  * Check project values without requiring inputs that an invocation may supply, and that
  * each `file` setting names a file that exists. Only `archon validate` runs the file
@@ -309,14 +334,25 @@ export async function validateProjectPackSettings(
   }
   for (const [name, spec] of Object.entries(pack.settings ?? {})) {
     if (spec.file !== true || refused.has(name)) continue;
-    const value = values[name] ?? spec.default;
-    if (value === undefined || value === '') continue;
-    const problem = await fileProblem(resolve(cwd, value));
+    // An own-key lookup: a setting may be named `constructor`, which a plain object inherits.
+    const value = Object.hasOwn(values, name) ? values[name] : spec.default;
+    const problem = await fileSettingProblem(cwd, value);
     if (problem !== undefined) {
       errors.push(`${path}: setting '${name}' names file '${value}', which ${problem}`);
     }
   }
   return errors;
+}
+
+/** Why a file setting's value does not name a file; undefined when it does or is empty. */
+async function fileSettingProblem(
+  cwd: string,
+  value: string | undefined
+): Promise<string | undefined> {
+  if (value === undefined || value === '') return undefined;
+  // Joined, not resolved: normalizing would drop a trailing slash or fold `..` across a
+  // symlink, so validate would check a different path than a stage opens.
+  return fileProblem(isAbsolute(value) ? value : `${cwd}${sep}${value}`);
 }
 
 /** Why a file setting's resolved path is not a file, or undefined when it is one. */

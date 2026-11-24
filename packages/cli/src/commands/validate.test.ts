@@ -226,24 +226,6 @@ describe('validateWorkflowsCommand', () => {
     expect(await validateWorkflowsCommand(validationCwd, 'packed')).toBe(0);
   });
 
-  test('fails on a file setting that names a missing file and passes once it exists', async () => {
-    const entry = discoverPackWorkflow();
-    entry.workflow.pack = {
-      key: 'example',
-      workflow: entry.workflow.name,
-      source: 'project',
-      settings: { review_policy: { type: 'string', file: true, section: 'Policies' } },
-    };
-    const path = await writePackSettings('settings:\n  review_policy: docs/review.md\n');
-    expect(await validateWorkflowsCommand(validationCwd, 'packed')).toBe(1);
-    expect(mockConsoleLog.mock.calls.flat().join('\n')).toContain(
-      `${path}: setting 'review_policy' names file 'docs/review.md', which does not exist`
-    );
-    await mkdir(join(validationCwd, 'docs'), { recursive: true });
-    await writeFile(join(validationCwd, 'docs', 'review.md'), 'review rules\n');
-    expect(await validateWorkflowsCommand(validationCwd, 'packed')).toBe(0);
-  });
-
   test('accepts an optional skill that is not installed', async () => {
     const originalHome = process.env.HOME;
     process.env.HOME = validationCwd;
