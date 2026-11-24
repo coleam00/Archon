@@ -769,7 +769,7 @@ An agent node can offer its model named scripts as tools. The agent decides when
 ```yaml
 nodes:
   - id: inspect
-    prompt: Look up the checks of pull request $ARGUMENTS and say whether it can merge.
+    prompt: Look up the checks of pull request $ARGUMENTS and say whether they are green.
     tools:
       lookup_checks:
         description: Get the check status of a pull request

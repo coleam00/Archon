@@ -340,7 +340,7 @@ A `script:` node runs at a fixed point in the graph. When the agent should decid
 ```yaml
 nodes:
   - id: inspect
-    prompt: Look up the checks of pull request $ARGUMENTS and say whether it can merge.
+    prompt: Look up the checks of pull request $ARGUMENTS and say whether they are green.
     tools:
       lookup_checks:
         description: Get the check status of a pull request
