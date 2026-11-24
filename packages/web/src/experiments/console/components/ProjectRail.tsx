@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState, type ReactElement } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router';
-import { ChartLine, Settings, PenTool, type LucideIcon } from 'lucide-react';
+import { ChartLine, Inbox, Settings, PenTool, type LucideIcon } from 'lucide-react';
 import { SessionMenu } from '@/components/auth/SessionMenu';
 import { ProjectRow } from './ProjectRow';
 import { EnvVarsDialog } from './EnvVarsDialog';
@@ -362,6 +362,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
 
       {/* Console navigation */}
       <div className="flex flex-col gap-0.5 border-t border-border px-2.5 py-2">
+        <RailNavLink to="/console/needs-you" icon={Inbox} label="Needs you" />
         <RailNavLink to="/console/metrics" icon={ChartLine} label="Metrics" />
         <RailNavLink
           to="/console/builder"
