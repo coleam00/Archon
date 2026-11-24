@@ -8,12 +8,12 @@
  * - Content blocks are typed via inline assertions for clarity
  *
  * Authentication:
- * - Credentials reach the subprocess via process.env (already cleaned by
- *   stripCwdEnv) PLUS any per-request `requestOptions.env` (per-user delivered
- *   keys/subscriptions), merged LAST so it wins. `buildProviderSubprocessEnv` does NOT
- *   filter tokens — the Claude wrapper logs which posture process.env shows (explicit
- *   token present vs not); the historical env-token allowlist was removed in
- *   #1067, so the log can read "global" while a per-request token authenticates.
+ * - Credentials reach the subprocess via process.env (host runs only, already
+ *   cleaned by stripCwdEnv) PLUS any per-request `requestOptions.env`, merged LAST.
+ *   A delivered per-user credential (`userCredentialEnvKeys`) replaces every
+ *   install-wide Claude credential. `buildRequestSubprocessEnv` logs
+ *   `claude.auth_source` from that final env, so the log names the source the
+ *   subprocess actually receives.
  * - CLAUDE_USE_GLOBAL_AUTH is an Archon-only boot sentinel (set for solo
  *   installs with no creds — see server/src/boot/claude-auth-posture.ts). The
  *   Claude CLI itself ignores it; it neither gates nor filters env here.
@@ -79,17 +79,34 @@ function deliveredClaudeCredential(options: SendQueryOptions | undefined): strin
   );
 }
 
+const INSTALL_CREDENTIAL_KEYS = [
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_API_KEY',
+  'CLAUDE_API_KEY',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+] as const;
+
+/**
+ * Logs which credential source the final subprocess env carries: key names only,
+ * never values. `native` means Claude Code's own configuration decides (the
+ * `claude /login` session, a settings `apiKeyHelper`, or a cloud selector).
+ */
+function logAuthSource(env: NodeJS.ProcessEnv, delivered: string | undefined): void {
+  if (delivered) {
+    getLog().info({ source: 'delivered', credentialKeys: [delivered] }, 'claude.auth_source');
+    return;
+  }
+  // Names every key present; which one Claude Code prefers is its precedence, not Archon's.
+  const credentialKeys = INSTALL_CREDENTIAL_KEYS.filter(key => env[key]);
+  getLog().info(
+    { source: credentialKeys.length > 0 ? 'environment' : 'native', credentialKeys },
+    'claude.auth_source'
+  );
+}
+
 export function buildRequestSubprocessEnv(
   requestOptions: SendQueryOptions | undefined
 ): NodeJS.ProcessEnv {
-  if (requestOptions?.execContext?.kind !== 'container') {
-    const authMode =
-      process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.CLAUDE_API_KEY ? 'explicit' : 'global';
-    getLog().info(
-      { authMode },
-      authMode === 'global' ? 'using_global_auth' : 'using_explicit_tokens'
-    );
-  }
   const env = buildProviderSubprocessEnv(requestOptions);
   const delivered = deliveredClaudeCredential(requestOptions);
   if (delivered) {
@@ -121,6 +138,7 @@ export function buildRequestSubprocessEnv(
     env.ANTHROPIC_API_KEY = env.CLAUDE_API_KEY;
     getLog().debug('claude.api_key_mirrored');
   }
+  logAuthSource(env, delivered);
   // Without this, Claude Code reports some refusals to start (an invalid proxy URL, for
   // one) only on stderr and exits 1, which reads as a crashed process and is retried.
   // With it, every refusal with a known cause also ends in an error result carrying
