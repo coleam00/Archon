@@ -1,12 +1,61 @@
 import { describe, test, expect } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { RunStream, pairProviderToolCalls } from './RunStream';
+import { RunStream } from './RunStream';
 import type { ProviderEventRecord, RunProviderEvents } from '../lib/provider-events';
 import { mergeProviderEventRecords } from '../lib/provider-events';
+import { buildRunLog, pairProviderToolCalls } from '../lib/run-log';
+import { pathTokens, type PathToken } from '../lib/run-paths';
 import type { Message } from '../primitives/message';
-import { toRunEvent } from '../primitives/event';
-import type { NodeTransitionEvent } from '../primitives/event';
+import { foldNodeRuns, toRunEvent } from '../primitives/event';
+import type { NodeTransitionEvent, RunEvent, RunNodeState } from '../primitives/event';
 import { StreamContextProvider } from '../lib/stream-context';
+
+interface StreamFixture {
+  runStartedAt?: string;
+  messages: Message[];
+  events: RunEvent[];
+  nodes: RunNodeState[];
+  providerEvents: RunProviderEvents;
+  showToolCalls: boolean;
+  showSystem: boolean;
+  selectedNodeId: string | null;
+  live: boolean;
+  waitingNodeId: string | null;
+  pathTokens?: readonly PathToken[];
+  fullPaths?: boolean;
+}
+
+/** The stream as the run page renders it: the log built from the run's three sources. */
+function renderStream({
+  runStartedAt = '2026-10-02T09:59:00.000Z',
+  messages,
+  events,
+  nodes,
+  providerEvents,
+  pathTokens: tokens = [],
+  fullPaths = false,
+  ...display
+}: StreamFixture): string {
+  const log = buildRunLog({
+    messages,
+    events,
+    nodeRuns: foldNodeRuns(events, nodes),
+    providerEvents,
+  });
+  return renderToStaticMarkup(
+    <StreamContextProvider value={{ runStartedAt }}>
+      <RunStream log={log} pathTokens={tokens} fullPaths={fullPaths} {...display} />
+    </StreamContextProvider>
+  );
+}
+
+/** What a browser would put on screen for `html`: tags gone, entities decoded. */
+const textOf = (html: string): string =>
+  html
+    .replace(/<[^>]+>/g, '')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&#x27;', "'")
+    .replaceAll('&amp;', '&');
 
 function record(
   stepName: string,
@@ -17,106 +66,6 @@ function record(
 ): ProviderEventRecord {
   return { runId: 'r1', stepName, attemptId, seq, observedAt, event };
 }
-
-describe('pairProviderToolCalls', () => {
-  test('pairs two concurrent calls of one tool by id, not by name or order', () => {
-    const events: RunProviderEvents = new Map([
-      [
-        'implement',
-        [
-          record('implement', 'a1', 0, '2026-10-02T10:00:00.000Z', {
-            type: 'tool_call',
-            toolCallId: 'x',
-            name: 'Bash',
-            rawInput: { command: 'sleep 2' },
-          }),
-          record('implement', 'a1', 1, '2026-10-02T10:00:00.010Z', {
-            type: 'tool_call',
-            toolCallId: 'y',
-            name: 'Bash',
-            rawInput: { command: 'ls' },
-          }),
-          record('implement', 'a1', 2, '2026-10-02T10:00:00.050Z', {
-            type: 'tool_call_update',
-            toolCallId: 'y',
-            status: 'completed',
-            output: 'a.ts',
-          }),
-          record('implement', 'a1', 3, '2026-10-02T10:00:02.000Z', {
-            type: 'tool_call_update',
-            toolCallId: 'x',
-            status: 'failed',
-            output: 'x'.repeat(16_384),
-            outputTruncated: true,
-            exitCode: 1,
-          }),
-        ],
-      ],
-    ]);
-
-    const paired = pairProviderToolCalls(events);
-
-    expect(paired.map(p => [p.nodeId, p.call])).toEqual([
-      [
-        'implement',
-        {
-          name: 'Bash',
-          input: { command: 'sleep 2' },
-          status: 'failed',
-          output: 'x'.repeat(16_384),
-          outputTruncated: true,
-          exitCode: 1,
-          durationMs: 2000,
-        },
-      ],
-      [
-        'implement',
-        {
-          name: 'Bash',
-          input: { command: 'ls' },
-          status: 'completed',
-          output: 'a.ts',
-          durationMs: 40,
-        },
-      ],
-    ]);
-  });
-
-  test('a legacy record pairs within its own null attempt, and a title names the call', () => {
-    const events: RunProviderEvents = new Map([
-      [
-        'plan',
-        [
-          record('plan', null, 0, '2026-10-02T10:00:00.000Z', {
-            type: 'tool_call',
-            toolCallId: 'anonymous-1',
-            name: 'command_execution',
-            title: 'git status',
-          }),
-          record('plan', null, 1, '2026-10-02T10:00:01.000Z', {
-            type: 'tool_call_update',
-            toolCallId: 'anonymous-1',
-            status: 'cancelled',
-          }),
-          // A retry's call with the same id is its own call.
-          record('plan', 'a2', 0, '2026-10-02T10:00:05.000Z', {
-            type: 'tool_call',
-            toolCallId: 'anonymous-1',
-            name: 'Read',
-          }),
-        ],
-      ],
-    ]);
-
-    expect(
-      pairProviderToolCalls(events).map(p => [p.call.name, p.call.status, p.call.durationMs])
-    ).toEqual([
-      // A legacy row's time is too coarse to time the call.
-      ['git status', 'cancelled', undefined],
-      ['Read', undefined, undefined],
-    ]);
-  });
-});
 
 describe('RunStream tool rendering', () => {
   const nodeStarted: NodeTransitionEvent = {
@@ -157,21 +106,17 @@ describe('RunStream tool rendering', () => {
     selectedNodeId: string | null = null,
     showToolCalls = true
   ): string =>
-    renderToStaticMarkup(
-      <StreamContextProvider value={{ runStartedAt: '2026-10-02T09:59:00.000Z' }}>
-        <RunStream
-          messages={[message]}
-          events={[nodeStarted]}
-          nodes={[{ node_id: 'implement', state: 'running' }]}
-          providerEvents={providerEvents}
-          showToolCalls={showToolCalls}
-          showSystem={false}
-          selectedNodeId={selectedNodeId}
-          live
-          waitingNodeId={null}
-        />
-      </StreamContextProvider>
-    );
+    renderStream({
+      messages: [message],
+      events: [nodeStarted],
+      nodes: [{ node_id: 'implement', state: 'running' }],
+      providerEvents,
+      showToolCalls,
+      showSystem: false,
+      selectedNodeId,
+      live: true,
+      waitingNodeId: null,
+    });
 
   test('renders recorded hook lifecycle events in order beside tool calls', () => {
     const records: ProviderEventRecord[] = [
@@ -398,21 +343,17 @@ describe('RunStream tool rendering', () => {
     ]);
     const finished: NodeTransitionEvent = { ...nodeStarted, id: 'n2', transition: 'completed' };
     const html = (events: NodeTransitionEvent[], state: 'running' | 'completed'): string =>
-      renderToStaticMarkup(
-        <StreamContextProvider value={{ runStartedAt: '2026-10-02T09:59:00.000Z' }}>
-          <RunStream
-            messages={[]}
-            events={events}
-            nodes={[{ node_id: 'implement', state }]}
-            providerEvents={lostUpdate}
-            showToolCalls
-            showSystem={false}
-            selectedNodeId={null}
-            live
-            waitingNodeId={null}
-          />
-        </StreamContextProvider>
-      );
+      renderStream({
+        messages: [],
+        events,
+        nodes: [{ node_id: 'implement', state }],
+        providerEvents: lostUpdate,
+        showToolCalls: true,
+        showSystem: false,
+        selectedNodeId: null,
+        live: true,
+        waitingNodeId: null,
+      });
 
     expect(html([nodeStarted], 'running')).not.toContain('no result recorded');
     expect(html([nodeStarted, finished], 'completed')).toContain('no result recorded');
@@ -428,21 +369,17 @@ describe('RunStream tool rendering', () => {
       numTurns: 3,
       tokens: { input: 12000, output: 300 },
     };
-    const html = renderToStaticMarkup(
-      <StreamContextProvider value={{ runStartedAt: '2026-10-02T09:59:00.000Z' }}>
-        <RunStream
-          messages={[]}
-          events={[nodeStarted, completed]}
-          nodes={[{ node_id: 'implement', state: 'completed' }]}
-          providerEvents={new Map()}
-          showToolCalls={false}
-          showSystem={false}
-          selectedNodeId={null}
-          live
-          waitingNodeId={null}
-        />
-      </StreamContextProvider>
-    );
+    const html = renderStream({
+      messages: [],
+      events: [nodeStarted, completed],
+      nodes: [{ node_id: 'implement', state: 'completed' }],
+      providerEvents: new Map(),
+      showToolCalls: false,
+      showSystem: false,
+      selectedNodeId: null,
+      live: true,
+      waitingNodeId: null,
+    });
     expect(html).toContain('· 00:11');
     expect(html).toContain('· $0.04');
     expect(html).toContain('· 3t');
@@ -451,6 +388,213 @@ describe('RunStream tool rendering', () => {
 
   test('falls back to message-inline tools for a run that recorded no tool events', () => {
     expect(render(new Map())).toContain('InlineOnly');
+  });
+});
+
+describe('RunStream run log', () => {
+  const at = '2026-10-02T10:00:00.000Z';
+  const transition = (
+    nodeId: string,
+    kind: NodeTransitionEvent['transition'],
+    second: number,
+    durationMs: number | null = null
+  ): NodeTransitionEvent => ({
+    id: `${nodeId}:${kind}`,
+    runId: 'r1',
+    kind: 'node_transition',
+    timestamp: `2026-10-02T10:00:${second.toString().padStart(2, '0')}.000Z`,
+    nodeId,
+    nodeName: nodeId,
+    transition: kind,
+    durationMs,
+    skipReason: null,
+    skipExpr: null,
+    costUsd: null,
+    costPartial: false,
+    costScope: null,
+    stopReason: null,
+    numTurns: null,
+    tokens: null,
+    output: null,
+    error: null,
+    failureKind: null,
+  });
+  const base = {
+    messages: [],
+    events: [transition('route', 'started', 0)],
+    nodes: [{ node_id: 'route', state: 'running' as const }],
+    providerEvents: new Map(),
+    showToolCalls: true,
+    showSystem: false,
+    selectedNodeId: null,
+    live: true,
+    waitingNodeId: null,
+  } satisfies StreamFixture;
+  const say = (seq: number, text: string): ProviderEventRecord =>
+    record('route', 'a1', seq, at, { type: 'agent_message_chunk', text });
+  const call = (seq: number, name: string): ProviderEventRecord =>
+    record('route', 'a1', seq, at, { type: 'tool_call', toolCallId: `c${seq.toString()}`, name });
+
+  test('groups each tool call under the text recorded before it; the conversation copy sits behind System', () => {
+    const fixture = {
+      ...base,
+      // Flushed before any of the records below by the conversation's own clock.
+      messages: [
+        {
+          id: 'm1',
+          role: 'assistant' as const,
+          content: 'Conversation copy of the text',
+          timestamp: '2026-10-02T10:00:00.500Z',
+          toolCalls: [],
+          error: null,
+          category: null,
+          dispatch: null,
+          workflowResult: null,
+        },
+      ],
+      providerEvents: new Map([
+        [
+          'route',
+          [
+            say(0, 'Text Alpha'),
+            call(1, 'ToolOne'),
+            call(2, 'ToolTwo'),
+            say(3, 'Text Beta'),
+            call(4, 'ToolThree'),
+          ],
+        ],
+      ]),
+    };
+    const html = renderStream(fixture);
+    const positions = ['Text Alpha', 'ToolOne', 'ToolTwo', 'Text Beta', 'ToolThree'].map(text =>
+      html.indexOf(text)
+    );
+    expect(positions.every(position => position > -1)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    expect(html).not.toContain('Conversation copy');
+    expect(renderStream({ ...fixture, showSystem: true })).toContain(
+      'Conversation copy of the text'
+    );
+  });
+
+  test.each([
+    ['tool calls come from provider events', new Map([['route', [call(0, 'Recorded')]]])],
+    ['tool calls come from the message itself', new Map()],
+  ])('renders no agent card for a message with no text when %s', (_name, providerEvents) => {
+    const html = renderStream({
+      ...base,
+      providerEvents,
+      messages: [
+        {
+          id: 'm1',
+          role: 'assistant',
+          content: '  ',
+          timestamp: '2026-10-02T10:00:01.000Z',
+          toolCalls: [{ name: 'InlineOnly', input: {} }],
+          error: null,
+          category: null,
+          dispatch: null,
+          workflowResult: null,
+        },
+      ],
+    });
+    expect(html).not.toContain('>Agent<');
+    expect(html).toContain(providerEvents.size > 0 ? 'Recorded' : 'InlineOnly');
+  });
+
+  describe('known paths', () => {
+    const WORKTREE = 'C:\\Users\\me\\.archon\\workspaces\\acme\\app\\worktrees\\feat\\x';
+    const RUN = 'C:\\Users\\me\\.archon\\workspaces\\acme\\app\\artifacts\\runs\\0a81ff6c';
+    const SOURCE = 'C:\\Users\\me\\.archon\\workspaces\\acme\\app\\workflow-source\\runs\\0a81ff6c';
+    const tokens = pathTokens([
+      { kind: 'checkout', path: WORKTREE },
+      { kind: 'run_artifacts', path: RUN },
+      { kind: 'workflow_source', path: SOURCE },
+    ]);
+    const first = `cd "${WORKTREE}" && cat "${RUN}\\plan.md"`;
+    const second = `cd "${WORKTREE}" && git status`;
+    const shell = (seq: number, command: string): ProviderEventRecord =>
+      record('route', 'a1', seq, at, {
+        type: 'tool_call',
+        toolCallId: `c${seq.toString()}`,
+        name: 'Bash',
+        title: command,
+        rawInput: { command, description: `Step ${seq.toString()}` },
+      });
+    const fixture = {
+      ...base,
+      pathTokens: tokens,
+      providerEvents: new Map([['route', [say(0, 'Reading'), shell(1, first), shell(2, second)]]]),
+    };
+
+    test('says once per node where commands run, and keys the tokens the page uses', () => {
+      const html = renderStream(fixture);
+      const text = textOf(html);
+      expect(text.split('Commands run in ‹worktree› unless they say otherwise').length).toBe(2);
+      expect(text).toContain('cat "‹run›\\plan.md"');
+      expect(text).not.toContain('cd "');
+      // The key: token, what it is, full path. A token no row shows is left out.
+      expect(text).toContain(`‹worktree›the run's checkout${WORKTREE}`);
+      expect(text).toContain(`‹run›this run's artifacts${RUN}`);
+      expect(text).not.toContain('‹source›');
+      expect(text).not.toContain(SOURCE);
+    });
+
+    test('Full paths shows every command exactly as recorded, with no key and no node line', () => {
+      const text = textOf(renderStream({ ...fixture, fullPaths: true }));
+      expect(text).toContain(first);
+      expect(text).toContain(second);
+      expect(text).not.toContain('‹');
+      expect(text).not.toContain('Commands run in');
+    });
+
+    test('hiding tool calls hides the lines that describe them', () => {
+      const text = textOf(renderStream({ ...fixture, showToolCalls: false }));
+      expect(text).toContain('Reading');
+      expect(text).not.toContain('‹');
+    });
+  });
+
+  describe('quiet nodes', () => {
+    const done = ['start', 'interpret', 'pick'];
+    const skipped = ['blocked', 'revisit', 'retriage', 'facts'];
+    const quiet = [...done, ...skipped];
+    const events = [
+      ...quiet.flatMap((id, index) =>
+        done.includes(id)
+          ? [transition(id, 'started', index), transition(id, 'completed', index, 1200)]
+          : [transition(id, 'skipped', index)]
+      ),
+      transition('route', 'started', 30),
+    ];
+    const fixture = {
+      ...base,
+      events,
+      nodes: [
+        ...quiet.map(id => ({
+          node_id: id,
+          state: done.includes(id) ? ('completed' as const) : ('skipped' as const),
+        })),
+        { node_id: 'route', state: 'running' as const },
+      ],
+    };
+
+    test('fold into one line that expands to the list', () => {
+      const html = renderStream(fixture);
+      const details = /<details[^>]*>(.*?)<\/details>/s.exec(html)?.[1] ?? '';
+      expect(details).toContain('7 steps · 3 done in under 5 s · 4 skipped</summary>');
+      for (const id of quiet) expect(details).toContain(`id="node-transition-${id}"`);
+      expect(details).not.toContain('node-transition-route');
+      expect(html).toContain('id="node-transition-route"');
+      expect(html.split('<details').length).toBe(2);
+    });
+
+    test('a selected node is shown by itself, outside any fold', () => {
+      const html = renderStream({ ...fixture, selectedNodeId: 'pick' });
+      expect(html).toContain('id="node-transition-pick"');
+      expect(html).not.toContain('<details');
+      expect(html).not.toContain('node-transition-start');
+    });
   });
 });
 
@@ -465,21 +609,18 @@ test('RunStream renders the diagnostic message of an error event', () => {
     data: { error: diagnostic },
     created_at: '2026-10-02T10:00:00.000Z',
   });
-  const html = renderToStaticMarkup(
-    <StreamContextProvider value={{ runStartedAt: event.timestamp }}>
-      <RunStream
-        messages={[]}
-        events={[event]}
-        nodes={[]}
-        providerEvents={new Map()}
-        showToolCalls={false}
-        showSystem
-        selectedNodeId={null}
-        live
-        waitingNodeId={null}
-      />
-    </StreamContextProvider>
-  );
+  const html = renderStream({
+    runStartedAt: event.timestamp,
+    messages: [],
+    events: [event],
+    nodes: [],
+    providerEvents: new Map(),
+    showToolCalls: false,
+    showSystem: true,
+    selectedNodeId: null,
+    live: true,
+    waitingNodeId: null,
+  });
   expect(html).toContain(diagnostic);
 });
 
@@ -498,21 +639,18 @@ describe('RunStream cleanup warnings', () => {
       data: { warnings },
       created_at: '2026-10-02T10:00:00.000Z',
     });
-    const html = renderToStaticMarkup(
-      <StreamContextProvider value={{ runStartedAt: event.timestamp }}>
-        <RunStream
-          messages={[]}
-          events={[event]}
-          nodes={[]}
-          providerEvents={new Map()}
-          showToolCalls={false}
-          showSystem={showSystem}
-          selectedNodeId={null}
-          live
-          waitingNodeId={null}
-        />
-      </StreamContextProvider>
-    );
+    const html = renderStream({
+      runStartedAt: event.timestamp,
+      messages: [],
+      events: [event],
+      nodes: [],
+      providerEvents: new Map(),
+      showToolCalls: false,
+      showSystem,
+      selectedNodeId: null,
+      live: true,
+      waitingNodeId: null,
+    });
     for (const warning of warnings) expect(html).toContain(warning);
     expect(html).not.toContain('Waiting for first event');
   });
@@ -537,20 +675,17 @@ test.each(
     data: { cost_usd: cost, cost_partial: true },
     created_at: '2026-10-02T10:00:00.000Z',
   });
-  const html = renderToStaticMarkup(
-    <StreamContextProvider value={{ runStartedAt: event.timestamp }}>
-      <RunStream
-        messages={[]}
-        events={[event]}
-        nodes={[{ node_id: 'grp', state: 'completed' }]}
-        providerEvents={new Map()}
-        showToolCalls={false}
-        showSystem={false}
-        selectedNodeId={null}
-        live
-        waitingNodeId={null}
-      />
-    </StreamContextProvider>
-  );
+  const html = renderStream({
+    runStartedAt: event.timestamp,
+    messages: [],
+    events: [event],
+    nodes: [{ node_id: 'grp', state: 'completed' }],
+    providerEvents: new Map(),
+    showToolCalls: false,
+    showSystem: false,
+    selectedNodeId: null,
+    live: true,
+    waitingNodeId: null,
+  });
   expect(html).toContain(`· ${scope === 'total' ? 'total ' : ''}at least $${formatted}`);
 });

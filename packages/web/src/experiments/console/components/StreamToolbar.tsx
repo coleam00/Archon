@@ -20,6 +20,9 @@ interface StreamToolbarProps {
   onToggleToolCalls: (next: boolean) => void;
   showSystem: boolean;
   onToggleSystem: (next: boolean) => void;
+  /** Tool calls exactly as recorded, instead of with the run's known paths shortened. */
+  showFullPaths: boolean;
+  onToggleFullPaths: (next: boolean) => void;
   toolCallCount: number;
   messageCount: number;
   artifactCount: number | null;
@@ -117,6 +120,8 @@ export function StreamToolbar({
   onToggleToolCalls,
   showSystem,
   onToggleSystem,
+  showFullPaths,
+  onToggleFullPaths,
   toolCallCount,
   messageCount,
   artifactCount,
@@ -174,6 +179,7 @@ export function StreamToolbar({
           ) : null}
           <Checkbox label="Tool calls" checked={showToolCalls} onChange={onToggleToolCalls} />
           <Checkbox label="System" checked={showSystem} onChange={onToggleSystem} />
+          <Checkbox label="Full paths" checked={showFullPaths} onChange={onToggleFullPaths} />
         </div>
       ) : null}
     </div>
