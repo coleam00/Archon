@@ -16,6 +16,11 @@ export {
   type ProviderLifecycleEvent,
 } from './lifecycle';
 export {
+  providerCredentialInputSchema,
+  providerCredentialKeysSchema,
+  type ProviderCredentialInput,
+} from './credential-input';
+export {
   credentialSourceSchema,
   credentialStatusSchema,
   type CredentialSource,

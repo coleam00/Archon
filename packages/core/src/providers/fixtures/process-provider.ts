@@ -157,6 +157,16 @@ async function writeQueryLogs(
       },
     });
   }
+  if (mode === 'logs-credential') {
+    await log({
+      level: 'info',
+      msg: 'claude.credential_input',
+      bindings: {
+        credentialInput: 'delivered',
+        credentialKeys: ['CLAUDE_CODE_OAUTH_TOKEN', options?.env?.CLAUDE_CODE_OAUTH_TOKEN ?? ''],
+      },
+    });
+  }
   if (mode === 'logs-untrusted') {
     process.stdout.write(
       `${JSON.stringify({

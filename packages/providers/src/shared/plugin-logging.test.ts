@@ -28,6 +28,11 @@ test('RPC logging redirects existing loggers and strips SDK payloads, credential
     'provider.fixture_failed'
   );
   logger.warn({ lifecycle: 'credential-secret' }, 'provider.fixture_warned');
+  logger.info(
+    { credentialInput: 'delivered', credentialKeys: ['CLAUDE_CODE_OAUTH_TOKEN'] },
+    'claude.credential_input'
+  );
+  logger.info({ credentialKeys: ['credential-secret'] }, 'provider.fixture_keys');
   await Promise.resolve();
   expect(records).toEqual([
     {
@@ -42,5 +47,15 @@ test('RPC logging redirects existing loggers and strips SDK payloads, credential
       },
     },
     { level: 'warn', msg: 'provider.fixture_warned', bindings: { module: 'provider.fixture' } },
+    {
+      level: 'info',
+      msg: 'claude.credential_input',
+      bindings: {
+        module: 'provider.fixture',
+        credentialInput: 'delivered',
+        credentialKeys: ['CLAUDE_CODE_OAUTH_TOKEN'],
+      },
+    },
+    { level: 'info', msg: 'provider.fixture_keys', bindings: { module: 'provider.fixture' } },
   ]);
 });

@@ -9,6 +9,8 @@ import {
 import { createLogger } from '@archon/paths';
 import {
   buildProviderSubprocessEnv,
+  providerCredentialInputSchema,
+  providerCredentialKeysSchema,
   providerFailureClassSchema,
   providerLifecycleEventSchema,
   providerLifecycleWaitedMsSchema,
@@ -97,6 +99,9 @@ function startProcess(
   secrets.sort((a, b) => b.length - a.length);
   const redact = (text: string): string => redactCredentialValues(text, secrets);
   const providerLog = createLogger(`provider.${descriptor.id}`);
+  // Env key names the host chose or the request carried; a reported credential key outside
+  // them is plugin text and is dropped.
+  const envKeys = new Set([...Object.keys(env), ...Object.keys(options.env ?? {})]);
   const child = spawn(argv[0], argv.slice(1), {
     detached: process.platform !== 'win32',
     windowsHide: true,
@@ -205,20 +210,36 @@ function startProcess(
         {
           onLog(record): void {
             // Plugin text and arbitrary JSON can encode message excerpts or credentials.
-            // Only the severity, a failure class and a lifecycle event from the contract's
-            // closed enums, and a lifecycle event's numeric `waitedMs`, cross this boundary.
-            // An open plugin-chosen token would let a credential-shaped word through, so no
-            // other plugin field is forwarded. A record with neither enum value would reach
-            // the log as severity alone, which no operator can act on, so it is dropped.
+            // Only the severity, a failure class, lifecycle event and credential input from
+            // the contract's closed enums, a lifecycle event's numeric `waitedMs`, and a
+            // credential input's key names that are keys of this process's env, cross this
+            // boundary. An open plugin-chosen token would let a credential-shaped word
+            // through, so no other plugin field is forwarded. A record with no enum value
+            // would reach the log as severity alone, which no operator can act on, so it is
+            // dropped.
             const failureClass = providerFailureClassSchema.safeParse(record.bindings.failureClass);
             const lifecycle = providerLifecycleEventSchema.safeParse(record.bindings.lifecycle);
-            if (!failureClass.success && !lifecycle.success) return;
+            const credentialInput = providerCredentialInputSchema.safeParse(
+              record.bindings.credentialInput
+            );
+            if (!failureClass.success && !lifecycle.success && !credentialInput.success) return;
             const waitedMs = providerLifecycleWaitedMsSchema.safeParse(record.bindings.waitedMs);
+            const credentialKeys = providerCredentialKeysSchema.safeParse(
+              record.bindings.credentialKeys
+            );
             providerLog[record.level](
               {
                 ...(failureClass.success ? { failureClass: failureClass.data } : {}),
                 ...(lifecycle.success ? { lifecycle: lifecycle.data } : {}),
                 ...(lifecycle.success && waitedMs.success ? { waitedMs: waitedMs.data } : {}),
+                ...(credentialInput.success
+                  ? {
+                      credentialInput: credentialInput.data,
+                      credentialKeys: credentialKeys.success
+                        ? credentialKeys.data.filter(key => envKeys.has(key))
+                        : [],
+                    }
+                  : {}),
               },
               'provider.plugin.log'
             );

@@ -3822,12 +3822,13 @@ for (const mode of ['success', 'abort', 'return'] as const) {
   });
 }
 
-describe('buildRequestSubprocessEnv auth source log', () => {
+describe('buildRequestSubprocessEnv credential input log', () => {
   const keys = [
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_API_KEY',
     'CLAUDE_API_KEY',
     'CLAUDE_CODE_OAUTH_TOKEN',
+    'CLAUDE_CODE_USE_BEDROCK',
   ] as const;
   const saved: Partial<Record<(typeof keys)[number], string>> = {};
   beforeEach(() => {
@@ -3843,37 +3844,50 @@ describe('buildRequestSubprocessEnv auth source log', () => {
     }
   });
 
-  const authSourceLogs = (): unknown[] =>
-    mockLogger.info.mock.calls.filter(call => call[1] === 'claude.auth_source').map(c => c[0]);
+  const credentialInputLogs = (): unknown[] =>
+    mockLogger.info.mock.calls
+      .filter(call => call[1] === 'claude.credential_input')
+      .map(call => call[0]);
   const expectNoSecretsLogged = (): void => {
-    const logged = JSON.stringify(mockLogger.info.mock.calls);
+    const logged = JSON.stringify(
+      [mockLogger.debug, mockLogger.info, mockLogger.warn, mockLogger.error].map(
+        level => level.mock.calls
+      )
+    );
     expect(logged).not.toContain('user-secret-token');
     expect(logged).not.toContain('install-secret-token');
   };
 
   test('a delivered per-user credential is logged as delivered, never as the global login', () => {
+    process.env.ANTHROPIC_API_KEY = 'install-secret-token';
     claudeModule.buildRequestSubprocessEnv({
       env: { CLAUDE_CODE_OAUTH_TOKEN: 'user-secret-token' },
       userCredentialEnvKeys: ['CLAUDE_CODE_OAUTH_TOKEN'],
     });
-    expect(authSourceLogs()).toEqual([
-      { source: 'delivered', credentialKeys: ['CLAUDE_CODE_OAUTH_TOKEN'] },
+    expect(credentialInputLogs()).toEqual([
+      { credentialInput: 'delivered', credentialKeys: ['CLAUDE_CODE_OAUTH_TOKEN'] },
     ]);
     expect(mockLogger.info.mock.calls.some(call => call[1] === 'using_global_auth')).toBe(false);
     expectNoSecretsLogged();
   });
 
-  test('an install-wide token is logged as the environment', () => {
+  test('install-wide keys and a cloud selector are logged as forwarded inputs', () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'install-secret-token';
+    process.env.CLAUDE_CODE_USE_BEDROCK = '1';
     claudeModule.buildRequestSubprocessEnv({});
-    expect(authSourceLogs()).toEqual([
-      { source: 'environment', credentialKeys: ['CLAUDE_CODE_OAUTH_TOKEN'] },
+    expect(credentialInputLogs()).toEqual([
+      {
+        credentialInput: 'forwarded',
+        credentialKeys: ['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK'],
+      },
     ]);
     expectNoSecretsLogged();
   });
 
-  test('no credential leaves the native login to decide', () => {
-    claudeModule.buildRequestSubprocessEnv({});
-    expect(authSourceLogs()).toEqual([{ source: 'native', credentialKeys: [] }]);
+  test('a request that clears the install token leaves no credential input', () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'install-secret-token';
+    const env = claudeModule.buildRequestSubprocessEnv({ env: { CLAUDE_CODE_OAUTH_TOKEN: '' } });
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('');
+    expect(credentialInputLogs()).toEqual([{ credentialInput: 'none', credentialKeys: [] }]);
   });
 });

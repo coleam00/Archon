@@ -12,8 +12,9 @@
  *   cleaned by stripCwdEnv) PLUS any per-request `requestOptions.env`, merged LAST.
  *   A delivered per-user credential (`userCredentialEnvKeys`) replaces every
  *   install-wide Claude credential. `buildRequestSubprocessEnv` logs
- *   `claude.auth_source` from that final env, so the log names the source the
- *   subprocess actually receives.
+ *   `claude.credential_input` from that final env: what Archon handed Claude Code,
+ *   not which source Claude Code then picks (its settings or a cloud backend can
+ *   still decide).
  * - CLAUDE_USE_GLOBAL_AUTH is an Archon-only boot sentinel (set for solo
  *   installs with no creds — see server/src/boot/claude-auth-posture.ts). The
  *   Claude CLI itself ignores it; it neither gates nor filters env here.
@@ -29,7 +30,11 @@
  *   `shouldPassNoEnvFile` for the implications on the `--no-env-file` flag.
  */
 import { buildProviderSubprocessEnv } from '@archon/provider-contract';
-import type { CredentialStatus, ProviderDiagnostics } from '@archon/provider-contract';
+import type {
+  CredentialStatus,
+  ProviderCredentialInput,
+  ProviderDiagnostics,
+} from '@archon/provider-contract';
 import {
   query,
   type Options,
@@ -79,29 +84,36 @@ function deliveredClaudeCredential(options: SendQueryOptions | undefined): strin
   );
 }
 
-const INSTALL_CREDENTIAL_KEYS = [
+const CLOUD_SELECTOR_KEYS = [
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX',
+  'CLAUDE_CODE_USE_FOUNDRY',
+  'CLAUDE_CODE_USE_MANTLE',
+  'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+  'CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD',
+] as const;
+const FORWARDED_AUTH_KEYS = [
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_API_KEY',
   'CLAUDE_API_KEY',
   'CLAUDE_CODE_OAUTH_TOKEN',
+  ...CLOUD_SELECTOR_KEYS,
 ] as const;
 
 /**
- * Logs which credential source the final subprocess env carries: key names only,
- * never values. `native` means Claude Code's own configuration decides (the
- * `claude /login` session, a settings `apiKeyHelper`, or a cloud selector).
+ * Logs the credential input in the final subprocess env: key names only, never values.
+ * The fields are the contract's `ProviderCredentialInput`, so the event crosses the
+ * provider process boundary to the host log.
  */
-function logAuthSource(env: NodeJS.ProcessEnv, delivered: string | undefined): void {
-  if (delivered) {
-    getLog().info({ source: 'delivered', credentialKeys: [delivered] }, 'claude.auth_source');
-    return;
-  }
-  // Names every key present; which one Claude Code prefers is its precedence, not Archon's.
-  const credentialKeys = INSTALL_CREDENTIAL_KEYS.filter(key => env[key]);
-  getLog().info(
-    { source: credentialKeys.length > 0 ? 'environment' : 'native', credentialKeys },
-    'claude.auth_source'
-  );
+function logCredentialInput(env: NodeJS.ProcessEnv, delivered: string | undefined): void {
+  // Names every forwarded key; which one Claude Code uses is its precedence, not Archon's.
+  const credentialKeys = delivered ? [delivered] : FORWARDED_AUTH_KEYS.filter(key => env[key]);
+  const credentialInput: ProviderCredentialInput = delivered
+    ? 'delivered'
+    : credentialKeys.length > 0
+      ? 'forwarded'
+      : 'none';
+  getLog().info({ credentialInput, credentialKeys }, 'claude.credential_input');
 }
 
 export function buildRequestSubprocessEnv(
@@ -122,23 +134,14 @@ export function buildRequestSubprocessEnv(
       delete env[key];
     env[delivered === 'CLAUDE_API_KEY' ? 'ANTHROPIC_API_KEY' : delivered] =
       requestOptions?.env?.[delivered];
-    for (const key of [
-      'CLAUDE_CODE_USE_BEDROCK',
-      'CLAUDE_CODE_USE_VERTEX',
-      'CLAUDE_CODE_USE_FOUNDRY',
-      'CLAUDE_CODE_USE_MANTLE',
-      'CLAUDE_CODE_USE_ANTHROPIC_AWS',
-      'CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD',
-    ]) {
-      env[key] = '0';
-    }
+    for (const key of CLOUD_SELECTOR_KEYS) env[key] = '0';
     // Native settings env otherwise overwrites the delivered identity.
     env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
   } else if (env.CLAUDE_API_KEY && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
     env.ANTHROPIC_API_KEY = env.CLAUDE_API_KEY;
     getLog().debug('claude.api_key_mirrored');
   }
-  logAuthSource(env, delivered);
+  logCredentialInput(env, delivered);
   // Without this, Claude Code reports some refusals to start (an invalid proxy URL, for
   // one) only on stderr and exits 1, which reads as a crashed process and is retried.
   // With it, every refusal with a known cause also ends in an error result carrying
