@@ -951,7 +951,16 @@ async function backedOff(kind: string, failOnce = false) {
       calls += 1;
       forge.reads.push(input);
       if (!failOnce || calls === 1) throw Object.assign(new Error('slow down'), { kind });
-      return {};
+      return {
+        repo: { host: 'github.com', path: 'owner/repo' },
+        branch: null,
+        revision: input.revision,
+        units: [],
+        summary: {
+          state: 'none' as const,
+          counts: { total: 0, green: 0, red: 0, pending: 0, gated: 0, unknown: 0 },
+        },
+      };
     },
   };
   const observer = createItemWaitObserver({

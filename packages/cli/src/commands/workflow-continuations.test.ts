@@ -889,7 +889,15 @@ function observation(receipts: string[]) {
     unservedBindings,
     value: {
       observer: {
-        observing: [{ sourceInstanceId: 'github', everySeconds: 60, labels: [], unservedBindings }],
+        observing: [
+          {
+            sourceInstanceId: 'github',
+            everySeconds: 60,
+            labels: [],
+            unservedBindings,
+            wakes: [],
+          },
+        ],
         pass,
       },
       dispatch,
