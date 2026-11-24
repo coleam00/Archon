@@ -1,6 +1,6 @@
 # Review lens conduct
 
-This is the SDLC pack's default for how every review lens, and the simplify pass, works
+This is the SDLC pack's default for how every review lens works
 beside the others and reports. A project adds to it with its own
 `.archon/sdlc/policy/review-lens.md`: a lens reads this default first and the project's
 file after it, and where the two conflict, the project's line wins.
@@ -24,3 +24,11 @@ file after it, and where the two conflict, the project's line wins.
   when the requested outcome itself would need an explicit boundary crossed), and
   `source_node` (the name your prompt gives). Write no file for no discovery; never
   append to another lens's file or record suspicion.
+
+## Full-review risks
+
+Full review applies to wire formats and persisted contracts or schemas; concurrency
+over shared state; isolation, auth, security and credential boundaries; destructive or
+irreversible paths and data loss; integration boundaries; lifecycle ownership; and
+parsers over user-authored text. Uncertainty earns full review. Each engaged risk gets
+an explicit attempt to refute its invariant; a prose-only change gets the minimum.

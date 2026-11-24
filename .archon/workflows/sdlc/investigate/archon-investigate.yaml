@@ -1,57 +1,43 @@
 name: archon-investigate
 description: |
-  Establish the proven causal chain for a bug, unexplained behavior, or open
-  question — to the root cause whose fix prevents the symptom, never the first
-  plausible explanation — and write an evidence-backed report a fixer or
-  planner can act on without repeating the work. Advisory: it reads,
-  reproduces, and reports — the repository is left exactly as it was found.
+  Establish the proven causal chain for one issue's symptom, from what is observed to the
+  root cause that explains it, and decide the fix, so the build stage can act on the
+  report without repeating the work. Changes nothing: the repository is left exactly as
+  it was found.
 
-  Use when: the cause is not yet known — "investigate this issue", "why does
-  this fail", "root-cause this before we fix it".
-  NOT for: deciding how to build the fix (plan), or building it (implement).
+  Starts when triage routes an issue `investigate`, or by hand:
+  `archon workflow run archon-investigate --item issue-<n> --input issue=<n>`.
+  `rooted` starts the build stage; `ask` leaves a product decision on the item.
 
 model: ['@investigator', medium]
+mutates_checkout: false
 
 inputs:
-  target:
+  issue:
+    description: The number of the issue to investigate.
+  repo_host:
     default: ""
-    description: >-
-      What to investigate — an issue reference, a symptom, a failing command, or
-      a question. When empty, the run's trigger message is the target.
+    description: The host of the issue's repository. Empty means the checkout's `origin` remote.
+  repo_path:
+    default: ""
+    description: The issue's repository on its host. Empty means the checkout's `origin` remote.
+  answers:
+    default: "None."
+    description: Every answer an operator gave on this item, oldest first.
+  triage:
+    result_of: archon-triage
+    description: What triage concluded about the issue. Read from the item.
 
-# The run completes with the investigator's verdict as its outcome. Only `rooted`
-# owes delivery; `refuted` and `inconclusive` are valid completions, so lifecycle
-# status and the verdict are separate facts.
-returns: { node: investigate, outcome: verdict }
+returns: { node: investigate, outcome: verdict, asks: asks }
 
 nodes:
-
-  # Inconclusive is a valid outcome, not a failure: the gaps named honestly beat a
-  # confident guess. Consumers gate on the verdict before building on the chain.
   - id: investigate
     command: investigate
-    # Advisory on both counts, and the engine holds both: it fails this node with
-    # the touched paths named if the checkout is modified, and it refuses the
-    # artifact pointer below if the report it names does not exist.
-    mutates_checkout: false
-    output_type: investigation-report
     output_format:
       type: object
+      additionalProperties: false
       properties:
-        verdict:
-          type: string
-          enum: [rooted, refuted, inconclusive]
-        summary:
-          type: string
-        report:
-          # The evidence contract, enforced by the engine at this node: a pointer at a
-          # file this run's artifacts do not hold is refused before the node completes,
-          # so a verdict cannot arrive without its report. The bar is an existing, non-empty
-          # file, the bar the node this replaced enforced by hand.
-          type: object
-          properties:
-            type: { type: string, enum: [archon_artifact] }
-            run_id: { type: string }
-            path: { type: string, enum: [investigation.md] }
-          required: [type, run_id, path]
+        verdict: { type: string, enum: [rooted, refuted, inconclusive, ask] }
+        summary: { type: string }
+        report: { type: string, description: 'The absolute path of investigation.md.' }
       required: [verdict, summary, report]

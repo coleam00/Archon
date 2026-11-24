@@ -2,19 +2,27 @@
 
 Turn the decided intent into a plan a competent implementer could execute without asking questions. You decide the approach — the plan records decisions, not options. You build nothing.
 
-What to plan (may be empty — empty means the run's trigger message is the work):
+The issue to plan: number `$INPUTS.issue` in the repository `$INPUTS.repo_host`/`$INPUTS.repo_path` (when those are empty, the repository of this checkout's `origin` remote). Read it, with its comments, through the Archon CLI, whose argv is the JSON string array in `$ARCHON_CLI_COMMAND`: `<argv...> forge workitem.view --json --data '{"ref":{"repo":{"host":…,"path":…},"number":…}}'` and `workitem.comments` with `{"subject":{"kind":"issue","ref":…}}`. The issue is the contract; a dated "Current scope" section in it overrides what it rules on.
 
-$INPUTS.work
+What triage concluded about it, as its result. Its `report` is the path of its assessment: read the Contract and Handoff there, which name the elements the item leaves out for you to shape. Its `related` is work triage found, as `[{ "url", "relation" }]`: overlapping open issues, closed earlier attempts, recent merged changes on the same surface. Read each one that bears on the approach before deciding it. An earlier attempt's rejection or a merged change's design is evidence the plan accounts for, not a rule:
 
-Optional prior investigation report to build on (may be empty — empty means none):
+$INPUTS.triage
 
-$INPUTS.report
+What the split stage concluded, when this item came through one (`null` otherwise):
 
-Related work an earlier triage found, as `[{ "url", "relation" }]`: overlapping open issues, closed earlier attempts, recent merged changes on the same surface (may be `[]`). Read each one that bears on the approach before deciding it. An earlier attempt's rejection or a merged change's design is evidence the plan accounts for, not a rule:
+$INPUTS.split
 
-$INPUTS.related
+When this item was planned before and delivery sent it back to planning, what the last build and the last review of it ended with (`null` when there was none). Their `summary` and `report` say what the earlier plan could not deliver; the new plan answers that:
 
-The operator's request — the message that started this run:
+$INPUTS.build
+
+$INPUTS.review
+
+Decisions an operator already made on this item, oldest first; where two disagree, the later one holds. A decision here settles its call:
+
+$INPUTS.answers
+
+The operator's request — the message that started this run (often empty):
 
 $ARGUMENTS
 
@@ -26,7 +34,7 @@ Prose is a claim; the code is the fact. An issue body, a comment, a linked discu
 
 Ground the plan in the code as it is, not as the request describes it. Read the files the change will touch, their direct callers and consumers, the existing tests, and any precedent for the pattern you are about to choose. Every file, function, and behavior the plan names must exist and have been verified this session — or be explicitly marked as new. Trust the source over the request's assumptions; when they conflict, the plan says so.
 
-When a prior report is provided, treat its claims like any inherited analysis: verify the load-bearing ones against current code before building on them, and note where you confirm or refute. Implementers will follow your plan literally — a plan that repeats an inherited wrong claim ships that wrong claim.
+When triage's assessment or an earlier report is provided, treat its claims like any inherited analysis: verify the load-bearing ones against current code before building on them, and note where you confirm or refute. Implementers will follow your plan literally — a plan that repeats an inherited wrong claim ships that wrong claim.
 
 Design calls are judged against the project's own guidance. For each design call, open, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point — and any other document the steering files point to that bears on the call, such as design rules for a language, API, or configuration surface, and read the section that rules on it rather than the whole file. A call those documents already rule on is settled by them, not by your preference.
 
@@ -38,7 +46,7 @@ Name the design decisions the work actually contains, choose, and record why —
 
 ## Calls that belong to a person
 
-Settle every call you can. Before declaring any call a person's, check whether something already decides it: the work order's invariants and steering, the tracked item's comments, a project document, or a ruling in the SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `rulings.md`; the pack's defaults are in `$PACK_DIR/.shared/policy/`. Read the default first, then the project's file when it exists: the project's file adds to the default, and where the two conflict, the project's line wins. When one of them picks an option, the call is settled: cite it and proceed. An option a project document forbids is not an option.
+Settle every call you can. Before declaring any call a person's, check whether something already decides it: the work order's invariants and steering, the tracked item's comments, an operator's answer on the item, a project document, or a ruling in the SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `rulings.md`; the pack's defaults are in `$PACK_DIR/.shared/policy/`. Read the default first, then the project's file when it exists: the project's file adds to the default, and where the two conflict, the project's line wins. When one of them picks an option, the call is settled: cite it and proceed. An option a project document forbids is not an option.
 
 A call is a person's only when one of these holds, and you name which:
 
@@ -55,7 +63,7 @@ An item whose proof needs credentials, a live third-party resource, or writes ou
 
 Settle the stated outcome. A wider path you find on the way is a discovery, never a blocker and never a reason to narrow the delivery.
 
-Each such call is an open question, and it always blocks the plan. Once a question meets one of these conditions, stop designing: write `plan.md` with what you verified and the question, declare `ready: false` with it in `open_questions`, and do not design the full solution first. Never fill the gap with a guess or a provisional choice. Meeting one of the conditions above is what makes it blocking; you may not judge it non-blocking. A question that meets none of the conditions is yours to settle. When the owner should still see it, proceed on a choice that is cheap to reverse, say in the plan that it is provisional, and declare the question as non-blocking. Do not edit the project's documents to settle any question.
+Each such call is an open question, and it always blocks the plan. Once a question meets one of these conditions, stop designing: write `plan.md` with what you verified and the question, end with outcome `ask` and leave it as an ask, and do not design the full solution first. Never fill the gap with a guess or a provisional choice. Meeting one of the conditions above is what makes it blocking; you may not judge it non-blocking. A question that meets none of the conditions is yours to settle. When the owner should still see it, proceed on a choice that is cheap to reverse, say in the plan that it is provisional, and declare the question as non-blocking. Do not edit the project's documents to settle any question.
 
 ## The plan
 
@@ -77,7 +85,7 @@ No one is watching this run: the plan file and your declared fields are all that
 
 ## Preserve proved unrelated defects
 
-A proved defect you meet that this work does not need is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/plan.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`plan`). Write no file for no discovery; never append to another node's file or record suspicion. When delivery follows in the same run, its review validates each record; the pack's discoveries workflow drains them into issues where a project runs it.
+A proved defect you meet that this work does not need is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/plan.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`plan`). Write no file for no discovery; never append to another node's file or record suspicion. The pack's discoveries stage reads this file once the item's change has landed, and decides what becomes an issue.
 
 ## Not your job
 
@@ -85,17 +93,10 @@ Do not implement, modify source files, commit, branch, push, or open or comment 
 
 ## Declare the verdict
 
-- `ready` — your judgment that the plan can be executed as written without asking anyone. A blocking question means `ready` is false, and `open_questions` names it. `ready` may be true while questions remain only when every one of them is non-blocking.
-- `open_questions` — one entry per open question, blocking or not, empty when there is none. Say in each entry whether it blocks: an entry that meets one of the conditions above blocks, and only an entry that meets none may say it does not. Each entry states the decision, the options and what each one costs, which of the conditions makes it a person's call or that none does, and one line the project's direction document could carry so that a later run settles the same call without asking.
+- `outcome` — `planned` when the plan can be executed as written without asking anyone: the build stage starts from it. `ask` when a blocking question remains: each one is an ask, and the answers start this plan again with the calls made. `planned` may leave questions only when every one of them is non-blocking.
+- `open_questions` — one entry per non-blocking question, empty when there is none. Each entry states the decision, the provisional choice you made and what the other options cost, and one line the project's direction document could carry so that a later run settles the same call without asking.
+- `asks` — one ask per blocking question, written as `asks.md` says (`.archon/sdlc/policy/`, over the default in `$PACK_DIR/.shared/policy/`): the decision, the options and what each one costs, your recommendation, and in `context` which of the conditions above makes it a person's call, and one line the project's direction document could carry so a later run settles the same call without asking. Empty with `planned`.
 - `summary` — a few sentences: the chosen approach (or the open questions), and that the full plan is at `$ARTIFACTS_DIR/plan.md`.
-- `report` — a pointer to the report you just wrote, copied exactly:
-
-  ```json
-  {"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "plan.md"}
-  ```
-
-  This node is refused if that file does not exist, so write the report before you
-  declare. `run_id` is the value above verbatim, and `path` is relative to
-  `$ARTIFACTS_DIR`.
+- `report` — the absolute path of the plan you just wrote: `$ARTIFACTS_DIR/plan.md`, exactly. The builder reads it there. Write it before you declare.
 
 Before declaring, re-read the plan: confirm every named anchor exists in the current code, and every decision has its why and its source.

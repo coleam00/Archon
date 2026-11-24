@@ -2,11 +2,17 @@
 
 Establish the proven causal chain for the target — from the observed symptom to the root cause that actually explains it — and write a report a fixer or planner can act on without repeating your work. You change nothing and fix nothing. No one watches the run; the report and your declared fields are the only things that persist.
 
-The target — an issue reference, a symptom, a failing command, or a question (may be empty — empty means the run's trigger message is the target):
+The issue: number `$INPUTS.issue` in the repository `$INPUTS.repo_host`/`$INPUTS.repo_path` (when those are empty, the repository of this checkout's `origin` remote). Read it, with its comments, through the Archon CLI, whose argv is the JSON string array in `$ARCHON_CLI_COMMAND`: `<argv...> forge workitem.view --json --data '{"ref":{"repo":{"host":…,"path":…},"number":…}}'` and `workitem.comments` with `{"subject":{"kind":"issue","ref":…}}`.
 
-$INPUTS.target
+What triage concluded about it, as its result (its `report` is the path of its assessment; read the Handoff there for the question it hands you):
 
-The operator's request — the message that started this run:
+$INPUTS.triage
+
+Decisions an operator already made on this item, oldest first; where two disagree, the later one holds:
+
+$INPUTS.answers
+
+The operator's request — the message that started this run (often empty):
 
 $ARGUMENTS
 
@@ -16,7 +22,7 @@ Prose is a claim; the code is the fact. An issue body, a comment, a linked discu
 
 ## Ground the target
 
-Resolve what you are actually investigating before forming any theory. For an issue reference, read the issue body and the comments or linked evidence that can change the symptom, constraints, or current state. State the symptom as something observable: the exact command, input, and wrong outcome. A target you cannot state observably is your first unknown, not a license to guess.
+Resolve what you are actually investigating before forming any theory. Read the issue body and the comments or linked evidence that can change the symptom, constraints, or current state. State the symptom as something observable: the exact command, input, and wrong outcome. A target you cannot state observably is your first unknown, not a license to guess.
 
 ## Prior analysis is claims, not facts
 
@@ -48,7 +54,7 @@ An investigation ends implementation-ready, in this same session: the verified c
 
 - Weigh the plausible fix options against the boundary you established. Name each option, its blast radius, and why the chosen one wins — a rejected option with its reason stops the fixer from relitigating it.
 - Decide the fix: ordered steps anchored to concrete files, functions, and existing tests; the validation that proves it; and what the change must NOT touch.
-- An engineering decision is yours to make — make it. A product decision — two coherent directions whose choice belongs to the owner — is a stop: name the decision precisely and declare `verdict: inconclusive`. A proven cause with an undecided fix is not a safe fix boundary yet.
+- An engineering decision is yours to make — make it. A product decision — two coherent directions whose choice belongs to the owner — is a stop: name the decision precisely and declare `verdict: ask`. A proven cause with an undecided fix is not a safe fix boundary yet.
 
 ## The report
 
@@ -67,11 +73,11 @@ Omit a section that does not apply; never write a placeholder to preserve one.
 
 ## Preserve proved unrelated defects
 
-A proved defect you meet that this work does not need is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/investigate.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`investigate`). Write no file for no discovery; never append to another node's file or record suspicion. When delivery follows in the same run, its review validates each record; the pack's discoveries workflow drains them into issues where a project runs it.
+A proved defect you meet that this work does not need is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/investigate.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`investigate`). Write no file for no discovery; never append to another node's file or record suspicion. The pack's discoveries stage reads this file once the item's change has landed, and decides what becomes an issue.
 
 ## Not your job
 
-Do not modify source files, commit, branch, push, open or comment on pull requests or issues, or fix the problem. `$ARTIFACTS_DIR/repro/` holds only what the fixer reruns or reads: repro scripts and their captured output. Never copy the checkout or install dependencies there. A reproduction that needs another checkout, an older revision, or its own dependency install does it under `$ARTIFACTS_DIR/.archon/scratch/investigate/`, which you remove before finishing (a worktree with `git worktree remove`); the engine deletes that directory when the run ends. Installing the project's dependencies in this checkout is fine when you use the project's own package manager in locked mode, never updating a lockfile: git ignores the installed files, so they are not a tree change, but a rewritten lockfile is. If observing the behavior genuinely requires a temporary source edit, revert it completely before finishing and note it in the report — the run fails on any tracked or untracked change you leave in the tree.
+Do not modify source files, commit, branch, push, open or comment on pull requests or issues, or fix the problem. A rooted investigation goes straight to the build stage, which reads your report as its work order. `$ARTIFACTS_DIR/repro/` holds only what the fixer reruns or reads: repro scripts and their captured output. Never copy the checkout or install dependencies there. A reproduction that needs another checkout, an older revision, or its own dependency install does it under `$ARTIFACTS_DIR/.archon/scratch/investigate/`, which you remove before finishing (a worktree with `git worktree remove`); the engine deletes that directory when the run ends. Installing the project's dependencies in this checkout is fine when you use the project's own package manager in locked mode, never updating a lockfile: git ignores the installed files, so they are not a tree change, but a rewritten lockfile is. If observing the behavior genuinely requires a temporary source edit, revert it completely before finishing and note it in the report — the run fails on any tracked or untracked change you leave in the tree.
 
 ## Declare the verdict
 
@@ -79,16 +85,10 @@ Do not modify source files, commit, branch, push, open or comment on pull reques
   - `rooted` — a change is owed in this repository: the causal chain is proven end to end, the fix and its boundary are decided, and every acceptance item has a planned proof.
   - `refuted` — no change is owed in this repository: the premise does not hold, or the cause is owned elsewhere. It carries the same evidence bar as `rooted`, with the conditions above controlled, and names the owner when there is one. Declining the work is not a refutation.
   - `inconclusive` — the cause is not established, the evidence is unavailable, or the fix hinges on a decision that is not yours. Name the gap and what would close it. An honest inconclusive beats a confident guess.
+  - `ask` — the cause is proven, and the fix hinges on a product decision that belongs to an operator: leave it as an ask, written as `asks.md` says (`.archon/sdlc/policy/`, over the default in `$PACK_DIR/.shared/policy/`). The answer starts this investigation again with the decision made.
 - `summary` — a few sentences: the cause (or the decisive gap), and that the full report is at `$ARTIFACTS_DIR/investigation.md`.
-- `report` — a pointer to the report you just wrote, copied exactly:
-
-  ```json
-  {"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "investigation.md"}
-  ```
-
-  This node is refused if that file does not exist, so write the report before you
-  declare. `run_id` is the value above verbatim, and `path` is relative to
-  `$ARTIFACTS_DIR`.
+- `report` — the absolute path of the report you just wrote: `$ARTIFACTS_DIR/investigation.md`, exactly. Write it before you declare.
+- `asks` — the decisions you leave with `ask`; otherwise empty.
 
 Before declaring, re-read the report: confirm every cited location exists in the current code, every command you cite actually ran in this session, and no unresolved gap was disguised by extra breadth.
 

@@ -8,20 +8,21 @@ one watches this run; your structured answer is all the next nodes read.
   its base and the exact commands that produce the diff under review. Run its
   `--stat` form and read the hunks you need; never a bare `git diff --stat`, which
   shows only uncommitted changes and is empty for a committed change.
-- The work order (may be empty for a standalone review): $INPUTS.work_order. When it
-  names a file such as `$ARTIFACTS_DIR/plan.md`, read that file's summary and steps,
-  not the whole repository.
-- Whether this round continues an earlier review: `$mode.output.continuation`. On a
+- The issue this change delivers, as scope.md records its accepted contract. When the
+  builder's report names a plan, read that plan's summary and steps, not the whole
+  repository.
+- Whether this round continues an earlier review: `$scope.output.continuation`. On a
   continuation, scope.md's diff is the correction delta since the previous round's
-  reviewed commit. The lens booleans in **$mode.output** that are `true` review it
-  whatever you answer: the code lens, and every lens that raised a blocker the
-  previous round left open, which verifies its findings were fixed and that the fix
-  caused nothing new in its area. For every other lens, select it only when the delta reaches new
-  ground in that lens's area that the earlier rounds never saw: a new type,
-  contract or boundary for `seams`; new behavior a test should protect for `tests`;
-  a new catch, fallback or retry for `errors`; a new user-facing command,
-  configuration key, flag or behavior for `docs`; a new page or interaction for
-  `ux`. The defaults below, seams on among them, describe a first round.
+  reviewed commit, and the prior report is `$scope.output.prior_report`, with its
+  `findings.json` beside it. Two kinds of lens review the delta whatever else you
+  answer: the code lens, and every lens named in the `sources` of a blocking finding
+  that `findings.json` leaves `open`, which verifies its findings were fixed and that
+  the fix caused nothing new in its area. Select them. For every other lens, select it
+  only when the delta reaches new ground in that lens's area that the earlier rounds
+  never saw: a new type, contract or boundary for `seams`; new behavior a test should
+  protect for `tests`; a new catch, fallback or retry for `errors`; a new user-facing
+  command, configuration key, flag or behavior for `docs`; a new page or interaction
+  for `ux`. The defaults below, seams on among them, describe a first round.
 
 Lenses:
 
@@ -34,9 +35,7 @@ Lenses:
 - `tests` — regression protection, when the change establishes or alters behavior a
   test should protect.
 - `errors` — swallowed failures and fallbacks, when the change adds or changes
-  catches, fallbacks, retries, default values, error translation, or recovery. The
-  operator's setting is `$INPUTS.errors`: `true` or `false` is your answer; `auto`
-  leaves it to you.
+  catches, fallbacks, retries, default values, error translation, or recovery.
 - `docs` — stale or missing documentation, when the diff changes shipped
   documentation or a user-facing command, configuration, or behavior.
 - `ux` — whether the change works well for the person using it, when the diff adds
